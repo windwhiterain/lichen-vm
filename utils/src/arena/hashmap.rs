@@ -15,7 +15,7 @@ pub struct ArenaHashMap<K, V> {
 
 impl<K, V> ArenaHashMap<K, V>
 where
-    K: Hash + PartialEq,
+    K: Hash + Eq,
 {
     const TABLE_SCALE: f32 = 2.0;
     pub fn new(arena: &mut Arena, len: usize) -> Self {

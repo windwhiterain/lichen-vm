@@ -25,7 +25,7 @@ impl<V> Default for StableVec<V> {
 
 impl<V: Debug> Debug for StableVec<V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.values()).finish()
+        f.debug_list().entries(self.iter()).finish()
     }
 }
 
@@ -77,10 +77,10 @@ impl<V> StableVec<V> {
     pub fn len(&self) -> usize {
         self.next_idx
     }
-    pub fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn iter(&self) -> impl Iterator<Item = &V> {
         (0..self.next_idx).map(|idx| self.get(idx))
     }
-    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut V> {
         let ptr = self as *mut Self;
         (0..self.next_idx).map(move |idx| unsafe { &mut *ptr }.get_mut(idx))
     }
