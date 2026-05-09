@@ -1,7 +1,4 @@
-pub enum Kind {
+#[derive(Debug,Clone, Copy)]
+pub enum Expr {
     Literal,
-}
-
-pub struct Expr {
-    pub kind: Kind,
 }

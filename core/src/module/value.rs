@@ -12,6 +12,7 @@ pub enum Value {
 }
 
 impl Value {
+    pub const AUTO: Self = Value::Auto { referrer_count: 1 };
     pub fn root(self) -> Value {
         match self {
             Value::Ref { property } => Module::property_value(property).root(),

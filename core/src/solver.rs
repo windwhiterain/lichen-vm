@@ -9,7 +9,7 @@ impl Solver {
     }
     pub fn solve_equation(properties: &[PropertyId]) {
         let (mut max_value, mut max_order, mut max_property) =
-            (&mut Value::UnSolved, (0, 0), PropertyId::DUMMY);
+            (&mut Value::UnSolved, (0, 0), *properties.first().unwrap());
         for property in properties.iter().copied() {
             let value = Module::property_value_mut(property).root_mut();
             let order = value.solve_order();
@@ -22,8 +22,8 @@ impl Solver {
                 break;
             }
         }
-        if max_order.0 == 0 {
-            return;
+        if let Value::UnSolved = max_value{
+            *max_value = Value::AUTO; 
         }
         for property in properties.iter().copied() {
             if property == max_property {
@@ -71,3 +71,4 @@ impl Solver {
         }
     }
 }
+

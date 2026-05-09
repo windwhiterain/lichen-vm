@@ -12,6 +12,12 @@ pub struct Arena {
     next_chunk_size: usize,
 }
 
+impl Default for Arena {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Arena {
     pub fn new() -> Self {
         Self {

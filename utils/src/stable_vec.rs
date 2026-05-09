@@ -43,7 +43,7 @@ impl<V> StableVec<V> {
         let x = k - exp2_int(n);
         ((n - INIT_BIT_WIDTH) as usize, x)
     }
-    pub fn insert(&mut self, value: V) -> (usize, &mut V) {
+    pub fn push(&mut self, value: V) -> (usize, &mut V) {
         let (y, x) = Self::compute_idx(self.next_idx);
         if y >= self.chunks.len() {
             let size = exp2_int(y as u32 + INIT_BIT_WIDTH);
@@ -118,12 +118,12 @@ fn test() {
     {
         let mut stable_vec = StableVec::<DropCounter>::default();
         for i in 0..256 {
-            stable_vec.insert(DropCounter::new(i));
+            stable_vec.push(DropCounter::new(i));
         }
         stable_vec.clear();
         assert!(DROP_COUNT.get() == 0);
         for i in 0..256 {
-            stable_vec.insert(DropCounter::new(i));
+            stable_vec.push(DropCounter::new(i));
         }
     }
     assert!(DROP_COUNT.get() == 0);
