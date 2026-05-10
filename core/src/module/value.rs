@@ -1,13 +1,15 @@
-use lichen_utils::arena::array::ArenaArray;
+use lichen_utils::arena::{array::ArenaArray, hashmap::ArenaHashMap};
 
-use crate::module::{ExprId, Module, PropertyId, Ptr};
+use crate::module::{OperationId, Module, Ptr, StringId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Value {
     Int(i64),
-    Array(Ptr<ArenaArray<ExprId>>),
+    String(StringId),
+    Array(Ptr<ArenaArray<OperationId>>),
+    Table(Ptr<ArenaHashMap<StringId,usize>>),
     Auto { referrer_count: usize },
-    Ref { property: PropertyId },
+    Ref(OperationId),
     UnSolved,
 }
 
@@ -15,13 +17,13 @@ impl Value {
     pub const AUTO: Self = Value::Auto { referrer_count: 1 };
     pub fn root(self) -> Value {
         match self {
-            Value::Ref { property } => Module::property_value(property).root(),
+            Value::Ref(operation_id) => Module::value(operation_id).root(),
             _ => self,
         }
     }
     pub fn root_mut(&mut self) -> &mut Value {
         match self {
-            Value::Ref { property } => Module::property_value_mut(*property).root_mut(),
+            Value::Ref(operation_id) => Module::value_mut(*operation_id).root_mut(),
             _ => self,
         }
     }

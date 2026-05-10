@@ -1,104 +1,62 @@
-use std::{collections::HashMap, ptr::NonNull};
+use std::{collections::HashMap, fmt::Debug, ptr::NonNull};
 
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
-use crate::module::{equation::Equation, expr::Expr, switch::Switch, value::Value};
+use crate::module::{equation::Equation, operation::Operation, switch::Switch, value::Value};
 
 pub mod equation;
-pub mod expr;
+pub mod operation;
 pub mod switch;
 pub mod value;
 #[derive(Debug)]
 pub struct Module {
     pub arena: Arena,
-    pub exprs: StableVec<Expr>,
-    pub properties: StableVec<Value>,
-    pub property_table: HashMap<StringId, usize>,
+    pub operations: StableVec<Operation>,
+    pub values: StableVec<Value>,
     pub equations: StableVec<Equation>,
     pub switches: StableVec<Switch>,
 }
+pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PtrRaw<T>(T);
-pub type Ptr<T> = PtrRaw<NonNull<T>>;
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExprId {
+pub struct OperationId {
     pub module: ModuleId,
-    pub local: ExprIdLocal,
+    pub local: OperationIdLocal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleId(pub NonNull<Module>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExprIdLocal(pub usize);
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PropertyId {
-    pub module: ModuleId,
-    pub local: PropertyIdLocal,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PropertyIdLocal(pub usize);
+pub struct OperationIdLocal(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SwitchId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringId(pub usize);
 
 impl Module {
-    pub fn new(property_table: HashMap<StringId, usize>) -> Self {
+    pub fn new() -> Self {
         Self {
             arena: Default::default(),
-            exprs: Default::default(),
-            properties: Default::default(),
-            property_table,
+            operations: Default::default(),
+            values: Default::default(),
             equations: Default::default(),
             switches: Default::default(),
         }
     }
-    pub fn expr_property_count(&self)-> usize{
-        self.property_table.len() + 1
-    }
-    pub fn add_expr(&mut self,expr:Expr,property_values:&[Value])->ExprId{
-        debug_assert!(property_values.len() == self.expr_property_count());
-        let (local, _) = self.exprs.push(expr);
-        for property_value in property_values.iter().copied(){
-            self.properties.push(property_value);
-        }
-        ExprId { module: ModuleId::from_ref(self), local: ExprIdLocal(local) }
+    pub fn add_operation(&mut self,operation:Operation,value:Value)->OperationId{
+        let (local, _) = self.operations.push(operation);
+        self.values.push(value);
+        OperationId { module: ModuleId::from_ref(self), local: OperationIdLocal(local) }
     }
     pub fn add_equation(&mut self,equation: Equation){
         self.equations.push(equation);
     }
-    pub fn value_property(expr_id: ExprId) -> PropertyId {
-        let module = expr_id.module.as_ref();
-        PropertyId {
-            module: expr_id.module,
-            local: PropertyIdLocal(expr_id.local.0 * module.expr_property_count()),
-        }
+    pub fn value<'a>(operation_id: OperationId) -> Value {
+        let module = operation_id.module.as_ref();
+        *module.values.get(operation_id.local.0)
     }
-    pub fn property(expr_id: ExprId, name: StringId) -> PropertyId {
-        let module = expr_id.module.as_ref();
-        PropertyId {
-            module: expr_id.module,
-            local: PropertyIdLocal(
-                expr_id.local.0 * module.expr_property_count()
-                    + module.property_table[&name]
-                    + 1,
-            ),
-        }
+    pub fn value_mut<'a>(operation_id: OperationId) -> &'a mut Value {
+        let module = operation_id.module.as_mut();
+        module.values.get_mut(operation_id.local.0)
     }
-    pub fn property_value<'a>(property: PropertyId) -> Value {
-        let module = property.module.as_ref();
-        *module.properties.get(property.local.0)
-    }
-    pub fn property_value_mut<'a>(property: PropertyId) -> &'a mut Value {
-        let module = property.module.as_mut();
-        module.properties.get_mut(property.local.0)
-    }
-}
-
-impl PropertyId {
-    pub const DUMMY: Self = Self {
-        module: ModuleId(NonNull::dangling()),
-        local: PropertyIdLocal(usize::MAX),
-    };
 }
 
 impl<T> Ptr<T> {
@@ -121,3 +79,21 @@ impl ModuleId{
         unsafe { self.0.as_mut() }
     }
 }
+
+impl<T: Debug> Debug for Ptr<T>{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_ref().fmt(f)
+    }
+}
+impl<T> Clone for Ptr<T>{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+impl<T> Copy for Ptr<T>{}
+impl<T> PartialEq for Ptr<T>{
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<T> Eq for Ptr<T>{}

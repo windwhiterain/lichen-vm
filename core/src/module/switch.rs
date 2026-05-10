@@ -1,7 +1,7 @@
-use crate::module::{ExprId, Module};
+use crate::module::{OperationId, Module};
 
 #[derive(Debug)]
 pub struct Switch {
-    pub index: ExprId,
+    pub index: OperationId,
     pub branches: Box<[Module]>,
 }

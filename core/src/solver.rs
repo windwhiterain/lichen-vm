@@ -1,4 +1,4 @@
-use crate::module::{Module, PropertyId, equation::Equation, value::Value};
+use crate::module::{Module, OperationId, equation::Equation, value::Value};
 
 pub struct Solver {}
 impl Solver {
@@ -7,16 +7,16 @@ impl Solver {
             Self::solve_equation(&equation.properties);
         }
     }
-    pub fn solve_equation(properties: &[PropertyId]) {
-        let (mut max_value, mut max_order, mut max_property) =
-            (&mut Value::UnSolved, (0, 0), *properties.first().unwrap());
-        for property in properties.iter().copied() {
-            let value = Module::property_value_mut(property).root_mut();
+    pub fn solve_equation(operations: &[OperationId]) {
+        let (mut max_value, mut max_order, mut max_operation) =
+            (&mut Value::UnSolved, (0, 0), *operations.first().unwrap());
+        for operation in operations.iter().copied() {
+            let value = Module::value_mut(operation).root_mut();
             let order = value.solve_order();
             if order > max_order {
                 max_value = value;
                 max_order = order;
-                max_property = property;
+                max_operation = operation;
             }
             if order.0 == 2 {
                 break;
@@ -25,26 +25,22 @@ impl Solver {
         if let Value::UnSolved = max_value{
             *max_value = Value::AUTO; 
         }
-        for property in properties.iter().copied() {
-            if property == max_property {
+        for operation in operations.iter().copied() {
+            if operation == max_operation {
                 continue;
             }
-            let value = Module::property_value_mut(property).root_mut();
+            let value = Module::value_mut(operation).root_mut();
             match max_value {
                 Value::Auto {
                     referrer_count: max_referrer_count,
                 } => match *value {
                     Value::UnSolved => {
                         *max_referrer_count += 1;
-                        *value = Value::Ref {
-                            property: max_property,
-                        };
+                        *value = Value::Ref(max_operation);
                     }
                     Value::Auto { referrer_count } => {
                         *max_referrer_count += referrer_count;
-                        *value = Value::Ref {
-                            property: max_property,
-                        };
+                        *value = Value::Ref(max_operation);
                     }
                     _ => unreachable!(),
                 },
@@ -56,8 +52,8 @@ impl Solver {
                                 assert!(max_array.len() == array.len());
                                 for i in 0..max_array.len() {
                                     Self::solve_equation(&[
-                                        Module::value_property(*max_array.get(i)),
-                                        Module::value_property(*array.get(i)),
+                                        *max_array.get(i),
+                                        *array.get(i),
                                     ]);
                                 }
                             }

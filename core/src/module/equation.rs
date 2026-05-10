@@ -1,6 +1,6 @@
-use crate::module::PropertyId;
+use crate::module::OperationId;
 
 #[derive(Debug)]
 pub struct Equation {
-    pub properties: Box<[PropertyId]>,
+    pub properties: Box<[OperationId]>,
 }
