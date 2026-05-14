@@ -5,8 +5,8 @@ use crate::{
     runtime::{
         Module, OperationId,
         equation::Equation,
-        value::{Auto, root_mut, solve_order},
     },
+    value::{Auto, root_mut, solve_order},
 };
 
 pub struct Solver<V: Value> {

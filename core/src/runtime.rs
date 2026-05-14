@@ -8,7 +8,6 @@ pub mod equation;
 pub mod operation;
 pub mod solver;
 pub mod switch;
-pub mod value;
 #[derive(Debug)]
 pub struct Module<V> {
     pub arena: Arena,

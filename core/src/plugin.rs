@@ -44,82 +44,17 @@ macro_rules! plugin {
                 pub const $unit_field: usize = ValueCode::$unit_field as usize;
             )*
         }
+        pub mod value_type{
+            $(
+                #[allow(non_camel_case_types)]
+                pub type $field = super::$type;
+            )*
+        }
         $crate::plugin::tokens!{
             #[macro_export]
             plugin_tokens{
                 value{$($field)*}{$($unit_field)*}
             }
-        }
-        #[macro_export]
-        macro_rules! value_code{
-            ($offset: ident)=>{
-                $(
-                    #[allow(non_upper_case_globals)]
-                    pub(super) const $field: usize = $crate::plugin_define::value_code::$field + $offset;
-                )*
-                $(
-                    #[allow(non_upper_case_globals)]
-                    pub(super) const $unit_field: usize = $crate::plugin_define::value_code::$unit_field + $offset;
-                )*
-            }
-        }
-        #[macro_export]
-        macro_rules! impl_plugin{
-            ($module:ident)=>{
-                $crate::plugin::paste!{
-                    impl ::$module::plugin_define::Value for ValueImpl{
-                        $(
-                            fn $field(self)->core::option::Option<::$module::plugin_define::$type>{
-                                if self.code == self::$module::$field{
-                                    Some(unsafe{self.data.$module.$field})
-                                }else{
-                                    None
-                                }
-                            }
-                        )*
-                        $(
-                            fn $unit_field(self)->bool{
-                                self.code == self::$module::$unit_field
-                            }
-                        )*
-                        $(
-                            fn [<from_ $field>](variant: ::$module::plugin_define::$type)->Self{
-                                ValueImpl{
-                                    code: self::$module::$field,
-                                    data: ValueUnionImpl{
-                                        $module: ::$module::plugin_define::ValueUnion{
-                                            $field: variant,
-                                        },
-                                    }
-                                }
-                            }
-                        )*
-                        $(
-                            fn [<from_ $unit_field>]()->Self{
-                                ValueImpl{
-                                    code: self::$module::$unit_field,
-                                    data: ValueUnionImpl{
-                                        $module: ::$module::plugin_define::ValueUnion{
-                                            $unit_field: (),
-                                        },
-                                    }
-                                }
-                            }
-                        )*
-                    }
-                }
-            }
-        }
-        #[macro_export]
-        macro_rules! match_case{
-            ($module:ident, $content:path)=>{
-                $(
-                    self::$module::$field => {$content!{$field,data.$field}},
-                )*
-                $(
-                    self::$module::$unit_field => {$content!{$unit_field,()}},
-                )*
-            };
         }
     };
     (@count) => {
@@ -132,7 +67,7 @@ macro_rules! plugin {
 
 #[macro_export]
 macro_rules! project {
-    ($($module:ident,)*) => {
+    ($($plugin:ident,)*) => {
         #[derive(Clone,Copy)]
         pub struct ValueImpl{
             code: usize,
@@ -140,37 +75,46 @@ macro_rules! project {
         }
         #[derive(Clone,Copy)]
         pub struct ValueUnionImpl{
-            $($module: ::$module::plugin_define::ValueUnion,)*
+            $($plugin: ::$plugin::plugin_define::ValueUnion,)*
         }
-        $crate::project!{@offset {}, $($module,)*}
+        $crate::project!{@offset {}, $($plugin,)*}
         $(
-            ::$module::impl_plugin!{$module}
+            ::$plugin::plugin_tokens!{$crate::project {@plugin_impl $plugin} {}}
         )*
-        $crate::plugin::group!{token_groups{$(::$module::plugin_tokens : $module,)*}}
-        token_groups!{$crate::project {@internal}{}}
+        $crate::plugin::group!{token_groups{$(::$plugin::plugin_tokens : $plugin,)*}}
+        token_groups!{$crate::project {@mono_impl}{}}
     };
-    (@offset {$($module_prev:ident)?},) => {};
-    (@offset {$($module_prev:ident)?}, $module:ident, $($rest_module:ident,)*) => {
-        mod $module{
-            pub(super) const OFFSET: usize = $(super::$module_prev + ::$module_prev::plugin_define::VALUE_COUNT +)? 0;
-            ::$module::value_code!{OFFSET}
+    (@offset {$($plugin_prev:ident)?},) => {};
+    (@offset {$($plugin_prev:ident)?}, $plugin:ident, $($rest_plugin:ident,)*) => {
+        mod $plugin{
+            pub(super) const OFFSET: usize = $(super::$plugin_prev + ::$plugin_prev::plugin_define::VALUE_COUNT +)? 0;
+            ::$plugin::plugin_tokens!{$crate::project {@variant_code}{}}
         }
-        $crate::project!{@offset {$module}, $($rest_module,)*}
+        $crate::project!{@offset {$plugin}, $($rest_plugin,)*}
     };
-    (@internal {$($module:ident{value{$($field:ident)*}{$($unit_field:ident)*}})*}) => {
+    (@variant_code {value{$($field:ident)*}{$($unit_field:ident)*}}) => {
+        $crate::project!{@variant_code @internal $($field)* $($unit_field)*}
+    };
+    (@variant_code @internal $($field:ident)*) => {
+        $(
+            #[allow(non_upper_case_globals)]
+            pub(super) const $field: usize = $crate::plugin_define::value_code::$field + OFFSET;
+        )*
+    };
+    (@mono_impl {$($plugin:ident{value{$($field:ident)*}{$($unit_field:ident)*}})*}) => {
         impl std::fmt::Debug for ValueImpl{
             fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
                 match self.code{
                     $(
                         $(
-                            self::$module::$field => {
-                                write!(f,"{}::{}: ",stringify!($module),stringify!($field))?;
-                                unsafe{self.data.$module.$field.fmt(f)}
+                            self::$plugin::$field => {
+                                write!(f,"{}::{}: ",stringify!($plugin),stringify!($field))?;
+                                unsafe{self.data.$plugin.$field.fmt(f)}
                             }
                         )*
                         $(
-                            self::$module::$field => {
-                                write!(f,"{}::{}",stringify!($module),stringify!($field))
+                            self::$plugin::$field => {
+                                write!(f,"{}::{}",stringify!($plugin),stringify!($field))
                             }
                         )*
                     )*
@@ -179,12 +123,48 @@ macro_rules! project {
             }
         }
     };
-}
-
-#[macro_export]
-macro_rules!  plugin_value_fmt{
-    ($name:ident, $value:expr) => {
-        f.write!("{}=>",stringify!($name))?;
-        value.fmt(f)
-    };
+    (@plugin_impl $plugin:ident {value{$($field:ident)*}{$($unit_field:ident)*}})=>{
+        $crate::plugin::paste!{
+            impl ::$plugin::plugin_define::Value for ValueImpl{
+                $(
+                    fn $field(self)->core::option::Option<::$plugin::plugin_define::value_type::$field>{
+                        if self.code == self::$plugin::$field{
+                            Some(unsafe{self.data.$plugin.$field})
+                        }else{
+                            None
+                        }
+                    }
+                )*
+                $(
+                    fn $unit_field(self)->bool{
+                        self.code == self::$plugin::$unit_field
+                    }
+                )*
+                $(
+                    fn [<from_ $field>](variant: ::$plugin::plugin_define::value_type::$field)->Self{
+                        ValueImpl{
+                            code: self::$plugin::$field,
+                            data: ValueUnionImpl{
+                                $plugin: ::$plugin::plugin_define::ValueUnion{
+                                    $field: variant,
+                                },
+                            }
+                        }
+                    }
+                )*
+                $(
+                    fn [<from_ $unit_field>]()->Self{
+                        ValueImpl{
+                            code: self::$plugin::$unit_field,
+                            data: ValueUnionImpl{
+                                $plugin: ::$plugin::plugin_define::ValueUnion{
+                                    $unit_field: (),
+                                },
+                            }
+                        }
+                    }
+                )*
+            }
+        }
+    }
 }

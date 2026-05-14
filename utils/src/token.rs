@@ -33,7 +33,10 @@ fn test() {
             ({$($module:ident{$($x:ident)*})*}) => {
                 $(
                     mod $module{
-                        $(pub const $x: usize = 1;)*
+                        $(
+                            #[allow(non_upper_case_globals)]
+                            pub const $x: usize = 1;
+                        )*
                     }
                 )*
             };
@@ -42,10 +45,11 @@ fn test() {
         tokens! {def {d e f}}
         group! {abc_def {abc:abc,def:def,}}
         //const K: &str = abc_def!(stringify {} {});
+        #[allow(dead_code)]
         fn test() {
             abc_def! {m {} {}}
-            abc::b;
-            def::e;
+            let _ = abc::b;
+            let _ = def::e;
         }
     }
 }
