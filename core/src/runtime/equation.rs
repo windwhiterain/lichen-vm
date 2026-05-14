@@ -1,4 +1,4 @@
-use crate::module::OperationId;
+use crate::runtime::OperationId;
 
 #[derive(Debug)]
 pub struct Equation {

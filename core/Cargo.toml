@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 lichen-utils = { path = "../utils" }
+paste = "1.0.15"

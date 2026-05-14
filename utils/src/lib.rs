@@ -1,5 +1,6 @@
 pub mod arena;
 pub mod stable_vec;
+pub mod token;
 pub const fn log2_int(x: usize) -> u32 {
     debug_assert!(x > 0);
     (usize::BITS - 1) - x.leading_zeros()
