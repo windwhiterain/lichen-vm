@@ -1,6 +1,6 @@
-use crate::runtime::OperationId;
+use crate::{plugin::Project, runtime::OperationId};
 
 #[derive(Debug)]
-pub struct Equation {
-    pub properties: Box<[OperationId]>,
+pub struct Equation<P:Project> {
+    pub operation_ids: Box<[OperationId<P>]>,
 }

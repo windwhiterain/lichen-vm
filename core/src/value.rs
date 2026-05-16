@@ -1,47 +1,91 @@
 use lichen_utils::arena::{array::ArenaArray, hashmap::ArenaHashMap};
 
 use crate::{
-    plugin_define::Value,
-    runtime::{Module, OperationId, Ptr, StringId},
+    plugin::Project,
+    runtime::{OperationId, OperationIdRaw, Ptr, StringId, solve::Solver},
 };
 
+#[derive(Debug, Clone, Copy)]
+pub enum Evaluation<P: Project> {
+    Value(P::Value),
+    Ref {
+        id: OperationId<P>,
+        brother: Option<OperationId<P>>,
+    },
+    Auto {
+        referrer_count: usize,
+        reference: Option<(OperationId<P>,OperationId<P>)>,
+    },
+}
+
 pub type Int = i64;
-pub type Array = Ptr<ArenaArray<OperationId>>;
+pub type Array = Ptr<ArenaArray<OperationIdRaw>>;
 pub type Table = Ptr<ArenaHashMap<StringId, usize>>;
 
-#[derive(Debug, Clone, Copy)]
-pub struct Auto {
-    pub referrer_count: usize,
-}
-
-pub fn root<V: Value>(value: V) -> V {
-    if let Some(operation_id) = value.reference() {
-        root(Module::<V>::value(operation_id))
-    } else {
-        value
+impl<P: Project> Evaluation<P> {
+    pub const AUTO: Self = Self::Auto {
+        referrer_count: 1,
+        reference: None,
+    };
+    pub fn evaluation_order(self) -> (usize, usize) {
+        match self {
+            Evaluation::Value(_) => (2, 0),
+            Evaluation::Ref { id, .. } => id.evaluation().evaluation_order(),
+            Evaluation::Auto { referrer_count, .. } => (1, referrer_count),
+        }
     }
 }
 
-pub fn root_mut<V: Value>(value: &mut V) -> &mut V {
-    if let Some(operation_id) = value.reference() {
-        root_mut(Module::<V>::value_mut(operation_id))
-    } else {
-        value
+impl<P: Project> OperationId<P>{
+    pub fn root(self) -> OperationId<P> {
+        if let Evaluation::Ref{id, ..} = self.evaluation_mut() {
+            let ret = id.root();
+            *id = ret;
+            ret
+        } else {
+            self
+        }
     }
-}
-
-pub fn solve_order<V: Value>(value: V) -> (usize, usize) {
-    if let Some(auto) = value.auto() {
-        (1, auto.referrer_count)
-    } else if value.none() {
-        (0, 0)
-    } else {
-        (2, 0)
+    pub fn set_value(self, value: P::Value) {
+        let evaluation = self.evaluation_mut();
+        let Evaluation::Auto {
+            reference,
+            ..
+        } = *evaluation
+        else {
+            panic!()
+        };
+        let mut reference_iter = reference.map(|x|x.0);
+        while let Some(reference) = reference_iter {
+            let evaluation = reference.evaluation_mut();
+            let Evaluation::Ref { brother, .. } = *evaluation else {
+                unreachable!();
+            };
+            reference_iter = brother;
+            Solver::set_operation_value(reference, value);
+        }
+        Solver::set_operation_value(self, value);
     }
-}
-
-impl Auto {
-    pub fn new() -> Self {
-        Self { referrer_count: 1 }
+    pub fn set_ref(self, id: OperationId<P>){
+        let evaluation = self.evaluation_mut();
+        let Evaluation::Auto { referrer_count:self_referrer_count,reference:self_reference, .. } = *evaluation else{panic!()};
+        let Evaluation::Auto { referrer_count, reference } = id.evaluation_mut() else{panic!()};
+        *referrer_count+=self_referrer_count;
+        if let Some(self_reference) = self_reference{
+            if let Some(reference) = reference{
+                let Evaluation::Ref { brother, .. } = self_reference.1.evaluation_mut() else{unreachable!()};
+                *brother = Some(reference.0);
+                reference.0 = self;
+            }
+            *evaluation = Evaluation::Ref { id, brother: Some(self_reference.0) };
+        }
+        else{
+            if let Some(reference) = reference{
+                *evaluation = Evaluation::Ref { id, brother: Some(reference.0) };
+                reference.0 = self;
+            }else{
+                *evaluation = Evaluation::Ref { id, brother: None };
+            }
+        }
     }
 }

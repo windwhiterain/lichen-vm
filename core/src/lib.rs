@@ -6,7 +6,7 @@ pub mod value;
 
 pub mod plugin_define{
     pub use crate::{
-        value::{Array, Auto, Int, Table},
+        value::{Array, Int, Table},
         runtime::{
             OperationId, StringId,     
         }
@@ -17,11 +17,13 @@ pub mod plugin_define{
             string: StringId,
             array: Array,
             table: Table,
-            auto: Auto,
-            reference: OperationId,
         }{
-            none,
             unit,
+        }
+        operation{
+            sum:crate::runtime::operation::sum,
+            index:crate::runtime::operation::index,
+            find:crate::runtime::operation::find,
         }
     }
 }

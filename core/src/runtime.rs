@@ -1,25 +1,43 @@
-use std::{fmt::Debug, ptr::NonNull};
+use std::{fmt::Debug, marker::PhantomData, ptr::NonNull};
 
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
-use crate::runtime::{equation::Equation, operation::Operation};
+use crate::{
+    plugin::Project,
+    runtime::{equation::Equation, operation::Operation},
+    value::Evaluation,
+};
 
 pub mod equation;
 pub mod operation;
-pub mod solver;
+pub mod solve;
 pub mod switch;
+
 #[derive(Debug)]
-pub struct Module<V> {
+pub struct Module<P: Project> {
     pub arena: Arena,
-    pub operations: StableVec<Operation>,
-    pub values: StableVec<V>,
-    pub equations: StableVec<Equation>,
+    pub operations: StableVec<Option<Operation<P>>>,
+    pub evaluations: StableVec<Evaluation<P>>,
+    pub solve_operations: Vec<solve::Operation<P>>,
+    pub equations: StableVec<Equation<P>>,
+}
+#[derive(Debug, Default)]
+pub struct Solving<P: Project> {
+    pub is_solving: bool,
+    pub dependents: Vec<OperationId<P>>,
+    pub dependencies_count: usize,
 }
 pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationId {
+pub struct OperationIdRaw {
     pub module: ModuleId,
     pub local: OperationIdLocal,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OperationId<P: Project> {
+    pub module: ModuleId,
+    pub local: OperationIdLocal,
+    _p: PhantomData<P>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OperationIdLocal(pub usize);
@@ -30,33 +48,85 @@ pub struct SwitchId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringId(pub usize);
 
-impl<V: Copy> Module<V> {
+impl<P: Project> Module<P> {
     pub fn new() -> Self {
         Self {
             arena: Default::default(),
             operations: Default::default(),
-            values: Default::default(),
+            evaluations: Default::default(),
+            solve_operations: Default::default(),
             equations: Default::default(),
         }
     }
-    pub fn add_operation(&mut self, operation: Operation, value: V) -> OperationId {
+    fn add_operation_raw(
+        &mut self,
+        operation: Option<Operation<P>>,
+        value: Evaluation<P>,
+    ) -> OperationId<P> {
         let (local, _) = self.operations.push(operation);
-        self.values.push(value);
-        OperationId {
-            module: ModuleId::from_ref(self),
-            local: OperationIdLocal(local),
-        }
+        self.evaluations.push(value);
+        self.solve_operations.push(Default::default());
+        OperationId::new(ModuleId::from_ref(self), OperationIdLocal(local))
     }
-    pub fn add_equation(&mut self, equation: Equation) {
+    pub fn add_operation(&mut self, operation: Operation<P>) -> OperationId<P> {
+        self.add_operation_raw(Some(operation), Evaluation::AUTO)
+    }
+    pub fn add_literal(&mut self, value: Evaluation<P>) -> OperationId<P> {
+        self.add_operation_raw(None, value)
+    }
+    pub fn add_equation(&mut self, equation: Equation<P>) {
         self.equations.push(equation);
     }
-    pub fn value<'a>(operation_id: OperationId) -> V {
-        let module = operation_id.module.as_ref();
-        *module.values.get(operation_id.local.0)
+}
+
+impl OperationIdRaw {
+    pub fn project<P: Project>(self) -> OperationId<P> {
+        OperationId::new(self.module, self.local)
     }
-    pub fn value_mut<'a>(operation_id: OperationId) -> &'a mut V {
-        let module = operation_id.module.as_mut();
-        module.values.get_mut(operation_id.local.0)
+}
+impl<P: Project> OperationId<P> {
+    pub fn new(module: ModuleId, local: OperationIdLocal) -> Self {
+        Self {
+            module,
+            local,
+            _p: Default::default(),
+        }
+    }
+    pub fn raw(self) -> OperationIdRaw {
+        OperationIdRaw {
+            module: self.module,
+            local: self.local,
+        }
+    }
+    pub fn operation(self) -> Option<Operation<P>> {
+        let module = self.module.as_ref::<P>();
+        *module.operations.get(self.local.0)
+    }
+    pub fn evaluation(self) -> Evaluation<P> {
+        let module = self.module.as_ref::<P>();
+        *module.evaluations.get(self.local.0)
+    }
+    pub fn evaluation_mut<'a>(self) -> &'a mut Evaluation<P> {
+        let module = self.module.as_mut::<P>();
+        module.evaluations.get_mut(self.local.0)
+    }
+    pub fn solve_state_mut<'a>(self) -> &'a mut solve::SolveState
+    where
+        P: 'a,
+    {
+        let module = self.module.as_mut::<P>();
+        &mut module.solve_operations.get_mut(self.local.0).unwrap().state
+    }
+    pub fn dependents_mut<'a>(self) -> &'a mut Vec<OperationId<P>>
+    where
+        P: 'a,
+    {
+        let module = self.module.as_mut::<P>();
+        &mut module
+            .solve_operations
+            .get_mut(self.local.0)
+            .unwrap()
+            .dependents
     }
 }
 
@@ -70,14 +140,14 @@ impl<T> Ptr<T> {
 }
 
 impl ModuleId {
-    pub fn from_ref<V>(r: &Module<V>) -> Self {
-        Self(r as *const Module<V> as *const () as *mut ())
+    pub fn from_ref<P: Project>(r: &Module<P>) -> Self {
+        Self(r as *const Module<P> as *const () as *mut ())
     }
-    pub fn as_ref<'a, V>(self) -> &'a Module<V> {
-        unsafe { &*(self.0 as *mut Module<V>) }
+    pub fn as_ref<'a, P: Project>(self) -> &'a Module<P> {
+        unsafe { &*(self.0 as *mut Module<P>) }
     }
-    pub fn as_mut<'a, V>(self) -> &'a mut Module<V> {
-        unsafe { &mut *(self.0 as *mut Module<V>) }
+    pub fn as_mut<'a, P: Project>(self) -> &'a mut Module<P> {
+        unsafe { &mut *(self.0 as *mut Module<P>) }
     }
 }
 

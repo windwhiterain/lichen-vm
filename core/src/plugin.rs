@@ -1,10 +1,17 @@
+use std::fmt::Debug;
+
 pub use lichen_utils::group;
 pub use lichen_utils::tokens;
 pub use paste::paste;
 
+pub trait Project:Debug+Clone+Copy+Eq+Default{
+    type Value: Copy+Debug+Eq;
+    type Operator: crate::runtime::operation::Operator<Self>; 
+}
+
 #[macro_export]
 macro_rules! plugin {
-    (value{$($field:ident : $type: ident,)*}{$($unit_field:ident,)*}) => {
+    (value{$($field:ident : $type: ident,)*}{$($unit_field:ident,)*}operation{$($name:ident : $func:path,)*}) => {
         $crate::plugin::paste!{
             pub trait Value: Sized + Copy{
                 $(
@@ -20,6 +27,9 @@ macro_rules! plugin {
                     fn [<from_ $unit_field>]()->Self;
                 )*
             }
+        }
+        pub trait Operator<P:$crate::plugin::Project>: $crate::runtime::operation::Operator<P>{
+            $(fn $name()->Self;)*
         }
         pub const VALUE_COUNT: usize = $crate::plugin!(@count $($field)* $($unit_field)*);
         #[derive(Clone,Copy)]
@@ -50,10 +60,17 @@ macro_rules! plugin {
                 pub type $field = super::$type;
             )*
         }
+        pub mod operation_func{
+            $(
+                #[allow(non_camel_case_types)]
+                pub use $func as $name;
+            )*
+        }
         $crate::plugin::tokens!{
             #[macro_export]
             plugin_tokens{
                 value{$($field)*}{$($unit_field)*}
+                operation{$($name)*}
             }
         }
     };
@@ -73,9 +90,18 @@ macro_rules! project {
             code: usize,
             data: ValueUnionImpl,
         }
+        impl core::cmp::Eq for ValueImpl{}
         #[derive(Clone,Copy)]
         pub struct ValueUnionImpl{
             $($plugin: ::$plugin::plugin_define::ValueUnion,)*
+        }
+        #[derive(Clone,Copy)]
+        pub struct OperatorImpl(usize);
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+        pub struct ProjectImpl;
+        impl $crate::plugin::Project for ProjectImpl{
+            type Value = ValueImpl;
+            type Operator = OperatorImpl;
         }
         $crate::project!{@offset {}, $($plugin,)*}
         $(
@@ -92,7 +118,7 @@ macro_rules! project {
         }
         $crate::project!{@offset {$plugin}, $($rest_plugin,)*}
     };
-    (@variant_code {value{$($field:ident)*}{$($unit_field:ident)*}}) => {
+    (@variant_code {value{$($field:ident)*}{$($unit_field:ident)*}$($_:tt)*}) => {
         $crate::project!{@variant_code @internal $($field)* $($unit_field)*}
     };
     (@variant_code @internal $($field:ident)*) => {
@@ -101,7 +127,7 @@ macro_rules! project {
             pub(super) const $field: usize = $crate::plugin_define::value_code::$field + OFFSET;
         )*
     };
-    (@mono_impl {$($plugin:ident{value{$($field:ident)*}{$($unit_field:ident)*}})*}) => {
+    (@mono_impl {$($plugin:ident{value{$($field:ident)*}{$($unit_field:ident)*}operation{$($name:ident)*}})*}) => {
         impl std::fmt::Debug for ValueImpl{
             fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
                 match self.code{
@@ -113,8 +139,8 @@ macro_rules! project {
                             }
                         )*
                         $(
-                            self::$plugin::$field => {
-                                write!(f,"{}::{}",stringify!($plugin),stringify!($field))
+                            self::$plugin::$unit_field => {
+                                write!(f,"{}::{}",stringify!($plugin),stringify!($unit_field))
                             }
                         )*
                     )*
@@ -122,8 +148,79 @@ macro_rules! project {
                 }
             }
         }
+        impl core::cmp::PartialEq for ValueImpl{
+            fn eq(&self,other:&Self)->bool{
+                if self.code!=other.code{return false;}
+                match self.code{
+                    $(
+                        $(
+                            self::$plugin::$field => unsafe{self.data.$plugin.$field == other.data.$plugin.$field},
+                        )*
+                        $(
+                            self::$plugin::$unit_field => true,
+                        )*
+                    )*
+                    _=>unreachable!(),
+                }
+            }
+            fn ne(&self,other:&Self)->bool{
+                if self.code!=other.code{return true;}
+                match self.code{
+                    $(
+                        $(
+                            self::$plugin::$field => unsafe{self.data.$plugin.$field != other.data.$plugin.$field},
+                        )*
+                        $(
+                            self::$plugin::$unit_field => false,
+                        )*
+                    )*
+                    _=>unreachable!(),
+                }
+            }
+        }
+        $crate::plugin::paste!{
+            #[allow(non_camel_case_types)]
+            #[repr(usize)]
+            enum OperationCode{
+                $($(
+                    [<$plugin __ $name>],
+                )*)*
+            }
+            mod operation_code{
+                $(
+                    pub(super) mod $plugin{
+                        $(
+                            #[allow(non_upper_case_globals)]
+                            pub(in super::super) const $name:usize = super::super::OperationCode::[<$plugin __ $name>] as usize;
+                        )*
+                    }
+                )*
+            }
+        }
+        
+        impl $crate::runtime::operation::Operator<ProjectImpl> for OperatorImpl{
+            fn run(self, param:ValueImpl, operation_id: $crate::runtime::OperationId<ProjectImpl>)->Option<ValueImpl>{
+                match self.0{
+                    $($(
+                        self::operation_code::$plugin::$name => ::$plugin::plugin_define::operation_func::$name::<ProjectImpl>(param, operation_id),
+                    )*)*
+                    _=>unreachable!()
+                }
+            }
+        }
+        impl std::fmt::Debug for OperatorImpl{
+            fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
+                match self.0{
+                    0=>write!(f,"none"),
+                    $($(
+                        self::operation_code::$plugin::$name => write!(f,"{}:{}",stringify!($plugin),stringify!($name)),
+                    )*)*
+                    _=>unreachable!(),
+                }
+            }
+        }
     };
-    (@plugin_impl $plugin:ident {value{$($field:ident)*}{$($unit_field:ident)*}})=>{
+    (@plugin_impl $plugin:ident {value{$($field:ident)*}{$($unit_field:ident)*}operation{$($name:ident)*}})=>{
         $crate::plugin::paste!{
             impl ::$plugin::plugin_define::Value for ValueImpl{
                 $(
@@ -166,5 +263,6 @@ macro_rules! project {
                 )*
             }
         }
+        
     }
 }
