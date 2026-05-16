@@ -2,12 +2,15 @@ use std::{fmt::Debug, mem::MaybeUninit, ptr::NonNull};
 
 use crate::arena::Arena;
 
-#[derive(Clone)]
 pub struct ArenaArray<T>(NonNull<[MaybeUninit<T>]>);
 
 impl<T> ArenaArray<T> {
     pub fn new(arena: &mut Arena, len: usize) -> Self {
         Self(NonNull::from_mut(arena.add_slice_uninit(len)))
+    }
+    pub fn from_iter(arena: &mut Arena, iter: impl Iterator<Item = T>) -> Self
+    {
+        Self(NonNull::from_mut(unsafe { std::mem::transmute(arena.add_iter(iter)) }))
     }
     pub fn len(&self) -> usize {
         self.0.len()
@@ -45,6 +48,14 @@ impl<T: Clone> ArenaArray<T> {
     }
 }
 
+impl<T> Clone for ArenaArray<T>{
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<T> Copy for ArenaArray<T>{}
+
 impl<T: Default> ArenaArray<T> {
     pub fn new_default(arena: &mut Arena, len: usize) -> Self {
         let mut ret = Self::new(arena, len);
@@ -60,3 +71,11 @@ impl<T: Debug> Debug for ArenaArray<T> {
         f.debug_list().entries(self.iter()).finish()
     }
 }
+
+impl<T> PartialEq for ArenaArray<T>{
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
+    }
+}
+
+impl<T> Eq for ArenaArray<T>{}

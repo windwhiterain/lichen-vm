@@ -1,4 +1,7 @@
-use std::hash::{DefaultHasher, Hash, Hasher as _};
+use std::{
+    fmt::Debug,
+    hash::{DefaultHasher, Hash, Hasher as _},
+};
 
 use crate::{
     arena::{Arena, array::ArenaArray},
@@ -7,7 +10,6 @@ use crate::{
 
 type Hasher = DefaultHasher;
 
-#[derive(Debug, Clone)]
 pub struct ArenaHashMap<K, V> {
     table: ArenaArray<Option<usize>>,
     entries: ArenaArray<Entry<K, V>>,
@@ -24,6 +26,15 @@ where
             table: ArenaArray::new_default(arena, table_len),
             entries: ArenaArray::new(arena, len),
         }
+    }
+    pub fn from_iter(arena: &mut Arena, iter: impl Iterator<Item = (K, V)>) -> Self {
+        let len = iter.size_hint().0;
+        debug_assert!(iter.size_hint().1 == Some(len));
+        let mut ret = Self::new(arena, len);
+        for (index, (key, value)) in iter.enumerate() {
+            ret.insert(index, key, value);
+        }
+        ret
     }
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -122,6 +133,33 @@ struct ProbingState {
     pub hash: usize,
     pub iteration: usize,
 }
+
+impl<K, V> Clone for ArenaHashMap<K, V> {
+    fn clone(&self) -> Self {
+        Self {
+            table: self.table.clone(),
+            entries: self.entries.clone(),
+        }
+    }
+}
+
+impl<K, V> Copy for ArenaHashMap<K, V> {}
+
+impl<K: Debug, V: Debug> Debug for ArenaHashMap<K, V> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.entries.iter().map(|x| (&x.key, &x.value)))
+            .finish()
+    }
+}
+
+impl<K, V> PartialEq for ArenaHashMap<K, V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.table == other.table && self.entries == other.entries
+    }
+}
+
+impl<K, V> Eq for ArenaHashMap<K, V> {}
 
 #[test]
 fn test() {

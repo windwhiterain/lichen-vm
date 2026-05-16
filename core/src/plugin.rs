@@ -263,6 +263,13 @@ macro_rules! project {
                 )*
             }
         }
+        impl ::$plugin::plugin_define::Operator<ProjectImpl> for OperatorImpl{
+            $(
+                fn $name()->Self{
+                    Self(self::operation_code::$plugin::$name)
+                }
+            )*
+        }
         
     }
 }

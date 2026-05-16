@@ -21,7 +21,6 @@ macro_rules! params {
         let Some(params) = $params.array() else {
             return None;
         };
-        let params = params.as_ref();
         if params.len() != params!(@count $(,$variant)*) {
             return None;
         }
@@ -47,7 +46,7 @@ pub fn sum<P: Project<Value: Value>>(
         return None;
     };
     let mut ret = 0;
-    for param in params.as_ref().iter().copied() {
+    for param in params.iter().copied() {
         let Some(int) = Solver::solve_operation(param.project(), Some(operation_id))?.int() else {
             return None;
         };
@@ -61,7 +60,6 @@ pub fn index<P: Project<Value: Value>>(
     operation_id: OperationId<P>,
 ) -> Option<P::Value> {
     let (array, index) = params!(param, operation_id, P::Value::array, P::Value::int,);
-    let array = array.as_ref();
     if index >= array.len() as i64 || index < 0 {
         return None;
     }
@@ -75,7 +73,6 @@ pub fn find<P: Project<Value: Value>>(
     operation_id: OperationId<P>,
 ) -> Option<P::Value> {
     let (table, name) = params!(param, operation_id, P::Value::table, P::Value::string,);
-    let table = table.as_ref();
     let index = *table.get(name)?;
     Some(P::Value::from_int(index as i64))
 }

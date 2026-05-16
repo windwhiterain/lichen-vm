@@ -161,7 +161,6 @@ impl<P: Project> Solver<P> {
                     if let Some(max_array) = max_value.array()
                         && let Some(array) = value.array()
                     {
-                        let (max_array, array) = (max_array.as_ref(), array.as_ref());
                         assert!(max_array.len() == array.len());
                         for i in 0..max_array.len() {
                             Self::solve_equation(&[
