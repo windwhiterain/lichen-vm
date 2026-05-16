@@ -2,31 +2,31 @@ use lichen_utils::arena::{array::ArenaArray, hashmap::ArenaHashMap};
 
 use crate::{
     plugin::Project,
-    runtime::{Module, OperationId, OperationIdRaw, Ptr, StringId, solve::Solver},
+    runtime::{Module, NodeId, NodeIdRaw, StringId, solve::Solver},
 };
 
 #[derive(Debug, Clone, Copy)]
 pub enum Evaluation<P: Project> {
     Value(P::Value),
     Ref {
-        id: OperationId<P>,
-        brother: Option<OperationId<P>>,
+        node: NodeId<P>,
+        brother: Option<NodeId<P>>,
     },
     Auto {
         referrer_count: usize,
-        reference: Option<(OperationId<P>, OperationId<P>)>,
+        reference: Option<(NodeId<P>, NodeId<P>)>,
     },
 }
 
 pub type Int = i64;
-pub type Array = ArenaArray<OperationIdRaw>;
+pub type Array = ArenaArray<NodeIdRaw>;
 pub type Table = ArenaHashMap<StringId, usize>;
 
 pub fn new_array<P: Project>(
     module: &mut Module<P>,
-    operations: impl Iterator<Item = OperationId<P>>,
+    nodes: impl Iterator<Item = NodeId<P>>,
 ) -> Array {
-    Array::from_iter(&mut module.arena, operations.map(|x| x.raw()))
+    Array::from_iter(&mut module.arena, nodes.map(|x| x.raw()))
 }
 pub fn new_table<P: Project>(
     module: &mut Module<P>,
@@ -43,15 +43,15 @@ impl<P: Project> Evaluation<P> {
     pub fn evaluation_order(self) -> (usize, usize) {
         match self {
             Evaluation::Value(_) => (2, 0),
-            Evaluation::Ref { id, .. } => id.evaluation().evaluation_order(),
+            Evaluation::Ref { node: id, .. } => id.evaluation().evaluation_order(),
             Evaluation::Auto { referrer_count, .. } => (1, referrer_count),
         }
     }
 }
 
-impl<P: Project> OperationId<P> {
-    pub fn root(self) -> OperationId<P> {
-        if let Evaluation::Ref { id, .. } = self.evaluation_mut() {
+impl<P: Project> NodeId<P> {
+    pub fn root(self) -> NodeId<P> {
+        if let Evaluation::Ref { node: id, .. } = self.evaluation_mut() {
             let ret = id.root();
             *id = ret;
             ret
@@ -71,11 +71,11 @@ impl<P: Project> OperationId<P> {
                 unreachable!();
             };
             reference_iter = brother;
-            Solver::set_operation_value(reference, value);
+            Solver::set_node_value(reference, value);
         }
-        Solver::set_operation_value(self, value);
+        Solver::set_node_value(self, value);
     }
-    pub fn set_ref(self, id: OperationId<P>) {
+    pub fn set_ref(self, node: NodeId<P>) {
         let evaluation = self.evaluation_mut();
         let Evaluation::Auto {
             referrer_count: self_referrer_count,
@@ -88,7 +88,7 @@ impl<P: Project> OperationId<P> {
         let Evaluation::Auto {
             referrer_count,
             reference,
-        } = id.evaluation_mut()
+        } = node.evaluation_mut()
         else {
             panic!()
         };
@@ -102,18 +102,21 @@ impl<P: Project> OperationId<P> {
                 reference.0 = self;
             }
             *evaluation = Evaluation::Ref {
-                id,
+                node,
                 brother: Some(self_reference.0),
             };
         } else {
             if let Some(reference) = reference {
                 *evaluation = Evaluation::Ref {
-                    id,
+                    node,
                     brother: Some(reference.0),
                 };
                 reference.0 = self;
             } else {
-                *evaluation = Evaluation::Ref { id, brother: None };
+                *evaluation = Evaluation::Ref {
+                    node,
+                    brother: None,
+                };
             }
         }
     }

@@ -3,8 +3,7 @@ use std::marker::PhantomData;
 use crate::{
     plugin::Project,
     plugin_define::Value,
-    runtime::{OperationId, equation::Equation, operation::Operator},
-    value::Evaluation,
+    runtime::{NodeId, equation::Equation, operation::Operator, value::Evaluation},
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -19,18 +18,18 @@ pub enum SolveState {
 }
 
 #[derive(Debug, Default)]
-pub struct Operation<P: Project> {
+pub struct Solve<P: Project> {
     pub state: SolveState,
-    pub dependents: Vec<OperationId<P>>,
+    pub dependents: Vec<NodeId<P>>,
 }
 
 pub struct Solver<P: Project> {
     _p: PhantomData<P>,
 }
 impl<P: Project> Solver<P> {
-    pub fn set_operation_value(operation_id: OperationId<P>, value: P::Value) {
-        *operation_id.evaluation_mut() = Evaluation::Value(value);
-        for dependent in std::mem::take(operation_id.dependents_mut()) {
+    pub fn set_node_value(node: NodeId<P>, value: P::Value) {
+        *node.evaluation_mut() = Evaluation::Value(value);
+        for dependent in std::mem::take(node.dependents_mut()) {
             let SolveState::Pending {
                 dependencies_count, ..
             } = dependent.solve_state_mut()
@@ -38,16 +37,13 @@ impl<P: Project> Solver<P> {
                 unreachable!()
             };
             *dependencies_count -= 1;
-            Self::solve_operation(dependent, None);
+            Self::solve_node(dependent, None);
         }
     }
-    pub fn solve_operation(
-        operation_id: OperationId<P>,
-        dependent: Option<OperationId<P>>,
-    ) -> Option<P::Value> {
+    pub fn solve_node(node: NodeId<P>, dependent: Option<NodeId<P>>) -> Option<P::Value> {
         let operation_value = 'operation_value: {
-            if let Some(operation) = operation_id.operation() {
-                let solve_state = operation_id.solve_state_mut();
+            if let Some(operation) = node.operation() {
+                let solve_state = node.solve_state_mut();
                 let is_solving = match solve_state {
                     SolveState::None => {
                         *solve_state = SolveState::Pending {
@@ -70,9 +66,9 @@ impl<P: Project> Solver<P> {
                     }
                     SolveState::Solved => break 'operation_value None,
                 };
-                if let Some(param) = Self::solve_operation(operation.param, Some(operation_id)) {
-                    if let Some(value) = operation.operator.run(param, operation.param) {
-                        *operation_id.solve_state_mut() = SolveState::Solved;
+                if let Some(param) = Self::solve_node(operation.operand, Some(node)) {
+                    if let Some(value) = operation.operator.run(param, operation.operand) {
+                        *node.solve_state_mut() = SolveState::Solved;
                         break 'operation_value Some(value);
                     }
                 }
@@ -82,7 +78,7 @@ impl<P: Project> Solver<P> {
                 None
             }
         };
-        let root = operation_id.root();
+        let root = node.root();
         let evaluation = root.evaluation_mut();
         if let Evaluation::Value(value) = evaluation {
             if let Some(operation_value) = operation_value {
@@ -120,42 +116,42 @@ impl<P: Project> Solver<P> {
         P::Value: Value,
     {
         for equation in equations {
-            for operation_id in equation.operation_ids.iter().copied() {
-                Self::solve_operation(operation_id, None);
+            for operation_id in equation.nodes.iter().copied() {
+                Self::solve_node(operation_id, None);
             }
-            Self::solve_equation(&equation.operation_ids);
+            Self::solve_equation(&equation.nodes);
         }
     }
-    pub fn solve_equation(operations: &[OperationId<P>])
+    pub fn solve_equation(nodes: &[NodeId<P>])
     where
         P::Value: Value,
     {
-        let (mut max_evaluation, mut max_order, mut max_operation) = (
+        let (mut max_evaluation, mut max_order, mut max_root) = (
             &mut Evaluation::AUTO.clone(),
             (0, 0),
-            *operations.first().unwrap(),
+            *nodes.first().unwrap(),
         );
-        for operation in operations.iter().copied() {
-            let operation = operation.root();
-            let evaluation = operation.evaluation_mut();
+        for node in nodes.iter().copied() {
+            let root = node.root();
+            let evaluation = root.evaluation_mut();
             let order = evaluation.evaluation_order();
             if order > max_order {
                 max_evaluation = evaluation;
                 max_order = order;
-                max_operation = operation;
+                max_root = root;
             }
             if order.0 == 2 {
                 break;
             }
         }
-        for operation in operations.iter().copied() {
-            let operation = operation.root();
-            if operation == max_operation {
+        for node in nodes.iter().copied() {
+            let root = node.root();
+            if root == max_root {
                 continue;
             }
-            let evaluation = operation.evaluation_mut();
+            let evaluation = root.evaluation_mut();
             if let Evaluation::Auto { .. } = max_evaluation {
-                operation.set_ref(max_operation);
+                root.set_ref(max_root);
             } else if let Evaluation::Value(max_value) = *max_evaluation {
                 if let Evaluation::Value(value) = evaluation {
                     if let Some(max_array) = max_value.array()
@@ -174,7 +170,7 @@ impl<P: Project> Solver<P> {
                         }
                     }
                 } else if let Evaluation::Auto { .. } = evaluation {
-                    operation.set_value(max_value);
+                    root.set_value(max_value);
                 } else {
                     unreachable!()
                 }

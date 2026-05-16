@@ -1,78 +1,72 @@
 use crate::{
     plugin::Project,
     plugin_define::Value,
-    runtime::{OperationId, solve::Solver},
+    runtime::{NodeId, solve::Solver},
 };
 
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Operation<P: Project> {
-    pub param: OperationId<P>,
+    pub operand: NodeId<P>,
     pub operator: P::Operator,
 }
 
 pub trait Operator<P: Project>: Copy + Debug {
-    fn run(self, param: P::Value, operation_id: OperationId<P>) -> Option<P::Value>;
+    fn run(self, param: P::Value, operation_id: NodeId<P>) -> Option<P::Value>;
 }
 
-macro_rules! params {
-    ($params:ident, $operation_id:ident, $($variant: path,)*) => {{
-        let Some(params) = $params.array() else {
+macro_rules! operands {
+    ($operand:ident, $node:ident, $($variant: path,)*) => {{
+        let Some(operands) = $operand.array() else {
             return None;
         };
-        if params.len() != params!(@count $(,$variant)*) {
+        if operands.len() != operands!(@count $(,$variant)*) {
             return None;
         }
-        let mut params = params.iter();
+        let mut operands = operands.iter();
         ($({
-            let param = *params.next().unwrap();
-            let param = Solver::solve_operation(param.project(),Some($operation_id))?;
-            let Some(param) = $variant(param) else {
+            let operand = *operands.next().unwrap();
+            let operand = Solver::solve_node(operand.project(),Some($node))?;
+            let Some(operand) = $variant(operand) else {
                 return None;
             };
-            param
+            operand
         },)*)
     }};
     (@count) => (0);
-    (@count, $variant0: path $(, $variant1: path)*) => (1 + params!(@count $(, $variant1)*));
+    (@count, $variant0: path $(, $variant1: path)*) => (1 + operands!(@count $(, $variant1)*));
 }
 
-pub fn sum<P: Project<Value: Value>>(
-    param: P::Value,
-    operation_id: OperationId<P>,
-) -> Option<P::Value> {
-    let Some(params) = param.array() else {
+pub fn sum<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
+    let Some(operands) = operand.array() else {
         return None;
     };
-    let mut ret = 0;
-    for param in params.iter().copied() {
-        let Some(int) = Solver::solve_operation(param.project(), Some(operation_id))?.int() else {
-            return None;
+    let mut ret = Some(0);
+    for operand in operands.iter().copied() {
+        let Some(value) = Solver::solve_node(operand.project(), Some(node)) else {
+            ret = None;
+            continue;
         };
-        ret += int;
+        if let Some(ret) = &mut ret {
+            *ret += value.int()?;
+        }
     }
-    Some(P::Value::from_int(ret))
+    ret.map(|x| P::Value::from_int(x))
 }
 
-pub fn index<P: Project<Value: Value>>(
-    param: P::Value,
-    operation_id: OperationId<P>,
-) -> Option<P::Value> {
-    let (array, index) = params!(param, operation_id, P::Value::array, P::Value::int,);
+pub fn index<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
+    let (array, index) = operands!(operand, node, P::Value::array, P::Value::int,);
     if index >= array.len() as i64 || index < 0 {
         return None;
     }
-    let reference_operation_id = array.get(index as usize).project();
-    Solver::solve_equation(&[operation_id, reference_operation_id]);
-    Solver::solve_operation(reference_operation_id, Some(operation_id))
+    let reference_node = array.get(index as usize).project();
+    Solver::solve_equation(&[node, reference_node]);
+    Solver::solve_node(reference_node, Some(node))
 }
 
-pub fn find<P: Project<Value: Value>>(
-    param: P::Value,
-    operation_id: OperationId<P>,
-) -> Option<P::Value> {
-    let (table, name) = params!(param, operation_id, P::Value::table, P::Value::string,);
+pub fn find<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
+    let (table, name) = operands!(operand, node, P::Value::table, P::Value::string,);
     let index = *table.get(name)?;
     Some(P::Value::from_int(index as i64))
 }

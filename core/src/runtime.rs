@@ -4,8 +4,7 @@ use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
 use crate::{
     plugin::Project,
-    runtime::{equation::Equation, operation::Operation},
-    value::Evaluation,
+    runtime::{equation::Equation, operation::Operation, solve::Solve, value::Evaluation},
 };
 
 pub mod equation;
@@ -13,34 +12,30 @@ pub mod operation;
 pub mod solve;
 pub mod switch;
 
+pub mod value;
+
 #[derive(Debug)]
 pub struct Module<P: Project> {
     pub arena: Arena,
     pub operations: StableVec<Option<Operation<P>>>,
     pub evaluations: StableVec<Evaluation<P>>,
-    pub solve_operations: Vec<solve::Operation<P>>,
+    pub solves: Vec<Solve<P>>,
     pub equations: StableVec<Equation<P>>,
-}
-#[derive(Debug, Default)]
-pub struct Solving<P: Project> {
-    pub is_solving: bool,
-    pub dependents: Vec<OperationId<P>>,
-    pub dependencies_count: usize,
 }
 pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationIdRaw {
+pub struct NodeIdRaw {
     pub module: ModuleId,
-    pub local: OperationIdLocal,
+    pub local: NodeIdLocal,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationId<P: Project> {
+pub struct NodeId<P: Project> {
     pub module: ModuleId,
-    pub local: OperationIdLocal,
+    pub local: NodeIdLocal,
     _p: PhantomData<P>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OperationIdLocal(pub usize);
+pub struct NodeIdLocal(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleId(pub *mut ());
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,46 +49,45 @@ impl<P: Project> Module<P> {
             arena: Default::default(),
             operations: Default::default(),
             evaluations: Default::default(),
-            solve_operations: Default::default(),
+            solves: Default::default(),
             equations: Default::default(),
         }
     }
-    fn add_operation_raw(
-        &mut self,
-        operation: Option<Operation<P>>,
-        value: Evaluation<P>,
-    ) -> OperationId<P> {
+    fn add_node_raw(&mut self, operation: Option<Operation<P>>, value: Evaluation<P>) -> NodeId<P> {
         let (local, _) = self.operations.push(operation);
         self.evaluations.push(value);
-        self.solve_operations.push(Default::default());
-        OperationId::new(ModuleId::from_ref(self), OperationIdLocal(local))
+        self.solves.push(Default::default());
+        NodeId::new(ModuleId::from_ref(self), NodeIdLocal(local))
     }
-    pub fn add_operation(&mut self, operation: Operation<P>) -> OperationId<P> {
-        self.add_operation_raw(Some(operation), Evaluation::AUTO)
+    pub fn add_operation(&mut self, operation: Operation<P>) -> NodeId<P> {
+        self.add_node_raw(Some(operation), Evaluation::AUTO)
     }
-    pub fn add_literal(&mut self, value: Evaluation<P>) -> OperationId<P> {
-        self.add_operation_raw(None, value)
+    pub fn add_literal(&mut self, value: P::Value) -> NodeId<P> {
+        self.add_node_raw(None, Evaluation::Value(value))
+    }
+    pub fn add_auto(&mut self) -> NodeId<P> {
+        self.add_node_raw(None, Evaluation::AUTO)
     }
     pub fn add_equation(&mut self, equation: Equation<P>) {
         self.equations.push(equation);
     }
 }
 
-impl OperationIdRaw {
-    pub fn project<P: Project>(self) -> OperationId<P> {
-        OperationId::new(self.module, self.local)
+impl NodeIdRaw {
+    pub fn project<P: Project>(self) -> NodeId<P> {
+        NodeId::new(self.module, self.local)
     }
 }
-impl<P: Project> OperationId<P> {
-    pub fn new(module: ModuleId, local: OperationIdLocal) -> Self {
+impl<P: Project> NodeId<P> {
+    pub fn new(module: ModuleId, local: NodeIdLocal) -> Self {
         Self {
             module,
             local,
             _p: Default::default(),
         }
     }
-    pub fn raw(self) -> OperationIdRaw {
-        OperationIdRaw {
+    pub fn raw(self) -> NodeIdRaw {
+        NodeIdRaw {
             module: self.module,
             local: self.local,
         }
@@ -115,18 +109,14 @@ impl<P: Project> OperationId<P> {
         P: 'a,
     {
         let module = self.module.as_mut::<P>();
-        &mut module.solve_operations.get_mut(self.local.0).unwrap().state
+        &mut module.solves.get_mut(self.local.0).unwrap().state
     }
-    pub fn dependents_mut<'a>(self) -> &'a mut Vec<OperationId<P>>
+    pub fn dependents_mut<'a>(self) -> &'a mut Vec<NodeId<P>>
     where
         P: 'a,
     {
         let module = self.module.as_mut::<P>();
-        &mut module
-            .solve_operations
-            .get_mut(self.local.0)
-            .unwrap()
-            .dependents
+        &mut module.solves.get_mut(self.local.0).unwrap().dependents
     }
 }
 

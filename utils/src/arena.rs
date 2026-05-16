@@ -1,5 +1,5 @@
 use core::slice;
-use std::mem::{self, MaybeUninit, transmute};
+use std::mem::{self, MaybeUninit};
 
 pub mod array;
 pub mod hashmap;
@@ -46,7 +46,7 @@ impl Arena {
         let len = iter.size_hint().0;
         debug_assert!(iter.size_hint().1 == Some(len));
         let ret = self.add_slice_uninit::<T>(len);
-        for (i, item) in iter.enumerate(){
+        for (i, item) in iter.enumerate() {
             ret[i].write(item);
         }
         unsafe { std::mem::transmute(ret) }

@@ -1,16 +1,12 @@
 pub mod plugin;
 pub mod property;
 pub mod runtime;
-pub mod value;
 
-
-pub mod plugin_define{
-    pub use crate::{
+pub mod plugin_define {
+    pub use crate::runtime::{
+        NodeId, StringId,
         value::{Array, Int, Table},
-        runtime::{
-            OperationId, StringId,     
-        }
-    }; 
+    };
     crate::plugin! {
         value{
             int: Int,
@@ -20,11 +16,10 @@ pub mod plugin_define{
         }{
             unit,
         }
-        operation{
+        operator{
             sum:crate::runtime::operation::sum,
             index:crate::runtime::operation::index,
             find:crate::runtime::operation::find,
         }
     }
 }
-

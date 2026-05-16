@@ -4,14 +4,14 @@ pub use lichen_utils::group;
 pub use lichen_utils::tokens;
 pub use paste::paste;
 
-pub trait Project:Debug+Clone+Copy+Eq+Default{
-    type Value: Copy+Debug+Eq;
-    type Operator: crate::runtime::operation::Operator<Self>; 
+pub trait Project: Debug + Clone + Copy + Eq + Default {
+    type Value: Copy + Debug + Eq;
+    type Operator: crate::runtime::operation::Operator<Self>;
 }
 
 #[macro_export]
 macro_rules! plugin {
-    (value{$($field:ident : $type: ident,)*}{$($unit_field:ident,)*}operation{$($name:ident : $func:path,)*}) => {
+    (value{$($field:ident : $type: ident,)*}{$($unit_field:ident,)*}operator{$($name:ident : $func:path,)*}) => {
         $crate::plugin::paste!{
             pub trait Value: Sized + Copy{
                 $(
@@ -197,9 +197,9 @@ macro_rules! project {
                 )*
             }
         }
-        
+
         impl $crate::runtime::operation::Operator<ProjectImpl> for OperatorImpl{
-            fn run(self, param:ValueImpl, operation_id: $crate::runtime::OperationId<ProjectImpl>)->Option<ValueImpl>{
+            fn run(self, param:ValueImpl, operation_id: $crate::runtime::NodeId<ProjectImpl>)->Option<ValueImpl>{
                 match self.0{
                     $($(
                         self::operation_code::$plugin::$name => ::$plugin::plugin_define::operation_func::$name::<ProjectImpl>(param, operation_id),
@@ -270,6 +270,6 @@ macro_rules! project {
                 }
             )*
         }
-        
+
     }
 }
