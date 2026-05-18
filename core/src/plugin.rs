@@ -7,269 +7,282 @@ pub use paste::paste;
 pub trait Project: Debug + Clone + Copy + Eq + Default {
     type Value: Copy + Debug + Eq;
     type Operator: crate::runtime::operation::Operator<Self>;
+    type DiagnosticKind: crate::runtime::diagnostic::DiagnosticKind<Self>;
 }
 
 #[macro_export]
 macro_rules! plugin {
-    (value{$($field:ident : $type: ident,)*}{$($unit_field:ident,)*}operator{$($name:ident : $func:path,)*}) => {
+    (value{$($value_variant:ident : $value_type: path,)*}{$($value_unit_variant:ident,)*}operator{$($operator:ident : $func:path,)*}diagnostic_kind{$($diagnostic_kind_variant:ident : $diagnostic_kind_type: path,)*}{$($diagnostic_kind_unit_variant:ident,)*}) => {
+        pub mod as_plugin{
+            #![allow(non_snake_case)]
+            #![allow(non_camel_case_types)]
+            #![allow(non_upper_case_globals)]
+            $crate::plugin!{@enum Value:$crate::runtime::value::Value{$($value_variant : $value_type,)*}{$($value_unit_variant,)*}}
+            $crate::plugin!{@enum DiagnosticKind<P>:$crate::runtime::diagnostic::DiagnosticKind<P>{$($diagnostic_kind_variant : $diagnostic_kind_type,)*}{$($diagnostic_kind_unit_variant,)*}}
+            pub trait Operator<P:$crate::plugin::Project>: $crate::runtime::operation::Operator<P>{
+                $(fn $operator()->Self;)*
+            }
+            pub mod operator_func{
+                $(
+                    pub use $func as $operator;
+                )*
+            }
+            $crate::plugin::tokens!{
+                #[macro_export]
+                plugin_tokens{
+                    value{$($value_variant)*}{$($value_unit_variant)*}
+                    operator{$($operator)*}
+                    diagnostic_kind{$($diagnostic_kind_variant)*}{$($diagnostic_kind_unit_variant)*}
+                }
+            }
+        }
+    };
+    (@enum $trait:ident $(<$P:ident>)? : $base_trait:ty{$($variant:ident : $type: path,)*}{$($unit_variant:ident,)*})=>{
         $crate::plugin::paste!{
-            pub trait Value: Sized + Copy{
+            pub trait $trait$(<$P: $crate::plugin::Project>)?: $base_trait{
                 $(
-                    fn $field(self)->core::option::Option<$type>;
+                    fn $variant(self)->core::option::Option<$type>;
                 )*
                 $(
-                    fn $unit_field(self)->bool;
+                    fn $unit_variant(self)->bool;
                 )*
                 $(
-                    fn [<from_ $field>](variant: $type)->Self;
+                    fn [<from_ $variant>](variant: $type)->Self;
                 )*
                 $(
-                    fn [<from_ $unit_field>]()->Self;
+                    fn [<from_ $unit_variant>]()->Self;
+                )*
+            }
+            pub mod [<$trait _ type>]{
+                $(
+                    pub use $type as $variant;
                 )*
             }
         }
-        pub trait Operator<P:$crate::plugin::Project>: $crate::runtime::operation::Operator<P>{
-            $(fn $name()->Self;)*
-        }
-        pub const VALUE_COUNT: usize = $crate::plugin!(@count $($field)* $($unit_field)*);
-        #[derive(Clone,Copy)]
-        pub union ValueUnion{
-            $(pub $field: $type,)*
-            $(pub $unit_field:(),)*
-        }
-        #[allow(non_camel_case_types)]
-        #[repr(usize)]
-        enum ValueCode{
-            $($field,)*
-            $($unit_field,)*
-        }
-        pub mod value_code{
-            use super::ValueCode;
-            $(
-                #[allow(non_upper_case_globals)]
-                pub const $field: usize = ValueCode::$field as usize;
-            )*
-            $(
-                #[allow(non_upper_case_globals)]
-                pub const $unit_field: usize = ValueCode::$unit_field as usize;
-            )*
-        }
-        pub mod value_type{
-            $(
-                #[allow(non_camel_case_types)]
-                pub type $field = super::$type;
-            )*
-        }
-        pub mod operation_func{
-            $(
-                #[allow(non_camel_case_types)]
-                pub use $func as $name;
-            )*
-        }
-        $crate::plugin::tokens!{
-            #[macro_export]
-            plugin_tokens{
-                value{$($field)*}{$($unit_field)*}
-                operation{$($name)*}
-            }
-        }
-    };
-    (@count) => {
-        0
-    };
-    (@count $first:ident $($rest:ident)*) => {
-        1 + $crate::plugin!(@count $($rest)*)
-    };
+    }
 }
 
 #[macro_export]
 macro_rules! project {
     ($($plugin:ident,)*) => {
-        #[derive(Clone,Copy)]
-        pub struct ValueImpl{
-            code: usize,
-            data: ValueUnionImpl,
-        }
-        impl core::cmp::Eq for ValueImpl{}
-        #[derive(Clone,Copy)]
-        pub struct ValueUnionImpl{
-            $($plugin: ::$plugin::plugin_define::ValueUnion,)*
-        }
-        #[derive(Clone,Copy)]
-        pub struct OperatorImpl(usize);
-        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-        pub struct ProjectImpl;
-        impl $crate::plugin::Project for ProjectImpl{
-            type Value = ValueImpl;
-            type Operator = OperatorImpl;
-        }
-        $crate::project!{@offset {}, $($plugin,)*}
-        $(
-            ::$plugin::plugin_tokens!{$crate::project {@plugin_impl $plugin} {}}
-        )*
-        $crate::plugin::group!{token_groups{$(::$plugin::plugin_tokens : $plugin,)*}}
-        token_groups!{$crate::project {@mono_impl}{}}
-    };
-    (@offset {$($plugin_prev:ident)?},) => {};
-    (@offset {$($plugin_prev:ident)?}, $plugin:ident, $($rest_plugin:ident,)*) => {
-        mod $plugin{
-            pub(super) const OFFSET: usize = $(super::$plugin_prev + ::$plugin_prev::plugin_define::VALUE_COUNT +)? 0;
-            ::$plugin::plugin_tokens!{$crate::project {@variant_code}{}}
-        }
-        $crate::project!{@offset {$plugin}, $($rest_plugin,)*}
-    };
-    (@variant_code {value{$($field:ident)*}{$($unit_field:ident)*}$($_:tt)*}) => {
-        $crate::project!{@variant_code @internal $($field)* $($unit_field)*}
-    };
-    (@variant_code @internal $($field:ident)*) => {
-        $(
-            #[allow(non_upper_case_globals)]
-            pub(super) const $field: usize = $crate::plugin_define::value_code::$field + OFFSET;
-        )*
-    };
-    (@mono_impl {$($plugin:ident{value{$($field:ident)*}{$($unit_field:ident)*}operation{$($name:ident)*}})*}) => {
-        impl std::fmt::Debug for ValueImpl{
-            fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
-                match self.code{
-                    $(
-                        $(
-                            self::$plugin::$field => {
-                                write!(f,"{}::{}: ",stringify!($plugin),stringify!($field))?;
-                                unsafe{self.data.$plugin.$field.fmt(f)}
-                            }
-                        )*
-                        $(
-                            self::$plugin::$unit_field => {
-                                write!(f,"{}::{}",stringify!($plugin),stringify!($unit_field))
-                            }
-                        )*
-                    )*
-                    _=>unreachable!(),
-                }
+        mod project{
+            #![allow(non_snake_case)]
+            #![allow(non_camel_case_types)]
+            #![allow(non_upper_case_globals)]
+            $crate::project!{@auto_enum Value{Clone Copy}{core::cmp::Eq}}
+            $crate::project!{@auto_enum DiagnosticKind{}{}}
+            #[derive(Clone,Copy)]
+            pub struct OperatorImpl(usize);
+            #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+            pub struct ProjectImpl;
+            impl $crate::plugin::Project for ProjectImpl{
+                type Value = ValueImpl;
+                type Operator = OperatorImpl;
+                type DiagnosticKind = DiagnosticKindImpl;
             }
+            $(
+                ::$plugin::plugin_tokens!{$crate::project {@plugin_impl $plugin} {}}
+            )*
+            $crate::plugin::group!{token_groups{$(::$plugin::plugin_tokens : $plugin,)*}}
+            token_groups!{$crate::project {@mono}{}}
         }
-        impl core::cmp::PartialEq for ValueImpl{
-            fn eq(&self,other:&Self)->bool{
-                if self.code!=other.code{return false;}
-                match self.code{
-                    $(
-                        $(
-                            self::$plugin::$field => unsafe{self.data.$plugin.$field == other.data.$plugin.$field},
-                        )*
-                        $(
-                            self::$plugin::$unit_field => true,
-                        )*
-                    )*
-                    _=>unreachable!(),
-                }
-            }
-            fn ne(&self,other:&Self)->bool{
-                if self.code!=other.code{return true;}
-                match self.code{
-                    $(
-                        $(
-                            self::$plugin::$field => unsafe{self.data.$plugin.$field != other.data.$plugin.$field},
-                        )*
-                        $(
-                            self::$plugin::$unit_field => false,
-                        )*
-                    )*
-                    _=>unreachable!(),
-                }
-            }
-        }
+    };
+    (@auto_enum $trait:ident{$($derive:path)*}{$($marker:path)*})=>{
         $crate::plugin::paste!{
-            #[allow(non_camel_case_types)]
-            #[repr(usize)]
-            enum OperationCode{
-                $($(
-                    [<$plugin __ $name>],
-                )*)*
+            #[derive($($derive,)*)]
+            pub struct [<$trait Impl>]{
+                code: usize,
+                data: [<$trait Union>]
             }
-            mod operation_code{
+            $(
+                impl $marker for [<$trait Impl>]{}
+            )*
+        }
+    };
+    (@mono_enum $trait:ident{$($plugin:ident{$($variant:ident)*}{$($unit_variant:ident)*})*}) =>{
+        $crate::plugin::paste!{
+            #[derive(Clone,Copy)]
+            pub union [<$trait Union>]{
+                $($([<$plugin __ $variant>]: ::$plugin::as_plugin::[<$trait _ type>]::$variant,)*)*
+                __unit: (),
+            }
+            mod [<$trait _ code>]{
+                #[repr(usize)]
+                enum [<$trait  Code>]{
+                    $(
+                        $([<$plugin __ $variant>],)*
+                        $([<$plugin __ $unit_variant>],)*
+                    )*
+                }
                 $(
-                    pub(super) mod $plugin{
-                        $(
-                            #[allow(non_upper_case_globals)]
-                            pub(in super::super) const $name:usize = super::super::OperationCode::[<$plugin __ $name>] as usize;
-                        )*
-                    }
+                    $(
+                        pub(super) const [<$plugin __ $variant>]:usize = [<$trait Code>]::[<$plugin __ $variant>] as usize;
+                    )*
+                    $(
+                        pub(super) const [<$plugin __ $unit_variant>]:usize = [<$trait Code>]::[<$plugin __ $unit_variant>] as usize;
+                    )*
                 )*
             }
         }
-
-        impl $crate::runtime::operation::Operator<ProjectImpl> for OperatorImpl{
-            fn run(self, param:ValueImpl, operation_id: $crate::runtime::NodeId<ProjectImpl>)->Option<ValueImpl>{
-                match self.0{
-                    $($(
-                        self::operation_code::$plugin::$name => ::$plugin::plugin_define::operation_func::$name::<ProjectImpl>(param, operation_id),
-                    )*)*
-                    _=>unreachable!()
-                }
-            }
-        }
-        impl std::fmt::Debug for OperatorImpl{
-            fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
-                match self.0{
-                    0=>write!(f,"none"),
-                    $($(
-                        self::operation_code::$plugin::$name => write!(f,"{}:{}",stringify!($plugin),stringify!($name)),
-                    )*)*
-                    _=>unreachable!(),
+    };
+    (@mono_enum_debug $trait:ident{$($plugin:ident{$($variant:ident)*}{$($unit_variant:ident)*})*})=>{
+        $crate::plugin::paste!{
+            impl std::fmt::Debug for [<$trait Impl>]{
+                fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
+                    match self.code{
+                        $(
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $variant>] => {
+                                    write!(f,"{}::{}: ",stringify!($plugin),stringify!($variant))?;
+                                    unsafe{self.data.[<$plugin __ $variant>].fmt(f)}
+                                }
+                            )*
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $unit_variant>] => {
+                                    write!(f,"{}::{}",stringify!($plugin),stringify!($unit_variant))
+                                }
+                            )*
+                        )*
+                        _=>unreachable!(),
+                    }
                 }
             }
         }
     };
-    (@plugin_impl $plugin:ident {value{$($field:ident)*}{$($unit_field:ident)*}operation{$($name:ident)*}})=>{
+    (@mono_enum_partial_eq $trait:ident{$($plugin:ident{$($variant:ident)*}{$($unit_variant:ident)*})*})=>{
         $crate::plugin::paste!{
-            impl ::$plugin::plugin_define::Value for ValueImpl{
+            impl core::cmp::PartialEq for ValueImpl{
+                fn eq(&self,other:&Self)->bool{
+                    if self.code!=other.code{return false;}
+                    match self.code{
+                        $(
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $variant>] => unsafe{self.data.[<$plugin __ $variant>] == other.data.[<$plugin __ $variant>]},
+                            )*
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $unit_variant>] => true,
+                            )*
+                        )*
+                        _=>unreachable!(),
+                    }
+                }
+                fn ne(&self,other:&Self)->bool{
+                    if self.code!=other.code{return true;}
+                    match self.code{
+                        $(
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $variant>] => unsafe{self.data.[<$plugin __ $variant>] != other.data.[<$plugin __ $variant>]},
+                            )*
+                            $(
+                                self::[<$trait _ code>]::[<$plugin __ $unit_variant>] => false,
+                            )*
+                        )*
+                        _=>unreachable!(),
+                    }
+                }
+            }
+        }
+    };
+    (@mono {$($plugin:ident{value{$($value_variant:ident)*}{$($value_unit_variant:ident)*}operator{$($operator:ident)*}diagnostic_kind{$($diagnostic_kind_variant:ident)*}{$($diagnostic_kind_unit_variant:ident)*}})*}) => {
+        $crate::project!{@mono_enum Value{$($plugin{$($value_variant)*}{$($value_unit_variant)*})*}}
+        $crate::project!{@mono_enum_debug Value{$($plugin{$($value_variant)*}{$($value_unit_variant)*})*}}
+        $crate::project!{@mono_enum_partial_eq Value{$($plugin{$($value_variant)*}{$($value_unit_variant)*})*}}
+
+        $crate::project!{@mono_enum DiagnosticKind{$($plugin{$($diagnostic_kind_variant)*}{$($diagnostic_kind_unit_variant)*})*}}
+        $crate::project!{@mono_enum_debug DiagnosticKind{$($plugin{$($diagnostic_kind_variant)*}{$($diagnostic_kind_unit_variant)*})*}}
+
+        impl $crate::runtime::value::Value for ValueImpl{}
+        impl $crate::runtime::diagnostic::DiagnosticKind<ProjectImpl> for DiagnosticKindImpl{}
+
+        $crate::plugin::paste!{
+            mod operator_code{
+                #[repr(usize)]
+                enum operatorCode{
+                    $($(
+                        [<$plugin __ $operator>],
+                    )*)*
+                }
                 $(
-                    fn $field(self)->core::option::Option<::$plugin::plugin_define::value_type::$field>{
-                        if self.code == self::$plugin::$field{
-                            Some(unsafe{self.data.$plugin.$field})
+                    $(
+                        pub(super) const [<$plugin __ $operator>]:usize = operatorCode::[<$plugin __ $operator>] as usize;
+                    )*
+                )*
+            }
+
+            impl $crate::runtime::operation::Operator<ProjectImpl> for OperatorImpl{
+                fn run(self, operand:ValueImpl, operator_id: $crate::runtime::NodeId<ProjectImpl>)->Option<ValueImpl>{
+                    match self.0{
+                        $($(
+                            self::operator_code::[<$plugin __ $operator>] => ::$plugin::as_plugin::operator_func::$operator::<ProjectImpl>(operand, operator_id),
+                        )*)*
+                        _=>unreachable!()
+                    }
+                }
+            }
+            impl std::fmt::Debug for OperatorImpl{
+                fn fmt(&self, f: &mut std::fmt::Formatter)->std::fmt::Result{
+                    match self.0{
+                        0=>write!(f,"none"),
+                        $($(
+                            self::operator_code::[<$plugin __ $operator>] => write!(f,"{}:{}",stringify!($plugin),stringify!($operator)),
+                        )*)*
+                        _=>unreachable!(),
+                    }
+                }
+            }
+        }
+    };
+    (@plugin_enum $trait:ident $(<$P:ident>)? $plugin:ident {$($variant:ident)*}{$($unit_variant:ident)*})=>{
+        $crate::plugin::paste!{
+            impl ::$plugin::as_plugin::$trait$(<$P>)? for [<$trait Impl>]{
+                $(
+                    fn $variant(self)->core::option::Option<::$plugin::as_plugin::[<$trait _type>]::$variant>{
+                        if self.code == self::[<$trait _code>]::[<$plugin __ $variant>]{
+                            Some(unsafe{self.data.[<$plugin __ $variant>]})
                         }else{
                             None
                         }
                     }
                 )*
                 $(
-                    fn $unit_field(self)->bool{
-                        self.code == self::$plugin::$unit_field
+                    fn $unit_variant(self)->bool{
+                        self.code == self::[<$trait _code>]::[<$plugin __ $unit_variant>]
                     }
                 )*
                 $(
-                    fn [<from_ $field>](variant: ::$plugin::plugin_define::value_type::$field)->Self{
-                        ValueImpl{
-                            code: self::$plugin::$field,
-                            data: ValueUnionImpl{
-                                $plugin: ::$plugin::plugin_define::ValueUnion{
-                                    $field: variant,
-                                },
+                    fn [<from_ $variant>](variant: ::$plugin::as_plugin::[<$trait _type>]::$variant)->Self{
+                        [<$trait Impl>]{
+                            code: self::[<$trait _code>]::[<$plugin __ $variant>],
+                            data: [<$trait Union>]{
+                                [<$plugin __ $variant>]: variant,
                             }
                         }
                     }
                 )*
                 $(
-                    fn [<from_ $unit_field>]()->Self{
+                    fn [<from_ $unit_variant>]()->Self{
                         ValueImpl{
-                            code: self::$plugin::$unit_field,
-                            data: ValueUnionImpl{
-                                $plugin: ::$plugin::plugin_define::ValueUnion{
-                                    $unit_field: (),
-                                },
+                            code: self::[<$trait _code>]::[<$plugin __ $unit_variant>],
+                            data: ValueUnion{
+                                __unit: (),
                             }
                         }
                     }
                 )*
             }
         }
-        impl ::$plugin::plugin_define::Operator<ProjectImpl> for OperatorImpl{
-            $(
-                fn $name()->Self{
-                    Self(self::operation_code::$plugin::$name)
-                }
-            )*
+    };
+    (@plugin_impl $plugin:ident {value{$($value_variant:ident)*}{$($value_unit_variant:ident)*}operator{$($operator:ident)*}diagnostic_kind{$($diagnostic_kind_variant:ident)*}{$($diagnostic_kind_unit_variant:ident)*}})=>{
+        $crate::project!{@plugin_enum Value $plugin {$($value_variant)*}{$($value_unit_variant)*}}
+        $crate::project!{@plugin_enum DiagnosticKind<ProjectImpl> $plugin {$($diagnostic_kind_variant)*}{$($diagnostic_kind_unit_variant)*}}
+        $crate::plugin::paste!{
+            impl ::$plugin::as_plugin::Operator<ProjectImpl> for OperatorImpl{
+                $(
+                    fn $operator()->Self{
+                        Self(self::operator_code::[<$plugin __ $operator>])
+                    }
+                )*
+            }
         }
-
     }
 }

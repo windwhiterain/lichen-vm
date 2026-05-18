@@ -1,18 +1,18 @@
-use std::{fmt::Debug, marker::PhantomData, ptr::NonNull};
+use std::{cell::UnsafeCell, fmt::Debug, marker::PhantomData, ptr::NonNull};
 
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
 use crate::{
     plugin::Project,
-    runtime::{equation::Equation, operation::Operation, solve::Solve, value::Evaluation},
+    runtime::{diagnostic::Diagnostic, equation::Equation, operation::Operation, solve::Solve, value::Evaluation},
 };
 
 pub mod equation;
 pub mod operation;
 pub mod solve;
 pub mod switch;
-
 pub mod value;
+pub mod diagnostic;
 
 #[derive(Debug)]
 pub struct Module<P: Project> {
@@ -20,7 +20,8 @@ pub struct Module<P: Project> {
     pub operations: StableVec<Option<Operation<P>>>,
     pub evaluations: StableVec<Evaluation<P>>,
     pub solves: Vec<Solve<P>>,
-    pub equations: StableVec<Equation<P>>,
+    pub equations: Vec<Equation<P>>,
+    pub diagnostics: Vec<Diagnostic<P>>,
 }
 pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +38,7 @@ pub struct NodeId<P: Project> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeIdLocal(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ModuleId(pub *mut ());
+pub struct ModuleId(pub *const ());
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SwitchId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -51,7 +52,11 @@ impl<P: Project> Module<P> {
             evaluations: Default::default(),
             solves: Default::default(),
             equations: Default::default(),
+            diagnostics: Default::default(),
         }
+    }
+    pub fn id(&self) -> ModuleId{
+        ModuleId::from_ref(self)
     }
     fn add_node_raw(&mut self, operation: Option<Operation<P>>, value: Evaluation<P>) -> NodeId<P> {
         let (local, _) = self.operations.push(operation);
@@ -131,13 +136,23 @@ impl<T> Ptr<T> {
 
 impl ModuleId {
     pub fn from_ref<P: Project>(r: &Module<P>) -> Self {
-        Self(r as *const Module<P> as *const () as *mut ())
+        Self(r as *const Module<P> as *const ())
     }
     pub fn as_ref<'a, P: Project>(self) -> &'a Module<P> {
-        unsafe { &*(self.0 as *mut Module<P>) }
+        unsafe {
+            (self.0 as *const UnsafeCell<Module<P>>)
+                .as_ref_unchecked()
+                .get()
+                .as_ref_unchecked()
+        }
     }
     pub fn as_mut<'a, P: Project>(self) -> &'a mut Module<P> {
-        unsafe { &mut *(self.0 as *mut Module<P>) }
+        unsafe {
+            (self.0 as *const UnsafeCell<Module<P>>)
+                .as_ref_unchecked()
+                .get()
+                .as_mut_unchecked()
+        }
     }
 }
 

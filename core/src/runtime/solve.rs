@@ -1,8 +1,8 @@
 use std::marker::PhantomData;
 
 use crate::{
+    as_plugin::Value,
     plugin::Project,
-    plugin_define::Value,
     runtime::{NodeId, equation::Equation, operation::Operator, value::Evaluation},
 };
 

@@ -5,6 +5,8 @@ use crate::{
     runtime::{Module, NodeId, NodeIdRaw, StringId, solve::Solver},
 };
 
+pub trait Value: std::fmt::Debug + Copy + Eq{}
+
 #[derive(Debug, Clone, Copy)]
 pub enum Evaluation<P: Project> {
     Value(P::Value),

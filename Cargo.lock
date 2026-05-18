@@ -21,6 +21,7 @@ name = "lichen-structure"
 version = "0.1.0"
 dependencies = [
  "lichen-core",
+ "lichen-utils",
 ]
 
 [[package]]
