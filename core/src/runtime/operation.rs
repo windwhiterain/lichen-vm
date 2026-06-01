@@ -1,6 +1,7 @@
 use crate::{
-    as_plugin::Value,
     plugin::Project,
+    plugin::Value,
+    plugin::principal_traits::Operator as PrincipalOperator,
     runtime::{NodeId, solve::Solver},
 };
 
@@ -10,10 +11,6 @@ use std::fmt::Debug;
 pub struct Operation<P: Project> {
     pub operand: NodeId<P>,
     pub operator: P::Operator,
-}
-
-pub trait Operator<P: Project>: Copy + Debug {
-    fn run(self, param: P::Value, operation_id: NodeId<P>) -> Option<P::Value>;
 }
 
 macro_rules! operands {
@@ -38,35 +35,50 @@ macro_rules! operands {
     (@count, $variant0: path $(, $variant1: path)*) => (1 + operands!(@count $(, $variant1)*));
 }
 
-pub fn sum<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
-    let Some(operands) = operand.array() else {
-        return None;
-    };
-    let mut ret = Some(0);
-    for operand in operands.iter().copied() {
-        let Some(value) = Solver::solve_node(operand.project(), Some(node)) else {
-            ret = None;
-            continue;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sum;
+
+impl<P: Project<Value: Value>> PrincipalOperator<P> for Sum {
+    fn run(&self, operand: P::Value, node: crate::runtime::NodeId<P>) -> Option<P::Value> {
+        let Some(operands) = operand.array() else {
+            return None;
         };
-        if let Some(ret) = &mut ret {
-            *ret += value.int()?;
+        let mut ret = Some(0);
+        for operand in operands.iter().copied() {
+            let Some(value) = Solver::solve_node(operand.project(), Some(node)) else {
+                ret = None;
+                continue;
+            };
+            if let Some(ret) = &mut ret {
+                *ret += value.int()?;
+            }
         }
+        ret.map(|x| P::Value::from_int(x))
     }
-    ret.map(|x| P::Value::from_int(x))
 }
 
-pub fn index<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
-    let (array, index) = operands!(operand, node, P::Value::array, P::Value::int,);
-    if index >= array.len() as i64 || index < 0 {
-        return None;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Index;
+
+impl<P: Project<Value: Value>> PrincipalOperator<P> for Index {
+    fn run(&self, operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
+        let (array, index) = operands!(operand, node, P::Value::array, P::Value::int,);
+        if index >= array.len() as i64 || index < 0 {
+            return None;
+        }
+        let reference_node = array.get(index as usize).project();
+        Solver::solve_equation(&[node, reference_node]);
+        Solver::solve_node(reference_node, Some(node))
     }
-    let reference_node = array.get(index as usize).project();
-    Solver::solve_equation(&[node, reference_node]);
-    Solver::solve_node(reference_node, Some(node))
 }
 
-pub fn find<P: Project<Value: Value>>(operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
-    let (table, name) = operands!(operand, node, P::Value::table, P::Value::string,);
-    let index = *table.get(name)?;
-    Some(P::Value::from_int(index as i64))
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Find;
+
+impl<P: Project<Value: Value>> PrincipalOperator<P> for Find {
+    fn run(&self, operand: P::Value, node: NodeId<P>) -> Option<P::Value> {
+        let (table, name) = operands!(operand, node, P::Value::table, P::Value::string,);
+        let index = *table.get(name)?;
+        Some(P::Value::from_int(index as i64))
+    }
 }

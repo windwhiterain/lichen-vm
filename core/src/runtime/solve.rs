@@ -1,9 +1,10 @@
 use std::marker::PhantomData;
 
 use crate::{
-    as_plugin::Value,
+    plugin::Value,
     plugin::Project,
-    runtime::{NodeId, equation::Equation, operation::Operator, value::Evaluation},
+    plugin::principal_traits::Operator,
+    runtime::{NodeId, equation::Equation, value::Evaluation},
 };
 
 #[derive(Debug, Default, Clone, Copy)]

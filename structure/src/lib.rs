@@ -1,5 +1,5 @@
 use lichen_core::{
-    plugin::Project,
+    project::Project,
     property::{ExprId, Module},
     runtime::{self, NodeId, NodeIdRaw, StringId},
 };
@@ -20,7 +20,7 @@ pub fn construct<P: Project<Value: as_plugin::Value>>(
     todo!()
 }
 
-::lichen_core::plugin! {
+::lichen_core::project! {
     value{
         named_array: crate::NamedArray,
     }{}

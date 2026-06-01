@@ -2,7 +2,9 @@ use lichen_utils::arena::{array::ArenaArray, hashmap::ArenaHashMap};
 
 use crate::{
     plugin::Project,
-    runtime::{Module, NodeId, NodeIdRaw, StringId, solve::Solver},
+    runtime::{Module, NodeId, NodeIdRaw, StringId, 
+        solve::Solver
+        },
 };
 
 pub trait Value: std::fmt::Debug + Copy + Eq{}
@@ -23,6 +25,8 @@ pub enum Evaluation<P: Project> {
 pub type Int = i64;
 pub type Array = ArenaArray<NodeIdRaw>;
 pub type Table = ArenaHashMap<StringId, usize>;
+#[derive(Debug,Clone, Copy, PartialEq, Eq)]
+pub struct Unit;
 
 pub fn new_array<P: Project>(
     module: &mut Module<P>,

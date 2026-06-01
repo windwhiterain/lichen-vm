@@ -1,10 +1,6 @@
 use std::fmt::Debug;
 
-use crate::{plugin::Project, runtime::NodeId};
-
-pub trait DiagnosticKind<P: Project>: Debug {
-    // fn message(f: &mut std::fmt::Formatter<'_>, node: NodeId<P>) -> std::fmt::Result;
-}
+use crate::{plugin::{Project, principal_traits::DiagnosticKind}, runtime::NodeId};
 
 #[derive(Debug)]
 pub struct Diagnostic<P: Project> {
@@ -13,4 +9,10 @@ pub struct Diagnostic<P: Project> {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct EqualityError(usize);
+pub struct EqualityError<P:Project>{pub expected:NodeId<P>}
+
+impl<P:Project> DiagnosticKind<P> for EqualityError<P>{
+    fn message(& self,f: &mut std::fmt::Formatter<'_>,)->std::fmt::Result {
+        todo!()
+    }
+}
