@@ -2,7 +2,7 @@ use lichen_utils::arena::{array::ArenaArray, hashmap::ArenaHashMap};
 
 use crate::{
     plugin::Project,
-    runtime::{Module, NodeId, NodeIdRaw, StringId, 
+    runtime::{Module, NodeId, StringId, 
         solve::Solver
         },
 };
@@ -23,7 +23,7 @@ pub enum Evaluation<P: Project> {
 }
 
 pub type Int = i64;
-pub type Array = ArenaArray<NodeIdRaw>;
+pub type Array<P:Project> = ArenaArray<NodeId<P>>;
 pub type Table = ArenaHashMap<StringId, usize>;
 #[derive(Debug,Clone, Copy, PartialEq, Eq)]
 pub struct Unit;
@@ -31,8 +31,8 @@ pub struct Unit;
 pub fn new_array<P: Project>(
     module: &mut Module<P>,
     nodes: impl Iterator<Item = NodeId<P>>,
-) -> Array {
-    Array::from_iter(&mut module.arena, nodes.map(|x| x.raw()))
+) -> Array<P> {
+    Array::<P>::from_iter(&mut module.arena, nodes)
 }
 pub fn new_table<P: Project>(
     module: &mut Module<P>,

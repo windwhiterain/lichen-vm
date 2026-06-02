@@ -114,7 +114,7 @@ impl<P: Project> Solver<P> {
     pub fn solve_equations<'a>(equations: impl Iterator<Item = &'a Equation<P>>)
     where
         P: 'a,
-        P::Value: Value,
+        P::Value: Value<P>,
     {
         for equation in equations {
             for operation_id in equation.nodes.iter().copied() {
@@ -125,7 +125,7 @@ impl<P: Project> Solver<P> {
     }
     pub fn solve_equation(nodes: &[NodeId<P>])
     where
-        P::Value: Value,
+        P::Value: Value<P>,
     {
         let (mut max_evaluation, mut max_order, mut max_root) = (
             &mut Evaluation::AUTO.clone(),
@@ -161,8 +161,8 @@ impl<P: Project> Solver<P> {
                         assert!(max_array.len() == array.len());
                         for i in 0..max_array.len() {
                             Self::solve_equation(&[
-                                max_array.get(i).project(),
-                                array.get(i).project(),
+                                *max_array.get(i),
+                                *array.get(i),
                             ]);
                         }
                     } else {

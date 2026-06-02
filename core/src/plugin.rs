@@ -1,5 +1,6 @@
 pub mod principal_traits{
-pub trait Value<>:std::fmt::Debug+Copy+Eq+{
+pub trait Value<Project: crate::plugin::Project
++>:std::fmt::Debug+Copy+Eq+{
 }
 pub trait Operator<Project: crate::plugin::Project
 +>:std::fmt::Debug+Copy+Eq+{
@@ -13,17 +14,18 @@ fn message(& self,f: &mut std::fmt::Formatter<'_>,)->std::fmt::Result;
 }
 }
 pub trait Project: std::fmt::Debug + Default + Copy + Eq{
-type Value<>:self::principal_traits::Value::<>;
+type Value<>:self::principal_traits::Value::<Self>;
 type Operator<>:self::principal_traits::Operator::<Self>;
 type DiagnosticKind<>:self::principal_traits::DiagnosticKind::<Self>;
 }
-pub trait Value<>:self::principal_traits::Value::<>{
+pub trait Value<Project: crate::plugin::Project
++>:self::principal_traits::Value::<Project>{
 fn int(self)->Option<crate::runtime::value::Int::<>>;
 fn from_int(data: crate::runtime::value::Int::<>)->Self;
 fn string(self)->Option<crate::runtime::StringId::<>>;
 fn from_string(data: crate::runtime::StringId::<>)->Self;
-fn array(self)->Option<crate::runtime::value::Array::<>>;
-fn from_array(data: crate::runtime::value::Array::<>)->Self;
+fn array(self)->Option<crate::runtime::value::Array::<Project>>;
+fn from_array(data: crate::runtime::value::Array::<Project>)->Self;
 fn table(self)->Option<crate::runtime::value::Table::<>>;
 fn from_table(data: crate::runtime::value::Table::<>)->Self;
 fn unit(self)->bool;

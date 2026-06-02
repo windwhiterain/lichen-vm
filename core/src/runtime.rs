@@ -25,11 +25,6 @@ pub struct Module<P: Project> {
 }
 pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NodeIdRaw {
-    pub module: ModuleId,
-    pub local: NodeIdLocal,
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NodeId<P: Project> {
     pub module: ModuleId,
     pub local: NodeIdLocal,
@@ -77,24 +72,12 @@ impl<P: Project> Module<P> {
         self.equations.push(equation);
     }
 }
-
-impl NodeIdRaw {
-    pub fn project<P: Project>(self) -> NodeId<P> {
-        NodeId::new(self.module, self.local)
-    }
-}
 impl<P: Project> NodeId<P> {
     pub fn new(module: ModuleId, local: NodeIdLocal) -> Self {
         Self {
             module,
             local,
             _p: Default::default(),
-        }
-    }
-    pub fn raw(self) -> NodeIdRaw {
-        NodeIdRaw {
-            module: self.module,
-            local: self.local,
         }
     }
     pub fn operation(self) -> Option<Operation<P>> {

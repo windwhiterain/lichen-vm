@@ -25,7 +25,7 @@ pub static PLUGIN: Plugin = Plugin {
 pub static VALUE_TYPE: EnumType = EnumType {
     name: &Name {
         name: "Value",
-        project_generic: false,
+        project_generic: true,
         generics: &Generics(&[]),
     },
     is_unit: false,
@@ -150,7 +150,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
                     relative: "runtime::value::Array",
                 },
                 generics: &Generics::none(),
-                project_generic: false,
+                project_generic: true,
             },
             is_unit: false,
         },
