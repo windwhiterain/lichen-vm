@@ -12,3 +12,11 @@ pub const fn exp2_int(n: u32) -> usize {
 pub const fn mod_exp2(l: usize, r: usize) -> usize {
     l & (r - 1)
 }
+
+pub unsafe fn erase_mut<'a, 'b, T: ?Sized>(x: &'a mut T) -> &'b mut T {
+    unsafe { std::mem::transmute(x) }
+}
+
+pub unsafe fn erase<'a, 'b, T: ?Sized>(x: &'a T) -> &'b T {
+    unsafe { std::mem::transmute(x) }
+}

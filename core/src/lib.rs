@@ -1,6 +1,6 @@
+pub mod plugin;
 pub mod property;
 pub mod runtime;
-pub mod plugin;
 
 static NAME: &'static str = "lichen_core";
 

@@ -1,8 +1,8 @@
 use lichen_project::{
     ArrayDisplay, AsTrait, DEBUG, DelegateBody, Derives, EnumType, FORMATE_RESULT_SYMBOL,
-    FORMATTER_PARAM, Function, Generics, Module, Name, PARTIAL_EQ, PROJECT, PROJECT_TRAIT, Param,
-    Params, PassMode, Plugin, PluginEnum, PluginSymbol, ProjectVariable, Self_, Variant,
-    WrittenSymbol,
+    FORMATTER_PARAM, Function, Generics, Module, Name, PARTIAL_EQ, PROJECT, PROJECT_GENERIC,
+    PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum, PluginSymbol, ProjectVariable,
+    Self_, Variant, WrittenSymbol,
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -25,7 +25,7 @@ pub static PLUGIN: Plugin = Plugin {
 pub static VALUE_TYPE: EnumType = EnumType {
     name: &Name {
         name: "Value",
-        project_generic: true,
+        project_generic: false,
         generics: &Generics(&[]),
     },
     is_unit: false,
@@ -60,8 +60,21 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[
             &Param {
+                name: "solver",
+                pass_mode: PassMode::RefMut { lifetime: None },
+                symbol: &ArrayDisplay(&[
+                    &PluginSymbol {
+                        crate_: CRATE,
+                        relative: "runtime::solve::Solver",
+                    },
+                    &"<",
+                    &ProjectVariable,
+                    &">",
+                ]),
+            },
+            &Param {
                 name: "value",
-                pass_mode: PassMode::Move,
+                pass_mode: PassMode::Ref { lifetime: None },
                 symbol: &ArrayDisplay(&[
                     &AsTrait {
                         this: &ProjectVariable,
@@ -72,16 +85,11 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
             },
             &Param {
                 name: "node",
-                pass_mode: PassMode::Move,
-                symbol: &ArrayDisplay(&[
-                    &WrittenSymbol::Plugin(&PluginSymbol {
-                        crate_: CRATE,
-                        relative: "runtime::NodeId",
-                    }),
-                    &"<",
-                    &ProjectVariable,
-                    &">",
-                ]),
+                pass_mode: PassMode::Ref { lifetime: None },
+                symbol: &WrittenSymbol::Plugin(&PluginSymbol {
+                    crate_: CRATE,
+                    relative: "runtime::solve::LocalNodeId",
+                }),
             },
         ]),
         return_: Some(&ArrayDisplay(&[
@@ -150,7 +158,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
                     relative: "runtime::value::Array",
                 },
                 generics: &Generics::none(),
-                project_generic: true,
+                project_generic: false,
             },
             is_unit: false,
         },
@@ -230,7 +238,7 @@ pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
                 relative: "runtime::diagnostic::EqualityError",
             },
             generics: &Generics::none(),
-            project_generic: true,
+            project_generic: false,
         },
         is_unit: false,
     }],

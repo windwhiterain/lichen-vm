@@ -362,8 +362,7 @@ impl Display for Plugin {
         writeln!(f, "}}")?;
         write!(
             f,
-            "pub trait {}: std::fmt::Debug + Default + Copy + Eq",
-            PROJECT
+            "pub trait {PROJECT}: std::fmt::Debug + Default + Copy + Eq + 'static"
         )?;
         for dependency in self.dependencies {
             write!(f, "{}::{}+", dependency.lib_module, PROJECT)?;

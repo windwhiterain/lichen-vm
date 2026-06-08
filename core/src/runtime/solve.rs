@@ -1,10 +1,15 @@
 use std::marker::PhantomData;
 
+use lichen_utils::{erase, erase_mut};
+
 use crate::{
-    plugin::Value,
-    plugin::Project,
-    plugin::principal_traits::Operator,
-    runtime::{NodeId, equation::Equation, value::Evaluation},
+    plugin::{Project, Value, principal_traits::Operator},
+    runtime::{
+        Module, ModuleId, NodeId, NodeIdLocal,
+        equation::{Equation, LocalEquation},
+        operation::Operation,
+        value::Evaluation,
+    },
 };
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -19,123 +24,246 @@ pub enum SolveState {
 }
 
 #[derive(Debug, Default)]
-pub struct Solve<P: Project> {
+pub struct Solve {
     pub state: SolveState,
-    pub dependents: Vec<NodeId<P>>,
+    pub dependents: Vec<NodeId>,
 }
 
-pub struct Solver<P: Project> {
-    _p: PhantomData<P>,
+pub struct Solver<'a, P: Project> {
+    pub module: &'a mut Module<P>,
+    pub equations: Vec<Equation>,
+    pub nodes: Vec<LocalNodeId>,
 }
-impl<P: Project> Solver<P> {
-    pub fn set_node_value(node: NodeId<P>, value: P::Value) {
-        *node.evaluation_mut() = Evaluation::Value(value);
-        for dependent in std::mem::take(node.dependents_mut()) {
-            let SolveState::Pending {
-                dependencies_count, ..
-            } = dependent.solve_state_mut()
-            else {
-                unreachable!()
-            };
-            *dependencies_count -= 1;
-            Self::solve_node(dependent, None);
+
+#[derive(Debug, Clone, Copy)]
+pub struct LocalModuleId;
+
+impl LocalModuleId {
+    pub fn global<P: Project>(&self, solver: &Solver<P>) -> ModuleId {
+        solver.module.id()
+    }
+}
+
+#[derive(Debug)]
+pub enum AnyNodeId {
+    Local(LocalNodeId),
+    Remote(NodeId),
+}
+
+impl AnyNodeId {
+    pub fn global<P: Project>(&self, solver: &Solver<P>) -> NodeId {
+        match self {
+            AnyNodeId::Local(local_node) => local_node.global(solver),
+            AnyNodeId::Remote(node_id) => *node_id,
         }
     }
-    pub fn solve_node(node: NodeId<P>, dependent: Option<NodeId<P>>) -> Option<P::Value> {
-        let operation_value = 'operation_value: {
-            if let Some(operation) = node.operation() {
-                let solve_state = node.solve_state_mut();
-                let is_solving = match solve_state {
-                    SolveState::None => {
-                        *solve_state = SolveState::Pending {
-                            is_solving: true,
-                            dependencies_count: 0,
-                        };
-                        let SolveState::Pending { is_solving, .. } = solve_state else {
-                            unreachable!()
-                        };
-                        is_solving
-                    }
-                    SolveState::Pending {
-                        is_solving,
-                        dependencies_count,
-                    } => {
-                        if *is_solving || *dependencies_count > 0 {
-                            break 'operation_value None;
-                        }
-                        is_solving
-                    }
-                    SolveState::Solved => break 'operation_value None,
-                };
-                if let Some(param) = Self::solve_node(operation.operand, Some(node)) {
-                    if let Some(value) = operation.operator.run(param, operation.operand) {
-                        *node.solve_state_mut() = SolveState::Solved;
-                        break 'operation_value Some(value);
-                    }
-                }
-                *is_solving = false;
-                None
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LocalNodeId {
+    pub module: LocalModuleId,
+    pub local: NodeIdLocal,
+}
+
+impl LocalNodeId {
+    pub fn global<P: Project>(&self, solver: &Solver<P>) -> NodeId {
+        NodeId {
+            module: solver.module.id(),
+            local: self.local,
+        }
+    }
+    pub fn local(&self) -> NodeIdLocal {
+        self.local
+    }
+    pub fn module(&self) -> LocalModuleId {
+        self.module
+    }
+}
+
+impl<'a, P: Project<Value: Value>> Solver<'a, P> {
+    pub fn new(module: &'a mut Module<P>) -> Self {
+        let equations = std::mem::take(&mut module.equations)
+            .into_iter()
+            .map(|x| Equation {
+                module: LocalModuleId,
+                nodes: x.nodes,
+            })
+            .collect();
+        let nodes = std::mem::take(&mut module.nodes)
+            .iter()
+            .map(|x| x.solver_local(LocalModuleId))
+            .collect();
+        Self {
+            module,
+            equations,
+            nodes,
+        }
+    }
+    pub fn solve(&mut self) {
+        loop {
+            if let Some(node) = self.nodes.pop() {
+                self.solve_node(&AnyNodeId::Local(node), None);
+            } else if let Some(equation) = self.equations.pop() {
+                self.apply_equation(equation.module, &equation.nodes);
             } else {
-                None
+                break;
             }
-        };
-        let root = node.root();
-        let evaluation = root.evaluation_mut();
-        if let Evaluation::Value(value) = evaluation {
-            if let Some(operation_value) = operation_value {
-                if *value != operation_value {
-                    panic!()
-                }
-                Some(operation_value)
-            } else {
-                Some(*value)
-            }
-        } else if let Evaluation::Auto { .. } = evaluation {
-            if let Some(operation_value) = operation_value {
-                root.set_value(operation_value);
-                Some(operation_value)
-            } else {
-                if let Some(dependent) = dependent {
-                    root.dependents_mut().push(dependent);
+        }
+    }
+    pub fn module(&self, id: &LocalModuleId) -> &Module<P> {
+        &self.module
+    }
+    pub fn module_mut(&mut self, id: &LocalModuleId) -> &mut Module<P> {
+        &mut self.module
+    }
+    pub fn module_of(&self, node: &LocalNodeId) -> &Module<P> {
+        self.module(&node.module())
+    }
+    pub fn module_mut_of(&mut self, node: &LocalNodeId) -> &mut Module<P> {
+        self.module_mut(&node.module())
+    }
+    pub fn node(&self, node: &NodeId) -> AnyNodeId {
+        if self.module.id() == node.module {
+            AnyNodeId::Local(LocalNodeId {
+                module: LocalModuleId,
+                local: node.local,
+            })
+        } else {
+            AnyNodeId::Remote(*node)
+        }
+    }
+    pub fn set_value(&mut self, node: &LocalNodeId, value: P::Value) {
+        let module_id = node.module;
+        let module = self.module_mut(&module_id);
+        for node in module.set_value(&node.local, value) {
+            let module = self.module_mut(&module_id);
+            for dependent in std::mem::take(&mut module.solve_mut(&node).dependents) {
+                if let AnyNodeId::Local(dependent) = self.node(&dependent) {
                     let SolveState::Pending {
                         dependencies_count, ..
-                    } = dependent.solve_state_mut()
+                    } = &mut self
+                        .module_mut_of(&dependent)
+                        .solve_mut(&dependent.local())
+                        .state
                     else {
                         unreachable!()
                     };
-                    *dependencies_count += 1;
+                    *dependencies_count -= 1;
+                } else {
+                    todo!()
                 }
-                None
+                self.solve_node(&self.node(&dependent), None);
             }
-        } else {
-            unreachable!()
         }
     }
-    pub fn solve_equations<'a>(equations: impl Iterator<Item = &'a Equation<P>>)
-    where
-        P: 'a,
-        P::Value: Value<P>,
-    {
-        for equation in equations {
-            for operation_id in equation.nodes.iter().copied() {
-                Self::solve_node(operation_id, None);
+    pub fn solve_node(
+        &mut self,
+        node: &AnyNodeId,
+        dependent: Option<&AnyNodeId>,
+    ) -> Option<P::Value> {
+        let self_static = unsafe { erase(self) };
+        match node {
+            AnyNodeId::Local(node) => {
+                let module = self.module_mut_of(node);
+                let operation_value = 'operation_value: {
+                    if let Some(operation) = *module.operation(&node.local()) {
+                        let solve = unsafe { erase_mut(module).solve_mut(&node.local()) };
+                        let is_solving = match &mut solve.state {
+                            SolveState::None => {
+                                solve.state = SolveState::Pending {
+                                    is_solving: true,
+                                    dependencies_count: 0,
+                                };
+                                let SolveState::Pending { is_solving, .. } = &mut solve.state
+                                else {
+                                    unreachable!()
+                                };
+                                is_solving
+                            }
+                            SolveState::Pending {
+                                is_solving,
+                                dependencies_count,
+                            } => {
+                                if *is_solving || *dependencies_count > 0 {
+                                    break 'operation_value None;
+                                }
+                                is_solving
+                            }
+                            SolveState::Solved => break 'operation_value None,
+                        };
+                        if let Some(param) = self.solve_node(
+                            &AnyNodeId::Local(operation.operand.solver_local(node.module())),
+                            Some(&AnyNodeId::Local(*node)),
+                        ) {
+                            if let Some(value) = operation.operator.run(self, &param, node) {
+                                solve.state = SolveState::Solved;
+                                break 'operation_value Some(value);
+                            }
+                        }
+                        *is_solving = false;
+                        None
+                    } else {
+                        None
+                    }
+                };
+                let module = self.module_mut_of(node);
+                let root = module.root(&node.local());
+                let evaluation = module.evaluation_mut(&root);
+                if let Evaluation::Value(value) = evaluation {
+                    if let Some(operation_value) = operation_value {
+                        if *value != operation_value {
+                            panic!()
+                        }
+                        Some(operation_value)
+                    } else {
+                        Some(*value)
+                    }
+                } else if let Evaluation::Auto { .. } = evaluation {
+                    if let Some(operation_value) = operation_value {
+                        self.set_value(&mut root.solver_local(node.module()), operation_value);
+                        Some(operation_value)
+                    } else {
+                        if let Some(dependent) = dependent {
+                            module
+                                .solve_mut(&root)
+                                .dependents
+                                .push(dependent.global(self_static));
+                            if let AnyNodeId::Local(dependent) = dependent {
+                                let SolveState::Pending {
+                                    dependencies_count, ..
+                                } = &mut self
+                                    .module_mut_of(dependent)
+                                    .solve_mut(&dependent.local)
+                                    .state
+                                else {
+                                    unreachable!()
+                                };
+                                *dependencies_count += 1;
+                            }
+                        }
+                        None
+                    }
+                } else {
+                    unreachable!()
+                }
             }
-            Self::solve_equation(&equation.nodes);
+            AnyNodeId::Remote { .. } => todo!(),
         }
     }
-    pub fn solve_equation(nodes: &[NodeId<P>])
+    pub fn apply_equation(&mut self, module_id: LocalModuleId, nodes: &[NodeIdLocal])
     where
-        P::Value: Value<P>,
+        P::Value: Value,
     {
-        let (mut max_evaluation, mut max_order, mut max_root) = (
-            &mut Evaluation::AUTO.clone(),
-            (0, 0),
-            *nodes.first().unwrap(),
-        );
         for node in nodes.iter().copied() {
-            let root = node.root();
-            let evaluation = root.evaluation_mut();
-            let order = evaluation.evaluation_order();
+            self.solve_node(&&AnyNodeId::Local(node.solver_local(module_id)), None);
+        }
+        let module = self.module_mut(&module_id);
+        let (mut max_evaluation, mut max_order, mut max_root) =
+            (&Evaluation::AUTO.clone(), (0, 0), *nodes.first().unwrap());
+        for node in nodes.iter().copied() {
+            let root = module.root(&node);
+            let evaluation = unsafe { erase(module.evaluation(&node)) };
+            let order = module.evaluation_order(&node);
             if order > max_order {
                 max_evaluation = evaluation;
                 max_order = order;
@@ -146,13 +274,14 @@ impl<P: Project> Solver<P> {
             }
         }
         for node in nodes.iter().copied() {
-            let root = node.root();
+            let module = self.module_mut(&module_id);
+            let root = module.root(&node);
             if root == max_root {
                 continue;
             }
-            let evaluation = root.evaluation_mut();
+            let evaluation = module.evaluation_mut(&root);
             if let Evaluation::Auto { .. } = max_evaluation {
-                root.set_ref(max_root);
+                module.set_ref(&root, &max_root);
             } else if let Evaluation::Value(max_value) = *max_evaluation {
                 if let Evaluation::Value(value) = evaluation {
                     if let Some(max_array) = max_value.array()
@@ -160,10 +289,7 @@ impl<P: Project> Solver<P> {
                     {
                         assert!(max_array.len() == array.len());
                         for i in 0..max_array.len() {
-                            Self::solve_equation(&[
-                                *max_array.get(i),
-                                *array.get(i),
-                            ]);
+                            self.apply_equation(module_id, &[*max_array.get(i), *array.get(i)]);
                         }
                     } else {
                         if max_value != *value {
@@ -171,7 +297,7 @@ impl<P: Project> Solver<P> {
                         }
                     }
                 } else if let Evaluation::Auto { .. } = evaluation {
-                    root.set_value(max_value);
+                    self.set_value(&root.solver_local(module_id), max_value);
                 } else {
                     unreachable!()
                 }
