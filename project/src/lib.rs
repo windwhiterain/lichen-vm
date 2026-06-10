@@ -124,6 +124,7 @@ pub static PARTIAL_EQ: Trait = Trait {
     functions: &[
         Function {
             name: "eq",
+            generics: &Generics::none(),
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[&Param {
                 name: "other",
@@ -140,6 +141,7 @@ pub static PARTIAL_EQ: Trait = Trait {
         },
         Function {
             name: "ne",
+            generics: &Generics::none(),
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[&Param {
                 name: "other",
@@ -157,11 +159,34 @@ pub static PARTIAL_EQ: Trait = Trait {
     ],
 };
 
+pub static HASH: Trait = Trait {
+    symbol: &Symbol::Raw("std::hash::Hash"),
+    generics: &Generics::none(),
+    functions: &[Function {
+        name: "hash",
+        generics: &Generics(&[&Generic {
+            name: "H",
+            constraints: &[&Symbol::Raw("std::hash::Hasher")],
+        }]),
+        self_: Some(Self_(PassMode::Ref { lifetime: None })),
+        params: &Params(&[&Param {
+            name: "state",
+            pass_mode: PassMode::RefMut { lifetime: None },
+            symbol: &Symbol::Raw("H"),
+            mutable: false,
+        }]),
+        return_: None,
+        body: Some(&HashBody),
+        default_body: None,
+    }],
+};
+
 pub static DEBUG: Trait = Trait {
     symbol: &Symbol::Raw("std::fmt::Debug"),
     generics: &Generics::none(),
     functions: &[Function {
         name: "fmt",
+        generics: &Generics::none(),
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[&FORMATTER_PARAM]),
         return_: Some(Annotation {
@@ -169,6 +194,23 @@ pub static DEBUG: Trait = Trait {
             symbol: &FORMATE_RESULT_SYMBOL,
         }),
         body: Some(&DebugBody),
+        default_body: None,
+    }],
+};
+
+pub static CLONE: Trait = Trait {
+    symbol: &Symbol::Raw("Clone"),
+    generics: &Generics::none(),
+    functions: &[Function {
+        name: "clone",
+        generics: &Generics::none(),
+        self_: Some(Self_(PassMode::Ref { lifetime: None })),
+        params: &Params(&[]),
+        return_: Some(Annotation {
+            impl_: false,
+            symbol: &SELF_SYMBOL,
+        }),
+        body: Some(&CloneBody),
         default_body: None,
     }],
 };
@@ -388,7 +430,7 @@ impl Display for Plugin {
         writeln!(f, "}}")?;
         write!(
             f,
-            "pub trait {PROJECT}: std::fmt::Debug + Default + Copy + Eq + 'static"
+            "pub trait {PROJECT}: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static"
         )?;
         for dependency in self.dependencies {
             write!(f, "{}::{}+", dependency.lib_module, PROJECT)?;
@@ -426,12 +468,12 @@ impl Display for Plugin {
             } else {
                 for variant in plugin_enum.variants.iter() {
                     if variant.is_unit {
-                        writeln!(f, "fn {}(self)->bool;", variant.name)?;
+                        writeln!(f, "fn {}(&self)->bool;", variant.name)?;
                         writeln!(f, "fn from_{}()->Self;", variant.name)?;
                     } else {
                         writeln!(
                             f,
-                            "fn {}(self)->Option<{}>;",
+                            "fn {}(&self)->Option<&{}>;",
                             variant.name,
                             Delegate(variant.symbol)
                         )?;
@@ -645,7 +687,7 @@ impl Display for Project {
                             if variant.is_unit {
                                 writeln!(
                                     f,
-                                    "fn {}(self)->bool{{self.code=={}}}",
+                                    "fn {}(&self)->bool{{self.code=={}}}",
                                     variant.name, code
                                 )?;
                                 writeln!(
@@ -664,7 +706,7 @@ impl Display for Project {
                             } else {
                                 writeln!(
                                     f,
-                                    "fn {}(self)->Option<{}>{{if self.code=={}{{Some(unsafe{{*self.data.{}__{}}})}}else{{None}} }}",
+                                    "fn {}(&self)->Option<&{}>{{if self.code=={}{{Some(unsafe{{&self.data.{}__{}}})}}else{{None}} }}",
                                     variant.name,
                                     Delegate(&Impl {
                                         this: variant.symbol,
@@ -767,6 +809,7 @@ pub struct Trait {
 
 pub struct Function {
     pub name: &'static str,
+    pub generics: &'static Generics,
     pub self_: Option<Self_>,
     pub params: &'static Params,
     pub return_: Option<Annotation>,
@@ -782,7 +825,7 @@ pub struct FunctionImpl<'a> {
 impl Display for FunctionImpl<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let function = self.function;
-        write!(f, "fn {}(", function.name)?;
+        write!(f, "fn {}<{}>(", function.name, function.generics)?;
         if let Some(self_) = function.self_.as_ref() {
             write!(f, "{}", self_)?;
         }
@@ -994,7 +1037,6 @@ impl Body for PartialEqBody {
         enum_type: &EnumType,
         function: &Function,
     ) -> std::fmt::Result {
-        assert!(!enum_type.is_unit);
         writeln!(f, "if self.code!=other.code{{return {}}}", !self.eq_or_ne)
     }
 
@@ -1006,13 +1048,40 @@ impl Body for PartialEqBody {
         variant: &Variant,
         plugin: &Plugin,
     ) -> std::fmt::Result {
-        assert!(!enum_type.is_unit);
         writeln!(
             f,
             "unsafe{{self.data.{0}__{1}{2}other.data.{0}__{1}}}",
             plugin.name,
             variant.name,
             if self.eq_or_ne { "==" } else { "!=" }
+        )
+    }
+}
+
+pub struct HashBody;
+
+impl Body for HashBody {
+    fn generate_pre_match(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        enum_type: &EnumType,
+        function: &Function,
+    ) -> std::fmt::Result {
+        writeln!(f, "self.code.hash(state);")
+    }
+
+    fn generate_match_branch(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        enum_type: &EnumType,
+        function: &Function,
+        variant: &Variant,
+        plugin: &Plugin,
+    ) -> std::fmt::Result {
+        writeln!(
+            f,
+            "unsafe{{&self.data.{0}__{1}}}.hash(state);",
+            plugin.name, variant.name,
         )
     }
 }
@@ -1043,11 +1112,39 @@ impl Body for DebugBody {
         } else {
             write!(
                 f,
-                "({{:?}})\",unsafe{{*self.data.{}__{}}})",
+                "({{:?}})\",unsafe{{&*self.data.{}__{}}})",
                 plugin.name, variant.name
             )?;
         }
         Ok(())
+    }
+}
+
+pub struct CloneBody;
+
+impl Body for CloneBody {
+    fn generate_pre_match(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        enum_type: &EnumType,
+        function: &Function,
+    ) -> std::fmt::Result {
+        Ok(())
+    }
+
+    fn generate_match_branch(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        enum_type: &EnumType,
+        function: &Function,
+        variant: &Variant,
+        plugin: &Plugin,
+    ) -> std::fmt::Result {
+        write!(
+            f,
+            "Self{{code:self.code,data:self::unions::{0}{{{1}__{2}:unsafe{{&self.data.{1}__{2}}}.clone() }} }}",
+            enum_type.name.name, plugin.name, variant.name
+        )
     }
 }
 

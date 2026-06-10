@@ -1,8 +1,8 @@
 use lichen_project::{
-    Annotation, ArrayDisplay, AsTrait, DEBUG, DelegateBody, Derives, EnumType,
-    FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, Module, Name, PARTIAL_EQ, PROJECT,
-    PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum, PluginSymbol,
-    ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
+    Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType,
+    FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, HASH, Module, Name, PARTIAL_EQ,
+    PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum,
+    PluginSymbol, ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -40,6 +40,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
     functions: &[
         Function {
             name: "fields",
+            generics: &Generics::none(),
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[]),
             return_: Some(Annotation {
@@ -58,6 +59,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
         },
         Function {
             name: "for_fields",
+            generics: &Generics::none(),
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[&Param {
                 name: "action",
@@ -78,6 +80,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
         },
         Function {
             name: "for_field_pairs",
+            generics: &Generics::none(),
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[
                 &Param {
@@ -131,6 +134,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
     ],
     functions: &[Function {
         name: "run",
+        generics: &Generics::none(),
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[
             &Param {
@@ -193,11 +197,17 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
     },
     is_unit: false,
     derives: &Derives(&[]),
-    markers: &[],
-    impls: &[&DEBUG],
-    base_traits: &[Symbol::Raw("std::fmt::Debug")],
+    markers: &["Eq"],
+    impls: &[&DEBUG, &PARTIAL_EQ, &HASH, &CLONE],
+    base_traits: &[
+        Symbol::Raw("std::fmt::Debug"),
+        Symbol::Raw("Eq"),
+        *HASH.symbol,
+        *CLONE.symbol,
+    ],
     functions: &[Function {
         name: "message",
+        generics: &Generics::none(),
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[&FORMATTER_PARAM]),
         return_: Some(Annotation {

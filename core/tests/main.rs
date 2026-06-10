@@ -1,10 +1,13 @@
-use std::cell::UnsafeCell;
+use std::collections::HashSet;
+use std::hash::RandomState;
 mod project;
 
+use lichen_core::plugin::DiagnosticKind as _;
 use lichen_core::plugin::Operator as _;
 use lichen_core::plugin::Value as _;
-use lichen_core::runtime::solve::LocalModuleId;
-use lichen_core::runtime::value::Evaluation;
+use lichen_core::runtime::diagnostic::Diagnostic;
+use lichen_core::runtime::diagnostic::EqualityError;
+use project::DiagnosticKind;
 use project::Operator;
 use project::Project;
 use project::Value;
@@ -16,27 +19,34 @@ use lichen_core::runtime::{
 #[test]
 fn main() {
     let mut module = Module::<Project>::new();
-    let a = module.add_literal(Value::from_int(1));
-    let b = module.add_literal(Value::from_int(2));
-    let array = new_array(&mut module, [a, b].into_iter());
-    let c = module.add_literal(Value::from_array(array)); //[1,2]
-    let d = module.add_operation(Operation {
-        operand: c,
+    let n0 = module.add_literal(Value::from_int(1)); //0:1
+    let n1 = module.add_literal(Value::from_int(2)); //1:2
+    let v = new_array(&mut module, [n0, n1].into_iter());
+    let n2 = module.add_literal(Value::from_array(v)); //2:[0,1]
+    let n3 = module.add_operation(Operation {
+        operand: n2,
         operator: Operator::sum(),
-    }); //3
-    let e = module.add_auto(); //3
+    }); //3:3
+    let n4 = module.add_auto(); //4:3
     module.add_equation(LocalEquation {
-        nodes: Box::new([d, e]),
-    });
-    let array = new_array(&mut module, [d].into_iter());
-    let f = module.add_literal(Value::from_array(array)); //[3]
-    let g = module.add_literal(Value::from_int(3));
-    let array = new_array(&mut module, [g].into_iter());
-    let h = module.add_literal(Value::from_array(array)); //[3]
+        nodes: Box::new([n3, n4]),
+    }); //3=4
+    let v = new_array(&mut module, [n4].into_iter());
+    let n5 = module.add_literal(Value::from_array(v)); //5:[4]
+    let n6 = module.add_literal(Value::from_int(4)); //6:4
+    let v = new_array(&mut module, [n6].into_iter());
+    let n7 = module.add_literal(Value::from_array(v)); //7:[6]
     module.add_equation(LocalEquation {
-        nodes: Box::new([f, h]),
-    });
+        nodes: Box::new([n5, n7]),
+    }); //5=7
 
     let mut solver = Solver::new(&mut module);
     solver.solve();
+    let diagnostics = HashSet::from_iter(module.diagnostics.into_iter());
+    assert!(
+        diagnostics
+            .intersection(&EqualityError::from_nodes(&[n3, n4, n6]))
+            .next()
+            .is_some()
+    );
 }

@@ -41,7 +41,7 @@ impl NodeId {
         self.local
     }
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeIdLocal(pub usize);
 impl NodeIdLocal {
     pub fn global(&self, module: ModuleId) -> NodeId {

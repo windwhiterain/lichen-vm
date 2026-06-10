@@ -4,11 +4,12 @@ use lichen_utils::{erase, erase_mut};
 
 use crate::{
     plugin::{
-        Project,
+        DiagnosticKind, Project,
         principal_traits::{Operator, Value},
     },
     runtime::{
         Module, ModuleId, NodeId, NodeIdLocal,
+        diagnostic::{Diagnostic, EqualityError},
         equation::{Equation, LocalEquation},
         operation::Operation,
         value::Evaluation,
@@ -83,7 +84,7 @@ impl LocalNodeId {
     }
 }
 
-impl<'a, P: Project> Solver<'a, P> {
+impl<'a, P: Project<DiagnosticKind: DiagnosticKind<P>>> Solver<'a, P> {
     pub fn new(module: &'a mut Module<P>) -> Self {
         let equations = std::mem::take(&mut module.equations)
             .into_iter()
@@ -285,7 +286,12 @@ impl<'a, P: Project> Solver<'a, P> {
             } else if let Evaluation::Value(max_value) = *max_evaluation {
                 if let Evaluation::Value(value) = *evaluation {
                     if max_value != value {
-                        panic!()
+                        module.diagnostics.push(Diagnostic {
+                            kind: P::DiagnosticKind::from_equality_error(EqualityError {
+                                expected: max_root,
+                            }),
+                            node: root,
+                        });
                     }
                     max_value.for_field_pairs(&value, |i, j| {
                         self.apply_equation(module_id, &[*i, *j]);

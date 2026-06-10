@@ -1,5 +1,5 @@
 use crate::{
-    plugin::{Project, Value, principal_traits::Operator as PrincipalOperator},
+    plugin::{DiagnosticKind, Project, Value, principal_traits::Operator as PrincipalOperator},
     runtime::{
         NodeIdLocal,
         solve::{AnyNodeId, LocalNodeId, Solver},
@@ -24,12 +24,12 @@ macro_rules! operands {
         }
         let mut operands = operands.0.iter();
         ($({
-            let operand = *operands.next().unwrap();
+            let operand = operands.next().unwrap();
             let operand = $solver.solve_node(&AnyNodeId::Local(operand.solver_local($node.module())),Some(&AnyNodeId::Local(*$node)))?;
-            let Some(operand) = $variant(operand) else {
+            let Some(operand) = $variant(&operand) else {
                 return None;
             };
-            operand
+            *operand
         },)*)
     }};
     (@count) => (0);
@@ -39,7 +39,7 @@ macro_rules! operands {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sum;
 
-impl<P: Project<Value: Value>> PrincipalOperator<P> for Sum {
+impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Sum {
     fn run(
         &self,
         solver: &mut Solver<P>,
@@ -69,7 +69,7 @@ impl<P: Project<Value: Value>> PrincipalOperator<P> for Sum {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index;
 
-impl<P: Project<Value: Value>> PrincipalOperator<P> for Index {
+impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Index {
     fn run(
         &self,
         solver: &mut Solver<P>,
@@ -92,7 +92,7 @@ impl<P: Project<Value: Value>> PrincipalOperator<P> for Index {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Find;
 
-impl<P: Project<Value: Value>> PrincipalOperator<P> for Find {
+impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Find {
     fn run(
         &self,
         solver: &mut Solver<P>,
@@ -100,7 +100,7 @@ impl<P: Project<Value: Value>> PrincipalOperator<P> for Find {
         node: &LocalNodeId,
     ) -> Option<P::Value> {
         let (table, name) = operands!(solver, operand, node, P::Value::table, P::Value::string,);
-        let index = *table.get(name)?;
+        let index = *table.get(&name)?;
         Some(P::Value::from_int(index as i64))
     }
 }

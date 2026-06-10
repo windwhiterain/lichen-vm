@@ -78,7 +78,7 @@ where
         }
         existing_entry_index
     }
-    pub fn get(&self, key: K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<&V> {
         let mut state = self.probing_state(&key);
         let mut table_location = self.table_location(&mut state);
         loop {
@@ -87,7 +87,7 @@ where
                 return None;
             };
             let entry = self.entries.get(entry_index);
-            if entry.key == key {
+            if &entry.key == key {
                 return Some(&entry.value);
             } else {
                 table_location = self.table_location(&mut state);
@@ -169,6 +169,6 @@ fn test() {
         assert!(hashmap.insert(i, i, i).is_none());
     }
     for i in 0..8 {
-        assert_eq!(*hashmap.get(i).unwrap(), i);
+        assert_eq!(*hashmap.get(&i).unwrap(), i);
     }
 }
