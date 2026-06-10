@@ -155,7 +155,7 @@ impl<K: Debug, V: Debug> Debug for ArenaHashMap<K, V> {
 
 impl<K, V> PartialEq for ArenaHashMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
-        self.table == other.table && self.entries == other.entries
+        core::ptr::eq(self.table.inner(), other.table.inner())
     }
 }
 

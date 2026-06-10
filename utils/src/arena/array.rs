@@ -72,11 +72,3 @@ impl<T: Debug> Debug for ArenaArray<T> {
         f.debug_list().entries(self.iter()).finish()
     }
 }
-
-impl<T> PartialEq for ArenaArray<T> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.0.as_ptr(), other.0.as_ptr())
-    }
-}
-
-impl<T> Eq for ArenaArray<T> {}

@@ -4,11 +4,9 @@ use lichen_utils::{
 };
 
 use crate::{
-    plugin::Project,
+    plugin::{Project, principal_traits::Value},
     runtime::{Module, NodeIdLocal, StringId, solve::Solver},
 };
-
-pub trait Value: std::fmt::Debug + Copy + Eq {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Evaluation<P: Project> {
@@ -24,16 +22,35 @@ pub enum Evaluation<P: Project> {
 }
 
 pub type Int = i64;
-pub type Array = ArenaArray<NodeIdLocal>;
+impl Value for Int {}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Array(pub ArenaArray<NodeIdLocal>);
+
+impl PartialEq for Array {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.inner().len() == other.0.inner().len()
+    }
+}
+
+impl Eq for Array {}
+
+impl Value for Array {
+    fn fields(&self) -> impl Iterator<Item = &NodeIdLocal> {
+        self.0.iter()
+    }
+}
 pub type Table = ArenaHashMap<StringId, usize>;
+impl Value for Table {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unit;
+impl Value for Unit {}
 
 pub fn new_array<P: Project>(
     module: &mut Module<P>,
     nodes: impl Iterator<Item = NodeIdLocal>,
 ) -> Array {
-    Array::from_iter(&mut module.arena, nodes)
+    Array(ArenaArray::from_iter(&mut module.arena, nodes))
 }
 pub fn new_table<P: Project>(
     module: &mut Module<P>,

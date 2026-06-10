@@ -3,7 +3,7 @@ use std::{fmt::Debug, ptr::NonNull};
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
 use crate::{
-    plugin::Project,
+    plugin::{Project, principal_traits::Value},
     runtime::{
         diagnostic::Diagnostic,
         equation::LocalEquation,
@@ -59,10 +59,9 @@ impl NodeIdLocal {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleId(pub *const ());
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SwitchId(pub usize);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StringId(pub usize);
+impl Value for StringId {}
 
 impl<P: Project> Module<P> {
     pub fn new() -> Self {

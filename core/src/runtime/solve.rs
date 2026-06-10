@@ -3,7 +3,10 @@ use std::marker::PhantomData;
 use lichen_utils::{erase, erase_mut};
 
 use crate::{
-    plugin::{Project, Value, principal_traits::Operator},
+    plugin::{
+        Project,
+        principal_traits::{Operator, Value},
+    },
     runtime::{
         Module, ModuleId, NodeId, NodeIdLocal,
         equation::{Equation, LocalEquation},
@@ -80,7 +83,7 @@ impl LocalNodeId {
     }
 }
 
-impl<'a, P: Project<Value: Value>> Solver<'a, P> {
+impl<'a, P: Project> Solver<'a, P> {
     pub fn new(module: &'a mut Module<P>) -> Self {
         let equations = std::mem::take(&mut module.equations)
             .into_iter()
@@ -250,10 +253,7 @@ impl<'a, P: Project<Value: Value>> Solver<'a, P> {
             AnyNodeId::Remote { .. } => todo!(),
         }
     }
-    pub fn apply_equation(&mut self, module_id: LocalModuleId, nodes: &[NodeIdLocal])
-    where
-        P::Value: Value,
-    {
+    pub fn apply_equation(&mut self, module_id: LocalModuleId, nodes: &[NodeIdLocal]) {
         for node in nodes.iter().copied() {
             self.solve_node(&&AnyNodeId::Local(node.solver_local(module_id)), None);
         }
@@ -283,19 +283,13 @@ impl<'a, P: Project<Value: Value>> Solver<'a, P> {
             if let Evaluation::Auto { .. } = max_evaluation {
                 module.set_ref(&root, &max_root);
             } else if let Evaluation::Value(max_value) = *max_evaluation {
-                if let Evaluation::Value(value) = evaluation {
-                    if let Some(max_array) = max_value.array()
-                        && let Some(array) = value.array()
-                    {
-                        assert!(max_array.len() == array.len());
-                        for i in 0..max_array.len() {
-                            self.apply_equation(module_id, &[*max_array.get(i), *array.get(i)]);
-                        }
-                    } else {
-                        if max_value != *value {
-                            panic!()
-                        }
+                if let Evaluation::Value(value) = *evaluation {
+                    if max_value != value {
+                        panic!()
                     }
+                    max_value.for_field_pairs(&value, |i, j| {
+                        self.apply_equation(module_id, &[*i, *j]);
+                    });
                 } else if let Evaluation::Auto { .. } = evaluation {
                     self.set_value(&root.solver_local(module_id), max_value);
                 } else {

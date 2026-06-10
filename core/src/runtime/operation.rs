@@ -1,7 +1,7 @@
 use crate::{
     plugin::{Project, Value, principal_traits::Operator as PrincipalOperator},
     runtime::{
-        NodeId, NodeIdLocal,
+        NodeIdLocal,
         solve::{AnyNodeId, LocalNodeId, Solver},
     },
 };
@@ -19,10 +19,10 @@ macro_rules! operands {
         let Some(operands) = $operand.array() else {
             return None;
         };
-        if operands.len() != operands!(@count $(,$variant)*) {
+        if operands.0.len() != operands!(@count $(,$variant)*) {
             return None;
         }
-        let mut operands = operands.iter();
+        let mut operands = operands.0.iter();
         ($({
             let operand = *operands.next().unwrap();
             let operand = $solver.solve_node(&AnyNodeId::Local(operand.solver_local($node.module())),Some(&AnyNodeId::Local(*$node)))?;
@@ -50,7 +50,7 @@ impl<P: Project<Value: Value>> PrincipalOperator<P> for Sum {
             return None;
         };
         let mut ret = Some(0);
-        for operand in operands.iter().copied() {
+        for operand in operands.0.iter().copied() {
             let Some(value) = solver.solve_node(
                 &AnyNodeId::Local(operand.solver_local(node.module())),
                 Some(&AnyNodeId::Local(*node)),
@@ -77,10 +77,10 @@ impl<P: Project<Value: Value>> PrincipalOperator<P> for Index {
         node: &LocalNodeId,
     ) -> Option<P::Value> {
         let (array, index) = operands!(solver, operand, node, P::Value::array, P::Value::int,);
-        if index >= array.len() as i64 || index < 0 {
+        if index >= array.0.len() as i64 || index < 0 {
             return None;
         }
-        let reference_node = *array.get(index as usize);
+        let reference_node = *array.0.get(index as usize);
         solver.apply_equation(node.module(), &[node.local(), reference_node]);
         solver.solve_node(
             &AnyNodeId::Local(reference_node.solver_local(node.module())),

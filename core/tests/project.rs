@@ -8,11 +8,6 @@ impl ::lichen_core::plugin::Project for Project {
 }
 mod unions {
     use super::Project;
-
-    pub(super) union DiagnosticKind {
-        pub(super) core__equality_error:
-            std::mem::ManuallyDrop<::lichen_core::runtime::diagnostic::EqualityError>,
-    }
     #[derive(Clone, Copy)]
     pub(super) union Value {
         pub(super) core__int: std::mem::ManuallyDrop<::lichen_core::runtime::value::Int>,
@@ -21,48 +16,10 @@ mod unions {
         pub(super) core__table: std::mem::ManuallyDrop<::lichen_core::runtime::value::Table>,
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::runtime::value::Unit>,
     }
-}
 
-pub struct DiagnosticKind {
-    code: usize,
-    data: self::unions::DiagnosticKind,
-}
-
-impl std::fmt::Debug for DiagnosticKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code {
-            0 => {
-                write!(f, "core::equality_error({:?})", unsafe {
-                    *self.data.core__equality_error
-                })
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl ::lichen_core::plugin::principal_traits::DiagnosticKind<Project> for DiagnosticKind {
-    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code{
-0=>{<::lichen_core::runtime::diagnostic::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind::<Project>>::message(unsafe{& self.data.core__equality_error},f,
-)
-}_=>unreachable!(),}
-    }
-}
-impl ::lichen_core::plugin::DiagnosticKind<Project> for DiagnosticKind {
-    fn equality_error(self) -> Option<::lichen_core::runtime::diagnostic::EqualityError> {
-        if self.code == 0 {
-            Some(unsafe { *self.data.core__equality_error })
-        } else {
-            None
-        }
-    }
-    fn from_equality_error(data: ::lichen_core::runtime::diagnostic::EqualityError) -> Self {
-        Self {
-            code: 0,
-            data: self::unions::DiagnosticKind {
-                core__equality_error: std::mem::ManuallyDrop::new(data),
-            },
-        }
+    pub(super) union DiagnosticKind {
+        pub(super) core__equality_error:
+            std::mem::ManuallyDrop<::lichen_core::runtime::diagnostic::EqualityError>,
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -92,12 +49,9 @@ impl ::lichen_core::plugin::principal_traits::Operator<Project> for Operator {
         node: &::lichen_core::runtime::solve::LocalNodeId,
     ) -> Option<<Project as ::lichen_core::plugin::Project>::Value> {
         match self.0{
-0=>{<::lichen_core::runtime::operation::Sum::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Sum::<>},solver,value,node,
-)
-}1=>{<::lichen_core::runtime::operation::Index::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Index::<>},solver,value,node,
-)
-}2=>{<::lichen_core::runtime::operation::Find::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Find::<>},solver,value,node,
-)
+0=>{<::lichen_core::runtime::operation::Sum::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Sum::<>},solver,value,node,)
+}1=>{<::lichen_core::runtime::operation::Index::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Index::<>},solver,value,node,)
+}2=>{<::lichen_core::runtime::operation::Find::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Find::<>},solver,value,node,)
 }_=>unreachable!(),}
     }
 }
@@ -169,7 +123,42 @@ impl std::fmt::Debug for Value {
         }
     }
 }
-impl ::lichen_core::plugin::principal_traits::Value for Value {}
+impl ::lichen_core::plugin::principal_traits::Value for Value {
+    fn fields(&self) -> impl Iterator<Item = &::lichen_core::runtime::NodeIdLocal> {
+        match self.code{
+0=>{std::boxed::Box::new(<::lichen_core::runtime::value::Int::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__int},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>}1=>{std::boxed::Box::new(<::lichen_core::runtime::StringId::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__string},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>}2=>{std::boxed::Box::new(<::lichen_core::runtime::value::Array::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__array},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>}3=>{std::boxed::Box::new(<::lichen_core::runtime::value::Table::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__table},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>}4=>{std::boxed::Box::new(<::lichen_core::runtime::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__unit},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>}_=>unreachable!(),}
+    }
+    fn for_fields(&self, mut action: impl FnMut(&::lichen_core::runtime::NodeIdLocal)) {
+        match self.code{
+0=>{<::lichen_core::runtime::value::Int::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_fields(unsafe{& self.data.core__int},action,)
+}1=>{<::lichen_core::runtime::StringId::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_fields(unsafe{& self.data.core__string},action,)
+}2=>{<::lichen_core::runtime::value::Array::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_fields(unsafe{& self.data.core__array},action,)
+}3=>{<::lichen_core::runtime::value::Table::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_fields(unsafe{& self.data.core__table},action,)
+}4=>{<::lichen_core::runtime::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_fields(unsafe{& self.data.core__unit},action,)
+}_=>unreachable!(),}
+    }
+    fn for_field_pairs(
+        &self,
+        other: &Self,
+        mut action: impl FnMut(
+            &::lichen_core::runtime::NodeIdLocal,
+            &::lichen_core::runtime::NodeIdLocal,
+        ),
+    ) {
+        match self.code{
+0=>{<::lichen_core::runtime::value::Int::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_field_pairs(unsafe{& self.data.core__int},unsafe{& other.data.core__int},action,)
+}1=>{<::lichen_core::runtime::StringId::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_field_pairs(unsafe{& self.data.core__string},unsafe{& other.data.core__string},action,)
+}2=>{<::lichen_core::runtime::value::Array::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_field_pairs(unsafe{& self.data.core__array},unsafe{& other.data.core__array},action,)
+}3=>{<::lichen_core::runtime::value::Table::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_field_pairs(unsafe{& self.data.core__table},unsafe{& other.data.core__table},action,)
+}4=>{<::lichen_core::runtime::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value::<>>::for_field_pairs(unsafe{& self.data.core__unit},unsafe{& other.data.core__unit},action,)
+}_=>unreachable!(),}
+    }
+}
 impl ::lichen_core::plugin::Value for Value {
     fn int(self) -> Option<::lichen_core::runtime::value::Int> {
         if self.code == 0 {
@@ -239,6 +228,48 @@ impl ::lichen_core::plugin::Value for Value {
             code: 4,
             data: self::unions::Value {
                 core__unit: std::mem::ManuallyDrop::new(::lichen_core::runtime::value::Unit),
+            },
+        }
+    }
+}
+
+pub struct DiagnosticKind {
+    code: usize,
+    data: self::unions::DiagnosticKind,
+}
+
+impl std::fmt::Debug for DiagnosticKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            0 => {
+                write!(f, "core::equality_error({:?})", unsafe {
+                    *self.data.core__equality_error
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl ::lichen_core::plugin::principal_traits::DiagnosticKind<Project> for DiagnosticKind {
+    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code{
+0=>{<::lichen_core::runtime::diagnostic::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind::<Project>>::message(unsafe{& self.data.core__equality_error},f,)
+}_=>unreachable!(),}
+    }
+}
+impl ::lichen_core::plugin::DiagnosticKind<Project> for DiagnosticKind {
+    fn equality_error(self) -> Option<::lichen_core::runtime::diagnostic::EqualityError> {
+        if self.code == 0 {
+            Some(unsafe { *self.data.core__equality_error })
+        } else {
+            None
+        }
+    }
+    fn from_equality_error(data: ::lichen_core::runtime::diagnostic::EqualityError) -> Self {
+        Self {
+            code: 0,
+            data: self::unions::DiagnosticKind {
+                core__equality_error: std::mem::ManuallyDrop::new(data),
             },
         }
     }

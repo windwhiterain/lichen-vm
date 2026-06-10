@@ -1,8 +1,8 @@
 use lichen_project::{
-    ArrayDisplay, AsTrait, DEBUG, DelegateBody, Derives, EnumType, FORMATE_RESULT_SYMBOL,
-    FORMATTER_PARAM, Function, Generics, Module, Name, PARTIAL_EQ, PROJECT, PROJECT_GENERIC,
-    PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum, PluginSymbol, ProjectVariable,
-    Self_, Variant, WrittenSymbol,
+    Annotation, ArrayDisplay, AsTrait, DEBUG, DelegateBody, Derives, EnumType,
+    FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, Module, Name, PARTIAL_EQ, PROJECT,
+    PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum, PluginSymbol,
+    ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -33,11 +33,85 @@ pub static VALUE_TYPE: EnumType = EnumType {
     markers: &["Eq"],
     impls: &[&PARTIAL_EQ, &DEBUG],
     base_traits: &[
-        WrittenSymbol::Raw("std::fmt::Debug"),
-        WrittenSymbol::Raw("Copy"),
-        WrittenSymbol::Raw("Eq"),
+        Symbol::Raw("std::fmt::Debug"),
+        Symbol::Raw("Copy"),
+        Symbol::Raw("Eq"),
     ],
-    functions: &[],
+    functions: &[
+        Function {
+            name: "fields",
+            self_: Some(Self_(PassMode::Ref { lifetime: None })),
+            params: &Params(&[]),
+            return_: Some(Annotation {
+                impl_: true,
+                symbol: &ArrayDisplay(&[
+                    &"Iterator<Item=&",
+                    &PluginSymbol {
+                        crate_: CRATE,
+                        relative: "runtime::NodeIdLocal",
+                    },
+                    &">",
+                ]),
+            }),
+            body: Some(&DelegateBody),
+            default_body: Some(&"std::iter::empty()"),
+        },
+        Function {
+            name: "for_fields",
+            self_: Some(Self_(PassMode::Ref { lifetime: None })),
+            params: &Params(&[&Param {
+                name: "action",
+                pass_mode: PassMode::Move,
+                symbol: &Symbol::Dyn(&ArrayDisplay(&[
+                    &"impl FnMut(&",
+                    &PluginSymbol {
+                        crate_: CRATE,
+                        relative: "runtime::NodeIdLocal",
+                    },
+                    &")",
+                ])),
+                mutable: true,
+            }]),
+            return_: None,
+            body: Some(&DelegateBody),
+            default_body: Some(&ArrayDisplay(&[&"for i in self.fields(){{action(i);}}"])),
+        },
+        Function {
+            name: "for_field_pairs",
+            self_: Some(Self_(PassMode::Ref { lifetime: None })),
+            params: &Params(&[
+                &Param {
+                    name: "other",
+                    pass_mode: PassMode::Ref { lifetime: None },
+                    symbol: &SELF_SYMBOL,
+                    mutable: false,
+                },
+                &Param {
+                    name: "action",
+                    pass_mode: PassMode::Move,
+                    symbol: &Symbol::Dyn(&ArrayDisplay(&[
+                        &"impl FnMut(&",
+                        &PluginSymbol {
+                            crate_: CRATE,
+                            relative: "runtime::NodeIdLocal",
+                        },
+                        &",&",
+                        &PluginSymbol {
+                            crate_: CRATE,
+                            relative: "runtime::NodeIdLocal",
+                        },
+                        &")",
+                    ])),
+                    mutable: true,
+                },
+            ]),
+            return_: None,
+            body: Some(&DelegateBody),
+            default_body: Some(&ArrayDisplay(&[
+                &"for (i,j) in self.fields().zip(other.fields()){{action(i,j);}}",
+            ])),
+        },
+    ],
 };
 
 pub static OPERATOR_TYPE: EnumType = EnumType {
@@ -51,9 +125,9 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
     markers: &[],
     impls: &[&DEBUG],
     base_traits: &[
-        WrittenSymbol::Raw("std::fmt::Debug"),
-        WrittenSymbol::Raw("Copy"),
-        WrittenSymbol::Raw("Eq"),
+        Symbol::Raw("std::fmt::Debug"),
+        Symbol::Raw("Copy"),
+        Symbol::Raw("Eq"),
     ],
     functions: &[Function {
         name: "run",
@@ -62,7 +136,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
             &Param {
                 name: "solver",
                 pass_mode: PassMode::RefMut { lifetime: None },
-                symbol: &ArrayDisplay(&[
+                symbol: &Symbol::Dyn(&ArrayDisplay(&[
                     &PluginSymbol {
                         crate_: CRATE,
                         relative: "runtime::solve::Solver",
@@ -70,37 +144,44 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
                     &"<",
                     &ProjectVariable,
                     &">",
-                ]),
+                ])),
+                mutable: false,
             },
             &Param {
                 name: "value",
                 pass_mode: PassMode::Ref { lifetime: None },
-                symbol: &ArrayDisplay(&[
+                symbol: &Symbol::Dyn(&ArrayDisplay(&[
                     &AsTrait {
                         this: &ProjectVariable,
                         trait_: &PROJECT_TRAIT,
                     },
                     &"::Value",
-                ]),
+                ])),
+                mutable: false,
             },
             &Param {
                 name: "node",
                 pass_mode: PassMode::Ref { lifetime: None },
-                symbol: &WrittenSymbol::Plugin(&PluginSymbol {
+                symbol: &Symbol::Plugin(&PluginSymbol {
                     crate_: CRATE,
                     relative: "runtime::solve::LocalNodeId",
                 }),
+                mutable: false,
             },
         ]),
-        return_: Some(&ArrayDisplay(&[
-            &"Option<",
-            &AsTrait {
-                this: &ProjectVariable,
-                trait_: &PROJECT_TRAIT,
-            },
-            &"::Value>",
-        ])),
-        body: &DelegateBody,
+        return_: Some(Annotation {
+            impl_: false,
+            symbol: &ArrayDisplay(&[
+                &"Option<",
+                &AsTrait {
+                    this: &ProjectVariable,
+                    trait_: &PROJECT_TRAIT,
+                },
+                &"::Value>",
+            ]),
+        }),
+        body: Some(&DelegateBody),
+        default_body: None,
     }],
 };
 
@@ -114,13 +195,17 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
     derives: &Derives(&[]),
     markers: &[],
     impls: &[&DEBUG],
-    base_traits: &[WrittenSymbol::Raw("std::fmt::Debug")],
+    base_traits: &[Symbol::Raw("std::fmt::Debug")],
     functions: &[Function {
         name: "message",
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[&FORMATTER_PARAM]),
-        return_: Some(&FORMATE_RESULT_SYMBOL),
-        body: &DelegateBody,
+        return_: Some(Annotation {
+            impl_: false,
+            symbol: &FORMATE_RESULT_SYMBOL,
+        }),
+        body: Some(&DelegateBody),
+        default_body: None,
     }],
 };
 

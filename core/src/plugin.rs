@@ -1,5 +1,27 @@
 pub mod principal_traits {
-    pub trait Value: std::fmt::Debug + Copy + Eq {}
+    pub trait Value: std::fmt::Debug + Copy + Eq {
+        fn fields(&self) -> impl Iterator<Item = &crate::runtime::NodeIdLocal> {
+            std::iter::empty()
+        }
+        fn for_fields(&self, mut action: impl FnMut(&crate::runtime::NodeIdLocal)) {
+            for i in self.fields() {
+                {
+                    action(i);
+                }
+            }
+        }
+        fn for_field_pairs(
+            &self,
+            other: &Self,
+            mut action: impl FnMut(&crate::runtime::NodeIdLocal, &crate::runtime::NodeIdLocal),
+        ) {
+            for (i, j) in self.fields().zip(other.fields()) {
+                {
+                    action(i, j);
+                }
+            }
+        }
+    }
     pub trait Operator<Project: crate::plugin::Project>: std::fmt::Debug + Copy + Eq {
         fn run(
             &self,

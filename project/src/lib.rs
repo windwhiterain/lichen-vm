@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::env::current_dir;
+use std::future;
 use std::io::Write;
 use std::iter::once;
 use std::marker::PhantomData;
@@ -118,7 +119,7 @@ impl<This: Display, Trait: Display> Display for AsTrait<This, Trait> {
 }
 
 pub static PARTIAL_EQ: Trait = Trait {
-    symbol: &WrittenSymbol::Raw("PartialEq"),
+    symbol: &Symbol::Raw("PartialEq"),
     generics: &Generics::none(),
     functions: &[
         Function {
@@ -128,9 +129,14 @@ pub static PARTIAL_EQ: Trait = Trait {
                 name: "other",
                 pass_mode: PassMode::Ref { lifetime: None },
                 symbol: &SELF_SYMBOL,
+                mutable: false,
             }]),
-            return_: Some(&BOOL_SYMBOL),
-            body: &PartialEqBody { eq_or_ne: true },
+            return_: Some(Annotation {
+                impl_: false,
+                symbol: &BOOL_SYMBOL,
+            }),
+            body: Some(&PartialEqBody { eq_or_ne: true }),
+            default_body: None,
         },
         Function {
             name: "ne",
@@ -139,35 +145,45 @@ pub static PARTIAL_EQ: Trait = Trait {
                 name: "other",
                 pass_mode: PassMode::Ref { lifetime: None },
                 symbol: &SELF_SYMBOL,
+                mutable: false,
             }]),
-            return_: Some(&BOOL_SYMBOL),
-            body: &PartialEqBody { eq_or_ne: false },
+            return_: Some(Annotation {
+                impl_: false,
+                symbol: &BOOL_SYMBOL,
+            }),
+            body: Some(&PartialEqBody { eq_or_ne: false }),
+            default_body: None,
         },
     ],
 };
 
 pub static DEBUG: Trait = Trait {
-    symbol: &WrittenSymbol::Raw("std::fmt::Debug"),
+    symbol: &Symbol::Raw("std::fmt::Debug"),
     generics: &Generics::none(),
     functions: &[Function {
         name: "fmt",
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[&FORMATTER_PARAM]),
-        return_: Some(&FORMATE_RESULT_SYMBOL),
-        body: &DebugBody,
+        return_: Some(Annotation {
+            impl_: false,
+            symbol: &FORMATE_RESULT_SYMBOL,
+        }),
+        body: Some(&DebugBody),
+        default_body: None,
     }],
 };
 
 pub static FORMATTER_PARAM: Param = Param {
     name: "f",
     pass_mode: PassMode::RefMut { lifetime: None },
-    symbol: &WrittenSymbol::Raw("std::fmt::Formatter<'_>"),
+    symbol: &Symbol::Raw("std::fmt::Formatter<'_>"),
+    mutable: false,
 };
 
-pub static FORMATE_RESULT_SYMBOL: WrittenSymbol = WrittenSymbol::Raw("std::fmt::Result");
+pub static FORMATE_RESULT_SYMBOL: Symbol = Symbol::Raw("std::fmt::Result");
 
-pub static SELF_SYMBOL: WrittenSymbol = WrittenSymbol::Raw("Self");
-pub static BOOL_SYMBOL: WrittenSymbol = WrittenSymbol::Raw("bool");
+pub static SELF_SYMBOL: Symbol = Symbol::Self_;
+pub static BOOL_SYMBOL: Symbol = Symbol::Raw("bool");
 
 pub static PRINCIPAL_TRAITS: &'static str = "principal_traits";
 pub static MANUALLY_DROP: &'static str = "std::mem::ManuallyDrop";
@@ -178,23 +194,8 @@ pub struct EnumType {
     pub derives: &'static Derives,
     pub markers: &'static [&'static str],
     pub impls: &'static [&'static Trait],
-    pub base_traits: &'static [WrittenSymbol],
+    pub base_traits: &'static [Symbol],
     pub functions: &'static [Function],
-}
-
-#[derive(Clone, Copy)]
-pub enum WrittenSymbol {
-    Plugin(&'static PluginSymbol),
-    Raw(&'static str),
-}
-
-impl Display for WrittenSymbol {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            WrittenSymbol::Plugin(symbol) => write!(f, "{}", symbol),
-            WrittenSymbol::Raw(symbol) => write!(f, "{}", symbol),
-        }
-    }
 }
 pub struct Lib;
 impl Display for Lib {
@@ -203,8 +204,12 @@ impl Display for Lib {
         write!(f, "{}", ctx.plugin.lib_module)
     }
 }
+
+#[derive(Clone, Copy)]
 pub enum Symbol {
-    Written(WrittenSymbol),
+    Plugin(&'static PluginSymbol),
+    Raw(&'static str),
+    Dyn(&'static (dyn Display + Sync)),
     GeneratedLib {
         relative: &'static str,
         name: &'static str,
@@ -213,12 +218,15 @@ pub enum Symbol {
         relative: &'static str,
         name: &'static str,
     },
+    Self_,
 }
 
 impl Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Symbol::Written(symbol) => write!(f, "{}", symbol),
+            Symbol::Plugin(symbol) => write!(f, "{}", symbol),
+            Symbol::Raw(symbol) => write!(f, "{}", symbol),
+            Symbol::Dyn(symbol) => write!(f, "{}", symbol),
             Symbol::GeneratedLib { relative, name } => {
                 write!(f, "{Lib}")?;
                 if !relative.is_empty() {
@@ -235,7 +243,25 @@ impl Display for Symbol {
                 writeln!(f, "::{}", name)?;
                 Ok(())
             }
+            Symbol::Self_ => write!(f, "Self"),
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct Annotation {
+    pub impl_: bool,
+    pub symbol: &'static (dyn Display + Sync),
+}
+
+impl Display for Annotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}{}",
+            if self.impl_ { "impl " } else { "" },
+            self.symbol
+        )
     }
 }
 
@@ -355,7 +381,7 @@ impl Display for Plugin {
             }
             writeln!(f, "{{")?;
             for function in enum_type.functions {
-                writeln!(f, "{};", function)?;
+                write!(f, "{}", function)?;
             }
             writeln!(f, "}}")?;
         }
@@ -529,7 +555,7 @@ impl Display for Project {
                 .map(|x| {
                     (
                         Name {
-                            name: Symbol::Written(*x.symbol),
+                            name: *x.symbol,
                             generics: x.generics,
                             project_generic: false,
                         },
@@ -561,25 +587,36 @@ impl Display for Project {
                 )?;
                 for function in functions {
                     let mut code = 0;
-                    writeln!(f, "{function}{{")?;
-                    function.body.generate_pre_match(f, enum_type, function)?;
-                    if enum_type.is_unit {
-                        writeln!(f, "match self.0{{")?;
-                    } else {
-                        writeln!(f, "match self.code{{")?;
-                    }
-                    for (plugin_enum, plugin) in plugin_enums {
-                        for variant in plugin_enum.variants {
-                            write!(f, "{code}=>{{")?;
-                            function
-                                .body
-                                .generate_match_branch(f, enum_type, function, variant, plugin)?;
-                            write!(f, "}}")?;
-                            code += 1;
+                    writeln!(
+                        f,
+                        "{}{{",
+                        FunctionImpl {
+                            function,
+                            body: None
                         }
-                        write!(f, "_=>unreachable!(),")?;
+                    )?;
+                    if let Some(body) = function.body {
+                        body.generate_pre_match(f, enum_type, function)?;
+                        if enum_type.is_unit {
+                            writeln!(f, "match self.0{{")?;
+                        } else {
+                            writeln!(f, "match self.code{{")?;
+                        }
+                        for (plugin_enum, plugin) in plugin_enums {
+                            for variant in plugin_enum.variants {
+                                write!(f, "{code}=>{{")?;
+                                body.generate_match_branch(
+                                    f, enum_type, function, variant, plugin,
+                                )?;
+                                write!(f, "}}")?;
+                                code += 1;
+                            }
+                            write!(f, "_=>unreachable!(),")?;
+                        }
+                        writeln!(f, "}}")?;
+                    } else {
+                        writeln!(f, "unimplemented!();")?;
                     }
-                    writeln!(f, "}}")?;
                     writeln!(f, "}}")?;
                 }
                 writeln!(f, "}}")?;
@@ -723,7 +760,7 @@ impl Display for Crate {
 }
 
 pub struct Trait {
-    pub symbol: &'static WrittenSymbol,
+    pub symbol: &'static Symbol,
     pub generics: &'static Generics,
     pub functions: &'static [Function],
 }
@@ -732,19 +769,55 @@ pub struct Function {
     pub name: &'static str,
     pub self_: Option<Self_>,
     pub params: &'static Params,
-    pub return_: Option<&'static (dyn Display + Sync)>,
-    pub body: &'static dyn Body,
+    pub return_: Option<Annotation>,
+    pub body: Option<&'static dyn Body>,
+    pub default_body: Option<&'static (dyn Display + Sync)>,
+}
+
+pub struct FunctionImpl<'a> {
+    function: &'a Function,
+    body: Option<&'a (dyn Display + Sync)>,
+}
+
+impl Display for FunctionImpl<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let function = self.function;
+        write!(f, "fn {}(", function.name)?;
+        if let Some(self_) = function.self_.as_ref() {
+            write!(f, "{}", self_)?;
+        }
+        write!(f, "{})", function.params)?;
+        if let Some(return_) = function.return_ {
+            write!(f, "->{}", return_)?;
+        }
+        if let Some(default_body) = self.body {
+            writeln!(f, "{{{default_body}}}")?;
+        }
+        Ok(())
+    }
 }
 
 impl Display for Function {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "fn {}(", self.name)?;
-        if let Some(self_) = self.self_.as_ref() {
-            write!(f, "{}", self_)?;
-        }
-        write!(f, "{})", self.params)?;
-        if let Some(return_) = self.return_ {
-            write!(f, "->{}", return_)?;
+        if let Some(default_body) = self.default_body {
+            write!(
+                f,
+                "{}",
+                FunctionImpl {
+                    function: self,
+                    body: Some(default_body)
+                }
+            )?;
+        } else {
+            write!(
+                f,
+                "{}",
+                FunctionImpl {
+                    function: self,
+                    body: None
+                }
+            )?;
+            writeln!(f, ";")?;
         }
         Ok(())
     }
@@ -797,12 +870,20 @@ impl Display for Self_ {
 pub struct Param {
     pub name: &'static str,
     pub pass_mode: PassMode,
-    pub symbol: &'static (dyn Display + Sync),
+    pub symbol: &'static Symbol,
+    pub mutable: bool,
 }
 
 impl Display for Param {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}{},", self.name, self.pass_mode, self.symbol)
+        write!(
+            f,
+            "{}{}: {}{},",
+            if self.mutable { "mut " } else { "" },
+            self.name,
+            self.pass_mode,
+            self.symbol
+        )
     }
 }
 
@@ -843,6 +924,11 @@ impl Body for DelegateBody {
         variant: &Variant,
         plugin: &Plugin,
     ) -> std::fmt::Result {
+        if let Some(return_) = function.return_
+            && return_.impl_
+        {
+            write!(f, "std::boxed::Box::new(")?;
+        }
         write!(
             f,
             "<{} as {Lib}::{PRINCIPAL_TRAITS}::{}>::{}(",
@@ -876,8 +962,23 @@ impl Body for DelegateBody {
             }
             write!(f, ",")?;
         }
-        writeln!(f, "{}", Delegate(function.params))?;
+        for param in function.params.0 {
+            if matches!(param.symbol, Symbol::Self_) {
+                write!(
+                    f,
+                    "unsafe{{{}{}.data.{}__{}}},",
+                    param.pass_mode, param.name, plugin.name, variant.name
+                )?;
+            } else {
+                write!(f, "{},", param.name)?;
+            }
+        }
         writeln!(f, ")")?;
+        if let Some(return_) = function.return_
+            && return_.impl_
+        {
+            write!(f, ") as std::boxed::Box<dyn {}>", return_.symbol)?;
+        }
         Ok(())
     }
 }
