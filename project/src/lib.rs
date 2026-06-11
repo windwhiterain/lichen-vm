@@ -96,6 +96,16 @@ pub static PROJECT_GENERIC: Generic = Generic {
         name: PROJECT,
     }],
 };
+pub static AST: &'static str = "Ast";
+pub static LICHEN_CORE: &'static str = "lichen_core";
+pub static EXPR_ID: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "ExprId",
+};
+pub static NODE_ID_LOCAL: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "runtime::NodeIdLocal",
+};
 
 pub struct ProjectVariable;
 impl Display for ProjectVariable {
@@ -403,6 +413,7 @@ pub struct Plugin {
     pub dependencies: &'static [&'static Plugin],
     pub enum_types: &'static [&'static EnumType],
     pub plugin_enums: &'static [(&'static EnumType, &'static PluginEnum)],
+    pub properties: &'static [&'static str],
 }
 
 pub enum Module {
@@ -433,34 +444,42 @@ impl Display for Plugin {
             "pub trait {PROJECT}: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static"
         )?;
         for dependency in self.dependencies {
-            write!(f, "{}::{}+", dependency.lib_module, PROJECT)?;
+            write!(f, "{}::{PROJECT}+", dependency.lib_module)?;
         }
         writeln!(f, "{{")?;
         for enum_type in self.enum_types {
             writeln!(
                 f,
-                "type {}:self::{}::{};",
+                "type {}:self::{};",
                 Impl {
                     this: enum_type.name,
                     project: &SELF_SYMBOL
                 },
-                PRINCIPAL_TRAITS,
                 Delegate(&Impl {
                     this: enum_type.name,
                     project: &SELF_SYMBOL
                 })
             )?;
         }
+        writeln!(f, "type {AST}:{AST};")?;
         writeln!(f, "}}")?;
 
         for (enum_type, plugin_enum) in self.plugin_enums {
             writeln!(
                 f,
-                "pub trait {}:self::{}::{}{{",
+                "pub trait {}:self::{}::{}+",
                 enum_type.name,
                 PRINCIPAL_TRAITS,
                 Delegate(enum_type.name)
             )?;
+            for dependency in self.dependencies {
+                write!(
+                    f,
+                    "{}::{PROJECT}::{}+",
+                    dependency.lib_module, enum_type.name.name
+                )?;
+            }
+            writeln!(f, "{{")?;
             if enum_type.is_unit {
                 for variant in plugin_enum.variants.iter() {
                     writeln!(f, "fn {}()->Self;", variant.name)?
@@ -488,6 +507,22 @@ impl Display for Plugin {
             }
             writeln!(f, "}}")?;
         }
+        write!(
+            f,
+            "pub trait {AST}:{}+",
+            PluginSymbol {
+                crate_: LICHEN_CORE,
+                relative: AST
+            }
+        )?;
+        for dependency in self.dependencies {
+            write!(f, "{}::{PROJECT}::{AST}+", dependency.lib_module)?;
+        }
+        writeln!(f, "{{")?;
+        for property in self.properties {
+            writeln!(f, "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL};")?;
+        }
+        writeln!(f, "}}")?;
         Ok(())
     }
 }
@@ -496,7 +531,6 @@ pub struct Project(&'static Plugin);
 
 impl Display for Project {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "use {PROJECT_TRAIT} as _;")?;
         #[derive(Default)]
         struct Ctx {
             plugins: HashSet<ByAddress<&'static Plugin>>,
@@ -521,10 +555,10 @@ impl Display for Project {
 
         writeln!(f, "#[derive(Debug,Default,Copy,Clone,PartialEq,Eq,Hash)]")?;
         writeln!(f, "pub struct Project;")?;
-        for plugin in ctx.plugins {
+        for plugin in &ctx.plugins {
             writeln!(f, "impl {PROJECT_TRAIT} for Project{{")?;
             for (enum_type, _) in plugin.plugin_enums {
-                write!(
+                writeln!(
                     f,
                     "type {} = {}<{}>;",
                     Impl {
@@ -535,6 +569,7 @@ impl Display for Project {
                     Delegate(enum_type.name.generics),
                 )?;
             }
+            writeln!(f, "type {AST} = {AST};")?;
             writeln!(f, "}}")?;
         }
 
@@ -736,6 +771,39 @@ impl Display for Project {
                     writeln!(f, "}}")?;
                 }
             }
+        }
+        {
+            writeln!(
+                f,
+                "pub struct {AST}<'a>({}<'a,{PROJECT}>);",
+                PluginSymbol {
+                    crate_: LICHEN_CORE,
+                    relative: "AstImpl"
+                }
+            )?;
+            let mut properties_len = 0;
+            for plugin in &ctx.plugins {
+                writeln!(f, "impl {}::{AST} for {AST}<'_>{{", plugin.lib_module,)?;
+                for property in plugin.properties {
+                    writeln!(
+                        f,
+                        "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL}{{self.0.property(expr,{properties_len})}}"
+                    )?;
+                }
+                properties_len += 1;
+                writeln!(f, "}}")?;
+            }
+
+            writeln!(
+                f,
+                "impl {} for {AST}<'_>{{",
+                PluginSymbol {
+                    crate_: LICHEN_CORE,
+                    relative: AST
+                }
+            )?;
+            writeln!(f, "const PROPERTIES_LEN:usize={};", properties_len)?;
+            writeln!(f, "}}")?;
         }
         Ok(())
     }

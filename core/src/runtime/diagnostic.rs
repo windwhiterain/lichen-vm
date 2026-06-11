@@ -17,7 +17,7 @@ pub struct EqualityError {
 }
 
 impl EqualityError {
-    pub fn from_nodes<P: Project<DiagnosticKind: DiagnosticKind<P>>>(
+    pub fn from_nodes<P: Project>(
         nodes: &[NodeIdLocal],
     ) -> HashSet<Diagnostic<P>> {
         let mut ret = HashSet::new();

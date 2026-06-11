@@ -20,6 +20,7 @@ pub static PLUGIN: Plugin = Plugin {
         (&OPERATOR_TYPE, &OPERATOR_ENUM),
         (&DIAGNOSTIC_KIND_TYPE, &DIAGNOSTIC_KIND_ENUM),
     ],
+    properties: &["value"]
 };
 
 pub static VALUE_TYPE: EnumType = EnumType {

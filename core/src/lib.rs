@@ -1,24 +1,35 @@
+use std::marker::PhantomData;
+
+use crate::{plugin::Project, runtime::{Module, NodeId, NodeIdLocal}};
+
 pub mod plugin;
 pub mod property;
 pub mod runtime;
 
-static NAME: &'static str = "lichen_core";
+pub struct ExprId(usize);
 
-// crate::project! {
-//     value{
-//         int: crate::runtime::value::Int,
-//         string: crate::runtime::StringId,
-//         array: crate::runtime::value::Array,
-//         table: crate::runtime::value::Table,
-//     }{
-//         unit: (),
-//     }
-//     operator{
-//         sum:crate::runtime::operation::sum,
-//         index:crate::runtime::operation::index,
-//         find:crate::runtime::operation::find,
-//     }
-//     diagnostic_kind{
-//         equality_error: crate::runtime::diagnostic::EqualityError,
-//     }{}
-// }
+pub trait Ast {
+    const PROPERTIES_LEN: usize;
+}
+
+pub struct AstImpl<'a, P:Project>{
+    module: &'a mut Module<P>
+}
+
+impl<P:Project> AstImpl<'_,P>{
+    pub fn property(&self,expr:&ExprId,offset:usize)->NodeIdLocal{
+        NodeIdLocal(expr.0*P::Ast::PROPERTIES_LEN + offset)
+    }
+}
+
+pub trait ExprImpl<P:Project>{
+    fn build(ast:&mut P::Ast,input: &ExprId,output:&ExprId);
+}
+
+pub struct Sum;
+
+impl<P:Project> ExprImpl<P> for Sum{
+    fn build(ast:&mut P::Ast,input: &ExprId,output:&ExprId) {
+        
+    }
+}

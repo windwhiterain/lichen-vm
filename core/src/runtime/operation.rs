@@ -39,7 +39,7 @@ macro_rules! operands {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Sum;
 
-impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Sum {
+impl<P: Project> PrincipalOperator<P> for Sum {
     fn run(
         &self,
         solver: &mut Solver<P>,
@@ -69,7 +69,7 @@ impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOpera
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index;
 
-impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Index {
+impl<P: Project> PrincipalOperator<P> for Index {
     fn run(
         &self,
         solver: &mut Solver<P>,

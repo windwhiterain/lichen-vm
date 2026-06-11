@@ -84,7 +84,7 @@ impl LocalNodeId {
     }
 }
 
-impl<'a, P: Project<DiagnosticKind: DiagnosticKind<P>>> Solver<'a, P> {
+impl<'a, P: Project> Solver<'a, P> {
     pub fn new(module: &'a mut Module<P>) -> Self {
         let equations = std::mem::take(&mut module.equations)
             .into_iter()
