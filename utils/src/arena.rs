@@ -42,7 +42,8 @@ impl Arena {
         self.next += size;
         ptr
     }
-    pub fn add_iter<T>(&mut self, iter: impl Iterator<Item = T>) -> &mut [T] {
+    pub fn add_iter<T>(&mut self, iter: impl IntoIterator<Item = T>) -> &mut [T] {
+        let iter = iter.into_iter();
         let len = iter.size_hint().0;
         debug_assert!(iter.size_hint().1 == Some(len));
         let ret = self.add_slice_uninit::<T>(len);

@@ -1,10 +1,11 @@
 use lichen_utils::{
     arena::{array::ArenaArray, hashmap::ArenaHashMap},
-    erase_mut,
+    erase, erase_mut,
 };
 
 use crate::{
-    plugin::{Project, principal_traits::Value},
+    Ast, ExprId,
+    plugin::{Project, Value as _, principal_traits::Value},
     runtime::{Module, NodeIdLocal, StringId, solve::Solver},
 };
 
@@ -27,6 +28,39 @@ impl Value for Int {}
 #[derive(Debug, Clone, Copy)]
 pub struct Array(pub ArenaArray<NodeIdLocal>);
 
+impl Array {
+    pub fn new<P: Project>(
+        module: &mut Module<P>,
+        nodes: impl IntoIterator<Item = NodeIdLocal>,
+    ) -> Self {
+        Array(ArenaArray::from_iter(&mut module.arena, nodes))
+    }
+    pub fn node<P: Project>(
+        module: &mut Module<P>,
+        nodes: impl IntoIterator<Item = NodeIdLocal>,
+    ) -> NodeIdLocal {
+        let value = Self::new(module, nodes);
+        module.add_literal(P::Value::from_array(value))
+    }
+    pub fn expr<P: Project>(
+        ast: &mut P::Ast<'_>,
+        exprs: impl IntoIterator<Item = ExprId> + Clone,
+    ) -> ExprId {
+        let expr = ast.add_auto();
+        for i in 0..P::Ast::PROPERTIES_LEN {
+            let node = ast.impl_().property(&expr, i);
+            let impl_ = unsafe { erase(ast.impl_()) };
+            let value = Array::new(
+                ast.impl_mut().module,
+                exprs.clone().into_iter().map(|x| impl_.property(&x, i)),
+            );
+            *ast.impl_mut().module.evaluation_mut(&node) =
+                Evaluation::Value(P::Value::from_array(value));
+        }
+        expr
+    }
+}
+
 impl PartialEq for Array {
     fn eq(&self, other: &Self) -> bool {
         self.0.inner().len() == other.0.inner().len()
@@ -46,12 +80,6 @@ impl Value for Table {}
 pub struct Unit;
 impl Value for Unit {}
 
-pub fn new_array<P: Project>(
-    module: &mut Module<P>,
-    nodes: impl Iterator<Item = NodeIdLocal>,
-) -> Array {
-    Array(ArenaArray::from_iter(&mut module.arena, nodes))
-}
 pub fn new_table<P: Project>(
     module: &mut Module<P>,
     entries: impl Iterator<Item = (StringId, usize)>,

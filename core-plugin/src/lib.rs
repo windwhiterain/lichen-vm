@@ -1,8 +1,8 @@
 use lichen_project::{
-    Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType,
-    FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, HASH, Module, Name, PARTIAL_EQ,
-    PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin, PluginEnum,
-    PluginSymbol, ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
+    Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType, Expr,
+    ExprImpls, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, HASH, Module, Name,
+    PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin,
+    PluginEnum, PluginSymbol, ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -20,7 +20,31 @@ pub static PLUGIN: Plugin = Plugin {
         (&OPERATOR_TYPE, &OPERATOR_ENUM),
         (&DIAGNOSTIC_KIND_TYPE, &DIAGNOSTIC_KIND_ENUM),
     ],
-    properties: &["value"]
+    properties: &["value"],
+    exprs: &[&SUM, &INDEX, &FIND],
+    expr_impls: &[
+        ExprImpls {
+            expr: &SUM,
+            impls: &[&PluginSymbol {
+                crate_: CRATE,
+                relative: "Sum",
+            }],
+        },
+        ExprImpls {
+            expr: &INDEX,
+            impls: &[&PluginSymbol {
+                crate_: CRATE,
+                relative: "Index",
+            }],
+        },
+        ExprImpls {
+            expr: &FIND,
+            impls: &[&PluginSymbol {
+                crate_: CRATE,
+                relative: "Find",
+            }],
+        },
+    ],
 };
 
 pub static VALUE_TYPE: EnumType = EnumType {
@@ -339,4 +363,7 @@ pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
         is_unit: false,
     }],
 };
+pub static SUM: Expr = Expr { name: "sum" };
+pub static INDEX: Expr = Expr { name: "index" };
+pub static FIND: Expr = Expr { name: "find" };
 pub const CRATE: &'static str = "lichen_core";

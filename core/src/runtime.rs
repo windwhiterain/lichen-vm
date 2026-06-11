@@ -26,7 +26,7 @@ pub struct Module<P: Project> {
     pub operations: StableVec<Option<Operation<P>>>,
     pub evaluations: StableVec<Evaluation<P>>,
     pub solves: Vec<Solve>,
-    pub nodes: Vec<NodeIdLocal>,
+    pub entries: Vec<NodeIdLocal>,
     pub equations: Vec<LocalEquation>,
     pub diagnostics: Vec<Diagnostic<P>>,
 }
@@ -71,7 +71,7 @@ impl<P: Project> Module<P> {
             evaluations: Default::default(),
             solves: Default::default(),
             equations: Default::default(),
-            nodes: Default::default(),
+            entries: Default::default(),
             diagnostics: Default::default(),
         }
     }
@@ -101,8 +101,8 @@ impl<P: Project> Module<P> {
     pub fn add_equation(&mut self, equation: LocalEquation) {
         self.equations.push(equation);
     }
-    pub fn add_node(&mut self, node: NodeIdLocal) {
-        self.nodes.push(node);
+    pub fn add_entry(&mut self, node: NodeIdLocal) {
+        self.entries.push(node);
     }
 }
 

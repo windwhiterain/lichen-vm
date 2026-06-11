@@ -97,6 +97,14 @@ pub static PROJECT_GENERIC: Generic = Generic {
     }],
 };
 pub static AST: &'static str = "Ast";
+pub static AST_TRAIT: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "Ast",
+};
+pub static AST_IMPL: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "AstImpl",
+};
 pub static LICHEN_CORE: &'static str = "lichen_core";
 pub static EXPR_ID: PluginSymbol = PluginSymbol {
     crate_: LICHEN_CORE,
@@ -105,6 +113,14 @@ pub static EXPR_ID: PluginSymbol = PluginSymbol {
 pub static NODE_ID_LOCAL: PluginSymbol = PluginSymbol {
     crate_: LICHEN_CORE,
     relative: "runtime::NodeIdLocal",
+};
+pub static EXPR_IMPL: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "ExprImpl",
+};
+pub static EVALUATION: PluginSymbol = PluginSymbol {
+    crate_: LICHEN_CORE,
+    relative: "runtime::value::Evaluation",
 };
 
 pub struct ProjectVariable;
@@ -414,6 +430,17 @@ pub struct Plugin {
     pub enum_types: &'static [&'static EnumType],
     pub plugin_enums: &'static [(&'static EnumType, &'static PluginEnum)],
     pub properties: &'static [&'static str],
+    pub exprs: &'static [&'static Expr],
+    pub expr_impls: &'static [ExprImpls],
+}
+
+pub struct Expr {
+    pub name: &'static str,
+}
+
+pub struct ExprImpls {
+    pub expr: &'static Expr,
+    pub impls: &'static [&'static PluginSymbol],
 }
 
 pub enum Module {
@@ -424,8 +451,22 @@ pub enum Module {
     Path(&'static str),
 }
 
-impl Display for Plugin {
+impl Display for &'static Plugin {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[derive(Default)]
+        struct Ctx {
+            plugins: HashSet<ByAddress<&'static Plugin>>,
+        }
+        let mut ctx = Ctx::default();
+        fn collect(plugin: &'static Plugin, ctx: &mut Ctx) {
+            if ctx.plugins.insert(ByAddress(plugin)) {
+                for dependency in plugin.dependencies.iter().copied() {
+                    collect(dependency, ctx);
+                }
+            }
+        }
+        collect(&self, &mut ctx);
+
         writeln!(f, "pub mod {PRINCIPAL_TRAITS}{{")?;
         for enum_type in self.enum_types {
             write!(f, "pub trait {}:", enum_type.name)?;
@@ -461,7 +502,7 @@ impl Display for Plugin {
                 })
             )?;
         }
-        writeln!(f, "type {AST}:{AST};")?;
+        writeln!(f, "type {AST}<'a>:{AST}<'a,Self>;")?;
         writeln!(f, "}}")?;
 
         for (enum_type, plugin_enum) in self.plugin_enums {
@@ -509,7 +550,7 @@ impl Display for Plugin {
         }
         write!(
             f,
-            "pub trait {AST}:{}+",
+            "pub trait {AST}<'a,{PROJECT_GENERIC}>:{}<'a,{ProjectVariable}>+",
             PluginSymbol {
                 crate_: LICHEN_CORE,
                 relative: AST
@@ -521,6 +562,20 @@ impl Display for Plugin {
         writeln!(f, "{{")?;
         for property in self.properties {
             writeln!(f, "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL};")?;
+        }
+        writeln!(f, "fn add_literal(&mut self,")?;
+        for plugin in ctx.plugins {
+            for property in plugin.properties {
+                write!(f, "{property}: Option<{ProjectVariable}::Value>,")?;
+            }
+        }
+        writeln!(f, ")->{EXPR_ID};")?;
+        for expr in self.exprs {
+            writeln!(
+                f,
+                "fn add_{}(&mut self,input:&{EXPR_ID})->{EXPR_ID};",
+                expr.name
+            )?;
         }
         writeln!(f, "}}")?;
         Ok(())
@@ -536,6 +591,7 @@ impl Display for Project {
             plugins: HashSet<ByAddress<&'static Plugin>>,
             plugin_enums:
                 HashMap<ByAddress<&'static EnumType>, Vec<(&'static PluginEnum, &'static Plugin)>>,
+            expr_impls: HashMap<ByAddress<&'static Expr>, Vec<&'static PluginSymbol>>,
         }
         let mut ctx = Ctx::default();
         fn collect(plugin: &'static Plugin, ctx: &mut Ctx) {
@@ -548,6 +604,12 @@ impl Display for Project {
                 }
                 for dependency in plugin.dependencies.iter().copied() {
                     collect(dependency, ctx);
+                }
+                for expr_impls in plugin.expr_impls {
+                    ctx.expr_impls
+                        .entry(ByAddress(expr_impls.expr))
+                        .or_default()
+                        .extend(expr_impls.impls);
                 }
             }
         }
@@ -569,7 +631,7 @@ impl Display for Project {
                     Delegate(enum_type.name.generics),
                 )?;
             }
-            writeln!(f, "type {AST} = {AST};")?;
+            writeln!(f, "type {AST}<'a> = {AST}<'a>;")?;
             writeln!(f, "}}")?;
         }
 
@@ -773,17 +835,14 @@ impl Display for Project {
             }
         }
         {
-            writeln!(
-                f,
-                "pub struct {AST}<'a>({}<'a,{PROJECT}>);",
-                PluginSymbol {
-                    crate_: LICHEN_CORE,
-                    relative: "AstImpl"
-                }
-            )?;
+            writeln!(f, "pub struct {AST}<'a>(pub {AST_IMPL}<'a,{PROJECT}>);")?;
             let mut properties_len = 0;
             for plugin in &ctx.plugins {
-                writeln!(f, "impl {}::{AST} for {AST}<'_>{{", plugin.lib_module,)?;
+                writeln!(
+                    f,
+                    "impl<'a> {}::{AST}<'a,{ProjectVariable}> for {AST}<'a>{{",
+                    plugin.lib_module,
+                )?;
                 for property in plugin.properties {
                     writeln!(
                         f,
@@ -791,18 +850,80 @@ impl Display for Project {
                     )?;
                 }
                 properties_len += 1;
+                writeln!(f, "fn add_literal(&mut self,")?;
+                for plugin in &ctx.plugins {
+                    for property in plugin.properties {
+                        write!(
+                            f,
+                            "{property}: Option<<{ProjectVariable} as {PROJECT_TRAIT}>::Value>,"
+                        )?;
+                    }
+                }
+                writeln!(f, ")->{EXPR_ID}{{")?;
+                writeln!(
+                    f,
+                    "let expr = <Self as {AST_TRAIT}<'a,{ProjectVariable}>>::add_auto(self);"
+                )?;
+                for plugin in &ctx.plugins {
+                    for property in plugin.properties {
+                        writeln!(f, "if let Some({property}) = {property}{{")?;
+                        writeln!(f, "let node = self.{property}(&expr);")?;
+                        write!(
+                            f,
+                            "*<Self as {AST_TRAIT}<'a,{ProjectVariable}>>::impl_mut(self).module.evaluation_mut(&node)={EVALUATION}::Value({property})"
+                        )?;
+                        writeln!(f, "}}")?;
+                    }
+                }
+                writeln!(f, "expr")?;
+                writeln!(f, "}}")?;
+                for expr in plugin.exprs {
+                    writeln!(
+                        f,
+                        "fn add_{}(&mut self,input:&{EXPR_ID})->{EXPR_ID}{{",
+                        expr.name
+                    )?;
+                    writeln!(
+                        f,
+                        "let output = <Self as {AST_TRAIT}<'a,{ProjectVariable}>>::add_auto(self);"
+                    )?;
+                    for expr_impl in ctx.expr_impls.get(&ByAddress(expr)).unwrap_or(&vec![]) {
+                        writeln!(
+                            f,
+                            "<{expr_impl} as {EXPR_IMPL}<{ProjectVariable}>>::build(self,input,&output);"
+                        )?;
+                    }
+                    writeln!(f, "output")?;
+                    writeln!(f, "}}")?;
+                }
                 writeln!(f, "}}")?;
             }
 
             writeln!(
                 f,
-                "impl {} for {AST}<'_>{{",
+                "impl<'a> {}<'a,{PROJECT}> for {AST}<'a>{{",
                 PluginSymbol {
                     crate_: LICHEN_CORE,
                     relative: AST
                 }
             )?;
             writeln!(f, "const PROPERTIES_LEN:usize={};", properties_len)?;
+            writeln!(
+                f,
+                "fn impl_(&self)->&{AST_IMPL}<'a,{ProjectVariable}>{{&self.0}}"
+            )?;
+            writeln!(
+                f,
+                "fn impl_mut(&mut self)->&mut {AST_IMPL}<'a,{ProjectVariable}>{{&mut self.0}}"
+            )?;
+            writeln!(
+                f,
+                "fn add_auto(&mut self)->{EXPR_ID}{{<Self as {AST_TRAIT}<'a,{ProjectVariable}>>::impl_mut(self).add_auto()}}"
+            )?;
+            writeln!(
+                f,
+                "fn add_entry(&mut self,expr:&{EXPR_ID}){{<Self as {AST_TRAIT}<'a,{ProjectVariable}>>::impl_mut(self).add_entry(expr)}}"
+            )?;
             writeln!(f, "}}")?;
         }
         Ok(())

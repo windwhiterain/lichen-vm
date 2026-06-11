@@ -8,7 +8,7 @@ impl<T> ArenaArray<T> {
     pub fn new(arena: &mut Arena, len: usize) -> Self {
         Self(NonNull::from_mut(arena.add_slice_uninit(len)))
     }
-    pub fn from_iter(arena: &mut Arena, iter: impl Iterator<Item = T>) -> Self {
+    pub fn from_iter(arena: &mut Arena, iter: impl IntoIterator<Item = T>) -> Self {
         Self(NonNull::from_mut(unsafe {
             std::mem::transmute(arena.add_iter(iter))
         }))

@@ -36,7 +36,7 @@ pub struct Solve {
 pub struct Solver<'a, P: Project> {
     pub module: &'a mut Module<P>,
     pub equations: Vec<Equation>,
-    pub nodes: Vec<LocalNodeId>,
+    pub entries: Vec<LocalNodeId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -93,20 +93,20 @@ impl<'a, P: Project> Solver<'a, P> {
                 nodes: x.nodes,
             })
             .collect();
-        let nodes = std::mem::take(&mut module.nodes)
+        let entries = std::mem::take(&mut module.entries)
             .iter()
             .map(|x| x.solver_local(LocalModuleId))
             .collect();
         Self {
             module,
             equations,
-            nodes,
+            entries,
         }
     }
     pub fn solve(&mut self) {
         loop {
-            if let Some(node) = self.nodes.pop() {
-                self.solve_node(&AnyNodeId::Local(node), None);
+            if let Some(entry) = self.entries.pop() {
+                self.solve_node(&AnyNodeId::Local(entry), None);
             } else if let Some(equation) = self.equations.pop() {
                 self.apply_equation(equation.module, &equation.nodes);
             } else {
