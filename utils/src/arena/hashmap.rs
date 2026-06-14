@@ -11,8 +11,8 @@ use crate::{
 type Hasher = DefaultHasher;
 
 pub struct ArenaHashMap<K, V> {
-    table: ArenaArray<Option<usize>>,
-    entries: ArenaArray<Entry<K, V>>,
+    pub table: ArenaArray<Option<usize>>,
+    pub entries: ArenaArray<Entry<K, V>>,
 }
 
 impl<K, V> ArenaHashMap<K, V>
@@ -153,13 +153,24 @@ impl<K: Debug, V: Debug> Debug for ArenaHashMap<K, V> {
     }
 }
 
-impl<K, V> PartialEq for ArenaHashMap<K, V> {
+impl<K: Hash + Eq, V: PartialEq> PartialEq for ArenaHashMap<K, V> {
     fn eq(&self, other: &Self) -> bool {
-        core::ptr::eq(self.table.inner(), other.table.inner())
+        if self.len() != other.len() {
+            return false;
+        }
+        for entry in self.entries.iter() {
+            let Some(value) = other.get(&entry.key) else {
+                return false;
+            };
+            if &entry.value != value {
+                return false;
+            }
+        }
+        true
     }
 }
 
-impl<K, V> Eq for ArenaHashMap<K, V> {}
+impl<K: Hash + Eq, V: Eq> Eq for ArenaHashMap<K, V> {}
 
 #[test]
 fn test() {

@@ -4,8 +4,8 @@ use lichen_utils::{
 };
 
 use crate::{
-    Ast, ExprId,
-    plugin::{Project, Value as _, principal_traits::Value},
+    Ast as _, ExprId,
+    plugin::{Ast, Project, Value as _, principal_traits::Value},
     runtime::{Module, NodeIdLocal, StringId, solve::Solver},
 };
 
@@ -43,15 +43,18 @@ impl Array {
         module.add_literal(P::Value::from_array(value))
     }
     pub fn expr<P: Project>(
-        ast: &mut P::Ast<'_>,
+        ast: &mut P::Ast,
         exprs: impl IntoIterator<Item = ExprId> + Clone,
-    ) -> ExprId {
+    ) -> ExprId
+    where
+        P::Ast: Ast<P>,
+    {
         let expr = ast.add_auto();
         for i in 0..P::Ast::PROPERTIES_LEN {
             let node = ast.impl_().property(&expr, i);
             let impl_ = unsafe { erase(ast.impl_()) };
             let value = Array::new(
-                ast.impl_mut().module,
+                &mut ast.impl_mut().module,
                 exprs.clone().into_iter().map(|x| impl_.property(&x, i)),
             );
             *ast.impl_mut().module.evaluation_mut(&node) =
@@ -74,18 +77,23 @@ impl Value for Array {
         self.0.iter()
     }
 }
-pub type Table = ArenaHashMap<StringId, usize>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Table(pub ArenaHashMap<StringId, usize>);
 impl Value for Table {}
+impl Table {
+    pub fn new<P: Project>(module: &mut Module<P>, names: impl Iterator<Item = StringId>) -> Self {
+        let mut names = names.collect::<Vec<_>>();
+        names.sort();
+        Self(ArenaHashMap::from_iter(
+            &mut module.arena,
+            names.into_iter().enumerate().map(|(i, x)| (x, i)),
+        ))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Unit;
 impl Value for Unit {}
-
-pub fn new_table<P: Project>(
-    module: &mut Module<P>,
-    entries: impl Iterator<Item = (StringId, usize)>,
-) -> Table {
-    Table::from_iter(&mut module.arena, entries)
-}
 
 impl<P: Project> Evaluation<P> {
     pub const AUTO: Self = Self::Auto {

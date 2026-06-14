@@ -20,8 +20,8 @@ use project::Value;
 
 #[test]
 fn main() {
-    let mut module = Module::<Project>::new();
-    let mut ast = Ast(AstImpl::new(&mut module));
+    let module = Module::<Project>::new();
+    let mut ast = Ast(AstImpl::new(module));
     let e0 = ast.add_literal(Some(Value::from_int(1)));
     let e1 = ast.add_literal(Some(Value::from_int(2)));
     let e2 = Array::expr::<Project>(&mut ast, [e0, e1]);
@@ -31,7 +31,7 @@ fn main() {
     solver.solve();
     let v3 = ast.value(&e3);
     assert_eq!(
-        module.evaluation(&v3),
+        ast.impl_().module.evaluation(&v3),
         &Evaluation::Value(Value::from_int(3))
     )
 }

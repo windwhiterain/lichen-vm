@@ -37,6 +37,12 @@ impl<T> ArenaArray<T> {
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
         unsafe { self.inner_mut().iter_mut().map(|x| x.assume_init_mut()) }
     }
+    pub fn as_slice(&self) -> &[T] {
+        unsafe { std::mem::transmute(self.0.as_ref()) }
+    }
+    pub fn as_slice_mut(&mut self) -> &mut [T] {
+        unsafe { std::mem::transmute(self.0.as_mut()) }
+    }
 }
 
 impl<T: Clone> ArenaArray<T> {
@@ -72,3 +78,11 @@ impl<T: Debug> Debug for ArenaArray<T> {
         f.debug_list().entries(self.iter()).finish()
     }
 }
+
+impl<T: PartialEq> PartialEq for ArenaArray<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl<T: Eq> Eq for ArenaArray<T> {}

@@ -1,19 +1,27 @@
 use lichen_project::{
     Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType, Expr,
-    ExprImpls, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics, HASH, Module, Name,
-    PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, Param, Params, PassMode, Plugin,
-    PluginEnum, PluginSymbol, ProjectVariable, SELF_SYMBOL, Self_, Symbol, Variant,
+    ExprImpls, ExprParam, ExprParams, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generic,
+    Generics, HASH, Module, Name, PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT,
+    PROJECT_VARIABLE, Param, Params, PassMode, Plugin, PluginEnum, SELF_SYMBOL, Self_, Symbol,
+    Variant, WrittenSymbol,
+    code::{self, WrittenPath},
+    plugin::ProjectTrait,
 };
 
 pub static PLUGIN: Plugin = Plugin {
     name: "core",
     lib_crate_path: "core",
-    lib_module: PluginSymbol {
+    lib_module: WrittenSymbol {
         crate_: CRATE,
         relative: "plugin",
     },
     bin_module: Module::Path("core/tests/project"),
     dependencies: &[],
+    names: &[&code::Name {
+        name: "Ast",
+        generics: &Generics::none(),
+        project_generic: true,
+    }],
     enum_types: &[&VALUE_TYPE, &OPERATOR_TYPE, &DIAGNOSTIC_KIND_TYPE],
     plugin_enums: &[
         (&VALUE_TYPE, &VALUE_ENUM),
@@ -21,25 +29,25 @@ pub static PLUGIN: Plugin = Plugin {
         (&DIAGNOSTIC_KIND_TYPE, &DIAGNOSTIC_KIND_ENUM),
     ],
     properties: &["value"],
-    exprs: &[&SUM, &INDEX, &FIND],
+    exprs: &[&SUM_EXPR, &INDEX_EXPR, &FIND_EXPR],
     expr_impls: &[
         ExprImpls {
-            expr: &SUM,
-            impls: &[&PluginSymbol {
+            expr: &SUM_EXPR,
+            impls: &[&WrittenSymbol {
                 crate_: CRATE,
                 relative: "Sum",
             }],
         },
         ExprImpls {
-            expr: &INDEX,
-            impls: &[&PluginSymbol {
+            expr: &INDEX_EXPR,
+            impls: &[&WrittenSymbol {
                 crate_: CRATE,
                 relative: "Index",
             }],
         },
         ExprImpls {
-            expr: &FIND,
-            impls: &[&PluginSymbol {
+            expr: &FIND_EXPR,
+            impls: &[&WrittenSymbol {
                 crate_: CRATE,
                 relative: "Find",
             }],
@@ -48,7 +56,7 @@ pub static PLUGIN: Plugin = Plugin {
 };
 
 pub static VALUE_TYPE: EnumType = EnumType {
-    name: &Name {
+    name: &code::Name {
         name: "Value",
         project_generic: false,
         generics: &Generics(&[]),
@@ -72,7 +80,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
                 impl_: true,
                 symbol: &ArrayDisplay(&[
                     &"Iterator<Item=&",
-                    &PluginSymbol {
+                    &WrittenSymbol {
                         crate_: CRATE,
                         relative: "runtime::NodeIdLocal",
                     },
@@ -91,7 +99,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
                 pass_mode: PassMode::Move,
                 symbol: &Symbol::Dyn(&ArrayDisplay(&[
                     &"impl FnMut(&",
-                    &PluginSymbol {
+                    &WrittenSymbol {
                         crate_: CRATE,
                         relative: "runtime::NodeIdLocal",
                     },
@@ -119,12 +127,12 @@ pub static VALUE_TYPE: EnumType = EnumType {
                     pass_mode: PassMode::Move,
                     symbol: &Symbol::Dyn(&ArrayDisplay(&[
                         &"impl FnMut(&",
-                        &PluginSymbol {
+                        &WrittenSymbol {
                             crate_: CRATE,
                             relative: "runtime::NodeIdLocal",
                         },
                         &",&",
-                        &PluginSymbol {
+                        &WrittenSymbol {
                             crate_: CRATE,
                             relative: "runtime::NodeIdLocal",
                         },
@@ -140,10 +148,11 @@ pub static VALUE_TYPE: EnumType = EnumType {
             ])),
         },
     ],
+    plugin: &PLUGIN,
 };
 
 pub static OPERATOR_TYPE: EnumType = EnumType {
-    name: &Name {
+    name: &code::Name {
         name: "Operator",
         project_generic: true,
         generics: &Generics(&[]),
@@ -166,12 +175,12 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
                 name: "solver",
                 pass_mode: PassMode::RefMut { lifetime: None },
                 symbol: &Symbol::Dyn(&ArrayDisplay(&[
-                    &PluginSymbol {
+                    &WrittenSymbol {
                         crate_: CRATE,
                         relative: "runtime::solve::Solver",
                     },
                     &"<",
-                    &ProjectVariable,
+                    &PROJECT_VARIABLE,
                     &">",
                 ])),
                 mutable: false,
@@ -181,8 +190,8 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
                 pass_mode: PassMode::Ref { lifetime: None },
                 symbol: &Symbol::Dyn(&ArrayDisplay(&[
                     &AsTrait {
-                        this: &ProjectVariable,
-                        trait_: &PROJECT_TRAIT,
+                        this: &PROJECT_VARIABLE,
+                        trait_: &ProjectTrait { plugin: &PLUGIN },
                     },
                     &"::Value",
                 ])),
@@ -191,7 +200,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
             &Param {
                 name: "node",
                 pass_mode: PassMode::Ref { lifetime: None },
-                symbol: &Symbol::Plugin(&PluginSymbol {
+                symbol: &Symbol::Written(&WrittenSymbol {
                     crate_: CRATE,
                     relative: "runtime::solve::LocalNodeId",
                 }),
@@ -203,8 +212,8 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
             symbol: &ArrayDisplay(&[
                 &"Option<",
                 &AsTrait {
-                    this: &ProjectVariable,
-                    trait_: &PROJECT_TRAIT,
+                    this: &PROJECT_VARIABLE,
+                    trait_: &ProjectTrait { plugin: &PLUGIN },
                 },
                 &"::Value>",
             ]),
@@ -212,10 +221,11 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         body: Some(&DelegateBody),
         default_body: None,
     }],
+    plugin: &PLUGIN,
 };
 
 pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
-    name: &Name {
+    name: &code::Name {
         name: "DiagnosticKind",
         project_generic: true,
         generics: &Generics(&[]),
@@ -242,128 +252,144 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
         body: Some(&DelegateBody),
         default_body: None,
     }],
+    plugin: &PLUGIN,
 };
 
 pub static VALUE_ENUM: PluginEnum = PluginEnum {
     variants: &[
         Variant {
             name: "int",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::value::Int",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::value::Int",
                 project_generic: false,
             },
             is_unit: false,
         },
         Variant {
             name: "string",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::StringId",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::StringId",
                 project_generic: false,
             },
             is_unit: false,
         },
         Variant {
             name: "array",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::value::Array",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::value::Array",
                 project_generic: false,
             },
             is_unit: false,
         },
         Variant {
             name: "table",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::value::Table",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::value::Table",
                 project_generic: false,
             },
             is_unit: false,
         },
         Variant {
             name: "unit",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::value::Unit",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::value::Unit",
                 project_generic: false,
             },
             is_unit: true,
         },
     ],
+    plugin: &PLUGIN,
 };
 
 pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
     variants: &[
         Variant {
             name: "sum",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::operation::Sum",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::operation::Sum",
                 project_generic: false,
             },
             is_unit: true,
         },
         Variant {
             name: "index",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::operation::Index",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::operation::Index",
                 project_generic: false,
             },
             is_unit: true,
         },
         Variant {
             name: "find",
-            symbol: &Name {
-                name: &PluginSymbol {
-                    crate_: CRATE,
-                    relative: "runtime::operation::Find",
-                },
+            path: &WrittenPath {
+                crate_: CRATE,
                 generics: &Generics::none(),
+                path: "runtime::operation::Find",
                 project_generic: false,
             },
             is_unit: true,
         },
     ],
+    plugin: &PLUGIN,
 };
 pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
     variants: &[Variant {
         name: "equality_error",
-        symbol: &Name {
-            name: &PluginSymbol {
-                crate_: CRATE,
-                relative: "runtime::diagnostic::EqualityError",
-            },
+        path: &WrittenPath {
+            crate_: CRATE,
             generics: &Generics::none(),
+            path: "runtime::diagnostic::EqualityError",
             project_generic: false,
         },
         is_unit: false,
     }],
+    plugin: &PLUGIN,
 };
-pub static SUM: Expr = Expr { name: "sum" };
-pub static INDEX: Expr = Expr { name: "index" };
-pub static FIND: Expr = Expr { name: "find" };
+pub static SUM_EXPR: Expr = Expr {
+    name: "sum",
+    params: &ExprParams(&[ExprParam {
+        name: "addends",
+        is_array: false,
+    }]),
+};
+pub static INDEX_EXPR: Expr = Expr {
+    name: "index",
+    params: &ExprParams(&[
+        ExprParam {
+            name: "array",
+            is_array: false,
+        },
+        ExprParam {
+            name: "index",
+            is_array: false,
+        },
+    ]),
+};
+pub static FIND_EXPR: Expr = Expr {
+    name: "find",
+    params: &ExprParams(&[
+        ExprParam {
+            name: "table",
+            is_array: false,
+        },
+        ExprParam {
+            name: "name",
+            is_array: false,
+        },
+    ]),
+};
 pub const CRATE: &'static str = "lichen_core";

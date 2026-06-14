@@ -22,27 +22,27 @@ pub mod principal_traits {
             }
         }
     }
-    pub trait Operator<Project: crate::plugin::Project>: std::fmt::Debug + Copy + Eq {
+    pub trait Operator<P: crate::plugin::Project>: std::fmt::Debug + Copy + Eq {
         fn run(
             &self,
-            solver: &mut crate::runtime::solve::Solver<Project>,
-            value: &<Project as crate::plugin::Project>::Value,
+            solver: &mut crate::runtime::solve::Solver<P>,
+            value: &<P as crate::plugin::Project>::Value,
             node: &crate::runtime::solve::LocalNodeId,
-        ) -> Option<<Project as crate::plugin::Project>::Value>;
+        ) -> Option<<P as crate::plugin::Project>::Value>;
     }
-    pub trait DiagnosticKind<Project: crate::plugin::Project>:
+    pub trait DiagnosticKind<P: crate::plugin::Project>:
         std::fmt::Debug + Eq + std::hash::Hash + Clone
     {
         fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
     }
 }
 pub trait Project: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static {
-    type Value: self::Value;
-    type Operator: self::Operator<Self>;
-    type DiagnosticKind: self::DiagnosticKind<Self>;
-    type Ast<'a>: Ast<'a, Self>;
+    type Value: crate::plugin::Value;
+    type Operator: crate::plugin::Operator<Self>;
+    type DiagnosticKind: crate::plugin::DiagnosticKind<Self>;
+    type Ast: crate::plugin::Ast<Self>;
 }
-pub trait Value: self::principal_traits::Value {
+pub trait Value: crate::plugin::principal_traits::Value {
     fn int(&self) -> Option<&crate::runtime::value::Int>;
     fn from_int(data: crate::runtime::value::Int) -> Self;
     fn string(&self) -> Option<&crate::runtime::StringId>;
@@ -54,23 +54,44 @@ pub trait Value: self::principal_traits::Value {
     fn unit(&self) -> bool;
     fn from_unit() -> Self;
 }
-pub trait Operator<Project: crate::plugin::Project>:
-    self::principal_traits::Operator<Project>
+pub trait Operator<P: crate::plugin::Project>:
+    crate::plugin::principal_traits::Operator<P>
 {
     fn sum() -> Self;
     fn index() -> Self;
     fn find() -> Self;
 }
-pub trait DiagnosticKind<Project: crate::plugin::Project>:
-    self::principal_traits::DiagnosticKind<Project>
+pub trait DiagnosticKind<P: crate::plugin::Project>:
+    crate::plugin::principal_traits::DiagnosticKind<P>
 {
     fn equality_error(&self) -> Option<&crate::runtime::diagnostic::EqualityError>;
     fn from_equality_error(data: crate::runtime::diagnostic::EqualityError) -> Self;
 }
-pub trait Ast<'a, Project: crate::plugin::Project>: crate::Ast<'a, Project> {
+pub trait Ast<P: crate::plugin::Project>: crate::Ast<P> {
     fn value(&self, expr: &crate::ExprId) -> crate::runtime::NodeIdLocal;
-    fn add_literal(&mut self, value: Option<Project::Value>) -> crate::ExprId;
-    fn add_sum(&mut self, input: &crate::ExprId) -> crate::ExprId;
-    fn add_index(&mut self, input: &crate::ExprId) -> crate::ExprId;
-    fn add_find(&mut self, input: &crate::ExprId) -> crate::ExprId;
+    fn add_literal(&mut self, value: Option<P::Value>) -> crate::ExprId;
+    fn add_sum(&mut self, addends: &crate::ExprId) -> crate::ExprId;
+    fn add_index(&mut self, array: &crate::ExprId, index: &crate::ExprId) -> crate::ExprId;
+    fn add_find(&mut self, table: &crate::ExprId, name: &crate::ExprId) -> crate::ExprId;
+}
+pub mod expr {
+    pub trait sum<P: crate::plugin::Project> {
+        fn build(ast: &mut P::Ast, output: &crate::ExprId, addends: &crate::ExprId);
+    }
+    pub trait index<P: crate::plugin::Project> {
+        fn build(
+            ast: &mut P::Ast,
+            output: &crate::ExprId,
+            array: &crate::ExprId,
+            index: &crate::ExprId,
+        );
+    }
+    pub trait find<P: crate::plugin::Project> {
+        fn build(
+            ast: &mut P::Ast,
+            output: &crate::ExprId,
+            table: &crate::ExprId,
+            name: &crate::ExprId,
+        );
+    }
 }

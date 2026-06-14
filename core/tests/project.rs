@@ -1,17 +1,17 @@
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Project;
 impl ::lichen_core::plugin::Project for Project {
-    type Value = Value;
-    type Operator = Operator;
-    type DiagnosticKind = DiagnosticKind;
-    type Ast<'a> = Ast<'a>;
+    type Value = self::Value;
+    type Operator = self::Operator<Self>;
+    type DiagnosticKind = self::DiagnosticKind<Self>;
+    type Ast = self::Ast<Self>;
 }
 mod unions {
-    use super::Project;
 
-    pub(super) union DiagnosticKind {
+    pub(super) union DiagnosticKind<P: ::lichen_core::plugin::Project> {
         pub(super) core__equality_error:
             std::mem::ManuallyDrop<::lichen_core::runtime::diagnostic::EqualityError>,
+        _p: core::marker::PhantomData<(P)>,
     }
     #[derive(Clone, Copy)]
     pub(super) union Value {
@@ -20,12 +20,13 @@ mod unions {
         pub(super) core__array: std::mem::ManuallyDrop<::lichen_core::runtime::value::Array>,
         pub(super) core__table: std::mem::ManuallyDrop<::lichen_core::runtime::value::Table>,
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::runtime::value::Unit>,
+        _p: core::marker::PhantomData<()>,
     }
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Operator(usize);
+pub struct Operator<P: ::lichen_core::plugin::Project>(usize, core::marker::PhantomData<P>);
 
-impl std::fmt::Debug for Operator {
+impl<P: ::lichen_core::plugin::Project> std::fmt::Debug for self::Operator<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
             0 => {
@@ -41,39 +42,41 @@ impl std::fmt::Debug for Operator {
         }
     }
 }
-impl ::lichen_core::plugin::principal_traits::Operator<Project> for Operator {
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
+    for self::Operator<P>
+{
     fn run(
         &self,
-        solver: &mut ::lichen_core::runtime::solve::Solver<Project>,
-        value: &<Project as ::lichen_core::plugin::Project>::Value,
+        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
+        value: &<P as ::lichen_core::plugin::Project>::Value,
         node: &::lichen_core::runtime::solve::LocalNodeId,
-    ) -> Option<<Project as ::lichen_core::plugin::Project>::Value> {
+    ) -> Option<<P as ::lichen_core::plugin::Project>::Value> {
         match self.0{
-0=>{<::lichen_core::runtime::operation::Sum::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Sum::<>},solver,value,node,)
-}1=>{<::lichen_core::runtime::operation::Index::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Index::<>},solver,value,node,)
-}2=>{<::lichen_core::runtime::operation::Find::<> as ::lichen_core::plugin::principal_traits::Operator::<Project>>::run(unsafe{& ::lichen_core::runtime::operation::Find::<>},solver,value,node,)
+0=>{<::lichen_core::runtime::operation::Sum::<> as ::lichen_core::plugin::principal_traits::Operator::<P>>::run(unsafe{& ::lichen_core::runtime::operation::Sum::<>},solver,value,node,)
+}1=>{<::lichen_core::runtime::operation::Index::<> as ::lichen_core::plugin::principal_traits::Operator::<P>>::run(unsafe{& ::lichen_core::runtime::operation::Index::<>},solver,value,node,)
+}2=>{<::lichen_core::runtime::operation::Find::<> as ::lichen_core::plugin::principal_traits::Operator::<P>>::run(unsafe{& ::lichen_core::runtime::operation::Find::<>},solver,value,node,)
 }_=>unreachable!(),}
     }
 }
-impl ::lichen_core::plugin::Operator<Project> for Operator {
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::Operator<P> for self::Operator<P> {
     fn sum() -> Self {
-        Self(0)
+        Self(0, core::marker::PhantomData)
     }
     fn index() -> Self {
-        Self(1)
+        Self(1, core::marker::PhantomData)
     }
     fn find() -> Self {
-        Self(2)
+        Self(2, core::marker::PhantomData)
     }
 }
 
-pub struct DiagnosticKind {
+pub struct DiagnosticKind<P: ::lichen_core::plugin::Project> {
     code: usize,
-    data: self::unions::DiagnosticKind,
+    data: self::unions::DiagnosticKind<P>,
 }
-impl Eq for DiagnosticKind {}
+impl<P: ::lichen_core::plugin::Project> Eq for self::DiagnosticKind<P> {}
 
-impl std::fmt::Debug for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code {
             0 => {
@@ -85,7 +88,7 @@ impl std::fmt::Debug for DiagnosticKind {
         }
     }
 }
-impl PartialEq for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> PartialEq for self::DiagnosticKind<P> {
     fn eq(&self, other: &Self) -> bool {
         if self.code != other.code {
             return false;
@@ -105,7 +108,7 @@ impl PartialEq for DiagnosticKind {
         }
     }
 }
-impl std::hash::Hash for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.code.hash(state);
         match self.code {
@@ -116,7 +119,7 @@ impl std::hash::Hash for DiagnosticKind {
         }
     }
 }
-impl Clone for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> Clone for self::DiagnosticKind<P> {
     fn clone(&self) -> Self {
         match self.code {
             0 => Self {
@@ -129,14 +132,18 @@ impl Clone for DiagnosticKind {
         }
     }
 }
-impl ::lichen_core::plugin::principal_traits::DiagnosticKind<Project> for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::principal_traits::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
     fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code{
-0=>{<::lichen_core::runtime::diagnostic::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind::<Project>>::message(unsafe{& self.data.core__equality_error},f,)
+0=>{<::lichen_core::runtime::diagnostic::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind::<P>>::message(unsafe{& self.data.core__equality_error},f,)
 }_=>unreachable!(),}
     }
 }
-impl ::lichen_core::plugin::DiagnosticKind<Project> for DiagnosticKind {
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
     fn equality_error(&self) -> Option<&::lichen_core::runtime::diagnostic::EqualityError> {
         if self.code == 0 {
             Some(unsafe { &self.data.core__equality_error })
@@ -158,9 +165,9 @@ pub struct Value {
     code: usize,
     data: self::unions::Value,
 }
-impl Eq for Value {}
+impl Eq for self::Value {}
 
-impl PartialEq for Value {
+impl PartialEq for self::Value {
     fn eq(&self, other: &Self) -> bool {
         if self.code != other.code {
             return false;
@@ -188,7 +195,7 @@ impl PartialEq for Value {
         }
     }
 }
-impl std::fmt::Debug for Value {
+impl std::fmt::Debug for self::Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code {
             0 => {
@@ -210,7 +217,7 @@ impl std::fmt::Debug for Value {
         }
     }
 }
-impl ::lichen_core::plugin::principal_traits::Value for Value {
+impl ::lichen_core::plugin::principal_traits::Value for self::Value {
     fn fields(&self) -> impl Iterator<Item = &::lichen_core::runtime::NodeIdLocal> {
         match self.code{
 0=>{std::boxed::Box::new(<::lichen_core::runtime::value::Int::<> as ::lichen_core::plugin::principal_traits::Value::<>>::fields(unsafe{& self.data.core__int},)
@@ -246,7 +253,7 @@ impl ::lichen_core::plugin::principal_traits::Value for Value {
 }_=>unreachable!(),}
     }
 }
-impl ::lichen_core::plugin::Value for Value {
+impl ::lichen_core::plugin::Value for self::Value {
     fn int(&self) -> Option<&::lichen_core::runtime::value::Int> {
         if self.code == 0 {
             Some(unsafe { &self.data.core__int })
@@ -319,52 +326,61 @@ impl ::lichen_core::plugin::Value for Value {
         }
     }
 }
-pub struct Ast<'a>(pub ::lichen_core::AstImpl<'a, Project>);
-impl<'a> ::lichen_core::plugin::Ast<'a, Project> for Ast<'a> {
+pub struct Ast<P: ::lichen_core::plugin::Project>(pub ::lichen_core::AstImpl<P>);
+impl<P: ::lichen_core::plugin::Project<Ast = Ast<P>>> ::lichen_core::plugin::Ast<P> for Ast<P> {
     fn value(&self, expr: &::lichen_core::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
         self.0.property(expr, 0)
     }
-    fn add_literal(
-        &mut self,
-        value: Option<<Project as ::lichen_core::plugin::Project>::Value>,
-    ) -> ::lichen_core::ExprId {
-        let expr = <Self as ::lichen_core::Ast<'a, Project>>::add_auto(self);
+    fn add_literal(&mut self, value: Option<P::Value>) -> ::lichen_core::ExprId {
+        let expr = <Self as ::lichen_core::Ast<P>>::add_auto(self);
         if let Some(value) = value {
-            let node = self.value(&expr);
-            *<Self as ::lichen_core::Ast<'a, Project>>::impl_mut(self)
+            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
+            *<Self as ::lichen_core::Ast<P>>::impl_mut(self)
                 .module
                 .evaluation_mut(&node) = ::lichen_core::runtime::value::Evaluation::Value(value)
         }
         expr
     }
-    fn add_sum(&mut self, input: &::lichen_core::ExprId) -> ::lichen_core::ExprId {
-        let output = <Self as ::lichen_core::Ast<'a, Project>>::add_auto(self);
-        <::lichen_core::Sum as ::lichen_core::ExprImpl<Project>>::build(self, input, &output);
+    fn add_sum(&mut self, addends: &::lichen_core::ExprId) -> ::lichen_core::ExprId {
+        let output = <Self as ::lichen_core::Ast<P>>::add_auto(self);
+        <::lichen_core::Sum as ::lichen_core::plugin::expr::sum<P>>::build(self, &output, addends);
         output
     }
-    fn add_index(&mut self, input: &::lichen_core::ExprId) -> ::lichen_core::ExprId {
-        let output = <Self as ::lichen_core::Ast<'a, Project>>::add_auto(self);
-        <::lichen_core::Index as ::lichen_core::ExprImpl<Project>>::build(self, input, &output);
+    fn add_index(
+        &mut self,
+        array: &::lichen_core::ExprId,
+        index: &::lichen_core::ExprId,
+    ) -> ::lichen_core::ExprId {
+        let output = <Self as ::lichen_core::Ast<P>>::add_auto(self);
+        <::lichen_core::Index as ::lichen_core::plugin::expr::index<P>>::build(
+            self, &output, array, index,
+        );
         output
     }
-    fn add_find(&mut self, input: &::lichen_core::ExprId) -> ::lichen_core::ExprId {
-        let output = <Self as ::lichen_core::Ast<'a, Project>>::add_auto(self);
-        <::lichen_core::Find as ::lichen_core::ExprImpl<Project>>::build(self, input, &output);
+    fn add_find(
+        &mut self,
+        table: &::lichen_core::ExprId,
+        name: &::lichen_core::ExprId,
+    ) -> ::lichen_core::ExprId {
+        let output = <Self as ::lichen_core::Ast<P>>::add_auto(self);
+        <::lichen_core::Find as ::lichen_core::plugin::expr::find<P>>::build(
+            self, &output, table, name,
+        );
         output
     }
 }
-impl<'a> ::lichen_core::Ast<'a, Project> for Ast<'a> {
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::Ast<P> for Ast<P> {
     const PROPERTIES_LEN: usize = 1;
-    fn impl_(&self) -> &::lichen_core::AstImpl<'a, Project> {
+    fn impl_(&self) -> &::lichen_core::AstImpl<P> {
         &self.0
     }
-    fn impl_mut(&mut self) -> &mut ::lichen_core::AstImpl<'a, Project> {
+    fn impl_mut(&mut self) -> &mut ::lichen_core::AstImpl<P> {
         &mut self.0
     }
     fn add_auto(&mut self) -> ::lichen_core::ExprId {
-        <Self as ::lichen_core::Ast<'a, Project>>::impl_mut(self).add_auto()
+        Self::impl_mut(self).add_auto()
     }
     fn add_entry(&mut self, expr: &::lichen_core::ExprId) {
-        <Self as ::lichen_core::Ast<'a, Project>>::impl_mut(self).add_entry(expr)
+        Self::impl_mut(self).add_entry(expr)
     }
 }

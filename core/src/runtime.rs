@@ -59,7 +59,7 @@ impl NodeIdLocal {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleId(pub *const ());
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StringId(pub usize);
 impl Value for StringId {}
 

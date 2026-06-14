@@ -1,6 +1,8 @@
+use lichen_utils::erase;
+
 use crate::{
     plugin::{Ast as _, Operator as _, Project},
-    runtime::{Module, NodeId, NodeIdLocal, operation::Operation},
+    runtime::{Module, NodeIdLocal, operation::Operation, value::Array},
 };
 
 pub mod plugin;
@@ -10,23 +12,21 @@ pub mod runtime;
 #[derive(Debug, Clone, Copy)]
 pub struct ExprId(usize);
 
-pub trait Ast<'a, P: Project> {
+pub trait Ast<P: Project> {
     const PROPERTIES_LEN: usize;
-    fn impl_(&self) -> &AstImpl<'a, P>;
-    fn impl_mut(&mut self) -> &mut AstImpl<'a, P>;
+    fn impl_(&self) -> &AstImpl<P>;
+    fn impl_mut(&mut self) -> &mut AstImpl<P>;
     fn add_auto(&mut self) -> ExprId;
     fn add_entry(&mut self, expr: &ExprId);
 }
 
-pub struct AstImpl<'a, P: Project> {
-    pub module: &'a mut Module<P>,
+pub struct AstImpl<P: Project> {
+    pub module: Module<P>,
 }
 
-impl<'a, P: Project> AstImpl<'a, P> {
-    pub fn new(module: &'a mut Module<P>) -> Self {
-        Self {
-            module,
-        }
+impl<P: Project> AstImpl<P> {
+    pub fn new(module: Module<P>) -> Self {
+        Self { module }
     }
     pub fn property(&self, expr: &ExprId, offset: usize) -> NodeIdLocal {
         NodeIdLocal(expr.0 + offset)
@@ -45,26 +45,39 @@ impl<'a, P: Project> AstImpl<'a, P> {
     }
 }
 
-pub trait ExprImpl<P: Project> {
-    fn build(ast: &mut P::Ast<'_>, input: &ExprId, output: &ExprId);
-}
-
-macro_rules! value_expr {
-    ($expr_impl:ident,$operator:ident) => {
-        pub struct $expr_impl;
-
-        impl<P: Project> ExprImpl<P> for $expr_impl {
-            fn build(ast: &mut P::Ast<'_>, input: &ExprId, output: &ExprId) {
-                let output_value = ast.value(output);
-                let input_value = ast.value(input);
-                *ast.impl_mut().module.operation_mut(&output_value) = Some(Operation {
-                    operand: input_value,
-                    operator: P::Operator::$operator(),
+#[macro_export]
+macro_rules! expr_impl {
+    (Name: $Name:ident, name: $name:ident,trait<$project_variable:ident:$project_trait:path>: $trait:path, params: [$($param:ident,)*]) => {
+        pub struct $Name;
+        impl<$project_variable: $project_trait> $trait for $Name {
+            fn build(ast:&mut $project_variable::Ast,output:&$crate::ExprId,$($param: &$crate::ExprId,)*) {
+                let params = [$(ast.value($param),)*];
+                let operand = $crate::runtime::value::Array::node(&mut ast.impl_mut().module, params);
+                let output = ast.value(output);
+                *ast.impl_mut().module.operation_mut(&output) = Some($crate::runtime::operation::Operation {
+                    operand,
+                    operator: P::Operator::$name(),
                 });
             }
         }
     };
+    (Name: $Name:ident, name: $name:ident, trait<$project_variable:ident:$project_trait:path>: $trait:path, param: $param:ident) => {
+        pub struct $Name;
+        impl<$project_variable: $project_trait> $trait for $Name {
+            fn build(ast:&mut $project_variable::Ast,output:&$crate::ExprId,$param: &$crate::ExprId) {
+                let operand = ast.value($param);
+                let output = ast.value(output);
+                *ast.impl_mut().module.operation_mut(&output) = Some($crate::runtime::operation::Operation {
+                    operand,
+                    operator: P::Operator::$name(),
+                });
+            }
+        }
+    }
 }
-value_expr! {Sum,sum}
-value_expr! {Index,index}
-value_expr! {Find,find}
+
+expr_impl! {Name: Sum, name: sum, trait<P:Project>: plugin::expr::sum<P>, param: addends}
+
+expr_impl! {Name: Index, name: index, trait<P:Project>: plugin::expr::index<P>, params: [array,index,]}
+
+expr_impl! {Name: Find, name: find, trait<P:Project>: plugin::expr::find<P>, params: [table,name,]}

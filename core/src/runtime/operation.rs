@@ -1,5 +1,5 @@
 use crate::{
-    plugin::{DiagnosticKind, Project, Value, principal_traits::Operator as PrincipalOperator},
+    plugin::{Project, Value, principal_traits::Operator as PrincipalOperator},
     runtime::{
         NodeIdLocal,
         solve::{AnyNodeId, LocalNodeId, Solver},
@@ -14,8 +14,9 @@ pub struct Operation<P: Project> {
     pub operator: P::Operator,
 }
 
+#[macro_export]
 macro_rules! operands {
-    ($solver:ident, $operand:ident, $node:ident, $($variant: path,)*) => {{
+    ($solver:ident, $operand:ident, $node:ident, [$($variant_enum: ty=>$variant: ident,)*]) => {{
         let Some(operands) = $operand.array() else {
             return None;
         };
@@ -25,15 +26,15 @@ macro_rules! operands {
         let mut operands = operands.0.iter();
         ($({
             let operand = operands.next().unwrap();
-            let operand = $solver.solve_node(&AnyNodeId::Local(operand.solver_local($node.module())),Some(&AnyNodeId::Local(*$node)))?;
-            let Some(operand) = $variant(&operand) else {
+            let operand = $solver.solve_node(&$crate::runtime::solve::AnyNodeId::Local(operand.solver_local($node.module())),Some(&$crate::runtime::solve::AnyNodeId::Local(*$node)))?;
+            let Some(operand) = <$variant_enum>::$variant(&operand) else {
                 return None;
             };
             *operand
         },)*)
     }};
     (@count) => (0);
-    (@count, $variant0: path $(, $variant1: path)*) => (1 + operands!(@count $(, $variant1)*));
+    (@count, $variant0: ident $(, $variant1: ident)*) => (1 + operands!(@count $(, $variant1)*));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,7 +77,7 @@ impl<P: Project> PrincipalOperator<P> for Index {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> Option<P::Value> {
-        let (array, index) = operands!(solver, operand, node, P::Value::array, P::Value::int,);
+        let (array, index) = operands!(solver, operand, node, [P::Value=>array, P::Value=>int,]);
         if index >= array.0.len() as i64 || index < 0 {
             return None;
         }
@@ -92,15 +93,15 @@ impl<P: Project> PrincipalOperator<P> for Index {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Find;
 
-impl<P: Project<Value: Value, DiagnosticKind: DiagnosticKind<P>>> PrincipalOperator<P> for Find {
+impl<P: Project> PrincipalOperator<P> for Find {
     fn run(
         &self,
         solver: &mut Solver<P>,
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> Option<P::Value> {
-        let (table, name) = operands!(solver, operand, node, P::Value::table, P::Value::string,);
-        let index = *table.get(&name)?;
+        let (table, name) = operands!(solver, operand, node, [P::Value=>table, P::Value=>string,]);
+        let index = *table.0.get(&name)?;
         Some(P::Value::from_int(index as i64))
     }
 }
