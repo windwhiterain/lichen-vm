@@ -22,13 +22,17 @@ All this leads to an idea: we have LLVM for compilers, now we need "LLVM" for st
   
   Value computing, type checking and more, all encoded into a unified runtime compute graph: type can be computed, value can depend on type.  
 
-- **Modular analysis property**
+- **Modular Analysis Property**
   
   Value is a property of expression, so do types, they are defined by plugins, can be extended by down-stream plugins, and more property like visibility, can be defined.
 
-- **zero cost plugin system**
+- **Zero Cost Plugin System**
   
   The plugin system use enum dispach for extendable concept like value, operator, which is implemented via code generation.
+
+- **Inference Anything**
+  
+  Unified runtime can add equality constraints for nodes, the value of these nodes will be infered structurally/recursively: value can be inferred from value or type, type can be inferred from type or value.
 
 ## Start Developing
 Still in prototyping, check the tests.
