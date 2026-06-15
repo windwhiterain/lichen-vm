@@ -35,14 +35,25 @@ pub mod principal_traits {
     {
         fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result;
     }
+    pub trait Ast<P: crate::plugin::Project> {
+        const PROPERTIES_COUNT: usize;
+        fn impl_(&self) -> &crate::AstImpl<P>;
+        fn impl_mut(&mut self) -> &mut crate::AstImpl<P>;
+    }
 }
 pub trait Project: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static {
-    type Value: crate::plugin::Value;
-    type Operator: crate::plugin::Operator<Self>;
-    type DiagnosticKind: crate::plugin::DiagnosticKind<Self>;
-    type Ast: crate::plugin::Ast<Self>;
+    type Value: crate::plugin::principal_traits::Value + crate::plugin::Value;
+    type Operator: crate::plugin::principal_traits::Operator<Self> + crate::plugin::Operator<Self>;
+    type DiagnosticKind: crate::plugin::principal_traits::DiagnosticKind<Self>
+        + crate::plugin::DiagnosticKind<Self>;
+    type Ast: crate::plugin::principal_traits::Ast<Self> + crate::plugin::Ast<Self>;
 }
-pub trait Value: crate::plugin::principal_traits::Value {
+pub trait Operator<P: crate::plugin::Project> {
+    fn sum() -> Self;
+    fn index() -> Self;
+    fn find() -> Self;
+}
+pub trait Value {
     fn int(&self) -> Option<&crate::runtime::value::Int>;
     fn from_int(data: crate::runtime::value::Int) -> Self;
     fn string(&self) -> Option<&crate::runtime::StringId>;
@@ -54,22 +65,13 @@ pub trait Value: crate::plugin::principal_traits::Value {
     fn unit(&self) -> bool;
     fn from_unit() -> Self;
 }
-pub trait Operator<P: crate::plugin::Project>:
-    crate::plugin::principal_traits::Operator<P>
-{
-    fn sum() -> Self;
-    fn index() -> Self;
-    fn find() -> Self;
-}
-pub trait DiagnosticKind<P: crate::plugin::Project>:
-    crate::plugin::principal_traits::DiagnosticKind<P>
-{
+pub trait DiagnosticKind<P: crate::plugin::Project> {
     fn equality_error(&self) -> Option<&crate::runtime::diagnostic::EqualityError>;
     fn from_equality_error(data: crate::runtime::diagnostic::EqualityError) -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>: crate::Ast<P> {
     fn value(&self, expr: &crate::ExprId) -> crate::runtime::NodeIdLocal;
-    fn add_literal(&mut self, value: Option<P::Value>) -> crate::ExprId;
+    fn add_literal_core(&mut self, value: Option<P::Value>) -> crate::ExprId;
     fn add_sum(&mut self, addends: &crate::ExprId) -> crate::ExprId;
     fn add_index(&mut self, array: &crate::ExprId, index: &crate::ExprId) -> crate::ExprId;
     fn add_find(&mut self, table: &crate::ExprId, name: &crate::ExprId) -> crate::ExprId;

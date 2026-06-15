@@ -1,8 +1,9 @@
 use crate::{
     plugin::{Project, Value, principal_traits::Operator as PrincipalOperator},
     runtime::{
-        NodeIdLocal,
+        NodeIdLocal, StringId,
         solve::{AnyNodeId, LocalNodeId, Solver},
+        value::{Array, Int, Table},
     },
 };
 
@@ -70,6 +71,24 @@ impl<P: Project> PrincipalOperator<P> for Sum {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Index;
 
+impl Index {
+    pub fn run<P: Project>(
+        solver: &mut Solver<P>,
+        node: &LocalNodeId,
+        array: Array,
+        index: Int,
+    ) -> Option<P::Value> {
+        if index >= array.0.len() as i64 || index < 0 {
+            return None;
+        }
+        let reference_node = *array.0.get(index as usize);
+        solver.solve_node(
+            &AnyNodeId::Local(reference_node.solver_local(node.module())),
+            Some(&AnyNodeId::Local(*node)),
+        )
+    }
+}
+
 impl<P: Project> PrincipalOperator<P> for Index {
     fn run(
         &self,
@@ -78,20 +97,19 @@ impl<P: Project> PrincipalOperator<P> for Index {
         node: &LocalNodeId,
     ) -> Option<P::Value> {
         let (array, index) = operands!(solver, operand, node, [P::Value=>array, P::Value=>int,]);
-        if index >= array.0.len() as i64 || index < 0 {
-            return None;
-        }
-        let reference_node = *array.0.get(index as usize);
-        solver.apply_equation(node.module(), &[node.local(), reference_node]);
-        solver.solve_node(
-            &AnyNodeId::Local(reference_node.solver_local(node.module())),
-            Some(&AnyNodeId::Local(*node)),
-        )
+        Index::run(solver, node, array, index)
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Find;
+
+impl Find {
+    pub fn run<P: Project>(table: Table, name: StringId) -> Option<P::Value> {
+        let index = *table.0.get(&name)?;
+        Some(P::Value::from_int(index as i64))
+    }
+}
 
 impl<P: Project> PrincipalOperator<P> for Find {
     fn run(

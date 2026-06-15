@@ -1,7 +1,0 @@
-[package]
-name = "lichen-project"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-by_address = "1.2.1"

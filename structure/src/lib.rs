@@ -1,6 +1,6 @@
 use lichen_core::{
     Ast as _,
-    plugin::{Ast as _, principal_traits::Value},
+    plugin::{Ast as _, Operator as _, principal_traits::Value},
     runtime::{
         Module, NodeIdLocal, StringId,
         operation::Operation,
@@ -9,7 +9,7 @@ use lichen_core::{
 };
 use lichen_utils::arena::array::ArenaArray;
 
-use crate::plugin::{Ast, Project};
+use crate::plugin::{Ast, Operator, Project};
 
 pub mod operator;
 pub mod plugin;
@@ -65,11 +65,12 @@ impl Value for Structure {
     }
 }
 
-pub struct MemberExprImpl;
+pub struct Member;
 
-impl<P: Project> plugin::expr::member<P> for MemberExprImpl
+impl<P: Project> plugin::expr::member<P> for Member
 where
     P::Ast: Ast<P>,
+    P::Operator: Operator<P>,
 {
     fn build(
         ast: &mut P::Ast,
@@ -77,19 +78,28 @@ where
         structure: &lichen_core::ExprId,
         name: &lichen_core::ExprId,
     ) {
-        // let structure_value = ast.value(structure);
-        // let structure_structure = ast.structure(structure);
-        // let name_value = ast.value(name);
-        // let output_value = ast.value(output);
-        // let output_structure = ast.structure(output);
-        // let operand = Array::node(ast.impl_mut().module, [structure_structure, name_value]);
-        // let index = ast.impl_mut().module.add_operation(Operation {
-        //     operand,
-        //     operator:
-        //         <<P as lichen_core::plugin::Project>::Operator as lichen_core::plugin::Operator<
-        //             P,
-        //         >>::find(),
-        // });
-        // let operand = Array::node(ast.impl_mut().module, [structure_value, index]);
+        let structure_value = ast.value(structure);
+        let structure_structure = ast.structure(structure);
+        let name_value = ast.value(name);
+        let output_value = ast.value(output);
+        let output_structure = ast.structure(output);
+        let operand = Array::node(
+            &mut ast.impl_mut().module,
+            [structure_structure, name_value],
+        );
+        let offset = ast.impl_mut().module.add_operation(Operation {
+            operand,
+            operator: P::Operator::offset(),
+        });
+        let operand = Array::node(&mut ast.impl_mut().module, [structure_value, offset]);
+        *ast.impl_mut().module.operation_mut(&output_value) = Some(Operation {
+            operand,
+            operator: P::Operator::index(),
+        });
+        let operand = Array::node(&mut ast.impl_mut().module, [structure_structure, offset]);
+        *ast.impl_mut().module.operation_mut(&output_structure) = Some(Operation {
+            operand,
+            operator: P::Operator::component(),
+        });
     }
 }

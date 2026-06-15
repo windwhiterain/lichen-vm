@@ -1,4 +1,4 @@
-use std::{fmt::Debug, ptr::NonNull};
+use std::{ffi::os_str::Display, fmt::Debug, ptr::NonNull};
 
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
@@ -20,7 +20,6 @@ pub mod solve;
 pub mod switch;
 pub mod value;
 
-#[derive(Debug)]
 pub struct Module<P: Project> {
     pub arena: Arena,
     pub operations: StableVec<Option<Operation<P>>>,
@@ -29,6 +28,27 @@ pub struct Module<P: Project> {
     pub entries: Vec<NodeIdLocal>,
     pub equations: Vec<LocalEquation>,
     pub diagnostics: Vec<Diagnostic<P>>,
+}
+
+struct DebugVec<'a, T: Debug>(&'a Vec<T>);
+
+impl<T: Debug> Debug for DebugVec<'_, T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map().entries(self.0.iter().enumerate()).finish()
+    }
+}
+
+impl<P: Project> Debug for Module<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Module")
+            .field("operations", &self.operations)
+            .field("evaluations", &self.evaluations)
+            .field("solves", &DebugVec(&self.solves))
+            .field("entries", &DebugVec(&self.entries))
+            .field("equations", &DebugVec(&self.equations))
+            .field("diagnostics", &DebugVec(&self.diagnostics))
+            .finish()
+    }
 }
 pub struct Ptr<T>(NonNull<T>);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

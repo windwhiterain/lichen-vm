@@ -50,7 +50,7 @@ impl Array {
         P::Ast: Ast<P>,
     {
         let expr = ast.add_auto();
-        for i in 0..P::Ast::PROPERTIES_LEN {
+        for i in 0..P::Ast::PROPERTIES_COUNT {
             let node = ast.impl_().property(&expr, i);
             let impl_ = unsafe { erase(ast.impl_()) };
             let value = Array::new(
@@ -81,8 +81,11 @@ impl Value for Array {
 pub struct Table(pub ArenaHashMap<StringId, usize>);
 impl Value for Table {}
 impl Table {
-    pub fn new<P: Project>(module: &mut Module<P>, names: impl Iterator<Item = StringId>) -> Self {
-        let mut names = names.collect::<Vec<_>>();
+    pub fn new<P: Project>(
+        module: &mut Module<P>,
+        names: impl IntoIterator<Item = StringId>,
+    ) -> Self {
+        let mut names = names.into_iter().collect::<Vec<_>>();
         names.sort();
         Self(ArenaHashMap::from_iter(
             &mut module.arena,

@@ -1,7 +1,8 @@
 use std::fmt::Display;
 
-use crate::Plugin;
-use crate::{PROJECT, PROJECT_TRAIT, PROJECT_VARIABLE};
+use crate::project::code::{Name, WrittenPath};
+use crate::project::{PROJECT, PROJECT_TRAIT, PROJECT_VARIABLE};
+use crate::project::{Plugin, Trait};
 
 pub struct ProjectTrait {
     pub plugin: &'static Plugin,
@@ -26,4 +27,9 @@ impl Display for EqualityProjectGeneric<'_> {
             self.associated, self.target
         )
     }
+}
+
+pub struct Type {
+    pub name: &'static Name,
+    pub impl_: Option<WrittenPath>,
 }

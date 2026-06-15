@@ -9,13 +9,34 @@ use std::{fmt::Display, fs::OpenOptions};
 
 use by_address::ByAddress;
 
-use crate::code::{GeneratedBinPath, GeneratedLibPath, GenericsOf, WrittenPath};
-use crate::plugin::EqualityProjectGeneric;
+use code::{GeneratedBinPath, GeneratedLibPath, GenericsOf, WrittenPath};
+use plugin::EqualityProjectGeneric;
+
+use crate::project::code::Name;
+use crate::{CRATE, OPERATOR_TYPE, PLUGIN};
 
 pub mod code;
 pub mod plugin;
+
+pub static AST_NAME: Name = Name {
+    name: "Ast",
+    generics: &Generics::none(),
+    project_generic: true,
+};
+
+pub static AST_IMPL_PATH: WrittenPath = WrittenPath {
+    crate_: CRATE,
+    path: "AstImpl",
+    generics: &Generics::none(),
+    project_generic: true,
+};
+
+pub static PROPERTIES_COUNT: &'static str = "PROPERTIES_COUNT";
+
 impl Plugin {
     pub fn generate(&'static self) -> std::io::Result<()> {
+        let project = Project::new(self);
+
         let current_dir = current_dir()?;
         CTX.set(Some(Context {
             current: GenerateStage::Lib,
@@ -33,7 +54,7 @@ impl Plugin {
             .create(true)
             .open(path)?;
 
-        writeln!(file, "{}", self)?;
+        writeln!(file, "{}", DisplayProjectLib(&project))?;
         CTX.set(Some(Context {
             current: GenerateStage::Bin,
             plugin: self,
@@ -52,7 +73,7 @@ impl Plugin {
             .truncate(true)
             .create(true)
             .open(path)?;
-        writeln!(file, "{}", Project(self))?;
+        writeln!(file, "{}", DisplayProjectBin(&project))?;
         CTX.set(None);
         Ok(())
     }
@@ -254,6 +275,7 @@ pub struct EnumType {
     pub impls: &'static [&'static Trait],
     pub base_traits: &'static [Symbol],
     pub functions: &'static [Function],
+    pub use_enum_types: &'static [&'static EnumType],
     pub plugin: &'static Plugin,
 }
 
@@ -342,53 +364,6 @@ impl Display for Annotation {
     }
 }
 
-pub struct Name<T: Display> {
-    pub name: T,
-    pub generics: &'static Generics,
-    pub project_generic: bool,
-}
-
-impl<T: Display> Display for Name<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}<", self.name)?;
-        if self.project_generic {
-            write!(f, "{}", PROJECT_GENERIC)?;
-        }
-        write!(f, "{}>", self.generics)?;
-        Ok(())
-    }
-}
-
-impl<T: Display> Display for Delegate<'_, Name<T>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::<", self.0.name)?;
-        if self.0.project_generic {
-            write!(f, "{PROJECT_VARIABLE}")?;
-        }
-        write!(f, "{}>", Delegate(self.0.generics))?;
-        Ok(())
-    }
-}
-
-impl<T: Display, P: Display> Display for Impl<'_, Name<T>, P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}<", self.this.name)?;
-        write!(f, "{}>", self.this.generics)?;
-        Ok(())
-    }
-}
-
-impl<T: Display, P: Display> Display for Delegate<'_, Impl<'_, Name<T>, P>> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}::<", self.0.this.name)?;
-        if self.0.this.project_generic {
-            write!(f, "{}", self.0.project)?;
-        }
-        write!(f, "{}>", Delegate(self.0.this.generics))?;
-        Ok(())
-    }
-}
-
 pub struct Generic {
     pub name: &'static str,
     pub constraints: &'static [&'static Symbol],
@@ -436,7 +411,6 @@ pub struct Plugin {
     pub lib_module: WrittenSymbol,
     pub bin_module: Module,
     pub dependencies: &'static [&'static Plugin],
-    pub names: &'static [&'static code::Name],
     pub enum_types: &'static [&'static EnumType],
     pub plugin_enums: &'static [(&'static EnumType, &'static PluginEnum)],
     pub properties: &'static [&'static str],
@@ -493,96 +467,140 @@ pub enum Module {
     Path(&'static str),
 }
 
-impl Display for &'static Plugin {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #[derive(Default)]
-        struct Ctx {
-            enum_types: HashSet<ByAddress<&'static EnumType>>,
-            plugins: HashSet<ByAddress<&'static Plugin>>,
-        }
+pub struct Project {
+    plugin: &'static Plugin,
+    ctx: Ctx,
+}
+
+impl Project {
+    pub fn new(plugin: &'static Plugin) -> Self {
         let mut ctx = Ctx::default();
         fn collect(plugin: &'static Plugin, ctx: &mut Ctx) {
-            if ctx.plugins.insert(ByAddress(plugin)) {
+            if let Entry::Vacant(entry) = ctx.plugins.entry(ByAddress(plugin)) {
+                entry.insert((
+                    HashSet::from_iter(plugin.enum_types.iter().map(|x| ByAddress(*x))),
+                    HashSet::new(),
+                ));
+                for (enum_type, plugin_enum) in plugin.plugin_enums {
+                    debug_assert!(
+                        ctx.plugin_enums
+                            .entry(ByAddress(enum_type))
+                            .or_default()
+                            .insert(ByAddress(plugin_enum.plugin), plugin_enum)
+                            .is_none()
+                    );
+                }
+                for expr_impls in plugin.expr_impls {
+                    ctx.expr_impls
+                        .entry(ByAddress(expr_impls.expr))
+                        .or_default()
+                        .extend(expr_impls.impls.iter().map(|x| (*x, plugin)));
+                }
                 for dependency in plugin.dependencies.iter().copied() {
-                    ctx.enum_types
-                        .extend(dependency.enum_types.iter().map(|x| ByAddress(*x)));
                     collect(dependency, ctx);
+                    let [
+                        Some((this_enum_types, this_ancestors)),
+                        Some((dependency_enum_type, dependency_ancestors)),
+                    ] = ctx
+                        .plugins
+                        .get_disjoint_mut([&ByAddress(plugin), &ByAddress(dependency)])
+                    else {
+                        unreachable!()
+                    };
+                    this_enum_types.extend(dependency_enum_type.iter());
+                    this_ancestors.insert(ByAddress(dependency));
+                    this_ancestors.extend(dependency_ancestors.iter());
+                }
+                for enum_type in &ctx.plugins[&ByAddress(plugin)].0 {
+                    ctx.enum_types.entry(*enum_type).or_default().push(plugin);
                 }
             }
         }
-        collect(&self, &mut ctx);
-
-        writeln!(f, "pub mod {PRINCIPAL_TRAITS}{{")?;
-        for enum_type in self.enum_types {
-            write!(f, "pub trait {}: ", enum_type.name)?;
-            for base in enum_type.base_traits {
-                write!(f, "{}+", base)?;
+        collect(&plugin, &mut ctx);
+        Self { plugin, ctx }
+    }
+    pub fn fmt_lib(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        {
+            writeln!(f, "pub mod {PRINCIPAL_TRAITS}{{")?;
+            for enum_type in self.plugin.enum_types {
+                write!(f, "pub trait {}: ", enum_type.name)?;
+                for base in enum_type.base_traits {
+                    write!(f, "{}+", base)?;
+                }
+                writeln!(f, "{{")?;
+                for function in enum_type.functions {
+                    write!(f, "{}", function)?;
+                }
+                writeln!(f, "}}")?;
             }
-            writeln!(f, "{{")?;
-            for function in enum_type.functions {
-                write!(f, "{}", function)?;
+
+            {
+                write!(f, "pub trait {AST_NAME}: ")?;
+                writeln!(f, "{{")?;
+                writeln!(f, "const {PROPERTIES_COUNT}: usize;")?;
+                writeln!(f, "fn impl_(&self)->&{};", Delegate(&AST_IMPL_PATH))?;
+                writeln!(
+                    f,
+                    "fn impl_mut(&mut self)->&mut {};",
+                    Delegate(&AST_IMPL_PATH)
+                )?;
+                writeln!(f, "}}")?;
             }
             writeln!(f, "}}")?;
         }
-        writeln!(f, "}}")?;
 
-        write!(
-            f,
-            "pub trait {PROJECT}: std::fmt::Debug+Default+Copy+Eq+std::hash::Hash+'static+"
-        )?;
-        for dependency in self.dependencies {
-            write!(f, "{}::{PROJECT}+", dependency.lib_module)?;
-        }
-        writeln!(f, "")?;
-        writeln!(f, "{{")?;
-        for name in self
-            .enum_types
-            .iter()
-            .map(|x| x.name)
-            .chain(self.names.iter().map(|x| *x))
         {
-            writeln!(
+            write!(
                 f,
-                "type {}: {};",
-                Impl {
-                    this: name,
-                    project: &SELF_SYMBOL
-                },
-                Delegate(&Impl {
-                    this: &GeneratedLibPath {
-                        plugin: self,
-                        relative: "",
-                        name
-                    },
-                    project: &SELF_SYMBOL
-                })
+                "pub trait {PROJECT}: std::fmt::Debug+Default+Copy+Eq+std::hash::Hash+'static+"
             )?;
+            for dependency in self.plugin.dependencies {
+                write!(f, "{}::{PROJECT}+", dependency.lib_module)?;
+            }
+            writeln!(f, "")?;
+            writeln!(f, "{{")?;
+            for name in self.plugin.enum_types.iter().map(|x| x.name).chain(
+                if ByAddress(self.plugin) == ByAddress(&PLUGIN) {
+                    Some(&AST_NAME)
+                } else {
+                    None
+                },
+            ) {
+                writeln!(
+                    f,
+                    "type {}: {} + {};",
+                    name.non_project_generic(),
+                    Delegate(&Impl {
+                        this: &GeneratedLibPath {
+                            plugin: self.plugin,
+                            relative: PRINCIPAL_TRAITS,
+                            name
+                        },
+                        project: &SELF_SYMBOL
+                    }),
+                    Delegate(&Impl {
+                        this: &GeneratedLibPath {
+                            plugin: self.plugin,
+                            relative: "",
+                            name
+                        },
+                        project: &SELF_SYMBOL
+                    })
+                )?;
+            }
+            writeln!(f, "}}")?;
         }
-        writeln!(f, "}}")?;
 
         let plugin_enums = HashMap::<_, _, RandomState>::from_iter(
-            self.plugin_enums
+            self.plugin
+                .plugin_enums
                 .iter()
                 .map(|(enum_type, plugin_enum)| (ByAddress(*enum_type), *plugin_enum)),
         );
-        for enum_type in ctx
-            .enum_types
-            .iter()
-            .map(|x| x.deref())
-            .chain(self.enum_types)
-        {
-            let plugin_enum = plugin_enums.get(&ByAddress(enum_type));
-            writeln!(
-                f,
-                "pub trait {}: {}+",
-                enum_type.name,
-                Delegate(&GeneratedLibPath {
-                    plugin: enum_type.plugin,
-                    relative: PRINCIPAL_TRAITS,
-                    name: enum_type.name
-                }),
-            )?;
-            for dependency in self.dependencies {
+        for (enum_type, _) in &self.ctx.enum_types {
+            let plugin_enum = plugin_enums.get(enum_type);
+            writeln!(f, "pub trait {}: ", enum_type.name,)?;
+            for dependency in self.plugin.dependencies {
                 write!(
                     f,
                     "{}+",
@@ -628,21 +646,26 @@ impl Display for &'static Plugin {
             f,
             "pub trait {AST}<{PROJECT_GENERIC}>: {AST_TRAIT}<{PROJECT_VARIABLE}>+"
         )?;
-        for dependency in self.dependencies {
+        for dependency in self.plugin.dependencies {
             write!(f, "{}::{AST}<{PROJECT_VARIABLE}>+", dependency.lib_module)?;
         }
         writeln!(f, "{{")?;
-        for property in self.properties {
+        for property in self.plugin.properties {
             writeln!(f, "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL};")?;
         }
-        writeln!(f, "fn add_literal(&mut self,")?;
-        for plugin in ctx.plugins {
+        writeln!(f, "fn add_literal_{}(&mut self,", self.plugin.name)?;
+        for plugin in self.ctx.plugins[&ByAddress(self.plugin)]
+            .1
+            .iter()
+            .map(|x| *x.deref())
+            .chain(once(self.plugin))
+        {
             for property in plugin.properties {
                 write!(f, "{property}: Option<{PROJECT_VARIABLE}::Value>,")?;
             }
         }
         writeln!(f, ")->{EXPR_ID};")?;
-        for expr in self.exprs {
+        for expr in self.plugin.exprs {
             writeln!(
                 f,
                 "fn add_{}(&mut self,{})->{EXPR_ID};",
@@ -652,7 +675,7 @@ impl Display for &'static Plugin {
         writeln!(f, "}}")?;
 
         writeln!(f, "pub mod expr{{")?;
-        for expr in self.exprs {
+        for expr in self.plugin.exprs {
             writeln!(f, "pub trait {}<{PROJECT_GENERIC}>{{", expr.name)?;
             writeln!(
                 f,
@@ -664,90 +687,26 @@ impl Display for &'static Plugin {
         writeln!(f, "}}")?;
         Ok(())
     }
-}
-
-pub struct Project(&'static Plugin);
-
-impl Display for Project {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #[derive(Default)]
-        struct Ctx {
-            plugins: HashMap<
-                ByAddress<&'static Plugin>,
-                (
-                    HashSet<ByAddress<&'static EnumType>>,
-                    HashSet<ByAddress<&'static Plugin>>,
-                ),
-            >,
-            enum_types: HashMap<ByAddress<&'static EnumType>, Vec<&'static Plugin>>,
-            plugin_enums: HashMap<
-                ByAddress<&'static EnumType>,
-                HashMap<ByAddress<&'static Plugin>, &'static PluginEnum>,
-            >,
-            expr_impls:
-                HashMap<ByAddress<&'static Expr>, Vec<(&'static WrittenSymbol, &'static Plugin)>>,
-        }
-        let mut ctx = Ctx::default();
-        fn collect(plugin: &'static Plugin, ctx: &mut Ctx) {
-            if let Entry::Vacant(entry) = ctx.plugins.entry(ByAddress(plugin)) {
-                entry.insert((
-                    HashSet::from_iter(plugin.enum_types.iter().map(|x| ByAddress(*x))),
-                    HashSet::new(),
-                ));
-                for (enum_type, plugin_enum) in plugin.plugin_enums {
-                    debug_assert!(
-                        ctx.plugin_enums
-                            .entry(ByAddress(enum_type))
-                            .or_default()
-                            .insert(ByAddress(plugin_enum.plugin), plugin_enum)
-                            .is_none()
-                    );
-                }
-                for expr_impls in plugin.expr_impls {
-                    ctx.expr_impls
-                        .entry(ByAddress(expr_impls.expr))
-                        .or_default()
-                        .extend(expr_impls.impls.iter().map(|x| (*x, plugin)));
-                }
-                for dependency in plugin.dependencies.iter().copied() {
-                    collect(dependency, ctx);
-                    let [
-                        Some((this_enum_types, this_ancestors)),
-                        Some((dependency_enum_type, dependency_ancestors)),
-                    ] = ctx
-                        .plugins
-                        .get_disjoint_mut([&ByAddress(plugin), &ByAddress(dependency)])
-                    else {
-                        unreachable!()
-                    };
-                    this_enum_types.extend(dependency_enum_type.iter());
-                    this_ancestors.insert(ByAddress(dependency));
-                    this_ancestors.extend(dependency_ancestors.iter());
-                }
-                for enum_type in &ctx.plugins[&ByAddress(plugin)].0 {
-                    ctx.enum_types.entry(*enum_type).or_default().push(plugin);
-                }
-            }
-        }
-        collect(&self.0, &mut ctx);
-
+    fn fmt_bin(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "#[derive(Debug,Default,Copy,Clone,PartialEq,Eq,Hash)]")?;
         writeln!(f, "pub struct {PROJECT};")?;
-        for (plugin, _) in &ctx.plugins {
+        for (plugin, _) in &self.ctx.plugins {
             writeln!(f, "impl {}::{PROJECT} for {PROJECT}{{", plugin.lib_module)?;
-            for name in plugin
-                .enum_types
-                .iter()
-                .map(|x| x.name)
-                .chain(plugin.names.iter().map(|x| *x))
+            for name in
+                plugin
+                    .enum_types
+                    .iter()
+                    .map(|x| x.name)
+                    .chain(if plugin == &ByAddress(&PLUGIN) {
+                        Some(&AST_NAME)
+                    } else {
+                        None
+                    })
             {
                 writeln!(
                     f,
                     "type {} = {};",
-                    Impl {
-                        this: name,
-                        project: &"Self"
-                    },
+                    name.non_project_generic(),
                     Delegate(&Impl {
                         this: &GeneratedBinPath {
                             relative: "",
@@ -760,8 +719,28 @@ impl Display for Project {
             writeln!(f, "}}")?;
         }
 
+        {
+            writeln!(f, "mod code{{")?;
+            for (enum_type, plugin_enums) in &self.ctx.plugin_enums {
+                let mut code = 0;
+                writeln!(f, "pub(super) mod {}{{", enum_type.name.name)?;
+                for (plugin, plugin_enum) in plugin_enums {
+                    for variant in plugin_enum.variants {
+                        writeln!(
+                            f,
+                            "pub(in super::super) const {}__{}:usize = {code};",
+                            plugin.name, variant.name
+                        )?;
+                        code += 1;
+                    }
+                }
+                writeln!(f, "}}")?;
+            }
+            writeln!(f, "}}")?;
+        }
+
         writeln!(f, "mod unions{{")?;
-        for (enum_type, plugin_enums) in &ctx.plugin_enums {
+        for (enum_type, plugin_enums) in &self.ctx.plugin_enums {
             if !enum_type.is_unit {
                 writeln!(f, "{}", enum_type.derives)?;
                 writeln!(f, "pub(super) union {}{{", enum_type.name)?;
@@ -785,7 +764,7 @@ impl Display for Project {
             }
         }
         writeln!(f, "}}")?;
-        for (enum_type, plugin_enums) in &ctx.plugin_enums {
+        for (enum_type, plugin_enums) in &self.ctx.plugin_enums {
             writeln!(f, "{}", enum_type.derives)?;
             if enum_type.is_unit {
                 writeln!(
@@ -830,7 +809,7 @@ impl Display for Project {
             {
                 writeln!(
                     f,
-                    "impl<{}> {} for {}{{",
+                    "impl<{}> {} for {}",
                     GenericsOf(enum_type.name),
                     trait_,
                     Delegate(&GeneratedBinPath {
@@ -838,8 +817,23 @@ impl Display for Project {
                         name: enum_type.name
                     }),
                 )?;
+                if !enum_type.use_enum_types.is_empty() {
+                    writeln!(f, "where")?;
+                    for use_enum_type in enum_type.use_enum_types {
+                        writeln!(
+                            f,
+                            "{PROJECT_VARIABLE}::{}: {},",
+                            Delegate(&use_enum_type.name.non_project_generic()),
+                            Delegate(&GeneratedLibPath {
+                                plugin: self.plugin,
+                                relative: "",
+                                name: use_enum_type.name
+                            })
+                        )?;
+                    }
+                }
+                writeln!(f, "{{")?;
                 for function in functions {
-                    let mut code = 0;
                     writeln!(
                         f,
                         "{}{{",
@@ -857,7 +851,11 @@ impl Display for Project {
                         }
                         for plugin_enum in plugin_enums.values() {
                             for variant in plugin_enum.variants {
-                                write!(f, "{code}=>{{")?;
+                                write!(
+                                    f,
+                                    "self::code::{}::{}__{}=>{{",
+                                    enum_type.name.name, plugin_enum.plugin.name, variant.name
+                                )?;
                                 body.generate_match_branch(
                                     f,
                                     enum_type,
@@ -866,10 +864,9 @@ impl Display for Project {
                                     plugin_enum.plugin,
                                 )?;
                                 write!(f, "}}")?;
-                                code += 1;
                             }
-                            write!(f, "_=>unreachable!(),")?;
                         }
+                        write!(f, "_=>unreachable!(),")?;
                         writeln!(f, "}}")?;
                     } else {
                         writeln!(f, "unimplemented!();")?;
@@ -880,9 +877,8 @@ impl Display for Project {
             }
 
             {
-                let mut code = 0;
                 let mut code2variant = Vec::<(&Variant, &Plugin)>::new();
-                for plugin in &ctx.enum_types[&ByAddress(enum_type)] {
+                for plugin in &self.ctx.enum_types[&ByAddress(enum_type)] {
                     writeln!(
                         f,
                         "impl<{}> {} for {}{{",
@@ -898,28 +894,33 @@ impl Display for Project {
                         })
                     )?;
                     if let Some(plugin_enum) =
-                        ctx.plugin_enums[&ByAddress(enum_type)].get(&ByAddress(plugin))
+                        self.ctx.plugin_enums[&ByAddress(enum_type)].get(&ByAddress(plugin))
                     {
                         for variant in plugin_enum.variants {
                             code2variant.push((variant, plugin_enum.plugin));
                             if enum_type.is_unit {
                                 writeln!(
                                     f,
-                                    "fn {}()->Self{{Self({},{PHANTOM_DATA})}}",
-                                    variant.name, code
+                                    "fn {}()->Self{{Self(self::code::{}::{}__{},{PHANTOM_DATA})}}",
+                                    variant.name,
+                                    enum_type.name.name,
+                                    plugin_enum.plugin.name,
+                                    variant.name
                                 )?
                             } else {
                                 if variant.is_unit {
                                     writeln!(
                                         f,
-                                        "fn {}(&self)->bool{{self.code=={}}}",
-                                        variant.name, code
+                                        "fn {}(&self)->bool{{self.code==self::code::{}::{}__{}}}",
+                                        variant.name,
+                                        enum_type.name.name,
+                                        plugin_enum.plugin.name,
+                                        variant.name
                                     )?;
                                     writeln!(
                                         f,
-                                        "fn from_{0}()->Self{{Self{{code:{1},data:self::unions::{2}{3}{{{4}__{0}: {MANUALLY_DROP}::new({5})}} }} }}",
+                                        "fn from_{0}()->Self{{Self{{code:self::code::{1}::{3}__{0},data:self::unions::{1}{2}{{{3}__{0}: {MANUALLY_DROP}::new({4})}} }} }}",
                                         variant.name,
-                                        code,
                                         enum_type.name.name,
                                         Delegate(enum_type.name.generics),
                                         plugin_enum.plugin.name,
@@ -928,57 +929,62 @@ impl Display for Project {
                                 } else {
                                     writeln!(
                                         f,
-                                        "fn {}(&self)->Option<&{}>{{if self.code=={}{{Some(unsafe{{&self.data.{}__{}}})}}else{{None}} }}",
+                                        "fn {0}(&self)->Option<&{1}>{{if self.code==self::code::{2}::{3}__{4}{{Some(unsafe{{&self.data.{3}__{4}}})}}else{{None}} }}",
                                         variant.name,
                                         Delegate(variant.path),
-                                        code,
+                                        enum_type.name.name,
                                         plugin_enum.plugin.name,
                                         variant.name
                                     )?;
                                     writeln!(
                                         f,
-                                        "fn from_{}(data: {})->Self{{Self{{code:{},data:self::unions::{}{{{}__{}:{MANUALLY_DROP}::new(data)}} }} }}",
+                                        "fn from_{0}(data: {1})->Self{{Self{{code:self::code::{2}::{3}__{4},data:self::unions::{2}{{{3}__{4}:{MANUALLY_DROP}::new(data)}} }} }}",
                                         variant.name,
                                         Delegate(variant.path),
-                                        code,
                                         enum_type.name.name,
                                         plugin_enum.plugin.name,
                                         variant.name
                                     )?;
                                 }
                             }
-                            code += 1;
                         }
                     }
                     writeln!(f, "}}")?;
                 }
             }
         }
+        let mut properties_count = 0;
         {
-            writeln!(
-                f,
-                "pub struct {AST}<{PROJECT_GENERIC}>(pub {AST_IMPL}<{PROJECT_VARIABLE}>);",
-            )?;
-            let mut properties_len = 0;
-            for (plugin, _) in &ctx.plugins {
+            for (plugin, _) in &self.ctx.plugins {
                 writeln!(
                     f,
-                    "impl<{}> {}::{AST}<{PROJECT_VARIABLE}> for {AST}<{PROJECT_VARIABLE}>{{",
+                    "impl<{}> {}::{AST}<{PROJECT_VARIABLE}> for {AST}<{PROJECT_VARIABLE}>",
                     EqualityProjectGeneric {
                         associated: &AST,
                         target: &ArrayDisplay(&[&AST, &"<", &PROJECT_VARIABLE, &">"]),
                     },
                     plugin.lib_module,
                 )?;
+                writeln!(
+                    f,
+                    "where {PROJECT_VARIABLE}::{}: {},",
+                    Delegate(&OPERATOR_TYPE.name.non_project_generic()),
+                    Delegate(&GeneratedLibPath {
+                        plugin,
+                        relative: "",
+                        name: OPERATOR_TYPE.name
+                    })
+                )?;
+                writeln!(f, "{{")?;
                 for property in plugin.properties {
                     writeln!(
                         f,
-                        "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL}{{self.0.property(expr,{properties_len})}}"
+                        "fn {property}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL}{{self.impl_.property(expr,{properties_count})}}"
                     )?;
                 }
-                properties_len += 1;
-                writeln!(f, "fn add_literal(&mut self,")?;
-                for plugin in ctx.plugins[plugin].1.iter().chain(once(plugin)) {
+                properties_count += 1;
+                writeln!(f, "fn add_literal_{}(&mut self,", plugin.name)?;
+                for plugin in self.ctx.plugins[plugin].1.iter().chain(once(plugin)) {
                     for property in plugin.properties {
                         write!(f, "{property}: Option<{PROJECT_VARIABLE}::Value>,")?;
                     }
@@ -988,7 +994,7 @@ impl Display for Project {
                     f,
                     "let expr = <Self as {AST_TRAIT}<{PROJECT_VARIABLE}>>::add_auto(self);"
                 )?;
-                for plugin in ctx.plugins[plugin].1.iter().chain(once(plugin)) {
+                for plugin in self.ctx.plugins[plugin].1.iter().chain(once(plugin)) {
                     for property in plugin.properties {
                         writeln!(f, "if let Some({property}) = {property}{{")?;
                         writeln!(
@@ -1016,7 +1022,7 @@ impl Display for Project {
                         "let output = <Self as {AST_TRAIT}<{PROJECT_VARIABLE}>>::add_auto(self);"
                     )?;
                     for (expr_impl, plugin) in
-                        ctx.expr_impls.get(&ByAddress(expr)).unwrap_or(&vec![])
+                        self.ctx.expr_impls.get(&ByAddress(expr)).unwrap_or(&vec![])
                     {
                         writeln!(
                             f,
@@ -1032,37 +1038,76 @@ impl Display for Project {
                 writeln!(f, "}}")?;
             }
 
-            writeln!(
-                f,
-                "impl<{PROJECT_GENERIC}> {}<{PROJECT_VARIABLE}> for {AST}<{PROJECT_VARIABLE}>{{",
-                WrittenSymbol {
-                    crate_: LICHEN_CORE,
-                    relative: AST
-                },
-            )?;
-            writeln!(f, "const PROPERTIES_LEN:usize={};", properties_len)?;
-            writeln!(
-                f,
-                "fn impl_(&self)->&{AST_IMPL}<{PROJECT_VARIABLE}>{{&self.0}}"
-            )?;
-            writeln!(
-                f,
-                "fn impl_mut(&mut self)->&mut {AST_IMPL}<{PROJECT_VARIABLE}>{{&mut self.0}}"
-            )?;
-            writeln!(
-                f,
-                "fn add_auto(&mut self)->{EXPR_ID}{{Self::impl_mut(self).add_auto()}}"
-            )?;
-            writeln!(
-                f,
-                "fn add_entry(&mut self,expr:&{EXPR_ID}){{Self::impl_mut(self).add_entry(expr)}}"
-            )?;
-            writeln!(f, "}}")?;
+            {
+                writeln!(f, "pub struct {AST_NAME}{{")?;
+                writeln!(f, "pub impl_: {}", Delegate(&AST_IMPL_PATH))?;
+                writeln!(f, "}}")?;
+            }
+            {
+                writeln!(
+                    f,
+                    "impl<{}> {} for {}{{",
+                    GenericsOf(&AST_NAME),
+                    Delegate(&GeneratedLibPath {
+                        plugin: &PLUGIN,
+                        relative: PRINCIPAL_TRAITS,
+                        name: &AST_NAME
+                    }),
+                    Delegate(&GeneratedBinPath {
+                        relative: "",
+                        name: &AST_NAME
+                    })
+                )?;
+                writeln!(f, "const {PROPERTIES_COUNT}: usize = {properties_count};")?;
+                writeln!(
+                    f,
+                    "fn impl_(&self)->&{}{{&self.impl_}}",
+                    Delegate(&AST_IMPL_PATH)
+                )?;
+                writeln!(
+                    f,
+                    "fn impl_mut(&mut self)->&mut {}{{&mut self.impl_}}",
+                    Delegate(&AST_IMPL_PATH)
+                )?;
+                writeln!(f, "}}")?;
+            }
         }
         Ok(())
     }
 }
 
+struct DisplayProjectLib<'a>(&'a Project);
+
+impl Display for DisplayProjectLib<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt_lib(f)
+    }
+}
+
+struct DisplayProjectBin<'a>(&'a Project);
+
+impl Display for DisplayProjectBin<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt_bin(f)
+    }
+}
+
+#[derive(Default)]
+pub struct Ctx {
+    plugins: HashMap<
+        ByAddress<&'static Plugin>,
+        (
+            HashSet<ByAddress<&'static EnumType>>,
+            HashSet<ByAddress<&'static Plugin>>,
+        ),
+    >,
+    enum_types: HashMap<ByAddress<&'static EnumType>, Vec<&'static Plugin>>,
+    plugin_enums: HashMap<
+        ByAddress<&'static EnumType>,
+        HashMap<ByAddress<&'static Plugin>, &'static PluginEnum>,
+    >,
+    expr_impls: HashMap<ByAddress<&'static Expr>, Vec<(&'static WrittenSymbol, &'static Plugin)>>,
+}
 pub struct Derives(pub &'static [&'static str]);
 impl Display for Derives {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

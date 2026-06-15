@@ -1,12 +1,13 @@
-use lichen_project::{
+pub mod project;
+use project::{
     Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType, Expr,
     ExprImpls, ExprParam, ExprParams, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generic,
-    Generics, HASH, Module, Name, PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT,
-    PROJECT_VARIABLE, Param, Params, PassMode, Plugin, PluginEnum, SELF_SYMBOL, Self_, Symbol,
-    Variant, WrittenSymbol,
-    code::{self, WrittenPath},
-    plugin::ProjectTrait,
+    Generics, HASH, Module, PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, PROJECT_VARIABLE,
+    Param, Params, PassMode, Plugin, PluginEnum, SELF_SYMBOL, Self_, Symbol, Variant,
+    WrittenSymbol, code::WrittenPath, plugin::ProjectTrait,
 };
+
+use crate::project::code::Name;
 
 pub static PLUGIN: Plugin = Plugin {
     name: "core",
@@ -17,11 +18,6 @@ pub static PLUGIN: Plugin = Plugin {
     },
     bin_module: Module::Path("core/tests/project"),
     dependencies: &[],
-    names: &[&code::Name {
-        name: "Ast",
-        generics: &Generics::none(),
-        project_generic: true,
-    }],
     enum_types: &[&VALUE_TYPE, &OPERATOR_TYPE, &DIAGNOSTIC_KIND_TYPE],
     plugin_enums: &[
         (&VALUE_TYPE, &VALUE_ENUM),
@@ -56,7 +52,7 @@ pub static PLUGIN: Plugin = Plugin {
 };
 
 pub static VALUE_TYPE: EnumType = EnumType {
-    name: &code::Name {
+    name: &Name {
         name: "Value",
         project_generic: false,
         generics: &Generics(&[]),
@@ -148,11 +144,12 @@ pub static VALUE_TYPE: EnumType = EnumType {
             ])),
         },
     ],
+    use_enum_types: &[],
     plugin: &PLUGIN,
 };
 
 pub static OPERATOR_TYPE: EnumType = EnumType {
-    name: &code::Name {
+    name: &Name {
         name: "Operator",
         project_generic: true,
         generics: &Generics(&[]),
@@ -221,11 +218,12 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         body: Some(&DelegateBody),
         default_body: None,
     }],
+    use_enum_types: &[&VALUE_TYPE],
     plugin: &PLUGIN,
 };
 
 pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
-    name: &code::Name {
+    name: &Name {
         name: "DiagnosticKind",
         project_generic: true,
         generics: &Generics(&[]),
@@ -252,6 +250,7 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
         body: Some(&DelegateBody),
         default_body: None,
     }],
+    use_enum_types: &[],
     plugin: &PLUGIN,
 };
 

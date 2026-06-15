@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lichen-project = { path = "../project" }
 lichen-core-plugin = { path = "../core-plugin" }

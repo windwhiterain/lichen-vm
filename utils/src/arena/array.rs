@@ -75,7 +75,7 @@ impl<T: Default> ArenaArray<T> {
 
 impl<T: Debug> Debug for ArenaArray<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_list().entries(self.iter()).finish()
+        f.debug_map().entries(self.iter().enumerate()).finish()
     }
 }
 

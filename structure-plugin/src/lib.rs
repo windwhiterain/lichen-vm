@@ -1,5 +1,5 @@
-use lichen_project::{
-    Expr, ExprImpls, ExprParam, ExprParams, Generics, Module, Name, Plugin, PluginEnum, Variant,
+use lichen_core_plugin::project::{
+    Expr, ExprImpls, ExprParam, ExprParams, Generics, Module, Plugin, PluginEnum, Variant,
     WrittenSymbol, code::WrittenPath,
 };
 
@@ -12,16 +12,18 @@ pub static PLUGIN: Plugin = Plugin {
     },
     bin_module: Module::Path("structure/tests/project"),
     dependencies: &[&lichen_core_plugin::PLUGIN],
-    names: &[],
     enum_types: &[],
-    plugin_enums: &[(&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM)],
+    plugin_enums: &[
+        (&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM),
+        (&lichen_core_plugin::OPERATOR_TYPE, &OPERATOR_ENUM),
+    ],
     properties: &["structure"],
     exprs: &[&MEMBER_EXPR],
     expr_impls: &[ExprImpls {
         expr: &MEMBER_EXPR,
         impls: &[&WrittenSymbol {
             crate_: CRATE,
-            relative: "MemberExprImpl",
+            relative: "Member",
         }],
     }],
 };
@@ -71,6 +73,32 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
                 project_generic: false,
             },
             is_unit: false,
+        },
+    ],
+    plugin: &PLUGIN,
+};
+
+static OPERATOR_ENUM: PluginEnum = PluginEnum {
+    variants: &[
+        Variant {
+            name: "offset",
+            path: &WrittenPath {
+                crate_: CRATE,
+                path: "operator::Offset",
+                generics: &Generics::none(),
+                project_generic: false,
+            },
+            is_unit: true,
+        },
+        Variant {
+            name: "component",
+            path: &WrittenPath {
+                crate_: CRATE,
+                path: "operator::Component",
+                generics: &Generics::none(),
+                project_generic: false,
+            },
+            is_unit: true,
         },
     ],
     plugin: &PLUGIN,

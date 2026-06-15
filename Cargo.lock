@@ -26,13 +26,6 @@ dependencies = [
 name = "lichen-core-plugin"
 version = "0.1.0"
 dependencies = [
- "lichen-project",
-]
-
-[[package]]
-name = "lichen-project"
-version = "0.1.0"
-dependencies = [
  "by_address",
 ]
 
@@ -49,7 +42,6 @@ name = "lichen-structure-plugin"
 version = "0.1.0"
 dependencies = [
  "lichen-core-plugin",
- "lichen-project",
 ]
 
 [[package]]
