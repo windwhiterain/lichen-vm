@@ -46,5 +46,10 @@ fn main() {
     assert_eq!(
         ast.impl_().module.evaluation(&v2),
         &Evaluation::Value(Value::from_int(1))
-    )
+    );
+    let s2 = ast.structure(&e2);
+    assert_eq!(
+        ast.impl_().module.evaluation(&s2),
+        &Evaluation::Value(Value::from_unit())
+    );
 }
