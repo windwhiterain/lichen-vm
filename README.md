@@ -3,7 +3,7 @@
 
 # LichenVM
 
-*infrastructure for tye checkers, static analyzers and language intelligence tools*
+*infrastructure for type checkers, static analyzers and language intelligence tools*
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Contributions](https://img.shields.io/badge/contributions-welcome-brightgreen) ![status](https://img.shields.io/badge/status-prototype-red)
 
