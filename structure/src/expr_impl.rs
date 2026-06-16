@@ -47,6 +47,64 @@ where
     }
 }
 
+pub struct Index;
+
+impl<P: Project> lichen_core::plugin::expr::index<P> for Index
+where
+    P::Ast: Ast<P>,
+    P::Operator: Operator<P>,
+{
+    fn build(
+        ast: &mut P::Ast,
+        output: &lichen_core::ast::ExprId,
+        array: &lichen_core::ast::ExprId,
+        index: &lichen_core::ast::ExprId,
+    ) {
+        let params = [ast.structure(array), ast.value(index)];
+        let operand = CoreArray::node(ast.module_mut(), params);
+        let output_structure = ast.structure(output);
+        ast.module_mut().operation_mut(&output_structure).replace(Operation {
+            operand,
+            operator: P::Operator::index(),
+        });
+    }
+}
+
+pub struct Sum;
+
+impl<P: Project> lichen_core::plugin::expr::sum<P> for Sum
+where
+    P::Ast: Ast<P>,
+{
+    fn build(
+        ast: &mut P::Ast,
+        output: &lichen_core::ast::ExprId,
+        addends: &lichen_core::ast::ExprId,
+    ) {
+        let output_structure = ast.structure(output);
+        *ast.module_mut().evaluation_mut(&output_structure) =
+            Evaluation::Value(P::Value::from_unit())
+    }
+}
+
+pub struct Find;
+
+impl<P: Project> lichen_core::plugin::expr::find<P> for Find
+where
+    P::Ast: Ast<P>,
+{
+    fn build(
+        ast: &mut P::Ast,
+        output: &lichen_core::ast::ExprId,
+        table: &lichen_core::ast::ExprId,
+        name: &lichen_core::ast::ExprId,
+    ) {
+        let output_structure = ast.structure(output);
+        *ast.module_mut().evaluation_mut(&output_structure) =
+            Evaluation::Value(P::Value::from_unit())
+    }
+}
+
 pub struct Array;
 
 impl<P: Project> lichen_core::plugin::expr::array<P> for Array

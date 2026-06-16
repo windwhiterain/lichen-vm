@@ -1,5 +1,5 @@
 use lichen_core_plugin::{
-    ARRAY_EXPR,
+    ARRAY_EXPR, FIND_EXPR, INDEX_EXPR, SUM_EXPR,
     system::{
         Expr, ExprImpls, ExprParam, ExprParams, Module, Plugin, PluginEnum, Variant,
         sytax::{Generics, WrittenPath, WrittenPathRaw},
@@ -35,6 +35,27 @@ pub static PLUGIN: Plugin = Plugin {
             impls: &[&WrittenPathRaw {
                 crate_: CRATE,
                 path: "expr_impl::Array",
+            }],
+        },
+        ExprImpls {
+            expr: &INDEX_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Index",
+            }],
+        },
+        ExprImpls {
+            expr: &SUM_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Sum",
+            }],
+        },
+        ExprImpls {
+            expr: &FIND_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Find",
             }],
         },
     ],
