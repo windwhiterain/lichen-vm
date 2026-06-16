@@ -27,7 +27,7 @@ pub static PLUGIN: Plugin = Plugin {
         (&DIAGNOSTIC_KIND_TYPE, &DIAGNOSTIC_KIND_ENUM),
     ],
     properties: &["value"],
-    exprs: &[&SUM_EXPR, &INDEX_EXPR, &FIND_EXPR],
+    exprs: &[&SUM_EXPR, &INDEX_EXPR, &FIND_EXPR, &ARRAY_EXPR],
     expr_impls: &[
         ExprImpls {
             expr: &SUM_EXPR,
@@ -48,6 +48,13 @@ pub static PLUGIN: Plugin = Plugin {
             impls: &[&WrittenPathRaw {
                 crate_: CRATE,
                 path: "expr_impl::Find",
+            }],
+        },
+        ExprImpls {
+            expr: &ARRAY_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Array",
             }],
         },
     ],
@@ -375,5 +382,12 @@ pub static FIND_EXPR: Expr = Expr {
             is_array: false,
         },
     ]),
+};
+pub static ARRAY_EXPR: Expr = Expr {
+    name: "array",
+    params: &ExprParams(&[ExprParam {
+        name: "element",
+        is_array: true,
+    }]),
 };
 pub const CRATE: &'static str = "lichen_core";

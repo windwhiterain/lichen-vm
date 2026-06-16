@@ -26,7 +26,7 @@ fn main() {
     };
     let e0 = ast.add_literal_core(Some(Value::from_int(1)));
     let e1 = ast.add_literal_core(Some(Value::from_int(2)));
-    let e2 = Array::expr::<Project>(&mut ast, [e0, e1]);
+    let e2 = ast.add_array(&[e0, e1]);
     let e3 = ast.add_sum(&e2);
     ast.add_entry(&e3);
     let mut solver = Solver::new(&mut ast.impl_mut().module);

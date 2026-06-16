@@ -1,4 +1,10 @@
-use crate::plugin::{Ast as _, Operator as _, Project, principal_traits::Ast as _};
+use lichen_utils::erase;
+
+use crate::{
+    plugin::{Ast as _, Operator as _, Project, Value as _, expr, principal_traits::Ast as _},
+    runtime::evaluation::Evaluation,
+    value,
+};
 
 #[macro_export]
 macro_rules! expr_impl {
@@ -31,8 +37,27 @@ macro_rules! expr_impl {
     }
 }
 
-expr_impl! {Name: Sum, name: sum, trait<P:Project>: crate::plugin::expr::sum<P>, param: addends}
+expr_impl! {Name: Sum, name: sum, trait<P:Project>: expr::sum<P>, param: addends}
 
-expr_impl! {Name: Index, name: index, trait<P:Project>: crate::plugin::expr::index<P>, params: [array,index,]}
+expr_impl! {Name: Index, name: index, trait<P:Project>: expr::index<P>, params: [array,index,]}
 
-expr_impl! {Name: Find, name: find, trait<P:Project>: crate::plugin::expr::find<P>, params: [table,name,]}
+expr_impl! {Name: Find, name: find, trait<P:Project>: expr::find<P>, params: [table,name,]}
+
+pub struct Array;
+
+impl<P: Project> expr::array<P> for Array {
+    fn build(
+        ast: &mut <P as Project>::Ast,
+        output: &crate::ast::ExprId,
+        element: &[crate::ast::ExprId],
+    ) {
+        let ast_static = unsafe { erase(ast) };
+        let array = value::Array::new(
+            &mut ast.impl_mut().module,
+            element.iter().map(|x| ast_static.value(x)),
+        );
+        let output = ast.value(output);
+        *ast.impl_mut().module.evaluation_mut(&output) =
+            Evaluation::Value(P::Value::from_array(array))
+    }
+}

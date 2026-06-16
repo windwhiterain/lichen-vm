@@ -1,12 +1,10 @@
 use lichen_utils::{
     arena::{array::ArenaArray, hashmap::ArenaHashMap},
-    erase, erase_mut,
+    erase_mut,
 };
 
 use crate::{
-    ast::Ast as _,
-    ast::ExprId,
-    plugin::{Ast, Project, Value as _, principal_traits::Value},
+    plugin::{Project, Value as _, principal_traits::Value},
     runtime::{Module, NodeIdLocal, evaluation::Evaluation},
 };
 
@@ -33,26 +31,6 @@ impl Array {
     ) -> NodeIdLocal {
         let value = Self::new(module, nodes);
         module.add_literal(P::Value::from_array(value))
-    }
-    pub fn expr<P: Project>(
-        ast: &mut P::Ast,
-        exprs: impl IntoIterator<Item = ExprId> + Clone,
-    ) -> ExprId
-    where
-        P::Ast: Ast<P>,
-    {
-        let expr = ast.add_auto();
-        for i in 0..P::Ast::PROPERTIES_COUNT {
-            let node = ast.impl_().property(&expr, i);
-            let impl_ = unsafe { erase(ast.impl_()) };
-            let value = Array::new(
-                &mut ast.impl_mut().module,
-                exprs.clone().into_iter().map(|x| impl_.property(&x, i)),
-            );
-            *ast.impl_mut().module.evaluation_mut(&node) =
-                Evaluation::Value(P::Value::from_array(value));
-        }
-        expr
     }
 }
 
