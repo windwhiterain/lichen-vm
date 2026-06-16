@@ -13,11 +13,13 @@ pub trait Project:
 pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
     fn offset() -> Self;
     fn component() -> Self;
-    fn construct() -> Self;
+    fn compose() -> Self;
 }
 pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
+    fn member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
+    fn from_member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
 }
 pub trait Value: ::lichen_core::plugin::Value {
     fn named_array(&self) -> Option<&crate::value::NamedArray>;

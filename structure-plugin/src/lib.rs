@@ -19,6 +19,10 @@ pub static PLUGIN: Plugin = Plugin {
     plugin_enums: &[
         (&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM),
         (&lichen_core_plugin::OPERATOR_TYPE, &OPERATOR_ENUM),
+        (
+            &lichen_core_plugin::DIAGNOSTIC_KIND_TYPE,
+            &DIAGNOSTIC_KIND_ENUM,
+        ),
     ],
     properties: &["structure"],
     exprs: &[&MEMBER_EXPR],
@@ -134,16 +138,30 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
             is_unit: true,
         },
         Variant {
-            name: "construct",
+            name: "compose",
             path: &WrittenPath {
                 crate_: CRATE,
-                path: "operator::Construct",
+                path: "operator::Compose",
                 generics: &Generics::NONE,
                 project_generic: false,
             },
             is_unit: true,
         },
     ],
+    plugin: &PLUGIN,
+};
+
+static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
+    variants: &[Variant {
+        name: "member_name_repetition",
+        path: &WrittenPath {
+            crate_: CRATE,
+            generics: &Generics::NONE,
+            path: "diagnostic_kind::MemberNameRepetition",
+            project_generic: false,
+        },
+        is_unit: false,
+    }],
     plugin: &PLUGIN,
 };
 

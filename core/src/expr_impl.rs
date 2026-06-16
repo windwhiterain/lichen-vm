@@ -58,7 +58,6 @@ impl<P: Project> expr::array<P> for Array {
             element.iter().map(|x| ast_static.value(x)),
         );
         let output = ast.value(output);
-        *ast.module_mut().evaluation_mut(&output) =
-            Evaluation::Value(P::Value::from_array(array))
+        *ast.module_mut().evaluation_mut(&output) = Evaluation::Value(P::Value::from_array(array))
     }
 }

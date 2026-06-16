@@ -58,6 +58,7 @@ where
             iteration: 0,
         }
     }
+    /// if key exists, return its index.
     pub fn insert(&mut self, index: usize, key: K, value: V) -> Option<usize> {
         let mut state = self.probing_state(&key);
         let mut table_location = self.table_location(&mut state);

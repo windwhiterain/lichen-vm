@@ -14,7 +14,11 @@ pub struct IndexOutOfBounds {
 
 impl<P: Project> DiagnosticKind<P> for IndexOutOfBounds {
     fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "index {} out of bounds for length {}", self.index, self.len)
+        write!(
+            f,
+            "index {} out of bounds for length {}",
+            self.index, self.len
+        )
     }
 }
 

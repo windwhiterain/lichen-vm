@@ -1,8 +1,11 @@
+use crate::diagnostic_kind::MemberNameRepetition;
+use crate::plugin::DiagnosticKind;
 use crate::plugin::Project;
 use crate::plugin::Value;
 use crate::value::Structure;
-use lichen_core::value::Table;
 use lichen_core::operator::{Find, Index};
+use lichen_core::runtime::diagnostic::Diagnostic;
+use lichen_core::value::Table;
 use lichen_core::{
     operands,
     plugin::{Value as _, principal_traits::Operator},
@@ -29,11 +32,12 @@ where
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Construct;
+pub struct Compose;
 
-impl<P: Project> Operator<P> for Construct
+impl<P: Project> Operator<P> for Compose
 where
     P::Value: Value,
+    P::DiagnosticKind: DiagnosticKind<P>,
 {
     fn run(
         &self,
@@ -43,7 +47,20 @@ where
     ) -> Option<<P as lichen_core::plugin::Project>::Value> {
         let named_array = value.named_array()?;
         let module = solver.module_mut(&node.module());
-        let table = Table::new(module, named_array.0.iter().map(|(name, _)| *name));
+        let mut table = Table::uninit(module, named_array.0.len());
+        for (i, (name, _)) in named_array.0.iter().enumerate() {
+            if let Some(exists_name_index) = table.0.insert(i, *name, i) {
+                module.diagnostics.push(Diagnostic {
+                    kind: P::DiagnosticKind::from_member_name_repetition(MemberNameRepetition {
+                        table,
+                        index_1: i,
+                        index_2: exists_name_index,
+                    }),
+                    node: node.local(),
+                });
+                return None;
+            }
+        }
         let components = Array::new(module, named_array.0.iter().map(|(_, node)| *node));
         Some(P::Value::from_structure(Structure { table, components }))
     }

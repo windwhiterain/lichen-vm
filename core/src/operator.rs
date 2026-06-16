@@ -72,13 +72,16 @@ impl Index {
         index: Int,
     ) -> Option<P::Value> {
         if index >= array.0.len() as i64 || index < 0 {
-            solver.module_mut(&node.module()).diagnostics.push(Diagnostic {
-                kind: P::DiagnosticKind::from_index_out_of_bounds(IndexOutOfBounds {
-                    index,
-                    len: array.0.len(),
-                }),
-                node: node.local(),
-            });
+            solver
+                .module_mut(&node.module())
+                .diagnostics
+                .push(Diagnostic {
+                    kind: P::DiagnosticKind::from_index_out_of_bounds(IndexOutOfBounds {
+                        index,
+                        len: array.0.len(),
+                    }),
+                    node: node.local(),
+                });
             return None;
         }
         let reference_node = *array.0.get(index as usize);

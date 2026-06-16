@@ -62,6 +62,9 @@ impl Table {
             names.into_iter().enumerate().map(|(i, x)| (x, i)),
         ))
     }
+    pub fn uninit<P: Project>(module: &mut Module<P>, len: usize) -> Self {
+        Self(ArenaHashMap::new(&mut module.arena, len))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

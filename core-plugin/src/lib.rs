@@ -217,7 +217,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         default_body: None,
         return_impl: false,
     }],
-    use_enum_types: &[&VALUE_TYPE],
+    use_enum_types: &[&VALUE_TYPE, &DIAGNOSTIC_KIND_TYPE],
     plugin: &PLUGIN,
 };
 

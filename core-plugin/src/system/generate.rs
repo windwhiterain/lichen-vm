@@ -332,7 +332,6 @@ impl Project {
                 generated_struct(PROJECT_NAME)
             )?;
             for name in
-            
                 plugin
                     .enum_types
                     .iter()

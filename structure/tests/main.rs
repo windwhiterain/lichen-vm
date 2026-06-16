@@ -31,7 +31,7 @@ fn main() {
     let s0 = ast.structure(&e0);
     ast.module_mut().operation_mut(&s0).replace(Operation {
         operand: named_array,
-        operator: Operator::construct(),
+        operator: Operator::compose(),
     });
     let e1 = ast.add_literal_structure(
         Some(Value::from_string(StringId(0))),

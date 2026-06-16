@@ -26,24 +26,25 @@ where
         let name_value = ast.value(name);
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
-        let operand = CoreArray::node(
-            ast.module_mut(),
-            [structure_structure, name_value],
-        );
+        let operand = CoreArray::node(ast.module_mut(), [structure_structure, name_value]);
         let offset = ast.module_mut().add_operation(Operation {
             operand,
             operator: P::Operator::offset(),
         });
         let operand = CoreArray::node(ast.module_mut(), [structure_value, offset]);
-        ast.module_mut().operation_mut(&output_value).replace(Operation {
-            operand,
-            operator: P::Operator::index(),
-        });
+        ast.module_mut()
+            .operation_mut(&output_value)
+            .replace(Operation {
+                operand,
+                operator: P::Operator::index(),
+            });
         let operand = CoreArray::node(ast.module_mut(), [structure_structure, offset]);
-        ast.module_mut().operation_mut(&output_structure).replace(Operation {
-            operand,
-            operator: P::Operator::component(),
-        });
+        ast.module_mut()
+            .operation_mut(&output_structure)
+            .replace(Operation {
+                operand,
+                operator: P::Operator::component(),
+            });
     }
 }
 
@@ -63,10 +64,12 @@ where
         let params = [ast.structure(array), ast.value(index)];
         let operand = CoreArray::node(ast.module_mut(), params);
         let output_structure = ast.structure(output);
-        ast.module_mut().operation_mut(&output_structure).replace(Operation {
-            operand,
-            operator: P::Operator::index(),
-        });
+        ast.module_mut()
+            .operation_mut(&output_structure)
+            .replace(Operation {
+                operand,
+                operator: P::Operator::index(),
+            });
     }
 }
 
