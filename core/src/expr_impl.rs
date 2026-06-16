@@ -1,6 +1,7 @@
 use lichen_utils::erase;
 
 use crate::{
+    ast::Ast as _,
     plugin::{Ast as _, Operator as _, Project, Value as _, expr, principal_traits::Ast as _},
     runtime::evaluation::Evaluation,
     value,
@@ -13,9 +14,9 @@ macro_rules! expr_impl {
         impl<$project_variable: $project_trait> $trait for $Name {
             fn build(ast:&mut $project_variable::Ast,output:&$crate::ast::ExprId,$($param: &$crate::ast::ExprId,)*) {
                 let params = [$(ast.value($param),)*];
-                let operand = $crate::value::Array::node(&mut ast.impl_mut().module, params);
+                let operand = $crate::value::Array::node(ast.module_mut(), params);
                 let output = ast.value(output);
-                *ast.impl_mut().module.operation_mut(&output) = Some($crate::runtime::operation::Operation {
+                ast.module_mut().operation_mut(&output).replace($crate::runtime::operation::Operation {
                     operand,
                     operator: P::Operator::$name(),
                 });
@@ -28,7 +29,7 @@ macro_rules! expr_impl {
             fn build(ast:&mut $project_variable::Ast,output:&$crate::ast::ExprId,$param: &$crate::ast::ExprId) {
                 let operand = ast.value($param);
                 let output = ast.value(output);
-                *ast.impl_mut().module.operation_mut(&output) = Some($crate::runtime::operation::Operation {
+                ast.module_mut().operation_mut(&output).replace($crate::runtime::operation::Operation {
                     operand,
                     operator: P::Operator::$name(),
                 });
@@ -53,11 +54,11 @@ impl<P: Project> expr::array<P> for Array {
     ) {
         let ast_static = unsafe { erase(ast) };
         let array = value::Array::new(
-            &mut ast.impl_mut().module,
+            ast.module_mut(),
             element.iter().map(|x| ast_static.value(x)),
         );
         let output = ast.value(output);
-        *ast.impl_mut().module.evaluation_mut(&output) =
+        *ast.module_mut().evaluation_mut(&output) =
             Evaluation::Value(P::Value::from_array(array))
     }
 }

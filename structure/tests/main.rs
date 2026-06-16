@@ -20,14 +20,14 @@ fn main() {
     let mut ast = Ast {
         impl_: AstImpl::new(module),
     };
-    let unit = ast.impl_mut().module.add_literal(Value::from_unit());
+    let unit = ast.module_mut().add_literal(Value::from_unit());
     let structure = Structure {
-        table: Table::new(&mut ast.impl_mut().module, [StringId(0), StringId(1)]),
-        components: Array::new(&mut ast.impl_mut().module, [unit, unit]),
+        table: Table::new(ast.module_mut(), [StringId(0), StringId(1)]),
+        components: Array::new(ast.module_mut(), [unit, unit]),
     };
-    let int1 = ast.impl_mut().module.add_literal(Value::from_int(1));
-    let int2 = ast.impl_mut().module.add_literal(Value::from_int(2));
-    let array = Array::new(&mut ast.impl_mut().module, [int1, int2]);
+    let int1 = ast.module_mut().add_literal(Value::from_int(1));
+    let int2 = ast.module_mut().add_literal(Value::from_int(2));
+    let array = Array::new(ast.module_mut(), [int1, int2]);
     let e0 = ast.add_literal_structure(
         Some(Value::from_array(array)),
         Some(Value::from_structure(structure)),
@@ -38,16 +38,16 @@ fn main() {
     );
     let e2 = ast.add_member(&e0, &e1);
     ast.add_entry(&e2);
-    let mut solver = Solver::new(&mut ast.impl_mut().module);
+    let mut solver = Solver::new(ast.module_mut());
     solver.solve();
     let v2 = ast.value(&e2);
     assert_eq!(
-        ast.impl_().module.evaluation(&v2),
+        ast.module().evaluation(&v2),
         &Evaluation::Value(Value::from_int(1))
     );
     let s2 = ast.structure(&e2);
     assert_eq!(
-        ast.impl_().module.evaluation(&s2),
+        ast.module().evaluation(&s2),
         &Evaluation::Value(Value::from_unit())
     );
 }

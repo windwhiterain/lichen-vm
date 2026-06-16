@@ -29,11 +29,11 @@ fn main() {
     let e2 = ast.add_array(&[e0, e1]);
     let e3 = ast.add_sum(&e2);
     ast.add_entry(&e3);
-    let mut solver = Solver::new(&mut ast.impl_mut().module);
+    let mut solver = Solver::new(ast.module_mut());
     solver.solve();
     let v3 = ast.value(&e3);
     assert_eq!(
-        ast.impl_().module.evaluation(&v3),
+        ast.module().evaluation(&v3),
         &Evaluation::Value(Value::from_int(3))
     )
 }

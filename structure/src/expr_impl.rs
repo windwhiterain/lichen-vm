@@ -26,20 +26,20 @@ where
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
         let operand = Array::node(
-            &mut ast.impl_mut().module,
+            ast.module_mut(),
             [structure_structure, name_value],
         );
-        let offset = ast.impl_mut().module.add_operation(Operation {
+        let offset = ast.module_mut().add_operation(Operation {
             operand,
             operator: P::Operator::offset(),
         });
-        let operand = Array::node(&mut ast.impl_mut().module, [structure_value, offset]);
-        *ast.impl_mut().module.operation_mut(&output_value) = Some(Operation {
+        let operand = Array::node(ast.module_mut(), [structure_value, offset]);
+        ast.module_mut().operation_mut(&output_value).replace(Operation {
             operand,
             operator: P::Operator::index(),
         });
-        let operand = Array::node(&mut ast.impl_mut().module, [structure_structure, offset]);
-        *ast.impl_mut().module.operation_mut(&output_structure) = Some(Operation {
+        let operand = Array::node(ast.module_mut(), [structure_structure, offset]);
+        ast.module_mut().operation_mut(&output_structure).replace(Operation {
             operand,
             operator: P::Operator::component(),
         });

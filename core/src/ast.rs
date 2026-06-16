@@ -8,8 +8,8 @@ pub struct ExprId(usize);
 
 pub trait Ast<P: Project> {
     const PROPERTIES_COUNT: usize;
-    fn impl_(&self) -> &AstImpl<P>;
-    fn impl_mut(&mut self) -> &mut AstImpl<P>;
+    fn module(&self) -> &Module<P>;
+    fn module_mut(&mut self) -> &mut Module<P>;
     fn add_auto(&mut self) -> ExprId;
     fn add_entry(&mut self, expr: &ExprId);
     fn property(&self, expr: &ExprId, offset: usize) -> NodeIdLocal;
@@ -18,12 +18,12 @@ pub trait Ast<P: Project> {
 impl<T: crate::plugin::principal_traits::Ast<P>, P: Project> Ast<P> for T {
     const PROPERTIES_COUNT: usize = T::PROPERTIES_COUNT;
 
-    fn impl_(&self) -> &AstImpl<P> {
-        self.impl_()
+    fn module(&self) -> &Module<P> {
+        &self.impl_().module
     }
 
-    fn impl_mut(&mut self) -> &mut AstImpl<P> {
-        self.impl_mut()
+    fn module_mut(&mut self) -> &mut Module<P> {
+        &mut self.impl_mut().module
     }
 
     fn add_auto(&mut self) -> ExprId {
