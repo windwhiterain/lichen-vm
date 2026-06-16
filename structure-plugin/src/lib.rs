@@ -133,6 +133,16 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
             },
             is_unit: true,
         },
+        Variant {
+            name: "construct",
+            path: &WrittenPath {
+                crate_: CRATE,
+                path: "operator::Construct",
+                generics: &Generics::NONE,
+                project_generic: false,
+            },
+            is_unit: true,
+        },
     ],
     plugin: &PLUGIN,
 };

@@ -79,7 +79,7 @@ where
     fn build(
         ast: &mut P::Ast,
         output: &lichen_core::ast::ExprId,
-        addends: &lichen_core::ast::ExprId,
+        _addends: &lichen_core::ast::ExprId,
     ) {
         let output_structure = ast.structure(output);
         *ast.module_mut().evaluation_mut(&output_structure) =
@@ -96,8 +96,8 @@ where
     fn build(
         ast: &mut P::Ast,
         output: &lichen_core::ast::ExprId,
-        table: &lichen_core::ast::ExprId,
-        name: &lichen_core::ast::ExprId,
+        _table: &lichen_core::ast::ExprId,
+        _name: &lichen_core::ast::ExprId,
     ) {
         let output_structure = ast.structure(output);
         *ast.module_mut().evaluation_mut(&output_structure) =

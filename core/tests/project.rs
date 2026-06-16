@@ -8,9 +8,6 @@ impl ::lichen_core::plugin::Project for self::Project {
     type Ast = self::Ast<Self>;
 }
 mod code {
-    pub(super) mod DiagnosticKind {
-        pub(in super::super) const core__equality_error: usize = 0;
-    }
     pub(super) mod Value {
         pub(in super::super) const core__int: usize = 0;
         pub(in super::super) const core__string: usize = 1;
@@ -23,14 +20,11 @@ mod code {
         pub(in super::super) const core__index: usize = 1;
         pub(in super::super) const core__find: usize = 2;
     }
+    pub(super) mod DiagnosticKind {
+        pub(in super::super) const core__equality_error: usize = 0;
+    }
 }
 mod union_ {
-
-    pub(super) union DiagnosticKind<P> {
-        pub(super) core__equality_error:
-            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
-        _p: core::marker::PhantomData<(P,)>,
-    }
     #[derive(Clone, Copy)]
     pub(super) union Value {
         pub(super) core__int: std::mem::ManuallyDrop<::lichen_core::value::Int>,
@@ -40,102 +34,11 @@ mod union_ {
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
         _p: core::marker::PhantomData<()>,
     }
-}
 
-pub struct DiagnosticKind<P: ::lichen_core::plugin::Project> {
-    code: usize,
-    data: self::union_::DiagnosticKind<P>,
-}
-impl<P: ::lichen_core::plugin::Project> Eq for self::DiagnosticKind<P> {}
-
-impl<P: ::lichen_core::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                write!(f, "core::equality_error({:?})", unsafe {
-                    &*self.data.core__equality_error
-                })
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_core::plugin::Project> PartialEq for self::DiagnosticKind<P> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return false;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error == other.data.core__equality_error
-            },
-            _ => unreachable!(),
-        }
-    }
-    fn ne(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return true;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error != other.data.core__equality_error
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_core::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.code.hash(state);
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                unsafe { &self.data.core__equality_error }.hash(state);
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_core::plugin::Project> Clone for self::DiagnosticKind<P> {
-    fn clone(&self) -> Self {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
-                },
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::principal_traits::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
-{
-    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code{
-self::code::DiagnosticKind::core__equality_error=>{
-<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
-}
-_=>unreachable!(),}
-    }
-}
-impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
-{
-    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
-        if self.code == self::code::DiagnosticKind::core__equality_error {
-            Some(unsafe { &self.data.core__equality_error })
-        } else {
-            None
-        }
-    }
-    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::core__equality_error,
-            data: self::union_::DiagnosticKind {
-                core__equality_error: std::mem::ManuallyDrop::new(data),
-            },
-        }
+    pub(super) union DiagnosticKind<P> {
+        pub(super) core__equality_error:
+            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
+        _p: core::marker::PhantomData<(P,)>,
     }
 }
 #[derive(Clone, Copy)]
@@ -410,6 +313,103 @@ impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::Operator<P> for s
     }
     fn find() -> Self {
         Self(self::code::Operator::core__find, core::marker::PhantomData)
+    }
+}
+
+pub struct DiagnosticKind<P: ::lichen_core::plugin::Project> {
+    code: usize,
+    data: self::union_::DiagnosticKind<P>,
+}
+impl<P: ::lichen_core::plugin::Project> Eq for self::DiagnosticKind<P> {}
+
+impl<P: ::lichen_core::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                write!(f, "core::equality_error({:?})", unsafe {
+                    &*self.data.core__equality_error
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_core::plugin::Project> PartialEq for self::DiagnosticKind<P> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return false;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error == other.data.core__equality_error
+            },
+            _ => unreachable!(),
+        }
+    }
+    fn ne(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return true;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error != other.data.core__equality_error
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_core::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.code.hash(state);
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                unsafe { &self.data.core__equality_error }.hash(state);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_core::plugin::Project> Clone for self::DiagnosticKind<P> {
+    fn clone(&self) -> Self {
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
+                },
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::principal_traits::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
+    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code{
+self::code::DiagnosticKind::core__equality_error=>{
+<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
+}
+_=>unreachable!(),}
+    }
+}
+impl<P: ::lichen_core::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
+    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
+        if self.code == self::code::DiagnosticKind::core__equality_error {
+            Some(unsafe { &self.data.core__equality_error })
+        } else {
+            None
+        }
+    }
+    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::core__equality_error,
+            data: self::union_::DiagnosticKind {
+                core__equality_error: std::mem::ManuallyDrop::new(data),
+            },
+        }
     }
 }
 impl<P: ::lichen_core::plugin::Project<Ast = self::Ast<P>>> ::lichen_core::plugin::Ast<P>
