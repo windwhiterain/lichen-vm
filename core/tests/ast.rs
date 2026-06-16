@@ -1,17 +1,17 @@
 mod project;
 
-use lichen_core::Ast as _;
-use lichen_core::AstImpl;
+use lichen_core::ast::Ast as _;
+use lichen_core::ast::AstImpl;
+use lichen_core::diagnostic_kind::EqualityError;
 use lichen_core::plugin::Ast as _;
 use lichen_core::plugin::DiagnosticKind as _;
 use lichen_core::plugin::Operator as _;
 use lichen_core::plugin::Value as _;
 use lichen_core::runtime::Module;
 use lichen_core::runtime::diagnostic::Diagnostic;
-use lichen_core::runtime::diagnostic::EqualityError;
+use lichen_core::runtime::evaluation::Evaluation;
 use lichen_core::runtime::solve::Solver;
-use lichen_core::runtime::value::Array;
-use lichen_core::runtime::value::Evaluation;
+use lichen_core::value::Array;
 use project::Ast;
 use project::DiagnosticKind;
 use project::Operator;

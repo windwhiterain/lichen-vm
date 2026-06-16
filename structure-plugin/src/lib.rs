@@ -23,7 +23,7 @@ pub static PLUGIN: Plugin = Plugin {
         expr: &MEMBER_EXPR,
         impls: &[&WrittenSymbol {
             crate_: CRATE,
-            relative: "Member",
+            relative: "expr_impl::Member",
         }],
     }],
 };
@@ -49,7 +49,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "NamedArray",
+                path: "value::NamedArray",
                 project_generic: false,
             },
             is_unit: false,
@@ -59,7 +59,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "NameSet",
+                path: "value::NameSet",
                 project_generic: false,
             },
             is_unit: false,
@@ -69,7 +69,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "Structure",
+                path: "value::Structure",
                 project_generic: false,
             },
             is_unit: false,

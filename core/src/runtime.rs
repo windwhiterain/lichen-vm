@@ -1,24 +1,23 @@
-use std::{ffi::os_str::Display, fmt::Debug, ptr::NonNull};
+use std::{fmt::Debug, ptr::NonNull};
 
 use lichen_utils::{arena::Arena, stable_vec::StableVec};
 
 use crate::{
-    plugin::{Project, principal_traits::Value},
+    plugin::Project,
     runtime::{
         diagnostic::Diagnostic,
         equation::LocalEquation,
+        evaluation::Evaluation,
         operation::Operation,
-        solve::{LocalModuleId, LocalNodeId, Solve, Solver},
-        value::Evaluation,
+        solve::{LocalModuleId, LocalNodeId, Solve},
     },
 };
 
 pub mod diagnostic;
 pub mod equation;
+pub mod evaluation;
 pub mod operation;
 pub mod solve;
-pub mod switch;
-pub mod value;
 
 pub struct Module<P: Project> {
     pub arena: Arena,
@@ -79,9 +78,6 @@ impl NodeIdLocal {
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModuleId(pub *const ());
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct StringId(pub usize);
-impl Value for StringId {}
 
 impl<P: Project> Module<P> {
     pub fn new() -> Self {

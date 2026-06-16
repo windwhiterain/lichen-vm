@@ -4,26 +4,18 @@ use lichen_utils::{
 };
 
 use crate::{
-    Ast as _, ExprId,
+    ast::Ast as _,
+    ast::ExprId,
     plugin::{Ast, Project, Value as _, principal_traits::Value},
-    runtime::{Module, NodeIdLocal, StringId, solve::Solver},
+    runtime::{Module, NodeIdLocal, evaluation::Evaluation},
 };
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Evaluation<P: Project> {
-    Value(P::Value),
-    Ref {
-        node: NodeIdLocal,
-        brother: Option<NodeIdLocal>,
-    },
-    Auto {
-        referrer_count: usize,
-        reference: Option<(NodeIdLocal, NodeIdLocal)>,
-    },
-}
 
 pub type Int = i64;
 impl Value for Int {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct StringId(pub usize);
+impl Value for StringId {}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Array(pub ArenaArray<NodeIdLocal>);

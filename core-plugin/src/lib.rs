@@ -1,10 +1,9 @@
 pub mod project;
 use project::{
     Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType, Expr,
-    ExprImpls, ExprParam, ExprParams, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generic,
-    Generics, HASH, Module, PARTIAL_EQ, PROJECT, PROJECT_GENERIC, PROJECT_TRAIT, PROJECT_VARIABLE,
-    Param, Params, PassMode, Plugin, PluginEnum, SELF_SYMBOL, Self_, Symbol, Variant,
-    WrittenSymbol, code::WrittenPath, plugin::ProjectTrait,
+    ExprImpls, ExprParam, ExprParams, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics,
+    HASH, Module, PARTIAL_EQ, PROJECT_VARIABLE, Param, Params, PassMode, Plugin, PluginEnum,
+    SELF_SYMBOL, Self_, Symbol, Variant, WrittenSymbol, code::WrittenPath, plugin::ProjectTrait,
 };
 
 use crate::project::code::Name;
@@ -31,21 +30,21 @@ pub static PLUGIN: Plugin = Plugin {
             expr: &SUM_EXPR,
             impls: &[&WrittenSymbol {
                 crate_: CRATE,
-                relative: "Sum",
+                relative: "expr_impl::Sum",
             }],
         },
         ExprImpls {
             expr: &INDEX_EXPR,
             impls: &[&WrittenSymbol {
                 crate_: CRATE,
-                relative: "Index",
+                relative: "expr_impl::Index",
             }],
         },
         ExprImpls {
             expr: &FIND_EXPR,
             impls: &[&WrittenSymbol {
                 crate_: CRATE,
-                relative: "Find",
+                relative: "expr_impl::Find",
             }],
         },
     ],
@@ -261,7 +260,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::value::Int",
+                path: "value::Int",
                 project_generic: false,
             },
             is_unit: false,
@@ -271,7 +270,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::StringId",
+                path: "value::StringId",
                 project_generic: false,
             },
             is_unit: false,
@@ -281,7 +280,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::value::Array",
+                path: "value::Array",
                 project_generic: false,
             },
             is_unit: false,
@@ -291,7 +290,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::value::Table",
+                path: "value::Table",
                 project_generic: false,
             },
             is_unit: false,
@@ -301,7 +300,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::value::Unit",
+                path: "value::Unit",
                 project_generic: false,
             },
             is_unit: true,
@@ -317,7 +316,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::operation::Sum",
+                path: "operator::Sum",
                 project_generic: false,
             },
             is_unit: true,
@@ -327,7 +326,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::operation::Index",
+                path: "operator::Index",
                 project_generic: false,
             },
             is_unit: true,
@@ -337,7 +336,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::none(),
-                path: "runtime::operation::Find",
+                path: "operator::Find",
                 project_generic: false,
             },
             is_unit: true,
@@ -351,7 +350,7 @@ pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
         path: &WrittenPath {
             crate_: CRATE,
             generics: &Generics::none(),
-            path: "runtime::diagnostic::EqualityError",
+            path: "diagnostic_kind::EqualityError",
             project_generic: false,
         },
         is_unit: false,

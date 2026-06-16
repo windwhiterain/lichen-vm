@@ -1,6 +1,6 @@
 use crate::plugin::Project;
 use crate::plugin::Value;
-use lichen_core::runtime::operation::{Find, Index};
+use lichen_core::operator::{Find, Index};
 use lichen_core::{
     operands,
     plugin::{Value as _, principal_traits::Operator},

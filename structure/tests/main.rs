@@ -1,15 +1,13 @@
 use lichen_core::{
-    Ast as _, AstImpl,
+    ast::Ast as _,
+    ast::AstImpl,
     plugin::{Ast as _, DiagnosticKind as _, Operator as _, Value as _},
-    runtime::{
-        Module, StringId,
-        solve::Solver,
-        value::{Array, Evaluation, Table},
-    },
+    runtime::{Module, evaluation::Evaluation, solve::Solver},
+    value::{Array, StringId, Table},
 };
 use lichen_structure::{
-    Structure,
     plugin::{Ast as _, DiagnosticKind as _, Operator as _, Value as _},
+    value::Structure,
 };
 
 use crate::project::{Ast, Project, Value};

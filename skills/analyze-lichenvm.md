@@ -14,42 +14,69 @@ You are analyzing the **LichenVM** Rust workspace. This is a modular infrastruct
 Read key files and produce a concise summary covering:
 
 1. **Workspace layout** — all 5 crates and their dependency graph
-2. **Core runtime architecture** — Module, Solver, Evaluation states, node graph, operators
-3. **Plugin/codegen system** — how `Project` trait, `Plugin` static definitions, code generation via `core-plugin` / `structure-plugin` produce zero-cost enum dispatch
-4. **Value system** — Int, StringId, Array, Table, Unit; the `fields()` / `for_field_pairs()` mechanism for structural equality and recursive solving
-5. **Expression/AST layer** — ExprId, AstImpl, `expr_impl!` macro, multi-property expressions
-6. **Structure extension crate** — NamedArray, NameSet, Structure, Member expr, Offset/Component operators
-7. **Utils crate** — Arena allocator (bump with exponential chunk growth), ArenaArray, ArenaHashMap (open-addressing with quadratic probing), StableVec (bit-indexed power-of-two chunks)
-8. **Current status** — test coverage (3 tests across core + structure), what's empty (`core/src/property.rs`, `core/src/runtime/switch.rs`)
+2. **Core module organization** — flat top-level modules vs. nested runtime — how the layout makes plugin authorship clearer
+3. **Core runtime architecture** — Module, Solver, Evaluation states, node graph, operators
+4. **Plugin/codegen system** — how `Project` trait, `Plugin` static definitions, code generation via `core-plugin` / `structure-plugin` produce zero-cost enum dispatch
+5. **Value system** — Int, StringId, Array, Table, Unit; the `fields()` / `for_field_pairs()` mechanism for structural equality and recursive solving
+6. **Expression/AST layer** — ExprId, AstImpl, `expr_impl!` macro, multi-property expressions
+7. **Structure extension crate** — NamedArray, NameSet, Structure, Member expr, Offset/Component operators
+8. **Utils crate** — Arena allocator (bump with exponential chunk growth), ArenaArray, ArenaHashMap (open-addressing with quadratic probing), StableVec (bit-indexed power-of-two chunks)
+9. **Current status** — test coverage (3 tests across core + structure), no dead files, `rustfmt` runs on generated output
+
+## Module organization (plugin author's view)
+
+The `core` crate has been reshaped from a deep hierarchy into 6 flat top-level modules — the entire public API is visible at a glance:
+
+| Module | Contents | Why it matters for a plugin author |
+|---|---|---|
+| `core::ast` | `ExprId`, `Ast`, `AstImpl` | AST node IDs and the concrete builder — you use these to construct and inspect expression trees |
+| `core::value` | `Int`, `StringId`, `Array`, `Table`, `Unit` | Built-in value types — your new value types plug into the same `fields()` / `for_field_pairs()` system |
+| `core::operator` | `Sum`, `Index`, `Find`, `operands!` macro | Built-in operators your operators can delegate to — no need to reimplement lookup logic |
+| `core::diagnostic_kind` | `EqualityError` | The one built-in diagnostic — your plugin can add more |
+| `core::expr_impl` | `expr_impl!` macro invocations | Macro-generated glue that connects trait methods to operator dispatch — look here to see the pattern for wiring up new expression types |
+| `core::plugin` | (generated) traits: `Project`, `Value`, `Operator`, `DiagnosticKind`, `Ast` | The **contract** — implements these to define a new project/plugin |
+
+Under `core::runtime` live the engine internals that concrete plugins mostly don't touch:
+- `runtime::evaluation` — `Evaluation` enum (Value/Ref/Auto)
+- `runtime::operation` — `Operation` struct (operand + operator)
+- `runtime::solve` — `Solver` (constraint propagation engine)
+- `runtime::equation` — `LocalEquation`
+- `runtime::diagnostic` — `Diagnostic` (produced during solving)
 
 ## Files to read
 
-For each crate, read `Cargo.toml` and `src/lib.rs` (or entry point). For core:
-- `core/src/plugin.rs` — all trait definitions (principal_traits + plugin traits)
-- `core/src/runtime.rs` — Module struct (nodes, operations, evaluations, solves, equations, arena)
-- `core/src/runtime/value.rs` — Evaluation enum (Value/Ref/Auto), Array/Table/Int/Unit types
-- `core/src/runtime/operation.rs` — Operation struct, built-in Sum/Index/Find, `operands!` macro
-- `core/src/runtime/solve.rs` — Solver struct, solve loop, dependency tracking, equation application
-- `core/src/runtime/equation.rs` — LocalEquation / Equation types
-- `core/src/runtime/diagnostic.rs` — Diagnostic, EqualityError
-- `core/src/lib.rs` — AstImpl, ExprId, `expr_impl!` macro, trait blanket impls
-- `core-plugin/src/lib.rs` — Plugin static definition (value/operator/diagnostic/expr variants)
-- `core/tests/project.rs` — generated code output (the enum dispatch machinery)
+For each crate, read `Cargo.toml` and `src/lib.rs` (the lib.rs is now just module declarations). For core:
+- `core/src/plugin.rs` — **generated** — all trait definitions (principal_traits + plugin traits). This is the plugin contract.
+- `core/src/ast.rs` — `ExprId`, `Ast` trait, `AstImpl` (moved from old lib.rs)
+- `core/src/operator.rs` — `operands!` macro, `Sum`, `Index`, `Find` (moved from old runtime/operation.rs)
+- `core/src/value.rs` — `Int`, `StringId`, `Array`, `Table`, `Unit`, `Evaluation::AUTO` const, Module helper methods (moved from old runtime/value.rs)
+- `core/src/diagnostic_kind.rs` — `EqualityError` (moved from old runtime/diagnostic.rs)
+- `core/src/expr_impl.rs` — `expr_impl!` macro invocations that wire up Sum/Index/Find expression builders (moved from old lib.rs)
+- `core/src/runtime.rs` — `Module` struct, Ptr, NodeId, NodeIdLocal, ModuleId, helper methods
+- `core/src/runtime/evaluation.rs` — `Evaluation` enum (Value/Ref/Auto) — now its own file
+- `core/src/runtime/operation.rs` — `Operation` struct (operand + operator) — **no longer contains operator implementations**
+- `core/src/runtime/solve.rs` — `Solver` struct, solve loop, dependency tracking, equation application
+- `core/src/runtime/equation.rs` — `LocalEquation` / `Equation`
+- `core/src/runtime/diagnostic.rs` — `Diagnostic` struct (EqualityError moved to diagnostic_kind.rs)
+- `core-plugin/src/lib.rs` — Plugin static definition (value/operator/diagnostic/expr variant declarations)
+- `core/tests/project.rs` — generated code output (the zero-cost enum dispatch machinery)
 - `core/tests/runtime.rs` — runtime test (sum + equation constraint solving)
 - `core/tests/ast.rs` — AST-level test (expression building + solving)
 - For structure:
-- `structure/src/lib.rs` — NamedArray, Structure, Member builder
-- `structure/src/operator.rs` — Offset, Component operators
-- `structure/src/plugin.rs` — structure plugin traits
+- `structure/src/lib.rs` — just module declarations
+- `structure/src/value.rs` — `NamedArray`, `NameSet`, `Structure` (moved from old lib.rs)
+- `structure/src/operator.rs` — `Offset`, `Component` (delegates to `Find`/`Index`)
+- `structure/src/expr_impl.rs` — `Member` builder (moved from old lib.rs)
+- `structure/src/plugin.rs` — generated structure plugin traits
 - `structure-plugin/src/lib.rs` — structure Plugin static def
 - `structure/tests/project.rs` — generated code with structure extensions
 - `structure/tests/main.rs` — structure test (member access on named fields)
 - For utils:
-- `utils/src/lib.rs` — Arena, StableVec, bit math
-- `utils/src/arena.rs` — Arena allocator
+- `utils/src/lib.rs` — Arena re-exports, bit math helpers
+- `utils/src/arena.rs` — Arena bump allocator
 - `utils/src/arena/array.rs` — ArenaArray
-- `utils/src/arena/hashmap.rs` — ArenaHashMap
-- `utils/src/stable_vec.rs` — StableVec
+- `utils/src/arena/hashmap.rs` — ArenaHashMap (open-addressing with quadratic probing)
+- `utils/src/stable_vec.rs` — StableVec (bit-indexed power-of-two chunks)
 
 ## Output
 

@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 mod project;
 
+use lichen_core::diagnostic_kind::EqualityError;
 use lichen_core::plugin::DiagnosticKind as _;
 use lichen_core::plugin::Operator as _;
 use lichen_core::plugin::Value as _;
 use lichen_core::runtime::diagnostic::Diagnostic;
-use lichen_core::runtime::diagnostic::EqualityError;
-use lichen_core::runtime::value::Array;
+use lichen_core::value::Array;
 use project::DiagnosticKind;
 use project::Operator;
 use project::Project;

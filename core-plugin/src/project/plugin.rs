@@ -1,8 +1,8 @@
 use std::fmt::Display;
 
+use crate::project::Plugin;
 use crate::project::code::{Name, WrittenPath};
 use crate::project::{PROJECT, PROJECT_TRAIT, PROJECT_VARIABLE};
-use crate::project::{Plugin, Trait};
 
 pub struct ProjectTrait {
     pub plugin: &'static Plugin,

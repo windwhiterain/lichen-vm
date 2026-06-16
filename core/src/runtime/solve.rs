@@ -1,18 +1,14 @@
-use std::marker::PhantomData;
-
 use lichen_utils::{erase, erase_mut};
 
 use crate::{
+    diagnostic_kind::EqualityError,
     plugin::{
         DiagnosticKind, Project,
         principal_traits::{Operator, Value},
     },
     runtime::{
-        Module, ModuleId, NodeId, NodeIdLocal,
-        diagnostic::{Diagnostic, EqualityError},
-        equation::{Equation, LocalEquation},
-        operation::Operation,
-        value::Evaluation,
+        Module, ModuleId, NodeId, NodeIdLocal, diagnostic::Diagnostic, equation::Equation,
+        evaluation::Evaluation,
     },
 };
 
@@ -114,10 +110,10 @@ impl<'a, P: Project> Solver<'a, P> {
             }
         }
     }
-    pub fn module(&self, id: &LocalModuleId) -> &Module<P> {
+    pub fn module(&self, _id: &LocalModuleId) -> &Module<P> {
         &self.module
     }
-    pub fn module_mut(&mut self, id: &LocalModuleId) -> &mut Module<P> {
+    pub fn module_mut(&mut self, _id: &LocalModuleId) -> &mut Module<P> {
         &mut self.module
     }
     pub fn module_of(&self, node: &LocalNodeId) -> &Module<P> {
