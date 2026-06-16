@@ -1,9 +1,10 @@
 use lichen_core::{
     ast::Ast as _,
-    plugin::{Ast as _, Operator as _},
-    runtime::operation::Operation,
-    value::Array,
+    plugin::{Ast as _, Operator as _, Value as _},
+    runtime::{evaluation::Evaluation, operation::Operation},
+    value::Array as CoreArray,
 };
+use lichen_utils::erase;
 
 use crate::plugin::{Ast, Operator, Project};
 
@@ -25,7 +26,7 @@ where
         let name_value = ast.value(name);
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
-        let operand = Array::node(
+        let operand = CoreArray::node(
             ast.module_mut(),
             [structure_structure, name_value],
         );
@@ -33,15 +34,37 @@ where
             operand,
             operator: P::Operator::offset(),
         });
-        let operand = Array::node(ast.module_mut(), [structure_value, offset]);
+        let operand = CoreArray::node(ast.module_mut(), [structure_value, offset]);
         ast.module_mut().operation_mut(&output_value).replace(Operation {
             operand,
             operator: P::Operator::index(),
         });
-        let operand = Array::node(ast.module_mut(), [structure_structure, offset]);
+        let operand = CoreArray::node(ast.module_mut(), [structure_structure, offset]);
         ast.module_mut().operation_mut(&output_structure).replace(Operation {
             operand,
             operator: P::Operator::component(),
         });
+    }
+}
+
+pub struct Array;
+
+impl<P: Project> lichen_core::plugin::expr::array<P> for Array
+where
+    P::Ast: Ast<P>,
+{
+    fn build(
+        ast: &mut P::Ast,
+        output: &lichen_core::ast::ExprId,
+        element: &[lichen_core::ast::ExprId],
+    ) {
+        let ast_static = unsafe { erase(ast) };
+        let array = CoreArray::new(
+            ast.module_mut(),
+            element.iter().map(|x| ast_static.structure(x)),
+        );
+        let output_structure = ast.structure(output);
+        *ast.module_mut().evaluation_mut(&output_structure) =
+            Evaluation::Value(P::Value::from_array(array))
     }
 }

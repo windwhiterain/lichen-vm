@@ -1,6 +1,9 @@
-use lichen_core_plugin::system::{
-    Expr, ExprImpls, ExprParam, ExprParams, Module, Plugin, PluginEnum, Variant,
-    sytax::{Generics, WrittenPath, WrittenPathRaw},
+use lichen_core_plugin::{
+    ARRAY_EXPR,
+    system::{
+        Expr, ExprImpls, ExprParam, ExprParams, Module, Plugin, PluginEnum, Variant,
+        sytax::{Generics, WrittenPath, WrittenPathRaw},
+    },
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -19,13 +22,22 @@ pub static PLUGIN: Plugin = Plugin {
     ],
     properties: &["structure"],
     exprs: &[&MEMBER_EXPR],
-    expr_impls: &[ExprImpls {
-        expr: &MEMBER_EXPR,
-        impls: &[&WrittenPathRaw {
-            crate_: CRATE,
-            path: "expr_impl::Member",
-        }],
-    }],
+    expr_impls: &[
+        ExprImpls {
+            expr: &MEMBER_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Member",
+            }],
+        },
+        ExprImpls {
+            expr: &ARRAY_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Array",
+            }],
+        },
+    ],
 };
 
 static MEMBER_EXPR: Expr = Expr {

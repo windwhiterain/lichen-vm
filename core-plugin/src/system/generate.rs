@@ -583,7 +583,7 @@ impl Project {
                     f,
                     "where {PROJECT_VARIABLE}::{}: {},",
                     OPERATOR_TYPE.name.non_project_generic(),
-                    generated_trait(plugin, *OPERATOR_TYPE.name)
+                    generated_trait(self.plugin, *OPERATOR_TYPE.name)
                 )?;
                 writeln!(f, "{{")?;
                 for property in plugin.properties {
@@ -633,7 +633,7 @@ impl Project {
                         f,
                         "let output = <Self as {AST_TRAIT_PATH}>::add_auto(self);"
                     )?;
-                    for (expr_impl, plugin) in
+                    for (expr_impl, _) in
                         self.ctx.expr_impls.get(&ByAddress(expr)).unwrap_or(&vec![])
                     {
                         writeln!(
