@@ -10,11 +10,11 @@
 </div>
 
 ## Why LichenVM
-While countless DSL is invented for ML kernel these years, static analysis on them are almostly unimplemented, or not integrated into language services.
+While countless DSLs are invented for ML kernels these years, static analysis on them is almost unimplemented, or not integrated into language services.
 
-Some embeded-DSL tries relying on host-language's type system to encode its static analysis, which usually brings much slower analysis speed, and completely different runtime integration.
+Some embedded-DSLs try relying on host-language's type system to encode their static analysis, which usually brings much slower analysis speed, and completely different runtime integration.
 
-All this leads to an idea: we have LLVM for compilers, now we need "LLVM" for static analyzers: "LichenVM", that is modular, layerd and composable, gradually add more checking property to original runtime program.
+All this leads to an idea: we have LLVM for compilers, now we need "LLVM" for static analyzers: "LichenVM", that is modular, layered and composable, gradually adding more checking properties to original runtime program.
 
 
 ## Features
@@ -28,11 +28,11 @@ All this leads to an idea: we have LLVM for compilers, now we need "LLVM" for st
 
 - **Zero Cost Plugin System**
   
-  The plugin system use enum dispach for extendable concept like value, operator, which is implemented via code generation.
+  The plugin system uses enum dispatch for extendable concepts like value and operator, which is implemented via code generation.
 
 - **Inference Anything**
   
-  Unified runtime can add equality constraints for nodes, the value of these nodes will be infered structurally/recursively: value can be inferred from value or type, type can be inferred from type or value.
+  Unified runtime can add equality constraints for nodes, the value of these nodes will be inferred structurally/recursively: value can be inferred from value or type, type can be inferred from type or value.
 
 ## Start Developing
 Still in prototyping, check the tests.
