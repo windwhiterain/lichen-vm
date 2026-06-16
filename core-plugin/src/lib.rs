@@ -1,21 +1,24 @@
-pub mod project;
-use project::{
-    Annotation, ArrayDisplay, AsTrait, CLONE, DEBUG, DelegateBody, Derives, EnumType, Expr,
-    ExprImpls, ExprParam, ExprParams, FORMATE_RESULT_SYMBOL, FORMATTER_PARAM, Function, Generics,
-    HASH, Module, PARTIAL_EQ, PROJECT_VARIABLE, Param, Params, PassMode, Plugin, PluginEnum,
-    SELF_SYMBOL, Self_, Symbol, Variant, WrittenSymbol, code::WrittenPath, plugin::ProjectTrait,
+pub mod system;
+use system::{
+    CLONE, DEBUG, EnumType, Expr, ExprImpls, ExprParam, ExprParams, FORMATE_RESULT,
+    FORMATTER_PARAM, Function, HASH, Module, PARTIAL_EQ, PROJECT_VARIABLE, Param, Params, PassMode,
+    Plugin, PluginEnum, Self_, Variant, enum_impl::Delegate, sytax::Derives, sytax::DisplayArray,
+    sytax::Generics, sytax::WrittenPath,
 };
 
-use crate::project::code::Name;
+use crate::system::{
+    sytax::{AsTrait, Name, WrittenPathRaw},
+    utils::generated_project_trait,
+};
 
 pub static PLUGIN: Plugin = Plugin {
     name: "core",
     lib_crate_path: "core",
-    lib_module: WrittenSymbol {
+    lib_module: WrittenPathRaw {
         crate_: CRATE,
-        relative: "plugin",
+        path: "plugin",
     },
-    bin_module: Module::Path("core/tests/project"),
+    bin_module: Module::Bin("core/tests/project"),
     dependencies: &[],
     enum_types: &[&VALUE_TYPE, &OPERATOR_TYPE, &DIAGNOSTIC_KIND_TYPE],
     plugin_enums: &[
@@ -28,23 +31,23 @@ pub static PLUGIN: Plugin = Plugin {
     expr_impls: &[
         ExprImpls {
             expr: &SUM_EXPR,
-            impls: &[&WrittenSymbol {
+            impls: &[&WrittenPathRaw {
                 crate_: CRATE,
-                relative: "expr_impl::Sum",
+                path: "expr_impl::Sum",
             }],
         },
         ExprImpls {
             expr: &INDEX_EXPR,
-            impls: &[&WrittenSymbol {
+            impls: &[&WrittenPathRaw {
                 crate_: CRATE,
-                relative: "expr_impl::Index",
+                path: "expr_impl::Index",
             }],
         },
         ExprImpls {
             expr: &FIND_EXPR,
-            impls: &[&WrittenSymbol {
+            impls: &[&WrittenPathRaw {
                 crate_: CRATE,
-                relative: "expr_impl::Find",
+                path: "expr_impl::Find",
             }],
         },
     ],
@@ -60,87 +63,83 @@ pub static VALUE_TYPE: EnumType = EnumType {
     derives: &Derives(&["Clone", "Copy"]),
     markers: &["Eq"],
     impls: &[&PARTIAL_EQ, &DEBUG],
-    base_traits: &[
-        Symbol::Raw("std::fmt::Debug"),
-        Symbol::Raw("Copy"),
-        Symbol::Raw("Eq"),
-    ],
+    base_traits: &[&"std::fmt::Debug", &"Copy", &"Eq"],
     functions: &[
         Function {
             name: "fields",
-            generics: &Generics::none(),
+            generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[]),
-            return_: Some(Annotation {
-                impl_: true,
-                symbol: &ArrayDisplay(&[
-                    &"Iterator<Item=&",
-                    &WrittenSymbol {
-                        crate_: CRATE,
-                        relative: "runtime::NodeIdLocal",
-                    },
-                    &">",
-                ]),
-            }),
-            body: Some(&DelegateBody),
+            return_: Some(&DisplayArray(&[
+                &"Iterator<Item=&",
+                &WrittenPathRaw {
+                    crate_: CRATE,
+                    path: "runtime::NodeIdLocal",
+                },
+                &">",
+            ])),
+            enum_impl: Some(&Delegate),
             default_body: Some(&"std::iter::empty()"),
+            return_impl: true,
         },
         Function {
             name: "for_fields",
-            generics: &Generics::none(),
+            generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[&Param {
                 name: "action",
                 pass_mode: PassMode::Move,
-                symbol: &Symbol::Dyn(&ArrayDisplay(&[
+                type_: &DisplayArray(&[
                     &"impl FnMut(&",
-                    &WrittenSymbol {
+                    &WrittenPathRaw {
                         crate_: CRATE,
-                        relative: "runtime::NodeIdLocal",
+                        path: "runtime::NodeIdLocal",
                     },
                     &")",
-                ])),
+                ]),
                 mutable: true,
             }]),
             return_: None,
-            body: Some(&DelegateBody),
-            default_body: Some(&ArrayDisplay(&[&"for i in self.fields(){{action(i);}}"])),
+            enum_impl: Some(&Delegate),
+            default_body: Some(&DisplayArray(&[&"for i in self.fields(){{action(i);}}"])),
+            return_impl: false,
         },
         Function {
             name: "for_field_pairs",
-            generics: &Generics::none(),
+            generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
             params: &Params(&[
                 &Param {
                     name: "other",
                     pass_mode: PassMode::Ref { lifetime: None },
-                    symbol: &SELF_SYMBOL,
+                    type_: &"Self",
                     mutable: false,
                 },
                 &Param {
                     name: "action",
                     pass_mode: PassMode::Move,
-                    symbol: &Symbol::Dyn(&ArrayDisplay(&[
+                    type_: &DisplayArray(&[
                         &"impl FnMut(&",
-                        &WrittenSymbol {
+                        &WrittenPathRaw {
                             crate_: CRATE,
-                            relative: "runtime::NodeIdLocal",
+                            path: "runtime::NodeIdLocal",
                         },
                         &",&",
-                        &WrittenSymbol {
+                        &WrittenPathRaw {
                             crate_: CRATE,
-                            relative: "runtime::NodeIdLocal",
+                            path: "runtime::NodeIdLocal",
                         },
                         &")",
-                    ])),
+                    ]),
                     mutable: true,
                 },
             ]),
             return_: None,
-            body: Some(&DelegateBody),
-            default_body: Some(&ArrayDisplay(&[
+            enum_impl: Some(&Delegate),
+            default_body: Some(&DisplayArray(&[
                 &"for (i,j) in self.fields().zip(other.fields()){{action(i,j);}}",
             ])),
+            return_impl: false,
         },
     ],
     use_enum_types: &[],
@@ -157,65 +156,59 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
     derives: &Derives(&["Clone", "Copy", "PartialEq", "Eq"]),
     markers: &[],
     impls: &[&DEBUG],
-    base_traits: &[
-        Symbol::Raw("std::fmt::Debug"),
-        Symbol::Raw("Copy"),
-        Symbol::Raw("Eq"),
-    ],
+    base_traits: &[&"std::fmt::Debug", &"Copy", &"Eq"],
     functions: &[Function {
         name: "run",
-        generics: &Generics::none(),
+        generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[
             &Param {
                 name: "solver",
                 pass_mode: PassMode::RefMut { lifetime: None },
-                symbol: &Symbol::Dyn(&ArrayDisplay(&[
-                    &WrittenSymbol {
+                type_: &DisplayArray(&[
+                    &WrittenPathRaw {
                         crate_: CRATE,
-                        relative: "runtime::solve::Solver",
+                        path: "runtime::solve::Solver",
                     },
                     &"<",
                     &PROJECT_VARIABLE,
                     &">",
-                ])),
+                ]),
                 mutable: false,
             },
             &Param {
                 name: "value",
                 pass_mode: PassMode::Ref { lifetime: None },
-                symbol: &Symbol::Dyn(&ArrayDisplay(&[
+                type_: &DisplayArray(&[
                     &AsTrait {
                         this: &PROJECT_VARIABLE,
-                        trait_: &ProjectTrait { plugin: &PLUGIN },
+                        trait_: &generated_project_trait(&PLUGIN),
                     },
                     &"::Value",
-                ])),
+                ]),
                 mutable: false,
             },
             &Param {
                 name: "node",
                 pass_mode: PassMode::Ref { lifetime: None },
-                symbol: &Symbol::Written(&WrittenSymbol {
+                type_: &WrittenPathRaw {
                     crate_: CRATE,
-                    relative: "runtime::solve::LocalNodeId",
-                }),
+                    path: "runtime::solve::LocalNodeId",
+                },
                 mutable: false,
             },
         ]),
-        return_: Some(Annotation {
-            impl_: false,
-            symbol: &ArrayDisplay(&[
-                &"Option<",
-                &AsTrait {
-                    this: &PROJECT_VARIABLE,
-                    trait_: &ProjectTrait { plugin: &PLUGIN },
-                },
-                &"::Value>",
-            ]),
-        }),
-        body: Some(&DelegateBody),
+        return_: Some(&DisplayArray(&[
+            &"Option<",
+            &AsTrait {
+                this: &PROJECT_VARIABLE,
+                trait_: &generated_project_trait(&PLUGIN),
+            },
+            &"::Value>",
+        ])),
+        enum_impl: Some(&Delegate),
         default_body: None,
+        return_impl: false,
     }],
     use_enum_types: &[&VALUE_TYPE],
     plugin: &PLUGIN,
@@ -231,23 +224,16 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
     derives: &Derives(&[]),
     markers: &["Eq"],
     impls: &[&DEBUG, &PARTIAL_EQ, &HASH, &CLONE],
-    base_traits: &[
-        Symbol::Raw("std::fmt::Debug"),
-        Symbol::Raw("Eq"),
-        *HASH.symbol,
-        *CLONE.symbol,
-    ],
+    base_traits: &[&"std::fmt::Debug", &"Eq", HASH.symbol, CLONE.symbol],
     functions: &[Function {
         name: "message",
-        generics: &Generics::none(),
+        generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
         params: &Params(&[&FORMATTER_PARAM]),
-        return_: Some(Annotation {
-            impl_: false,
-            symbol: &FORMATE_RESULT_SYMBOL,
-        }),
-        body: Some(&DelegateBody),
+        return_: Some(&FORMATE_RESULT),
+        enum_impl: Some(&Delegate),
         default_body: None,
+        return_impl: false,
     }],
     use_enum_types: &[],
     plugin: &PLUGIN,
@@ -259,7 +245,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "int",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::Int",
                 project_generic: false,
             },
@@ -269,7 +255,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "string",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::StringId",
                 project_generic: false,
             },
@@ -279,7 +265,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "array",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::Array",
                 project_generic: false,
             },
@@ -289,7 +275,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "table",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::Table",
                 project_generic: false,
             },
@@ -299,7 +285,7 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "unit",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::Unit",
                 project_generic: false,
             },
@@ -315,7 +301,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             name: "sum",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "operator::Sum",
                 project_generic: false,
             },
@@ -325,7 +311,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             name: "index",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "operator::Index",
                 project_generic: false,
             },
@@ -335,7 +321,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
             name: "find",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "operator::Find",
                 project_generic: false,
             },
@@ -349,7 +335,7 @@ pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
         name: "equality_error",
         path: &WrittenPath {
             crate_: CRATE,
-            generics: &Generics::none(),
+            generics: &Generics::NONE,
             path: "diagnostic_kind::EqualityError",
             project_generic: false,
         },

@@ -1,16 +1,16 @@
-use lichen_core_plugin::project::{
-    Expr, ExprImpls, ExprParam, ExprParams, Generics, Module, Plugin, PluginEnum, Variant,
-    WrittenSymbol, code::WrittenPath,
+use lichen_core_plugin::system::{
+    Expr, ExprImpls, ExprParam, ExprParams, Module, Plugin, PluginEnum, Variant,
+    sytax::{Generics, WrittenPath, WrittenPathRaw},
 };
 
 pub static PLUGIN: Plugin = Plugin {
     name: "structure",
     lib_crate_path: "structure",
-    lib_module: WrittenSymbol {
+    lib_module: WrittenPathRaw {
         crate_: CRATE,
-        relative: "plugin",
+        path: "plugin",
     },
-    bin_module: Module::Path("structure/tests/project"),
+    bin_module: Module::Bin("structure/tests/project"),
     dependencies: &[&lichen_core_plugin::PLUGIN],
     enum_types: &[],
     plugin_enums: &[
@@ -21,9 +21,9 @@ pub static PLUGIN: Plugin = Plugin {
     exprs: &[&MEMBER_EXPR],
     expr_impls: &[ExprImpls {
         expr: &MEMBER_EXPR,
-        impls: &[&WrittenSymbol {
+        impls: &[&WrittenPathRaw {
             crate_: CRATE,
-            relative: "expr_impl::Member",
+            path: "expr_impl::Member",
         }],
     }],
 };
@@ -48,7 +48,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "named_array",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::NamedArray",
                 project_generic: false,
             },
@@ -58,7 +58,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "name_set",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::NameSet",
                 project_generic: false,
             },
@@ -68,7 +68,7 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             name: "structure",
             path: &WrittenPath {
                 crate_: CRATE,
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 path: "value::Structure",
                 project_generic: false,
             },
@@ -85,7 +85,7 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 path: "operator::Offset",
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 project_generic: false,
             },
             is_unit: true,
@@ -95,7 +95,7 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
             path: &WrittenPath {
                 crate_: CRATE,
                 path: "operator::Component",
-                generics: &Generics::none(),
+                generics: &Generics::NONE,
                 project_generic: false,
             },
             is_unit: true,
