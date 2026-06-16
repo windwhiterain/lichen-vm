@@ -15,6 +15,10 @@ pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P
     fn component() -> Self;
     fn construct() -> Self;
 }
+pub trait DiagnosticKind<P: crate::plugin::Project>:
+    ::lichen_core::plugin::DiagnosticKind<P>
+{
+}
 pub trait Value: ::lichen_core::plugin::Value {
     fn named_array(&self) -> Option<&crate::value::NamedArray>;
     fn from_named_array(data: crate::value::NamedArray) -> Self;
@@ -22,10 +26,6 @@ pub trait Value: ::lichen_core::plugin::Value {
     fn from_name_set(data: crate::value::NameSet) -> Self;
     fn structure(&self) -> Option<&crate::value::Structure>;
     fn from_structure(data: crate::value::Structure) -> Self;
-}
-pub trait DiagnosticKind<P: crate::plugin::Project>:
-    ::lichen_core::plugin::DiagnosticKind<P>
-{
 }
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>

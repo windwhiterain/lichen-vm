@@ -338,16 +338,28 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
     plugin: &PLUGIN,
 };
 pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
-    variants: &[Variant {
-        name: "equality_error",
-        path: &WrittenPath {
-            crate_: CRATE,
-            generics: &Generics::NONE,
-            path: "diagnostic_kind::EqualityError",
-            project_generic: false,
+    variants: &[
+        Variant {
+            name: "equality_error",
+            path: &WrittenPath {
+                crate_: CRATE,
+                generics: &Generics::NONE,
+                path: "diagnostic_kind::EqualityError",
+                project_generic: false,
+            },
+            is_unit: false,
         },
-        is_unit: false,
-    }],
+        Variant {
+            name: "index_out_of_bounds",
+            path: &WrittenPath {
+                crate_: CRATE,
+                generics: &Generics::NONE,
+                path: "diagnostic_kind::IndexOutOfBounds",
+                project_generic: false,
+            },
+            is_unit: false,
+        },
+    ],
     plugin: &PLUGIN,
 };
 pub static SUM_EXPR: Expr = Expr {

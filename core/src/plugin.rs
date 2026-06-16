@@ -52,11 +52,8 @@ pub trait Project: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'st
 pub trait DiagnosticKind<P: crate::plugin::Project> {
     fn equality_error(&self) -> Option<&crate::diagnostic_kind::EqualityError>;
     fn from_equality_error(data: crate::diagnostic_kind::EqualityError) -> Self;
-}
-pub trait Operator<P: crate::plugin::Project> {
-    fn sum() -> Self;
-    fn index() -> Self;
-    fn find() -> Self;
+    fn index_out_of_bounds(&self) -> Option<&crate::diagnostic_kind::IndexOutOfBounds>;
+    fn from_index_out_of_bounds(data: crate::diagnostic_kind::IndexOutOfBounds) -> Self;
 }
 pub trait Value {
     fn int(&self) -> Option<&crate::value::Int>;
@@ -69,6 +66,11 @@ pub trait Value {
     fn from_table(data: crate::value::Table) -> Self;
     fn unit(&self) -> bool;
     fn from_unit() -> Self;
+}
+pub trait Operator<P: crate::plugin::Project> {
+    fn sum() -> Self;
+    fn index() -> Self;
+    fn find() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>: crate::ast::Ast<P> {
     fn value(&self, expr: &crate::ast::ExprId) -> crate::runtime::NodeIdLocal;
