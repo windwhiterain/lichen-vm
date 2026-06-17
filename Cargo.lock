@@ -45,6 +45,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lichen-type"
+version = "0.1.0"
+dependencies = [
+ "lichen-core",
+ "lichen-utils",
+]
+
+[[package]]
+name = "lichen-type-plugin"
+version = "0.1.0"
+dependencies = [
+ "lichen-core-plugin",
+]
+
+[[package]]
 name = "lichen-utils"
 version = "0.1.0"
 dependencies = [

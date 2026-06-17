@@ -20,13 +20,13 @@ mod code {
         pub(in super::super) const structure__structure: usize = 7;
     }
     pub(super) mod Operator {
-        pub(in super::super) const structure__offset: usize = 0;
-        pub(in super::super) const structure__component: usize = 1;
-        pub(in super::super) const structure__compose: usize = 2;
-        pub(in super::super) const structure__construct: usize = 3;
-        pub(in super::super) const core__sum: usize = 4;
-        pub(in super::super) const core__index: usize = 5;
-        pub(in super::super) const core__find: usize = 6;
+        pub(in super::super) const core__sum: usize = 0;
+        pub(in super::super) const core__index: usize = 1;
+        pub(in super::super) const core__find: usize = 2;
+        pub(in super::super) const structure__offset: usize = 3;
+        pub(in super::super) const structure__component: usize = 4;
+        pub(in super::super) const structure__compose: usize = 5;
+        pub(in super::super) const structure__construct: usize = 6;
     }
     pub(super) mod DiagnosticKind {
         pub(in super::super) const core__equality_error: usize = 0;
@@ -397,6 +397,15 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.0 {
+            self::code::Operator::core__sum => {
+                write!(f, "core::sum")
+            }
+            self::code::Operator::core__index => {
+                write!(f, "core::index")
+            }
+            self::code::Operator::core__find => {
+                write!(f, "core::find")
+            }
             self::code::Operator::structure__offset => {
                 write!(f, "structure::offset")
             }
@@ -408,15 +417,6 @@ where
             }
             self::code::Operator::structure__construct => {
                 write!(f, "structure::construct")
-            }
-            self::code::Operator::core__sum => {
-                write!(f, "core::sum")
-            }
-            self::code::Operator::core__index => {
-                write!(f, "core::index")
-            }
-            self::code::Operator::core__find => {
-                write!(f, "core::find")
             }
             _ => unreachable!(),
         }
@@ -435,6 +435,15 @@ where
         node: &::lichen_core::runtime::solve::LocalNodeId,
     ) -> Option<<P as ::lichen_core::plugin::Project>::Value> {
         match self.0{
+self::code::Operator::core__sum=>{
+<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
+}
+self::code::Operator::core__index=>{
+<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
+}
+self::code::Operator::core__find=>{
+<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
+}
 self::code::Operator::structure__offset=>{
 <::lichen_structure::operator::Offset::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Offset::<>},solver,value,node,)
 }
@@ -446,15 +455,6 @@ self::code::Operator::structure__compose=>{
 }
 self::code::Operator::structure__construct=>{
 <::lichen_structure::operator::Construct::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Construct::<>},solver,value,node,)
-}
-self::code::Operator::core__sum=>{
-<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
-}
-self::code::Operator::core__index=>{
-<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
-}
-self::code::Operator::core__find=>{
-<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
 }
 _=>unreachable!(),}
     }
