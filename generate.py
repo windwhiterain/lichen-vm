@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Run all *-plugin crate binaries to regenerate their code-generated Rust files.
 

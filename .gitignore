@@ -2,3 +2,6 @@
 
 # Reasonix session cache — regenerated every run
 .reasonix/
+
+.codanna
+.codannaignore
