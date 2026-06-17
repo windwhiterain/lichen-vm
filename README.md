@@ -7,6 +7,11 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg) ![Contributions](https://img.shields.io/badge/contributions-welcome-brightgreen) ![status](https://img.shields.io/badge/status-prototype-red)
 
+<<<<<<< HEAD
+[English](README.md) | [简体中文](README.zh-CN.md)
+
+=======
+>>>>>>> upstream/main
 </div>
 
 ## Why LichenVM
@@ -35,4 +40,8 @@ All this leads to an idea: we have LLVM for compilers, now we need "LLVM" for st
   Unified runtime can add equality constraints for nodes, the value of these nodes will be inferred structurally/recursively: value can be inferred from value or type, type can be inferred from type or value.
 
 ## Start Developing
+<<<<<<< HEAD
 Still in prototyping, check the tests.
+=======
+Still in prototyping, check the tests.
+>>>>>>> upstream/main
