@@ -10,17 +10,6 @@ pub trait Project:
     std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static + ::lichen_core::plugin::Project
 {
 }
-pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
-    fn offset() -> Self;
-    fn component() -> Self;
-    fn compose() -> Self;
-}
-pub trait DiagnosticKind<P: crate::plugin::Project>:
-    ::lichen_core::plugin::DiagnosticKind<P>
-{
-    fn member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
-    fn from_member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
-}
 pub trait Value: ::lichen_core::plugin::Value {
     fn named_array(&self) -> Option<&crate::value::NamedArray>;
     fn from_named_array(data: crate::value::NamedArray) -> Self;
@@ -28,6 +17,18 @@ pub trait Value: ::lichen_core::plugin::Value {
     fn from_name_set(data: crate::value::NameSet) -> Self;
     fn structure(&self) -> Option<&crate::value::Structure>;
     fn from_structure(data: crate::value::Structure) -> Self;
+}
+pub trait DiagnosticKind<P: crate::plugin::Project>:
+    ::lichen_core::plugin::DiagnosticKind<P>
+{
+    fn member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
+    fn from_member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
+}
+pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
+    fn offset() -> Self;
+    fn component() -> Self;
+    fn compose() -> Self;
+    fn construct() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>

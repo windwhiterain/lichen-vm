@@ -25,6 +25,9 @@ impl Array {
     ) -> Self {
         Array(ArenaArray::from_iter(&mut module.arena, nodes))
     }
+    pub fn uninit<P: Project>(module: &mut Module<P>,len:usize)->Self{
+        Array(ArenaArray::new(&mut module.arena, len))
+    }
     pub fn node<P: Project>(
         module: &mut Module<P>,
         nodes: impl IntoIterator<Item = NodeIdLocal>,

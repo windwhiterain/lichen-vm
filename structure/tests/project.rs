@@ -23,14 +23,15 @@ mod code {
         pub(in super::super) const structure__offset: usize = 0;
         pub(in super::super) const structure__component: usize = 1;
         pub(in super::super) const structure__compose: usize = 2;
-        pub(in super::super) const core__sum: usize = 3;
-        pub(in super::super) const core__index: usize = 4;
-        pub(in super::super) const core__find: usize = 5;
+        pub(in super::super) const structure__construct: usize = 3;
+        pub(in super::super) const core__sum: usize = 4;
+        pub(in super::super) const core__index: usize = 5;
+        pub(in super::super) const core__find: usize = 6;
     }
     pub(super) mod DiagnosticKind {
-        pub(in super::super) const structure__member_name_repetition: usize = 0;
-        pub(in super::super) const core__equality_error: usize = 1;
-        pub(in super::super) const core__index_out_of_bounds: usize = 2;
+        pub(in super::super) const core__equality_error: usize = 0;
+        pub(in super::super) const core__index_out_of_bounds: usize = 1;
+        pub(in super::super) const structure__member_name_repetition: usize = 2;
     }
 }
 mod union_ {
@@ -50,12 +51,12 @@ mod union_ {
     }
 
     pub(super) union DiagnosticKind<P> {
-        pub(super) structure__member_name_repetition:
-            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameRepetition>,
         pub(super) core__equality_error:
             std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
         pub(super) core__index_out_of_bounds:
             std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
+        pub(super) structure__member_name_repetition:
+            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameRepetition>,
         _p: core::marker::PhantomData<(P,)>,
     }
 }
@@ -405,6 +406,9 @@ where
             self::code::Operator::structure__compose => {
                 write!(f, "structure::compose")
             }
+            self::code::Operator::structure__construct => {
+                write!(f, "structure::construct")
+            }
             self::code::Operator::core__sum => {
                 write!(f, "core::sum")
             }
@@ -439,6 +443,9 @@ self::code::Operator::structure__component=>{
 }
 self::code::Operator::structure__compose=>{
 <::lichen_structure::operator::Compose::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Compose::<>},solver,value,node,)
+}
+self::code::Operator::structure__construct=>{
+<::lichen_structure::operator::Construct::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Construct::<>},solver,value,node,)
 }
 self::code::Operator::core__sum=>{
 <::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
@@ -486,6 +493,12 @@ impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::Operato
             core::marker::PhantomData,
         )
     }
+    fn construct() -> Self {
+        Self(
+            self::code::Operator::structure__construct,
+            core::marker::PhantomData,
+        )
+    }
 }
 
 pub struct DiagnosticKind<P: ::lichen_structure::plugin::Project> {
@@ -497,11 +510,6 @@ impl<P: ::lichen_structure::plugin::Project> Eq for self::DiagnosticKind<P> {}
 impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code {
-            self::code::DiagnosticKind::structure__member_name_repetition => {
-                write!(f, "structure::member_name_repetition({:?})", unsafe {
-                    &*self.data.structure__member_name_repetition
-                })
-            }
             self::code::DiagnosticKind::core__equality_error => {
                 write!(f, "core::equality_error({:?})", unsafe {
                     &*self.data.core__equality_error
@@ -510,6 +518,11 @@ impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::Diagnosti
             self::code::DiagnosticKind::core__index_out_of_bounds => {
                 write!(f, "core::index_out_of_bounds({:?})", unsafe {
                     &*self.data.core__index_out_of_bounds
+                })
+            }
+            self::code::DiagnosticKind::structure__member_name_repetition => {
+                write!(f, "structure::member_name_repetition({:?})", unsafe {
+                    &*self.data.structure__member_name_repetition
                 })
             }
             _ => unreachable!(),
@@ -522,15 +535,15 @@ impl<P: ::lichen_structure::plugin::Project> PartialEq for self::DiagnosticKind<
             return false;
         }
         match self.code {
-            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
-                self.data.structure__member_name_repetition
-                    == other.data.structure__member_name_repetition
-            },
             self::code::DiagnosticKind::core__equality_error => unsafe {
                 self.data.core__equality_error == other.data.core__equality_error
             },
             self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
                 self.data.core__index_out_of_bounds == other.data.core__index_out_of_bounds
+            },
+            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
+                self.data.structure__member_name_repetition
+                    == other.data.structure__member_name_repetition
             },
             _ => unreachable!(),
         }
@@ -540,15 +553,15 @@ impl<P: ::lichen_structure::plugin::Project> PartialEq for self::DiagnosticKind<
             return true;
         }
         match self.code {
-            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
-                self.data.structure__member_name_repetition
-                    != other.data.structure__member_name_repetition
-            },
             self::code::DiagnosticKind::core__equality_error => unsafe {
                 self.data.core__equality_error != other.data.core__equality_error
             },
             self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
                 self.data.core__index_out_of_bounds != other.data.core__index_out_of_bounds
+            },
+            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
+                self.data.structure__member_name_repetition
+                    != other.data.structure__member_name_repetition
             },
             _ => unreachable!(),
         }
@@ -558,14 +571,14 @@ impl<P: ::lichen_structure::plugin::Project> std::hash::Hash for self::Diagnosti
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.code.hash(state);
         match self.code {
-            self::code::DiagnosticKind::structure__member_name_repetition => {
-                unsafe { &self.data.structure__member_name_repetition }.hash(state);
-            }
             self::code::DiagnosticKind::core__equality_error => {
                 unsafe { &self.data.core__equality_error }.hash(state);
             }
             self::code::DiagnosticKind::core__index_out_of_bounds => {
                 unsafe { &self.data.core__index_out_of_bounds }.hash(state);
+            }
+            self::code::DiagnosticKind::structure__member_name_repetition => {
+                unsafe { &self.data.structure__member_name_repetition }.hash(state);
             }
             _ => unreachable!(),
         }
@@ -574,15 +587,6 @@ impl<P: ::lichen_structure::plugin::Project> std::hash::Hash for self::Diagnosti
 impl<P: ::lichen_structure::plugin::Project> Clone for self::DiagnosticKind<P> {
     fn clone(&self) -> Self {
         match self.code {
-            self::code::DiagnosticKind::structure__member_name_repetition => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    structure__member_name_repetition: unsafe {
-                        &self.data.structure__member_name_repetition
-                    }
-                    .clone(),
-                },
-            },
             self::code::DiagnosticKind::core__equality_error => Self {
                 code: self.code,
                 data: self::union_::DiagnosticKind {
@@ -596,6 +600,15 @@ impl<P: ::lichen_structure::plugin::Project> Clone for self::DiagnosticKind<P> {
                         .clone(),
                 },
             },
+            self::code::DiagnosticKind::structure__member_name_repetition => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    structure__member_name_repetition: unsafe {
+                        &self.data.structure__member_name_repetition
+                    }
+                    .clone(),
+                },
+            },
             _ => unreachable!(),
         }
     }
@@ -605,14 +618,14 @@ impl<P: ::lichen_structure::plugin::Project>
 {
     fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code{
-self::code::DiagnosticKind::structure__member_name_repetition=>{
-<::lichen_structure::diagnostic_kind::MemberNameRepetition::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_repetition},f,)
-}
 self::code::DiagnosticKind::core__equality_error=>{
 <::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
 }
 self::code::DiagnosticKind::core__index_out_of_bounds=>{
 <::lichen_core::diagnostic_kind::IndexOutOfBounds::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__index_out_of_bounds},f,)
+}
+self::code::DiagnosticKind::structure__member_name_repetition=>{
+<::lichen_structure::diagnostic_kind::MemberNameRepetition::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_repetition},f,)
 }
 _=>unreachable!(),}
     }
