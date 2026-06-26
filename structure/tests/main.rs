@@ -1,11 +1,7 @@
 use lichen_core::{
     ast::{Ast as _, AstImpl},
     plugin::{Ast as _, Value as _},
-    runtime::{
-        Module,
-        operation::Operation,
-        solve::Solver,
-    },
+    runtime::{Module, operation::Operation, solve::Solver},
     value::{Array, StringId},
 };
 use lichen_structure::{
