@@ -205,14 +205,12 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
                 mutable: false,
             },
         ]),
-        return_: Some(&DisplayArray(&[
-            &"Option<",
-            &AsTrait {
-                this: &PROJECT_VARIABLE,
-                trait_: &generated_project_trait(&PLUGIN),
-            },
-            &"::Value>",
-        ])),
+        return_: Some(&WrittenPath {
+            crate_: CRATE,
+            path: "runtime::operation::Option",
+            generics: &Generics::NONE,
+            project_generic: true,
+        }),
         enum_impl: Some(&Delegate),
         default_body: None,
         return_impl: false,

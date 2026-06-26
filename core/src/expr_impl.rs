@@ -2,7 +2,7 @@ use lichen_utils::erase;
 
 use crate::{
     ast::Ast as _,
-    plugin::{Ast as _, Operator as _, Project, Value as _, expr, principal_traits::Ast as _},
+    plugin::{Ast as _, Operator as _, Project, Value as _, expr},
     runtime::evaluation::Evaluation,
     value,
 };

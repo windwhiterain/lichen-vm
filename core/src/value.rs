@@ -25,7 +25,7 @@ impl Array {
     ) -> Self {
         Array(ArenaArray::from_iter(&mut module.arena, nodes))
     }
-    pub fn uninit<P: Project>(module: &mut Module<P>,len:usize)->Self{
+    pub fn uninit<P: Project>(module: &mut Module<P>, len: usize) -> Self {
         Array(ArenaArray::new(&mut module.arena, len))
     }
     pub fn node<P: Project>(
@@ -77,7 +77,7 @@ impl Value for Unit {}
 impl<P: Project> Evaluation<P> {
     pub const AUTO: Self = Self::Auto {
         referrer_count: 1,
-        reference: None,
+        referers: None,
     };
 }
 
@@ -96,71 +96,6 @@ impl<P: Project> Module<P> {
             ret
         } else {
             *node
-        }
-    }
-    pub fn set_value(&mut self, node: &NodeIdLocal, value: P::Value) -> Vec<NodeIdLocal> {
-        let evaluation = self.evaluation_mut(node);
-        let Evaluation::Auto { reference, .. } = *evaluation else {
-            panic!()
-        };
-        *evaluation = Evaluation::Value(value);
-        let mut reference_iter = reference.map(|x| x.0);
-        let mut ret = vec![*node];
-        while let Some(reference) = reference_iter {
-            let evaluation = self.evaluation_mut(&reference);
-            let Evaluation::Ref { brother, .. } = *evaluation else {
-                unreachable!();
-            };
-            reference_iter = brother;
-            *evaluation = Evaluation::Value(value);
-            ret.push(reference);
-        }
-        ret
-    }
-    pub fn set_ref(&mut self, node: &NodeIdLocal, target: &NodeIdLocal) {
-        debug_assert_ne!(node, target);
-        let evaluation = unsafe { erase_mut(self.evaluation_mut(node)) };
-        let Evaluation::Auto {
-            referrer_count: self_referrer_count,
-            reference: self_reference,
-            ..
-        } = *evaluation
-        else {
-            panic!()
-        };
-        let Evaluation::Auto {
-            referrer_count,
-            reference,
-        } = (unsafe { erase_mut(self.evaluation_mut(target)) })
-        else {
-            panic!()
-        };
-        *referrer_count += self_referrer_count;
-        if let Some(self_reference) = self_reference {
-            if let Some(reference) = reference {
-                let Evaluation::Ref { brother, .. } = self.evaluation_mut(&self_reference.1) else {
-                    unreachable!()
-                };
-                *brother = Some(reference.0);
-                reference.0 = *node;
-            }
-            *evaluation = Evaluation::Ref {
-                node: *target,
-                brother: Some(self_reference.0),
-            };
-        } else {
-            if let Some(reference) = reference {
-                *evaluation = Evaluation::Ref {
-                    node: *target,
-                    brother: Some(reference.0),
-                };
-                reference.0 = *node;
-            } else {
-                *evaluation = Evaluation::Ref {
-                    node: *target,
-                    brother: None,
-                };
-            }
         }
     }
 }

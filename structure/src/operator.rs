@@ -5,6 +5,7 @@ use crate::plugin::Value;
 use crate::value::Structure;
 use lichen_core::operator::{Find, Index};
 use lichen_core::runtime::diagnostic::Diagnostic;
+use lichen_core::runtime::operation;
 use lichen_core::value::Table;
 use lichen_core::{
     operands,
@@ -24,7 +25,7 @@ where
         solver: &mut lichen_core::runtime::solve::Solver<P>,
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
-    ) -> Option<<P as lichen_core::plugin::Project>::Value> {
+    ) -> operation::Option<P> {
         let (structure, name) =
             operands!(solver, value, node, [P::Value=>structure,P::Value=>string,]);
         Find::run::<P>(structure.table, name)
@@ -44,7 +45,7 @@ where
         solver: &mut lichen_core::runtime::solve::Solver<P>,
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
-    ) -> Option<<P as lichen_core::plugin::Project>::Value> {
+    ) -> operation::Option<P> {
         let named_array = value.named_array()?;
         let module = solver.module_mut(&node.module());
         let mut table = Table::uninit(module, named_array.0.len());
@@ -62,7 +63,9 @@ where
             }
         }
         let components = Array::new(module, named_array.0.iter().map(|(_, node)| *node));
-        Some(P::Value::from_structure(Structure { table, components }))
+        Some(operation::Some::Value(P::Value::from_structure(
+            Structure { table, components },
+        )))
     }
 }
 
@@ -78,16 +81,18 @@ where
         solver: &mut lichen_core::runtime::solve::Solver<P>,
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
-    ) -> Option<<P as lichen_core::plugin::Project>::Value> {
+    ) -> operation::Option<P> {
         let (named_array, structure) =
             operands!(solver, value, node, [P::Value=>named_array, P::Value=>structure,]);
         let module = solver.module_mut(&node.module());
         let mut array = Array::uninit(module, structure.table.0.len());
-        for (name,element) in named_array.0.iter(){
-            let Some(offset) = structure.table.0.get(name) else{return None;};
+        for (name, element) in named_array.0.iter() {
+            let Some(offset) = structure.table.0.get(name) else {
+                return None;
+            };
             *array.0.get_mut(*offset) = *element;
         }
-        Some(P::Value::from_array(array))
+        Some(operation::Some::Value(P::Value::from_array(array)))
     }
 }
 
@@ -103,7 +108,7 @@ where
         solver: &mut lichen_core::runtime::solve::Solver<P>,
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
-    ) -> Option<<P as lichen_core::plugin::Project>::Value> {
+    ) -> operation::Option<P> {
         let (structure, index) =
             operands!(solver, value, node, [P::Value=>structure,P::Value=>int,]);
         Index::run(solver, node, structure.components, index)

@@ -1,8 +1,5 @@
 use lichen_core::{
-    ast::Ast as _,
-    plugin::Value as _,
-    runtime::evaluation::Evaluation,
-    value::Array as CoreArray,
+    ast::Ast as _, plugin::Value as _, runtime::evaluation::Evaluation, value::Array as CoreArray,
 };
 use lichen_utils::erase;
 

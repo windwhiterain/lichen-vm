@@ -19,15 +19,13 @@ pub static PLUGIN: Plugin = Plugin {
     plugin_enums: &[(&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM)],
     properties: &["r#type"],
     exprs: &[],
-    expr_impls: &[
-        ExprImpls {
-            expr: &ARRAY_EXPR,
-            impls: &[&WrittenPathRaw {
-                crate_: CRATE,
-                path: "expr_impl::Array",
-            }],
-        },
-    ],
+    expr_impls: &[ExprImpls {
+        expr: &ARRAY_EXPR,
+        impls: &[&WrittenPathRaw {
+            crate_: CRATE,
+            path: "expr_impl::Array",
+        }],
+    }],
 };
 
 static VALUE_ENUM: PluginEnum = PluginEnum {

@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::hash::RandomState;
 mod project;
 
 use lichen_core::diagnostic_kind::EqualityError;
@@ -26,21 +27,26 @@ fn main() {
     });
     let n4 = module.add_auto();
     module.add_equation(LocalEquation {
-        nodes: Box::new([n3, n4]),
+        nodes: Box::new([n4, n3]),
     });
     let n5 = Array::node(&mut module, [n4]);
     let n6 = module.add_literal(Value::from_int(4));
     let n7 = Array::node(&mut module, [n6]);
     module.add_equation(LocalEquation {
-        nodes: Box::new([n5, n7]),
+        nodes: Box::new([n7, n5]),
     });
 
     let mut solver = Solver::new(&mut module);
     solver.solve();
-    let diagnostics = HashSet::from_iter(module.diagnostics.into_iter());
+    let diagnostics: HashSet<Diagnostic<Project>, RandomState> =
+        HashSet::from_iter(module.diagnostics.into_iter());
+    // panic!("{diagnostics:#?}");
     assert!(
         diagnostics
-            .intersection(&EqualityError::from_nodes(&[n3, n4, n6]))
+            .intersection(&HashSet::from_iter([Diagnostic {
+                kind: DiagnosticKind::from_equality_error(EqualityError { expected: n3 }),
+                node: n6
+            },]))
             .next()
             .is_some()
     );

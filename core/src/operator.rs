@@ -3,6 +3,7 @@ use crate::{
     plugin::{DiagnosticKind as _, Project, Value as _, principal_traits::Operator},
     runtime::{
         diagnostic::Diagnostic,
+        operation,
         solve::{AnyNodeId, LocalNodeId, Solver},
     },
     value::{Array, Int, StringId, Table},
@@ -40,7 +41,7 @@ impl<P: Project> Operator<P> for Sum {
         solver: &mut Solver<P>,
         operand: &P::Value,
         node: &LocalNodeId,
-    ) -> Option<P::Value> {
+    ) -> operation::Option<P> {
         let Some(operands) = operand.array() else {
             return None;
         };
@@ -57,7 +58,7 @@ impl<P: Project> Operator<P> for Sum {
                 *ret += value.int()?;
             }
         }
-        ret.map(|x| P::Value::from_int(x))
+        ret.map(|x| operation::Some::Value(P::Value::from_int(x)))
     }
 }
 
@@ -70,7 +71,7 @@ impl Index {
         node: &LocalNodeId,
         array: Array,
         index: Int,
-    ) -> Option<P::Value> {
+    ) -> operation::Option<P> {
         if index >= array.0.len() as i64 || index < 0 {
             solver
                 .module_mut(&node.module())
@@ -85,10 +86,7 @@ impl Index {
             return None;
         }
         let reference_node = *array.0.get(index as usize);
-        solver.solve_node(
-            &AnyNodeId::Local(reference_node.solver_local(node.module())),
-            Some(&AnyNodeId::Local(*node)),
-        )
+        Some(operation::Some::Ref(reference_node))
     }
 }
 
@@ -98,7 +96,7 @@ impl<P: Project> Operator<P> for Index {
         solver: &mut Solver<P>,
         operand: &P::Value,
         node: &LocalNodeId,
-    ) -> Option<P::Value> {
+    ) -> operation::Option<P> {
         let (array, index) = operands!(solver, operand, node, [P::Value=>array, P::Value=>int,]);
         Index::run(solver, node, array, index)
     }
@@ -108,9 +106,9 @@ impl<P: Project> Operator<P> for Index {
 pub struct Find;
 
 impl Find {
-    pub fn run<P: Project>(table: Table, name: StringId) -> Option<P::Value> {
+    pub fn run<P: Project>(table: Table, name: StringId) -> operation::Option<P> {
         let index = *table.0.get(&name)?;
-        Some(P::Value::from_int(index as i64))
+        Some(operation::Some::Value(P::Value::from_int(index as i64)))
     }
 }
 
@@ -120,9 +118,9 @@ impl<P: Project> Operator<P> for Find {
         solver: &mut Solver<P>,
         operand: &P::Value,
         node: &LocalNodeId,
-    ) -> Option<P::Value> {
+    ) -> operation::Option<P> {
         let (table, name) = operands!(solver, operand, node, [P::Value=>table, P::Value=>string,]);
         let index = *table.0.get(&name)?;
-        Some(P::Value::from_int(index as i64))
+        Some(operation::Some::Value(P::Value::from_int(index as i64)))
     }
 }

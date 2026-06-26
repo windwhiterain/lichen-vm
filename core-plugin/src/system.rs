@@ -1,6 +1,5 @@
 //! plugin systm via code generation
 use std::fmt::Display;
-use std::io::Write;
 
 use sytax::WrittenPath;
 

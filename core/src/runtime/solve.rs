@@ -8,7 +8,7 @@ use crate::{
     },
     runtime::{
         Module, ModuleId, NodeId, NodeIdLocal, diagnostic::Diagnostic, equation::Equation,
-        evaluation::Evaluation,
+        evaluation::Evaluation, operation,
     },
 };
 
@@ -135,7 +135,11 @@ impl<'a, P: Project> Solver<'a, P> {
     pub fn set_value(&mut self, node: &LocalNodeId, value: P::Value) {
         let module_id = node.module;
         let module = self.module_mut(&module_id);
-        for node in module.set_value(&node.local, value) {
+        let node = module.root(&node.local());
+        let evaluation = module.evaluation_mut(&node);
+        debug_assert!(matches!(evaluation, Evaluation::Auto { .. }));
+        *evaluation = Evaluation::Value(value);
+        for node in unsafe { erase(module).referers(&node) } {
             let module = self.module_mut(&module_id);
             for dependent in std::mem::take(&mut module.solve_mut(&node).dependents) {
                 if let AnyNodeId::Local(dependent) = self.node(&dependent) {
@@ -149,10 +153,12 @@ impl<'a, P: Project> Solver<'a, P> {
                         unreachable!()
                     };
                     *dependencies_count -= 1;
+                    if *dependencies_count == 0 {
+                        self.solve_node(&AnyNodeId::Local(dependent), None);
+                    }
                 } else {
                     todo!()
                 }
-                self.solve_node(&self.node(&dependent), None);
             }
         }
     }
@@ -171,7 +177,7 @@ impl<'a, P: Project> Solver<'a, P> {
                         let is_solving = match &mut solve.state {
                             SolveState::None => {
                                 solve.state = SolveState::Pending {
-                                    is_solving: true,
+                                    is_solving: false,
                                     dependencies_count: 0,
                                 };
                                 let SolveState::Pending { is_solving, .. } = &mut solve.state
@@ -191,13 +197,25 @@ impl<'a, P: Project> Solver<'a, P> {
                             }
                             SolveState::Solved => break 'operation_value None,
                         };
-                        if let Some(param) = self.solve_node(
+                        *is_solving = true;
+                        let param = self.solve_node(
                             &AnyNodeId::Local(operation.operand.solver_local(node.module())),
                             Some(&AnyNodeId::Local(*node)),
-                        ) {
+                        );
+                        if let Some(param) = param {
                             if let Some(value) = operation.operator.run(self, &param, node) {
                                 solve.state = SolveState::Solved;
-                                break 'operation_value Some(value);
+                                let value = match value {
+                                    operation::Some::Value(value) => Some(value),
+                                    operation::Some::Ref(node_id_local) => {
+                                        self.apply_equation(
+                                            LocalModuleId,
+                                            &[node.local(), node_id_local],
+                                        );
+                                        None
+                                    }
+                                };
+                                break 'operation_value value;
                             }
                         }
                         *is_solving = false;
@@ -212,7 +230,12 @@ impl<'a, P: Project> Solver<'a, P> {
                 if let Evaluation::Value(value) = evaluation {
                     if let Some(operation_value) = operation_value {
                         if *value != operation_value {
-                            panic!()
+                            module.diagnostics.push(Diagnostic {
+                                kind: DiagnosticKind::from_equality_error(EqualityError {
+                                    expected: root,
+                                }),
+                                node: node.local(),
+                            });
                         }
                         Some(operation_value)
                     } else {
@@ -259,8 +282,8 @@ impl<'a, P: Project> Solver<'a, P> {
             (&Evaluation::AUTO.clone(), (0, 0), *nodes.first().unwrap());
         for node in nodes.iter().copied() {
             let root = module.root(&node);
-            let evaluation = unsafe { erase(module.evaluation(&node)) };
-            let order = module.evaluation_order(&node);
+            let evaluation = unsafe { erase(module.evaluation(&root)) };
+            let order = module.evaluation_order(&root);
             if order > max_order {
                 max_evaluation = evaluation;
                 max_order = order;
@@ -284,16 +307,16 @@ impl<'a, P: Project> Solver<'a, P> {
                     if max_value != value {
                         module.diagnostics.push(Diagnostic {
                             kind: P::DiagnosticKind::from_equality_error(EqualityError {
-                                expected: max_root,
+                                expected: root,
                             }),
-                            node: root,
+                            node: max_root,
                         });
                     }
                     max_value.for_field_pairs(&value, |i, j| {
                         self.apply_equation(module_id, &[*i, *j]);
                     });
                 } else if let Evaluation::Auto { .. } = evaluation {
-                    self.set_value(&root.solver_local(module_id), max_value);
+                    module.set_ref(&root, &max_root);
                 } else {
                     unreachable!()
                 }
