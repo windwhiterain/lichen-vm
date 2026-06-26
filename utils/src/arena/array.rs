@@ -22,14 +22,14 @@ impl<T> ArenaArray<T> {
     pub fn inner_mut(&mut self) -> &mut [MaybeUninit<T>] {
         unsafe { self.0.as_mut() }
     }
-    pub fn get_uninit(&mut self, index: usize) -> &mut MaybeUninit<T> {
-        self.inner_mut().get_mut(index).unwrap()
+    pub fn get_uninit(&mut self, index: usize) -> Option<&mut MaybeUninit<T>> {
+        self.inner_mut().get_mut(index)
     }
-    pub fn get_mut(&mut self, index: usize) -> &mut T {
-        unsafe { self.get_uninit(index).assume_init_mut() }
+    pub fn get_mut(&mut self, index: usize) -> Option<&mut T> {
+        unsafe { self.get_uninit(index).map(|x| x.assume_init_mut()) }
     }
-    pub fn get(&self, index: usize) -> &T {
-        unsafe { self.inner().get(index).unwrap().assume_init_ref() }
+    pub fn get(&self, index: usize) -> Option<&T> {
+        unsafe { self.inner().get(index).map(|x| x.assume_init_ref()) }
     }
     pub fn iter(&self) -> impl Iterator<Item = &T> {
         unsafe { self.inner().iter().map(|x| x.assume_init_ref()) }

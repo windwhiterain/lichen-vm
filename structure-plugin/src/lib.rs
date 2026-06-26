@@ -162,16 +162,28 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
 };
 
 static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
-    variants: &[Variant {
-        name: "member_name_repetition",
-        path: &WrittenPath {
-            crate_: CRATE,
-            generics: &Generics::NONE,
-            path: "diagnostic_kind::MemberNameRepetition",
-            project_generic: false,
+    variants: &[
+        Variant {
+            name: "member_name_repetition",
+            path: &WrittenPath {
+                crate_: CRATE,
+                generics: &Generics::NONE,
+                path: "diagnostic_kind::MemberNameRepetition",
+                project_generic: false,
+            },
+            is_unit: false,
         },
-        is_unit: false,
-    }],
+        Variant {
+            name: "member_name_missing",
+            path: &WrittenPath {
+                crate_: CRATE,
+                generics: &Generics::NONE,
+                path: "diagnostic_kind::MemberNameMissing",
+                project_generic: false,
+            },
+            is_unit: false,
+        },
+    ],
     plugin: &PLUGIN,
 };
 

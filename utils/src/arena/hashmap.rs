@@ -64,17 +64,20 @@ where
         let mut table_location = self.table_location(&mut state);
         let mut existing_entry_index = None;
         loop {
-            let entry_index = *self.table.get(table_location);
+            let entry_index = *self.table.get(table_location).unwrap();
             if let Some(entry_index) = entry_index {
-                let entry = self.entries.get_mut(entry_index);
+                let entry = self.entries.get_mut(entry_index).unwrap();
                 if entry.key == key {
                     existing_entry_index = Some(entry_index);
                 }
                 table_location = self.table_location(&mut state);
                 continue;
             }
-            self.entries.get_uninit(index).write(Entry { key, value });
-            *self.table.get_mut(table_location) = Some(index);
+            self.entries
+                .get_uninit(index)
+                .unwrap()
+                .write(Entry { key, value });
+            *self.table.get_mut(table_location).unwrap() = Some(index);
             break;
         }
         existing_entry_index
@@ -83,11 +86,11 @@ where
         let mut state = self.probing_state(&key);
         let mut table_location = self.table_location(&mut state);
         loop {
-            let entry_index = *self.table.get(table_location);
+            let entry_index = *self.table.get(table_location).unwrap();
             let Some(entry_index) = entry_index else {
                 return None;
             };
-            let entry = self.entries.get(entry_index);
+            let entry = self.entries.get(entry_index).unwrap();
             if &entry.key == key {
                 return Some(&entry.value);
             } else {
@@ -100,13 +103,13 @@ where
         let mut state = self.probing_state(&key);
         let mut table_location = self.table_location(&mut state);
         loop {
-            let entry_index = *self.table.get(table_location);
+            let entry_index = *self.table.get(table_location).unwrap();
             let Some(entry_index) = entry_index else {
                 return None;
             };
-            let entry = self.entries.get(entry_index);
+            let entry = self.entries.get(entry_index).unwrap();
             if entry.key == key {
-                return Some(&mut self.entries.get_mut(entry_index).value);
+                return Some(&mut self.entries.get_mut(entry_index).unwrap().value);
             } else {
                 table_location = self.table_location(&mut state);
                 continue;

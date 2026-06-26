@@ -11,19 +11,19 @@ use crate::{
 
 #[macro_export]
 macro_rules! operands {
-    ($solver:ident, $operand:ident, $node:ident, [$($variant_enum: ty=>$variant: ident,)*]) => {{
+    ($solver:ident, $operand:ident, $node:ident, $project:ident,[$($variant: ident,)*]) => {{
         let Some(operands) = $operand.array() else {
-            return None;
+            panic!("expected array, found: {:#?}", $operand);
         };
         if operands.0.len() != operands!(@count $(,$variant)*) {
-            return None;
+            panic!("expeced length: {}, found: {}", operands!(@count $(,$variant)*), operands.0.len());
         }
         let mut operands = operands.0.iter();
         ($({
             let operand = operands.next().unwrap();
             let operand = $solver.solve_node(&$crate::runtime::solve::AnyNodeId::Local(operand.solver_local($node.module())),Some(&$crate::runtime::solve::AnyNodeId::Local(*$node)))?;
-            let Some(operand) = <$variant_enum>::$variant(&operand) else {
-                return None;
+            let Some(operand) = $project::Value::$variant(&operand) else {
+                panic!("expected variant: {}, found: {:#?}", stringify!($variant),operand);
             };
             *operand
         },)*)
@@ -43,7 +43,7 @@ impl<P: Project> Operator<P> for Sum {
         node: &LocalNodeId,
     ) -> operation::Option<P> {
         let Some(operands) = operand.array() else {
-            return None;
+            panic!()
         };
         let mut ret = Some(0);
         for operand in operands.0.iter().copied() {
@@ -55,7 +55,7 @@ impl<P: Project> Operator<P> for Sum {
                 continue;
             };
             if let Some(ret) = &mut ret {
-                *ret += value.int()?;
+                *ret += value.int().unwrap();
             }
         }
         ret.map(|x| operation::Some::Value(P::Value::from_int(x)))
@@ -67,26 +67,13 @@ pub struct Index;
 
 impl Index {
     pub fn run<P: Project>(
-        solver: &mut Solver<P>,
-        node: &LocalNodeId,
+        _solver: &mut Solver<P>,
+        _node: &LocalNodeId,
         array: Array,
         index: Int,
-    ) -> operation::Option<P> {
-        if index >= array.0.len() as i64 || index < 0 {
-            solver
-                .module_mut(&node.module())
-                .diagnostics
-                .push(Diagnostic {
-                    kind: P::DiagnosticKind::from_index_out_of_bounds(IndexOutOfBounds {
-                        index,
-                        len: array.0.len(),
-                    }),
-                    node: node.local(),
-                });
-            return None;
-        }
-        let reference_node = *array.0.get(index as usize);
-        Some(operation::Some::Ref(reference_node))
+    ) -> Option<operation::Option<P>> {
+        let reference_node = array.0.get(index as usize).copied();
+        reference_node.map(|x| Some(operation::Some::Ref(x)))
     }
 }
 
@@ -97,8 +84,22 @@ impl<P: Project> Operator<P> for Index {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> operation::Option<P> {
-        let (array, index) = operands!(solver, operand, node, [P::Value=>array, P::Value=>int,]);
-        Index::run(solver, node, array, index)
+        let (array, index) = operands!(solver, operand, node, P, [array, int,]);
+        if let Some(ret) = Index::run(solver, node, array, index) {
+            ret
+        } else {
+            solver
+                .module_mut(&node.module())
+                .diagnostics
+                .push(Diagnostic {
+                    kind: P::DiagnosticKind::from_index_out_of_bounds(IndexOutOfBounds {
+                        index,
+                        len: array.0.len(),
+                    }),
+                    node: node.local(),
+                });
+            None
+        }
     }
 }
 
@@ -119,7 +120,7 @@ impl<P: Project> Operator<P> for Find {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> operation::Option<P> {
-        let (table, name) = operands!(solver, operand, node, [P::Value=>table, P::Value=>string,]);
+        let (table, name) = operands!(solver, operand, node, P, [table, string,]);
         let index = *table.0.get(&name)?;
         Some(operation::Some::Value(P::Value::from_int(index as i64)))
     }

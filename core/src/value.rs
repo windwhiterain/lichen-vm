@@ -91,9 +91,17 @@ impl<P: Project> Module<P> {
     }
     pub fn root(&mut self, node: &NodeIdLocal) -> NodeIdLocal {
         if let Evaluation::Ref { node: id, .. } = unsafe { erase_mut(self.evaluation_mut(node)) } {
-            let ret = self.root(&id);
+            let ret = self.root(id);
             *id = ret;
             ret
+        } else {
+            *node
+        }
+    }
+
+    pub fn debug_root(&self, node: &NodeIdLocal) -> NodeIdLocal {
+        if let Evaluation::Ref { node: id, .. } = self.evaluation(node) {
+            self.debug_root(id)
         } else {
             *node
         }

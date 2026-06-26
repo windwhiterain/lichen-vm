@@ -2,6 +2,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+#![allow(unused_unsafe)]
+#![allow(unused_mut)]
 
 pub mod principal_traits {
     pub trait Value: std::fmt::Debug + Copy + Eq {
@@ -65,16 +69,16 @@ pub trait Value {
     fn unit(&self) -> bool;
     fn from_unit() -> Self;
 }
+pub trait Operator<P: crate::plugin::Project> {
+    fn sum() -> Self;
+    fn index() -> Self;
+    fn find() -> Self;
+}
 pub trait DiagnosticKind<P: crate::plugin::Project> {
     fn equality_error(&self) -> Option<&crate::diagnostic_kind::EqualityError>;
     fn from_equality_error(data: crate::diagnostic_kind::EqualityError) -> Self;
     fn index_out_of_bounds(&self) -> Option<&crate::diagnostic_kind::IndexOutOfBounds>;
     fn from_index_out_of_bounds(data: crate::diagnostic_kind::IndexOutOfBounds) -> Self;
-}
-pub trait Operator<P: crate::plugin::Project> {
-    fn sum() -> Self;
-    fn index() -> Self;
-    fn find() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>: crate::ast::Ast<P> {
     fn value(&self, expr: &crate::ast::ExprId) -> crate::runtime::NodeIdLocal;

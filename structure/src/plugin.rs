@@ -2,6 +2,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+#![allow(unused_unsafe)]
+#![allow(unused_mut)]
 
 pub mod principal_traits {
     pub trait Ast<P: crate::plugin::Project> {
@@ -22,17 +26,19 @@ pub trait Value: ::lichen_core::plugin::Value {
     fn structure(&self) -> Option<&crate::value::Structure>;
     fn from_structure(data: crate::value::Structure) -> Self;
 }
-pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
-    fn offset() -> Self;
-    fn component() -> Self;
-    fn compose() -> Self;
-    fn construct() -> Self;
-}
 pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
     fn member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
     fn from_member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
+    fn member_name_missing(&self) -> Option<&crate::diagnostic_kind::MemberNameMissing>;
+    fn from_member_name_missing(data: crate::diagnostic_kind::MemberNameMissing) -> Self;
+}
+pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
+    fn offset() -> Self;
+    fn component() -> Self;
+    fn compose() -> Self;
+    fn construct() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>

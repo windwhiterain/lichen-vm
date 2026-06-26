@@ -141,6 +141,13 @@ impl<P: Project> Module<P> {
     pub fn solve_mut(&mut self, node: &NodeIdLocal) -> &mut Solve {
         self.solves.get_mut(node.0).unwrap()
     }
+
+    pub fn assert_value(&self, node: &NodeIdLocal) -> &P::Value {
+        let Evaluation::Value(value) = self.evaluation(&self.debug_root(node)) else {
+            panic!()
+        };
+        value
+    }
 }
 
 impl<T> Ptr<T> {
@@ -156,11 +163,8 @@ impl ModuleId {
     pub fn from_ref<P: Project>(r: &Module<P>) -> Self {
         Self(r as *const Module<P> as *const ())
     }
-    pub unsafe fn as_ref<'a, P: Project>(self) -> &'a Module<P> {
-        unsafe { &*(self.0 as *const Module<P>) }
-    }
-    pub unsafe fn as_mut<'a, P: Project>(self) -> &'a mut Module<P> {
-        unsafe { &mut *(self.0 as *mut Module<P>) }
+    pub fn local(&self) -> LocalModuleId {
+        LocalModuleId
     }
 }
 

@@ -25,8 +25,7 @@ use crate::system::utils::{
 use crate::{OPERATOR_TYPE, PLUGIN, VALUE_TYPE};
 
 const GENERATED_FILE: &str = "// This file is @generated. Do not edit by hand.\n";
-const GENERATED_RUST_FILE: &str =
-    "#![allow(non_camel_case_types)]#![allow(non_snake_case)]#![allow(non_upper_case_globals)]\n";
+const GENERATED_RUST_FILE: &str = "#![allow(non_camel_case_types)]#![allow(non_snake_case)]#![allow(non_upper_case_globals)]#![allow(unused_variables)]#![allow(dead_code)]#![allow(unused_unsafe)]#![allow(unused_mut)]\n";
 
 impl Plugin {
     pub fn generate(&'static self) -> std::io::Result<()> {

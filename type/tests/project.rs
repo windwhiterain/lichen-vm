@@ -2,6 +2,10 @@
 #![allow(non_camel_case_types)]
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
+#![allow(unused_variables)]
+#![allow(dead_code)]
+#![allow(unused_unsafe)]
+#![allow(unused_mut)]
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Project;
@@ -17,6 +21,11 @@ mod code {
         pub(in super::super) const core__equality_error: usize = 0;
         pub(in super::super) const core__index_out_of_bounds: usize = 1;
     }
+    pub(super) mod Operator {
+        pub(in super::super) const core__sum: usize = 0;
+        pub(in super::super) const core__index: usize = 1;
+        pub(in super::super) const core__find: usize = 2;
+    }
     pub(super) mod Value {
         pub(in super::super) const type__int_type: usize = 0;
         pub(in super::super) const type__string_type: usize = 1;
@@ -25,11 +34,6 @@ mod code {
         pub(in super::super) const core__array: usize = 4;
         pub(in super::super) const core__table: usize = 5;
         pub(in super::super) const core__unit: usize = 6;
-    }
-    pub(super) mod Operator {
-        pub(in super::super) const core__sum: usize = 0;
-        pub(in super::super) const core__index: usize = 1;
-        pub(in super::super) const core__find: usize = 2;
     }
 }
 mod union_ {
@@ -193,6 +197,66 @@ impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::DiagnosticKind<P>
     for self::DiagnosticKind<P>
 {
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Operator<P: ::lichen_type::plugin::Project>(usize, core::marker::PhantomData<P>);
+
+impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::Operator<P>
+where
+    P::Value: ::lichen_type::plugin::Value,
+    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            self::code::Operator::core__sum => {
+                write!(f, "core::sum")
+            }
+            self::code::Operator::core__index => {
+                write!(f, "core::index")
+            }
+            self::code::Operator::core__find => {
+                write!(f, "core::find")
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
+    for self::Operator<P>
+where
+    P::Value: ::lichen_type::plugin::Value,
+    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
+{
+    fn run(
+        &self,
+        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
+        value: &<P as ::lichen_core::plugin::Project>::Value,
+        node: &::lichen_core::runtime::solve::LocalNodeId,
+    ) -> ::lichen_core::runtime::operation::Option<P> {
+        match self.0{
+self::code::Operator::core__sum=>{
+<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
+}
+self::code::Operator::core__index=>{
+<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
+}
+self::code::Operator::core__find=>{
+<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
+}
+_=>unreachable!(),}
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::Operator<P> for self::Operator<P> {
+    fn sum() -> Self {
+        Self(self::code::Operator::core__sum, core::marker::PhantomData)
+    }
+    fn index() -> Self {
+        Self(self::code::Operator::core__index, core::marker::PhantomData)
+    }
+    fn find() -> Self {
+        Self(self::code::Operator::core__find, core::marker::PhantomData)
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::Operator<P> for self::Operator<P> {}
 #[derive(Clone, Copy)]
 pub struct Value {
     code: usize,
@@ -472,66 +536,6 @@ impl ::lichen_type::plugin::Value for self::Value {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Operator<P: ::lichen_type::plugin::Project>(usize, core::marker::PhantomData<P>);
-
-impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::Operator<P>
-where
-    P::Value: ::lichen_type::plugin::Value,
-    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            self::code::Operator::core__sum => {
-                write!(f, "core::sum")
-            }
-            self::code::Operator::core__index => {
-                write!(f, "core::index")
-            }
-            self::code::Operator::core__find => {
-                write!(f, "core::find")
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
-    for self::Operator<P>
-where
-    P::Value: ::lichen_type::plugin::Value,
-    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
-{
-    fn run(
-        &self,
-        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
-        value: &<P as ::lichen_core::plugin::Project>::Value,
-        node: &::lichen_core::runtime::solve::LocalNodeId,
-    ) -> ::lichen_core::runtime::operation::Option<P> {
-        match self.0{
-self::code::Operator::core__sum=>{
-<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
-}
-self::code::Operator::core__index=>{
-<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
-}
-self::code::Operator::core__find=>{
-<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
-}
-_=>unreachable!(),}
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::Operator<P> for self::Operator<P> {
-    fn sum() -> Self {
-        Self(self::code::Operator::core__sum, core::marker::PhantomData)
-    }
-    fn index() -> Self {
-        Self(self::code::Operator::core__index, core::marker::PhantomData)
-    }
-    fn find() -> Self {
-        Self(self::code::Operator::core__find, core::marker::PhantomData)
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::Operator<P> for self::Operator<P> {}
 impl<P: ::lichen_type::plugin::Project<Ast = self::Ast<P>>> ::lichen_core::plugin::Ast<P>
     for self::Ast<P>
 where
