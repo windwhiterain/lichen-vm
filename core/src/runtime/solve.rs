@@ -139,27 +139,18 @@ impl<'a, P: Project> Solver<'a, P> {
         let evaluation = module.evaluation_mut(&node);
         debug_assert!(matches!(evaluation, Evaluation::Auto { .. }));
         *evaluation = Evaluation::Value(value);
-        for node in unsafe { erase(module).referers(&node) } {
-            let module = self.module_mut(&module_id);
-            for dependent in std::mem::take(&mut module.solve_mut(&node).dependents) {
-                if let AnyNodeId::Local(dependent) = self.node(&dependent) {
-                    let SolveState::Pending {
-                        dependencies_count, ..
-                    } = &mut self
-                        .module_mut_of(&dependent)
-                        .solve_mut(&dependent.local())
-                        .state
-                    else {
-                        unreachable!()
-                    };
-                    *dependencies_count -= 1;
-                    if *dependencies_count == 0 {
-                        self.solve_node(&AnyNodeId::Local(dependent), None);
-                    }
-                } else {
-                    todo!()
-                }
-            }
+        for referer in unsafe { erase(module).referers(&node) } {
+            self.awake_dependencies(referer.solver_local(module_id));
+        }
+    }
+    /// #Panic
+    /// - `node` must has [`Evaluation::Auto`]
+    /// - `target` must not has [`Evaluation::Ref`]
+    pub fn set_ref(&mut self, module_id: LocalModuleId, node: &NodeIdLocal, target: &NodeIdLocal) {
+        let module = self.module_mut(&module_id);
+        module.set_ref(node, target);
+        if let SolveState::Solved { .. } = module.solve(target).state {
+            self.awake_dependencies(node.solver_local(module_id));
         }
     }
     pub fn solve_node(
@@ -197,9 +188,10 @@ impl<'a, P: Project> Solver<'a, P> {
                             }
                             SolveState::Solved => break 'operation_value None,
                         };
+                        let operand = module.root(&operation.operand);
                         *is_solving = true;
                         let param = self.solve_node(
-                            &AnyNodeId::Local(operation.operand.solver_local(node.module())),
+                            &AnyNodeId::Local(operand.solver_local(node.module())),
                             Some(&AnyNodeId::Local(*node)),
                         );
                         if let Some(param) = param {
@@ -301,7 +293,7 @@ impl<'a, P: Project> Solver<'a, P> {
             }
             let evaluation = module.evaluation_mut(&root);
             if let Evaluation::Auto { .. } = max_evaluation {
-                module.set_ref(&root, &max_root);
+                self.set_ref(module_id, &root, &max_root);
             } else if let Evaluation::Value(max_value) = *max_evaluation {
                 if let Evaluation::Value(value) = *evaluation {
                     if max_value != value {
@@ -316,12 +308,34 @@ impl<'a, P: Project> Solver<'a, P> {
                         self.apply_equation(module_id, &[*i, *j]);
                     });
                 } else if let Evaluation::Auto { .. } = evaluation {
-                    module.set_ref(&root, &max_root);
+                    self.set_ref(module_id, &root, &max_root);
                 } else {
                     unreachable!()
                 }
             } else {
                 unreachable!()
+            }
+        }
+    }
+    fn awake_dependencies(&mut self, node: LocalNodeId) {
+        let module = self.module_mut(&node.module());
+        for dependent in std::mem::take(&mut module.solve_mut(&node.local()).dependents) {
+            if let AnyNodeId::Local(dependent) = self.node(&dependent) {
+                let SolveState::Pending {
+                    dependencies_count, ..
+                } = &mut self
+                    .module_mut_of(&dependent)
+                    .solve_mut(&dependent.local())
+                    .state
+                else {
+                    unreachable!()
+                };
+                *dependencies_count -= 1;
+                if *dependencies_count == 0 {
+                    self.solve_node(&AnyNodeId::Local(dependent), None);
+                }
+            } else {
+                todo!()
             }
         }
     }

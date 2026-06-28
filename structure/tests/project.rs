@@ -9,22 +9,19 @@
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Project;
-impl ::lichen_structure::plugin::Project for self::Project {}
 impl ::lichen_core::plugin::Project for self::Project {
     type Value = self::Value;
     type Operator = self::Operator<Self>;
     type DiagnosticKind = self::DiagnosticKind<Self>;
     type Ast = self::Ast<Self>;
 }
+impl ::lichen_structure::plugin::Project for self::Project {}
 mod code {
-    pub(super) mod Operator {
-        pub(in super::super) const structure__offset: usize = 0;
-        pub(in super::super) const structure__component: usize = 1;
-        pub(in super::super) const structure__compose: usize = 2;
-        pub(in super::super) const structure__construct: usize = 3;
-        pub(in super::super) const core__sum: usize = 4;
-        pub(in super::super) const core__index: usize = 5;
-        pub(in super::super) const core__find: usize = 6;
+    pub(super) mod DiagnosticKind {
+        pub(in super::super) const core__equality_error: usize = 0;
+        pub(in super::super) const core__index_out_of_bounds: usize = 1;
+        pub(in super::super) const structure__member_name_repetition: usize = 2;
+        pub(in super::super) const structure__member_name_missing: usize = 3;
     }
     pub(super) mod Value {
         pub(in super::super) const structure__named_array: usize = 0;
@@ -36,14 +33,29 @@ mod code {
         pub(in super::super) const core__table: usize = 6;
         pub(in super::super) const core__unit: usize = 7;
     }
-    pub(super) mod DiagnosticKind {
-        pub(in super::super) const core__equality_error: usize = 0;
-        pub(in super::super) const core__index_out_of_bounds: usize = 1;
-        pub(in super::super) const structure__member_name_repetition: usize = 2;
-        pub(in super::super) const structure__member_name_missing: usize = 3;
+    pub(super) mod Operator {
+        pub(in super::super) const structure__offset: usize = 0;
+        pub(in super::super) const structure__component: usize = 1;
+        pub(in super::super) const structure__compose: usize = 2;
+        pub(in super::super) const structure__construct: usize = 3;
+        pub(in super::super) const core__sum: usize = 4;
+        pub(in super::super) const core__index: usize = 5;
+        pub(in super::super) const core__find: usize = 6;
     }
 }
 mod union_ {
+
+    pub(super) union DiagnosticKind<P> {
+        pub(super) core__equality_error:
+            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
+        pub(super) core__index_out_of_bounds:
+            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
+        pub(super) structure__member_name_repetition:
+            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameRepetition>,
+        pub(super) structure__member_name_missing:
+            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameMissing>,
+        _p: core::marker::PhantomData<(P,)>,
+    }
     #[derive(Clone, Copy)]
     pub(super) union Value {
         pub(super) structure__named_array:
@@ -58,130 +70,239 @@ mod union_ {
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
         _p: core::marker::PhantomData<()>,
     }
-
-    pub(super) union DiagnosticKind<P> {
-        pub(super) core__equality_error:
-            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
-        pub(super) core__index_out_of_bounds:
-            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
-        pub(super) structure__member_name_repetition:
-            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameRepetition>,
-        pub(super) structure__member_name_missing:
-            std::mem::ManuallyDrop<::lichen_structure::diagnostic_kind::MemberNameMissing>,
-        _p: core::marker::PhantomData<(P,)>,
-    }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Operator<P: ::lichen_structure::plugin::Project>(usize, core::marker::PhantomData<P>);
 
-impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::Operator<P>
-where
-    P::Value: ::lichen_structure::plugin::Value,
-    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
-{
+pub struct DiagnosticKind<P: ::lichen_structure::plugin::Project> {
+    code: usize,
+    data: self::union_::DiagnosticKind<P>,
+}
+impl<P: ::lichen_structure::plugin::Project> Eq for self::DiagnosticKind<P> {}
+
+impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            self::code::Operator::structure__offset => {
-                write!(f, "structure::offset")
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                write!(f, "core::equality_error({:?})", unsafe {
+                    &*self.data.core__equality_error
+                })
             }
-            self::code::Operator::structure__component => {
-                write!(f, "structure::component")
+            self::code::DiagnosticKind::core__index_out_of_bounds => {
+                write!(f, "core::index_out_of_bounds({:?})", unsafe {
+                    &*self.data.core__index_out_of_bounds
+                })
             }
-            self::code::Operator::structure__compose => {
-                write!(f, "structure::compose")
+            self::code::DiagnosticKind::structure__member_name_repetition => {
+                write!(f, "structure::member_name_repetition({:?})", unsafe {
+                    &*self.data.structure__member_name_repetition
+                })
             }
-            self::code::Operator::structure__construct => {
-                write!(f, "structure::construct")
-            }
-            self::code::Operator::core__sum => {
-                write!(f, "core::sum")
-            }
-            self::code::Operator::core__index => {
-                write!(f, "core::index")
-            }
-            self::code::Operator::core__find => {
-                write!(f, "core::find")
+            self::code::DiagnosticKind::structure__member_name_missing => {
+                write!(f, "structure::member_name_missing({:?})", unsafe {
+                    &*self.data.structure__member_name_missing
+                })
             }
             _ => unreachable!(),
         }
     }
 }
-impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
-    for self::Operator<P>
-where
-    P::Value: ::lichen_structure::plugin::Value,
-    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
+impl<P: ::lichen_structure::plugin::Project> PartialEq for self::DiagnosticKind<P> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return false;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error == other.data.core__equality_error
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
+                self.data.core__index_out_of_bounds == other.data.core__index_out_of_bounds
+            },
+            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
+                self.data.structure__member_name_repetition
+                    == other.data.structure__member_name_repetition
+            },
+            self::code::DiagnosticKind::structure__member_name_missing => unsafe {
+                self.data.structure__member_name_missing
+                    == other.data.structure__member_name_missing
+            },
+            _ => unreachable!(),
+        }
+    }
+    fn ne(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return true;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error != other.data.core__equality_error
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
+                self.data.core__index_out_of_bounds != other.data.core__index_out_of_bounds
+            },
+            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
+                self.data.structure__member_name_repetition
+                    != other.data.structure__member_name_repetition
+            },
+            self::code::DiagnosticKind::structure__member_name_missing => unsafe {
+                self.data.structure__member_name_missing
+                    != other.data.structure__member_name_missing
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_structure::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.code.hash(state);
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                unsafe { &self.data.core__equality_error }.hash(state);
+            }
+            self::code::DiagnosticKind::core__index_out_of_bounds => {
+                unsafe { &self.data.core__index_out_of_bounds }.hash(state);
+            }
+            self::code::DiagnosticKind::structure__member_name_repetition => {
+                unsafe { &self.data.structure__member_name_repetition }.hash(state);
+            }
+            self::code::DiagnosticKind::structure__member_name_missing => {
+                unsafe { &self.data.structure__member_name_missing }.hash(state);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_structure::plugin::Project> Clone for self::DiagnosticKind<P> {
+    fn clone(&self) -> Self {
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
+                },
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    core__index_out_of_bounds: unsafe { &self.data.core__index_out_of_bounds }
+                        .clone(),
+                },
+            },
+            self::code::DiagnosticKind::structure__member_name_repetition => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    structure__member_name_repetition: unsafe {
+                        &self.data.structure__member_name_repetition
+                    }
+                    .clone(),
+                },
+            },
+            self::code::DiagnosticKind::structure__member_name_missing => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    structure__member_name_missing: unsafe {
+                        &self.data.structure__member_name_missing
+                    }
+                    .clone(),
+                },
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_structure::plugin::Project>
+    ::lichen_core::plugin::principal_traits::DiagnosticKind<P> for self::DiagnosticKind<P>
 {
-    fn run(
-        &self,
-        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
-        value: &<P as ::lichen_core::plugin::Project>::Value,
-        node: &::lichen_core::runtime::solve::LocalNodeId,
-    ) -> ::lichen_core::runtime::operation::Option<P> {
-        match self.0{
-self::code::Operator::structure__offset=>{
-<::lichen_structure::operator::Offset::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Offset::<>},solver,value,node,)
+    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code{
+self::code::DiagnosticKind::core__equality_error=>{
+<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
 }
-self::code::Operator::structure__component=>{
-<::lichen_structure::operator::Component::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Component::<>},solver,value,node,)
+self::code::DiagnosticKind::core__index_out_of_bounds=>{
+<::lichen_core::diagnostic_kind::IndexOutOfBounds::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__index_out_of_bounds},f,)
 }
-self::code::Operator::structure__compose=>{
-<::lichen_structure::operator::Compose::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Compose::<>},solver,value,node,)
+self::code::DiagnosticKind::structure__member_name_repetition=>{
+<::lichen_structure::diagnostic_kind::MemberNameRepetition::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_repetition},f,)
 }
-self::code::Operator::structure__construct=>{
-<::lichen_structure::operator::Construct::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Construct::<>},solver,value,node,)
-}
-self::code::Operator::core__sum=>{
-<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
-}
-self::code::Operator::core__index=>{
-<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
-}
-self::code::Operator::core__find=>{
-<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
+self::code::DiagnosticKind::structure__member_name_missing=>{
+<::lichen_structure::diagnostic_kind::MemberNameMissing::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_missing},f,)
 }
 _=>unreachable!(),}
     }
 }
-impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::Operator<P>
-    for self::Operator<P>
+impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
 {
-    fn sum() -> Self {
-        Self(self::code::Operator::core__sum, core::marker::PhantomData)
+    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
+        if self.code == self::code::DiagnosticKind::core__equality_error {
+            Some(unsafe { &self.data.core__equality_error })
+        } else {
+            None
+        }
     }
-    fn index() -> Self {
-        Self(self::code::Operator::core__index, core::marker::PhantomData)
+    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::core__equality_error,
+            data: self::union_::DiagnosticKind {
+                core__equality_error: std::mem::ManuallyDrop::new(data),
+            },
+        }
     }
-    fn find() -> Self {
-        Self(self::code::Operator::core__find, core::marker::PhantomData)
+    fn index_out_of_bounds(&self) -> Option<&::lichen_core::diagnostic_kind::IndexOutOfBounds> {
+        if self.code == self::code::DiagnosticKind::core__index_out_of_bounds {
+            Some(unsafe { &self.data.core__index_out_of_bounds })
+        } else {
+            None
+        }
+    }
+    fn from_index_out_of_bounds(data: ::lichen_core::diagnostic_kind::IndexOutOfBounds) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::core__index_out_of_bounds,
+            data: self::union_::DiagnosticKind {
+                core__index_out_of_bounds: std::mem::ManuallyDrop::new(data),
+            },
+        }
     }
 }
-impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::Operator<P>
-    for self::Operator<P>
+impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
 {
-    fn offset() -> Self {
-        Self(
-            self::code::Operator::structure__offset,
-            core::marker::PhantomData,
-        )
+    fn member_name_repetition(
+        &self,
+    ) -> Option<&::lichen_structure::diagnostic_kind::MemberNameRepetition> {
+        if self.code == self::code::DiagnosticKind::structure__member_name_repetition {
+            Some(unsafe { &self.data.structure__member_name_repetition })
+        } else {
+            None
+        }
     }
-    fn component() -> Self {
-        Self(
-            self::code::Operator::structure__component,
-            core::marker::PhantomData,
-        )
+    fn from_member_name_repetition(
+        data: ::lichen_structure::diagnostic_kind::MemberNameRepetition,
+    ) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::structure__member_name_repetition,
+            data: self::union_::DiagnosticKind {
+                structure__member_name_repetition: std::mem::ManuallyDrop::new(data),
+            },
+        }
     }
-    fn compose() -> Self {
-        Self(
-            self::code::Operator::structure__compose,
-            core::marker::PhantomData,
-        )
+    fn member_name_missing(
+        &self,
+    ) -> Option<&::lichen_structure::diagnostic_kind::MemberNameMissing> {
+        if self.code == self::code::DiagnosticKind::structure__member_name_missing {
+            Some(unsafe { &self.data.structure__member_name_missing })
+        } else {
+            None
+        }
     }
-    fn construct() -> Self {
-        Self(
-            self::code::Operator::structure__construct,
-            core::marker::PhantomData,
-        )
+    fn from_member_name_missing(
+        data: ::lichen_structure::diagnostic_kind::MemberNameMissing,
+    ) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::structure__member_name_missing,
+            data: self::union_::DiagnosticKind {
+                structure__member_name_missing: std::mem::ManuallyDrop::new(data),
+            },
+        }
     }
 }
 #[derive(Clone, Copy)]
@@ -511,274 +632,117 @@ impl ::lichen_structure::plugin::Value for self::Value {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Operator<P: ::lichen_structure::plugin::Project>(usize, core::marker::PhantomData<P>);
 
-pub struct DiagnosticKind<P: ::lichen_structure::plugin::Project> {
-    code: usize,
-    data: self::union_::DiagnosticKind<P>,
-}
-impl<P: ::lichen_structure::plugin::Project> Eq for self::DiagnosticKind<P> {}
-
-impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                write!(f, "core::equality_error({:?})", unsafe {
-                    &*self.data.core__equality_error
-                })
-            }
-            self::code::DiagnosticKind::core__index_out_of_bounds => {
-                write!(f, "core::index_out_of_bounds({:?})", unsafe {
-                    &*self.data.core__index_out_of_bounds
-                })
-            }
-            self::code::DiagnosticKind::structure__member_name_repetition => {
-                write!(f, "structure::member_name_repetition({:?})", unsafe {
-                    &*self.data.structure__member_name_repetition
-                })
-            }
-            self::code::DiagnosticKind::structure__member_name_missing => {
-                write!(f, "structure::member_name_missing({:?})", unsafe {
-                    &*self.data.structure__member_name_missing
-                })
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_structure::plugin::Project> PartialEq for self::DiagnosticKind<P> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return false;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error == other.data.core__equality_error
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
-                self.data.core__index_out_of_bounds == other.data.core__index_out_of_bounds
-            },
-            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
-                self.data.structure__member_name_repetition
-                    == other.data.structure__member_name_repetition
-            },
-            self::code::DiagnosticKind::structure__member_name_missing => unsafe {
-                self.data.structure__member_name_missing
-                    == other.data.structure__member_name_missing
-            },
-            _ => unreachable!(),
-        }
-    }
-    fn ne(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return true;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error != other.data.core__equality_error
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
-                self.data.core__index_out_of_bounds != other.data.core__index_out_of_bounds
-            },
-            self::code::DiagnosticKind::structure__member_name_repetition => unsafe {
-                self.data.structure__member_name_repetition
-                    != other.data.structure__member_name_repetition
-            },
-            self::code::DiagnosticKind::structure__member_name_missing => unsafe {
-                self.data.structure__member_name_missing
-                    != other.data.structure__member_name_missing
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_structure::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.code.hash(state);
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                unsafe { &self.data.core__equality_error }.hash(state);
-            }
-            self::code::DiagnosticKind::core__index_out_of_bounds => {
-                unsafe { &self.data.core__index_out_of_bounds }.hash(state);
-            }
-            self::code::DiagnosticKind::structure__member_name_repetition => {
-                unsafe { &self.data.structure__member_name_repetition }.hash(state);
-            }
-            self::code::DiagnosticKind::structure__member_name_missing => {
-                unsafe { &self.data.structure__member_name_missing }.hash(state);
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_structure::plugin::Project> Clone for self::DiagnosticKind<P> {
-    fn clone(&self) -> Self {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
-                },
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    core__index_out_of_bounds: unsafe { &self.data.core__index_out_of_bounds }
-                        .clone(),
-                },
-            },
-            self::code::DiagnosticKind::structure__member_name_repetition => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    structure__member_name_repetition: unsafe {
-                        &self.data.structure__member_name_repetition
-                    }
-                    .clone(),
-                },
-            },
-            self::code::DiagnosticKind::structure__member_name_missing => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    structure__member_name_missing: unsafe {
-                        &self.data.structure__member_name_missing
-                    }
-                    .clone(),
-                },
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_structure::plugin::Project>
-    ::lichen_core::plugin::principal_traits::DiagnosticKind<P> for self::DiagnosticKind<P>
+impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::Operator<P>
+where
+    P::Value: ::lichen_structure::plugin::Value,
+    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
 {
-    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code{
-self::code::DiagnosticKind::core__equality_error=>{
-<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            self::code::Operator::structure__offset => {
+                write!(f, "structure::offset")
+            }
+            self::code::Operator::structure__component => {
+                write!(f, "structure::component")
+            }
+            self::code::Operator::structure__compose => {
+                write!(f, "structure::compose")
+            }
+            self::code::Operator::structure__construct => {
+                write!(f, "structure::construct")
+            }
+            self::code::Operator::core__sum => {
+                write!(f, "core::sum")
+            }
+            self::code::Operator::core__index => {
+                write!(f, "core::index")
+            }
+            self::code::Operator::core__find => {
+                write!(f, "core::find")
+            }
+            _ => unreachable!(),
+        }
+    }
 }
-self::code::DiagnosticKind::core__index_out_of_bounds=>{
-<::lichen_core::diagnostic_kind::IndexOutOfBounds::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__index_out_of_bounds},f,)
+impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
+    for self::Operator<P>
+where
+    P::Value: ::lichen_structure::plugin::Value,
+    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
+{
+    fn run(
+        &self,
+        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
+        value: &<P as ::lichen_core::plugin::Project>::Value,
+        node: &::lichen_core::runtime::solve::LocalNodeId,
+    ) -> ::lichen_core::runtime::operation::Option<P> {
+        match self.0{
+self::code::Operator::structure__offset=>{
+<::lichen_structure::operator::Offset::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Offset::<>},solver,value,node,)
 }
-self::code::DiagnosticKind::structure__member_name_repetition=>{
-<::lichen_structure::diagnostic_kind::MemberNameRepetition::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_repetition},f,)
+self::code::Operator::structure__component=>{
+<::lichen_structure::operator::Component::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Component::<>},solver,value,node,)
 }
-self::code::DiagnosticKind::structure__member_name_missing=>{
-<::lichen_structure::diagnostic_kind::MemberNameMissing::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.structure__member_name_missing},f,)
+self::code::Operator::structure__compose=>{
+<::lichen_structure::operator::Compose::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Compose::<>},solver,value,node,)
+}
+self::code::Operator::structure__construct=>{
+<::lichen_structure::operator::Construct::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Construct::<>},solver,value,node,)
+}
+self::code::Operator::core__sum=>{
+<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
+}
+self::code::Operator::core__index=>{
+<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
+}
+self::code::Operator::core__find=>{
+<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
 }
 _=>unreachable!(),}
     }
 }
-impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
+impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::Operator<P>
+    for self::Operator<P>
 {
-    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
-        if self.code == self::code::DiagnosticKind::core__equality_error {
-            Some(unsafe { &self.data.core__equality_error })
-        } else {
-            None
-        }
+    fn sum() -> Self {
+        Self(self::code::Operator::core__sum, core::marker::PhantomData)
     }
-    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::core__equality_error,
-            data: self::union_::DiagnosticKind {
-                core__equality_error: std::mem::ManuallyDrop::new(data),
-            },
-        }
+    fn index() -> Self {
+        Self(self::code::Operator::core__index, core::marker::PhantomData)
     }
-    fn index_out_of_bounds(&self) -> Option<&::lichen_core::diagnostic_kind::IndexOutOfBounds> {
-        if self.code == self::code::DiagnosticKind::core__index_out_of_bounds {
-            Some(unsafe { &self.data.core__index_out_of_bounds })
-        } else {
-            None
-        }
-    }
-    fn from_index_out_of_bounds(data: ::lichen_core::diagnostic_kind::IndexOutOfBounds) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::core__index_out_of_bounds,
-            data: self::union_::DiagnosticKind {
-                core__index_out_of_bounds: std::mem::ManuallyDrop::new(data),
-            },
-        }
+    fn find() -> Self {
+        Self(self::code::Operator::core__find, core::marker::PhantomData)
     }
 }
-impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
+impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::Operator<P>
+    for self::Operator<P>
 {
-    fn member_name_repetition(
-        &self,
-    ) -> Option<&::lichen_structure::diagnostic_kind::MemberNameRepetition> {
-        if self.code == self::code::DiagnosticKind::structure__member_name_repetition {
-            Some(unsafe { &self.data.structure__member_name_repetition })
-        } else {
-            None
-        }
+    fn offset() -> Self {
+        Self(
+            self::code::Operator::structure__offset,
+            core::marker::PhantomData,
+        )
     }
-    fn from_member_name_repetition(
-        data: ::lichen_structure::diagnostic_kind::MemberNameRepetition,
-    ) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::structure__member_name_repetition,
-            data: self::union_::DiagnosticKind {
-                structure__member_name_repetition: std::mem::ManuallyDrop::new(data),
-            },
-        }
+    fn component() -> Self {
+        Self(
+            self::code::Operator::structure__component,
+            core::marker::PhantomData,
+        )
     }
-    fn member_name_missing(
-        &self,
-    ) -> Option<&::lichen_structure::diagnostic_kind::MemberNameMissing> {
-        if self.code == self::code::DiagnosticKind::structure__member_name_missing {
-            Some(unsafe { &self.data.structure__member_name_missing })
-        } else {
-            None
-        }
+    fn compose() -> Self {
+        Self(
+            self::code::Operator::structure__compose,
+            core::marker::PhantomData,
+        )
     }
-    fn from_member_name_missing(
-        data: ::lichen_structure::diagnostic_kind::MemberNameMissing,
-    ) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::structure__member_name_missing,
-            data: self::union_::DiagnosticKind {
-                structure__member_name_missing: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-}
-impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_structure::plugin::Ast<P>
-    for self::Ast<P>
-where
-    P::Operator: ::lichen_structure::plugin::Operator<P>,
-{
-    fn structure(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 0)
-    }
-    fn add_literal_structure(
-        &mut self,
-        value: Option<P::Value>,
-        structure: Option<P::Value>,
-    ) -> ::lichen_core::ast::ExprId {
-        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        if let Some(value) = value {
-            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
-        }
-        if let Some(structure) = structure {
-            let node = <Self as ::lichen_structure::plugin::Ast<P>>::structure(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(structure)
-        }
-        expr
-    }
-    fn add_member(
-        &mut self,
-        structure: &::lichen_core::ast::ExprId,
-        name: &::lichen_core::ast::ExprId,
-    ) -> ::lichen_core::ast::ExprId {
-        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        <::lichen_structure::expr_impl::Member as ::lichen_structure::plugin::expr::member<P,>>::build(self,&output,structure,name,);
-        output
+    fn construct() -> Self {
+        Self(
+            self::code::Operator::structure__construct,
+            core::marker::PhantomData,
+        )
     }
 }
 impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_core::plugin::Ast<P>
@@ -787,7 +751,7 @@ where
     P::Operator: ::lichen_structure::plugin::Operator<P>,
 {
     fn value(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 1)
+        self.impl_.property(expr, 0)
     }
     fn add_literal_core(&mut self, value: Option<P::Value>) -> ::lichen_core::ast::ExprId {
         let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
@@ -844,6 +808,61 @@ where
         <::lichen_core::expr_impl::Array as ::lichen_core::plugin::expr::array<P>>::build(
             self, &output, element,
         );
+        output
+    }
+}
+impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_structure::plugin::Ast<P>
+    for self::Ast<P>
+where
+    P::Operator: ::lichen_structure::plugin::Operator<P>,
+{
+    fn structure(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
+        self.impl_.property(expr, 1)
+    }
+    fn add_literal_structure(
+        &mut self,
+        value: Option<P::Value>,
+        structure: Option<P::Value>,
+    ) -> ::lichen_core::ast::ExprId {
+        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        if let Some(value) = value {
+            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
+        }
+        if let Some(structure) = structure {
+            let node = <Self as ::lichen_structure::plugin::Ast<P>>::structure(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(structure)
+        }
+        expr
+    }
+    fn add_member(
+        &mut self,
+        instance: &::lichen_core::ast::ExprId,
+        name: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Member as ::lichen_structure::plugin::expr::member<P,>>::build(self,&output,instance,name,);
+        output
+    }
+    fn add_compose(
+        &mut self,
+        components: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Compose as ::lichen_structure::plugin::expr::compose<P,>>::build(self,&output,components,);
+        output
+    }
+    fn add_construct(
+        &mut self,
+        structure: &::lichen_core::ast::ExprId,
+        members: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Construct as ::lichen_structure::plugin::expr::construct<
+            P,
+        >>::build(self, &output, structure, members);
         output
     }
 }

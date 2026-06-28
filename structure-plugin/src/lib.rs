@@ -25,13 +25,27 @@ pub static PLUGIN: Plugin = Plugin {
         ),
     ],
     properties: &["structure"],
-    exprs: &[&MEMBER_EXPR],
+    exprs: &[&MEMBER_EXPR, &COMPOSE_EXPR, &CONSTRUCT_EXPR],
     expr_impls: &[
         ExprImpls {
             expr: &MEMBER_EXPR,
             impls: &[&WrittenPathRaw {
                 crate_: CRATE,
                 path: "expr_impl::Member",
+            }],
+        },
+        ExprImpls {
+            expr: &COMPOSE_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Compose",
+            }],
+        },
+        ExprImpls {
+            expr: &CONSTRUCT_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Construct",
             }],
         },
         ExprImpls {
@@ -63,20 +77,6 @@ pub static PLUGIN: Plugin = Plugin {
             }],
         },
     ],
-};
-
-static MEMBER_EXPR: Expr = Expr {
-    name: "member",
-    params: &ExprParams(&[
-        ExprParam {
-            name: "structure",
-            is_array: false,
-        },
-        ExprParam {
-            name: "name",
-            is_array: false,
-        },
-    ]),
 };
 
 static VALUE_ENUM: PluginEnum = PluginEnum {
@@ -185,6 +185,42 @@ static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
         },
     ],
     plugin: &PLUGIN,
+};
+
+static MEMBER_EXPR: Expr = Expr {
+    name: "member",
+    params: &ExprParams(&[
+        ExprParam {
+            name: "instance",
+            is_array: false,
+        },
+        ExprParam {
+            name: "name",
+            is_array: false,
+        },
+    ]),
+};
+
+static COMPOSE_EXPR: Expr = Expr {
+    name: "compose",
+    params: &ExprParams(&[ExprParam {
+        name: "components",
+        is_array: false,
+    }]),
+};
+
+static CONSTRUCT_EXPR: Expr = Expr {
+    name: "construct",
+    params: &ExprParams(&[
+        ExprParam {
+            name: "structure",
+            is_array: false,
+        },
+        ExprParam {
+            name: "members",
+            is_array: false,
+        },
+    ]),
 };
 
 pub const CRATE: &'static str = "lichen_structure";

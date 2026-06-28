@@ -32,6 +32,9 @@ impl<P: Project> Module<P> {
             }
         })
     }
+    /// #Panic
+    /// - `node` must has [`Evaluation::Auto`]
+    /// - `target` must not has [`Evaluation::Ref`]
     pub fn set_ref(&mut self, node: &NodeIdLocal, target: &NodeIdLocal) {
         debug_assert_ne!(node, target);
         let evaluation = unsafe { erase_mut(self.evaluation_mut(node)) };

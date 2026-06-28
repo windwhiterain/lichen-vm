@@ -7,7 +7,6 @@ use crate::{
     value,
 };
 
-#[macro_export]
 macro_rules! expr_impl {
     (Name: $Name:ident, name: $name:ident,trait<$project_variable:ident:$project_trait:path>: $trait:path, params: [$($param:ident,)*]) => {
         pub struct $Name;

@@ -9,18 +9,14 @@
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Project;
+impl ::lichen_type::plugin::Project for self::Project {}
 impl ::lichen_core::plugin::Project for self::Project {
     type Value = self::Value;
     type Operator = self::Operator<Self>;
     type DiagnosticKind = self::DiagnosticKind<Self>;
     type Ast = self::Ast<Self>;
 }
-impl ::lichen_type::plugin::Project for self::Project {}
 mod code {
-    pub(super) mod DiagnosticKind {
-        pub(in super::super) const core__equality_error: usize = 0;
-        pub(in super::super) const core__index_out_of_bounds: usize = 1;
-    }
     pub(super) mod Operator {
         pub(in super::super) const core__sum: usize = 0;
         pub(in super::super) const core__index: usize = 1;
@@ -35,16 +31,12 @@ mod code {
         pub(in super::super) const core__table: usize = 5;
         pub(in super::super) const core__unit: usize = 6;
     }
+    pub(super) mod DiagnosticKind {
+        pub(in super::super) const core__equality_error: usize = 0;
+        pub(in super::super) const core__index_out_of_bounds: usize = 1;
+    }
 }
 mod union_ {
-
-    pub(super) union DiagnosticKind<P> {
-        pub(super) core__equality_error:
-            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
-        pub(super) core__index_out_of_bounds:
-            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
-        _p: core::marker::PhantomData<(P,)>,
-    }
     #[derive(Clone, Copy)]
     pub(super) union Value {
         pub(super) type__int_type: std::mem::ManuallyDrop<::lichen_type::value::IntType>,
@@ -56,146 +48,14 @@ mod union_ {
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
         _p: core::marker::PhantomData<()>,
     }
-}
 
-pub struct DiagnosticKind<P: ::lichen_type::plugin::Project> {
-    code: usize,
-    data: self::union_::DiagnosticKind<P>,
-}
-impl<P: ::lichen_type::plugin::Project> Eq for self::DiagnosticKind<P> {}
-
-impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                write!(f, "core::equality_error({:?})", unsafe {
-                    &*self.data.core__equality_error
-                })
-            }
-            self::code::DiagnosticKind::core__index_out_of_bounds => {
-                write!(f, "core::index_out_of_bounds({:?})", unsafe {
-                    &*self.data.core__index_out_of_bounds
-                })
-            }
-            _ => unreachable!(),
-        }
+    pub(super) union DiagnosticKind<P> {
+        pub(super) core__equality_error:
+            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::EqualityError>,
+        pub(super) core__index_out_of_bounds:
+            std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
+        _p: core::marker::PhantomData<(P,)>,
     }
-}
-impl<P: ::lichen_type::plugin::Project> PartialEq for self::DiagnosticKind<P> {
-    fn eq(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return false;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error == other.data.core__equality_error
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
-                self.data.core__index_out_of_bounds == other.data.core__index_out_of_bounds
-            },
-            _ => unreachable!(),
-        }
-    }
-    fn ne(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return true;
-        }
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => unsafe {
-                self.data.core__equality_error != other.data.core__equality_error
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
-                self.data.core__index_out_of_bounds != other.data.core__index_out_of_bounds
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.code.hash(state);
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => {
-                unsafe { &self.data.core__equality_error }.hash(state);
-            }
-            self::code::DiagnosticKind::core__index_out_of_bounds => {
-                unsafe { &self.data.core__index_out_of_bounds }.hash(state);
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> Clone for self::DiagnosticKind<P> {
-    fn clone(&self) -> Self {
-        match self.code {
-            self::code::DiagnosticKind::core__equality_error => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
-                },
-            },
-            self::code::DiagnosticKind::core__index_out_of_bounds => Self {
-                code: self.code,
-                data: self::union_::DiagnosticKind {
-                    core__index_out_of_bounds: unsafe { &self.data.core__index_out_of_bounds }
-                        .clone(),
-                },
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
-{
-    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code{
-self::code::DiagnosticKind::core__equality_error=>{
-<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
-}
-self::code::DiagnosticKind::core__index_out_of_bounds=>{
-<::lichen_core::diagnostic_kind::IndexOutOfBounds::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__index_out_of_bounds},f,)
-}
-_=>unreachable!(),}
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
-{
-    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
-        if self.code == self::code::DiagnosticKind::core__equality_error {
-            Some(unsafe { &self.data.core__equality_error })
-        } else {
-            None
-        }
-    }
-    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::core__equality_error,
-            data: self::union_::DiagnosticKind {
-                core__equality_error: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-    fn index_out_of_bounds(&self) -> Option<&::lichen_core::diagnostic_kind::IndexOutOfBounds> {
-        if self.code == self::code::DiagnosticKind::core__index_out_of_bounds {
-            Some(unsafe { &self.data.core__index_out_of_bounds })
-        } else {
-            None
-        }
-    }
-    fn from_index_out_of_bounds(data: ::lichen_core::diagnostic_kind::IndexOutOfBounds) -> Self {
-        Self {
-            code: self::code::DiagnosticKind::core__index_out_of_bounds,
-            data: self::union_::DiagnosticKind {
-                core__index_out_of_bounds: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::DiagnosticKind<P>
-    for self::DiagnosticKind<P>
-{
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Operator<P: ::lichen_type::plugin::Project>(usize, core::marker::PhantomData<P>);
@@ -536,13 +396,180 @@ impl ::lichen_type::plugin::Value for self::Value {
         }
     }
 }
+
+pub struct DiagnosticKind<P: ::lichen_type::plugin::Project> {
+    code: usize,
+    data: self::union_::DiagnosticKind<P>,
+}
+impl<P: ::lichen_type::plugin::Project> Eq for self::DiagnosticKind<P> {}
+
+impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::DiagnosticKind<P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                write!(f, "core::equality_error({:?})", unsafe {
+                    &*self.data.core__equality_error
+                })
+            }
+            self::code::DiagnosticKind::core__index_out_of_bounds => {
+                write!(f, "core::index_out_of_bounds({:?})", unsafe {
+                    &*self.data.core__index_out_of_bounds
+                })
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> PartialEq for self::DiagnosticKind<P> {
+    fn eq(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return false;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error == other.data.core__equality_error
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
+                self.data.core__index_out_of_bounds == other.data.core__index_out_of_bounds
+            },
+            _ => unreachable!(),
+        }
+    }
+    fn ne(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return true;
+        }
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => unsafe {
+                self.data.core__equality_error != other.data.core__equality_error
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => unsafe {
+                self.data.core__index_out_of_bounds != other.data.core__index_out_of_bounds
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> std::hash::Hash for self::DiagnosticKind<P> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.code.hash(state);
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => {
+                unsafe { &self.data.core__equality_error }.hash(state);
+            }
+            self::code::DiagnosticKind::core__index_out_of_bounds => {
+                unsafe { &self.data.core__index_out_of_bounds }.hash(state);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> Clone for self::DiagnosticKind<P> {
+    fn clone(&self) -> Self {
+        match self.code {
+            self::code::DiagnosticKind::core__equality_error => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    core__equality_error: unsafe { &self.data.core__equality_error }.clone(),
+                },
+            },
+            self::code::DiagnosticKind::core__index_out_of_bounds => Self {
+                code: self.code,
+                data: self::union_::DiagnosticKind {
+                    core__index_out_of_bounds: unsafe { &self.data.core__index_out_of_bounds }
+                        .clone(),
+                },
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
+    fn message(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code{
+self::code::DiagnosticKind::core__equality_error=>{
+<::lichen_core::diagnostic_kind::EqualityError::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__equality_error},f,)
+}
+self::code::DiagnosticKind::core__index_out_of_bounds=>{
+<::lichen_core::diagnostic_kind::IndexOutOfBounds::<> as ::lichen_core::plugin::principal_traits::DiagnosticKind<P,>>::message(unsafe{& self.data.core__index_out_of_bounds},f,)
+}
+_=>unreachable!(),}
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
+    fn equality_error(&self) -> Option<&::lichen_core::diagnostic_kind::EqualityError> {
+        if self.code == self::code::DiagnosticKind::core__equality_error {
+            Some(unsafe { &self.data.core__equality_error })
+        } else {
+            None
+        }
+    }
+    fn from_equality_error(data: ::lichen_core::diagnostic_kind::EqualityError) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::core__equality_error,
+            data: self::union_::DiagnosticKind {
+                core__equality_error: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn index_out_of_bounds(&self) -> Option<&::lichen_core::diagnostic_kind::IndexOutOfBounds> {
+        if self.code == self::code::DiagnosticKind::core__index_out_of_bounds {
+            Some(unsafe { &self.data.core__index_out_of_bounds })
+        } else {
+            None
+        }
+    }
+    fn from_index_out_of_bounds(data: ::lichen_core::diagnostic_kind::IndexOutOfBounds) -> Self {
+        Self {
+            code: self::code::DiagnosticKind::core__index_out_of_bounds,
+            data: self::union_::DiagnosticKind {
+                core__index_out_of_bounds: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::DiagnosticKind<P>
+    for self::DiagnosticKind<P>
+{
+}
+impl<P: ::lichen_type::plugin::Project<Ast = self::Ast<P>>> ::lichen_type::plugin::Ast<P>
+    for self::Ast<P>
+where
+    P::Operator: ::lichen_type::plugin::Operator<P>,
+{
+    fn r#type(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
+        self.impl_.property(expr, 0)
+    }
+    fn add_literal_type(
+        &mut self,
+        value: Option<P::Value>,
+        r#type: Option<P::Value>,
+    ) -> ::lichen_core::ast::ExprId {
+        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        if let Some(value) = value {
+            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
+        }
+        if let Some(r#type) = r#type {
+            let node = <Self as ::lichen_type::plugin::Ast<P>>::r#type(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(r#type)
+        }
+        expr
+    }
+}
 impl<P: ::lichen_type::plugin::Project<Ast = self::Ast<P>>> ::lichen_core::plugin::Ast<P>
     for self::Ast<P>
 where
     P::Operator: ::lichen_type::plugin::Operator<P>,
 {
     fn value(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 0)
+        self.impl_.property(expr, 1)
     }
     fn add_literal_core(&mut self, value: Option<P::Value>) -> ::lichen_core::ast::ExprId {
         let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
@@ -591,33 +618,6 @@ where
             self, &output, element,
         );
         output
-    }
-}
-impl<P: ::lichen_type::plugin::Project<Ast = self::Ast<P>>> ::lichen_type::plugin::Ast<P>
-    for self::Ast<P>
-where
-    P::Operator: ::lichen_type::plugin::Operator<P>,
-{
-    fn r#type(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 1)
-    }
-    fn add_literal_type(
-        &mut self,
-        value: Option<P::Value>,
-        r#type: Option<P::Value>,
-    ) -> ::lichen_core::ast::ExprId {
-        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        if let Some(value) = value {
-            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
-        }
-        if let Some(r#type) = r#type {
-            let node = <Self as ::lichen_type::plugin::Ast<P>>::r#type(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(r#type)
-        }
-        expr
     }
 }
 pub struct Ast<P: ::lichen_type::plugin::Project> {

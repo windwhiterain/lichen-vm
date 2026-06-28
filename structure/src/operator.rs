@@ -33,7 +33,7 @@ where
         node: &lichen_core::runtime::solve::LocalNodeId,
     ) -> operation::Option<P> {
         let (structure, name) = operands!(solver, value, node, P, [structure, string,]);
-        Find::run::<P>(structure.table, name)
+        Find::run::<P>(structure.table, name).unwrap()
     }
 }
 
@@ -55,7 +55,7 @@ where
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
     ) -> operation::Option<P> {
-        let named_array = value.named_array()?;
+        let named_array = value.named_array().unwrap();
         let module = solver.module_mut(&node.module());
         let mut table = Table::uninit(module, named_array.0.len());
         for (i, (name, _)) in named_array.0.iter().enumerate() {

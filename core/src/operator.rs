@@ -107,9 +107,9 @@ impl<P: Project> Operator<P> for Index {
 pub struct Find;
 
 impl Find {
-    pub fn run<P: Project>(table: Table, name: StringId) -> operation::Option<P> {
-        let index = *table.0.get(&name)?;
-        Some(operation::Some::Value(P::Value::from_int(index as i64)))
+    pub fn run<P: Project>(table: Table, name: StringId) -> Option<operation::Option<P>> {
+        let index = table.0.get(&name).copied();
+        index.map(|index| Some(operation::Some::Value(P::Value::from_int(index as i64))))
     }
 }
 
@@ -121,7 +121,6 @@ impl<P: Project> Operator<P> for Find {
         node: &LocalNodeId,
     ) -> operation::Option<P> {
         let (table, name) = operands!(solver, operand, node, P, [table, string,]);
-        let index = *table.0.get(&name)?;
-        Some(operation::Some::Value(P::Value::from_int(index as i64)))
+        Self::run(table, name).unwrap()
     }
 }
