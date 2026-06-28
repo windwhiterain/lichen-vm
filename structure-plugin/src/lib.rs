@@ -1,7 +1,7 @@
 use lichen_core_plugin::{
-    ARRAY_EXPR, FIND_EXPR, INDEX_EXPR, SUM_EXPR,
+    ARRAY_EXPR, FIND_EXPR, INDEX_EXPR, SUM_EXPR, expr_id_param,
     system::{
-        Expr, ExprImpls, ExprParam, ExprParams, Module, Plugin, PluginEnum, Variant,
+        Expr, ExprImpls, Module, Params, Plugin, PluginEnum, Variant,
         sytax::{Generics, WrittenPath, WrittenPathRaw},
     },
 };
@@ -82,21 +82,21 @@ pub static PLUGIN: Plugin = Plugin {
 static VALUE_ENUM: PluginEnum = PluginEnum {
     variants: &[
         Variant {
-            name: "named_array",
-            path: &WrittenPath {
-                crate_: CRATE,
-                generics: &Generics::NONE,
-                path: "value::NamedArray",
-                project_generic: false,
-            },
-            is_unit: false,
-        },
-        Variant {
             name: "name_set",
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::NONE,
                 path: "value::NameSet",
+                project_generic: false,
+            },
+            is_unit: false,
+        },
+        Variant {
+            name: "layout",
+            path: &WrittenPath {
+                crate_: CRATE,
+                generics: &Generics::NONE,
+                path: "value::Layout",
                 project_generic: false,
             },
             is_unit: false,
@@ -148,10 +148,20 @@ static OPERATOR_ENUM: PluginEnum = PluginEnum {
             is_unit: true,
         },
         Variant {
-            name: "construct",
+            name: "match",
             path: &WrittenPath {
                 crate_: CRATE,
-                path: "operator::Construct",
+                path: "operator::Match",
+                generics: &Generics::NONE,
+                project_generic: false,
+            },
+            is_unit: true,
+        },
+        Variant {
+            name: "transform",
+            path: &WrittenPath {
+                crate_: CRATE,
+                path: "operator::Transform",
                 generics: &Generics::NONE,
                 project_generic: false,
             },
@@ -189,37 +199,20 @@ static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
 
 static MEMBER_EXPR: Expr = Expr {
     name: "member",
-    params: &ExprParams(&[
-        ExprParam {
-            name: "instance",
-            is_array: false,
-        },
-        ExprParam {
-            name: "name",
-            is_array: false,
-        },
-    ]),
+    params: &Params::simple(&[&expr_id_param("instance"), &expr_id_param("name")]),
 };
 
 static COMPOSE_EXPR: Expr = Expr {
     name: "compose",
-    params: &ExprParams(&[ExprParam {
-        name: "components",
-        is_array: false,
-    }]),
+    params: &Params::simple(&[&expr_id_param("name_set"), &expr_id_param("structures")]),
 };
 
 static CONSTRUCT_EXPR: Expr = Expr {
     name: "construct",
-    params: &ExprParams(&[
-        ExprParam {
-            name: "structure",
-            is_array: false,
-        },
-        ExprParam {
-            name: "members",
-            is_array: false,
-        },
+    params: &Params::simple(&[
+        &expr_id_param("structure"),
+        &expr_id_param("name_set"),
+        &expr_id_param("members"),
     ]),
 };
 

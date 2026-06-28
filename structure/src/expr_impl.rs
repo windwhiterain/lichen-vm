@@ -1,8 +1,8 @@
 use lichen_core::{
-    ast::Ast as _,
+    ast::{Ast as _, ExprId},
     plugin::{Ast as _, Operator as _, Value as _},
     runtime::{equation::LocalEquation, evaluation::Evaluation, operation::Operation},
-    value::Array as CoreArray,
+    value::Array as ValueArray,
 };
 use lichen_utils::erase;
 
@@ -26,19 +26,19 @@ where
         let name_value = ast.value(name);
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
-        let operand = CoreArray::node(ast.module_mut(), [instance_structure, name_value]);
+        let operand = ValueArray::node(ast.module_mut(), [instance_structure, name_value]);
         let offset = ast.module_mut().add_operation(Operation {
             operand,
             operator: P::Operator::offset(),
         });
-        let operand = CoreArray::node(ast.module_mut(), [instance_value, offset]);
+        let operand = ValueArray::node(ast.module_mut(), [instance_value, offset]);
         ast.module_mut()
             .operation_mut(&output_value)
             .replace(Operation {
                 operand,
                 operator: P::Operator::index(),
             });
-        let operand = CoreArray::node(ast.module_mut(), [instance_structure, offset]);
+        let operand = ValueArray::node(ast.module_mut(), [instance_structure, offset]);
         ast.module_mut()
             .operation_mut(&output_structure)
             .replace(Operation {
@@ -58,15 +58,18 @@ where
     fn build(
         ast: &mut <P>::Ast,
         output: &lichen_core::ast::ExprId,
-        components: &lichen_core::ast::ExprId,
+        name_set: &lichen_core::ast::ExprId,
+        structures: &lichen_core::ast::ExprId,
     ) {
-        let components_value = ast.value(components);
+        let name_set_value = ast.value(name_set);
+        let structures_value = ast.value(structures);
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
+        let operand = ValueArray::node(ast.module_mut(), [name_set_value, structures_value]);
         ast.module_mut()
             .operation_mut(&output_value)
             .replace(Operation {
-                operand: components_value,
+                operand,
                 operator: P::Operator::compose(),
             });
         *ast.module_mut().evaluation_mut(&output_structure) =
@@ -85,18 +88,25 @@ where
         ast: &mut <P>::Ast,
         output: &lichen_core::ast::ExprId,
         structure: &lichen_core::ast::ExprId,
+        name_set: &lichen_core::ast::ExprId,
         members: &lichen_core::ast::ExprId,
     ) {
         let structure_value = ast.value(structure);
+        let name_set_value = ast.value(name_set);
         let members_value = ast.value(members);
         let output_value = ast.value(output);
         let output_structure = ast.structure(output);
-        let operand = CoreArray::node(ast.module_mut(), [structure_value, members_value]);
+        let operand = ValueArray::node(ast.module_mut(), [structure_value, name_set_value]);
+        let layout = ast.module_mut().add_operation(Operation {
+            operand,
+            operator: P::Operator::r#match(),
+        });
+        let operand = ValueArray::node(ast.module_mut(), [layout, members_value]);
         ast.module_mut()
             .operation_mut(&output_value)
             .replace(Operation {
                 operand,
-                operator: P::Operator::construct(),
+                operator: P::Operator::transform(),
             });
         ast.module_mut().add_equation(LocalEquation {
             nodes: Box::new([output_structure, structure_value]),
@@ -118,7 +128,7 @@ where
         index: &lichen_core::ast::ExprId,
     ) {
         let params = [ast.structure(array), ast.value(index)];
-        let operand = CoreArray::node(ast.module_mut(), params);
+        let operand = ValueArray::node(ast.module_mut(), params);
         let output_structure = ast.structure(output);
         ast.module_mut()
             .operation_mut(&output_structure)
@@ -170,15 +180,15 @@ impl<P: Project> lichen_core::plugin::expr::array<P> for Array
 where
     P::Ast: Ast<P>,
 {
-    fn build(
+    fn build<'a>(
         ast: &mut P::Ast,
         output: &lichen_core::ast::ExprId,
-        element: &[lichen_core::ast::ExprId],
+        element: impl IntoIterator<Item = &'a ExprId> + Copy,
     ) {
         let ast_static = unsafe { erase(ast) };
-        let array = CoreArray::new(
+        let array = ValueArray::new(
             ast.module_mut(),
-            element.iter().map(|x| ast_static.structure(x)),
+            element.into_iter().map(|x| ast_static.structure(x)),
         );
         let output_structure = ast.structure(output);
         *ast.module_mut().evaluation_mut(&output_structure) =

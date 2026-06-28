@@ -1,11 +1,18 @@
-use lichen_core::plugin::principal_traits::Value;
+use lichen_core::{plugin::principal_traits::Value, runtime::NodeId, value::Array};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct IntType;
+#[derive(Debug, Clone, Copy)]
+pub struct Type {
+    pub id: NodeId,
+    pub params: Array,
+    pub components: Array,
+}
 
-impl Value for IntType {}
+impl PartialEq for Type {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id && self.params == other.params
+    }
+}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StringType;
+impl Eq for Type {}
 
-impl Value for StringType {}
+impl Value for Type {}

@@ -1,13 +1,14 @@
 pub mod system;
 use system::{
-    CLONE, DEBUG, EnumType, Expr, ExprImpls, ExprParam, ExprParams, FORMATE_RESULT,
-    FORMATTER_PARAM, Function, HASH, Module, PARTIAL_EQ, PROJECT_VARIABLE, Param, Params, PassMode,
-    Plugin, PluginEnum, Self_, Variant, enum_impl::Delegate, sytax::Derives, sytax::DisplayArray,
-    sytax::Generics, sytax::WrittenPath,
+    CLONE, DEBUG, EnumType, Expr, ExprImpls, FORMATE_RESULT, FORMATTER_PARAM, Function, HASH,
+    Module, PARTIAL_EQ, PROJECT_VARIABLE, Param, Params, PassMode, Plugin, PluginEnum, Self_,
+    Variant, enum_impl::Delegate, sytax::Derives, sytax::DisplayArray, sytax::Generics,
+    sytax::WrittenPath,
 };
 
 use crate::system::{
-    sytax::{AsTrait, Name, WrittenPathRaw},
+    EXPR_ID,
+    sytax::{AsTrait, Generic, Name, WrittenPathRaw},
     utils::generated_project_trait,
 };
 
@@ -76,7 +77,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
             name: "fields",
             generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
-            params: &Params(&[]),
+            params: &Params::simple(&[]),
             return_: Some(&DisplayArray(&[
                 &"Iterator<Item=&",
                 &WrittenPathRaw {
@@ -93,7 +94,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
             name: "for_fields",
             generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
-            params: &Params(&[&Param {
+            params: &Params::simple(&[&Param {
                 name: "action",
                 pass_mode: PassMode::Move,
                 type_: &DisplayArray(&[
@@ -115,7 +116,7 @@ pub static VALUE_TYPE: EnumType = EnumType {
             name: "for_field_pairs",
             generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
-            params: &Params(&[
+            params: &Params::simple(&[
                 &Param {
                     name: "other",
                     pass_mode: PassMode::Ref { lifetime: None },
@@ -168,7 +169,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         name: "run",
         generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
-        params: &Params(&[
+        params: &Params::simple(&[
             &Param {
                 name: "solver",
                 pass_mode: PassMode::RefMut { lifetime: None },
@@ -184,7 +185,7 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
                 mutable: false,
             },
             &Param {
-                name: "value",
+                name: "operand",
                 pass_mode: PassMode::Ref { lifetime: None },
                 type_: &DisplayArray(&[
                     &AsTrait {
@@ -234,7 +235,7 @@ pub static DIAGNOSTIC_KIND_TYPE: EnumType = EnumType {
         name: "message",
         generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
-        params: &Params(&[&FORMATTER_PARAM]),
+        params: &Params::simple(&[&FORMATTER_PARAM]),
         return_: Some(&FORMATE_RESULT),
         enum_impl: Some(&Delegate),
         default_body: None,
@@ -362,42 +363,44 @@ pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
 };
 pub static SUM_EXPR: Expr = Expr {
     name: "sum",
-    params: &ExprParams(&[ExprParam {
-        name: "addends",
-        is_array: false,
-    }]),
+    params: &Params::simple(&[&expr_id_param("addends")]),
 };
 pub static INDEX_EXPR: Expr = Expr {
     name: "index",
-    params: &ExprParams(&[
-        ExprParam {
-            name: "array",
-            is_array: false,
-        },
-        ExprParam {
-            name: "index",
-            is_array: false,
-        },
-    ]),
+    params: &Params::simple(&[&expr_id_param("array"), &expr_id_param("index")]),
 };
 pub static FIND_EXPR: Expr = Expr {
     name: "find",
-    params: &ExprParams(&[
-        ExprParam {
-            name: "table",
-            is_array: false,
-        },
-        ExprParam {
-            name: "name",
-            is_array: false,
-        },
-    ]),
+    params: &Params::simple(&[&expr_id_param("table"), &expr_id_param("name")]),
 };
 pub static ARRAY_EXPR: Expr = Expr {
     name: "array",
-    params: &ExprParams(&[ExprParam {
-        name: "element",
-        is_array: true,
-    }]),
+    params: &Params {
+        this: &[&expr_ids_param("items")],
+        generics: &Generics(&[&Generic {
+            name: "'a",
+            constraints: &[],
+        }]),
+    },
 };
 pub const CRATE: &'static str = "lichen_core";
+pub const EXPR_IDS: DisplayArray =
+    DisplayArray(&[&"impl IntoIterator<Item = &'a ", &EXPR_ID, &"> + Copy"]);
+pub const fn expr_id_param(name: &'static str) -> Param {
+    Param {
+        name,
+        pass_mode: PassMode::Ref { lifetime: None },
+        type_: &EXPR_ID,
+        mutable: false,
+    }
+}
+pub const fn expr_ids_param(name: &'static str) -> Param {
+    Param {
+        name,
+        pass_mode: PassMode::Move,
+        type_: &EXPR_IDS,
+        mutable: false,
+    }
+}
+
+fn a(_a: impl IntoIterator) {}

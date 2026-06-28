@@ -400,3 +400,31 @@ impl Display for Crate {
         }
     }
 }
+
+pub struct DeKeyword(pub &'static str);
+
+impl Display for DeKeyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mode = match self.0 {
+            "match" | "type" => 1,
+            _ => 0,
+        };
+        match mode {
+            0 => write!(f, "{}", self.0),
+            1 => write!(f, "r#{}", self.0),
+            _ => unreachable!(),
+        }
+    }
+}
+
+pub struct Bracket<'a, T: Display>(pub &'a T);
+
+impl Display for Bracket<'_, Generics> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.0.len() > 0 {
+            write!(f, "<{}>", self.0)
+        } else {
+            Ok(())
+        }
+    }
+}

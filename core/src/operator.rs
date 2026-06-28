@@ -2,13 +2,20 @@ use crate::{
     diagnostic_kind::IndexOutOfBounds,
     plugin::{DiagnosticKind as _, Project, Value as _, principal_traits::Operator},
     runtime::{
+        NodeIdLocal,
         diagnostic::Diagnostic,
         operation,
-        solve::{AnyNodeId, LocalNodeId, Solver},
+        solve::{AnyNodeId, LocalModuleId, LocalNodeId, Solver},
     },
     value::{Array, Int, StringId, Table},
 };
 
+/// # Argument
+/// - `solver`: ident
+/// - `operand`: ident
+/// - `node`: ident
+/// - `project`: ident
+/// - `variants`: [[ident, ..]]
 #[macro_export]
 macro_rules! operands {
     ($solver:ident, $operand:ident, $node:ident, $project:ident,[$($variant: ident,)*]) => {{
@@ -123,4 +130,21 @@ impl<P: Project> Operator<P> for Find {
         let (table, name) = operands!(solver, operand, node, P, [table, string,]);
         Self::run(table, name).unwrap()
     }
+}
+
+pub fn solve_all<'a, P: Project>(
+    solver: &mut Solver<P>,
+    module_id: LocalModuleId,
+    nodes: impl IntoIterator<Item = &'a NodeIdLocal>,
+) -> bool {
+    let mut solved = true;
+    for name in nodes.into_iter() {
+        if solver
+            .solve_node(&AnyNodeId::Local(name.solver_local(module_id)), None)
+            .is_none()
+        {
+            solved = false;
+        }
+    }
+    solved
 }

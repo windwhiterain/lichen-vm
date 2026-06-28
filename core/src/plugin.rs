@@ -35,7 +35,7 @@ pub mod principal_traits {
         fn run(
             &self,
             solver: &mut crate::runtime::solve::Solver<P>,
-            value: &<P as crate::plugin::Project>::Value,
+            operand: &<P as crate::plugin::Project>::Value,
             node: &crate::runtime::solve::LocalNodeId,
         ) -> crate::runtime::operation::Option<P>;
     }
@@ -94,7 +94,10 @@ pub trait Ast<P: crate::plugin::Project>: crate::ast::Ast<P> {
         table: &crate::ast::ExprId,
         name: &crate::ast::ExprId,
     ) -> crate::ast::ExprId;
-    fn add_array(&mut self, element: &[crate::ast::ExprId]) -> crate::ast::ExprId;
+    fn add_array<'a>(
+        &mut self,
+        items: impl IntoIterator<Item = &'a crate::ast::ExprId> + Copy,
+    ) -> crate::ast::ExprId;
 }
 pub mod expr {
     pub trait sum<P: crate::plugin::Project> {
@@ -117,6 +120,10 @@ pub mod expr {
         );
     }
     pub trait array<P: crate::plugin::Project> {
-        fn build(ast: &mut P::Ast, output: &crate::ast::ExprId, element: &[crate::ast::ExprId]);
+        fn build<'a>(
+            ast: &mut P::Ast,
+            output: &crate::ast::ExprId,
+            items: impl IntoIterator<Item = &'a crate::ast::ExprId> + Copy,
+        );
     }
 }

@@ -1,7 +1,7 @@
 use lichen_utils::erase;
 
 use crate::{
-    ast::Ast as _,
+    ast::{Ast as _, ExprId},
     plugin::{Ast as _, Operator as _, Project, Value as _, expr},
     runtime::evaluation::Evaluation,
     value,
@@ -46,15 +46,15 @@ expr_impl! {Name: Find, name: find, trait<P:Project>: expr::find<P>, params: [ta
 pub struct Array;
 
 impl<P: Project> expr::array<P> for Array {
-    fn build(
+    fn build<'a>(
         ast: &mut <P as Project>::Ast,
         output: &crate::ast::ExprId,
-        element: &[crate::ast::ExprId],
+        items: impl IntoIterator<Item = &'a ExprId> + Copy,
     ) {
         let ast_static = unsafe { erase(ast) };
         let array = value::Array::new(
             ast.module_mut(),
-            element.iter().map(|x| ast_static.value(x)),
+            items.into_iter().map(|x| ast_static.value(x)),
         );
         let output = ast.value(output);
         *ast.module_mut().evaluation_mut(&output) = Evaluation::Value(P::Value::from_array(array))

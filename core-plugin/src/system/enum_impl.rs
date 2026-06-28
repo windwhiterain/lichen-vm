@@ -1,4 +1,5 @@
 use crate::system::UNION;
+use crate::system::sytax::{Bracket, DeKeyword};
 use crate::system::{EnumType, Function, Plugin, Variant, utils::generated_principle_trait};
 
 pub trait EnumImpl: Send + Sync {
@@ -43,10 +44,11 @@ impl EnumImpl for Delegate {
         }
         write!(
             f,
-            "<{} as {}>::{}(",
+            "<{} as {}>::{}{}(",
             variant.path,
             generated_principle_trait(enum_type.plugin, *enum_type.name),
-            function.name
+            function.name,
+            Bracket(function.params.generics)
         )?;
         if let Some(self_) = &function.self_ {
             if enum_type.is_unit {
@@ -60,7 +62,7 @@ impl EnumImpl for Delegate {
             }
             write!(f, ",")?;
         }
-        for param in function.params.0 {
+        for param in function.params.this {
             if format!("{}", param.type_) == "Self" {
                 write!(
                     f,
@@ -161,7 +163,7 @@ impl EnumImpl for DebugBody {
         variant: &Variant,
         plugin: &Plugin,
     ) -> std::fmt::Result {
-        write!(f, "write!(f,\"{}::{}", plugin.name, variant.name)?;
+        write!(f, "write!(f,\"{}::{}", plugin.name, DeKeyword(variant.name))?;
         if enum_type.is_unit || variant.is_unit {
             write!(f, "\")")?;
         } else {
@@ -199,7 +201,9 @@ impl EnumImpl for Clone {
         writeln!(
             f,
             "Self{{code:self.code,data:self::{UNION}::{0}{{{1}__{2}:unsafe{{&self.data.{1}__{2}}}.clone() }} }}",
-            enum_type.name.name, plugin.name, variant.name
+            DeKeyword(enum_type.name.name),
+            plugin.name,
+            variant.name
         )
     }
 }

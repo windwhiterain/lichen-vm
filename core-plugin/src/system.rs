@@ -21,7 +21,7 @@ pub static PARTIAL_EQ: Trait = Trait {
             name: "eq",
             generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
-            params: &Params(&[&Param {
+            params: &Params::simple(&[&Param {
                 name: "other",
                 pass_mode: PassMode::Ref { lifetime: None },
                 type_: &"Self",
@@ -36,7 +36,7 @@ pub static PARTIAL_EQ: Trait = Trait {
             name: "ne",
             generics: &[],
             self_: Some(Self_(PassMode::Ref { lifetime: None })),
-            params: &Params(&[&Param {
+            params: &Params::simple(&[&Param {
                 name: "other",
                 pass_mode: PassMode::Ref { lifetime: None },
                 type_: &"Self",
@@ -59,7 +59,7 @@ pub static HASH: Trait = Trait {
             constraints: &[&"std::hash::Hasher"],
         }],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
-        params: &Params(&[&Param {
+        params: &Params::simple(&[&Param {
             name: "state",
             pass_mode: PassMode::RefMut { lifetime: None },
             type_: &"H",
@@ -78,7 +78,7 @@ pub static DEBUG: Trait = Trait {
         name: "fmt",
         generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
-        params: &Params(&[&FORMATTER_PARAM]),
+        params: &Params::simple(&[&FORMATTER_PARAM]),
         return_: Some(&FORMATE_RESULT),
         enum_impl: Some(&DebugBody),
         default_body: None,
@@ -92,7 +92,7 @@ pub static CLONE: Trait = Trait {
         name: "clone",
         generics: &[],
         self_: Some(Self_(PassMode::Ref { lifetime: None })),
-        params: &Params(&[]),
+        params: &Params::simple(&[]),
         return_: Some(&"Self"),
         enum_impl: Some(&Clone),
         default_body: None,
@@ -276,11 +276,23 @@ impl Display for Function {
     }
 }
 
-pub struct Params(pub &'static [&'static Param]);
+pub struct Params {
+    pub this: &'static [&'static Param],
+    pub generics: &'static Generics,
+}
+
+impl Params {
+    pub const fn simple(this: &'static [&'static Param]) -> Self {
+        Self {
+            this,
+            generics: &Generics::NONE,
+        }
+    }
+}
 
 impl Display for Params {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for param in self.0 {
+        for param in self.this {
             write!(f, "{}", param)?;
         }
         Ok(())
@@ -289,7 +301,7 @@ impl Display for Params {
 
 impl Display for Declare<'_, Params> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for param in self.0.0 {
+        for param in self.0.this {
             write!(f, "{}", Declare(*param))?;
         }
         Ok(())
@@ -348,38 +360,7 @@ impl Display for Declare<'_, Param> {
 
 pub struct Expr {
     pub name: &'static str,
-    pub params: &'static ExprParams,
-}
-
-pub struct ExprParams(pub &'static [ExprParam]);
-
-impl Display for ExprParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for param in self.0 {
-            write!(f, "{},", param.name)?;
-        }
-        Ok(())
-    }
-}
-
-impl Display for Declare<'_, ExprParams> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for param in self.0.0 {
-            write!(f, "{}:", param.name)?;
-            if !param.is_array {
-                write!(f, "&{EXPR_ID}")?;
-            } else {
-                write!(f, "&[{EXPR_ID}]")?;
-            }
-            write!(f, ",")?;
-        }
-        Ok(())
-    }
-}
-
-pub struct ExprParam {
-    pub name: &'static str,
-    pub is_array: bool,
+    pub params: &'static Params,
 }
 
 pub struct ExprImpls {

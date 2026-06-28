@@ -9,14 +9,24 @@
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Hash)]
 pub struct Project;
+impl ::lichen_structure::plugin::Project for self::Project {}
 impl ::lichen_core::plugin::Project for self::Project {
     type Value = self::Value;
     type Operator = self::Operator<Self>;
     type DiagnosticKind = self::DiagnosticKind<Self>;
     type Ast = self::Ast<Self>;
 }
-impl ::lichen_structure::plugin::Project for self::Project {}
 mod code {
+    pub(super) mod Operator {
+        pub(in super::super) const structure__offset: usize = 0;
+        pub(in super::super) const structure__component: usize = 1;
+        pub(in super::super) const structure__compose: usize = 2;
+        pub(in super::super) const structure__match: usize = 3;
+        pub(in super::super) const structure__transform: usize = 4;
+        pub(in super::super) const core__sum: usize = 5;
+        pub(in super::super) const core__index: usize = 6;
+        pub(in super::super) const core__find: usize = 7;
+    }
     pub(super) mod DiagnosticKind {
         pub(in super::super) const core__equality_error: usize = 0;
         pub(in super::super) const core__index_out_of_bounds: usize = 1;
@@ -24,23 +34,14 @@ mod code {
         pub(in super::super) const structure__member_name_missing: usize = 3;
     }
     pub(super) mod Value {
-        pub(in super::super) const structure__named_array: usize = 0;
-        pub(in super::super) const structure__name_set: usize = 1;
+        pub(in super::super) const structure__name_set: usize = 0;
+        pub(in super::super) const structure__layout: usize = 1;
         pub(in super::super) const structure__structure: usize = 2;
         pub(in super::super) const core__int: usize = 3;
         pub(in super::super) const core__string: usize = 4;
         pub(in super::super) const core__array: usize = 5;
         pub(in super::super) const core__table: usize = 6;
         pub(in super::super) const core__unit: usize = 7;
-    }
-    pub(super) mod Operator {
-        pub(in super::super) const structure__offset: usize = 0;
-        pub(in super::super) const structure__component: usize = 1;
-        pub(in super::super) const structure__compose: usize = 2;
-        pub(in super::super) const structure__construct: usize = 3;
-        pub(in super::super) const core__sum: usize = 4;
-        pub(in super::super) const core__index: usize = 5;
-        pub(in super::super) const core__find: usize = 6;
     }
 }
 mod union_ {
@@ -58,9 +59,8 @@ mod union_ {
     }
     #[derive(Clone, Copy)]
     pub(super) union Value {
-        pub(super) structure__named_array:
-            std::mem::ManuallyDrop<::lichen_structure::value::NamedArray>,
         pub(super) structure__name_set: std::mem::ManuallyDrop<::lichen_structure::value::NameSet>,
+        pub(super) structure__layout: std::mem::ManuallyDrop<::lichen_structure::value::Layout>,
         pub(super) structure__structure:
             std::mem::ManuallyDrop<::lichen_structure::value::Structure>,
         pub(super) core__int: std::mem::ManuallyDrop<::lichen_core::value::Int>,
@@ -69,6 +69,131 @@ mod union_ {
         pub(super) core__table: std::mem::ManuallyDrop<::lichen_core::value::Table>,
         pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
         _p: core::marker::PhantomData<()>,
+    }
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Operator<P: ::lichen_structure::plugin::Project>(usize, core::marker::PhantomData<P>);
+
+impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::Operator<P>
+where
+    P::Value: ::lichen_structure::plugin::Value,
+    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            self::code::Operator::structure__offset => {
+                write!(f, "structure::offset")
+            }
+            self::code::Operator::structure__component => {
+                write!(f, "structure::component")
+            }
+            self::code::Operator::structure__compose => {
+                write!(f, "structure::compose")
+            }
+            self::code::Operator::structure__match => {
+                write!(f, "structure::r#match")
+            }
+            self::code::Operator::structure__transform => {
+                write!(f, "structure::transform")
+            }
+            self::code::Operator::core__sum => {
+                write!(f, "core::sum")
+            }
+            self::code::Operator::core__index => {
+                write!(f, "core::index")
+            }
+            self::code::Operator::core__find => {
+                write!(f, "core::find")
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
+    for self::Operator<P>
+where
+    P::Value: ::lichen_structure::plugin::Value,
+    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
+{
+    fn run(
+        &self,
+        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
+        operand: &<P as ::lichen_core::plugin::Project>::Value,
+        node: &::lichen_core::runtime::solve::LocalNodeId,
+    ) -> ::lichen_core::runtime::operation::Option<P> {
+        match self.0{
+self::code::Operator::structure__offset=>{
+<::lichen_structure::operator::Offset::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Offset::<>},solver,operand,node,)
+}
+self::code::Operator::structure__component=>{
+<::lichen_structure::operator::Component::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Component::<>},solver,operand,node,)
+}
+self::code::Operator::structure__compose=>{
+<::lichen_structure::operator::Compose::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Compose::<>},solver,operand,node,)
+}
+self::code::Operator::structure__match=>{
+<::lichen_structure::operator::Match::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Match::<>},solver,operand,node,)
+}
+self::code::Operator::structure__transform=>{
+<::lichen_structure::operator::Transform::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Transform::<>},solver,operand,node,)
+}
+self::code::Operator::core__sum=>{
+<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,operand,node,)
+}
+self::code::Operator::core__index=>{
+<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,operand,node,)
+}
+self::code::Operator::core__find=>{
+<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,operand,node,)
+}
+_=>unreachable!(),}
+    }
+}
+impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::Operator<P>
+    for self::Operator<P>
+{
+    fn sum() -> Self {
+        Self(self::code::Operator::core__sum, core::marker::PhantomData)
+    }
+    fn index() -> Self {
+        Self(self::code::Operator::core__index, core::marker::PhantomData)
+    }
+    fn find() -> Self {
+        Self(self::code::Operator::core__find, core::marker::PhantomData)
+    }
+}
+impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::Operator<P>
+    for self::Operator<P>
+{
+    fn offset() -> Self {
+        Self(
+            self::code::Operator::structure__offset,
+            core::marker::PhantomData,
+        )
+    }
+    fn component() -> Self {
+        Self(
+            self::code::Operator::structure__component,
+            core::marker::PhantomData,
+        )
+    }
+    fn compose() -> Self {
+        Self(
+            self::code::Operator::structure__compose,
+            core::marker::PhantomData,
+        )
+    }
+    fn r#match() -> Self {
+        Self(
+            self::code::Operator::structure__match,
+            core::marker::PhantomData,
+        )
+    }
+    fn transform() -> Self {
+        Self(
+            self::code::Operator::structure__transform,
+            core::marker::PhantomData,
+        )
     }
 }
 
@@ -318,11 +443,11 @@ impl PartialEq for self::Value {
             return false;
         }
         match self.code {
-            self::code::Value::structure__named_array => unsafe {
-                self.data.structure__named_array == other.data.structure__named_array
-            },
             self::code::Value::structure__name_set => unsafe {
                 self.data.structure__name_set == other.data.structure__name_set
+            },
+            self::code::Value::structure__layout => unsafe {
+                self.data.structure__layout == other.data.structure__layout
             },
             self::code::Value::structure__structure => unsafe {
                 self.data.structure__structure == other.data.structure__structure
@@ -348,11 +473,11 @@ impl PartialEq for self::Value {
             return true;
         }
         match self.code {
-            self::code::Value::structure__named_array => unsafe {
-                self.data.structure__named_array != other.data.structure__named_array
-            },
             self::code::Value::structure__name_set => unsafe {
                 self.data.structure__name_set != other.data.structure__name_set
+            },
+            self::code::Value::structure__layout => unsafe {
+                self.data.structure__layout != other.data.structure__layout
             },
             self::code::Value::structure__structure => unsafe {
                 self.data.structure__structure != other.data.structure__structure
@@ -377,14 +502,14 @@ impl PartialEq for self::Value {
 impl std::fmt::Debug for self::Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.code {
-            self::code::Value::structure__named_array => {
-                write!(f, "structure::named_array({:?})", unsafe {
-                    &*self.data.structure__named_array
-                })
-            }
             self::code::Value::structure__name_set => {
                 write!(f, "structure::name_set({:?})", unsafe {
                     &*self.data.structure__name_set
+                })
+            }
+            self::code::Value::structure__layout => {
+                write!(f, "structure::layout({:?})", unsafe {
+                    &*self.data.structure__layout
                 })
             }
             self::code::Value::structure__structure => {
@@ -414,12 +539,12 @@ impl std::fmt::Debug for self::Value {
 impl ::lichen_core::plugin::principal_traits::Value for self::Value {
     fn fields(&self) -> impl Iterator<Item = &::lichen_core::runtime::NodeIdLocal> {
         match self.code{
-self::code::Value::structure__named_array=>{
-std::boxed::Box::new(<::lichen_structure::value::NamedArray::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.structure__named_array},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
 self::code::Value::structure__name_set=>{
 std::boxed::Box::new(<::lichen_structure::value::NameSet::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.structure__name_set},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::structure__layout=>{
+std::boxed::Box::new(<::lichen_structure::value::Layout::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.structure__layout},)
 ) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
 }
 self::code::Value::structure__structure=>{
@@ -450,11 +575,11 @@ _=>unreachable!(),}
     }
     fn for_fields(&self, mut action: impl FnMut(&::lichen_core::runtime::NodeIdLocal)) {
         match self.code{
-self::code::Value::structure__named_array=>{
-<::lichen_structure::value::NamedArray::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.structure__named_array},action,)
-}
 self::code::Value::structure__name_set=>{
 <::lichen_structure::value::NameSet::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.structure__name_set},action,)
+}
+self::code::Value::structure__layout=>{
+<::lichen_structure::value::Layout::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.structure__layout},action,)
 }
 self::code::Value::structure__structure=>{
 <::lichen_structure::value::Structure::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.structure__structure},action,)
@@ -485,11 +610,11 @@ _=>unreachable!(),}
         ),
     ) {
         match self.code{
-self::code::Value::structure__named_array=>{
-<::lichen_structure::value::NamedArray::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.structure__named_array},unsafe{& other.data.structure__named_array},action,)
-}
 self::code::Value::structure__name_set=>{
 <::lichen_structure::value::NameSet::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.structure__name_set},unsafe{& other.data.structure__name_set},action,)
+}
+self::code::Value::structure__layout=>{
+<::lichen_structure::value::Layout::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.structure__layout},unsafe{& other.data.structure__layout},action,)
 }
 self::code::Value::structure__structure=>{
 <::lichen_structure::value::Structure::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.structure__structure},unsafe{& other.data.structure__structure},action,)
@@ -586,21 +711,6 @@ impl ::lichen_core::plugin::Value for self::Value {
     }
 }
 impl ::lichen_structure::plugin::Value for self::Value {
-    fn named_array(&self) -> Option<&::lichen_structure::value::NamedArray> {
-        if self.code == self::code::Value::structure__named_array {
-            Some(unsafe { &self.data.structure__named_array })
-        } else {
-            None
-        }
-    }
-    fn from_named_array(data: ::lichen_structure::value::NamedArray) -> Self {
-        Self {
-            code: self::code::Value::structure__named_array,
-            data: self::union_::Value {
-                structure__named_array: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
     fn name_set(&self) -> Option<&::lichen_structure::value::NameSet> {
         if self.code == self::code::Value::structure__name_set {
             Some(unsafe { &self.data.structure__name_set })
@@ -613,6 +723,21 @@ impl ::lichen_structure::plugin::Value for self::Value {
             code: self::code::Value::structure__name_set,
             data: self::union_::Value {
                 structure__name_set: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn layout(&self) -> Option<&::lichen_structure::value::Layout> {
+        if self.code == self::code::Value::structure__layout {
+            Some(unsafe { &self.data.structure__layout })
+        } else {
+            None
+        }
+    }
+    fn from_layout(data: ::lichen_structure::value::Layout) -> Self {
+        Self {
+            code: self::code::Value::structure__layout,
+            data: self::union_::Value {
+                structure__layout: std::mem::ManuallyDrop::new(data),
             },
         }
     }
@@ -632,117 +757,61 @@ impl ::lichen_structure::plugin::Value for self::Value {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Operator<P: ::lichen_structure::plugin::Project>(usize, core::marker::PhantomData<P>);
-
-impl<P: ::lichen_structure::plugin::Project> std::fmt::Debug for self::Operator<P>
+impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_structure::plugin::Ast<P>
+    for self::Ast<P>
 where
-    P::Value: ::lichen_structure::plugin::Value,
-    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
+    P::Operator: ::lichen_structure::plugin::Operator<P>,
 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            self::code::Operator::structure__offset => {
-                write!(f, "structure::offset")
-            }
-            self::code::Operator::structure__component => {
-                write!(f, "structure::component")
-            }
-            self::code::Operator::structure__compose => {
-                write!(f, "structure::compose")
-            }
-            self::code::Operator::structure__construct => {
-                write!(f, "structure::construct")
-            }
-            self::code::Operator::core__sum => {
-                write!(f, "core::sum")
-            }
-            self::code::Operator::core__index => {
-                write!(f, "core::index")
-            }
-            self::code::Operator::core__find => {
-                write!(f, "core::find")
-            }
-            _ => unreachable!(),
+    fn structure(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
+        self.impl_.property(expr, 0)
+    }
+    fn add_literal_structure(
+        &mut self,
+        value: Option<P::Value>,
+        structure: Option<P::Value>,
+    ) -> ::lichen_core::ast::ExprId {
+        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        if let Some(value) = value {
+            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
         }
+        if let Some(structure) = structure {
+            let node = <Self as ::lichen_structure::plugin::Ast<P>>::structure(self, &expr);
+            *self.impl_.module.evaluation_mut(&node) =
+                ::lichen_core::runtime::evaluation::Evaluation::Value(structure)
+        }
+        expr
     }
-}
-impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
-    for self::Operator<P>
-where
-    P::Value: ::lichen_structure::plugin::Value,
-    P::DiagnosticKind: ::lichen_structure::plugin::DiagnosticKind<P>,
-{
-    fn run(
-        &self,
-        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
-        value: &<P as ::lichen_core::plugin::Project>::Value,
-        node: &::lichen_core::runtime::solve::LocalNodeId,
-    ) -> ::lichen_core::runtime::operation::Option<P> {
-        match self.0{
-self::code::Operator::structure__offset=>{
-<::lichen_structure::operator::Offset::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Offset::<>},solver,value,node,)
-}
-self::code::Operator::structure__component=>{
-<::lichen_structure::operator::Component::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Component::<>},solver,value,node,)
-}
-self::code::Operator::structure__compose=>{
-<::lichen_structure::operator::Compose::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Compose::<>},solver,value,node,)
-}
-self::code::Operator::structure__construct=>{
-<::lichen_structure::operator::Construct::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_structure::operator::Construct::<>},solver,value,node,)
-}
-self::code::Operator::core__sum=>{
-<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
-}
-self::code::Operator::core__index=>{
-<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
-}
-self::code::Operator::core__find=>{
-<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
-}
-_=>unreachable!(),}
+    fn add_member(
+        &mut self,
+        instance: &::lichen_core::ast::ExprId,
+        name: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Member as ::lichen_structure::plugin::expr::member<P,>>::build(self,&output,instance,name,);
+        output
     }
-}
-impl<P: ::lichen_structure::plugin::Project> ::lichen_core::plugin::Operator<P>
-    for self::Operator<P>
-{
-    fn sum() -> Self {
-        Self(self::code::Operator::core__sum, core::marker::PhantomData)
+    fn add_compose(
+        &mut self,
+        name_set: &::lichen_core::ast::ExprId,
+        structures: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Compose as ::lichen_structure::plugin::expr::compose<P,>>::build(self,&output,name_set,structures,);
+        output
     }
-    fn index() -> Self {
-        Self(self::code::Operator::core__index, core::marker::PhantomData)
-    }
-    fn find() -> Self {
-        Self(self::code::Operator::core__find, core::marker::PhantomData)
-    }
-}
-impl<P: ::lichen_structure::plugin::Project> ::lichen_structure::plugin::Operator<P>
-    for self::Operator<P>
-{
-    fn offset() -> Self {
-        Self(
-            self::code::Operator::structure__offset,
-            core::marker::PhantomData,
-        )
-    }
-    fn component() -> Self {
-        Self(
-            self::code::Operator::structure__component,
-            core::marker::PhantomData,
-        )
-    }
-    fn compose() -> Self {
-        Self(
-            self::code::Operator::structure__compose,
-            core::marker::PhantomData,
-        )
-    }
-    fn construct() -> Self {
-        Self(
-            self::code::Operator::structure__construct,
-            core::marker::PhantomData,
-        )
+    fn add_construct(
+        &mut self,
+        structure: &::lichen_core::ast::ExprId,
+        name_set: &::lichen_core::ast::ExprId,
+        members: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::ast::ExprId {
+        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
+        <::lichen_structure::expr_impl::Construct as ::lichen_structure::plugin::expr::construct<
+            P,
+        >>::build(self, &output, structure, name_set, members);
+        output
     }
 }
 impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_core::plugin::Ast<P>
@@ -751,7 +820,7 @@ where
     P::Operator: ::lichen_structure::plugin::Operator<P>,
 {
     fn value(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 0)
+        self.impl_.property(expr, 1)
     }
     fn add_literal_core(&mut self, value: Option<P::Value>) -> ::lichen_core::ast::ExprId {
         let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
@@ -800,69 +869,17 @@ where
         );
         output
     }
-    fn add_array(&mut self, element: &[::lichen_core::ast::ExprId]) -> ::lichen_core::ast::ExprId {
+    fn add_array<'a>(
+        &mut self,
+        items: impl IntoIterator<Item = &'a ::lichen_core::ast::ExprId> + Copy,
+    ) -> ::lichen_core::ast::ExprId {
         let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
         <::lichen_structure::expr_impl::Array as ::lichen_core::plugin::expr::array<P>>::build(
-            self, &output, element,
+            self, &output, items,
         );
         <::lichen_core::expr_impl::Array as ::lichen_core::plugin::expr::array<P>>::build(
-            self, &output, element,
+            self, &output, items,
         );
-        output
-    }
-}
-impl<P: ::lichen_structure::plugin::Project<Ast = self::Ast<P>>> ::lichen_structure::plugin::Ast<P>
-    for self::Ast<P>
-where
-    P::Operator: ::lichen_structure::plugin::Operator<P>,
-{
-    fn structure(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal {
-        self.impl_.property(expr, 1)
-    }
-    fn add_literal_structure(
-        &mut self,
-        value: Option<P::Value>,
-        structure: Option<P::Value>,
-    ) -> ::lichen_core::ast::ExprId {
-        let expr = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        if let Some(value) = value {
-            let node = <Self as ::lichen_core::plugin::Ast<P>>::value(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(value)
-        }
-        if let Some(structure) = structure {
-            let node = <Self as ::lichen_structure::plugin::Ast<P>>::structure(self, &expr);
-            *self.impl_.module.evaluation_mut(&node) =
-                ::lichen_core::runtime::evaluation::Evaluation::Value(structure)
-        }
-        expr
-    }
-    fn add_member(
-        &mut self,
-        instance: &::lichen_core::ast::ExprId,
-        name: &::lichen_core::ast::ExprId,
-    ) -> ::lichen_core::ast::ExprId {
-        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        <::lichen_structure::expr_impl::Member as ::lichen_structure::plugin::expr::member<P,>>::build(self,&output,instance,name,);
-        output
-    }
-    fn add_compose(
-        &mut self,
-        components: &::lichen_core::ast::ExprId,
-    ) -> ::lichen_core::ast::ExprId {
-        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        <::lichen_structure::expr_impl::Compose as ::lichen_structure::plugin::expr::compose<P,>>::build(self,&output,components,);
-        output
-    }
-    fn add_construct(
-        &mut self,
-        structure: &::lichen_core::ast::ExprId,
-        members: &::lichen_core::ast::ExprId,
-    ) -> ::lichen_core::ast::ExprId {
-        let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
-        <::lichen_structure::expr_impl::Construct as ::lichen_structure::plugin::expr::construct<
-            P,
-        >>::build(self, &output, structure, members);
         output
     }
 }

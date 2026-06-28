@@ -17,7 +17,7 @@ pub static PLUGIN: Plugin = Plugin {
     dependencies: &[&lichen_core_plugin::PLUGIN],
     enum_types: &[],
     plugin_enums: &[(&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM)],
-    properties: &["r#type"],
+    properties: &["type"],
     exprs: &[],
     expr_impls: &[ExprImpls {
         expr: &ARRAY_EXPR,
@@ -29,28 +29,16 @@ pub static PLUGIN: Plugin = Plugin {
 };
 
 static VALUE_ENUM: PluginEnum = PluginEnum {
-    variants: &[
-        Variant {
-            name: "int_type",
-            path: &WrittenPath {
-                crate_: CRATE,
-                generics: &Generics::NONE,
-                path: "value::IntType",
-                project_generic: false,
-            },
-            is_unit: true,
+    variants: &[Variant {
+        name: "type",
+        path: &WrittenPath {
+            crate_: CRATE,
+            generics: &Generics::NONE,
+            path: "value::Type",
+            project_generic: false,
         },
-        Variant {
-            name: "string_type",
-            path: &WrittenPath {
-                crate_: CRATE,
-                generics: &Generics::NONE,
-                path: "value::StringType",
-                project_generic: false,
-            },
-            is_unit: true,
-        },
-    ],
+        is_unit: false,
+    }],
     plugin: &PLUGIN,
 };
 

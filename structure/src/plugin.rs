@@ -18,12 +18,6 @@ pub trait Project:
     std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static + ::lichen_core::plugin::Project
 {
 }
-pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
-    fn offset() -> Self;
-    fn component() -> Self;
-    fn compose() -> Self;
-    fn construct() -> Self;
-}
 pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
@@ -33,12 +27,19 @@ pub trait DiagnosticKind<P: crate::plugin::Project>:
     fn from_member_name_missing(data: crate::diagnostic_kind::MemberNameMissing) -> Self;
 }
 pub trait Value: ::lichen_core::plugin::Value {
-    fn named_array(&self) -> Option<&crate::value::NamedArray>;
-    fn from_named_array(data: crate::value::NamedArray) -> Self;
     fn name_set(&self) -> Option<&crate::value::NameSet>;
     fn from_name_set(data: crate::value::NameSet) -> Self;
+    fn layout(&self) -> Option<&crate::value::Layout>;
+    fn from_layout(data: crate::value::Layout) -> Self;
     fn structure(&self) -> Option<&crate::value::Structure>;
     fn from_structure(data: crate::value::Structure) -> Self;
+}
+pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
+    fn offset() -> Self;
+    fn component() -> Self;
+    fn compose() -> Self;
+    fn r#match() -> Self;
+    fn transform() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>
@@ -56,11 +57,13 @@ pub trait Ast<P: crate::plugin::Project>:
     ) -> ::lichen_core::ast::ExprId;
     fn add_compose(
         &mut self,
-        components: &::lichen_core::ast::ExprId,
+        name_set: &::lichen_core::ast::ExprId,
+        structures: &::lichen_core::ast::ExprId,
     ) -> ::lichen_core::ast::ExprId;
     fn add_construct(
         &mut self,
         structure: &::lichen_core::ast::ExprId,
+        name_set: &::lichen_core::ast::ExprId,
         members: &::lichen_core::ast::ExprId,
     ) -> ::lichen_core::ast::ExprId;
 }
@@ -77,7 +80,8 @@ pub mod expr {
         fn build(
             ast: &mut P::Ast,
             output: &::lichen_core::ast::ExprId,
-            components: &::lichen_core::ast::ExprId,
+            name_set: &::lichen_core::ast::ExprId,
+            structures: &::lichen_core::ast::ExprId,
         );
     }
     pub trait construct<P: crate::plugin::Project> {
@@ -85,6 +89,7 @@ pub mod expr {
             ast: &mut P::Ast,
             output: &::lichen_core::ast::ExprId,
             structure: &::lichen_core::ast::ExprId,
+            name_set: &::lichen_core::ast::ExprId,
             members: &::lichen_core::ast::ExprId,
         );
     }

@@ -18,15 +18,13 @@ pub trait Project:
     std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'static + ::lichen_core::plugin::Project
 {
 }
-pub trait Value: ::lichen_core::plugin::Value {
-    fn int_type(&self) -> bool;
-    fn from_int_type() -> Self;
-    fn string_type(&self) -> bool;
-    fn from_string_type() -> Self;
-}
 pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
+}
+pub trait Value: ::lichen_core::plugin::Value {
+    fn r#type(&self) -> Option<&crate::value::Type>;
+    fn from_type(data: crate::value::Type) -> Self;
 }
 pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {}
 pub trait Ast<P: crate::plugin::Project>:

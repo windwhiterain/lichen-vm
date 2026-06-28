@@ -17,37 +17,25 @@ impl ::lichen_core::plugin::Project for self::Project {
     type Ast = self::Ast<Self>;
 }
 mod code {
+    pub(super) mod DiagnosticKind {
+        pub(in super::super) const core__equality_error: usize = 0;
+        pub(in super::super) const core__index_out_of_bounds: usize = 1;
+    }
     pub(super) mod Operator {
         pub(in super::super) const core__sum: usize = 0;
         pub(in super::super) const core__index: usize = 1;
         pub(in super::super) const core__find: usize = 2;
     }
     pub(super) mod Value {
-        pub(in super::super) const type__int_type: usize = 0;
-        pub(in super::super) const type__string_type: usize = 1;
-        pub(in super::super) const core__int: usize = 2;
-        pub(in super::super) const core__string: usize = 3;
-        pub(in super::super) const core__array: usize = 4;
-        pub(in super::super) const core__table: usize = 5;
-        pub(in super::super) const core__unit: usize = 6;
-    }
-    pub(super) mod DiagnosticKind {
-        pub(in super::super) const core__equality_error: usize = 0;
-        pub(in super::super) const core__index_out_of_bounds: usize = 1;
+        pub(in super::super) const type__type: usize = 0;
+        pub(in super::super) const core__int: usize = 1;
+        pub(in super::super) const core__string: usize = 2;
+        pub(in super::super) const core__array: usize = 3;
+        pub(in super::super) const core__table: usize = 4;
+        pub(in super::super) const core__unit: usize = 5;
     }
 }
 mod union_ {
-    #[derive(Clone, Copy)]
-    pub(super) union Value {
-        pub(super) type__int_type: std::mem::ManuallyDrop<::lichen_type::value::IntType>,
-        pub(super) type__string_type: std::mem::ManuallyDrop<::lichen_type::value::StringType>,
-        pub(super) core__int: std::mem::ManuallyDrop<::lichen_core::value::Int>,
-        pub(super) core__string: std::mem::ManuallyDrop<::lichen_core::value::StringId>,
-        pub(super) core__array: std::mem::ManuallyDrop<::lichen_core::value::Array>,
-        pub(super) core__table: std::mem::ManuallyDrop<::lichen_core::value::Table>,
-        pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
-        _p: core::marker::PhantomData<()>,
-    }
 
     pub(super) union DiagnosticKind<P> {
         pub(super) core__equality_error:
@@ -56,344 +44,15 @@ mod union_ {
             std::mem::ManuallyDrop<::lichen_core::diagnostic_kind::IndexOutOfBounds>,
         _p: core::marker::PhantomData<(P,)>,
     }
-}
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub struct Operator<P: ::lichen_type::plugin::Project>(usize, core::marker::PhantomData<P>);
-
-impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::Operator<P>
-where
-    P::Value: ::lichen_type::plugin::Value,
-    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
-            self::code::Operator::core__sum => {
-                write!(f, "core::sum")
-            }
-            self::code::Operator::core__index => {
-                write!(f, "core::index")
-            }
-            self::code::Operator::core__find => {
-                write!(f, "core::find")
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
-    for self::Operator<P>
-where
-    P::Value: ::lichen_type::plugin::Value,
-    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
-{
-    fn run(
-        &self,
-        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
-        value: &<P as ::lichen_core::plugin::Project>::Value,
-        node: &::lichen_core::runtime::solve::LocalNodeId,
-    ) -> ::lichen_core::runtime::operation::Option<P> {
-        match self.0{
-self::code::Operator::core__sum=>{
-<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,value,node,)
-}
-self::code::Operator::core__index=>{
-<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,value,node,)
-}
-self::code::Operator::core__find=>{
-<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,value,node,)
-}
-_=>unreachable!(),}
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::Operator<P> for self::Operator<P> {
-    fn sum() -> Self {
-        Self(self::code::Operator::core__sum, core::marker::PhantomData)
-    }
-    fn index() -> Self {
-        Self(self::code::Operator::core__index, core::marker::PhantomData)
-    }
-    fn find() -> Self {
-        Self(self::code::Operator::core__find, core::marker::PhantomData)
-    }
-}
-impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::Operator<P> for self::Operator<P> {}
-#[derive(Clone, Copy)]
-pub struct Value {
-    code: usize,
-    data: self::union_::Value,
-}
-impl Eq for self::Value {}
-
-impl PartialEq for self::Value {
-    fn eq(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return false;
-        }
-        match self.code {
-            self::code::Value::type__int_type => unsafe {
-                self.data.type__int_type == other.data.type__int_type
-            },
-            self::code::Value::type__string_type => unsafe {
-                self.data.type__string_type == other.data.type__string_type
-            },
-            self::code::Value::core__int => unsafe { self.data.core__int == other.data.core__int },
-            self::code::Value::core__string => unsafe {
-                self.data.core__string == other.data.core__string
-            },
-            self::code::Value::core__array => unsafe {
-                self.data.core__array == other.data.core__array
-            },
-            self::code::Value::core__table => unsafe {
-                self.data.core__table == other.data.core__table
-            },
-            self::code::Value::core__unit => unsafe {
-                self.data.core__unit == other.data.core__unit
-            },
-            _ => unreachable!(),
-        }
-    }
-    fn ne(&self, other: &Self) -> bool {
-        if self.code != other.code {
-            return true;
-        }
-        match self.code {
-            self::code::Value::type__int_type => unsafe {
-                self.data.type__int_type != other.data.type__int_type
-            },
-            self::code::Value::type__string_type => unsafe {
-                self.data.type__string_type != other.data.type__string_type
-            },
-            self::code::Value::core__int => unsafe { self.data.core__int != other.data.core__int },
-            self::code::Value::core__string => unsafe {
-                self.data.core__string != other.data.core__string
-            },
-            self::code::Value::core__array => unsafe {
-                self.data.core__array != other.data.core__array
-            },
-            self::code::Value::core__table => unsafe {
-                self.data.core__table != other.data.core__table
-            },
-            self::code::Value::core__unit => unsafe {
-                self.data.core__unit != other.data.core__unit
-            },
-            _ => unreachable!(),
-        }
-    }
-}
-impl std::fmt::Debug for self::Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.code {
-            self::code::Value::type__int_type => {
-                write!(f, "type::int_type")
-            }
-            self::code::Value::type__string_type => {
-                write!(f, "type::string_type")
-            }
-            self::code::Value::core__int => {
-                write!(f, "core::int({:?})", unsafe { &*self.data.core__int })
-            }
-            self::code::Value::core__string => {
-                write!(f, "core::string({:?})", unsafe { &*self.data.core__string })
-            }
-            self::code::Value::core__array => {
-                write!(f, "core::array({:?})", unsafe { &*self.data.core__array })
-            }
-            self::code::Value::core__table => {
-                write!(f, "core::table({:?})", unsafe { &*self.data.core__table })
-            }
-            self::code::Value::core__unit => {
-                write!(f, "core::unit")
-            }
-            _ => unreachable!(),
-        }
-    }
-}
-impl ::lichen_core::plugin::principal_traits::Value for self::Value {
-    fn fields(&self) -> impl Iterator<Item = &::lichen_core::runtime::NodeIdLocal> {
-        match self.code{
-self::code::Value::type__int_type=>{
-std::boxed::Box::new(<::lichen_type::value::IntType::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.type__int_type},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::type__string_type=>{
-std::boxed::Box::new(<::lichen_type::value::StringType::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.type__string_type},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::core__int=>{
-std::boxed::Box::new(<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__int},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::core__string=>{
-std::boxed::Box::new(<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__string},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::core__array=>{
-std::boxed::Box::new(<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__array},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::core__table=>{
-std::boxed::Box::new(<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__table},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-self::code::Value::core__unit=>{
-std::boxed::Box::new(<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__unit},)
-) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
-}
-_=>unreachable!(),}
-    }
-    fn for_fields(&self, mut action: impl FnMut(&::lichen_core::runtime::NodeIdLocal)) {
-        match self.code{
-self::code::Value::type__int_type=>{
-<::lichen_type::value::IntType::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.type__int_type},action,)
-}
-self::code::Value::type__string_type=>{
-<::lichen_type::value::StringType::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.type__string_type},action,)
-}
-self::code::Value::core__int=>{
-<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__int},action,)
-}
-self::code::Value::core__string=>{
-<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__string},action,)
-}
-self::code::Value::core__array=>{
-<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__array},action,)
-}
-self::code::Value::core__table=>{
-<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__table},action,)
-}
-self::code::Value::core__unit=>{
-<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__unit},action,)
-}
-_=>unreachable!(),}
-    }
-    fn for_field_pairs(
-        &self,
-        other: &Self,
-        mut action: impl FnMut(
-            &::lichen_core::runtime::NodeIdLocal,
-            &::lichen_core::runtime::NodeIdLocal,
-        ),
-    ) {
-        match self.code{
-self::code::Value::type__int_type=>{
-<::lichen_type::value::IntType::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.type__int_type},unsafe{& other.data.type__int_type},action,)
-}
-self::code::Value::type__string_type=>{
-<::lichen_type::value::StringType::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.type__string_type},unsafe{& other.data.type__string_type},action,)
-}
-self::code::Value::core__int=>{
-<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__int},unsafe{& other.data.core__int},action,)
-}
-self::code::Value::core__string=>{
-<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__string},unsafe{& other.data.core__string},action,)
-}
-self::code::Value::core__array=>{
-<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__array},unsafe{& other.data.core__array},action,)
-}
-self::code::Value::core__table=>{
-<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__table},unsafe{& other.data.core__table},action,)
-}
-self::code::Value::core__unit=>{
-<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__unit},unsafe{& other.data.core__unit},action,)
-}
-_=>unreachable!(),}
-    }
-}
-impl ::lichen_core::plugin::Value for self::Value {
-    fn int(&self) -> Option<&::lichen_core::value::Int> {
-        if self.code == self::code::Value::core__int {
-            Some(unsafe { &self.data.core__int })
-        } else {
-            None
-        }
-    }
-    fn from_int(data: ::lichen_core::value::Int) -> Self {
-        Self {
-            code: self::code::Value::core__int,
-            data: self::union_::Value {
-                core__int: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-    fn string(&self) -> Option<&::lichen_core::value::StringId> {
-        if self.code == self::code::Value::core__string {
-            Some(unsafe { &self.data.core__string })
-        } else {
-            None
-        }
-    }
-    fn from_string(data: ::lichen_core::value::StringId) -> Self {
-        Self {
-            code: self::code::Value::core__string,
-            data: self::union_::Value {
-                core__string: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-    fn array(&self) -> Option<&::lichen_core::value::Array> {
-        if self.code == self::code::Value::core__array {
-            Some(unsafe { &self.data.core__array })
-        } else {
-            None
-        }
-    }
-    fn from_array(data: ::lichen_core::value::Array) -> Self {
-        Self {
-            code: self::code::Value::core__array,
-            data: self::union_::Value {
-                core__array: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-    fn table(&self) -> Option<&::lichen_core::value::Table> {
-        if self.code == self::code::Value::core__table {
-            Some(unsafe { &self.data.core__table })
-        } else {
-            None
-        }
-    }
-    fn from_table(data: ::lichen_core::value::Table) -> Self {
-        Self {
-            code: self::code::Value::core__table,
-            data: self::union_::Value {
-                core__table: std::mem::ManuallyDrop::new(data),
-            },
-        }
-    }
-    fn unit(&self) -> bool {
-        self.code == self::code::Value::core__unit
-    }
-    fn from_unit() -> Self {
-        Self {
-            code: self::code::Value::core__unit,
-            data: self::union_::Value {
-                core__unit: std::mem::ManuallyDrop::new(::lichen_core::value::Unit),
-            },
-        }
-    }
-}
-impl ::lichen_type::plugin::Value for self::Value {
-    fn int_type(&self) -> bool {
-        self.code == self::code::Value::type__int_type
-    }
-    fn from_int_type() -> Self {
-        Self {
-            code: self::code::Value::type__int_type,
-            data: self::union_::Value {
-                type__int_type: std::mem::ManuallyDrop::new(::lichen_type::value::IntType),
-            },
-        }
-    }
-    fn string_type(&self) -> bool {
-        self.code == self::code::Value::type__string_type
-    }
-    fn from_string_type() -> Self {
-        Self {
-            code: self::code::Value::type__string_type,
-            data: self::union_::Value {
-                type__string_type: std::mem::ManuallyDrop::new(::lichen_type::value::StringType),
-            },
-        }
+    #[derive(Clone, Copy)]
+    pub(super) union Value {
+        pub(super) type__type: std::mem::ManuallyDrop<::lichen_type::value::Type>,
+        pub(super) core__int: std::mem::ManuallyDrop<::lichen_core::value::Int>,
+        pub(super) core__string: std::mem::ManuallyDrop<::lichen_core::value::StringId>,
+        pub(super) core__array: std::mem::ManuallyDrop<::lichen_core::value::Array>,
+        pub(super) core__table: std::mem::ManuallyDrop<::lichen_core::value::Table>,
+        pub(super) core__unit: std::mem::ManuallyDrop<::lichen_core::value::Unit>,
+        _p: core::marker::PhantomData<()>,
     }
 }
 
@@ -536,6 +195,319 @@ impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::DiagnosticKind<P>
     for self::DiagnosticKind<P>
 {
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Operator<P: ::lichen_type::plugin::Project>(usize, core::marker::PhantomData<P>);
+
+impl<P: ::lichen_type::plugin::Project> std::fmt::Debug for self::Operator<P>
+where
+    P::Value: ::lichen_type::plugin::Value,
+    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            self::code::Operator::core__sum => {
+                write!(f, "core::sum")
+            }
+            self::code::Operator::core__index => {
+                write!(f, "core::index")
+            }
+            self::code::Operator::core__find => {
+                write!(f, "core::find")
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::principal_traits::Operator<P>
+    for self::Operator<P>
+where
+    P::Value: ::lichen_type::plugin::Value,
+    P::DiagnosticKind: ::lichen_type::plugin::DiagnosticKind<P>,
+{
+    fn run(
+        &self,
+        solver: &mut ::lichen_core::runtime::solve::Solver<P>,
+        operand: &<P as ::lichen_core::plugin::Project>::Value,
+        node: &::lichen_core::runtime::solve::LocalNodeId,
+    ) -> ::lichen_core::runtime::operation::Option<P> {
+        match self.0{
+self::code::Operator::core__sum=>{
+<::lichen_core::operator::Sum::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Sum::<>},solver,operand,node,)
+}
+self::code::Operator::core__index=>{
+<::lichen_core::operator::Index::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Index::<>},solver,operand,node,)
+}
+self::code::Operator::core__find=>{
+<::lichen_core::operator::Find::<> as ::lichen_core::plugin::principal_traits::Operator<P,>>::run(unsafe{& ::lichen_core::operator::Find::<>},solver,operand,node,)
+}
+_=>unreachable!(),}
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_core::plugin::Operator<P> for self::Operator<P> {
+    fn sum() -> Self {
+        Self(self::code::Operator::core__sum, core::marker::PhantomData)
+    }
+    fn index() -> Self {
+        Self(self::code::Operator::core__index, core::marker::PhantomData)
+    }
+    fn find() -> Self {
+        Self(self::code::Operator::core__find, core::marker::PhantomData)
+    }
+}
+impl<P: ::lichen_type::plugin::Project> ::lichen_type::plugin::Operator<P> for self::Operator<P> {}
+#[derive(Clone, Copy)]
+pub struct Value {
+    code: usize,
+    data: self::union_::Value,
+}
+impl Eq for self::Value {}
+
+impl PartialEq for self::Value {
+    fn eq(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return false;
+        }
+        match self.code {
+            self::code::Value::type__type => unsafe {
+                self.data.type__type == other.data.type__type
+            },
+            self::code::Value::core__int => unsafe { self.data.core__int == other.data.core__int },
+            self::code::Value::core__string => unsafe {
+                self.data.core__string == other.data.core__string
+            },
+            self::code::Value::core__array => unsafe {
+                self.data.core__array == other.data.core__array
+            },
+            self::code::Value::core__table => unsafe {
+                self.data.core__table == other.data.core__table
+            },
+            self::code::Value::core__unit => unsafe {
+                self.data.core__unit == other.data.core__unit
+            },
+            _ => unreachable!(),
+        }
+    }
+    fn ne(&self, other: &Self) -> bool {
+        if self.code != other.code {
+            return true;
+        }
+        match self.code {
+            self::code::Value::type__type => unsafe {
+                self.data.type__type != other.data.type__type
+            },
+            self::code::Value::core__int => unsafe { self.data.core__int != other.data.core__int },
+            self::code::Value::core__string => unsafe {
+                self.data.core__string != other.data.core__string
+            },
+            self::code::Value::core__array => unsafe {
+                self.data.core__array != other.data.core__array
+            },
+            self::code::Value::core__table => unsafe {
+                self.data.core__table != other.data.core__table
+            },
+            self::code::Value::core__unit => unsafe {
+                self.data.core__unit != other.data.core__unit
+            },
+            _ => unreachable!(),
+        }
+    }
+}
+impl std::fmt::Debug for self::Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code {
+            self::code::Value::type__type => {
+                write!(f, "type::r#type({:?})", unsafe { &*self.data.type__type })
+            }
+            self::code::Value::core__int => {
+                write!(f, "core::int({:?})", unsafe { &*self.data.core__int })
+            }
+            self::code::Value::core__string => {
+                write!(f, "core::string({:?})", unsafe { &*self.data.core__string })
+            }
+            self::code::Value::core__array => {
+                write!(f, "core::array({:?})", unsafe { &*self.data.core__array })
+            }
+            self::code::Value::core__table => {
+                write!(f, "core::table({:?})", unsafe { &*self.data.core__table })
+            }
+            self::code::Value::core__unit => {
+                write!(f, "core::unit")
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+impl ::lichen_core::plugin::principal_traits::Value for self::Value {
+    fn fields(&self) -> impl Iterator<Item = &::lichen_core::runtime::NodeIdLocal> {
+        match self.code{
+self::code::Value::type__type=>{
+std::boxed::Box::new(<::lichen_type::value::Type::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.type__type},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::core__int=>{
+std::boxed::Box::new(<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__int},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::core__string=>{
+std::boxed::Box::new(<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__string},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::core__array=>{
+std::boxed::Box::new(<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__array},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::core__table=>{
+std::boxed::Box::new(<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__table},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+self::code::Value::core__unit=>{
+std::boxed::Box::new(<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::fields(unsafe{& self.data.core__unit},)
+) as std::boxed::Box<dyn Iterator<Item=&::lichen_core::runtime::NodeIdLocal>>
+}
+_=>unreachable!(),}
+    }
+    fn for_fields(&self, mut action: impl FnMut(&::lichen_core::runtime::NodeIdLocal)) {
+        match self.code{
+self::code::Value::type__type=>{
+<::lichen_type::value::Type::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.type__type},action,)
+}
+self::code::Value::core__int=>{
+<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__int},action,)
+}
+self::code::Value::core__string=>{
+<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__string},action,)
+}
+self::code::Value::core__array=>{
+<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__array},action,)
+}
+self::code::Value::core__table=>{
+<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__table},action,)
+}
+self::code::Value::core__unit=>{
+<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_fields(unsafe{& self.data.core__unit},action,)
+}
+_=>unreachable!(),}
+    }
+    fn for_field_pairs(
+        &self,
+        other: &Self,
+        mut action: impl FnMut(
+            &::lichen_core::runtime::NodeIdLocal,
+            &::lichen_core::runtime::NodeIdLocal,
+        ),
+    ) {
+        match self.code{
+self::code::Value::type__type=>{
+<::lichen_type::value::Type::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.type__type},unsafe{& other.data.type__type},action,)
+}
+self::code::Value::core__int=>{
+<::lichen_core::value::Int::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__int},unsafe{& other.data.core__int},action,)
+}
+self::code::Value::core__string=>{
+<::lichen_core::value::StringId::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__string},unsafe{& other.data.core__string},action,)
+}
+self::code::Value::core__array=>{
+<::lichen_core::value::Array::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__array},unsafe{& other.data.core__array},action,)
+}
+self::code::Value::core__table=>{
+<::lichen_core::value::Table::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__table},unsafe{& other.data.core__table},action,)
+}
+self::code::Value::core__unit=>{
+<::lichen_core::value::Unit::<> as ::lichen_core::plugin::principal_traits::Value<>>::for_field_pairs(unsafe{& self.data.core__unit},unsafe{& other.data.core__unit},action,)
+}
+_=>unreachable!(),}
+    }
+}
+impl ::lichen_core::plugin::Value for self::Value {
+    fn int(&self) -> Option<&::lichen_core::value::Int> {
+        if self.code == self::code::Value::core__int {
+            Some(unsafe { &self.data.core__int })
+        } else {
+            None
+        }
+    }
+    fn from_int(data: ::lichen_core::value::Int) -> Self {
+        Self {
+            code: self::code::Value::core__int,
+            data: self::union_::Value {
+                core__int: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn string(&self) -> Option<&::lichen_core::value::StringId> {
+        if self.code == self::code::Value::core__string {
+            Some(unsafe { &self.data.core__string })
+        } else {
+            None
+        }
+    }
+    fn from_string(data: ::lichen_core::value::StringId) -> Self {
+        Self {
+            code: self::code::Value::core__string,
+            data: self::union_::Value {
+                core__string: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn array(&self) -> Option<&::lichen_core::value::Array> {
+        if self.code == self::code::Value::core__array {
+            Some(unsafe { &self.data.core__array })
+        } else {
+            None
+        }
+    }
+    fn from_array(data: ::lichen_core::value::Array) -> Self {
+        Self {
+            code: self::code::Value::core__array,
+            data: self::union_::Value {
+                core__array: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn table(&self) -> Option<&::lichen_core::value::Table> {
+        if self.code == self::code::Value::core__table {
+            Some(unsafe { &self.data.core__table })
+        } else {
+            None
+        }
+    }
+    fn from_table(data: ::lichen_core::value::Table) -> Self {
+        Self {
+            code: self::code::Value::core__table,
+            data: self::union_::Value {
+                core__table: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+    fn unit(&self) -> bool {
+        self.code == self::code::Value::core__unit
+    }
+    fn from_unit() -> Self {
+        Self {
+            code: self::code::Value::core__unit,
+            data: self::union_::Value {
+                core__unit: std::mem::ManuallyDrop::new(::lichen_core::value::Unit),
+            },
+        }
+    }
+}
+impl ::lichen_type::plugin::Value for self::Value {
+    fn r#type(&self) -> Option<&::lichen_type::value::Type> {
+        if self.code == self::code::Value::type__type {
+            Some(unsafe { &self.data.type__type })
+        } else {
+            None
+        }
+    }
+    fn from_type(data: ::lichen_type::value::Type) -> Self {
+        Self {
+            code: self::code::Value::type__type,
+            data: self::union_::Value {
+                type__type: std::mem::ManuallyDrop::new(data),
+            },
+        }
+    }
+}
 impl<P: ::lichen_type::plugin::Project<Ast = self::Ast<P>>> ::lichen_type::plugin::Ast<P>
     for self::Ast<P>
 where
@@ -609,13 +581,16 @@ where
         );
         output
     }
-    fn add_array(&mut self, element: &[::lichen_core::ast::ExprId]) -> ::lichen_core::ast::ExprId {
+    fn add_array<'a>(
+        &mut self,
+        items: impl IntoIterator<Item = &'a ::lichen_core::ast::ExprId> + Copy,
+    ) -> ::lichen_core::ast::ExprId {
         let output = <Self as ::lichen_core::ast::Ast<P>>::add_auto(self);
         <::lichen_type::expr_impl::Array as ::lichen_core::plugin::expr::array<P>>::build(
-            self, &output, element,
+            self, &output, items,
         );
         <::lichen_core::expr_impl::Array as ::lichen_core::plugin::expr::array<P>>::build(
-            self, &output, element,
+            self, &output, items,
         );
         output
     }

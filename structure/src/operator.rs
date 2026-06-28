@@ -3,6 +3,7 @@ use crate::diagnostic_kind::MemberNameRepetition;
 use crate::plugin::DiagnosticKind;
 use crate::plugin::Project;
 use crate::plugin::Value;
+use crate::value::Layout;
 use crate::value::Structure;
 use lichen_core::operator::{Find, Index};
 use lichen_core::runtime::diagnostic::Diagnostic;
@@ -52,13 +53,15 @@ where
     fn run(
         &self,
         solver: &mut lichen_core::runtime::solve::Solver<P>,
-        value: &<P as lichen_core::plugin::Project>::Value,
+        operand: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
     ) -> operation::Option<P> {
-        let named_array = value.named_array().unwrap();
+        let (names, structures) = operands!(solver, operand, node, P, [name_set, array,]);
+        assert_eq!(names.0.len(), structures.0.len());
+        let length = names.0.len();
         let module = solver.module_mut(&node.module());
-        let mut table = Table::uninit(module, named_array.0.len());
-        for (i, (name, _)) in named_array.0.iter().enumerate() {
+        let mut table = Table::uninit(module, length);
+        for (i, name) in names.0.iter().enumerate() {
             if let Some(exists_name_index) = table.0.insert(i, *name, i) {
                 module.diagnostics.push(Diagnostic {
                     kind: P::DiagnosticKind::from_member_name_repetition(MemberNameRepetition {
@@ -69,9 +72,11 @@ where
                 return None;
             }
         }
-        let components = Array::new(module, named_array.0.iter().map(|(_, node)| *node));
         Some(operation::Some::Value(P::Value::from_structure(
-            Structure { table, components },
+            Structure {
+                table,
+                components: structures,
+            },
         )))
     }
 }
@@ -82,9 +87,9 @@ where
 /// # output
 /// instance of the structure
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Construct;
+pub struct Match;
 
-impl<P: Project> Operator<P> for Construct
+impl<P: Project> Operator<P> for Match
 where
     P::Value: Value,
     P::DiagnosticKind: DiagnosticKind<P>,
@@ -95,11 +100,11 @@ where
         value: &<P as lichen_core::plugin::Project>::Value,
         node: &lichen_core::runtime::solve::LocalNodeId,
     ) -> operation::Option<P> {
-        let (structure, named_array) = operands!(solver, value, node, P, [structure, named_array,]);
+        let (structure, names) = operands!(solver, value, node, P, [structure, name_set,]);
         let module = solver.module_mut(&node.module());
-        let mut array = Array::uninit(module, structure.table.0.len());
-        let mut init_mask = vec![None; array.0.len()];
-        for (i, (name, element)) in named_array.0.iter().enumerate() {
+        let mut layout = Layout::uninit(module, structure.table.0.len());
+        let mut init_mask = vec![None; layout.0.len()];
+        for (i, name) in names.0.iter().enumerate() {
             let Some(offset) = structure.table.0.get(name).copied() else {
                 return None;
             };
@@ -113,7 +118,7 @@ where
                 });
             } else {
                 *mask = Some(i);
-                *array.0.get_mut(offset).unwrap() = *element;
+                *layout.0.get_mut(i).unwrap() = offset;
             }
         }
         for (i, mask) in init_mask.iter().enumerate() {
@@ -126,7 +131,35 @@ where
                 });
             }
         }
-        Some(operation::Some::Value(P::Value::from_array(array)))
+        Some(operation::Some::Value(P::Value::from_layout(layout)))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Transform;
+
+impl<P: Project> Operator<P> for Transform
+where
+    P::Value: Value,
+    P::DiagnosticKind: DiagnosticKind<P>,
+{
+    fn run(
+        &self,
+        solver: &mut lichen_core::runtime::solve::Solver<P>,
+        value: &<P as lichen_core::plugin::Project>::Value,
+        node: &lichen_core::runtime::solve::LocalNodeId,
+    ) -> operation::Option<P> {
+        let (layout, items) = operands!(solver, value, node, P, [layout, array,]);
+        let module = solver.module_mut(&node.module());
+        let mut transformeds = Array::uninit(module, items.0.len());
+        for (i, item) in items.0.iter().enumerate() {
+            transformeds
+                .0
+                .get_uninit(*layout.0.get(i).unwrap())
+                .unwrap()
+                .write(*item);
+        }
+        Some(operation::Some::Value(P::Value::from_array(transformeds)))
     }
 }
 
