@@ -6,7 +6,7 @@ use crate::{
     plugin::Project,
     runtime::{
         diagnostic::Diagnostic,
-        equation::LocalEquation,
+        equation::Equation,
         evaluation::Evaluation,
         operation::Operation,
         solve::{LocalModuleId, LocalNodeId, Solve},
@@ -25,7 +25,7 @@ pub struct Module<P: Project> {
     pub evaluations: StableVec<Evaluation<P>>,
     pub solves: Vec<Solve>,
     pub entries: Vec<NodeIdLocal>,
-    pub equations: Vec<LocalEquation>,
+    pub equations: Vec<Equation<P>>,
     pub diagnostics: Vec<Diagnostic<P>>,
 }
 
@@ -114,7 +114,7 @@ impl<P: Project> Module<P> {
     pub fn add_auto(&mut self) -> NodeIdLocal {
         self.add_node_raw(None, Evaluation::AUTO)
     }
-    pub fn add_equation(&mut self, equation: LocalEquation) {
+    pub fn add_equation(&mut self, equation: Equation<P>) {
         self.equations.push(equation);
     }
     pub fn add_entry(&mut self, node: NodeIdLocal) {

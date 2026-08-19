@@ -2,38 +2,39 @@ use std::collections::HashSet;
 use std::hash::RandomState;
 mod project;
 
-use lichen_core::diagnostic_kind::EqualityError;
+use lichen_core::diagnostic_kind::Unequality;
 use lichen_core::plugin::DiagnosticKind as _;
 use lichen_core::plugin::Operator as _;
 use lichen_core::plugin::Value as _;
 use lichen_core::runtime::diagnostic::Diagnostic;
-use lichen_core::value::Array;
+use lichen_core::runtime::equation;
+use lichen_core::value::Tuple;
 use project::DiagnosticKind;
 use project::Operator;
 use project::Project;
 use project::Value;
 
-use lichen_core::runtime::{Module, equation::LocalEquation, operation::Operation, solve::Solver};
+use lichen_core::runtime::{Module, equation::Equation, operation::Operation, solve::Solver};
 
 #[test]
 fn main() {
     let mut module = Module::<Project>::new();
-    let n0 = module.add_literal(Value::from_int(1));
-    let n1 = module.add_literal(Value::from_int(2));
-    let n2 = Array::node(&mut module, [n0, n1]);
+    let n0 = module.add_literal(Value::int(1));
+    let n1 = module.add_literal(Value::int(2));
+    let n2 = Tuple::node(&mut module, [n0, n1]);
     let n3 = module.add_operation(Operation {
         operand: n2,
         operator: Operator::sum(),
     });
     let n4 = module.add_auto();
-    module.add_equation(LocalEquation {
-        nodes: Box::new([n4, n3]),
+    module.add_equation(Equation {
+        nodes: Box::new([equation::Term::Node(n4), equation::Term::Node(n3)]),
     });
-    let n5 = Array::node(&mut module, [n4]);
-    let n6 = module.add_literal(Value::from_int(4));
-    let n7 = Array::node(&mut module, [n6]);
-    module.add_equation(LocalEquation {
-        nodes: Box::new([n7, n5]),
+    let n5 = Tuple::node(&mut module, [n4]);
+    let n6 = module.add_literal(Value::int(4));
+    let n7 = Tuple::node(&mut module, [n6]);
+    module.add_equation(Equation {
+        nodes: Box::new([equation::Term::Node(n7), equation::Term::Node(n5)]),
     });
 
     let mut solver = Solver::new(&mut module);
@@ -44,7 +45,7 @@ fn main() {
     assert!(
         diagnostics
             .intersection(&HashSet::from_iter([Diagnostic {
-                kind: DiagnosticKind::from_equality_error(EqualityError { expected: n3 }),
+                kind: DiagnosticKind::unequality(Unequality { expected: equation::Term::Node(n3) }),
                 node: n6
             },]))
             .next()

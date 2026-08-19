@@ -7,9 +7,7 @@ use system::{
 };
 
 use crate::system::{
-    EXPR_ID,
-    sytax::{AsTrait, Generic, Name, WrittenPathRaw},
-    utils::generated_project_trait,
+    EXPR_ID, Property, sytax::{AsTrait, Generic, Name, WrittenPathRaw}, utils::generated_project_trait,
 };
 
 pub static PLUGIN: Plugin = Plugin {
@@ -27,8 +25,9 @@ pub static PLUGIN: Plugin = Plugin {
         (&OPERATOR_TYPE, &OPERATOR_ENUM),
         (&DIAGNOSTIC_KIND_TYPE, &DIAGNOSTIC_KIND_ENUM),
     ],
-    properties: &["value"],
-    exprs: &[&SUM_EXPR, &INDEX_EXPR, &FIND_EXPR, &ARRAY_EXPR],
+    properties: &[&VALUE_PROPERTY],
+    metadatas: &[],
+    exprs: &[&SUM_EXPR, &INDEX_EXPR, &FIND_EXPR, &TUPLE_EXPR],
     expr_impls: &[
         ExprImpls {
             expr: &SUM_EXPR,
@@ -52,10 +51,10 @@ pub static PLUGIN: Plugin = Plugin {
             }],
         },
         ExprImpls {
-            expr: &ARRAY_EXPR,
+            expr: &TUPLE_EXPR,
             impls: &[&WrittenPathRaw {
                 crate_: CRATE,
-                path: "expr_impl::Array",
+                path: "expr_impl::Tuple",
             }],
         },
     ],
@@ -70,8 +69,8 @@ pub static VALUE_TYPE: EnumType = EnumType {
     is_unit: false,
     derives: &Derives(&["Clone", "Copy"]),
     markers: &["Eq"],
-    impls: &[&PARTIAL_EQ, &DEBUG],
-    base_traits: &[&"std::fmt::Debug", &"Copy", &"Eq"],
+    impls: &[&PARTIAL_EQ, &DEBUG, &HASH],
+    base_traits: &[&"std::fmt::Debug", &"Copy", &"Eq", HASH.symbol],
     functions: &[
         Function {
             name: "fields",
@@ -160,10 +159,10 @@ pub static OPERATOR_TYPE: EnumType = EnumType {
         project_generic: true,
         generics: &Generics(&[]),
     },
-    is_unit: true,
-    derives: &Derives(&["Clone", "Copy", "PartialEq", "Eq"]),
-    markers: &[],
-    impls: &[&DEBUG],
+    is_unit: false,
+    derives: &Derives(&["Clone", "Copy"]),
+    markers: &["Eq"],
+    impls: &[&DEBUG,&PARTIAL_EQ],
     base_traits: &[&"std::fmt::Debug", &"Copy", &"Eq"],
     functions: &[Function {
         name: "run",
@@ -268,11 +267,11 @@ pub static VALUE_ENUM: PluginEnum = PluginEnum {
             is_unit: false,
         },
         Variant {
-            name: "array",
+            name: "tuple",
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::NONE,
-                path: "value::Array",
+                path: "value::Tuple",
                 project_generic: false,
             },
             is_unit: false,
@@ -321,7 +320,7 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
                 path: "operator::Index",
                 project_generic: false,
             },
-            is_unit: true,
+            is_unit: false,
         },
         Variant {
             name: "find",
@@ -339,12 +338,12 @@ pub static OPERATOR_ENUM: PluginEnum = PluginEnum {
 pub static DIAGNOSTIC_KIND_ENUM: PluginEnum = PluginEnum {
     variants: &[
         Variant {
-            name: "equality_error",
+            name: "unequality",
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::NONE,
-                path: "diagnostic_kind::EqualityError",
-                project_generic: false,
+                path: "diagnostic_kind::Unequality",
+                project_generic: true,
             },
             is_unit: false,
         },
@@ -373,8 +372,8 @@ pub static FIND_EXPR: Expr = Expr {
     name: "find",
     params: &Params::simple(&[&expr_id_param("table"), &expr_id_param("name")]),
 };
-pub static ARRAY_EXPR: Expr = Expr {
-    name: "array",
+pub static TUPLE_EXPR: Expr = Expr {
+    name: "tuple",
     params: &Params {
         this: &[&expr_ids_param("items")],
         generics: &Generics(&[&Generic {
@@ -383,6 +382,11 @@ pub static ARRAY_EXPR: Expr = Expr {
         }]),
     },
 };
+
+pub const VALUE_PROPERTY: Property = Property {
+    name: "value",
+};
+
 pub const CRATE: &'static str = "lichen_core";
 pub const EXPR_IDS: DisplayArray =
     DisplayArray(&[&"impl IntoIterator<Item = &'a ", &EXPR_ID, &"> + Copy"]);
@@ -402,5 +406,3 @@ pub const fn expr_ids_param(name: &'static str) -> Param {
         mutable: false,
     }
 }
-
-fn a(_a: impl IntoIterator) {}

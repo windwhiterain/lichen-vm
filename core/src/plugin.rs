@@ -8,7 +8,7 @@
 #![allow(unused_mut)]
 
 pub mod principal_traits {
-    pub trait Value: std::fmt::Debug + Copy + Eq {
+    pub trait Value: std::fmt::Debug + Copy + Eq + std::hash::Hash {
         fn fields(&self) -> impl Iterator<Item = &crate::runtime::NodeIdLocal> {
             std::iter::empty()
         }
@@ -57,32 +57,46 @@ pub trait Project: std::fmt::Debug + Default + Copy + Eq + std::hash::Hash + 'st
         + crate::plugin::DiagnosticKind<Self>;
     type Ast: crate::plugin::principal_traits::Ast<Self> + crate::plugin::Ast<Self>;
 }
-pub trait Operator<P: crate::plugin::Project> {
-    fn sum() -> Self;
-    fn index() -> Self;
-    fn find() -> Self;
+pub trait Value {
+    fn as_int(&self) -> Option<&crate::value::Int>;
+    fn int(data: crate::value::Int) -> Self;
+    fn as_string(&self) -> Option<&crate::value::StringId>;
+    fn string(data: crate::value::StringId) -> Self;
+    fn as_tuple(&self) -> Option<&crate::value::Tuple>;
+    fn tuple(data: crate::value::Tuple) -> Self;
+    fn as_table(&self) -> Option<&crate::value::Table>;
+    fn table(data: crate::value::Table) -> Self;
+    fn as_unit(&self) -> bool;
+    fn unit() -> Self;
 }
 pub trait DiagnosticKind<P: crate::plugin::Project> {
-    fn equality_error(&self) -> Option<&crate::diagnostic_kind::EqualityError>;
-    fn from_equality_error(data: crate::diagnostic_kind::EqualityError) -> Self;
-    fn index_out_of_bounds(&self) -> Option<&crate::diagnostic_kind::IndexOutOfBounds>;
-    fn from_index_out_of_bounds(data: crate::diagnostic_kind::IndexOutOfBounds) -> Self;
+    fn as_unequality(&self) -> Option<&crate::diagnostic_kind::Unequality<P>>;
+    fn unequality(data: crate::diagnostic_kind::Unequality<P>) -> Self;
+    fn as_index_out_of_bounds(&self) -> Option<&crate::diagnostic_kind::IndexOutOfBounds>;
+    fn index_out_of_bounds(data: crate::diagnostic_kind::IndexOutOfBounds) -> Self;
 }
-pub trait Value {
-    fn int(&self) -> Option<&crate::value::Int>;
-    fn from_int(data: crate::value::Int) -> Self;
-    fn string(&self) -> Option<&crate::value::StringId>;
-    fn from_string(data: crate::value::StringId) -> Self;
-    fn array(&self) -> Option<&crate::value::Array>;
-    fn from_array(data: crate::value::Array) -> Self;
-    fn table(&self) -> Option<&crate::value::Table>;
-    fn from_table(data: crate::value::Table) -> Self;
-    fn unit(&self) -> bool;
-    fn from_unit() -> Self;
+pub trait Operator<P: crate::plugin::Project> {
+    fn as_sum(&self) -> bool;
+    fn sum() -> Self;
+    fn as_index(&self) -> Option<&crate::operator::Index>;
+    fn index(data: crate::operator::Index) -> Self;
+    fn as_find(&self) -> bool;
+    fn find() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>: crate::ast::Ast<P> {
-    fn value(&self, expr: &crate::ast::ExprId) -> crate::runtime::NodeIdLocal;
-    fn add_literal_core(&mut self, value: Option<P::Value>) -> crate::ast::ExprId;
+    fn get_value_uninit<'a>(
+        &'a self,
+        expr: &'a mut crate::value::Tuple,
+    ) -> &'a mut crate::runtime::NodeIdLocal;
+    fn get_value(&self, expr: &crate::ast::ExprId) -> crate::runtime::NodeIdLocal;
+    fn get_value_dynamic(
+        &mut self,
+        expr: &crate::runtime::NodeIdLocal,
+    ) -> crate::runtime::NodeIdLocal;
+    fn add_literal_core(
+        &mut self,
+        value: Option<&crate::runtime::NodeIdLocal>,
+    ) -> crate::ast::ExprId;
     fn add_sum(&mut self, addends: &crate::ast::ExprId) -> crate::ast::ExprId;
     fn add_index(
         &mut self,
@@ -94,7 +108,7 @@ pub trait Ast<P: crate::plugin::Project>: crate::ast::Ast<P> {
         table: &crate::ast::ExprId,
         name: &crate::ast::ExprId,
     ) -> crate::ast::ExprId;
-    fn add_array<'a>(
+    fn add_tuple<'a>(
         &mut self,
         items: impl IntoIterator<Item = &'a crate::ast::ExprId> + Copy,
     ) -> crate::ast::ExprId;
@@ -119,7 +133,7 @@ pub mod expr {
             name: &crate::ast::ExprId,
         );
     }
-    pub trait array<P: crate::plugin::Project> {
+    pub trait tuple<P: crate::plugin::Project> {
         fn build<'a>(
             ast: &mut P::Ast,
             output: &crate::ast::ExprId,

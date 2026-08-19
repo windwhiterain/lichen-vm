@@ -1,5 +1,6 @@
 use crate::{
     diagnostic_kind::IndexOutOfBounds,
+    operator::Index::Dynamic,
     plugin::{DiagnosticKind as _, Project, Value as _, principal_traits::Operator},
     runtime::{
         NodeIdLocal,
@@ -7,19 +8,18 @@ use crate::{
         operation,
         solve::{AnyNodeId, LocalModuleId, LocalNodeId, Solver},
     },
-    value::{Array, Int, StringId, Table},
+    value::{Int, StringId, Table, Tuple},
 };
 
 /// # Argument
 /// - `solver`: ident
 /// - `operand`: ident
 /// - `node`: ident
-/// - `project`: ident
-/// - `variants`: [[ident, ..]]
+/// - `variants`: [[path, ..]]
 #[macro_export]
 macro_rules! operands {
-    ($solver:ident, $operand:ident, $node:ident, $project:ident,[$($variant: ident,)*]) => {{
-        let Some(operands) = $operand.array() else {
+    ($solver:ident, $operand:ident, $node:ident, [$($variant: path,)*]) => {{
+        let Some(operands) = $operand.as_tuple() else {
             panic!("expected array, found: {:#?}", $operand);
         };
         if operands.0.len() != operands!(@count $(,$variant)*) {
@@ -29,14 +29,14 @@ macro_rules! operands {
         ($({
             let operand = operands.next().unwrap();
             let operand = $solver.solve_node(&$crate::runtime::solve::AnyNodeId::Local(operand.solver_local($node.module())),Some(&$crate::runtime::solve::AnyNodeId::Local(*$node)))?;
-            let Some(operand) = $project::Value::$variant(&operand) else {
+            let Some(operand) = $variant(&operand) else {
                 panic!("expected variant: {}, found: {:#?}", stringify!($variant),operand);
             };
             *operand
         },)*)
     }};
     (@count) => (0);
-    (@count, $variant0: ident $(, $variant1: ident)*) => (1 + operands!(@count $(, $variant1)*));
+    (@count, $variant0: path $(, $variant1: path)*) => (1 + operands!(@count $(, $variant1)*));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +49,7 @@ impl<P: Project> Operator<P> for Sum {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> operation::Option<P> {
-        let Some(operands) = operand.array() else {
+        let Some(operands) = operand.as_tuple() else {
             panic!()
         };
         let mut ret = Some(0);
@@ -62,25 +62,46 @@ impl<P: Project> Operator<P> for Sum {
                 continue;
             };
             if let Some(ret) = &mut ret {
-                *ret += value.int().unwrap();
+                *ret += value.as_int().unwrap();
             }
         }
-        ret.map(|x| operation::Some::Value(P::Value::from_int(x)))
+        ret.map(|x| operation::Some::Value(P::Value::int(x)))
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Index;
+pub enum Index {
+    Dynamic { stride: usize, offset: usize },
+    Static { index: usize },
+}
 
 impl Index {
     pub fn run<P: Project>(
+        &self,
         _solver: &mut Solver<P>,
         _node: &LocalNodeId,
-        array: Array,
-        index: Int,
+        array: &Tuple,
+        index: &Int,
     ) -> Option<operation::Option<P>> {
-        let reference_node = array.0.get(index as usize).copied();
+        let reference_node = array
+            .0
+            .get(match self {
+                Self::Dynamic { stride, offset } => {
+                    TryInto::<usize>::try_into(*index).ok()? * stride + offset
+                }
+                Self::Static { index } => *index,
+            })
+            .copied();
         reference_node.map(|x| Some(operation::Some::Ref(x)))
+    }
+}
+
+impl Default for Index {
+    fn default() -> Self {
+        Self::Dynamic {
+            stride: 1,
+            offset: 0,
+        }
     }
 }
 
@@ -91,15 +112,25 @@ impl<P: Project> Operator<P> for Index {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> operation::Option<P> {
-        let (array, index) = operands!(solver, operand, node, P, [array, int,]);
-        if let Some(ret) = Index::run(solver, node, array, index) {
+        let (array, index) = match self {
+            Dynamic { .. } => {
+                operands!(
+                    solver,
+                    operand,
+                    node,
+                    [P::Value::as_tuple, P::Value::as_int,]
+                )
+            }
+            Index::Static { index } => (*operand.as_tuple().unwrap(), *index as i64),
+        };
+        if let Some(ret) = Index::run(self, solver, node, &array, &index) {
             ret
         } else {
             solver
                 .module_mut(&node.module())
                 .diagnostics
                 .push(Diagnostic {
-                    kind: P::DiagnosticKind::from_index_out_of_bounds(IndexOutOfBounds {
+                    kind: P::DiagnosticKind::index_out_of_bounds(IndexOutOfBounds {
                         index,
                         len: array.0.len(),
                     }),
@@ -116,7 +147,7 @@ pub struct Find;
 impl Find {
     pub fn run<P: Project>(table: Table, name: StringId) -> Option<operation::Option<P>> {
         let index = table.0.get(&name).copied();
-        index.map(|index| Some(operation::Some::Value(P::Value::from_int(index as i64))))
+        index.map(|index| Some(operation::Some::Value(P::Value::int(index as i64))))
     }
 }
 
@@ -127,7 +158,12 @@ impl<P: Project> Operator<P> for Find {
         operand: &P::Value,
         node: &LocalNodeId,
     ) -> operation::Option<P> {
-        let (table, name) = operands!(solver, operand, node, P, [table, string,]);
+        let (table, name) = operands!(
+            solver,
+            operand,
+            node,
+            [P::Value::as_table, P::Value::as_string,]
+        );
         Self::run(table, name).unwrap()
     }
 }

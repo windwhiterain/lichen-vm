@@ -127,6 +127,7 @@ pub static AST_IMPL_PATH: WrittenPath = WrittenPath {
 };
 
 pub static PROPERTIES_COUNT: &'static str = "PROPERTIES_COUNT";
+pub static METADATAS_COUNTS: &'static str = "METADATAS_COUNTS";
 pub static THIS_PROJECT_TRAIT: ThisGeneratedLibPath = ThisGeneratedLibPath {
     relative: "",
     name: PROJECT_NAME,
@@ -141,6 +142,7 @@ pub static AST_IMPL: WrittenPath = WrittenPath::raw(CRATE, "ast::AstImpl");
 pub static EXPR_ID: WrittenPath = WrittenPath::raw(CRATE, "ast::ExprId");
 pub static NODE_ID_LOCAL: WrittenPath = WrittenPath::raw(CRATE, "runtime::NodeIdLocal");
 pub static EVALUATION: WrittenPath = WrittenPath::raw(CRATE, "runtime::evaluation::Evaluation");
+pub static TUPLE: WrittenPath = WrittenPath::raw(CRATE, "value::Tuple");
 pub static PHANTOM_DATA: &'static str = "core::marker::PhantomData";
 
 pub static FORMATTER_PARAM: Param = Param {
@@ -163,7 +165,8 @@ pub struct Plugin {
     pub dependencies: &'static [&'static Plugin],
     pub enum_types: &'static [&'static EnumType],
     pub plugin_enums: &'static [(&'static EnumType, &'static PluginEnum)],
-    pub properties: &'static [&'static str],
+    pub properties: &'static [&'static Property],
+    pub metadatas: &'static [&'static Metadata],
     pub exprs: &'static [&'static Expr],
     pub expr_impls: &'static [ExprImpls],
 }
@@ -189,6 +192,15 @@ pub struct Variant {
     pub name: &'static str,
     pub path: &'static WrittenPath,
     pub is_unit: bool,
+}
+
+pub struct Property{
+    pub name: &'static str,
+}
+
+pub struct Metadata{
+    pub name: &'static str,
+    pub property: &'static Property
 }
 
 pub struct Trait {

@@ -20,17 +20,17 @@ where
     K: Hash + Eq,
 {
     const TABLE_SCALE: f32 = 2.0;
-    pub fn new(arena: &mut Arena, len: usize) -> Self {
+    pub fn uninit(arena: &mut Arena, len: usize) -> Self {
         let table_len = ((len as f32 * Self::TABLE_SCALE).ceil() as usize).next_power_of_two();
         Self {
             table: ArenaArray::new_default(arena, table_len),
-            entries: ArenaArray::new(arena, len),
+            entries: ArenaArray::uninit(arena, len),
         }
     }
-    pub fn from_iter(arena: &mut Arena, iter: impl Iterator<Item = (K, V)>) -> Self {
+    pub fn new(arena: &mut Arena, iter: impl Iterator<Item = (K, V)>) -> Self {
         let len = iter.size_hint().0;
         debug_assert!(iter.size_hint().1 == Some(len));
-        let mut ret = Self::new(arena, len);
+        let mut ret = Self::uninit(arena, len);
         for (index, (key, value)) in iter.enumerate() {
             ret.insert(index, key, value);
         }
@@ -127,7 +127,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Entry<K, V> {
     key: K,
     value: V,
@@ -176,10 +176,18 @@ impl<K: Hash + Eq, V: PartialEq> PartialEq for ArenaHashMap<K, V> {
 
 impl<K: Hash + Eq, V: Eq> Eq for ArenaHashMap<K, V> {}
 
+impl<K: Hash + Eq + Ord, V: Hash> Hash for ArenaHashMap<K, V> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let mut entries = self.entries.iter().collect::<Box<[_]>>();
+        entries.sort_by_key(|entry| &entry.key);
+        entries.hash(state);
+    }
+}
+
 #[test]
 fn test() {
     let mut arena = Arena::new();
-    let mut hashmap = ArenaHashMap::<usize, usize>::new(&mut arena, 8);
+    let mut hashmap = ArenaHashMap::<usize, usize>::uninit(&mut arena, 8);
     for i in 0..8 {
         assert!(hashmap.insert(i, i, i).is_none());
     }

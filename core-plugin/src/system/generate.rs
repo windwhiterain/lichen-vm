@@ -14,7 +14,7 @@ use crate::system::sytax::{Bracket, DeKeyword, EqualityProjectGeneric};
 use crate::system::{
     AST_IMPL_PATH, AST_NAME, AST_TRAIT_PATH, EVALUATION, EXPR_ID, EnumType, Expr, FunctionImpl,
     MANUALLY_DROP, Module, NODE_ID_LOCAL, PHANTOM_DATA, PRINCIPAL_TRAITS, PROJECT_NAME,
-    PROJECT_VARIABLE, PROPERTIES_COUNT, Plugin, PluginEnum, UNION, Variant,
+    PROJECT_VARIABLE, PROPERTIES_COUNT, Plugin, PluginEnum, TUPLE, UNION, Variant,METADATAS_COUNTS
 };
 
 use crate::system::sytax::{Declare, DisplayMarkers, Generics, Name, WithProject, WrittenPathRaw};
@@ -121,7 +121,7 @@ pub struct Project {
 impl Project {
     pub fn new(plugin: &'static Plugin) -> Self {
         let mut ctx = ProjectAnalysis::default();
-        fn collect(plugin: &'static Plugin, ctx: &mut ProjectAnalysis) {
+        fn analyse(plugin: &'static Plugin, ctx: &mut ProjectAnalysis) {
             if let Entry::Vacant(entry) = ctx.plugins.entry(ByAddress(plugin)) {
                 entry.insert((
                     HashSet::from_iter(plugin.enum_types.iter().map(|x| ByAddress(*x))),
@@ -143,7 +143,7 @@ impl Project {
                         .extend(expr_impls.impls.iter().map(|x| (*x, plugin)));
                 }
                 for dependency in plugin.dependencies.iter().copied() {
-                    collect(dependency, ctx);
+                    analyse(dependency, ctx);
                     let [
                         Some((this_enum_types, this_ancestors)),
                         Some((dependency_enum_type, dependency_ancestors)),
@@ -162,7 +162,7 @@ impl Project {
                 }
             }
         }
-        collect(&plugin, &mut ctx);
+        analyse(&plugin, &mut ctx);
         Self { plugin, ctx }
     }
     pub fn fmt_lib(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -184,6 +184,7 @@ impl Project {
                 write!(f, "pub trait {}: ", Declare(&AST_NAME))?;
                 writeln!(f, "{{")?;
                 writeln!(f, "const {PROPERTIES_COUNT}: usize;")?;
+                writeln!(f, "const {METADATAS_COUNTS}: &'static [usize];")?;
                 writeln!(f, "fn impl_(&self)->&{};", AST_IMPL_PATH)?;
                 writeln!(f, "fn impl_mut(&mut self)->&mut {};", AST_IMPL_PATH)?;
                 writeln!(f, "}}")?;
@@ -247,16 +248,20 @@ impl Project {
                 } else {
                     for variant in plugin_enum.variants.iter() {
                         if variant.is_unit {
-                            writeln!(f, "fn {}(&self)->bool;", DeKeyword(variant.name))?;
-                            writeln!(f, "fn from_{}()->Self;", variant.name)?;
+                            writeln!(f, "fn as_{}(&self)->bool;", variant.name)?;
+                            writeln!(f, "fn {}()->Self;", DeKeyword(variant.name))?;
                         } else {
                             writeln!(
                                 f,
-                                "fn {}(&self)->Option<&{}>;",
+                                "fn as_{}(&self)->Option<&{}>;",
+                                variant.name, variant.path
+                            )?;
+                            writeln!(
+                                f,
+                                "fn {}(data: {})->Self;",
                                 DeKeyword(variant.name),
                                 variant.path
                             )?;
-                            writeln!(f, "fn from_{}(data: {})->Self;", variant.name, variant.path)?;
                         }
                     }
                 }
@@ -272,8 +277,18 @@ impl Project {
         for property in self.plugin.properties {
             writeln!(
                 f,
-                "fn {}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL};",
-                DeKeyword(property)
+                "fn get_{}_uninit<'a>(&'a self,expr:&'a mut {TUPLE})->&'a mut {NODE_ID_LOCAL};",
+                DeKeyword(property.name),
+            )?;
+            writeln!(
+                f,
+                "fn get_{}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL};",
+                DeKeyword(property.name),
+            )?;
+            writeln!(
+                f,
+                "fn get_{}_dynamic(&mut self,expr:&{NODE_ID_LOCAL})->{NODE_ID_LOCAL};",
+                DeKeyword(property.name),
             )?;
         }
         writeln!(f, "fn add_literal_{}(&mut self,", self.plugin.name)?;
@@ -284,12 +299,7 @@ impl Project {
             .chain(once(self.plugin))
         {
             for property in plugin.properties {
-                write!(
-                    f,
-                    "{}: Option<{PROJECT_VARIABLE}::{}>,",
-                    DeKeyword(property),
-                    VALUE_TYPE.name
-                )?;
+                write!(f, "{}: Option<&{NODE_ID_LOCAL}>,", DeKeyword(property.name),)?;
             }
         }
         writeln!(f, ")->{EXPR_ID};")?;
@@ -385,7 +395,7 @@ impl Project {
         for (enum_type, plugin_enums) in &self.ctx.plugin_enums {
             if !enum_type.is_unit {
                 writeln!(f, "{}", enum_type.derives)?;
-                writeln!(f, "pub(super) union {}{{", enum_type.name)?;
+                writeln!(f, "pub(super) union {}{{", Declare(enum_type.name))?;
                 for plugin_enum in plugin_enums.values() {
                     for variant in plugin_enum.variants {
                         writeln!(
@@ -531,26 +541,27 @@ impl Project {
                                 if variant.is_unit {
                                     writeln!(
                                         f,
-                                        "fn {}(&self)->bool{{self.code==self::code::{}::{}__{}}}",
-                                        DeKeyword(variant.name),
+                                        "fn as_{}(&self)->bool{{self.code==self::code::{}::{}__{}}}",
+                                        variant.name,
                                         DeKeyword(enum_type.name.name),
                                         plugin_enum.plugin.name,
                                         variant.name
                                     )?;
                                     writeln!(
                                         f,
-                                        "fn from_{0}()->Self{{Self{{code:self::code::{1}::{3}__{0},data:self::union_::{1}{2}{{{3}__{0}: {MANUALLY_DROP}::new({4})}} }} }}",
-                                        variant.name,
+                                        "fn {0}()->Self{{Self{{code:self::code::{1}::{3}__{4},data:self::union_::{1}{2}{{{3}__{4}: {MANUALLY_DROP}::new({5})}} }} }}",
+                                        DeKeyword(variant.name),
                                         DeKeyword(enum_type.name.name),
                                         enum_type.name.generics,
                                         plugin_enum.plugin.name,
-                                        variant.path
+                                        variant.name,
+                                        variant.path,
                                     )?;
                                 } else {
                                     writeln!(
                                         f,
-                                        "fn {0}(&self)->Option<&{1}>{{if self.code==self::code::{2}::{3}__{4}{{Some(unsafe{{&self.data.{3}__{4}}})}}else{{None}} }}",
-                                        DeKeyword(variant.name),
+                                        "fn as_{0}(&self)->Option<&{1}>{{if self.code==self::code::{2}::{3}__{4}{{Some(unsafe{{&self.data.{3}__{4}}})}}else{{None}} }}",
+                                        variant.name,
                                         variant.path,
                                         DeKeyword(enum_type.name.name),
                                         plugin_enum.plugin.name,
@@ -558,8 +569,8 @@ impl Project {
                                     )?;
                                     writeln!(
                                         f,
-                                        "fn from_{0}(data: {1})->Self{{Self{{code:self::code::{2}::{3}__{4},data:self::{UNION}::{2}{{{3}__{4}:{MANUALLY_DROP}::new(data)}} }} }}",
-                                        variant.name,
+                                        "fn {0}(data: {1})->Self{{Self{{code:self::code::{2}::{3}__{4},data:self::{UNION}::{2}{{{3}__{4}:{MANUALLY_DROP}::new(data)}} }} }}",
+                                        DeKeyword(variant.name),
                                         variant.path,
                                         DeKeyword(enum_type.name.name),
                                         plugin_enum.plugin.name,
@@ -573,7 +584,7 @@ impl Project {
                 }
             }
         }
-        let mut properties_count = 0;
+        let mut property_index = 0;
         {
             for (plugin, _) in &self.ctx.plugins {
                 writeln!(
@@ -596,41 +607,52 @@ impl Project {
                 for property in plugin.properties {
                     writeln!(
                         f,
-                        "fn {}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL}{{self.impl_.property(expr,{properties_count})}}",
-                        DeKeyword(property)
+                        "fn get_{}_uninit<'a>(&'a self,expr:&'a mut {TUPLE})->&'a mut {NODE_ID_LOCAL}{{self.impl_.get_property_uninit(expr,{property_index})}}",
+                        DeKeyword(property.name),
+                    )?;
+                    writeln!(
+                        f,
+                        "fn get_{}(&self,expr:&{EXPR_ID})->{NODE_ID_LOCAL}{{self.impl_.get_property(expr,{property_index})}}",
+                        DeKeyword(property.name),
+                    )?;
+                    writeln!(
+                        f,
+                        "fn get_{}_dynamic(&mut self,expr:&{NODE_ID_LOCAL})->{NODE_ID_LOCAL}{{self.impl_.get_property_dynamic(expr,{property_index})}}",
+                        DeKeyword(property.name),
                     )?;
                 }
-                properties_count += 1;
+                property_index += 1;
                 writeln!(f, "fn add_literal_{}(&mut self,", plugin.name)?;
                 for plugin in self.ctx.plugins[plugin].1.iter().chain(once(plugin)) {
                     for property in plugin.properties {
-                        write!(
-                            f,
-                            "{}: Option<{PROJECT_VARIABLE}::{}>,",
-                            DeKeyword(property),
-                            VALUE_TYPE.name
-                        )?;
+                        write!(f, "{}: Option<&{NODE_ID_LOCAL}>,", DeKeyword(property.name),)?;
                     }
                 }
                 writeln!(f, ")->{EXPR_ID}{{")?;
-                writeln!(f, "let expr = <Self as {AST_TRAIT_PATH}>::add_auto(self);")?;
+                writeln!(f, "let mut expr = self.impl_.add_uninit();")?;
                 for plugin in self.ctx.plugins[plugin].1.iter().chain(once(plugin)) {
                     for property in plugin.properties {
-                        let property = DeKeyword(property);
-                        writeln!(f, "if let Some({property}) = {property}{{")?;
+                        let property = DeKeyword(property.name);
+                        write!(f,"let node=")?;
+                        {
+                            writeln!(f, "if let Some({0}) = {0}{{", property)?;
+                            write!(f, "*{property}")?;
+                            writeln!(f, "}}")?;
+                        }
+                        {
+                            writeln!(f, "else{{")?;
+                            write!(f, "self.impl_.module.add_auto()")?;
+                            writeln!(f, "}}")?;
+                        }
+                        writeln!(f,";")?;
                         writeln!(
                             f,
-                            "let node = <Self as {}>::{property}(self,&expr);",
-                            generated_trait(plugin, AST_NAME)
+                            "*<Self as {}>::get_{property}_uninit(self, &mut expr) = node;",
+                            generated_trait(plugin, AST_NAME),
                         )?;
-                        write!(
-                            f,
-                            "*self.impl_.module.evaluation_mut(&node)={EVALUATION}::Value({property})"
-                        )?;
-                        writeln!(f, "}}")?;
                     }
                 }
-                writeln!(f, "expr")?;
+                writeln!(f, "self.impl_.init(expr)")?;
                 writeln!(f, "}}")?;
                 for expr in plugin.exprs {
                     writeln!(
@@ -673,7 +695,7 @@ impl Project {
                     generated_principle_trait(&PLUGIN, AST_NAME),
                     generated_struct(AST_NAME),
                 )?;
-                writeln!(f, "const {PROPERTIES_COUNT}: usize = {properties_count};")?;
+                writeln!(f, "const {PROPERTIES_COUNT}: usize = {property_index};")?;
                 writeln!(f, "fn impl_(&self)->&{AST_IMPL_PATH}{{&self.impl_}}",)?;
                 writeln!(
                     f,

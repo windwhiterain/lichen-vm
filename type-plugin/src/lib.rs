@@ -1,5 +1,5 @@
 use lichen_core_plugin::{
-    ARRAY_EXPR,
+    TUPLE_EXPR, INDEX_EXPR, OPERATOR_TYPE,
     system::{
         ExprImpls, Module, Plugin, PluginEnum, Variant,
         sytax::{Generics, WrittenPath, WrittenPathRaw},
@@ -16,28 +16,57 @@ pub static PLUGIN: Plugin = Plugin {
     bin_module: Module::Bin("type/tests/project"),
     dependencies: &[&lichen_core_plugin::PLUGIN],
     enum_types: &[],
-    plugin_enums: &[(&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM)],
+    plugin_enums: &[
+        (&lichen_core_plugin::VALUE_TYPE, &VALUE_ENUM),
+    ],
     properties: &["type"],
     exprs: &[],
-    expr_impls: &[ExprImpls {
-        expr: &ARRAY_EXPR,
-        impls: &[&WrittenPathRaw {
-            crate_: CRATE,
-            path: "expr_impl::Array",
-        }],
-    }],
+    expr_impls: &[
+        ExprImpls {
+            expr: &TUPLE_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Array",
+            }],
+        },
+        ExprImpls {
+            expr: &INDEX_EXPR,
+            impls: &[&WrittenPathRaw {
+                crate_: CRATE,
+                path: "expr_impl::Index",
+            }],
+        },
+    ],
 };
 
 static VALUE_ENUM: PluginEnum = PluginEnum {
     variants: &[Variant {
-        name: "type",
+        name: "int_type",
         path: &WrittenPath {
             crate_: CRATE,
             generics: &Generics::NONE,
-            path: "value::Type",
+            path: "value::IntType",
             project_generic: false,
         },
-        is_unit: false,
+        is_unit: true,
+    },Variant {
+        name: "string_type",
+        path: &WrittenPath {
+            crate_: CRATE,
+            generics: &Generics::NONE,
+            path: "value::StringType",
+            project_generic: false,
+        },
+        is_unit: true,
+    },Variant {
+        name: "table_type",
+        path: &WrittenPath {
+            crate_: CRATE,
+            generics: &Generics::NONE,
+            path: "value::TableType",
+            project_generic: false,
+        },
+        is_unit: true,
     }],
     plugin: &PLUGIN,
 };

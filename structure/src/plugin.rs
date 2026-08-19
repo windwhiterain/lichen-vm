@@ -21,31 +21,34 @@ pub trait Project:
 pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
-    fn member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
-    fn from_member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
-    fn member_name_missing(&self) -> Option<&crate::diagnostic_kind::MemberNameMissing>;
-    fn from_member_name_missing(data: crate::diagnostic_kind::MemberNameMissing) -> Self;
+    fn as_member_name_repetition(&self) -> Option<&crate::diagnostic_kind::MemberNameRepetition>;
+    fn member_name_repetition(data: crate::diagnostic_kind::MemberNameRepetition) -> Self;
+    fn as_member_name_missing(&self) -> Option<&crate::diagnostic_kind::MemberNameMissing>;
+    fn member_name_missing(data: crate::diagnostic_kind::MemberNameMissing) -> Self;
 }
 pub trait Value: ::lichen_core::plugin::Value {
-    fn name_set(&self) -> Option<&crate::value::NameSet>;
-    fn from_name_set(data: crate::value::NameSet) -> Self;
-    fn layout(&self) -> Option<&crate::value::Layout>;
-    fn from_layout(data: crate::value::Layout) -> Self;
-    fn structure(&self) -> Option<&crate::value::Structure>;
-    fn from_structure(data: crate::value::Structure) -> Self;
+    fn as_name_set(&self) -> Option<&crate::value::NameSet>;
+    fn name_set(data: crate::value::NameSet) -> Self;
+    fn as_offsets(&self) -> Option<&crate::value::Offsets>;
+    fn offsets(data: crate::value::Offsets) -> Self;
 }
 pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {
-    fn offset() -> Self;
-    fn component() -> Self;
+    fn as_compose(&self) -> bool;
     fn compose() -> Self;
+    fn as_match(&self) -> bool;
     fn r#match() -> Self;
+    fn as_transform(&self) -> bool;
     fn transform() -> Self;
 }
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>
 {
     fn structure(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal;
-    fn add_literal_structure(
+    fn structure_components(
+        &self,
+        expr: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::runtime::NodeIdLocal;
+    fn add_primitive_structure(
         &mut self,
         value: Option<P::Value>,
         structure: Option<P::Value>,

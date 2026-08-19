@@ -1,12 +1,15 @@
-use crate::runtime::{NodeIdLocal, solve::LocalModuleId};
+use crate::{
+    plugin::Project,
+    runtime::{NodeIdLocal, solve::LocalModuleId},
+};
 
 #[derive(Debug)]
-pub struct LocalEquation {
-    pub nodes: Box<[NodeIdLocal]>,
+pub struct Equation<P: Project> {
+    pub nodes: Box<[Term<P>]>,
 }
 
-#[derive(Debug)]
-pub struct Equation {
-    pub module: LocalModuleId,
-    pub nodes: Box<[NodeIdLocal]>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Term<P: Project> {
+    Node(NodeIdLocal),
+    Value(P::Value),
 }

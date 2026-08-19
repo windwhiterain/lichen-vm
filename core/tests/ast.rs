@@ -17,16 +17,18 @@ fn main() {
     let mut ast = Ast {
         impl_: AstImpl::new(module),
     };
-    let e0 = ast.add_literal_core(Some(Value::from_int(1)));
-    let e1 = ast.add_literal_core(Some(Value::from_int(2)));
-    let e2 = ast.add_array(&[e0, e1]);
+    let v0 = ast.module_mut().add_literal(Value::int(1));
+    let v1 = ast.module_mut().add_literal(Value::int(2));
+    let e0 = ast.add_literal_core(Some(&v0));
+    let e1 = ast.add_literal_core(Some(&v1));
+    let e2 = ast.add_tuple(&[e0, e1]);
     let e3 = ast.add_sum(&e2);
     ast.add_entry(&e3);
     let mut solver = Solver::new(ast.module_mut());
     solver.solve();
-    let v3 = ast.value(&e3);
+    let v3 = ast.get_value(&e3);
     assert_eq!(
         ast.module().evaluation(&v3),
-        &Evaluation::Value(Value::from_int(3))
+        &Evaluation::Value(Value::int(3))
     )
 }

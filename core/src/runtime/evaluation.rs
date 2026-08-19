@@ -20,6 +20,20 @@ pub enum Evaluation<P: Project> {
     },
 }
 
+impl<P: Project> Evaluation<P> {
+    pub const AUTO: Self = Self::Auto {
+        referrer_count: 1,
+        referers: None,
+    };
+    pub fn evaluation_order(&self) -> (usize, usize) {
+        match *self {
+            Evaluation::Value(_) => (2, 0),
+            Evaluation::Ref { .. } => panic!(),
+            Evaluation::Auto { referrer_count, .. } => (1, referrer_count),
+        }
+    }
+}
+
 impl<P: Project> Module<P> {
     /// include self
     pub fn referers(&self, node: &NodeIdLocal) -> impl Iterator<Item = NodeIdLocal> {

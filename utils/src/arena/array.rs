@@ -1,14 +1,14 @@
-use std::{fmt::Debug, mem::MaybeUninit, ptr::NonNull};
+use std::{fmt::Debug, hash::Hash, mem::MaybeUninit, ptr::NonNull};
 
 use crate::arena::Arena;
 
 pub struct ArenaArray<T>(NonNull<[MaybeUninit<T>]>);
 
 impl<T> ArenaArray<T> {
-    pub fn new(arena: &mut Arena, len: usize) -> Self {
+    pub fn uninit(arena: &mut Arena, len: usize) -> Self {
         Self(NonNull::from_mut(arena.add_slice_uninit(len)))
     }
-    pub fn from_iter(arena: &mut Arena, iter: impl IntoIterator<Item = T>) -> Self {
+    pub fn new(arena: &mut Arena, iter: impl IntoIterator<Item = T>) -> Self {
         Self(NonNull::from_mut(unsafe {
             std::mem::transmute(arena.add_iter(iter))
         }))
@@ -47,7 +47,7 @@ impl<T> ArenaArray<T> {
 
 impl<T: Clone> ArenaArray<T> {
     pub fn new_uniform(arena: &mut Arena, len: usize, val: T) -> Self {
-        let mut ret = Self::new(arena, len);
+        let mut ret = Self::uninit(arena, len);
         for i in ret.inner_mut() {
             i.write(val.clone());
         }
@@ -65,7 +65,7 @@ impl<T> Copy for ArenaArray<T> {}
 
 impl<T: Default> ArenaArray<T> {
     pub fn new_default(arena: &mut Arena, len: usize) -> Self {
-        let mut ret = Self::new(arena, len);
+        let mut ret = Self::uninit(arena, len);
         for i in ret.inner_mut() {
             i.write(Default::default());
         }
@@ -86,3 +86,9 @@ impl<T: PartialEq> PartialEq for ArenaArray<T> {
 }
 
 impl<T: Eq> Eq for ArenaArray<T> {}
+
+impl<T: Hash> Hash for ArenaArray<T>{
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
+}

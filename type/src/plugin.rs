@@ -22,16 +22,24 @@ pub trait DiagnosticKind<P: crate::plugin::Project>:
     ::lichen_core::plugin::DiagnosticKind<P>
 {
 }
-pub trait Value: ::lichen_core::plugin::Value {
-    fn r#type(&self) -> Option<&crate::value::Type>;
-    fn from_type(data: crate::value::Type) -> Self;
-}
 pub trait Operator<P: crate::plugin::Project>: ::lichen_core::plugin::Operator<P> {}
+pub trait Value: ::lichen_core::plugin::Value {
+    fn as_int_type(&self) -> bool;
+    fn int_type() -> Self;
+    fn as_string_type(&self) -> bool;
+    fn string_type() -> Self;
+    fn as_table_type(&self) -> bool;
+    fn table_type() -> Self;
+}
 pub trait Ast<P: crate::plugin::Project>:
     ::lichen_core::ast::Ast<P> + ::lichen_core::plugin::Ast<P>
 {
     fn r#type(&self, expr: &::lichen_core::ast::ExprId) -> ::lichen_core::runtime::NodeIdLocal;
-    fn add_literal_type(
+    fn r#type_components(
+        &self,
+        expr: &::lichen_core::ast::ExprId,
+    ) -> ::lichen_core::runtime::NodeIdLocal;
+    fn add_primitive_type(
         &mut self,
         value: Option<P::Value>,
         r#type: Option<P::Value>,

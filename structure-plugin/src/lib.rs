@@ -1,5 +1,5 @@
 use lichen_core_plugin::{
-    ARRAY_EXPR, FIND_EXPR, INDEX_EXPR, SUM_EXPR, expr_id_param,
+    TUPLE_EXPR, FIND_EXPR, INDEX_EXPR, SUM_EXPR, expr_id_param,
     system::{
         Expr, ExprImpls, Module, Params, Plugin, PluginEnum, Variant,
         sytax::{Generics, WrittenPath, WrittenPathRaw},
@@ -49,7 +49,7 @@ pub static PLUGIN: Plugin = Plugin {
             }],
         },
         ExprImpls {
-            expr: &ARRAY_EXPR,
+            expr: &TUPLE_EXPR,
             impls: &[&WrittenPathRaw {
                 crate_: CRATE,
                 path: "expr_impl::Array",
@@ -92,21 +92,11 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
             is_unit: false,
         },
         Variant {
-            name: "layout",
+            name: "offsets",
             path: &WrittenPath {
                 crate_: CRATE,
                 generics: &Generics::NONE,
-                path: "value::Layout",
-                project_generic: false,
-            },
-            is_unit: false,
-        },
-        Variant {
-            name: "structure",
-            path: &WrittenPath {
-                crate_: CRATE,
-                generics: &Generics::NONE,
-                path: "value::Structure",
+                path: "value::Offsets",
                 project_generic: false,
             },
             is_unit: false,
@@ -117,26 +107,6 @@ static VALUE_ENUM: PluginEnum = PluginEnum {
 
 static OPERATOR_ENUM: PluginEnum = PluginEnum {
     variants: &[
-        Variant {
-            name: "offset",
-            path: &WrittenPath {
-                crate_: CRATE,
-                path: "operator::Offset",
-                generics: &Generics::NONE,
-                project_generic: false,
-            },
-            is_unit: true,
-        },
-        Variant {
-            name: "component",
-            path: &WrittenPath {
-                crate_: CRATE,
-                path: "operator::Component",
-                generics: &Generics::NONE,
-                project_generic: false,
-            },
-            is_unit: true,
-        },
         Variant {
             name: "compose",
             path: &WrittenPath {

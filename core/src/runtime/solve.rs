@@ -1,14 +1,17 @@
 use lichen_utils::{erase, erase_mut};
 
 use crate::{
-    diagnostic_kind::EqualityError,
+    diagnostic_kind::Unequality,
     plugin::{
         DiagnosticKind, Project,
         principal_traits::{Operator, Value},
     },
     runtime::{
-        Module, ModuleId, NodeId, NodeIdLocal, diagnostic::Diagnostic, equation::Equation,
-        evaluation::Evaluation, operation,
+        Module, ModuleId, NodeId, NodeIdLocal,
+        diagnostic::Diagnostic,
+        equation::{self, Equation},
+        evaluation::{self, Evaluation},
+        operation,
     },
 };
 
@@ -31,8 +34,6 @@ pub struct Solve {
 
 pub struct Solver<'a, P: Project> {
     pub module: &'a mut Module<P>,
-    pub equations: Vec<Equation>,
-    pub entries: Vec<LocalNodeId>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -82,32 +83,14 @@ impl LocalNodeId {
 
 impl<'a, P: Project> Solver<'a, P> {
     pub fn new(module: &'a mut Module<P>) -> Self {
-        let equations = std::mem::take(&mut module.equations)
-            .into_iter()
-            .map(|x| Equation {
-                module: LocalModuleId,
-                nodes: x.nodes,
-            })
-            .collect();
-        let entries = std::mem::take(&mut module.entries)
-            .iter()
-            .map(|x| x.solver_local(LocalModuleId))
-            .collect();
-        Self {
-            module,
-            equations,
-            entries,
-        }
+        Self { module }
     }
     pub fn solve(&mut self) {
-        loop {
-            if let Some(entry) = self.entries.pop() {
-                self.solve_node(&AnyNodeId::Local(entry), None);
-            } else if let Some(equation) = self.equations.pop() {
-                self.apply_equation(equation.module, &equation.nodes);
-            } else {
-                break;
-            }
+        while let Some(equation) = self.module_mut(&LocalModuleId).equations.pop() {
+            self.apply_equation(LocalModuleId, &equation.nodes);
+        }
+        while let Some(entry) = self.module_mut(&LocalModuleId).entries.pop() {
+            self.solve_node(&AnyNodeId::Local(entry.solver_local(LocalModuleId)), None);
         }
     }
     pub fn module(&self, _id: &LocalModuleId) -> &Module<P> {
@@ -202,7 +185,10 @@ impl<'a, P: Project> Solver<'a, P> {
                                     operation::Some::Ref(node_id_local) => {
                                         self.apply_equation(
                                             LocalModuleId,
-                                            &[node.local(), node_id_local],
+                                            &[
+                                                equation::Term::Node(node.local()),
+                                                equation::Term::Node(node_id_local),
+                                            ],
                                         );
                                         None
                                     }
@@ -223,8 +209,8 @@ impl<'a, P: Project> Solver<'a, P> {
                     if let Some(operation_value) = operation_value {
                         if *value != operation_value {
                             module.diagnostics.push(Diagnostic {
-                                kind: DiagnosticKind::from_equality_error(EqualityError {
-                                    expected: root,
+                                kind: P::DiagnosticKind::unequality(Unequality {
+                                    expected: equation::Term::Node(root),
                                 }),
                                 node: node.local(),
                             });
@@ -265,17 +251,34 @@ impl<'a, P: Project> Solver<'a, P> {
             AnyNodeId::Remote { .. } => todo!(),
         }
     }
-    pub fn apply_equation(&mut self, module_id: LocalModuleId, nodes: &[NodeIdLocal]) {
-        for node in nodes.iter().copied() {
-            self.solve_node(&&AnyNodeId::Local(node.solver_local(module_id)), None);
+    pub fn apply_equation(&mut self, module_id: LocalModuleId, terms: &[equation::Term<P>]) {
+        for term in terms.iter().copied() {
+            if let equation::Term::Node(node) = term {
+                self.solve_node(&&AnyNodeId::Local(node.solver_local(module_id)), None);
+            }
         }
         let module = self.module_mut(&module_id);
-        let (mut max_evaluation, mut max_order, mut max_root) =
-            (&Evaluation::AUTO.clone(), (0, 0), *nodes.first().unwrap());
-        for node in nodes.iter().copied() {
-            let root = module.root(&node);
-            let evaluation = unsafe { erase(module.evaluation(&root)) };
-            let order = module.evaluation_order(&root);
+        let (mut max_evaluation, mut max_order, mut max_root) = (
+            Evaluation::AUTO,
+            Evaluation::<P>::AUTO.evaluation_order(),
+            *terms.first().unwrap(),
+        );
+        for term in terms.iter().copied() {
+            let (root, evaluation, order) = match term {
+                equation::Term::Node(node) => {
+                    let root = module.root(&node);
+                    let evaluation = unsafe { erase(module.evaluation(&root)) };
+                    (
+                        equation::Term::Node(root),
+                        *evaluation,
+                        evaluation.evaluation_order(),
+                    )
+                }
+                equation::Term::Value(value) => {
+                    let evaluation = Evaluation::Value((value));
+                    (term, evaluation, evaluation.evaluation_order())
+                }
+            };
             if order > max_order {
                 max_evaluation = evaluation;
                 max_order = order;
@@ -285,30 +288,64 @@ impl<'a, P: Project> Solver<'a, P> {
                 break;
             }
         }
-        for node in nodes.iter().copied() {
+        for term in terms.iter().copied() {
             let module = self.module_mut(&module_id);
-            let root = module.root(&node);
-            if root == max_root {
+            let (root, evaluation) = match term {
+                equation::Term::Node(node) => {
+                    let root = module.root(&node);
+                    let evaluation = unsafe { erase(module.evaluation(&root)) };
+                    (equation::Term::Node(root), *evaluation)
+                }
+                equation::Term::Value(value) => {
+                    let evaluation = Evaluation::Value((value));
+                    (term, evaluation)
+                }
+            };
+            if let equation::Term::Node(root) = root
+                && let equation::Term::Node(max_root) = max_root
+                && root == max_root
+            {
                 continue;
             }
-            let evaluation = module.evaluation_mut(&root);
             if let Evaluation::Auto { .. } = max_evaluation {
+                let equation::Term::Node(max_root) = max_root else {
+                    unreachable!()
+                };
+                let equation::Term::Node(root) = root else {
+                    unreachable!()
+                };
                 self.set_ref(module_id, &root, &max_root);
-            } else if let Evaluation::Value(max_value) = *max_evaluation {
-                if let Evaluation::Value(value) = *evaluation {
+            } else if let Evaluation::Value(max_value) = max_evaluation {
+                if let Evaluation::Value(value) = evaluation {
                     if max_value != value {
+                        let equation::Term::Node(max_root) = max_root else {
+                            panic!()
+                        };
                         module.diagnostics.push(Diagnostic {
-                            kind: P::DiagnosticKind::from_equality_error(EqualityError {
+                            kind: P::DiagnosticKind::unequality(Unequality {
                                 expected: root,
                             }),
                             node: max_root,
                         });
                     }
                     max_value.for_field_pairs(&value, |i, j| {
-                        self.apply_equation(module_id, &[*i, *j]);
+                        self.apply_equation(
+                            module_id,
+                            &[equation::Term::Node(*i), equation::Term::Node(*j)],
+                        );
                     });
                 } else if let Evaluation::Auto { .. } = evaluation {
-                    self.set_ref(module_id, &root, &max_root);
+                    let equation::Term::Node(root) = root else {
+                        unreachable!()
+                    };
+                    match max_root {
+                        equation::Term::Node(max_root) => {
+                            self.set_ref(module_id, &root, &max_root);
+                        }
+                        equation::Term::Value(max_root) => {
+                            self.set_value(&root.solver_local(module_id), max_root);
+                        }
+                    }
                 } else {
                     unreachable!()
                 }

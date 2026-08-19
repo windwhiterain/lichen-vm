@@ -1,18 +1,16 @@
-use lichen_core::{plugin::principal_traits::Value, runtime::NodeId, value::Array};
+use lichen_core::{plugin::principal_traits::Value, runtime::NodeId, value::Tuple};
 
-#[derive(Debug, Clone, Copy)]
-pub struct Type {
-    pub id: NodeId,
-    pub params: Array,
-    pub components: Array,
+#[macro_export]
+macro_rules! primitive_type {
+    ($name:ident) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name;
+        impl lichen_core::plugin::principal_traits::Value for $name {}
+    };
 }
 
-impl PartialEq for Type {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id && self.params == other.params
-    }
-}
+primitive_type! {IntType}
 
-impl Eq for Type {}
+primitive_type! {StringType}
 
-impl Value for Type {}
+primitive_type! {TableType}
