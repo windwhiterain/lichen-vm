@@ -1,5 +1,6 @@
 use lichen_vm::lowlevel::{
-    Block, BlockId, Moduele, NodeId, Operation, Operator, OperatorExt, Program, Value, ValueExt,
+    Block, BlockId, Module, Node, NodeId, Operation, Operator, OperatorExt, Program, Value,
+    ValueExt,
 };
 use slotmap::SlotMap;
 
@@ -22,7 +23,7 @@ enum TestValue {
     String(*const [char]),
 }
 impl ValueExt for TestValue {
-    fn is_ptr() -> bool {
+    fn is_ptr(&self) -> bool {
         true
     }
     // `U128` requires 16-byte alignment; returning the strictest
@@ -62,7 +63,7 @@ impl OperatorExt<TestProgram> for TestOperator {
         &self,
         operand: Value<TestProgram>,
         block: &mut Block,
-        values: &SlotMap<NodeId, Option<Value<TestProgram>>>,
+        nodes: &SlotMap<NodeId, Node<TestProgram>>,
     ) -> Value<TestProgram> {
         match self {
             TestOperator::Id => operand,
@@ -73,8 +74,8 @@ impl OperatorExt<TestProgram> for TestOperator {
                     unreachable!("Add/Concat expect an array of two node ids")
                 };
                 let operands = unsafe { &*operands };
-                let left = values[operands[0]].unwrap();
-                let right = values[operands[1]].unwrap();
+                let left = nodes[operands[0]].value.unwrap();
+                let right = nodes[operands[1]].value.unwrap();
                 match self {
                     TestOperator::Add => {
                         let sum = u128_of(left).wrapping_add(u128_of(right));
@@ -116,12 +117,12 @@ fn string_of(value: Value<TestProgram>) -> Vec<char> {
 
 // --- builders ---------------------------------------------------------
 
-fn u128_node(m: &mut Moduele<TestProgram>, block: BlockId, n: u128) -> NodeId {
+fn u128_node(m: &mut Module<TestProgram>, block: BlockId, n: u128) -> NodeId {
     let p = m.blocks[block].arena.alloc(n);
     m.add_node(block, None, Some(Value::Ext(TestValue::U128(p as *const u128))))
 }
 
-fn str_node(m: &mut Moduele<TestProgram>, block: BlockId, chars: &[char]) -> NodeId {
+fn str_node(m: &mut Module<TestProgram>, block: BlockId, chars: &[char]) -> NodeId {
     let slice = m.blocks[block].arena.alloc_slice_copy(chars);
     m.add_node(
         block,
@@ -133,7 +134,7 @@ fn str_node(m: &mut Moduele<TestProgram>, block: BlockId, chars: &[char]) -> Nod
     )
 }
 
-fn array_node(m: &mut Moduele<TestProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
+fn array_node(m: &mut Module<TestProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
     let slice = m.blocks[block].arena.alloc_slice_copy(ids);
     m.add_node(
         block,
@@ -145,12 +146,12 @@ fn array_node(m: &mut Moduele<TestProgram>, block: BlockId, ids: &[NodeId]) -> N
     )
 }
 
-fn usize_node(m: &mut Moduele<TestProgram>, block: BlockId, n: usize) -> NodeId {
+fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(Value::USize(n)))
 }
 
 fn op_node(
-    m: &mut Moduele<TestProgram>,
+    m: &mut Module<TestProgram>,
     block: BlockId,
     operator: Operator<TestProgram>,
     operand: Option<NodeId>,
@@ -159,14 +160,14 @@ fn op_node(
 }
 
 /// Assert `value` is an array whose elements hold the given `u128`s.
-fn assert_u128_array(m: &Moduele<TestProgram>, value: Value<TestProgram>, expected: &[u128]) {
+fn assert_u128_array(m: &Module<TestProgram>, value: Value<TestProgram>, expected: &[u128]) {
     let Value::Array(ptr) = value else {
         panic!("expected array")
     };
     let ids = unsafe { &*ptr };
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected) {
-        assert_eq!(u128_of(m.values[id].unwrap()), n);
+        assert_eq!(u128_of(m.nodes[id].value.unwrap()), n);
     }
 }
 
@@ -174,7 +175,7 @@ fn assert_u128_array(m: &Moduele<TestProgram>, value: Value<TestProgram>, expect
 
 #[test]
 fn redundant_nodes_are_not_compacted() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
     let x = u128_node(&mut m, child, 5);
@@ -184,13 +185,13 @@ fn redundant_nodes_are_not_compacted() {
     let value = m.evaluate_node_deep(root_node,None);
 
     assert_eq!(u128_of(value), 5);
-    assert_eq!(m.values.len(), 2); // root_node + child's kept return x
-    assert!(!m.values.contains_key(y));
+    assert_eq!(m.nodes.len(), 2); // root_node + child's kept return x
+    assert!(!m.nodes.contains_key(y));
 }
 
 #[test]
 fn u128_payload_is_relocated_into_parent_and_block_releasable() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     // Marker allocated in root's arena before the child runs.  Bumpalo
     // allocates downward within a chunk, so later allocations sit at
@@ -219,7 +220,7 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
 
 #[test]
 fn add_sums_u128_operands() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let a = u128_node(&mut m, root, 3);
     let b = u128_node(&mut m, root, 4);
@@ -233,7 +234,7 @@ fn add_sums_u128_operands() {
 
 #[test]
 fn concat_joins_string_operands() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let a = str_node(&mut m, root, &['a', 'b']);
     let b = str_node(&mut m, root, &['c', 'd']);
@@ -247,7 +248,7 @@ fn concat_joins_string_operands() {
 
 #[test]
 fn index_selects_array_element() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let a = u128_node(&mut m, root, 10);
     let b = u128_node(&mut m, root, 20);
@@ -263,7 +264,7 @@ fn index_selects_array_element() {
 
 #[test]
 fn array_return_compacts_elements_into_parent() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
     let a = u128_node(&mut m, child, 10);
@@ -277,15 +278,15 @@ fn array_return_compacts_elements_into_parent() {
     // The element nodes keep their ids: their data was relocated into the
     // root's arena, so they stay readable after the child was released.
     assert_u128_array(&m, value, &[10, 20, 30]);
-    assert_eq!(m.values.len(), 5); // root_node + ret + a, b, c
-    assert!(m.values.contains_key(a));
-    assert!(m.values.contains_key(b));
-    assert!(m.values.contains_key(c));
+    assert_eq!(m.nodes.len(), 5); // root_node + ret + a, b, c
+    assert!(m.nodes.contains_key(a));
+    assert!(m.nodes.contains_key(b));
+    assert!(m.nodes.contains_key(c));
 }
 
 #[test]
 fn nested_scalar_return_compacts_into_grandparent() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let grandparent = m.add_block(None);
     let outer = m.add_block(Some(grandparent));
     let inner = m.add_block(Some(outer));
@@ -301,13 +302,13 @@ fn nested_scalar_return_compacts_into_grandparent() {
     let value = m.evaluate_node_deep(root_node,None);
 
     assert_u128_array(&m, value, &[9]);
-    assert_eq!(m.values.len(), 3); // root_node + outer's kept return + inner's kept return
-    assert!(m.values.contains_key(x));
+    assert_eq!(m.nodes.len(), 3); // root_node + outer's kept return + inner's kept return
+    assert!(m.nodes.contains_key(x));
 }
 
 #[test]
 fn nested_array_return_relocates_data_twice() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let grandparent = m.add_block(None);
     let outer = m.add_block(Some(grandparent));
     let inner = m.add_block(Some(outer));
@@ -330,19 +331,19 @@ fn nested_array_return_relocates_data_twice() {
     };
     let ids = unsafe { &*ptr };
     assert_eq!(ids.len(), 1);
-    let Value::Array(ptr) = m.values[ids[0]].unwrap() else {
+    let Value::Array(ptr) = m.nodes[ids[0]].value.unwrap() else {
         panic!("expected array")
     };
     let ids = unsafe { &*ptr };
     assert_eq!(ids.len(), 1);
-    assert_eq!(u128_of(m.values[ids[0]].unwrap()), 7);
-    assert_eq!(m.values.len(), 4); // root_node + outer_ret + inner_ret + c
-    assert!(m.values.contains_key(c));
+    assert_eq!(u128_of(m.nodes[ids[0]].value.unwrap()), 7);
+    assert_eq!(m.nodes.len(), 4); // root_node + outer_ret + inner_ret + c
+    assert!(m.nodes.contains_key(c));
 }
 
 #[test]
 fn unreferenced_child_blocks_are_released() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let child = m.add_block(Some(root));
     let x = u128_node(&mut m, child, 5);
@@ -353,13 +354,13 @@ fn unreferenced_child_blocks_are_released() {
     let value = m.evaluate_node_deep(root_node,None);
 
     assert_eq!(u128_of(value), 5);
-    assert_eq!(m.values.len(), 2); // root_node + child's kept return x
-    assert!(!m.values.contains_key(orphan));
+    assert_eq!(m.nodes.len(), 2); // root_node + child's kept return x
+    assert!(!m.nodes.contains_key(orphan));
 }
 
 #[test]
 fn block_run_pulls_outer_and_sibling_blocks() {
-    let mut m = Moduele::new();
+    let mut m = Module::new();
     let root = m.add_block(None);
     let p = m.add_block(Some(root));
     let c = m.add_block(Some(p));
@@ -375,9 +376,108 @@ fn block_run_pulls_outer_and_sibling_blocks() {
     // Running p ran c, whose resolution pulled in p's outer node y,
     // which ran sibling s; the result is compacted up to the root.
     assert_eq!(u128_of(value), 11);
-    assert_eq!(m.values.len(), 2); // root_node + p's kept return
-    assert!(!m.values.contains_key(z));
+    assert_eq!(m.nodes.len(), 2); // root_node + p's kept return
+    assert!(!m.nodes.contains_key(z));
     assert!(!m.blocks.contains_key(s)); // sibling s was released
     assert!(!m.blocks.contains_key(c));
     assert!(!m.blocks.contains_key(p));
+}
+
+#[test]
+#[should_panic(expected = "cycle")]
+fn cyclic_operations_panic_instead_of_looping() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = op_node(&mut m, root, Operator::Ext(TestOperator::Id), None);
+    let b = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(a));
+    // Close the loop a -> b -> a through the public operation fields; the
+    // evaluating state marks b as in-progress on re-entry and panics.
+    m.nodes[a].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(b),
+    });
+    m.evaluate_node_deep(b, None);
+}
+
+#[test]
+fn deep_never_run_block_chain_releases_stack_safely() {
+    let mut m = Module::new();
+    let top = m.add_block(None);
+    let mut prev = top;
+    for _ in 0..100_000 {
+        prev = m.add_block(Some(prev));
+    }
+    let first = m.blocks[top].children[0];
+    let x = u128_node(&mut m, first, 1);
+
+    // Running first releases its whole never-run subtree, 100_000 blocks deep.
+    m.evaluate_node_deep(x, Some(top));
+
+    assert_eq!(u128_of(m.nodes[x].value.unwrap()), 1);
+    assert_eq!(m.nodes.len(), 1); // only x survived, moved to top
+    assert!(m.blocks.contains_key(top));
+    assert!(!m.blocks.contains_key(first));
+    assert_eq!(m.blocks.len(), 1); // top is all that remains
+}
+
+#[test]
+fn visiting_markers_are_cleared_after_evaluation() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = u128_node(&mut m, root, 3);
+    let b = u128_node(&mut m, root, 4);
+    let operands = array_node(&mut m, root, &[a, b]);
+    let add = op_node(&mut m, root, Operator::Ext(TestOperator::Add), Some(operands));
+
+    m.evaluate_node_deep(add, None);
+
+    assert!(m.nodes.values().all(|n| !n.visiting));
+}
+
+#[test]
+fn deep_block_chain_evaluates_stack_safely() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let mut chain = vec![root];
+    for _ in 0..100_000 {
+        let id = m.add_block(Some(*chain.last().unwrap()));
+        chain.push(id);
+    }
+    // Deepest block holds the constant; each block's return op references the
+    // child block's return node, so evaluation nests 100_000 block runs deep.
+    let mut ret = u128_node(&mut m, *chain.last().unwrap(), 7);
+    for i in (1..chain.len() - 1).rev() {
+        ret = op_node(&mut m, chain[i], Operator::Ext(TestOperator::Id), Some(ret));
+    }
+    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(ret));
+
+    let value = m.evaluate_node_deep(root_node, None);
+
+    assert_eq!(u128_of(value), 7);
+    assert_eq!(m.blocks.len(), 1); // only root remains, chain compacted into it
+    assert!(m.nodes.values().all(|n| !n.visiting));
+}
+
+#[test]
+fn parameterized_deep_marks_subtrees_with_parameters() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let p = m.add_node(root, None, Some(Value::Parameterized));
+    let x = u128_node(&mut m, root, 5);
+    let arr = array_node(&mut m, root, &[x, p]);
+    let id_arr = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(arr));
+    let id_p = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(p));
+
+    m.evaluate_node_deep(id_arr, None);
+
+    // The parameter node itself and everything reachable from it is flagged;
+    // plain constants are not.
+    assert_eq!(m.nodes[p].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[arr].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[id_arr].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[x].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[id_p].parameterized_deep, None); // not yet evaluated
+
+    m.evaluate_node_deep(id_p, None);
+    assert_eq!(m.nodes[id_p].parameterized_deep, Some(true));
 }

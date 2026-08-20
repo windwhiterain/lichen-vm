@@ -2,10 +2,10 @@
 
 ## Features
 
-- Lazy Evaluation
-- Block Level Garbage Collection
+- Lazy Evaluation.
+- Block Level Garbage Collection.
 
 ## Philosophy
 
-- Minimal Memory Usage
-- Minimal Allocation
+- Minimal Memory Usage.
+- Minimal Allocation.
