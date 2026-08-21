@@ -55,7 +55,12 @@ enum TestOperator {
     /// Pass the operand through untouched.
     Id,
     Add,
+    Sub,
     Concat,
+    /// `a == b`, returning `Value::USize(1/0)` so it can drive `Index`.
+    Eq,
+    /// `a < b`, returning `Value::USize(1/0)` so it can drive `Index`.
+    Lt,
 }
 
 impl OperatorExt<TestProgram> for TestOperator {
@@ -71,12 +76,16 @@ impl OperatorExt<TestProgram> for TestOperator {
             // ids; the elements are already evaluated.  A parameterized
             // operand means the body is still a template being defined —
             // stay lazy so the definition pass can flag it.
-            TestOperator::Add | TestOperator::Concat => {
+            TestOperator::Add
+            | TestOperator::Sub
+            | TestOperator::Concat
+            | TestOperator::Eq
+            | TestOperator::Lt => {
                 if matches!(operand, Value::Parameterized) {
                     return Value::Parameterized;
                 }
                 let Value::Array(operands) = operand else {
-                    unreachable!("Add/Concat expect an array of two node ids")
+                    unreachable!("binary ops expect an array of two node ids")
                 };
                 let operands = unsafe { &*operands };
                 let left = nodes[operands[0]].value.unwrap();
@@ -87,7 +96,14 @@ impl OperatorExt<TestProgram> for TestOperator {
                         let p = block.arena.alloc(sum);
                         Value::Ext(TestValue::U128(p as *const u128))
                     }
-                    _ => {
+                    TestOperator::Sub => {
+                        let difference = u128_of(left).wrapping_sub(u128_of(right));
+                        let p = block.arena.alloc(difference);
+                        Value::Ext(TestValue::U128(p as *const u128))
+                    }
+                    TestOperator::Eq => Value::USize((u128_of(left) == u128_of(right)) as usize),
+                    TestOperator::Lt => Value::USize((u128_of(left) < u128_of(right)) as usize),
+                    TestOperator::Concat => {
                         let mut result = string_of(left);
                         result.extend(string_of(right));
                         let slice = block.arena.alloc_slice_copy(&result);
@@ -96,6 +112,7 @@ impl OperatorExt<TestProgram> for TestOperator {
                             slice.len(),
                         )))
                     }
+                    _ => unreachable!("all binary ops are handled above"),
                 }
             }
         }
@@ -226,6 +243,28 @@ fn call_node(
     op_node(m, block, Operator::Apply, Some(operands))
 }
 
+/// Register a function whose body lives in `block`: insert the `Function`
+/// (scope = the block's node list), register it on the block, and fill the
+/// placeholder `func_node` with its value.  Returns the function id.
+fn finish_function(
+    m: &mut Module<TestProgram>,
+    block: BlockId,
+    ret: NodeId,
+    param: NodeId,
+    func_node: NodeId,
+) -> FunctionId {
+    let nodes = m.blocks[block].nodes.clone();
+    let function = m.functions.insert(Function {
+        nodes,
+        r#return: ret,
+        parameter: param,
+        block,
+    });
+    m.blocks[block].functions.push(function);
+    m.nodes[func_node].value = Some(Value::Function(function));
+    function
+}
+
 /// Build a self-referential function `f(x) = [x, f(x)]` in its own body
 /// block: the Apply operand array references the function's own value node,
 /// so each application of `f` produces one recursion level.  Returns the
@@ -286,6 +325,54 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     m.nodes[f_func].value = Some(Value::Function(f));
     m.nodes[g_func].value = Some(Value::Function(g));
     (f_func, g_func)
+}
+
+/// Build a Fibonacci function in its own body block:
+/// `fib(x) = if x < 2 then x else fib(x-1) + fib(x-2)`, with the
+/// `if/else` expressed as a lazy `Index` branch — `Index([else, then], c)`
+/// with `c` a `USize(0/1)` — so the untaken recursive branch is never
+/// forced.  Returns the function value node and id.
+fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
+    let body = m.add_block(None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    // Placeholder for the function's own value node (the operand arrays
+    // reference it before the function exists).
+    let fib_func = m.add_node(body, None, None);
+    let one = u128_node(m, body, 1);
+    let two = u128_node(m, body, 2);
+    // fib(x-1)
+    let sub1_ops = array_node(m, body, &[param, one]);
+    let sub1 = op_node(m, body, Operator::Ext(TestOperator::Sub), Some(sub1_ops));
+    let fib1_ops = array_node(m, body, &[fib_func, sub1]);
+    let fib1 = op_node(m, body, Operator::Apply, Some(fib1_ops));
+    // fib(x-2)
+    let sub2_ops = array_node(m, body, &[param, two]);
+    let sub2 = op_node(m, body, Operator::Ext(TestOperator::Sub), Some(sub2_ops));
+    let fib2_ops = array_node(m, body, &[fib_func, sub2]);
+    let fib2 = op_node(m, body, Operator::Apply, Some(fib2_ops));
+    // rec = fib(x-1) + fib(x-2)
+    let rec_ops = array_node(m, body, &[fib1, fib2]);
+    let rec = op_node(m, body, Operator::Ext(TestOperator::Add), Some(rec_ops));
+    // ret = if x < 2 then x else rec
+    let lt_ops = array_node(m, body, &[param, two]);
+    let lt = op_node(m, body, Operator::Ext(TestOperator::Lt), Some(lt_ops));
+    let branch = array_node(m, body, &[rec, param]);
+    let index_ops = array_node(m, body, &[branch, lt]);
+    let ret = op_node(m, body, Operator::Index, Some(index_ops));
+    let function = finish_function(m, body, ret, param, fib_func);
+    (fib_func, function)
+}
+
+/// Build `f(x) = Apply(f, x)` — an unconditional self-application with no
+/// base case, so any evaluation of a call never returns.
+fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
+    let body = m.add_block(None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let func_node = m.add_node(body, None, None); // placeholder self-ref
+    let operands = array_node(m, body, &[func_node, param]);
+    let ret = op_node(m, body, Operator::Apply, Some(operands));
+    let function = finish_function(m, body, ret, param, func_node);
+    (func_node, function)
 }
 
 // --- tests ------------------------------------------------------------
@@ -1186,6 +1273,204 @@ fn mutually_recursive_functions_call_each_other() {
     let ops = m.nodes[f_app].operation.unwrap().operand.unwrap();
     assert_eq!(array_ids(m.nodes[ops].value.unwrap()), [f_node, five]);
     assert_eq!(m.functions.len(), 2); // cross-references stay in place
+}
+
+#[test]
+fn fibonacci_recurses_through_index_branches() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let (fib_node, fib_id) = fibonacci(&mut m);
+
+    // The function's own value node is concrete, so the recursion reuses
+    // one FunctionId instead of cloning the function per level.
+    m.evaluate_node_deep(fib_node, None);
+    assert_eq!(m.nodes[fib_node].parameterized_deep, Some(false));
+
+    // The definition pass terminates: with a marker condition the Index
+    // arm stays lazy and never forces the recursive branch, so the body is
+    // definable even though it applies itself.
+    m.evaluate_node_deep(m.functions[fib_id].r#return, None);
+    assert_eq!(
+        m.nodes[m.functions[fib_id].r#return].parameterized_deep,
+        Some(true)
+    );
+
+    for (n, expected) in [(0, 0), (1, 1), (2, 1), (3, 2), (5, 5), (10, 55)] {
+        let arg = u128_node(&mut m, root, n);
+        let call = call_node(&mut m, root, fib_node, arg);
+        assert_eq!(u128_of(m.evaluate_node_deep(call, None)), expected, "fib({n})");
+    }
+
+    assert_eq!(m.functions.len(), 1); // recursion referenced the function in place
+}
+
+#[test]
+fn sub_eq_lt_operators_compute_concrete_results() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let two = u128_node(&mut m, root, 2);
+    let three = u128_node(&mut m, root, 3);
+    // Sub: 3 - 2 = 1
+    let sub_ops = array_node(&mut m, root, &[three, two]);
+    let sub = op_node(&mut m, root, Operator::Ext(TestOperator::Sub), Some(sub_ops));
+    assert_eq!(u128_of(m.evaluate_node_deep(sub, None)), 1);
+    // Eq: 3 == 3
+    let eq_ops = array_node(&mut m, root, &[three, three]);
+    let eq = op_node(&mut m, root, Operator::Ext(TestOperator::Eq), Some(eq_ops));
+    assert!(matches!(m.evaluate_node_deep(eq, None), Value::USize(1)));
+    // Lt: 3 < 2 is false
+    let lt_ops = array_node(&mut m, root, &[three, two]);
+    let lt = op_node(&mut m, root, Operator::Ext(TestOperator::Lt), Some(lt_ops));
+    assert!(matches!(m.evaluate_node_deep(lt, None), Value::USize(0)));
+}
+
+#[test]
+fn countdown_definition_pass_terminates() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = if x == 0 then 0 else Add(f(x-1), 1) — the recursion sits
+    // behind a lazy branch, so the definition pass completes even though
+    // the body applies itself.
+    let body = m.add_block(None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let func_node = m.add_node(body, None, None); // placeholder self-ref
+    let zero = u128_node(&mut m, body, 0);
+    let one = u128_node(&mut m, body, 1);
+    // f(x-1)
+    let sub_ops = array_node(&mut m, body, &[param, one]);
+    let sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(sub_ops));
+    let call_ops = array_node(&mut m, body, &[func_node, sub]);
+    let call = op_node(&mut m, body, Operator::Apply, Some(call_ops));
+    // Add(f(x-1), 1)
+    let rec_ops = array_node(&mut m, body, &[call, one]);
+    let rec = op_node(&mut m, body, Operator::Ext(TestOperator::Add), Some(rec_ops));
+    // if x == 0 then 0 else rec
+    let cond_ops = array_node(&mut m, body, &[param, zero]);
+    let cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(cond_ops));
+    let branch = array_node(&mut m, body, &[rec, zero]);
+    let index_ops = array_node(&mut m, body, &[branch, cond]);
+    let ret = op_node(&mut m, body, Operator::Index, Some(index_ops));
+    let function = finish_function(&mut m, body, ret, param, func_node);
+    m.evaluate_node_deep(func_node, None); // self-ref stays in place
+    m.evaluate_node_deep(ret, None); // definition pass: completes, flagged
+    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+
+    let zero_arg = u128_node(&mut m, root, 0);
+    let call = call_node(&mut m, root, func_node, zero_arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 0);
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, func_node, five);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 5);
+    assert_eq!(m.functions.len(), 1);
+    assert_eq!(m.functions[function].block, body);
+}
+
+#[test]
+fn mutual_recursion_with_branches_definition_pass_terminates() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // even(x) = if x == 0 then 1 else odd(x-1)
+    // odd(x)  = if x == 0 then 0 else even(x-1)
+    let body = m.add_block(None);
+    let e_param = m.add_node(body, None, Some(Value::Parameterized));
+    let o_param = m.add_node(body, None, Some(Value::Parameterized));
+    let e_func = m.add_node(body, None, None); // placeholders
+    let o_func = m.add_node(body, None, None);
+    let zero = u128_node(&mut m, body, 0);
+    let one = u128_node(&mut m, body, 1);
+    // even: if x == 0 then 1 else odd(x-1)
+    let e_cond_ops = array_node(&mut m, body, &[e_param, zero]);
+    let e_cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(e_cond_ops));
+    let e_sub_ops = array_node(&mut m, body, &[e_param, one]);
+    let e_sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(e_sub_ops));
+    let e_call_ops = array_node(&mut m, body, &[o_func, e_sub]);
+    let e_call = op_node(&mut m, body, Operator::Apply, Some(e_call_ops));
+    let e_branch = array_node(&mut m, body, &[e_call, one]);
+    let e_index_ops = array_node(&mut m, body, &[e_branch, e_cond]);
+    let e_ret = op_node(&mut m, body, Operator::Index, Some(e_index_ops));
+    let even = m.functions.insert(Function {
+        nodes: vec![
+            e_param, e_func, e_cond_ops, e_cond, e_sub_ops, e_sub, e_call_ops, e_call, e_branch,
+            e_index_ops, e_ret,
+        ],
+        r#return: e_ret,
+        parameter: e_param,
+        block: body,
+    });
+    // odd: if x == 0 then 0 else even(x-1)
+    let o_cond_ops = array_node(&mut m, body, &[o_param, zero]);
+    let o_cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(o_cond_ops));
+    let o_sub_ops = array_node(&mut m, body, &[o_param, one]);
+    let o_sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(o_sub_ops));
+    let o_call_ops = array_node(&mut m, body, &[e_func, o_sub]);
+    let o_call = op_node(&mut m, body, Operator::Apply, Some(o_call_ops));
+    let o_branch = array_node(&mut m, body, &[o_call, zero]);
+    let o_index_ops = array_node(&mut m, body, &[o_branch, o_cond]);
+    let o_ret = op_node(&mut m, body, Operator::Index, Some(o_index_ops));
+    let odd = m.functions.insert(Function {
+        nodes: vec![
+            o_param, o_func, o_cond_ops, o_cond, o_sub_ops, o_sub, o_call_ops, o_call, o_branch,
+            o_index_ops, o_ret,
+        ],
+        r#return: o_ret,
+        parameter: o_param,
+        block: body,
+    });
+    m.blocks[body].functions.extend([even, odd]);
+    m.nodes[e_func].value = Some(Value::Function(even));
+    m.nodes[o_func].value = Some(Value::Function(odd));
+
+    // Both bodies are definable: a marker condition keeps the Index arm
+    // lazy, so the cross-call is never forced.
+    m.evaluate_node_deep(e_ret, None);
+    m.evaluate_node_deep(o_ret, None);
+    assert_eq!(m.nodes[e_ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[o_ret].parameterized_deep, Some(true));
+
+    let six = u128_node(&mut m, root, 6);
+    let call = call_node(&mut m, root, e_func, six);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 1);
+    let seven = u128_node(&mut m, root, 7);
+    let call = call_node(&mut m, root, e_func, seven);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 0);
+    assert_eq!(m.functions.len(), 2); // cross-references stay in place
+}
+
+#[test]
+#[should_panic(expected = "recursion depth exceeded")]
+fn non_terminating_apply_panics_at_depth_limit() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let (func_node, _) = unconditional_self_apply(&mut m);
+    m.apply_depth_limit = 4;
+    let arg = u128_node(&mut m, root, 1);
+    let call = call_node(&mut m, root, func_node, arg);
+    m.evaluate_node_deep(call, None);
+}
+
+#[test]
+#[should_panic(expected = "recursion depth exceeded")]
+fn definition_pass_on_non_terminating_body_panics() {
+    let mut m = Module::new();
+    let (_, function) = unconditional_self_apply(&mut m);
+    m.apply_depth_limit = 4;
+    // The unconditional self-apply is in the direct value path, so the
+    // definition pass nests applications forever instead of staying lazy.
+    m.evaluate_node_deep(m.functions[function].r#return, None);
+}
+
+#[test]
+#[should_panic(expected = "recursion depth exceeded")]
+fn deep_evaluating_an_infinite_stream_panics() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = [x, f(x)]: each apply level terminates, but deep evaluation
+    // walks the infinitely growing value — the deep guard catches it.
+    let (func_node, _) = recursive_function(&mut m);
+    m.deep_depth_limit = 8;
+    let arg = u128_node(&mut m, root, 1);
+    let call = call_node(&mut m, root, func_node, arg);
+    m.evaluate_node_deep(call, None);
 }
 
 #[test]

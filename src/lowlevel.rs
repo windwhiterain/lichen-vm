@@ -121,6 +121,19 @@ pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
+    /// Nested-application guard: a run panics when function applications
+    /// nest deeper than this (a non-terminating function applying itself
+    /// directly, e.g. `f(x) = f(x)`).  Defaults to
+    /// [`Self::MAX_APPLY_DEPTH`]; tests lower it to panic fast.
+    pub apply_depth_limit: usize,
+    /// Deep-evaluation guard: a run panics when [`Self::evaluate_node_deep`]
+    /// nests deeper than this (deep-evaluating an infinitely growing value,
+    /// e.g. `f(x) = [x, f(x)]`).  Defaults to [`Self::MAX_DEEP_DEPTH`],
+    /// which sits above the legitimately ~200k-deep block chains exercised
+    /// by the `#[stacksafe]` tests; tests lower it to panic fast.
+    pub deep_depth_limit: usize,
+    apply_depth: usize,
+    deep_depth: usize,
 }
 
 impl<P: Program> Default for Module<P> {
@@ -130,11 +143,18 @@ impl<P: Program> Default for Module<P> {
 }
 
 impl<P: Program> Module<P> {
+    pub const MAX_APPLY_DEPTH: usize = 10_000;
+    pub const MAX_DEEP_DEPTH: usize = 300_000;
+
     pub fn new() -> Self {
         Module {
             nodes: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
+            apply_depth_limit: Self::MAX_APPLY_DEPTH,
+            deep_depth_limit: Self::MAX_DEEP_DEPTH,
+            apply_depth: 0,
+            deep_depth: 0,
         }
     }
 
@@ -283,6 +303,13 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> Value<P> {
+        self.deep_depth += 1;
+        if self.deep_depth > self.deep_depth_limit {
+            panic!(
+                "recursion depth exceeded in deep evaluation (limit {}) — non-terminating evaluation?",
+                self.deep_depth_limit
+            );
+        }
         let value = self.evaluate_node(node, current);
         if let Value::Array(array) = value {
             let block = self.nodes[node].block;
@@ -306,6 +333,7 @@ impl<P: Program> Module<P> {
                 })
             });
         self.nodes[node].parameterized_deep = Some(parameterized);
+        self.deep_depth -= 1;
         value
     }
 
@@ -447,6 +475,13 @@ impl<P:Program> Module<P>{
         argument: NodeId,
         block: BlockId,
     ) -> Value<P> {
+        self.apply_depth += 1;
+        if self.apply_depth > self.apply_depth_limit {
+            panic!(
+                "recursion depth exceeded in function application (limit {}) — non-terminating function application?",
+                self.apply_depth_limit
+            );
+        }
         let (r#return, parameter) = {
             let function = &self.functions[function];
             (function.r#return, function.parameter)
@@ -463,7 +498,9 @@ impl<P:Program> Module<P>{
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
-        self.evaluate_node(applied, Some(block))
+        let result = self.evaluate_node(applied, Some(block));
+        self.apply_depth -= 1;
+        result
     }
 
     #[stacksafe]

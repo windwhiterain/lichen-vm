@@ -1,11 +1,14 @@
 # LichenVM
 
-## Features
+## Lowlevel
+
+Features:
 
 - Lazy Evaluation.
 - Block Level Garbage Collection.
+- First Class Function, Higher Order Function, Closure.
 
-## Philosophy
+Philosophy:
 
 - Minimal Memory Usage.
 - Minimal Allocation.
