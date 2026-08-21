@@ -8,7 +8,7 @@ Type and value are same thing.
 
 - Lazy Evaluation.
 - Block Level Garbage Collection.
-- First Class Function, Higher Order Function, Closure.
+- Lmbda Calculas: first class function, higher order function, closure.
 - Recursive Function Apply.
 - Function Normalization.
 - Unification.
