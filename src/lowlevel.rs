@@ -14,7 +14,9 @@ pub trait Program: Sized + Copy {
     type Operator: OperatorExt<Self>;
 }
 
-pub trait ValueExt: Copy {
+/// Extension values are program-specific; [`PartialEq`] is what decides
+/// whether two of them unify.
+pub trait ValueExt: Copy + PartialEq {
     fn is_ptr(&self) -> bool;
     /// Available if [`Self::is_ptr()`].
     fn ptr(&self) -> *const [u8] {
@@ -47,6 +49,22 @@ pub enum Value<P: Program> {
     USize(usize),
     None,
     Parameterized,
+}
+
+/// Equality is what decides whether two concrete values merge in
+/// [`Module::unify`]; arrays are exempt there (they unify elementwise), so
+/// they only compare by address here.
+impl<P: Program> PartialEq for Value<P> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Value::Ext(a), Value::Ext(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => std::ptr::eq(a, b),
+            (Value::Function(a), Value::Function(b)) => a == b,
+            (Value::USize(a), Value::USize(b)) => a == b,
+            (Value::None, Value::None) | (Value::Parameterized, Value::Parameterized) => true,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +139,20 @@ impl<P: Program> disjoint::Node for Node<P> {
     }
 }
 
+/// A failed unification between two value classes.
+///
+/// `a` and `b` are the representatives of the two classes that could not
+/// be unified; [`Self::value_a`] and [`Self::value_b`] are the values that
+/// conflicted.  The lowlevel only records facts — the high-level checker
+/// reads these from [`Module::unify_errors`] to build diagnostics.
+#[derive(Clone, Copy)]
+pub struct UnifyError<P: Program> {
+    pub a: NodeId,
+    pub b: NodeId,
+    pub value_a: Option<Value<P>>,
+    pub value_b: Option<Value<P>>,
+}
+
 pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
@@ -136,6 +168,10 @@ pub struct Module<P: Program> {
     /// which sits above the legitimately ~200k-deep block chains exercised
     /// by the `#[stacksafe]` tests; tests lower it to panic fast.
     pub evaluate_depth_limit: usize,
+    /// Failed unifications collected by [`Self::unify`]; the checker drains
+    /// this to build diagnostics.  A failed unify leaves the two classes
+    /// unmerged.
+    pub unify_errors: Vec<UnifyError<P>>,
     apply_depth: usize,
     deep_depth: usize,
 }
@@ -157,6 +193,7 @@ impl<P: Program> Module<P> {
             functions: SlotMap::with_key(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
+            unify_errors: Vec::new(),
             apply_depth: 0,
             deep_depth: 0,
         }

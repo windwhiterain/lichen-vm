@@ -2,15 +2,16 @@ use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::lowlevel::{BlockId, Function, FunctionId, Module, NodeId, Operation, Program, Value};
+use crate::{
+    lowlevel::{BlockId, Function, FunctionId, Module, NodeId, Operation, Program, Value},
+    utils::disjoint,
+};
 
-/// The fixed context of one clone pass: where the clones land, what the
-/// parameter maps onto, and the template's membership set plus the running
-/// node-id remap.
+/// The fixed context of one clone pass: where the clones land, the
+/// template's membership set, and the running node-id remap (template node
+/// to its clone).
 struct ApplyCtx<'a> {
     target: BlockId,
-    param: NodeId,
-    argument: NodeId,
     members: &'a HashSet<NodeId>,
     remap: &'a mut HashMap<NodeId, NodeId>,
 }
@@ -39,22 +40,71 @@ impl<P: Program> Module<P> {
         let mut remap = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
-            param: parameter,
-            argument,
             members: &members,
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
+        // The parameter is cloned like any parameterized node, and the clone
+        // is unified with the argument instead of being replaced by it: the
+        // class binding propagates the argument's value to every reference
+        // to the parameter in the body.
+        if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+            // The clones are fresh singleton classes; re-establish the
+            // template's internal class topology among them, so template
+            // nodes unified at definition time (e.g. the elements of a
+            // homogeneous array pattern) stay unified after cloning — the
+            // elementwise unify below then forces the argument to satisfy
+            // the pattern's internal constraints.  A single clone (just the
+            // parameter) has no topology to re-establish.
+            if ctx.remap.len() > 1 {
+                let mut groups: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+                for (&template, &clone) in ctx.remap.iter() {
+                    groups
+                        .entry(disjoint::find(&mut self.nodes, template))
+                        .or_default()
+                        .push(clone);
+                }
+                for clones in groups.values() {
+                    let first = clones[0];
+                    for &clone in &clones[1..] {
+                        self.unify(first, clone);
+                    }
+                }
+            }
+            // Evaluate the argument to the depth the parameter's pattern
+            // references, so the unify sees the argument's element values
+            // instead of unbound slots; positions the pattern treats as
+            // opaque stay lazy.
+            self.evaluate_pattern_argument(cloned_param, argument, block);
+            self.unify(cloned_param, argument);
+        }
         let result = self.evaluate_node(applied, Some(block));
         self.apply_depth -= 1;
         result
     }
 
+    /// Evaluate `argument` to the structural depth `pattern` (the cloned
+    /// parameter) references, so the apply's unify sees the argument's
+    /// element values instead of unbound slots.  Only array positions in
+    /// the pattern recurse; sub-values the pattern treats as opaque stay
+    /// unevaluated.
+    #[stacksafe]
+    fn evaluate_pattern_argument(&mut self, pattern: NodeId, argument: NodeId, block: BlockId) {
+        self.evaluate_node(argument, Some(block));
+        let (Some(Value::Array(pattern_ids)), Some(Value::Array(argument_ids))) =
+            (self.nodes[pattern].value, self.nodes[argument].value)
+        else {
+            return;
+        };
+        for (&pattern_id, &argument_id) in
+            unsafe { &*pattern_ids }.iter().zip(unsafe { &*argument_ids }.iter())
+        {
+            self.evaluate_pattern_argument(pattern_id, argument_id, block);
+        }
+    }
+
     #[stacksafe]
     fn node_apply(&mut self, node: NodeId, ctx: &mut ApplyCtx<'_>) -> NodeId {
-        if node == ctx.param {
-            return ctx.argument;
-        }
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }

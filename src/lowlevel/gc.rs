@@ -1,6 +1,9 @@
 use stacksafe::stacksafe;
 
-use crate::lowlevel::{BlockId, Module, NodeId, Program, Value};
+use crate::{
+    lowlevel::{BlockId, Module, NodeId, Program, Value},
+    utils::disjoint::{self, Node as _},
+};
 
 impl<P: Program> Module<P> {
     /// move the `block_root`'s reachable subtree into its `block.parent`.
@@ -73,6 +76,49 @@ impl<P: Program> Module<P> {
         value
     }
 
+    /// Splice every member homed in `dropped` out of the class rooted at
+    /// `rep`, re-elect a representative among the survivors, and re-point
+    /// every survivor's parent at it, flattening the tree so no live
+    /// member's chain passes through a removed node.  The class value needs
+    /// no migration: [`Module::bind`] already replicated it to every member.
+    /// A class whose members all die with the block is left alone.
+    ///
+    /// Must run before the block's nodes are removed — the walk reads the
+    /// `next` pointers of the members being removed.
+    fn flatten_class(&mut self, rep: NodeId, dropped: BlockId) {
+        let mut current = Some(rep);
+        let mut new_rep: Option<NodeId> = None;
+        let mut prev: Option<NodeId> = None;
+        let mut tail: Option<NodeId> = None;
+        let mut size = 0u32;
+        while let Some(member) = current {
+            current = self.nodes[member].meta().next;
+            if self.nodes[member].block == dropped {
+                continue; // removed below; keep walking past it
+            }
+            let representative = match new_rep {
+                Some(representative) => representative,
+                None => {
+                    new_rep = Some(member);
+                    member
+                }
+            };
+            if let Some(prev) = prev {
+                self.nodes[prev].meta_mut().next = Some(member);
+            }
+            self.nodes[member].meta_mut().parent = (member != representative).then_some(representative);
+            prev = Some(member);
+            tail = Some(member);
+            size += 1;
+        }
+        let Some(representative) = new_rep else { return };
+        let last = prev.expect("a surviving member was elected representative");
+        self.nodes[last].meta_mut().next = None;
+        let meta = self.nodes[representative].meta_mut();
+        meta.tail = tail;
+        meta.size = size;
+    }
+
     #[stacksafe]
     fn drop_block(&mut self, block: BlockId) {
         let children = std::mem::take(&mut self.blocks[block].children);
@@ -96,6 +142,20 @@ impl<P: Program> Module<P> {
             }
         }
         let nodes = std::mem::take(&mut self.blocks[block].nodes);
+        // Splice classes touched by this block out of their member lists
+        // and re-elect representatives among the survivors, so surviving
+        // members keep working parent chains and member lists after the
+        // removal below.  Runs before any node is removed, while the
+        // dropped nodes' `next` pointers are still readable.
+        let mut touched = std::collections::HashSet::new();
+        for &node in &nodes {
+            if self.nodes.get(node).is_some_and(|node| node.block == block) {
+                touched.insert(disjoint::find(&mut self.nodes, node));
+            }
+        }
+        for rep in touched {
+            self.flatten_class(rep, block);
+        }
         for node in nodes {
             if self.nodes.get(node).is_some_and(|node| node.block == block) {
                 self.nodes.remove(node);
