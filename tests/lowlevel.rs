@@ -1467,7 +1467,7 @@ fn deep_evaluating_an_infinite_stream_panics() {
     // f(x) = [x, f(x)]: each apply level terminates, but deep evaluation
     // walks the infinitely growing value — the deep guard catches it.
     let (func_node, _) = recursive_function(&mut m);
-    m.deep_depth_limit = 8;
+    m.evaluate_depth_limit = 8;
     let arg = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);

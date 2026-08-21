@@ -68,6 +68,10 @@ new_key_type! {pub struct NodeId;}
 new_key_type! {pub struct BlockId;}
 new_key_type! {pub struct FunctionId;}
 
+/// Garbage collection unit.
+/// # Contract
+/// - Only one node can be referenced from parent block
+/// - Referencing a node whose block was released is a panic
 pub struct Block {
     pub arena: Bump,
     pub parent: Option<BlockId>,
@@ -78,10 +82,11 @@ pub struct Block {
     pub functions: Vec<FunctionId>,
 }
 
+/// # Contract:
+/// Only [`Self::nodes`] can reference [`Self::parameter`].
 #[derive(Clone)]
 pub struct Function {
-    /// # Contract:
-    /// Only `nodes`` that may reference `parameter`, including `r#return` and `parameter`.
+    /// including [`Self::r#return`] and [`Self::parameter`].
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
@@ -93,14 +98,11 @@ pub struct Node<P: Program> {
     pub value: Option<Value<P>>,
     pub operation: Option<Operation<P>>,
     /// Owner.
-    /// # Contract
-    /// - Only one node can be referenced from parent block
-    /// - Referencing a node whose block was released is a panic
     pub block: BlockId,
     /// Detect circular recursion.
     pub visiting: bool,
     /// Any node in self's reachable subtree has a [`Value::Parameterized`].
-    /// Computed during [`Module::evaluate_node_deep`].
+    /// Is [`Some`] only if having run by [`Module::evaluate_node_deep`].   
     pub parameterized_deep: Option<bool>,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::root_node`].
@@ -131,7 +133,7 @@ pub struct Module<P: Program> {
     /// e.g. `f(x) = [x, f(x)]`).  Defaults to [`Self::MAX_DEEP_DEPTH`],
     /// which sits above the legitimately ~200k-deep block chains exercised
     /// by the `#[stacksafe]` tests; tests lower it to panic fast.
-    pub deep_depth_limit: usize,
+    pub evaluate_depth_limit: usize,
     apply_depth: usize,
     deep_depth: usize,
 }
@@ -152,7 +154,7 @@ impl<P: Program> Module<P> {
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
-            deep_depth_limit: Self::MAX_DEEP_DEPTH,
+            evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             apply_depth: 0,
             deep_depth: 0,
         }
@@ -304,10 +306,10 @@ impl<P: Program> Module<P> {
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> Value<P> {
         self.deep_depth += 1;
-        if self.deep_depth > self.deep_depth_limit {
+        if self.deep_depth > self.evaluate_depth_limit {
             panic!(
                 "recursion depth exceeded in deep evaluation (limit {}) — non-terminating evaluation?",
-                self.deep_depth_limit
+                self.evaluate_depth_limit
             );
         }
         let value = self.evaluate_node(node, current);
