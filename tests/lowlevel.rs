@@ -657,6 +657,166 @@ fn deep_block_chain_evaluates_stack_safely() {
 }
 
 #[test]
+fn garbage_collect_hoists_uncompacted_descendants() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    let a = u128_node(&mut m, grandchild, 10);
+    let b = u128_node(&mut m, grandchild, 20);
+    let orphan = u128_node(&mut m, grandchild, 99); // never referenced
+    let ret = array_node(&mut m, child, &[a, b]);
+
+    // Collect the child's return *without* deep-evaluating it first: the
+    // elements still live in the un-compacted grandchild block, so the
+    // move must pull them straight through to the root in one pass, and
+    // the release sweeps the whole vacated subtree.
+    let value = m.garbage_collect(ret).expect("evaluated return node");
+
+    assert_u128_array(&m, value, &[10, 20]);
+    assert_eq!(m.nodes[ret].block, root);
+    assert_eq!(m.nodes[a].block, root); // hoisted past the child, not into it
+    assert_eq!(m.nodes[b].block, root);
+    // The release dropped the grandchild and its orphan, but the hoisted
+    // elements survive.
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    assert!(!m.nodes.contains_key(orphan));
+    assert_u128_array(&m, value, &[10, 20]);
+}
+
+#[test]
+fn garbage_collect_leaves_sibling_and_ancestor_content_in_place() {
+    let mut m = Module::new();
+    let grandparent = m.add_block(None);
+    let parent = m.add_block(Some(grandparent));
+    let child = m.add_block(Some(parent));
+    let sibling = m.add_block(Some(grandparent));
+    let c_gp = u128_node(&mut m, grandparent, 1); // ancestor, not the target
+    let s_node = u128_node(&mut m, sibling, 2);
+    let ret = array_node(&mut m, child, &[c_gp, s_node]);
+
+    let value = m.garbage_collect(ret).expect("evaluated return node");
+
+    assert_u128_array(&m, value, &[1, 2]);
+    assert_eq!(m.nodes[ret].block, parent);
+    assert_eq!(m.nodes[c_gp].block, grandparent); // untouched
+    assert_eq!(m.nodes[s_node].block, sibling); // untouched
+    assert!(!m.blocks.contains_key(child)); // only the vacated block is released
+    assert!(m.blocks.contains_key(sibling));
+    assert!(m.blocks.contains_key(grandparent));
+}
+
+#[test]
+fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    // f(x) = Id(x), homed in the un-compacted grandchild block.
+    let ret_f = m.add_node(grandchild, None, None);
+    let param_f = m.add_node(grandchild, None, Some(Value::Parameterized));
+    m.nodes[ret_f].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(param_f),
+    });
+    let (func_node, f) = wrap_function(&mut m, grandchild, ret_f, param_f);
+    let ret = array_node(&mut m, child, &[func_node]);
+
+    // A direct collect re-homes the function and maps its scope members
+    // into the root, releasing the vacated subtree in the same call.
+    let value = m.garbage_collect(ret).expect("evaluated return node");
+    assert_eq!(array_ids(value), &[func_node]);
+
+    assert_eq!(m.nodes[ret].block, root);
+    assert_eq!(m.nodes[func_node].block, root);
+    assert_eq!(m.functions[f].block, root); // re-homed out of the grandchild
+    assert!(m.blocks[root].functions.contains(&f));
+    assert_eq!(m.nodes[ret_f].block, root); // scope mapped along with it
+    assert_eq!(m.nodes[param_f].block, root);
+    assert_eq!(m.functions[f].nodes.as_slice(), &[ret_f, param_f]);
+
+    // The vacated subtree is gone, but the function is still callable.
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    let arg = u128_node(&mut m, root, 42);
+    let call = call_node(&mut m, root, func_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+}
+
+#[test]
+fn garbage_collect_hoists_unevaluated_scalar_operand() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    let x = u128_node(&mut m, grandchild, 42);
+    let ret = op_node(&mut m, child, Operator::Ext(TestOperator::Id), Some(x));
+    let orphan = u128_node(&mut m, grandchild, 99); // never referenced
+
+    // `ret` is unevaluated, so its operand is still live: collecting the
+    // child hoists x through the operand edge instead of dropping it with
+    // the vacated subtree; only the orphan, which no edge reaches, dies.
+    assert!(m.garbage_collect(ret).is_none());
+    assert_eq!(m.nodes[ret].block, root);
+    assert!(m.nodes[ret].value.is_none());
+    assert_eq!(m.nodes[x].block, root); // operand hoisted, not dropped
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    assert!(!m.nodes.contains_key(orphan));
+    // The hoisted operand is still evaluable.
+    assert_eq!(u128_of(m.evaluate_node_deep(ret, None)), 42);
+}
+
+#[test]
+fn garbage_collect_enters_unevaluated_subtree_via_operand() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    let x = u128_node(&mut m, grandchild, 7);
+    let operands = array_node(&mut m, grandchild, &[x]);
+    let ret = op_node(&mut m, child, Operator::Ext(TestOperator::Id), Some(operands));
+
+    // The unevaluated subtree behind `ret`'s operand is entered through
+    // the operand edge: the operand array is hoisted, and its array
+    // element with it, so nothing the future evaluation of `ret` needs is
+    // dropped with the inner block.
+    assert!(m.garbage_collect(ret).is_none());
+    assert_eq!(m.nodes[operands].block, root); // hoisted via the operand edge
+    assert_eq!(m.nodes[x].block, root); // and its array element with it
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    let value = m.evaluate_node_deep(ret, None);
+    assert_u128_array(&m, value, &[7]);
+}
+
+#[test]
+fn garbage_collect_skips_operands_of_evaluated_nodes() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    let x = u128_node(&mut m, grandchild, 7);
+    let operands = array_node(&mut m, grandchild, &[x]);
+    let ret = op_node(&mut m, child, Operator::Ext(TestOperator::Id), Some(operands));
+
+    // Evaluating `ret` memoizes its result, so the operand edge is dead: a
+    // later collect must not drag the operand subtree up with it.  Only
+    // the value-reachable element x survives; the operand array itself is
+    // dropped with the vacated block.
+    let evaluated = m.evaluate_node_deep(ret, None);
+    assert_u128_array(&m, evaluated, &[7]);
+    let value = m.garbage_collect(ret).expect("evaluated return node");
+    assert_eq!(m.nodes[ret].block, root);
+    assert_eq!(m.nodes[x].block, root); // kept by the value edge
+    assert!(!m.nodes.contains_key(operands)); // dead operand edge not followed
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    assert_u128_array(&m, value, &[7]);
+}
+
+#[test]
 fn parameterized_deep_marks_subtrees_with_parameters() {
     let mut m = Module::new();
     let root = m.add_block(None);

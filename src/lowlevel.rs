@@ -209,7 +209,10 @@ impl<P: Program> Module<P> {
         self.blocks[block].functions.push(function);
         self.add_node(block, None, Some(Value::Function(function)))
     }
+}
 
+// Evaluation
+impl<P: Program> Module<P> {
     /// If `id` lives in a child of `referer`, its a block root, [`Self::evaluate_block`] will be called on it.
     pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> Value<P> {
         let block = self.nodes[node].block;
@@ -220,7 +223,7 @@ impl<P: Program> Module<P> {
         if let Some(referer) = referer
             && self.blocks[block].parent == Some(referer)
         {
-            return self.evaluate_block(block, node);
+            return self.evaluate_block(node);
         }
         if let Some(value) = self.nodes[node].value {
             return value;
@@ -339,22 +342,21 @@ impl<P: Program> Module<P> {
         value
     }
 
-    fn evaluate_block(&mut self, block: BlockId, root: NodeId) -> Value<P> {
-        debug_assert_eq!(self.nodes[root].block, block);
+    fn evaluate_block(&mut self, root: NodeId) -> Value<P> {
         self.evaluate_node_deep(root, None);
-        let value = self.move_to_parent(root).expect("evaluated return node");
-        self.release_block(block);
-        value
+        self.garbage_collect(root).expect("evaluated return node")
     }
+}
 
-    /// Copy `nodes` into `block`'s arena and return the new `nodes`.
+// Utils
+impl<P: Program> Module<P> {
+    /// Copy `nodes` into `block.arena` and return the new `nodes`.
     fn copy_nodes(&self, nodes: &[NodeId], block: BlockId) -> *const [NodeId] {
         let slice = self.blocks[block].arena.alloc_slice_copy(nodes);
         ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
     }
 
-    /// Copy `ext`'s payload bytes into `arena` and re-point it there,
-    /// preserving the payload's alignment.
+    /// Copy `ext` into `block.arena` and return the new `ext`.
     fn copy_ext(&self, mut ext: P::Value, block: BlockId) -> Value<P> {
         let arena = &self.blocks[block].arena;
         if !ext.is_ptr() {
@@ -368,59 +370,81 @@ impl<P: Program> Module<P> {
         Value::Ext(ext)
     }
 
-    /// Move a node into its parent block: re-point it, relocate any arena
-    /// data it carries (array slices, Ext payloads) into the parent's
-    /// arena, and return the relocated value.
-    ///
-    /// The node may not hold a value yet (a static function template is
-    /// unevaluated) — in that case only the block mapping is updated and
-    /// `None` is returned.  Value edges are followed like the original
-    /// contract: array elements and function scope members that still live
-    /// in `block` move with it, so a function's template survives the
-    /// closing block exactly like an array's elements.  A function value
-    /// itself is a [`FunctionId`] into the module's slotmap and needs no
-    /// relocation; its scope outlives the block through the moved nodes,
-    /// and it is dropped only when its home node eventually is.
+    /// True if `block` is `ancestor` or a descendant of it.
+    fn descends_from(&self, mut block: BlockId, ancestor: BlockId) -> bool {
+        loop {
+            if block == ancestor {
+                return true;
+            }
+            match self.blocks[block].parent {
+                Some(parent) => block = parent,
+                None => return false,
+            }
+        }
+    }
+}
+
+// Garbage Collection
+impl<P:Program>  Module<P>{
+    /// move the `block_root`'s reachable subtree into its `block.parent`.
     #[stacksafe]
-    fn move_to_parent(&mut self, node: NodeId) -> Option<Value<P>> {
-        let block = self.nodes[node].block;
-        let parent = self.blocks[block].parent;
-        let Some(parent) = parent else {
-            return self.nodes[node].value;
+    pub fn garbage_collect(&mut self, block_root: NodeId) -> Option<Value<P>> {
+        let source = self.nodes[block_root].block;
+        let Some(target) = self.blocks[source].parent else {
+            return self.nodes[block_root].value; // root block: nothing to move or release
         };
-        self.nodes[node].block = parent;
-        self.blocks[parent].nodes.push(node);
+        let value = self.garbage_collect_node(block_root, source, target);
+        self.drop_block(source);
+        value
+    }
+
+    #[stacksafe]
+    fn garbage_collect_node(&mut self, node: NodeId, source: BlockId, target: BlockId) -> Option<Value<P>> {
+        if !self.descends_from(self.nodes[node].block, source) {
+            return self.nodes[node].value; // lives outside the vacated subtree — stays put
+        }
+        self.nodes[node].block = target;
+        self.blocks[target].nodes.push(node);
         let current = self.nodes[node].value;
+        let operation = self.nodes[node].operation;
+        // An unevaluated operation still depends on its operand: the
+        // subtree behind it may be referenced when the node is evaluated
+        // later, so enter it through the operand edge — the same
+        // unevaluated-op rule as the apply clone set.  A cached value
+        // means the node is memoized and its operand is dead; it is not
+        // followed, so evaluated intermediate chains still compact away.
+        if current.is_none()
+            && let Some(operand) = operation.and_then(|operation| operation.operand)
+        {
+            self.garbage_collect_node(operand, source, target);
+        }
         let value = current.map(|value| match value {
             Value::Array(array) => {
                 let nodes = unsafe { &*array };
                 for &node in nodes {
-                    if self.nodes[node].block == block {
-                        self.move_to_parent(node);
-                    }
+                    self.garbage_collect_node(node, source, target);
                 }
-                Value::Array(self.copy_nodes(nodes, parent))
+                Value::Array(self.copy_nodes(nodes, target))
             }
             Value::Function(function) => {
                 // The template's nodes must outlive the closing block, so
-                // the scope is mapped like an array slice: each member that
-                // lives here moves into the parent.  The function itself is
-                // homed like a node — if it lives in the closing block it
-                // is re-pointed to the parent and registered there, so
-                // release skips it and it stays callable.
+                // the scope is mapped like an array slice: each member
+                // homed in the vacated subtree moves into the target.  The
+                // function itself is homed like a node — if it lives in
+                // the vacated subtree it is re-pointed to the target and
+                // registered there, so release skips it and it stays
+                // callable.
                 let ids = self.functions[function].nodes.clone();
                 for &id in &ids {
-                    if self.nodes[id].block == block {
-                        self.move_to_parent(id);
-                    }
+                    self.garbage_collect_node(id, source, target);
                 }
-                if self.functions[function].block == block {
-                    self.functions[function].block = parent;
-                    self.blocks[parent].functions.push(function);
+                if self.descends_from(self.functions[function].block, source) {
+                    self.functions[function].block = target;
+                    self.blocks[target].functions.push(function);
                 }
                 Value::Function(function)
             }
-            Value::Ext(ext) => Self::copy_ext(self, ext, parent),
+            Value::Ext(ext) => Self::copy_ext(self, ext, target),
             value => value,
         });
         self.nodes[node].value = value;
@@ -428,11 +452,11 @@ impl<P: Program> Module<P> {
     }
 
     #[stacksafe]
-    fn release_block(&mut self, block: BlockId) {
+    fn drop_block(&mut self, block: BlockId) {
         let children = std::mem::take(&mut self.blocks[block].children);
         for child in children {
             if self.blocks.contains_key(child) {
-                self.release_block(child);
+                self.drop_block(child);
             }
         }
         let functions = std::mem::take(&mut self.blocks[block].functions);
@@ -458,6 +482,8 @@ impl<P: Program> Module<P> {
         self.blocks.remove(block);
     }
 }
+
+// Funcion Application
 
 /// The fixed context of one clone pass: where the clones land, what the
 /// parameter maps onto, and the template's membership set plus the running
@@ -599,6 +625,7 @@ impl<P:Program> Module<P>{
     }
 }
 
+// Equality
 impl<P:Program> Module<P>{
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
         disjoint::union(&mut self.nodes, a, b)
