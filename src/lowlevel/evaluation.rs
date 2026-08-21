@@ -70,7 +70,7 @@ impl<P: Program> Module<P> {
             }
             Operator::Apply => {
                 let Some(operands) = operation.operand else {
-                    unreachable!("Call expects an operand array node")
+                    unreachable!("Apply expects an operand array node")
                 };
                 // A marker target — the body's own parameter during the
                 // definition pass — stays lazy instead of panicking.
@@ -83,10 +83,10 @@ impl<P: Program> Module<P> {
                             Value::Function(function) => {
                                 self.function_apply(function, operands[1], block)
                             }
-                            _ => unreachable!("Call target must be a function value"),
+                            _ => unreachable!("Apply target must be a function value"),
                         }
                     }
-                    _ => unreachable!("Call operand must be an array of [function, argument]"),
+                    _ => unreachable!("Apply operand must be an array of [function, argument]"),
                 }
             }
         };

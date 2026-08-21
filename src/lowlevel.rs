@@ -16,15 +16,15 @@ pub trait Program: Sized + Copy {
 
 pub trait ValueExt: Copy {
     fn is_ptr(&self) -> bool;
-    /// Avaliable if [`Self::is_ptr()`].
+    /// Available if [`Self::is_ptr()`].
     fn ptr(&self) -> *const [u8] {
         unreachable!()
     }
-    /// Avaliable if [`Self::is_ptr()`].
+    /// Available if [`Self::is_ptr()`].
     fn set_ptr(&mut self, _ptr: *const [u8]) {
         unreachable!()
     }
-    /// Avaliable if [`Self::is_ptr()`].
+    /// Available if [`Self::is_ptr()`].
     fn alignment() -> usize {
         unreachable!()
     }
