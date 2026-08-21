@@ -1,6 +1,6 @@
 use lichen_vm::lowlevel::{
-    Block, BlockId, Function, Module, Node, NodeId, Operation, Operator, OperatorExt, Program,
-    Value, ValueExt,
+    Block, BlockId, Function, FunctionId, Module, Node, NodeId, Operation, Operator, OperatorExt,
+    Program, Value, ValueExt,
 };
 use slotmap::SlotMap;
 
@@ -68,8 +68,13 @@ impl OperatorExt<TestProgram> for TestOperator {
         match self {
             TestOperator::Id => operand,
             // Binary ops receive their operands as an array of two node
-            // ids; the elements are already evaluated.
+            // ids; the elements are already evaluated.  A parameterized
+            // operand means the body is still a template being defined —
+            // stay lazy so the definition pass can flag it.
             TestOperator::Add | TestOperator::Concat => {
+                if matches!(operand, Value::Parameterized) {
+                    return Value::Parameterized;
+                }
                 let Value::Array(operands) = operand else {
                     unreachable!("Add/Concat expect an array of two node ids")
                 };
@@ -177,13 +182,13 @@ fn assert_u128_array(m: &Module<TestProgram>, value: Value<TestProgram>, expecte
 }
 
 /// Wrap `ret`/`param` — and every node built so far in `block` — into a
-/// function value node, returning the node and the function value.
+/// function value node, returning the node and the function id.
 fn wrap_function(
     m: &mut Module<TestProgram>,
     block: BlockId,
     ret: NodeId,
     param: NodeId,
-) -> (NodeId, Function) {
+) -> (NodeId, FunctionId) {
     let nodes = m.blocks[block].nodes.clone();
     let func_node = m.add_function(block, ret, param, &nodes);
     let Value::Function(func) = m.nodes[func_node].value.unwrap() else {
@@ -218,7 +223,69 @@ fn call_node(
     arg: NodeId,
 ) -> NodeId {
     let operands = array_node(m, block, &[func_node, arg]);
-    op_node(m, block, Operator::Call, Some(operands))
+    op_node(m, block, Operator::Apply, Some(operands))
+}
+
+/// Build a self-referential function `f(x) = [x, f(x)]` in its own body
+/// block: the Apply operand array references the function's own value node,
+/// so each application of `f` produces one recursion level.  Returns the
+/// function value node and id.
+fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
+    let body = m.add_block(None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    // Placeholder for the function's own value node: the operand array must
+    // reference it before the function exists, so `add_function` (which
+    // creates the value node last) cannot be used here.
+    let func_node = m.add_node(body, None, None);
+    let operands = array_node(m, body, &[func_node, param]);
+    let apply = op_node(m, body, Operator::Apply, Some(operands));
+    let ret = array_node(m, body, &[param, apply]);
+    let function = m.functions.insert(Function {
+        nodes: vec![param, func_node, operands, apply, ret],
+        r#return: ret,
+        parameter: param,
+        block: body,
+    });
+    m.blocks[body].functions.push(function);
+    m.nodes[func_node].value = Some(Value::Function(function));
+    (func_node, function)
+}
+
+/// Build two functions calling each other: `f(x) = [x, g(x)]` and
+/// `g(x) = [x, f(x)]`, sharing one body block.  Returns the two function
+/// value nodes.
+fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId) {
+    let body = m.add_block(None);
+    let f_param = m.add_node(body, None, Some(Value::Parameterized));
+    let g_param = m.add_node(body, None, Some(Value::Parameterized));
+    // Both value nodes are placeholders: f's body references g before g
+    // exists, and vice versa.
+    let f_func = m.add_node(body, None, None);
+    let g_func = m.add_node(body, None, None);
+    // f(x) = [x, g(x)]
+    let f_ops = array_node(m, body, &[g_func, f_param]);
+    let f_apply = op_node(m, body, Operator::Apply, Some(f_ops));
+    let f_ret = array_node(m, body, &[f_param, f_apply]);
+    // g(x) = [x, f(x)]
+    let g_ops = array_node(m, body, &[f_func, g_param]);
+    let g_apply = op_node(m, body, Operator::Apply, Some(g_ops));
+    let g_ret = array_node(m, body, &[g_param, g_apply]);
+    let f = m.functions.insert(Function {
+        nodes: vec![f_param, f_func, f_ops, f_apply, f_ret],
+        r#return: f_ret,
+        parameter: f_param,
+        block: body,
+    });
+    let g = m.functions.insert(Function {
+        nodes: vec![g_param, g_func, g_ops, g_apply, g_ret],
+        r#return: g_ret,
+        parameter: g_param,
+        block: body,
+    });
+    m.blocks[body].functions.extend([f, g]);
+    m.nodes[f_func].value = Some(Value::Function(f));
+    m.nodes[g_func].value = Some(Value::Function(g));
+    (f_func, g_func)
 }
 
 // --- tests ------------------------------------------------------------
@@ -542,7 +609,7 @@ fn function_call_operator_clones_body_and_maps_parameter() {
     let Value::Function(func) = m.nodes[func_node].value.unwrap() else {
         unreachable!("expected a function value")
     };
-    assert_eq!(unsafe { &*func.nodes }, &[ret, param]);
+    assert_eq!(m.functions[func].nodes.as_slice(), &[ret, param]);
 
     // The body is untouched and still callable: its parameter is still the
     // marker and its return node still references it.
@@ -711,12 +778,489 @@ fn function_in_local_block_survives_compaction() {
     assert!(!m.blocks.contains_key(child));
     assert_eq!(m.nodes[ret].block, root); // template mapped into the root
     assert_eq!(m.nodes[param].block, root);
-    assert_eq!(unsafe { &*mapped.nodes }, &[ret, param]);
+    assert_eq!(m.functions[mapped].nodes.as_slice(), &[ret, param]);
+    assert!(m.functions.contains_key(mapped)); // the function outlives the block
 
     // The outer block can still call the mapped function.
     let arg2 = u128_node(&mut m, root, 7);
     let call2 = call_node(&mut m, root, func_node, arg2);
     assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 7);
+}
+
+#[test]
+fn function_scope_is_dropped_with_its_block() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    // f(x) = Id(x), homed in the child but not reachable from the block's
+    // return, so it must not survive the compaction.
+    let ret = m.add_node(child, None, None);
+    let param = m.add_node(child, None, Some(Value::Parameterized));
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(param),
+    });
+    let (func_node, func) = wrap_function(&mut m, child, ret, param);
+    assert_eq!(m.functions.len(), 1);
+
+    // Evaluate a *different* node of the child: the block compacts only the
+    // return-reachable tree, then releases the rest — the function's home
+    // node included, dropping the function and its scope.
+    let x = u128_node(&mut m, child, 5);
+    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
+    assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 5);
+
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.nodes.contains_key(func_node));
+    assert!(!m.functions.contains_key(func)); // scope dropped with the block
+}
+
+// --- nested functions, higher-order functions, mixed blocks+functions ---
+
+#[test]
+fn nested_function_is_called_by_the_outer_body() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // g(y) = Id(y) is defined inside f's template block, and f(x) = g(x)
+    // calls it with f's own parameter.
+    let f = m.add_block(None);
+    let gret = m.add_node(f, None, None);
+    let gparam = m.add_node(f, None, Some(Value::Parameterized));
+    m.nodes[gret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(gparam),
+    });
+    let (g_node, _) = wrap_function(&mut m, f, gret, gparam);
+    let ret = m.add_node(f, None, None);
+    let param = m.add_node(f, None, Some(Value::Parameterized));
+    let operands = array_node(&mut m, f, &[g_node, param]);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Apply,
+        operand: Some(operands),
+    });
+    let (f_node, _) = wrap_function(&mut m, f, ret, param);
+    m.evaluate_node_deep(ret, None); // definition pass: the nested g is concrete
+
+    let arg = u128_node(&mut m, root, 42);
+    let call = call_node(&mut m, root, f_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+
+    // The nested g is untouched in the template and still callable directly.
+    assert_eq!(m.nodes[g_node].block, f);
+    let g_arg = u128_node(&mut m, root, 5);
+    let g_call = call_node(&mut m, root, g_node, g_arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(g_call, None)), 5);
+}
+
+#[test]
+fn outer_call_returns_a_nested_function_value() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // g(y) = Id(y) lives inside f's body; f(x) = g returns it.
+    let f = m.add_block(None);
+    let gret = m.add_node(f, None, None);
+    let gparam = m.add_node(f, None, Some(Value::Parameterized));
+    m.nodes[gret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(gparam),
+    });
+    let (g_node, g_id) = wrap_function(&mut m, f, gret, gparam);
+    let ret = m.add_node(f, None, None);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Id),
+        operand: Some(g_node),
+    });
+    let param = m.add_node(f, None, Some(Value::Parameterized));
+    let (f_node, _) = wrap_function(&mut m, f, ret, param);
+    m.evaluate_node_deep(ret, None); // definition pass: Id(g) is concrete
+
+    let one = u128_node(&mut m, root, 1);
+    let call = call_node(&mut m, root, f_node, one);
+    let Value::Function(got) = m.evaluate_node_deep(call, None) else {
+        panic!("expected the nested function value");
+    };
+    assert_eq!(got, g_id); // the same nested function, referenced in place
+
+    // The returned function is callable from the outer block.
+    let arg = u128_node(&mut m, root, 7);
+    let call2 = call_node(&mut m, root, g_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 7);
+}
+
+#[test]
+fn higher_order_function_passes_a_function_argument_through() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // apply(g) = g: the parameter is the return node's operand, so calling
+    // apply with a function argument hands that function back.
+    let (apply_node, ret, _param) = function(&mut m, |m, ret, param| {
+        m.nodes[ret].operation = Some(Operation {
+            operator: Operator::Ext(TestOperator::Id),
+            operand: Some(param),
+        });
+    });
+    m.evaluate_node_deep(ret, None); // definition pass: Id(marker) stays a marker
+
+    // g(x) = Id(x).
+    let (g_node, _, _) = function(&mut m, |m, ret, param| {
+        m.nodes[ret].operation = Some(Operation {
+            operator: Operator::Ext(TestOperator::Id),
+            operand: Some(param),
+        });
+    });
+    let Value::Function(g_id) = m.nodes[g_node].value.unwrap() else {
+        unreachable!("expected a function value")
+    };
+
+    let call = call_node(&mut m, root, apply_node, g_node);
+    let Value::Function(got) = m.evaluate_node_deep(call, None) else {
+        panic!("expected the function argument back");
+    };
+    assert_eq!(got, g_id);
+
+    // The passed-through function is still callable.
+    let arg = u128_node(&mut m, root, 9);
+    let call2 = call_node(&mut m, root, g_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 9);
+}
+
+#[test]
+fn higher_order_function_calls_its_function_argument() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // apply(f) = f(42): the parameter is the target of an Apply node.
+    let body = m.add_block(None);
+    let ret = m.add_node(body, None, None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let forty_two = u128_node(&mut m, body, 42);
+    let operands = array_node(&mut m, body, &[param, forty_two]);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Apply,
+        operand: Some(operands),
+    });
+    let (apply_node, _) = wrap_function(&mut m, body, ret, param);
+    m.evaluate_node_deep(ret, None); // definition pass: a marker target stays lazy
+
+    // g(x) = Id(x): passing g as the argument makes apply evaluate g(42).
+    let (g_node, _, _) = function(&mut m, |m, ret, param| {
+        m.nodes[ret].operation = Some(Operation {
+            operator: Operator::Ext(TestOperator::Id),
+            operand: Some(param),
+        });
+    });
+    let call = call_node(&mut m, root, apply_node, g_node);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+}
+
+#[test]
+fn function_can_index_into_parameterized_array() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = [x, 7][0]: the array embeds the parameter, so the Index arm
+    // sees a marker element and stays lazy during the definition pass.
+    let body = m.add_block(None);
+    let ret = m.add_node(body, None, None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let seven = u128_node(&mut m, body, 7);
+    let array = array_node(&mut m, body, &[param, seven]);
+    let zero = usize_node(&mut m, body, 0);
+    let operands = array_node(&mut m, body, &[array, zero]);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Index,
+        operand: Some(operands),
+    });
+    let (f_node, _) = wrap_function(&mut m, body, ret, param);
+    m.evaluate_node_deep(ret, None); // definition pass: index of a marker stays a marker
+    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+
+    let arg = u128_node(&mut m, root, 42);
+    let call = call_node(&mut m, root, f_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
+
+    // The body is untouched and still parameterized.
+    assert!(matches!(m.nodes[param].value, Some(Value::Parameterized)));
+}
+
+#[test]
+fn manually_partially_evaluated_function_applies_correctly() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = Add(Add(x, 1), 2).  The partial definition is built by hand:
+    // evaluate_node_deep is called on exactly the two constants, and
+    // nothing else — the parameter-dependent chain stays unevaluated.
+    let body = m.add_block(None);
+    let ret = m.add_node(body, None, None);
+    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let one = u128_node(&mut m, body, 1);
+    let inner_ops = array_node(&mut m, body, &[param, one]);
+    let inner = op_node(&mut m, body, Operator::Ext(TestOperator::Add), Some(inner_ops));
+    let two = u128_node(&mut m, body, 2);
+    let ret_ops = array_node(&mut m, body, &[inner, two]);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Add),
+        operand: Some(ret_ops),
+    });
+    let (f_node, _) = wrap_function(&mut m, body, ret, param);
+
+    // Manually define exactly the constants; the parameter-dependent nodes
+    // keep parameterized_deep = None.
+    m.evaluate_node_deep(one, None);
+    m.evaluate_node_deep(two, None);
+    assert_eq!(m.nodes[one].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[two].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[ret].parameterized_deep, None);
+    assert_eq!(m.nodes[inner].parameterized_deep, None);
+    assert_eq!(m.nodes[inner_ops].parameterized_deep, None);
+    assert_eq!(m.nodes[ret_ops].parameterized_deep, None);
+
+    // The apply reuses the proven constants in place and clones + remaps
+    // the unevaluated chain: f(5) = (5 + 1) + 2 = 8, f(9) = 12.
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, f_node, five);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 8);
+
+    // The clone of the inner operand array maps the parameter onto the
+    // argument while keeping the proven constant in place.
+    let cloned_inner_ops = m.blocks[root]
+        .nodes
+        .iter()
+        .copied()
+        .find(|&id| {
+            matches!(m.nodes[id].value, Some(Value::Array(_)))
+                && array_ids(m.nodes[id].value.unwrap()) == [five, one]
+        })
+        .expect("the cloned inner operand array references the argument");
+    assert_eq!(m.nodes[cloned_inner_ops].block, root);
+
+    let nine = u128_node(&mut m, root, 9);
+    let call2 = call_node(&mut m, root, f_node, nine);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 12);
+}
+
+#[test]
+fn unevaluated_function_applies_correctly() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = Add(x, 1), with no evaluate_node / evaluate_node_deep call
+    // before applying: every body node keeps parameterized_deep = None.
+    let (f_node, ret, param) = function(&mut m, |m, ret, param| {
+        let one = u128_node(m, m.nodes[ret].block, 1);
+        let operands = array_node(m, m.nodes[ret].block, &[param, one]);
+        m.nodes[ret].operation = Some(Operation {
+            operator: Operator::Ext(TestOperator::Add),
+            operand: Some(operands),
+        });
+    });
+    assert_eq!(m.nodes[ret].parameterized_deep, None);
+    assert_eq!(m.nodes[param].parameterized_deep, None);
+
+    // The apply clones the whole unevaluated body and resolves it against
+    // the argument: f(5) = 6, f(9) = 10.
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, f_node, five);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 6);
+
+    let nine = u128_node(&mut m, root, 9);
+    let call2 = call_node(&mut m, root, f_node, nine);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 10);
+}
+
+#[test]
+fn recursive_function_applies_itself_lazily() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let (f_node, f_id) = recursive_function(&mut m);
+    // The function's own value node is concrete (it never depends on the
+    // parameter), so the clone keeps the self-reference in place instead of
+    // copying the function per level.
+    m.evaluate_node_deep(f_node, None);
+    assert_eq!(m.nodes[f_node].parameterized_deep, Some(false));
+
+    // f(5) = [5, f(5)]: each forced application produces exactly one new
+    // level — a fresh, still-unevaluated apply clone referencing the same
+    // function value and the same argument.
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, f_node, five);
+    let level0 = m.evaluate_node(call, None);
+    let ids = array_ids(level0);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], five);
+    let c1 = ids[1];
+    assert!(m.nodes[c1].value.is_none()); // unevaluated until forced
+    assert!(matches!(
+        m.nodes[c1].operation,
+        Some(Operation { operator: Operator::Apply, .. })
+    ));
+    let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
+    assert_eq!(array_ids(m.nodes[ops].value.unwrap()), [f_node, five]);
+
+    // Forcing that level runs the same function against the same argument.
+    let level1 = m.evaluate_node(c1, None);
+    let ids1 = array_ids(level1);
+    assert_eq!(ids1.len(), 2);
+    assert_eq!(ids1[0], five);
+    let c2 = ids1[1];
+    assert_ne!(c2, c1);
+    let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
+    assert_eq!(array_ids(m.nodes[ops].value.unwrap()), [f_node, five]);
+
+    let level2 = m.evaluate_node(c2, None);
+    assert_eq!(array_ids(level2)[0], five);
+    assert!(m.nodes[array_ids(level2)[1]].value.is_none());
+
+    // The recursion never cloned the function: the same template recursed
+    // three times, referenced in place.
+    assert_eq!(m.functions.len(), 1);
+    assert_eq!(m.functions[f_id].block, m.nodes[f_node].block);
+    assert!(matches!(m.nodes[f_node].value, Some(Value::Function(_))));
+}
+
+#[test]
+fn undefined_recursive_function_clones_a_function_per_level() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // With no evaluation at all, the function value node's
+    // parameterized_deep stays None, so the clone rule copies it: each
+    // recursion level carries its own fresh function clone homed on the
+    // calling block.
+    let (f_node, f_id) = recursive_function(&mut m);
+    assert_eq!(m.nodes[f_node].parameterized_deep, None);
+
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, f_node, five);
+    let level0 = m.evaluate_node(call, None);
+    let ids = array_ids(level0);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], five);
+    let c1 = ids[1];
+
+    let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
+    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let Value::Function(cloned) = m.nodes[operand_ids[0]].value.unwrap() else {
+        panic!("expected a cloned function value")
+    };
+    assert_ne!(cloned, f_id);
+    assert_eq!(m.functions[cloned].block, root);
+    assert_eq!(m.functions[cloned].nodes.len(), 5);
+
+    let level1 = m.evaluate_node(c1, None);
+    let ids1 = array_ids(level1);
+    assert_eq!(ids1.len(), 2);
+    assert_eq!(ids1[0], five);
+    let c2 = ids1[1];
+    assert_ne!(c2, c1);
+    let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
+    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let Value::Function(cloned2) = m.nodes[operand_ids[0]].value.unwrap() else {
+        panic!("expected a cloned function value")
+    };
+    assert_ne!(cloned2, cloned);
+    assert_eq!(m.functions.len(), 3); // the original plus one clone per level
+}
+
+#[test]
+fn mutually_recursive_functions_call_each_other() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let (f_node, g_node) = mutually_recursive_functions(&mut m);
+
+    // f(5) = [5, g(5)]: g's value node is outside f's template scope, so
+    // the clone references it in place.
+    let five = u128_node(&mut m, root, 5);
+    let call = call_node(&mut m, root, f_node, five);
+    let level0 = m.evaluate_node(call, None);
+    let ids = array_ids(level0);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], five);
+    let g_app = ids[1];
+    let ops = m.nodes[g_app].operation.unwrap().operand.unwrap();
+    assert_eq!(array_ids(m.nodes[ops].value.unwrap()), [g_node, five]);
+
+    // Forcing that level runs g's body: g(5) = [5, f(5)].
+    let level1 = m.evaluate_node(g_app, None);
+    let ids = array_ids(level1);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], five);
+    let f_app = ids[1];
+    assert_ne!(f_app, g_app);
+    let ops = m.nodes[f_app].operation.unwrap().operand.unwrap();
+    assert_eq!(array_ids(m.nodes[ops].value.unwrap()), [f_node, five]);
+    assert_eq!(m.functions.len(), 2); // cross-references stay in place
+}
+
+#[test]
+fn mixed_blocks_and_functions_survive_compaction() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    // g(x) = Add(x, 7) is built inside the child block; the constant 7
+    // lives in the child and is part of g's scope.
+    let ret = m.add_node(child, None, None);
+    let param = m.add_node(child, None, Some(Value::Parameterized));
+    let seven = u128_node(&mut m, child, 7);
+    let operands = array_node(&mut m, child, &[param, seven]);
+    m.nodes[ret].operation = Some(Operation {
+        operator: Operator::Ext(TestOperator::Add),
+        operand: Some(operands),
+    });
+    let (g_node, g_id) = wrap_function(&mut m, child, ret, param);
+    m.evaluate_node_deep(ret, None); // definition pass (Add is marker-aware)
+
+    // Call g from inside the child: 10 + 7.
+    let ten = u128_node(&mut m, child, 10);
+    let call = call_node(&mut m, child, g_node, ten);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 17);
+
+    // The root pulls g out of the child: compaction re-homes the function
+    // and moves its whole scope, then releases the rest of the block.
+    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(g_node));
+    let Value::Function(mapped) = m.evaluate_node_deep(root_node, None) else {
+        panic!("expected function")
+    };
+    assert_eq!(mapped, g_id);
+    assert_eq!(m.functions[g_id].block, root); // re-homed to the root
+    assert_eq!(m.nodes[seven].block, root); // scope constant moved too
+    assert!(!m.blocks.contains_key(child));
+
+    // Still callable after compaction: 3 + 7.
+    let three = u128_node(&mut m, root, 3);
+    let call2 = call_node(&mut m, root, g_node, three);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 10);
+}
+
+#[test]
+fn call_clones_are_compacted_with_the_calling_block() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    // g(x) = Add(x, 1) lives at the root level.
+    let (g_node, g_ret, _g_param) = function(&mut m, |m, ret, param| {
+        let one = u128_node(m, m.nodes[ret].block, 1);
+        let operands = array_node(m, m.nodes[ret].block, &[param, one]);
+        m.nodes[ret].operation = Some(Operation {
+            operator: Operator::Ext(TestOperator::Add),
+            operand: Some(operands),
+        });
+    });
+    m.evaluate_node_deep(g_ret, None); // definition pass
+
+    // The call clones g's body into the child block.
+    let five = u128_node(&mut m, child, 5);
+    let call = call_node(&mut m, child, g_node, five);
+    assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 6);
+    assert_eq!(m.nodes[call].block, child);
+
+    // Compacting the child moves the call node (with its cached result)
+    // into the root; the clone nodes it used are released with the block.
+    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(call));
+    assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 6);
+    assert_eq!(m.nodes[call].block, root);
+    assert!(!m.blocks.contains_key(child));
+
+    // The root-level function is untouched and still callable.
+    let two = u128_node(&mut m, root, 2);
+    let call2 = call_node(&mut m, root, g_node, two);
+    assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 3);
 }
 
 #[test]
@@ -764,18 +1308,18 @@ fn add_equality_merges_equivalence_classes() {
     let c = u128_node(&mut m, root, 3);
 
     // Fresh nodes are their own representatives.
-    assert_eq!(m.root_node(a), a);
-    assert_eq!(m.root_node(b), b);
+    assert_eq!(m.equality_representative(a), a);
+    assert_eq!(m.equality_representative(b), b);
 
     let rep = m.add_equality(a, b);
-    assert_eq!(m.root_node(a), rep);
-    assert_eq!(m.root_node(b), rep);
-    assert_ne!(m.root_node(c), rep);
+    assert_eq!(m.equality_representative(a), rep);
+    assert_eq!(m.equality_representative(b), rep);
+    assert_ne!(m.equality_representative(c), rep);
 
     // Equality is transitive: merging b's class with c pulls a in too.
     m.add_equality(b, c);
-    assert_eq!(m.root_node(a), rep);
-    assert_eq!(m.root_node(c), rep);
+    assert_eq!(m.equality_representative(a), rep);
+    assert_eq!(m.equality_representative(c), rep);
 }
 
 #[test]
@@ -786,15 +1330,15 @@ fn root_node_compresses_deep_paths() {
     // Build a deliberately deep parent chain 0 <- 1 <- 2 <- 3 <- 4 by hand
     // (union by size would attach every new node directly under the root).
     for pair in nodes.windows(2) {
-        m.nodes[pair[1]].set.parent = Some(pair[0]);
+        m.nodes[pair[1]].equality.parent = Some(pair[0]);
     }
 
-    let rep = m.root_node(nodes[4]);
+    let rep = m.equality_representative(nodes[4]);
 
     assert_eq!(rep, nodes[0]);
     // The whole path was flattened onto the representative.
     for &n in &nodes {
-        assert_eq!(m.nodes[n].set.parent, (n != nodes[0]).then_some(nodes[0]));
+        assert_eq!(m.nodes[n].equality.parent, (n != nodes[0]).then_some(nodes[0]));
     }
 }
 
@@ -822,6 +1366,6 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
         .copied()
         .find(|&id| m.nodes[id].operation.is_some_and(|op| op.operand == Some(arg)))
         .expect("the call clone of ret");
-    assert_eq!(m.root_node(clone_ret), clone_ret);
-    assert_ne!(m.root_node(clone_ret), m.root_node(ret));
+    assert_eq!(m.equality_representative(clone_ret), clone_ret);
+    assert_ne!(m.equality_representative(clone_ret), m.equality_representative(ret));
 }

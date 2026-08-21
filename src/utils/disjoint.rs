@@ -32,11 +32,11 @@ pub struct Meta<K: Copy> {
 }
 
 /// A node type that carries a [`Meta`] for a disjoint-set.
-pub trait DisjointNode: Sized {
+pub trait Node: Sized {
     /// The node's key in the [`SlotMap`] that stores it.
     type Key: Copy;
-    fn set(&self) -> &Meta<Self::Key>;
-    fn set_mut(&mut self) -> &mut Meta<Self::Key>;
+    fn meta(&self) -> &Meta<Self::Key>;
+    fn meta_mut(&mut self) -> &mut Meta<Self::Key>;
 }
 
 /// Initialize `key` as the singleton representative of its own set.
@@ -46,9 +46,9 @@ pub trait DisjointNode: Sized {
 pub fn make_set<K, V>(nodes: &mut SlotMap<K, V>, key: K)
 where
     K: Key,
-    V: DisjointNode<Key = K>,
+    V: Node<Key = K>,
 {
-    let set = nodes[key].set_mut();
+    let set = nodes[key].meta_mut();
     set.parent = None;
     set.next = None;
     set.tail = Some(key);
@@ -66,14 +66,14 @@ where
 pub fn find<K, V>(nodes: &mut SlotMap<K, V>, key: K) -> K
 where
     K: Key,
-    V: DisjointNode<Key = K>,
+    V: Node<Key = K>,
 {
-    let Some(parent) = nodes[key].set().parent else {
+    let Some(parent) = nodes[key].meta().parent else {
         return key;
     };
     let root = find(nodes, parent);
     if root != parent {
-        nodes[key].set_mut().parent = Some(root);
+        nodes[key].meta_mut().parent = Some(root);
     }
     root
 }
@@ -88,30 +88,30 @@ where
 pub fn union<K, V>(nodes: &mut SlotMap<K, V>, a: K, b: K) -> K
 where
     K: Key,
-    V: DisjointNode<Key = K>,
+    V: Node<Key = K>,
 {
     let ra = find(nodes, a);
     let rb = find(nodes, b);
     if ra == rb {
         return ra;
     }
-    let (ra, rb) = if nodes[ra].set().size < nodes[rb].set().size {
+    let (ra, rb) = if nodes[ra].meta().size < nodes[rb].meta().size {
         (rb, ra)
     } else {
         (ra, rb)
     };
     // Read every target before writing, so the writes below are independent.
-    let Some(ta) = nodes[ra].set().tail else {
+    let Some(ta) = nodes[ra].meta().tail else {
         unreachable!("representative {ra:?} lacks a member-list tail")
     };
-    let Some(tb) = nodes[rb].set().tail else {
+    let Some(tb) = nodes[rb].meta().tail else {
         unreachable!("representative {rb:?} lacks a member-list tail")
     };
-    let size = nodes[ra].set().size + nodes[rb].set().size;
-    nodes[ta].set_mut().next = Some(rb);
-    nodes[rb].set_mut().parent = Some(ra);
-    nodes[ra].set_mut().tail = Some(tb);
-    nodes[ra].set_mut().size = size;
+    let size = nodes[ra].meta().size + nodes[rb].meta().size;
+    nodes[ta].meta_mut().next = Some(rb);
+    nodes[rb].meta_mut().parent = Some(ra);
+    nodes[ra].meta_mut().tail = Some(tb);
+    nodes[ra].meta_mut().size = size;
     ra
 }
 
@@ -122,7 +122,7 @@ where
 pub fn members<'n, K, V>(nodes: &'n SlotMap<K, V>, root: K) -> impl Iterator<Item = K> + 'n
 where
     K: Key,
-    V: DisjointNode<Key = K>,
+    V: Node<Key = K>,
 {
-    std::iter::successors(Some(root), |&key| nodes[key].set().next)
+    std::iter::successors(Some(root), |&key| nodes[key].meta().next)
 }
