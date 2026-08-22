@@ -1,8 +1,0 @@
--- Struct instantiation
---
--- `s(1, 2)` wraps a positional tuple in the nominal type: an application
--- whose callee is a struct type compiles to the `Instantiate` expression,
--- the element types are checked against the fields, and the result has the
--- struct type.  Bind the struct type once and reuse it.
--- output: [1, 2]
-s = struct<Int, Int>; s(1, 2)

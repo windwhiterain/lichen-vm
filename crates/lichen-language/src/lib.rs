@@ -50,12 +50,19 @@ pub fn compile(source: &str) -> Report {
         },
         Ok(ir) => {
             let build = Checker::build(ir);
+            // The pretty rendering is shared across the whole report: the
+            // raw node → span table (the flow lines' line numbers) and one
+            // type printer, so a class keeps one `?a` name across
+            // diagnostics.
+            let node_spans = build.node_spans();
+            let mut printer =
+                crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
             let diagnostics = build
                 .diagnostics()
                 .into_iter()
                 .map(|d| Diag {
                     span: d.span,
-                    message: d.message.clone(),
+                    message: crate::render::checker_message(&build, &node_spans, &mut printer, &d),
                     stage: Stage::Check,
                     check: Some(Box::new(d)),
                 })

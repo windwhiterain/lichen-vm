@@ -58,7 +58,7 @@ pub enum Expr {
     Tuple(Vec<Expr>, Span),
     /// `(T1, ..., Tn)` in type position — a tuple type.
     TypeTuple(Vec<Expr>, Span),
-    /// `struct { T1, ..., Tn }` — a nominal struct type, positional fields.
+    /// `struct<T1, ..., Tn>` — a nominal struct type, positional fields.
     StructType(Vec<Expr>, Span),
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
@@ -66,6 +66,15 @@ pub enum Expr {
     TypeArray {
         element_type: Box<Expr>,
         length: Box<Expr>,
+        span: Span,
+    },
+    /// `{ name = expr; …; expr }` — a block: scoped bindings followed by the
+    /// block's value.  The bindings are graph-shared like a program's; the
+    /// block compiles to its final expression's own IR node (see
+    /// [`crate::compile`]).
+    Block {
+        bindings: Vec<Binding>,
+        expr: Box<Expr>,
         span: Span,
     },
 }
@@ -109,6 +118,7 @@ impl Expr {
             Expr::StructType(_, s) => *s,
             Expr::Array(_, s) => *s,
             Expr::TypeArray { span, .. } => *span,
+            Expr::Block { span, .. } => *span,
         }
     }
 }

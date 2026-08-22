@@ -96,8 +96,21 @@ fn the_polymorphic_identity_checks() {
 }
 
 #[test]
-fn a_heterogeneous_tuple_checks() {
-    run("(1, (x => x))");
+fn a_nested_function_captures_the_applied_outer_parameter() {
+    // f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4 — the returned
+    // closure captures x's binding: the parameter must not leak through as
+    // the unbound marker.
+    let (mut module, root) = run("a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4");
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    let expected = [1usize, 2, 3, 4];
+    assert_eq!(ids.len(), expected.len());
+    for (&id, &n) in ids.iter().zip(expected.iter()) {
+        assert_eq!(
+            module.nodes[id].value,
+            Some(Value::USize(n)),
+            "element {n} must be a bound value, not the leaked parameter"
+        );
+    }
 }
 
 #[test]
@@ -206,6 +219,67 @@ fn an_unresolved_name_in_a_statement_program_is_reported() {
     assert_eq!(d[0].span, Some((1, 8)));
 }
 
+// --- blocks ------------------------------------------------------------------
+
+#[test]
+fn a_block_body_checks_and_evaluates() {
+    // f = x => {y = x; y} — the block is the lambda's body; its bindings
+    // resolve through the graph and its final expression is the body.
+    assert_eq!(usize_of(&evaluate("f = x => {y = x; y}; (f 5 : Int)")), 5);
+    // The same with a block binding used by an index, the fib pattern.
+    assert_eq!(
+        usize_of(&evaluate("f = a => {i = 0; a[i]}; (f ([7, 8]) : Int)")),
+        7
+    );
+}
+
+#[test]
+fn a_block_is_its_final_expression() {
+    // The root is the final expression's own node — a concrete literal, so
+    // no ambiguity and no extra form in the IR.
+    assert_eq!(usize_of(&evaluate("{a = 5; a}")), 5);
+    assert_eq!(usize_of(&evaluate("{a = 1; b = 2; a}")), 1);
+}
+
+#[test]
+fn a_block_scopes_its_bindings() {
+    // A block-bound name shadows an outer one inside the block, and is gone
+    // after the `}`.
+    assert_eq!(
+        usize_of(&evaluate("a = 5; f = x => {a = x; a}; (f 9 : Int)")),
+        9
+    );
+    assert_eq!(usize_of(&evaluate("a = 5; f = x => {a = x; a}; a")), 5);
+}
+
+#[test]
+fn a_block_bound_lambda_is_still_polymorphic() {
+    // g bound inside the block is one shared function node; each apply gets
+    // fresh clones, so it still checks at Int and at Type.
+    let (module, root) =
+        run("(((x => {g = y => y; ((g x : Int), (g Type : Type))}) 5) : <Int, Type>)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
+    assert!(
+        matches!(
+            module.nodes[ids[1]].value,
+            Some(Value::Ext(HighValue::TypeType))
+        ),
+        "the second element is the Type constant"
+    );
+}
+
+#[test]
+fn an_unresolved_name_inside_a_block_is_reported() {
+    let d = diags("f = x => {a = 1; b}; 0");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert_eq!(d[0].message, "unresolved name 'b'");
+    assert_eq!(d[0].span, Some((1, 18)));
+}
+
 // --- struct types ------------------------------------------------------------
 
 #[test]
@@ -286,6 +360,40 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
     assert!(check.message.contains("TypeId("), "{}", check.message);
+}
+
+#[test]
+fn a_struct_instance_indexes_its_fields() {
+    // s = struct<Int, Type>; a = s(1, Int); (a[0], a[1]) — indexing an
+    // instance reads the wrapped tuple's elements, and each element's type
+    // is the corresponding field type (Int and Type).
+    let (module, root) = run("s = struct<Int, Type>; a = s(1, Int); (a[0], a[1])");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 1);
+    assert_eq!(
+        module.nodes[ids[1]].value,
+        Some(Value::Ext(HighValue::TypeInt)),
+        "the second field is the `Int` type constant"
+    );
+    // indexing the instance through a parameter works too — the runtime
+    // IndexType sees the struct type and selects its field list
+    let (module, root) = run("f = a => a[0]; s = struct<Int, Type>; f s(1, Int) : Int");
+    let mut module = module;
+    assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 1);
+}
+
+#[test]
+fn a_struct_instance_index_out_of_bounds_is_rejected() {
+    // a[5] — the field list is structural like a tuple's, so the bounds
+    // check fires at check time.
+    let d = diags("s = struct<Int, Type>; a = s(1, Int); a[5]");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
+    assert_eq!(check.value_a, Some(Value::USize(5)), "the index");
+    assert_eq!(check.value_b, Some(Value::USize(2)), "the field count");
 }
 
 #[test]
@@ -393,7 +501,7 @@ fn indexing_a_function_is_an_index_target_error() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexTarget);
     assert!(
-        check.message.contains("expected a tuple or array type"),
+        check.message.contains("expected a tuple, array, or struct type"),
         "{}",
         check.message
     );

@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{is_unbound, EvalError, NodeId, Operator, UnifyError, Value};
+use lichen_lowlevel::{EvalError, NodeId, Operator, UnifyError, Value, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
@@ -45,6 +45,10 @@ pub struct Diag {
     /// re-reads (a failed unify never merges the classes, so they are stable).
     pub value_a: Option<Value<HighProgram>>,
     pub value_b: Option<Value<HighProgram>>,
+    /// Which `Module::unify_errors` entry this diagnostic came from — the
+    /// key back to its diary entry, for callers (the language crate) that
+    /// re-render the message.  `None` for runtime evaluation failures.
+    pub error_index: Option<usize>,
     /// Rendered for display/debug — not the test contract.
     pub message: String,
 }
@@ -62,7 +66,7 @@ pub enum DiagKind {
     /// Applying a concretely non-function type — expected = a function.
     Guard,
     /// Indexing a concretely non-indexable type (a function, an atomic
-    /// type, a struct type) — expected = a tuple or array type.
+    /// type) — expected = a tuple, array, or struct type.
     IndexTarget,
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
@@ -126,7 +130,7 @@ impl Build {
     /// elements (the `Type` marker) only carry spans through direct
     /// references, so a parameter's template type never inherits the span of
     /// an unrelated expression that happens to share the universe.
-    fn node_spans(&self) -> HashMap<NodeId, Span> {
+    pub fn node_spans(&self) -> HashMap<NodeId, Span> {
         let mut map = HashMap::new();
         let mut visited = HashSet::new();
         for (i, expr) in self.ir.expr.iter().enumerate() {
@@ -218,6 +222,7 @@ impl Report<'_> {
             b: err.b,
             value_a: err.value_a,
             value_b: err.value_b,
+            error_index: Some(i),
             message,
         }
     }
@@ -236,7 +241,7 @@ impl Report<'_> {
             DiagKind::Kinding => format!("expected TypeType, found {}", self.print_type(err.a)),
             DiagKind::Guard => format!("expected a function, found {}", self.print_type(err.a)),
             DiagKind::IndexTarget => format!(
-                "expected a tuple or array type, found {}",
+                "expected a tuple, array, or struct type, found {}",
                 self.print_type(err.a)
             ),
             DiagKind::ArrayElement => format!(
@@ -289,6 +294,7 @@ impl Report<'_> {
                 "index {} out of bounds (array length {})",
                 err.index_value, err.length
             ),
+            error_index: None,
         }
     }
 
@@ -395,8 +401,7 @@ impl Report<'_> {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
-                                if let Some(s) =
-                                    self.build.module.array_ids(self.rep(ids[0]))
+                                if let Some(s) = self.build.module.array_ids(self.rep(ids[0]))
                                     && s.len() == 2
                                 {
                                     return format!(
@@ -417,8 +422,7 @@ impl Report<'_> {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
-                                if let Some(s) =
-                                    self.build.module.array_ids(self.rep(ids[0]))
+                                if let Some(s) = self.build.module.array_ids(self.rep(ids[0]))
                                     && s.len() == 2
                                 {
                                     return format!(
@@ -432,16 +436,13 @@ impl Report<'_> {
                                 // A struct type: `[fields, [TypeId(n), Type]]`
                                 // — render `struct#n { f1, f2 }`, the shape
                                 // being the field-type list.
-                                let fields: Vec<String> =
-                                    if let Some(s) =
-                                        self.build.module.array_ids(self.rep(ids[0]))
-                                    {
-                                        s.iter()
-                                            .map(|&id| self.print_inner(id, visiting))
-                                            .collect()
-                                    } else {
-                                        vec![self.print_inner(ids[0], visiting)]
-                                    };
+                                let fields: Vec<String> = if let Some(s) =
+                                    self.build.module.array_ids(self.rep(ids[0]))
+                                {
+                                    s.iter().map(|&id| self.print_inner(id, visiting)).collect()
+                                } else {
+                                    vec![self.print_inner(ids[0], visiting)]
+                                };
                                 return format!("struct#{n} {{ {} }}", fields.join(", "));
                             }
                             _ => {}
@@ -499,5 +500,3 @@ fn letter_name(i: usize) -> String {
         format!("?{letter}{round}")
     }
 }
-
-

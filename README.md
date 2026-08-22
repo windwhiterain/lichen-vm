@@ -110,14 +110,14 @@ output:
 ### `function.lichen`
 
 ```text
-f1 = x => x;
+f1 = x => x : Int -> Int;
 f2 = x => f1 x;
-f2 1
+f2
 ```
 
 output:
 ```text
-1: Int
+Function: ?a -> ?b
 ```
 
 ### `index.lichen`

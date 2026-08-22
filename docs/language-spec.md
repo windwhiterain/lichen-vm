@@ -21,7 +21,8 @@ resolver, and IR emitter on top of the existing highlevel checker, which runs
    diagnostics. Every stage is testable on its own.
 2. **Proper diagnostics.** Every error — frontend or checker — is a value with
    a span and a message; bad input never panics. Checker failures keep the
-   highlevel's existing rendering (expected/found, the `?a` flow).
+   expected/found wording and the `?a` flow, rendered by the same pretty
+   printer as the CLI output (§5).
 3. **No changes to the type layer.** The checker, the IR, and the lowlevel VM
    are used as-is; the frontend is a pure producer of `ExprTable`s.
 
@@ -46,11 +47,12 @@ atom     := int_literal
           | '[' expr (',' expr)* ']'              -- array literal
           | '<' expr ',' expr (',' expr)* '>'     -- tuple type  (always TypeTuple)
           | 'struct' '<' expr (',' expr)* '>'     -- struct type  (nominal, positional fields)
+          | '{' (name '=' expr ';')* expr '}'     -- block: scoped bindings, then the block's value
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `=>`, `->`, `:`.  `=` binds a name in
-  a statement, `;` separates statements.  `--` starts a line comment (to end
-  of line).
+  a statement, `;` separates statements, and `{` `}` delimit a block (a
+  program-shaped expression).  `--` starts a line comment (to end of line).
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
   `Type`, and `struct` are reserved — they cannot be bound or used as names.
 - **The `_` placeholder.**  In type position (the right side of `:`, and the
@@ -105,6 +107,17 @@ index it selects a branch.
   Sharing means a bound *non-function* value has one type across uses, while
   a bound lambda stays polymorphic — each application still instantiates the
   parameter fresh via the runtime's per-apply clones.
+- **Blocks.**  `{ name = expr; …; expr }` is an expression: the same
+  statement list as a program, scoped to the block.  Bindings are graph-shared
+  exactly as at the top level (each value compiles once, and a use of the name
+  is the value's own node) and shadow outer names; the block's names are gone
+  after the `}`.  Because a block is an expression, a function body can be one
+  naturally — `f = x => { a = 1; a }` — and so can any other subexpression
+  (`{ a = 5; a }` as a program, an argument, a nested block).  A block
+  compiles to its final expression's own node: there is no block node in the
+  IR, so a bound lambda inside a block stays polymorphic and a block never
+  monomorphizes its contents.  `{}` (no final expression) is a parse error,
+  like a program without one.
 - **Every lambda is automatically let-polymorphic.**  Each application
   instantiates the parameter fresh — the lowlevel apply machinery clones the
   parameter per call site — so `(x => x) 5 : Int` and `(x => x) Type : Type`
@@ -116,12 +129,14 @@ index it selects a branch.
   can be passed around, bound, and used in type position.  `Type : Type`
   holds in a single universe; kinding is an ordinary type check (a literal in
   type position is a kinding error, not a separate "kind system").
-- **Indexing.**  `e[i]` reads the `i`-th element of an array or tuple.  A
+- **Indexing.**  `e[i]` reads the `i`-th element of an array, tuple, or
+  struct instance (a struct instance's positional fields are its wrapped
+  tuple's elements).  A
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
   is checked when evaluated.  Indexing a *concretely* non-indexable type —
-  a function, an atomic type, a struct type — is an `IndexTarget`
+  a function or an atomic type — is an `IndexTarget`
   diagnostic at check time, not a runtime panic (mirroring the apply
   guard).  `[then, else][i]` is the language's only
   conditional form — an integer index selects a branch, and the untaken
@@ -145,8 +160,11 @@ index it selects a branch.
   the frontend from its IR node (the literal `struct<...>` or a name bound
   to one); a struct type arriving through a parameter is not recognized and
   falls through to a plain application, which fails at runtime (applying a
-  non-function is a VM panic, not a diagnostic).  Field access and values of
-  struct type beyond the wrapped tuple are future work.
+  non-function is a VM panic, not a diagnostic).  Indexing an instance reads
+  its positional fields: `s(1, 2)[0]` is the first field, and its type is
+  the corresponding field type (an out-of-bounds field index is an
+  `IndexOutOfBounds` diagnostic).  Values of struct type beyond the wrapped
+  tuple are future work.
 - **Dependent array types (pinning).**  The length of `T<e>` is an arbitrary
   expression, so `Int<n>` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an
@@ -190,6 +208,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
+| `{ a = e; …; e }` | the final expression's own node — bindings are scope-entered, then popped |
 
 There is no desugar step (no `let`).
 
@@ -206,7 +225,10 @@ A use of `x` in `e` therefore *is* the parameter's own `ExprId` — the checker'
 scope stack is keyed by it, and the IR carries no name strings.  A statement
 binding `a = e` resolves the same way without a lambda: the value compiles to
 one `ExprId`, `a` is pushed onto the stack (never popped — later statements
-see it), and a use of `a` is the value's own `ExprId`.  Shadowing is allowed
+see it), and a use of `a` is the value's own `ExprId`.  A block
+`{ a = e; …; e }` pushes its bindings the same way and pops them (truncates)
+at the `}` — inside, the block's names shadow outer ones; after the `}`, the
+outer names are back.  Shadowing is allowed
 (the inner binding wins).  A name in no scope is a **resolve diagnostic** at
 the name's span — the checker's `lookup` panics on unresolved ids, so the
 frontend guarantees resolution before the IR leaves the crate.
@@ -220,7 +242,7 @@ frontend guarantees resolution before the IR leaves the crate.
 | Lex | `unexpected character '@'` |
 | Parse | `expected ')', found ']'` |
 | Resolve | `unresolved name 'y'` |
-| Check | `expected TypeInt → TypeInt, found TypeInt` (+ the `?a` flow lines) |
+| Check | `expected Int -> Int, found Int` (+ the `?a` flow lines) |
 
 A `Diag { span: Option<(u32, u32)>, message: String, stage: Stage, check: Option<Box<...>> }`.
 The `message` is the rendered form for display (`render`); `stage` says which
@@ -252,8 +274,11 @@ diagnostics.
 
 ### Checker spellings
 
-The highlevel printer renders constants by their canonical names, so
-diagnostics show `TypeInt`, `TypeType`, `TypeFunction`, `TypeTuple`,
-`TypeArray`, `none`, `Function` even though the source spells the first two
-`Int` and `Type`.  `Int` (the value) prints as its own digits.
+Checker messages are rendered by the same printer as the CLI output, so
+types appear in the language's own syntax: `Int`, `Type`, `T1 -> T2`,
+`<T1, T2>`, `T<len>`, `struct<...>`, and unbound cells as stable `?a`,
+`?b`, … names (cells in one unification class share a name).  The boxed
+highlevel `Diag` in `check` stays raw — it carries the structured facts
+(`kind`, the classes `a`/`b` and their values, the `error_index` into
+`unify_errors`) and its own raw message (`TypeInt`, `TypeType`, …).
 

@@ -11,6 +11,12 @@ use lichen_utils::disjoint;
 struct ApplyCtx<'a> {
     target: BlockId,
     members: &'a HashSet<NodeId>,
+    /// The scope of a nested function value being cloned (see
+    /// [`Module::value_apply`]): its own nodes join the membership, so
+    /// references to the outer members inside the closure — a captured
+    /// parameter — are rewritten to the fresh clones instead of pointing at
+    /// the never-bound template cells.
+    extra: Option<&'a HashSet<NodeId>>,
     remap: &'a mut HashMap<NodeId, NodeId>,
 }
 
@@ -20,6 +26,8 @@ impl<P: Program> Module<P> {
         function: FunctionId,
         argument: NodeId,
         block: BlockId,
+        node: NodeId,
+        cell: Option<NodeId>,
     ) -> Value<P> {
         self.apply_depth += 1;
         if self.apply_depth > self.apply_depth_limit {
@@ -34,11 +42,12 @@ impl<P: Program> Module<P> {
         };
         debug_assert!(self.functions[function].nodes.contains(&r#return));
         debug_assert!(self.functions[function].nodes.contains(&parameter));
-        let members: HashSet<NodeId> = self.functions[function].nodes.iter().copied().collect();
+        let members = self.functions[function].nodes.clone();
         let mut remap = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
             members: &members,
+            extra: None,
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
@@ -74,11 +83,50 @@ impl<P: Program> Module<P> {
             // instead of unbound slots; positions the pattern treats as
             // opaque stay lazy.
             self.evaluate_pattern_argument(cloned_param, argument, block);
+            eprintln!(
+                "DBG function_apply: argument = {argument:?} value = {:?}, cloned_param = {cloned_param:?} value = {:?}",
+                self.nodes[argument].value,
+                self.nodes[cloned_param].value,
+            );
+            if let (Some(Value::Array(a)), Some(Value::Array(b))) = (
+                self.nodes[argument].value,
+                self.nodes[cloned_param].value,
+            ) {
+                let (a, b) = (unsafe { &*a }, unsafe { &*b });
+                eprintln!(
+                    "DBG   argument elems = {a:?} (values {:?}), cloned_param elems = {b:?}",
+                    a.iter().map(|&id| self.nodes[id].value).collect::<Vec<_>>()
+                );
+            }
             self.unify(cloned_param, argument);
         }
         let result = self.evaluate_node(applied, Some(block));
         self.apply_depth -= 1;
-        result
+        // The apply's result is the function's return pair `[value, type]`
+        // (the checker encodes every expression as such a pair).  The apply
+        // node caches that pair and is unified with the return node, so the
+        // classes merge — the apply node *is* the return pair — and the
+        // result cell (the checker's third operand element) binds to the
+        // return type.  Unifying the two equal pairs never conflicts (their
+        // elements are the same nodes); a lazy result — a polymorphic
+        // template — leaves the cell bound to an unresolved class, which
+        // reads as unbound until the deep pass resolves it.  An apply
+        // without a wired cell (a hand-built lowlevel graph) is unchanged.
+        match (cell, result) {
+            (Some(cell), Value::Array(ptr)) if unsafe { &*ptr }.len() == 2 => {
+                let ids = unsafe { &*ptr };
+                self.nodes[node].value = Some(result);
+                self.unify(node, applied);
+                // Resolve the return type before binding the cell: the deep
+                // pass resolves the node later but does not replicate to
+                // class members, so an unresolved bind would leave the cell
+                // unbound.
+                self.evaluate_node(ids[1], Some(block));
+                self.unify(cell, ids[1]);
+                result
+            }
+            _ => result,
+        }
     }
 
     /// Evaluate `argument` to the structural depth `pattern` (the cloned
@@ -111,8 +159,9 @@ impl<P: Program> Module<P> {
         else {
             return;
         };
-        for (&pattern_id, &argument_id) in
-            unsafe { &*pattern_ids }.iter().zip(unsafe { &*argument_ids }.iter())
+        for (&pattern_id, &argument_id) in unsafe { &*pattern_ids }
+            .iter()
+            .zip(unsafe { &*argument_ids }.iter())
         {
             self.evaluate_pattern_argument_inner(pattern_id, argument_id, block, seen);
         }
@@ -123,7 +172,7 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
-        if !ctx.members.contains(&node) {
+        if !ctx.members.contains(&node) && !ctx.extra.is_some_and(|extra| extra.contains(&node)) {
             return node; // outside the template scope — reference as-is
         }
         // The body always exists, so only the parts that depend on the
@@ -191,16 +240,32 @@ impl<P: Program> Module<P> {
                         function.parameter,
                     )
                 };
-                let nodes: Vec<NodeId> = scope.iter().map(|&id| self.node_apply(id, ctx)).collect();
-                let r#return = self.node_apply(r#return, ctx);
-                let parameter = self.node_apply(parameter, ctx);
+                // The nested function's own scope joins the clone's
+                // template: its body may capture the applied function's
+                // members (an outer parameter), and those references must
+                // be rewritten to the fresh clones — the ones the apply's
+                // parameter unify binds.  The remap is shared, so a member
+                // reached from the outer body and from here is one clone.
+                let target = ctx.target;
+                let mut inner = ApplyCtx {
+                    target,
+                    members: ctx.members,
+                    extra: Some(&scope),
+                    remap: ctx.remap,
+                };
+                let nodes: HashSet<NodeId> = scope
+                    .iter()
+                    .map(|&id| self.node_apply(id, &mut inner))
+                    .collect();
+                let r#return = self.node_apply(r#return, &mut inner);
+                let parameter = self.node_apply(parameter, &mut inner);
                 let function = self.functions.insert(Function {
                     nodes,
                     r#return,
                     parameter,
-                    block: ctx.target,
+                    block: target,
                 });
-                self.blocks[ctx.target].functions.push(function);
+                self.blocks[target].functions.push(function);
                 Value::Function(function)
             }
             Value::Ext(ext) => Self::copy_ext(self, ext, ctx.target),

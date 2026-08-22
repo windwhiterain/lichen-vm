@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
+use std::collections::HashSet;
 use std::fmt::Debug;
 
 use lichen_utils::disjoint::{self};
@@ -40,12 +41,7 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 }
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
-    fn run(
-        &self,
-        operand: Value<P>,
-        block: BlockId,
-        module: &mut Module<P>,
-    ) -> Value<P>;
+    fn run(&self, operand: Value<P>, block: BlockId, module: &mut Module<P>) -> Value<P>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,7 +80,7 @@ pub fn is_unbound<P: Program>(value: Option<Value<P>>) -> bool {
 /// Pointer into a [`Block::arena`].  
 /// `PartialEq` compares pointing value if not `UNIQUE`.
 #[derive(Debug)]
-pub struct Handle<T: ?Sized,const UNIQUE:bool = false>(pub *const T);
+pub struct Handle<T: ?Sized, const UNIQUE: bool = false>(pub *const T);
 impl<T: ?Sized> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
@@ -92,15 +88,16 @@ impl<T: ?Sized> Clone for Handle<T> {
 }
 impl<T: ?Sized> Copy for Handle<T> {}
 
-impl<T: PartialEq + ?Sized,const UNIQUE:bool> PartialEq for Handle<T,UNIQUE> {
+impl<T: PartialEq + ?Sized, const UNIQUE: bool> PartialEq for Handle<T, UNIQUE> {
     fn eq(&self, other: &Self) -> bool {
-        if std::ptr::eq(self.0 , other.0) {return true}
-        if !UNIQUE{
+        if std::ptr::eq(self.0, other.0) {
+            return true;
+        }
+        if !UNIQUE {
             unsafe { *self.0 == *other.0 }
-        }else{
+        } else {
             false
         }
-        
     }
 }
 
@@ -138,8 +135,11 @@ pub struct Block {
 /// Only [`Self::nodes`] can reference [`Self::parameter`].
 #[derive(Debug, Clone)]
 pub struct Function {
-    /// including the `r#return` and [`Self::parameter`] entry points.
-    pub nodes: Vec<NodeId>,
+    /// A membership set — the template scope — including the `r#return`
+    /// and [`Self::parameter`] entry points.  Stored as a set because the
+    /// clone pass only asks "is this node part of the scope"; no code reads
+    /// the members positionally.
+    pub nodes: HashSet<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
     /// Owner.
@@ -251,10 +251,10 @@ impl<P: Program> Module<P> {
         block: BlockId,
         ret: NodeId,
         param: NodeId,
-        nodes: &[NodeId],
+        nodes: impl IntoIterator<Item = NodeId>,
     ) -> NodeId {
         let function = self.functions.insert(Function {
-            nodes: nodes.to_vec(),
+            nodes: nodes.into_iter().collect(),
             r#return: ret,
             parameter: param,
             block,

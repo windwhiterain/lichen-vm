@@ -1,3 +1,0 @@
-f1 = x => x : Int -> Int;
-f2 = x => f1 x;
-f2

@@ -1,7 +1,0 @@
--- First-class types
---
--- Types are ordinary values: `Type : Type` (the single universe), `Int`,
--- and a function type `Int -> Int` can all sit in a tuple.
--- output: [Type, Int, Function]
-
-((Type : Type), Int, (x => x) : (Int -> Int))

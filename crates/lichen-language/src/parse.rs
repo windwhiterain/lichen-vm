@@ -1,12 +1,13 @@
 //! The recursive-descent parser: tokens → AST.
 //!
 //! A program is `name = expr; …` bindings followed by a final expression
-//! (see [`Program`]).  Within an expression, one grammar covers terms and
-//! types (types are expressions); a *type-mode* flag — set inside an
-//! annotation's right side — decides whether `(a, b)` is a `Tuple` value or
-//! a `TypeTuple` type expression.  Angle brackets are exclusively
-//! type-level and need no flag: `<a, b>` is always a `TypeTuple`,
-//! `struct<T1, T2>` always a `StructType`, and `T<e>` (a
+//! (see [`Program`]) — the same statement list, wrapped in `{ … }`, forms a
+//! block expression (see [`Expr::Block`]).  Within an expression, one
+//! grammar covers terms and types (types are expressions); a *type-mode*
+//! flag — set inside an annotation's right side — decides whether `(a, b)`
+//! is a `Tuple` value or a `TypeTuple` type expression.  Angle brackets are
+//! exclusively type-level and need no flag: `<a, b>` is always a
+//! `TypeTuple`, `struct<T1, T2>` always a `StructType`, and `T<e>` (a
 //! `<` directly after an expression) is always the array type.  A `[`
 //! directly after an expression is always an index `e[i]` — the array
 //! literal is the prefix `[e, …]` form, so no whitespace rule decides, and
@@ -73,16 +74,26 @@ impl Parser<'_> {
         self.error(format!("expected {expected}, found {found}"))
     }
 
+    /// The program: the statement list, then `Eof`.
+    fn parse_program(&mut self) -> Result<Program, Diag> {
+        let (bindings, expr) = self.parse_bindings_and_expr(false)?;
+        Ok(Program { bindings, expr })
+    }
+
     /// The statement list: `name = expr;` bindings, then the final
     /// expression.  A `name =` at statement start is a binding; everything
     /// else is an expression — a bare expression statement is only legal as
     /// the last one (there is no dead code).  Bindings require the trailing
-    /// `;`; the final expression is the program's value.
-    fn parse_program(&mut self) -> Result<Program, Diag> {
+    /// `;`; the final expression is the list's value.  The same list forms
+    /// a block's body (see [`Parser::block`]).
+    fn parse_bindings_and_expr(&mut self, type_mode: bool) -> Result<(Vec<Binding>, Expr), Diag> {
         let mut bindings = Vec::new();
         loop {
             let binding = matches!(
-                (&self.peek().kind, self.tokens.get(self.pos + 1).map(|t| &t.kind)),
+                (
+                    &self.peek().kind,
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind)
+                ),
                 (TokenKind::Name(_), Some(TokenKind::Equals))
             );
             if !binding {
@@ -93,7 +104,7 @@ impl Parser<'_> {
                 unreachable!()
             };
             self.pos += 1; // the `=`
-            let value = self.parse_expr(false)?;
+            let value = self.parse_expr(type_mode)?;
             bindings.push(Binding {
                 name: binding_name,
                 span: name.span,
@@ -103,8 +114,8 @@ impl Parser<'_> {
                 return Err(self.error_found("';'"));
             }
         }
-        let expr = self.parse_expr(false)?;
-        Ok(Program { bindings, expr })
+        let expr = self.parse_expr(type_mode)?;
+        Ok((bindings, expr))
     }
 
     /// An expression.  A name directly followed by `=>` starts a lambda whose
@@ -188,17 +199,15 @@ impl Parser<'_> {
             TokenKind::Name(name) => Expr::Name(name.clone(), start.span),
             TokenKind::LParen => self.paren_or_tuple(type_mode, start.span)?,
             TokenKind::LBracket => self.array_literal(type_mode, start.span)?,
+            TokenKind::LBrace => self.block(type_mode, start.span)?,
             TokenKind::LAngle => self.angle_tuple(type_mode, start.span)?,
             TokenKind::KwStruct => self.struct_type(start.span)?,
             _ => {
                 return Err(Diag::new(
                     Stage::Parse,
                     start.span,
-                    format!(
-                        "expected an expression, found {}",
-                        start.kind.describe()
-                    ),
-                ))
+                    format!("expected an expression, found {}", start.kind.describe()),
+                ));
             }
         };
         self.postfix(atom, type_mode, start.span)
@@ -358,6 +367,22 @@ impl Parser<'_> {
         Ok(Expr::StructType(fields, span))
     }
 
+    /// `{ name = expr; …; expr }` — a block: scoped bindings followed by the
+    /// block's value.  The opener has been consumed by
+    /// [`Parser::parse_atom`]; the body is the same statement list as a
+    /// program's, ending in the `}`.
+    fn block(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
+        let (bindings, expr) = self.parse_bindings_and_expr(type_mode)?;
+        if !self.eat(&TokenKind::RBrace) {
+            return Err(self.error_found("'}'"));
+        }
+        Ok(Expr::Block {
+            bindings,
+            expr: Box::new(expr),
+            span,
+        })
+    }
+
     fn atom_start(&self) -> bool {
         matches!(
             &self.peek().kind,
@@ -368,6 +393,7 @@ impl Parser<'_> {
                 | TokenKind::Name(_)
                 | TokenKind::LParen
                 | TokenKind::LBracket
+                | TokenKind::LBrace
         )
     }
 }
@@ -415,10 +441,16 @@ mod tests {
     #[test]
     fn application_is_left_associative() {
         // x y z = (x y) z
-        let Expr::Apply { function, argument, .. } = parse_ok("x y z") else {
+        let Expr::Apply {
+            function, argument, ..
+        } = parse_ok("x y z")
+        else {
             panic!("expected an apply")
         };
-        let Expr::Apply { argument: inner, .. } = *function else {
+        let Expr::Apply {
+            argument: inner, ..
+        } = *function
+        else {
             panic!("the function must be the nested apply")
         };
         assert!(matches!(*inner, Expr::Name(..)));
@@ -428,7 +460,12 @@ mod tests {
     #[test]
     fn arrows_are_right_associative() {
         // Int -> Int -> Int = Int -> (Int -> Int)
-        let Expr::Arrow { parameter, r#return, .. } = parse_ok("Int -> Int -> Int") else {
+        let Expr::Arrow {
+            parameter,
+            r#return,
+            ..
+        } = parse_ok("Int -> Int -> Int")
+        else {
             panic!("expected an arrow")
         };
         assert!(matches!(*parameter, Expr::TypeConst(TypeConst::Int, _)));
@@ -529,7 +566,10 @@ mod tests {
         let err = parse_err("struct");
         assert_eq!(err.message, "expected '<', found the end of the program");
         let err = parse_err("struct<");
-        assert_eq!(err.message, "expected an expression, found the end of the program");
+        assert_eq!(
+            err.message,
+            "expected an expression, found the end of the program"
+        );
         let err = parse_err("struct<>");
         assert_eq!(err.message, "expected an expression, found '>'");
         let err = parse_err("struct<Int");
@@ -539,7 +579,12 @@ mod tests {
     #[test]
     fn the_angle_bracket_array_type() {
         // Int<3> — an array type.
-        let Expr::TypeArray { element_type, length, .. } = parse_ok("Int<3>") else {
+        let Expr::TypeArray {
+            element_type,
+            length,
+            ..
+        } = parse_ok("Int<3>")
+        else {
             panic!("expected an array type")
         };
         assert!(matches!(*element_type, Expr::TypeConst(TypeConst::Int, _)));
@@ -606,7 +651,10 @@ mod tests {
     fn parse_errors_carry_spans() {
         let err = parse_err("x =>");
         assert_eq!(err.stage, Stage::Parse);
-        assert_eq!(err.message, "expected an expression, found the end of the program");
+        assert_eq!(
+            err.message,
+            "expected an expression, found the end of the program"
+        );
         assert_eq!(err.span, Some((1, 5)));
 
         let err = parse_err("(x");
@@ -644,5 +692,70 @@ mod tests {
         assert!(matches!(*r#return, Expr::Placeholder(_)));
         // In term position `_` stays an ordinary name.
         assert!(matches!(parse_ok("_"), Expr::Name(name, _) if name == "_"));
+    }
+
+    #[test]
+    fn a_block_is_bindings_followed_by_a_final_expression() {
+        let Expr::Block { bindings, expr, .. } = parse_ok("{a = 1; a}") else {
+            panic!("expected a block")
+        };
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].name, "a");
+        assert!(matches!(bindings[0].value, Expr::Int(1, _)));
+        assert!(matches!(*expr, Expr::Name(name, _) if name == "a"));
+        // A block with only a final expression.
+        assert!(matches!(parse_ok("{5}"), Expr::Block { .. }));
+        // Bindings are graph-shared statements, not just literals.
+        assert!(matches!(
+            parse_ok("{a = [1, 2]; b = a[0]; b}"),
+            Expr::Block { bindings, .. } if bindings.len() == 2
+        ));
+    }
+
+    #[test]
+    fn a_block_can_be_a_lambda_body() {
+        let Expr::Lambda { r#return, .. } = parse_ok("x => {a = x; a}") else {
+            panic!("expected a lambda")
+        };
+        assert!(matches!(*r#return, Expr::Block { .. }));
+    }
+
+    #[test]
+    fn a_block_is_an_atom() {
+        // A block in argument position is an application, like any atom.
+        let Expr::Apply { argument, .. } = parse_ok("f {a = 1; a}") else {
+            panic!("expected an apply")
+        };
+        assert!(matches!(*argument, Expr::Block { .. }));
+        // Blocks nest.
+        let Expr::Block { expr, .. } = parse_ok("{{a = 1; a}}") else {
+            panic!("expected a block")
+        };
+        assert!(matches!(*expr, Expr::Block { .. }));
+        // A block composes with postfix and annotation forms.
+        assert!(matches!(
+            parse_ok("{a = 1; a}[0]"),
+            Expr::Index { array, .. } if matches!(*array, Expr::Block { .. })
+        ));
+        assert!(matches!(
+            parse_ok("{a = 1; a} : Int"),
+            Expr::Annotation { .. }
+        ));
+    }
+
+    #[test]
+    fn block_errors_carry_spans() {
+        let err = parse_err("{a = 1; a");
+        assert_eq!(err.stage, Stage::Parse);
+        assert_eq!(err.message, "expected '}', found the end of the program");
+        // A block needs a final expression, like a program.
+        let err = parse_err("{}");
+        assert_eq!(err.message, "expected an expression, found '}'");
+        // A block binding requires `;`.
+        let err = parse_err("{a = 1}");
+        assert_eq!(err.message, "expected ';', found '}'");
+        // A stray `}` after the program.
+        let err = parse_err("x }");
+        assert_eq!(err.message, "unexpected '}' after the program");
     }
 }

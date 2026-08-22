@@ -24,50 +24,38 @@ fn recursive_function_applies_itself_lazily() {
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids[0]), rep_five);
     assert!(matches!(m.nodes[ids[0]].value, Some(Value::Ext(_))));
     let c1 = ids[1];
     assert!(m.nodes[c1].value.is_none()); // unevaluated until forced
     assert!(matches!(
         m.nodes[c1].operation,
-        Some(Operation { operator: Operator::Apply, .. })
+        Some(Operation {
+            operator: Operator::Apply,
+            ..
+        })
     ));
     let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
     assert_eq!(operand_ids[0], f_node);
-    assert_eq!(
-        m.equality_representative(operand_ids[1]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
     // Forcing that level runs the same function against the same argument.
     let level1 = m.evaluate_node(c1, None);
     let ids1 = array_ids(level1);
     assert_eq!(ids1.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids1[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids1[0]), rep_five);
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
     assert_eq!(operand_ids[0], f_node);
-    assert_eq!(
-        m.equality_representative(operand_ids[1]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
     let level2 = m.evaluate_node(c2, None);
     let ids2 = array_ids(level2);
     assert_eq!(ids2.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids2[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids2[0]), rep_five);
     assert!(m.nodes[ids2[1]].value.is_none());
 
     // The recursion never cloned the function: the same template recursed
@@ -93,10 +81,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids[0]), rep_five);
     let c1 = ids[1];
 
     let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
@@ -111,10 +96,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     let level1 = m.evaluate_node(c1, None);
     let ids1 = array_ids(level1);
     assert_eq!(ids1.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids1[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids1[0]), rep_five);
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
@@ -140,36 +122,24 @@ fn mutually_recursive_functions_call_each_other() {
     let ids = array_ids(level0);
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids[0]), rep_five);
     let g_app = ids[1];
     let ops = m.nodes[g_app].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
     assert_eq!(operand_ids[0], g_node);
-    assert_eq!(
-        m.equality_representative(operand_ids[1]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
     // Forcing that level runs g's body: g(5) = [5, f(5)].
     let level1 = m.evaluate_node(g_app, None);
     let ids = array_ids(level1);
     assert_eq!(ids.len(), 2);
-    assert_eq!(
-        m.equality_representative(ids[0]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(ids[0]), rep_five);
     let f_app = ids[1];
     assert_ne!(f_app, g_app);
     let ops = m.nodes[f_app].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
     assert_eq!(operand_ids[0], f_node);
-    assert_eq!(
-        m.equality_representative(operand_ids[1]),
-        rep_five
-    );
+    assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
     assert_eq!(m.functions.len(), 2); // cross-references stay in place
 }
 #[test]
@@ -195,7 +165,11 @@ fn fibonacci_recurses_through_index_branches() {
     for (n, expected) in [(0, 0), (1, 1), (2, 1), (3, 2), (5, 5), (10, 55)] {
         let arg = u128_node(&mut m, root, n);
         let call = call_node(&mut m, root, fib_node, arg);
-        assert_eq!(u128_of(m.evaluate_node_deep(call, None)), expected, "fib({n})");
+        assert_eq!(
+            u128_of(m.evaluate_node_deep(call, None)),
+            expected,
+            "fib({n})"
+        );
     }
 
     assert_eq!(m.functions.len(), 1); // recursion referenced the function in place
@@ -214,15 +188,30 @@ fn countdown_definition_pass_terminates() {
     let one = u128_node(&mut m, body, 1);
     // f(x-1)
     let sub_ops = array_node(&mut m, body, &[param, one]);
-    let sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(sub_ops));
+    let sub = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Sub),
+        Some(sub_ops),
+    );
     let call_ops = array_node(&mut m, body, &[func_node, sub]);
     let call = op_node(&mut m, body, Operator::Apply, Some(call_ops));
     // Add(f(x-1), 1)
     let rec_ops = array_node(&mut m, body, &[call, one]);
-    let rec = op_node(&mut m, body, Operator::Ext(TestOperator::Add), Some(rec_ops));
+    let rec = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Add),
+        Some(rec_ops),
+    );
     // if x == 0 then 0 else rec
     let cond_ops = array_node(&mut m, body, &[param, zero]);
-    let cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(cond_ops));
+    let cond = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Eq),
+        Some(cond_ops),
+    );
     let branch = array_node(&mut m, body, &[rec, zero]);
     let index_ops = array_node(&mut m, body, &[branch, cond]);
     let ret = op_node(&mut m, body, Operator::Index, Some(index_ops));
@@ -255,38 +244,76 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     let one = u128_node(&mut m, body, 1);
     // even: if x == 0 then 1 else odd(x-1)
     let e_cond_ops = array_node(&mut m, body, &[e_param, zero]);
-    let e_cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(e_cond_ops));
+    let e_cond = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Eq),
+        Some(e_cond_ops),
+    );
     let e_sub_ops = array_node(&mut m, body, &[e_param, one]);
-    let e_sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(e_sub_ops));
+    let e_sub = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Sub),
+        Some(e_sub_ops),
+    );
     let e_call_ops = array_node(&mut m, body, &[o_func, e_sub]);
     let e_call = op_node(&mut m, body, Operator::Apply, Some(e_call_ops));
     let e_branch = array_node(&mut m, body, &[e_call, one]);
     let e_index_ops = array_node(&mut m, body, &[e_branch, e_cond]);
     let e_ret = op_node(&mut m, body, Operator::Index, Some(e_index_ops));
     let even = m.functions.insert(Function {
-        nodes: vec![
-            e_param, e_func, e_cond_ops, e_cond, e_sub_ops, e_sub, e_call_ops, e_call, e_branch,
-            e_index_ops, e_ret,
-        ],
+        nodes: HashSet::from([
+            e_param,
+            e_func,
+            e_cond_ops,
+            e_cond,
+            e_sub_ops,
+            e_sub,
+            e_call_ops,
+            e_call,
+            e_branch,
+            e_index_ops,
+            e_ret,
+        ]),
         r#return: e_ret,
         parameter: e_param,
         block: body,
     });
     // odd: if x == 0 then 0 else even(x-1)
     let o_cond_ops = array_node(&mut m, body, &[o_param, zero]);
-    let o_cond = op_node(&mut m, body, Operator::Ext(TestOperator::Eq), Some(o_cond_ops));
+    let o_cond = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Eq),
+        Some(o_cond_ops),
+    );
     let o_sub_ops = array_node(&mut m, body, &[o_param, one]);
-    let o_sub = op_node(&mut m, body, Operator::Ext(TestOperator::Sub), Some(o_sub_ops));
+    let o_sub = op_node(
+        &mut m,
+        body,
+        Operator::Ext(TestOperator::Sub),
+        Some(o_sub_ops),
+    );
     let o_call_ops = array_node(&mut m, body, &[e_func, o_sub]);
     let o_call = op_node(&mut m, body, Operator::Apply, Some(o_call_ops));
     let o_branch = array_node(&mut m, body, &[o_call, zero]);
     let o_index_ops = array_node(&mut m, body, &[o_branch, o_cond]);
     let o_ret = op_node(&mut m, body, Operator::Index, Some(o_index_ops));
     let odd = m.functions.insert(Function {
-        nodes: vec![
-            o_param, o_func, o_cond_ops, o_cond, o_sub_ops, o_sub, o_call_ops, o_call, o_branch,
-            o_index_ops, o_ret,
-        ],
+        nodes: HashSet::from([
+            o_param,
+            o_func,
+            o_cond_ops,
+            o_cond,
+            o_sub_ops,
+            o_sub,
+            o_call_ops,
+            o_call,
+            o_branch,
+            o_index_ops,
+            o_ret,
+        ]),
         r#return: o_ret,
         parameter: o_param,
         block: body,

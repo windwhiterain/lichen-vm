@@ -34,7 +34,13 @@ fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
     )
 }
 fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Apply { function: f, argument: x }, None)
+    ir.alloc(
+        ExprKind::Apply {
+            function: f,
+            argument: x,
+        },
+        None,
+    )
 }
 /// `a[i]` — element selection.
 fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
@@ -98,7 +104,10 @@ fn array_ids(
     b: &lichen_highlevel::checker::Build,
     node: lichen_lowlevel::NodeId,
 ) -> Vec<lichen_lowlevel::NodeId> {
-    b.module.array_ids(node).expect("expected an array value").to_vec()
+    b.module
+        .array_ids(node)
+        .expect("expected an array value")
+        .to_vec()
 }
 
 // --- checking -------------------------------------------------------------
@@ -117,7 +126,10 @@ fn int_literal_checks() {
         b.module.nodes[ids[0]].value,
         Some(Value::Ext(HighValue::TypeInt))
     ));
-    assert_eq!(ids[1], b.type_expr, "the type of int must be the Type universe");
+    assert_eq!(
+        ids[1], b.type_expr,
+        "the type of int must be the Type universe"
+    );
 }
 
 #[test]
@@ -148,7 +160,10 @@ fn the_type_universe_is_self_referential() {
         b.module.nodes[ids[0]].value,
         Some(Value::Ext(HighValue::TypeType))
     ));
-    assert_eq!(ids[1], b.type_expr, "the universe's type slot cycles back to itself");
+    assert_eq!(
+        ids[1], b.type_expr,
+        "the universe's type slot cycles back to itself"
+    );
 }
 
 #[test]
@@ -212,7 +227,10 @@ fn annotating_a_lambda_with_a_tuple_type_fails() {
     let t = type_tuple(&mut ir, &[d, c]);
     let a = ann(&mut ir, l, t);
     let b = build(a, ir);
-    assert!(!b.ok, "(\\x. x) : [int, int] must fail (a lambda is not a tuple)");
+    assert!(
+        !b.ok,
+        "(\\x. x) : [int, int] must fail (a lambda is not a tuple)"
+    );
 }
 
 #[test]
@@ -330,7 +348,11 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1, "the array kinding passes; only the shape clashes");
+    assert_eq!(
+        diags.len(),
+        1,
+        "the array kinding passes; only the shape clashes"
+    );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].value_b, Some(Value::USize(3)));
     // the found side is the int type expression `[int, Type]`, unified into
@@ -425,7 +447,10 @@ fn heterogeneous_array_literal_fails() {
     let e2 = int_t(&mut ir); // `int` as a value — its type is Type
     let arr = array(&mut ir, &[e1, e2]);
     let b = build(arr, ir);
-    assert!(!b.ok, "[1, int] must fail (the elements must share one type)");
+    assert!(
+        !b.ok,
+        "[1, int] must fail (the elements must share one type)"
+    );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::ArrayElement);
@@ -735,10 +760,11 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
 }
 
 #[test]
-fn an_unannotated_call_derives_its_root_type_from_the_value() {
+fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
     // (\id. id 5) (\x. x) — the call's result type cell is a lazy record
-    // (the runtime apply never fills it), so the checker pre-evaluates the
-    // root type: the program evaluates to 5, whose type is int.
+    // (the runtime apply never fills it), so the apply's evaluation syncs
+    // the cell with the return pair: the program evaluates to 5, whose type
+    // is int.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let id = lam(&mut ir, x, x);
@@ -747,10 +773,49 @@ fn an_unannotated_call_derives_its_root_type_from_the_value() {
     let call = app(&mut ir, b1, five);
     let outer = lam(&mut ir, b1, call);
     let whole = app(&mut ir, outer, id);
+    let mut b = build(whole, ir);
+    assert!(b.ok);
+    assert!(b.diagnostics().is_empty());
+    assert_eq!(
+        b.module.equality_representative(b.root_ty),
+        b.module.equality_representative(b.int_type),
+        "the root type is synced to the return type (int)"
+    );
+}
+
+#[test]
+fn a_tuples_unbound_element_types_sync_from_the_return_types() {
+    // a = \x. (1, Int)[x]; (a 0, a 1) — the tuple's element types are the
+    // calls' lazy result cells.  Each apply's evaluation syncs its cell with
+    // its return pair: element 0's cell binds to int, element 1's to the
+    // universe (the `Int` constant's type is `Type`).
+    let mut ir = IR::new();
+    let x = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let tval = ty(&mut ir);
+    let tup = tuple(&mut ir, &[one, tval]);
+    let idx = index(&mut ir, tup, x);
+    let a = lam(&mut ir, x, idx);
+    let zero = int(&mut ir, 0);
+    let c0 = app(&mut ir, a, zero);
+    let one1 = int(&mut ir, 1);
+    let c1 = app(&mut ir, a, one1);
+    let whole = tuple(&mut ir, &[c0, c1]);
     let b = build(whole, ir);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
-    assert_eq!(b.root_ty, b.int_type, "the derived root type is int");
+    // The resolved root type is the tuple type `<Int, Type>`.
+    let pair = array_ids(&b, b.root_ty);
+    assert_eq!(pair.len(), 2);
+    let shape = array_ids(&b, pair[0]);
+    assert_eq!(
+        b.module.nodes[shape[0]].value, b.module.nodes[b.int_type].value,
+        "element 0's cell syncs to int"
+    );
+    assert_eq!(
+        b.module.nodes[shape[1]].value, b.module.nodes[b.type_expr].value,
+        "element 1's cell syncs to Type's"
+    );
 }
 
 #[test]
@@ -781,13 +846,12 @@ fn tuple_length_mismatch_reports_both_sides() {
 // time — it is never compared against the runtime result in v1.
 
 #[test]
-fn a_call_result_annotation_binds_lazily() {
-    // (\f. (f 5 : int)) (\x. Type) — f actually returns Type, but the
-    // annotation anchors the lazy result cell of `f 5` without a runtime
-    // check, so the call checks and its type is int.  The outer apply's
-    // result cell is unanchored too, but the checker pre-evaluates the root
-    // type from the evaluated value — the Type constant — so the program
-    // checks cleanly.
+fn a_call_result_annotation_is_checked_against_the_return_type() {
+    // (\f. (f 5 : int)) (\x. Type) — f actually returns Type.  The
+    // annotation binds the result cell at check time; the apply's runtime
+    // evaluation then syncs the return pair against the apply's pair, and
+    // the mismatch between the annotation's int and the real return type is
+    // a reported error — the annotation is checked, not silently bound.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let tval = ty(&mut ir);
@@ -800,23 +864,19 @@ fn a_call_result_annotation_binds_lazily() {
     let f_lam = lam(&mut ir, b1, a);
     let whole = app(&mut ir, f_lam, f);
     let b = build(whole, ir);
-    assert!(b.ok, "(f 5 : int) should check lazily");
-    assert!(b.module.unify_errors.is_empty());
-    assert!(b.diagnostics().is_empty());
-    // the annotated call's type is int
-    let rt = b.ty[a].unwrap();
-    let ids = array_ids(&b, rt);
-    assert_eq!(ids.len(), 2);
-    assert_eq!(ids[0], b.int_marker);
-    assert_eq!(ids[1], b.type_expr);
-    // the root type is derived from the evaluated value (the Type constant)
-    assert_eq!(b.root_ty, b.type_expr, "the derived root type is Type's");
+    assert!(!b.ok, "(f 5 : int) must fail: the annotation is checked");
+    assert!(!b.module.unify_errors.is_empty());
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::Runtime);
 }
 
 #[test]
-fn a_direct_call_result_annotation_binds_lazily() {
-    // (\x. x) 5 : Type — the identity applied to 5 actually returns int, but
-    // the annotation binds the lazy result cell without a runtime check.
+fn a_direct_call_result_annotation_is_checked_against_the_return_type() {
+    // (\x. x) 5 : Type — the identity applied to 5 actually returns int.
+    // The apply's evaluation syncs the result cell with the return pair, so
+    // the annotation's Type conflicts with the real return type: the
+    // annotation is checked, not silently bound.
     let mut ir = IR::new();
     let x = param(&mut ir);
     // The return expression uses the parameter's id directly.
@@ -826,8 +886,49 @@ fn a_direct_call_result_annotation_binds_lazily() {
     let want = ty(&mut ir);
     let a = ann(&mut ir, call, want);
     let b = build(a, ir);
-    assert!(b.ok, "(\\x. x) 5 : Type should check lazily");
-    assert!(b.module.unify_errors.is_empty());
+    assert!(
+        !b.ok,
+        "(\\x. x) 5 : Type must fail: the annotation is checked"
+    );
+    assert!(!b.module.unify_errors.is_empty());
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::Runtime);
+}
+
+#[test]
+fn a_nested_function_value_captures_the_applied_outer_parameter() {
+    // a = 1; f1 = x => { b = 2; f2 = y => [a, b, x, y]; f2 }; f1 3 4 — the
+    // returned closure captures f1's parameter: applying it to 4 yields
+    // [1, 2, 3, 4], not a leaked template parameter.
+    let mut ir = IR::new();
+    let a = int(&mut ir, 1);
+    let b = int(&mut ir, 2);
+    let x = param(&mut ir);
+    let y = param(&mut ir);
+    let f2_body = array(&mut ir, &[a, b, x, y]);
+    let f2 = lam(&mut ir, y, f2_body);
+    let f1 = lam(&mut ir, x, f2);
+    let three = int(&mut ir, 3);
+    let four = int(&mut ir, 4);
+    let call1 = app(&mut ir, f1, three);
+    let whole = app(&mut ir, call1, four);
+    let mut b = build(whole, ir);
+    assert!(b.ok, "the closure program must check");
+    let value = b.module.evaluate_node_deep(b.root_val, None);
+    let Value::Array(ptr) = value else {
+        panic!("expected an array result, got {value:?}");
+    };
+    let ids = unsafe { &*ptr };
+    let expected = [1usize, 2, 3, 4];
+    assert_eq!(ids.len(), expected.len());
+    for (&id, &n) in ids.iter().zip(expected.iter()) {
+        assert_eq!(
+            b.module.nodes[id].value,
+            Some(Value::USize(n)),
+            "element {n} must be a bound value, not the leaked parameter"
+        );
+    }
 }
 
 // --- indexing -------------------------------------------------------------
@@ -1026,8 +1127,14 @@ fn two_struct_type_occurrences_do_not_unify() {
     module.unify(b.term[s1].unwrap(), b.term[s2].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
     let err = module.unify_errors[0];
-    assert!(matches!(err.value_a, Some(Value::Ext(HighValue::TypeId(0)))));
-    assert!(matches!(err.value_b, Some(Value::Ext(HighValue::TypeId(1)))));
+    assert!(matches!(
+        err.value_a,
+        Some(Value::Ext(HighValue::TypeId(0)))
+    ));
+    assert!(matches!(
+        err.value_b,
+        Some(Value::Ext(HighValue::TypeId(1)))
+    ));
 }
 
 #[test]
@@ -1044,8 +1151,14 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     assert_eq!(module.unify_errors.len(), 1);
     let err = module.unify_errors[0];
     // the kind slot clashed: the nominal id vs the structural marker
-    assert!(matches!(err.value_a, Some(Value::Ext(HighValue::TypeId(0)))));
-    assert!(matches!(err.value_b, Some(Value::Ext(HighValue::TypeTuple))));
+    assert!(matches!(
+        err.value_a,
+        Some(Value::Ext(HighValue::TypeId(0)))
+    ));
+    assert!(matches!(
+        err.value_b,
+        Some(Value::Ext(HighValue::TypeTuple))
+    ));
 }
 
 #[test]
@@ -1182,7 +1295,10 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
     assert!(b.ok, "s(1, 2) must check");
     assert!(b.module.unify_errors.is_empty());
     // the instance's type is the struct type, not the tuple type
-    assert_eq!(b.ty[inst], b.term[s], "the instance's type is the struct type");
+    assert_eq!(
+        b.ty[inst], b.term[s],
+        "the instance's type is the struct type"
+    );
 }
 
 #[test]
@@ -1196,7 +1312,10 @@ fn a_struct_instantiation_checks_its_fields() {
     let s = type_struct(&mut ir, &[f]);
     let inst = instantiate(&mut ir, s, v);
     let b = build(inst, ir);
-    assert!(!b.ok, "s(1, 2) against a one-field struct must fail (arity)");
+    assert!(
+        !b.ok,
+        "s(1, 2) against a one-field struct must fail (arity)"
+    );
     // field type: the tuple's Ints are not Type
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
@@ -1207,7 +1326,10 @@ fn a_struct_instantiation_checks_its_fields() {
     let s = type_struct(&mut ir, &[t1, t2]);
     let inst = instantiate(&mut ir, s, v);
     let b = build(inst, ir);
-    assert!(!b.ok, "s(1, 2) against struct {{ Type, Type }} must fail (fields)");
+    assert!(
+        !b.ok,
+        "s(1, 2) against struct {{ Type, Type }} must fail (fields)"
+    );
     // a literal is not a positional value
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
@@ -1237,7 +1359,10 @@ fn instances_of_different_struct_occurrences_conflict() {
     let i2 = instantiate(&mut ir, s2, v);
     let a = array(&mut ir, &[i1, i2]);
     let b = build(a, ir);
-    assert!(!b.ok, "instances of different struct occurrences must conflict");
+    assert!(
+        !b.ok,
+        "instances of different struct occurrences must conflict"
+    );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert!(diags[0].message.contains("TypeId("), "{}", diags[0].message);

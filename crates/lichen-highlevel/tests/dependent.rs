@@ -34,7 +34,12 @@ fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> No
 /// An `Index` node over `[branches, condition]` — the dependent-codomain
 /// stand-in.  Like `if cond then a else b`, it stays lazy until its
 /// condition is bound and then selects one branch.
-fn index_node(m: &mut Module<HighProgram>, block: BlockId, branches: NodeId, cond: NodeId) -> NodeId {
+fn index_node(
+    m: &mut Module<HighProgram>,
+    block: BlockId,
+    branches: NodeId,
+    cond: NodeId,
+) -> NodeId {
     let operands = array_node(m, block, &[branches, cond]);
     m.add_node(
         block,
@@ -93,7 +98,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
         root,
         ret,
         x,
-        &[x, codomain, codomain_operands, ret, branches, float, int],
+        [x, codomain, codomain_operands, ret, branches, float, int],
     );
 
     // applied to 1: the cloned condition binds, and forcing the codomain

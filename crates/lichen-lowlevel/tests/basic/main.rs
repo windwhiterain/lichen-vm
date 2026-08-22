@@ -19,9 +19,10 @@ mod function;
 mod recursion;
 
 use lichen_lowlevel::{
-    BlockId, Function, FunctionId, Module, NodeId, Operation, Operator, OperatorExt, Handle,
+    BlockId, Function, FunctionId, Handle, Module, NodeId, Operation, Operator, OperatorExt,
     Program, Value, ValueExt,
 };
+use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct TestProgram;
@@ -59,9 +60,7 @@ impl ValueExt for TestValue {
     }
     fn handle(&self) -> Handle<[u8]> {
         match self {
-            TestValue::U128(p) => {
-                Handle(std::ptr::slice_from_raw_parts(p.0 as *const u8, 16))
-            }
+            TestValue::U128(p) => Handle(std::ptr::slice_from_raw_parts(p.0 as *const u8, 16)),
             TestValue::String(p) => {
                 let chars = unsafe { &*p.0 };
                 Handle(std::ptr::slice_from_raw_parts(
@@ -75,10 +74,7 @@ impl ValueExt for TestValue {
         match self {
             TestValue::U128(p) => p.0 = payload.0 as *const u128,
             TestValue::String(p) => {
-                p.0 = std::ptr::slice_from_raw_parts(
-                    payload.0 as *const char,
-                    payload.len() / 4,
-                )
+                p.0 = std::ptr::slice_from_raw_parts(payload.0 as *const char, payload.len() / 4)
             }
         }
     }
@@ -175,9 +171,11 @@ fn string_of(value: Value<TestProgram>) -> Vec<char> {
 
 fn u128_node(m: &mut Module<TestProgram>, block: BlockId, n: u128) -> NodeId {
     let p = m.blocks[block].arena.alloc(n);
-    m.add_node(block, None, Some(Value::Ext(TestValue::U128(Handle(
-        p as *const u128,
-    )))))
+    m.add_node(
+        block,
+        None,
+        Some(Value::Ext(TestValue::U128(Handle(p as *const u128)))),
+    )
 }
 
 fn str_node(m: &mut Module<TestProgram>, block: BlockId, chars: &[char]) -> NodeId {
@@ -252,7 +250,7 @@ fn wrap_function(
     param: NodeId,
 ) -> (NodeId, FunctionId) {
     let nodes = m.blocks[block].nodes.clone();
-    let func_node = m.add_function(block, ret, param, &nodes);
+    let func_node = m.add_function(block, ret, param, nodes);
     let Value::Function(func) = m.nodes[func_node].value.unwrap() else {
         unreachable!("add_function always wraps a function value")
     };
@@ -298,7 +296,7 @@ fn finish_function(
     param: NodeId,
     func_node: NodeId,
 ) -> FunctionId {
-    let nodes = m.blocks[block].nodes.clone();
+    let nodes: std::collections::HashSet<NodeId> = m.blocks[block].nodes.iter().copied().collect();
     let function = m.functions.insert(Function {
         nodes,
         r#return: ret,
@@ -325,7 +323,7 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let apply = op_node(m, body, Operator::Apply, Some(operands));
     let ret = array_node(m, body, &[param, apply]);
     let function = m.functions.insert(Function {
-        nodes: vec![param, func_node, operands, apply, ret],
+        nodes: HashSet::from([param, func_node, operands, apply, ret]),
         r#return: ret,
         parameter: param,
         block: body,
@@ -355,13 +353,13 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     let g_apply = op_node(m, body, Operator::Apply, Some(g_ops));
     let g_ret = array_node(m, body, &[g_param, g_apply]);
     let f = m.functions.insert(Function {
-        nodes: vec![f_param, f_func, f_ops, f_apply, f_ret],
+        nodes: HashSet::from([f_param, f_func, f_ops, f_apply, f_ret]),
         r#return: f_ret,
         parameter: f_param,
         block: body,
     });
     let g = m.functions.insert(Function {
-        nodes: vec![g_param, g_func, g_ops, g_apply, g_ret],
+        nodes: HashSet::from([g_param, g_func, g_ops, g_apply, g_ret]),
         r#return: g_ret,
         parameter: g_param,
         block: body,

@@ -8,6 +8,9 @@
 //! `a` is that same id — the IR is a graph and the binding is pure sharing
 //! (no `let`, no desugared application).  The IR therefore carries no name
 //! strings, and the checker's scope stack is keyed by the same ids.
+//! A block `{ a = e; …; e }` is a program-shaped expression: its bindings
+//! share the same way, its scope frames are popped at the `}`, and it
+//! compiles to its final expression's own node.
 //! Shadowing is allowed (the inner binding wins); an unknown name is a
 //! resolve diagnostic — the checker's `lookup` panics on unresolved ids, so
 //! resolution completes here.  Every emitted expression carries its source
@@ -30,7 +33,9 @@ pub fn compile(program: &Program) -> Result<IR, Diag> {
     // every earlier binding.
     for binding in &program.bindings {
         let id = compiler.compile_expr(&binding.value)?;
-        compiler.scopes.push(HashMap::from([(binding.name.clone(), id)]));
+        compiler
+            .scopes
+            .push(HashMap::from([(binding.name.clone(), id)]));
     }
     let id = compiler.compile_expr(&program.expr)?;
     compiler.ir.set_root(id);
@@ -161,6 +166,21 @@ impl Compiler {
                     span,
                 )
             }
+            Expr::Block { bindings, expr, .. } => {
+                // The same graph sharing as a program's bindings — each
+                // value compiles once and names resolve to its own id — but
+                // the block's scope frames are dropped at the `}`, so a
+                // block compiles to its final expression's own node.
+                let scope_len = self.scopes.len();
+                for binding in bindings {
+                    let id = self.compile_expr(&binding.value)?;
+                    self.scopes
+                        .push(HashMap::from([(binding.name.clone(), id)]));
+                }
+                let body = self.compile_expr(expr);
+                self.scopes.truncate(scope_len);
+                body?
+            }
         };
         Ok(id)
     }
@@ -280,5 +300,64 @@ mod tests {
             panic!("expected an annotation")
         };
         assert!(matches!(kind(&ir, r#type), ExprKind::Placeholder));
+    }
+
+    #[test]
+    fn a_block_compiles_to_its_final_expression() {
+        // {a = 1; a} — the block is its final expression's own node; the
+        // binding is pure sharing, not a new IR form.
+        let ir = compile_ok("{a = 1; a}");
+        assert!(matches!(
+            kind(&ir, ir.root),
+            ExprKind::Constant(Constant::USize(1))
+        ));
+        // The same holds through a lambda body: x => {y = x; y} is the
+        // identity function, whose return is the parameter itself.
+        let ir = compile_ok("x => {y = x; y}");
+        let ExprKind::Function {
+            parameter,
+            r#return,
+        } = kind(&ir, ir.root)
+        else {
+            panic!("expected a function")
+        };
+        assert_eq!(r#return, parameter, "the block is the parameter's own id");
+    }
+
+    #[test]
+    fn a_block_scopes_its_bindings() {
+        // a = 2; {a = 1; a} — inside the block the name is the inner
+        // binding.
+        let ir = compile_ok("a = 2; {a = 1; a}");
+        assert!(matches!(
+            kind(&ir, ir.root),
+            ExprKind::Constant(Constant::USize(1))
+        ));
+        // After the `}`, the block's bindings are gone and the outer name
+        // resolves again: `{a = 1; a} a` applies the block (the `1` node) to
+        // the outer `a` (the `2` node).
+        let ir = compile_ok("a = 2; {a = 1; a} a");
+        let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
+            panic!("expected an apply")
+        };
+        assert!(matches!(
+            kind(&ir, function),
+            ExprKind::Constant(Constant::USize(1))
+        ));
+        assert!(matches!(
+            kind(&ir, argument),
+            ExprKind::Constant(Constant::USize(2))
+        ));
+    }
+
+    #[test]
+    fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
+        let err = compile_err("{a = 1; b}");
+        assert_eq!(err.stage, Stage::Resolve);
+        assert_eq!(err.message, "unresolved name 'b'");
+        assert_eq!(err.span, Some((1, 9)));
+        // A block's bindings don't leak out: the name is unresolved after `}`.
+        let err = compile_err("{a = 1; a} a");
+        assert_eq!(err.message, "unresolved name 'a'");
     }
 }

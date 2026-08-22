@@ -53,23 +53,23 @@ impl<P: Program> Module<P> {
                             Value::USize(index) => {
                                 match self.evaluate_node(operands[0], Some(block)) {
                                     Value::Parameterized => Value::Parameterized,
-                                Value::Array(ptr) => {
-                                    let array = unsafe { &*ptr };
-                                    // An out-of-bounds index is a user error,
-                                    // not an invariant violation: record it
-                                    // and yield no value instead of panicking
-                                    // in raw slice indexing.
-                                    if index < array.len() {
-                                        self.evaluate_node(array[index], Some(block))
-                                    } else {
-                                        self.eval_errors.push(EvalError {
-                                            index: operands[1],
-                                            index_value: index,
-                                            length: array.len(),
-                                        });
-                                        Value::None
+                                    Value::Array(ptr) => {
+                                        let array = unsafe { &*ptr };
+                                        // An out-of-bounds index is a user error,
+                                        // not an invariant violation: record it
+                                        // and yield no value instead of panicking
+                                        // in raw slice indexing.
+                                        if index < array.len() {
+                                            self.evaluate_node(array[index], Some(block))
+                                        } else {
+                                            self.eval_errors.push(EvalError {
+                                                index: operands[1],
+                                                index_value: index,
+                                                length: array.len(),
+                                            });
+                                            Value::None
+                                        }
                                     }
-                                }
                                     _ => unreachable!("Index target must be an array"),
                                 }
                             }
@@ -106,7 +106,16 @@ impl<P: Program> Module<P> {
                         match self.evaluate_node(operands[0], Some(block)) {
                             Value::Parameterized => Value::Parameterized,
                             Value::Function(function) => {
-                                self.function_apply(function, operands[1], block)
+                                // Element 2 is the checker-wired result
+                                // cell, when present — the lowlevel tests
+                                // build bare 2-element operands.
+                                self.function_apply(
+                                    function,
+                                    operands[1],
+                                    block,
+                                    node,
+                                    operands.get(2).copied(),
+                                )
                             }
                             _ => unreachable!("Apply target must be a function value"),
                         }

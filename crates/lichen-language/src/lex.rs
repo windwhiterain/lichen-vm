@@ -3,7 +3,8 @@
 //! `Int` and `Type` lex as keywords; everything else that starts an
 //! identifier is a name.  `<` `>` build type-level forms (the array type
 //! `Int<3>`, the tuple type `<Int, Type>`, the struct type
-//! `struct<Int, Type>`); `[` `]` and `(` `)` stay value-level.  `;`
+//! `struct<Int, Type>`); `[` `]` and `(` `)` stay value-level; `{` `}`
+//! delimit a block — scoped bindings followed by the block's value.  `;`
 //! separates statements, `=` binds a name (`a = [1, 2]`); `=>` is still the
 //! lambda.  `--` starts a line comment.  Any other character is a lex error
 //! — the first one stops the pipeline.
@@ -39,6 +40,10 @@ pub enum TokenKind {
     RParen,
     LBracket,
     RBracket,
+    /// `{` — opens a block.
+    LBrace,
+    /// `}` — closes a block.
+    RBrace,
     /// `<` — the array-type postfix after an expression, the tuple-type
     /// and struct-type prefixes at expression start.  Exclusively type-level.
     LAngle,
@@ -66,6 +71,8 @@ impl TokenKind {
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBracket => "'['".to_string(),
             TokenKind::RBracket => "']'".to_string(),
+            TokenKind::LBrace => "'{'".to_string(),
+            TokenKind::RBrace => "'}'".to_string(),
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
@@ -121,6 +128,8 @@ impl Lexer<'_> {
                 b')' => self.push(line, col, 1, TokenKind::RParen),
                 b'[' => self.push(line, col, 1, TokenKind::LBracket),
                 b']' => self.push(line, col, 1, TokenKind::RBracket),
+                b'{' => self.push(line, col, 1, TokenKind::LBrace),
+                b'}' => self.push(line, col, 1, TokenKind::RBrace),
                 b'<' => self.push(line, col, 1, TokenKind::LAngle),
                 b'>' => self.push(line, col, 1, TokenKind::RAngle),
                 b',' => self.push(line, col, 1, TokenKind::Comma),
@@ -208,7 +217,10 @@ impl Lexer<'_> {
 
     fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
         self.step(len);
-        self.tokens.push(Token { kind, span: (line, col) });
+        self.tokens.push(Token {
+            kind,
+            span: (line, col),
+        });
     }
 
     fn step(&mut self, len: usize) {
@@ -320,6 +332,23 @@ mod tests {
                 TokenKind::Comma,
                 TokenKind::KwType,
                 TokenKind::RAngle,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn braces_lex_as_their_own_tokens() {
+        assert_eq!(
+            kinds("{a = 1; a}"),
+            vec![
+                TokenKind::LBrace,
+                TokenKind::Name("a".to_string()),
+                TokenKind::Equals,
+                TokenKind::Int(1),
+                TokenKind::Semicolon,
+                TokenKind::Name("a".to_string()),
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );

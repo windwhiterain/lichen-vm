@@ -70,13 +70,14 @@ pub enum HighOperator {
     /// The type evaluation of an indexing expression `a[i]`.
     ///
     /// Operand: `[type_pair, index]` where `type_pair` is the indexed
-    /// value's type expression.  A tuple type (`TypeTuple` kind) selects
-    /// its element-type list position — a structural out of bounds.  An
-    /// array type (`ArrayType` kind) checks the index against the *length*
-    /// stored in its shape `[element_type, length]` — the check the
-    /// structural `Index` cannot express (the shape holds the length as
-    /// data, not as selectable positions).  Out of bounds records an
-    /// [`EvalError`] and yields [`Value::None`].
+    /// value's type expression.  A tuple type (`TypeTuple` kind) and a
+    /// struct type (`TypeId` kind) select their element/field-type list
+    /// position — a structural out of bounds.  An array type (`ArrayType`
+    /// kind) checks the index against the *length* stored in its shape
+    /// `[element_type, length]` — the check the structural `Index` cannot
+    /// express (the shape holds the length as data, not as selectable
+    /// positions).  Out of bounds records an [`EvalError`] and yields
+    /// [`Value::None`].
     IndexType,
     /// A fresh nominal type id: each call reads and increments
     /// [`HighGlobalExt::type_id_counter`] and returns
@@ -108,6 +109,10 @@ impl OperatorExt<HighProgram> for HighOperator {
                 let operands = unsafe { &*operands };
                 let type_pair = operands[0];
                 let index_node = operands[1];
+                eprintln!(
+                    "DBG IndexType: operand ids = {operands:?}; type_pair {type_pair:?} value = {:?}",
+                    module.nodes[type_pair].value
+                );
                 let Value::USize(index) = module.nodes[index_node]
                     .value
                     .expect("the operand was deep-evaluated")
@@ -119,7 +124,10 @@ impl OperatorExt<HighProgram> for HighOperator {
                     .value
                     .expect("the operand was deep-evaluated")
                 else {
-                    unreachable!("IndexType needs a type expression pair")
+                    panic!(
+                        "IndexType needs a type expression pair; type_pair={type_pair:?}, value={:?}, index_node={index_node:?}",
+                        module.nodes[type_pair].value,
+                    )
                 };
                 let pair = unsafe { &*pair };
                 let shape = pair[0];
@@ -181,7 +189,37 @@ impl OperatorExt<HighProgram> for HighOperator {
                             Value::None
                         }
                     }
-                    _ => unreachable!("IndexType target must be a tuple or array type"),
+                    Some(Value::Ext(HighValue::TypeId(_))) => {
+                        // A struct type's shape is its positional field-type
+                        // list — selecting an element is field access, exactly
+                        // like a tuple type's element-type list.
+                        let Value::Array(elements) = module.nodes[shape]
+                            .value
+                            .expect("the operand was deep-evaluated")
+                        else {
+                            unreachable!("a struct type shape is its field-type list")
+                        };
+                        let elements = unsafe { &*elements };
+                        if index < elements.len() {
+                            module.nodes[elements[index]]
+                                .value
+                                .expect("the operand was deep-evaluated")
+                        } else {
+                            module.eval_errors.push(EvalError {
+                                index: index_node,
+                                index_value: index,
+                                length: elements.len(),
+                            });
+                            Value::None
+                        }
+                    }
+                    _ => panic!(
+                        "IndexType target must be a tuple, array, or struct type; marker={:?}, marker_value={:?}, kind_cell_value={:?}, shape_value={:?}",
+                        marker,
+                        module.nodes[marker].value,
+                        module.nodes[kind_cell].value,
+                        module.nodes[shape].value,
+                    ),
                 }
             }
             HighOperator::Fresh => {
