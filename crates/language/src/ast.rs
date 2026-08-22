@@ -54,6 +54,8 @@ pub enum Expr {
     Tuple(Vec<Expr>, Span),
     /// `(T1, ..., Tn)` in type position — a tuple type.
     TypeTuple(Vec<Expr>, Span),
+    /// `struct { T1, ..., Tn }` — a nominal struct type, positional fields.
+    StructType(Vec<Expr>, Span),
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
     /// `T<e>` — an array type.
@@ -99,6 +101,7 @@ impl Expr {
             Expr::Arrow { span, .. } => *span,
             Expr::Tuple(_, s) => *s,
             Expr::TypeTuple(_, s) => *s,
+            Expr::StructType(_, s) => *s,
             Expr::Array(_, s) => *s,
             Expr::TypeArray { span, .. } => *span,
         }

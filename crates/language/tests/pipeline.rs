@@ -206,6 +206,87 @@ fn an_unresolved_name_in_a_statement_program_is_reported() {
     assert_eq!(d[0].span, Some((1, 8)));
 }
 
+// --- struct types ------------------------------------------------------------
+
+#[test]
+fn a_struct_type_kinds_and_evaluates() {
+    // struct { Int, Int } — the pair [[Int, Int], [TypeId(n), Type]]; a bare
+    // struct type is a well-typed program with a determined root.
+    run("struct { Int, Int }");
+}
+
+#[test]
+fn a_bound_struct_type_is_reusable() {
+    // One occurrence bound, then used twice in an array — the array's
+    // element check unifies the two uses, and they are the *same* compiled
+    // node (the checker compiles each expression once, so the single
+    // nominal id survives).
+    let (module, root) = run("s = struct { Int }; [s, s]");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    for id in ids {
+        assert!(matches!(module.nodes[id].value, Some(Value::Array(_))));
+    }
+}
+
+#[test]
+fn two_struct_type_occurrences_do_not_unify() {
+    // [struct { Int }, struct { Int }] — each occurrence allocates a fresh
+    // nominal id, so the array element check reports the conflict (nominal
+    // identity: same fields, different types).
+    let d = diags("[struct { Int }, struct { Int }]");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::ArrayElement);
+}
+
+#[test]
+fn an_annotation_against_a_struct_type_conflicts() {
+    // 5 : struct { Int } — the literal's int type is not the struct type.
+    let d = diags("5 : struct { Int }");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+}
+
+#[test]
+fn a_tuple_annotated_with_a_struct_type_is_an_instance() {
+    // (1, 2) : struct { Int, Int } — instantiation wraps the positional
+    // tuple in the nominal type: the element types are checked against the
+    // fields, and the result has the struct type.
+    let (module, root) = run("(1, 2) : struct { Int, Int }");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    let (module, root) = run("s = struct { Int, Int }; ((1, 2) : s)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    // re-annotating the same bound instance with the same struct passes
+    run("s = struct { Int, Int }; (((1, 2) : s) : s)");
+}
+
+#[test]
+fn a_struct_instance_with_mismatched_fields_is_rejected() {
+    // arity: two fields, one value
+    let d = diags("(1, 2) : struct { Int }");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+    // field types: the tuple's Ints are not Type
+    let d = diags("(1, 2) : struct { Type, Type }");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+    // a different source occurrence is a different nominal type
+    let d = diags("((1, 2) : struct { Int, Int }) : struct { Int, Int }");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+    assert!(check.message.contains("TypeId("), "{}", check.message);
+}
+
 #[test]
 fn a_function_type_is_a_first_class_value() {
     // `Int -> Int` checks in term position; the identity is such a function.

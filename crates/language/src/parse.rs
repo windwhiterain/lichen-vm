@@ -4,15 +4,17 @@
 //! (see [`Program`]).  Within an expression, one grammar covers terms and
 //! types (types are expressions); a *type-mode* flag — set inside an
 //! annotation's right side — decides whether `(a, b)` is a `Tuple` value or
-//! a `TypeTuple` type expression.  Angle brackets are exclusively type-level
-//! and need no flag: `<a, b>` is always a `TypeTuple`, and `T<e>` (a `<`
-//! directly after an expression) is always the array type.  A `[` directly
-//! after an expression is always an index `e[i]` — the array literal is the
-//! prefix `[e, …]` form, so no whitespace rule decides, and an array literal
-//! in argument position needs parens: `f ([1, 2])`.  Precedence (loosest →
-//! tightest): `:` (right) → `->` (right) → application (left) → postfix
-//! `<e>` / `[e]` / atoms.  `name =>` starts a lambda only in prefix
-//! position, so `f x => e` is a parse error rather than `f (x => e)`.
+//! a `TypeTuple` type expression.  Angle brackets and braces are
+//! exclusively type-level and need no flag: `<a, b>` is always a
+//! `TypeTuple`, `struct { T1, T2 }` always a `StructType`, and `T<e>` (a
+//! `<` directly after an expression) is always the array type.  A `[`
+//! directly after an expression is always an index `e[i]` — the array
+//! literal is the prefix `[e, …]` form, so no whitespace rule decides, and
+//! an array literal in argument position needs parens: `f ([1, 2])`.
+//! Precedence (loosest → tightest): `:` (right) → `->` (right) →
+//! application (left) → postfix `<e>` / `[e]` / atoms.  `name =>` starts a
+//! lambda only in prefix position, so `f x => e` is a parse error rather
+//! than `f (x => e)`.
 
 use lichen_highlevel::ir::Span;
 
@@ -186,6 +188,7 @@ impl Parser<'_> {
             TokenKind::LParen => self.paren_or_tuple(type_mode, start.span)?,
             TokenKind::LBracket => self.array_literal(type_mode, start.span)?,
             TokenKind::LAngle => self.angle_tuple(type_mode, start.span)?,
+            TokenKind::KwStruct => self.struct_type(start.span)?,
             _ => {
                 return Err(Diag::new(
                     Stage::Parse,
@@ -327,12 +330,40 @@ impl Parser<'_> {
         Ok(Expr::Array(elements, span))
     }
 
+    /// `struct { T1, ..., Tn }` — a nominal struct type, positional fields.
+    /// The fields are type expressions (parsed in type mode — braces are
+    /// exclusively type-level), at least one.  The opener `struct` has been
+    /// consumed by [`Parser::parse_atom`].
+    fn struct_type(&mut self, span: Span) -> Result<Expr, Diag> {
+        if !self.eat(&TokenKind::LBrace) {
+            return Err(self.error_found("'{'"));
+        }
+        if self.at(&TokenKind::RBrace) {
+            return Err(self.error_found("an expression"));
+        }
+        let mut fields = Vec::new();
+        loop {
+            fields.push(self.parse_expr(true)?);
+            if !self.eat(&TokenKind::Comma) {
+                break;
+            }
+            if self.at(&TokenKind::RBrace) {
+                break;
+            }
+        }
+        if !self.eat(&TokenKind::RBrace) {
+            return Err(self.error_found("'}'"));
+        }
+        Ok(Expr::StructType(fields, span))
+    }
+
     fn atom_start(&self) -> bool {
         matches!(
             &self.peek().kind,
             TokenKind::Int(_)
                 | TokenKind::KwInt
                 | TokenKind::KwType
+                | TokenKind::KwStruct
                 | TokenKind::Name(_)
                 | TokenKind::LParen
                 | TokenKind::LBracket
@@ -463,6 +494,45 @@ mod tests {
             panic!("expected an apply")
         };
         assert!(matches!(*argument, Expr::TypeTuple(..)));
+    }
+
+    #[test]
+    fn struct_types_are_positional_fields_in_braces() {
+        // struct { Int, Int -> Int } — fields are type expressions.
+        let Expr::StructType(fields, _) = parse_ok("struct { Int, Int -> Int }") else {
+            panic!("expected a struct type")
+        };
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(fields[0], Expr::TypeConst(TypeConst::Int, _)));
+        assert!(matches!(fields[1], Expr::Arrow { .. }));
+        // a single field is the newtype form.
+        assert!(matches!(
+            parse_ok("struct { Int }"),
+            Expr::StructType(f, _) if f.len() == 1
+        ));
+        // struct types are first-class values: an apply argument, a binding.
+        let Expr::Apply { argument, .. } = parse_ok("f (struct { Int })") else {
+            panic!("expected an apply")
+        };
+        assert!(matches!(*argument, Expr::StructType(..)));
+        // fields are type expressions, so `(Int, Type)` inside is a
+        // TypeTuple, not a Tuple.
+        let Expr::StructType(fields, _) = parse_ok("struct { (Int, Type) }") else {
+            panic!("expected a struct type")
+        };
+        assert!(matches!(fields[0], Expr::TypeTuple(..)));
+    }
+
+    #[test]
+    fn struct_type_errors_carry_spans() {
+        let err = parse_err("struct");
+        assert_eq!(err.message, "expected '{', found the end of the program");
+        let err = parse_err("struct {");
+        assert_eq!(err.message, "expected an expression, found the end of the program");
+        let err = parse_err("struct { }");
+        assert_eq!(err.message, "expected an expression, found '}'");
+        let err = parse_err("struct { Int");
+        assert_eq!(err.message, "expected '}', found the end of the program");
     }
 
     #[test]

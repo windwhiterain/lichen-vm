@@ -1,21 +1,44 @@
-//! The language CLI: `cargo run -p language -- <program.lang>` compiles and
-//! runs one program, printing its output; a directory path runs every
-//! `.lang` file in it, printing `file: output` per program.
+//! The language CLI. `lichen <program.lang>` compiles and runs one program,
+//! printing its output; a directory path runs every `.lang` file in it,
+//! printing `file: output` per program.
+//!
+//! Install it with `cargo install --path crates/language` (from a checkout of
+//! this repo) or `cargo install --git <repo-url> language`.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+const USAGE: &str = "usage: lichen <program.lang | directory>";
+
 fn main() -> ExitCode {
-    let Some(arg) = std::env::args().nth(1) else {
-        eprintln!("usage: cargo run -p language -- <program.lang | directory>");
+    let mut args = std::env::args();
+    let _program = args.next();
+    let Some(arg) = args.next() else {
+        eprintln!("{USAGE}");
         return ExitCode::FAILURE;
     };
-    let path = PathBuf::from(arg);
-    if path.is_dir() {
-        run_directory(&path)
-    } else {
-        run_file(&path)
+    match arg.as_str() {
+        "-h" | "--help" => {
+            println!("{USAGE}");
+            ExitCode::SUCCESS
+        }
+        "-V" | "--version" => {
+            println!("lichen {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
+        path_arg => {
+            if args.next().is_some() {
+                eprintln!("{USAGE}");
+                return ExitCode::FAILURE;
+            }
+            let path = PathBuf::from(path_arg);
+            if path.is_dir() {
+                run_directory(&path)
+            } else {
+                run_file(&path)
+            }
+        }
     }
 }
 

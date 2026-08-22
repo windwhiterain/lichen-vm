@@ -44,13 +44,14 @@ atom     := int_literal
           | '(' expr ',' expr (',' expr)* ')'     -- tuple  (TypeTuple in type position)
           | '[' expr (',' expr)* ']'              -- array literal
           | '<' expr ',' expr (',' expr)* '>'     -- tuple type  (always TypeTuple)
+          | 'struct' '{' expr (',' expr)* '}'     -- struct type  (nominal, positional fields)
 ```
 
-- **Keywords:** `Int`, `Type`, `=>`, `->`, `:`.  `=` binds a name in a
-  statement, `;` separates statements.  `--` starts a line comment (to end
+- **Keywords:** `Int`, `Type`, `struct`, `=>`, `->`, `:`.  `=` binds a name in
+  a statement, `;` separates statements.  `--` starts a line comment (to end
   of line).
-- **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int` and
-  `Type` are reserved — they cannot be bound or used as names.
+- **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
+  `Type`, and `struct` are reserved — they cannot be bound or used as names.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
 - **Precedence** (loosest → tightest): `:` → `->` → application → postfix
@@ -65,9 +66,10 @@ atom     := int_literal
 
 ### 2.1 Distinct delimiters
 
-Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
-types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `T<3>` is the
-array type of length 3 and `<Int, Type>` the tuple type.  A `<` directly
+Brackets `[ ]` and parens `( )` build values; angle brackets `< >` and
+braces `{ }` build types.  `[1, 2]` is an array value and `(1, 2)` a tuple
+value; `T<3>` is the array type of length 3, `<Int, Type>` the tuple type,
+and `struct { Int, Type }` a nominal struct type.  A `<` directly
 after an expression is *always* the array type — application is
 juxtaposition, so no whitespace rule exists (the earlier `T[e]` design needed
 one to tell `Int[3]` from `f [3]`; angle brackets removed it).  A type tuple
@@ -115,6 +117,23 @@ index it selects a branch.
   is checked when evaluated.  `[then, else][i]` is the language's only
   conditional form — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
+- **Nominal struct types.**  `struct { T1, ..., Tn }` is a *new type* with
+  positional fields (no names in v1).  Its kind slot holds a **fresh nominal
+  id** — each occurrence of the syntax allocates a new id, so two
+  occurrences never unify and a struct never unifies with a same-shape tuple
+  type (nominal identity).  Bind one occurrence and it is reusable: the
+  checker compiles each expression once, so a bound or parameter-passed
+  struct type used many times is the *same* type — `s = struct { Int }; [s, s]`
+  is a homogeneous array, while `[struct { Int }, struct { Int }]` (two
+  source occurrences) is a nominal conflict.
+- **Struct instantiation.**  `(v1, ..., vn) : struct { T1, ..., Tn }` wraps
+  a positional tuple in the nominal type: the element types are checked
+  against the field list (arity and field types must match), and the
+  annotation's type is the struct type itself.  A literal is not a struct
+  value — `5 : struct { Int }` conflicts.  Re-annotating an instance with
+  the *same* struct type passes; a different source occurrence is a
+  different type.  Field access and values of struct type beyond the
+  wrapped tuple are future work.
 - **Dependent array types (pinning).**  The length of `T<e>` is an arbitrary
   expression, so `Int<n>` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an
@@ -144,6 +163,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |
+| `struct { T1, …, Tn }` | `TypeStruct(range)` — nominal, fresh id per occurrence |
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
 
@@ -230,6 +250,10 @@ x => x                                   -- a function, type ?a → ?a
 ((i => [10, 20][i]) 1 : Int)             -- 20 (the index is a runtime parameter)
 a = [1, 2]; b = 0; a[b]                  -- 1 (statements: bindings, then the final expression)
 a = x => x; ((a 5 : Int), (a Type : Type))  -- (5, Type) — a bound lambda stays polymorphic
+struct { Int, Int }                      -- [Int, Int] (a nominal struct type, first-class value)
+s = struct { Int }; (s, s)               -- [[Int], [Int]] — one occurrence, reused
+(1, 2) : struct { Int, Int }             -- [1, 2] (instantiation: a tuple wrapped in the struct type)
+s = struct { Int, Int }; ((1, 2) : s)    -- [1, 2] (the same bound type, instantiated)
 ```
 
 (A top-level *unannotated* application's result type is a lazy cell, so the
@@ -249,6 +273,7 @@ Ill-typed programs (expected diagnostics):
 | `[1, x => x]` | the array elements do not share one type (check) |
 | `([1, 2, 3])[5]` | `index 5 out of bounds (array length 3)` (check) |
 | `a = 5; y` | `unresolved name 'y'` (resolve) |
+| `[struct { Int }, struct { Int }]` | `expected TypeId(1), found TypeId(0)` (check — two occurrences never unify) |
 | `(((n => ([1, 2, 3] : Int<n>)) 5) : Int<3>)` | `expected 3, found 5` (check, runtime — `n` is pinned to 3 by the annotation) |
 
 ## 7. Non-goals (v1)
@@ -302,6 +327,11 @@ or a whole directory (one `file: output` line per program):
 ```
 cargo run -p language -- crates/language/examples/programs
 ```
+
+The runner also installs as a standalone CLI named `lichen` — `cargo install
+--path crates/language` from a checkout of the repo, or `cargo install --git
+<repo-url> language` — after which `lichen <program.lang | directory>`
+runs the same commands.
 
 `tests/examples.rs` checks every example file against its promised output,
 so the examples stay the living spec.  The value printer renders `USize`s as

@@ -39,6 +39,20 @@ cargo run -p language -- crates/language/examples/programs/bindings.lang
 # 1
 ```
 
+Install the CLI (a binary named `lichen`):
+
+```bash
+cargo install --path crates/language          # from a checkout of this repo
+cargo install --git git@github.com:windwhiterain/lichen-vm.git language
+```
+
+then run it directly:
+
+```bash
+lichen crates/language/examples/programs/bindings.lang
+# 1
+```
+
 ## A taste
 
 ```text

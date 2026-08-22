@@ -1,11 +1,12 @@
 //! The lexer: source text → tokens, each with a `(line, column)` span.
 //!
 //! `Int` and `Type` lex as keywords; everything else that starts an
-//! identifier is a name.  `<` and `>` are the type-level delimiters (the
-//! array type `Int<3>` and the tuple type `<Int, Type>`); `[` `]` and `(`
-//! `)` stay value-level.  `;` separates statements, `=` binds a name
-//! (`a = [1, 2]`); `=>` is still the lambda.  `--` starts a line comment.
-//! Any other character is a lex error — the first one stops the pipeline.
+//! identifier is a name.  `<` `>` and `struct { }` build type-level forms
+//! (the array type `Int<3>`, the tuple type `<Int, Type>`, the struct type
+//! `struct { Int, Type }`); `[` `]` and `(` `)` stay value-level.  `;`
+//! separates statements, `=` binds a name (`a = [1, 2]`); `=>` is still the
+//! lambda.  `--` starts a line comment.  Any other character is a lex error
+//! — the first one stops the pipeline.
 
 use lichen_highlevel::ir::Span;
 
@@ -21,6 +22,8 @@ pub enum TokenKind {
     KwInt,
     /// The `Type` type constant — the universe.
     KwType,
+    /// The `struct` keyword — a nominal struct type.
+    KwStruct,
     /// `->` — a function type.
     Arrow,
     /// `=>` — a lambda.
@@ -41,6 +44,10 @@ pub enum TokenKind {
     LAngle,
     /// `>` — closes `<`.
     RAngle,
+    /// `{` — opens a struct type's field list.
+    LBrace,
+    /// `}` — closes `{`.
+    RBrace,
     Eof,
 }
 
@@ -52,6 +59,7 @@ impl TokenKind {
             TokenKind::Name(_) => "a name".to_string(),
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
+            TokenKind::KwStruct => "'struct'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -64,6 +72,8 @@ impl TokenKind {
             TokenKind::RBracket => "']'".to_string(),
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
+            TokenKind::LBrace => "'{'".to_string(),
+            TokenKind::RBrace => "'}'".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
         }
     }
@@ -119,6 +129,8 @@ impl Lexer<'_> {
                 b']' => self.push(line, col, 1, TokenKind::RBracket),
                 b'<' => self.push(line, col, 1, TokenKind::LAngle),
                 b'>' => self.push(line, col, 1, TokenKind::RAngle),
+                b'{' => self.push(line, col, 1, TokenKind::LBrace),
+                b'}' => self.push(line, col, 1, TokenKind::RBrace),
                 b',' => self.push(line, col, 1, TokenKind::Comma),
                 b':' => self.push(line, col, 1, TokenKind::Colon),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),
@@ -193,6 +205,7 @@ impl Lexer<'_> {
         let kind = match text {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
+            "struct" => TokenKind::KwStruct,
             _ => TokenKind::Name(text.to_string()),
         };
         self.tokens.push(Token {

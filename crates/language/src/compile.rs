@@ -122,6 +122,10 @@ impl Compiler {
                 let ids = self.compile_all(elements)?;
                 self.ir.alloc_type_tuple(&ids, Some(*span))
             }
+            Expr::StructType(fields, span) => {
+                let ids = self.compile_all(fields)?;
+                self.ir.alloc_type_struct(&ids, Some(*span))
+            }
             Expr::Array(elements, span) => {
                 let ids = self.compile_all(elements)?;
                 self.ir.alloc_array(&ids, Some(*span))

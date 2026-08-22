@@ -1,0 +1,7 @@
+-- Struct instantiation
+--
+-- `v : struct { T1, ..., Tn }` wraps a positional tuple in the nominal
+-- type: the element types are checked against the fields, and the result
+-- has the struct type.  Bind the struct type once and reuse it.
+-- output: [1, 2]
+s = struct { Int, Int }; ((1, 2) : s)

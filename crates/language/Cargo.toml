@@ -6,3 +6,7 @@ edition = "2024"
 [dependencies]
 lichen-highlevel = { path = "../lichen-highlevel" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
+
+[[bin]]
+name = "lichen"
+path = "src/main.rs"

@@ -1102,3 +1102,111 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     assert!(matches!(diags[0].value_a, Some(Value::Array(_))));
     assert_eq!(diags[0].value_b, Some(Value::Ext(HighValue::TypeInt)));
 }
+
+#[test]
+fn a_shared_expression_compiles_once_with_one_nominal_id() {
+    // The IR is a graph: the same expression may be referenced from several
+    // parents (statement bindings pre-resolve every use of a name to the
+    // value's own id).  Compiling it once keeps the single fresh nominal id,
+    // so an array holding the same bound struct type twice is homogeneous —
+    // recompiling per use would allocate a second id and the element check
+    // would conflict.
+    let mut ir = IR::new();
+    let f = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f]);
+    let a = array(&mut ir, &[s, s]);
+    let b = build(a, ir);
+    assert!(b.ok, "one shared occurrence is one nominal type");
+    assert!(b.module.unify_errors.is_empty());
+    assert_eq!(
+        b.module.global_ext.type_id_counter, 1,
+        "one expression compiles to exactly one Fresh call"
+    );
+}
+
+// --- struct instantiation ----------------------------------------------------
+// `(v1, ..., vn) : struct { T1, ..., Tn }` wraps a positional tuple in the
+// nominal type: the tuple's element-type list is checked against the field
+// list, and the annotation's type is the struct type itself.
+
+#[test]
+fn a_tuple_annotated_with_a_struct_type_is_an_instance() {
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f1, f2]);
+    let a = ann(&mut ir, v, s);
+    let b = build(a, ir);
+    assert!(b.ok, "(1, 2) : struct {{ Int, Int }} must check");
+    assert!(b.module.unify_errors.is_empty());
+    // the annotation's type is the struct type, not the tuple type
+    assert_eq!(b.ty[a], b.term[s], "the instance's type is the struct type");
+}
+
+#[test]
+fn a_struct_instance_checks_its_fields() {
+    // arity: two fields, one value
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let f = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f]);
+    let a = ann(&mut ir, v, s);
+    let b = build(a, ir);
+    assert!(!b.ok, "(1, 2) : struct {{ Int }} must fail (arity)");
+    // field type: the tuple's Ints are not Type
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let t1 = ty(&mut ir);
+    let t2 = ty(&mut ir);
+    let s = type_struct(&mut ir, &[t1, t2]);
+    let a = ann(&mut ir, v, s);
+    let b = build(a, ir);
+    assert!(!b.ok, "(1, 2) : struct {{ Type, Type }} must fail (fields)");
+}
+
+#[test]
+fn an_instance_annotated_with_the_same_struct_again_passes() {
+    // ((1, 2) : s) : s — re-annotating an instance with the same bound
+    // struct type is idempotent (the plain unify compares equal pairs).
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f1, f2]);
+    let inner = ann(&mut ir, v, s);
+    let outer = ann(&mut ir, inner, s);
+    let b = build(outer, ir);
+    assert!(b.ok, "re-annotating with the same struct type passes");
+    assert!(b.module.unify_errors.is_empty());
+}
+
+#[test]
+fn an_instance_of_a_different_struct_occurrence_conflicts() {
+    // ((1, 2) : s1) : s2 — a different source occurrence is a different
+    // nominal type, even with the same fields.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let s1 = type_struct(&mut ir, &[f1, f2]);
+    let f3 = int_t(&mut ir);
+    let f4 = int_t(&mut ir);
+    let s2 = type_struct(&mut ir, &[f3, f4]);
+    let inner = ann(&mut ir, v, s1);
+    let outer = ann(&mut ir, inner, s2);
+    let b = build(outer, ir);
+    assert!(!b.ok, "a different struct occurrence is a different type");
+    assert_eq!(b.diagnostics().len(), 1);
+    assert!(b.diagnostics()[0].message.contains("TypeId("));
+}

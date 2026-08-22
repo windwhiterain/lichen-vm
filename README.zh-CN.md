@@ -39,6 +39,20 @@ cargo run -p language -- crates/language/examples/programs/bindings.lang
 # 1
 ```
 
+安装 CLI（可执行文件名为 `lichen`）：
+
+```bash
+cargo install --path crates/language          # 在本仓库的检出中执行
+cargo install --git git@github.com:windwhiterain/lichen-vm.git language
+```
+
+然后直接运行：
+
+```bash
+lichen crates/language/examples/programs/bindings.lang
+# 1
+```
+
 ## 尝鲜
 
 ```text

@@ -407,6 +407,16 @@ impl Checker {
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
+        // The IR is a graph: statement bindings pre-resolve every use of a
+        // name to the value's own `ExprId`, so one expression may be
+        // referenced from several parents (a DAG, not a tree).  Compile each
+        // expression once and reuse the compiled pair — recompiling would
+        // duplicate fresh state (a struct type's nominal id comes from a
+        // per-compilation `Fresh` call), silently breaking the sharing the
+        // frontend relies on.
+        if let Some(pair) = self.term[e] {
+            return pair;
+        }
         match self.ir[e].kind {
             ExprKind::Constant(Constant::USize(n)) => {
                 let value = self
@@ -643,18 +653,64 @@ impl Checker {
         // expression's type against the type expression itself — both are
         // pairs in the recursive encoding.
         let type_pair = self.term[type_expr].unwrap();
-        self.check_unify(
-            self.ty[value].unwrap(),
-            type_pair,
-            self.ir[e].span,
-            DiagKind::Annotation,
-        );
+        // A struct instantiation: `(v1, ..., vn) : struct { T1, ..., Tn }`
+        // wraps a tuple value in the nominal type.  The plain unify would
+        // compare the kind slots — the tuple type's fixed marker against the
+        // struct's nominal id — and always conflict, so instead the tuple's
+        // element-type list is checked against the field list, and the
+        // annotation's type is the struct type itself.  A non-tuple value
+        // (a literal, an array, an already-wrapped instance) takes the plain
+        // path: literals conflict, an instance of the same struct passes
+        // trivially, a different occurrence conflicts nominally.
+        let value_ty = self.ty[value].unwrap();
+        let is_tuple = match self.module.array_ids(value_ty) {
+            Some(ids) if ids.len() == 2 => {
+                // Copy the id out of the slice borrow: kind_marker_is needs
+                // `&mut self` while `array_ids` borrows the module.
+                let kind = ids[1];
+                self.kind_marker_is(kind, HighValue::TypeTuple)
+            }
+            _ => false,
+        };
+        if self.is_struct_type(type_expr) && is_tuple {
+            let tuple_shape = self.module.array_ids(value_ty).unwrap()[0];
+            let field_list = self.module.array_ids(type_pair).unwrap()[0];
+            self.check_unify(tuple_shape, field_list, self.ir[e].span, DiagKind::Annotation);
+        } else {
+            self.check_unify(
+                self.ty[value].unwrap(),
+                type_pair,
+                self.ir[e].span,
+                DiagKind::Annotation,
+            );
+        }
         let value_node = self.value_of(value);
         let pair = self.pair_of(value_node, type_pair);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(type_pair);
         pair
+    }
+
+    /// Whether the type expression is a struct type: its kind slot is
+    /// `[TypeId(n) | <pending Fresh>, K]` — the marker is a nominal id (or
+    /// the unevaluated [`HighOperator::Fresh`] call that will produce one),
+    /// never one of the fixed markers.
+    fn is_struct_type(&mut self, e: ExprId) -> bool {
+        let Some(ids) = self.module.array_ids(self.ty[e].unwrap()) else {
+            return false;
+        };
+        if ids.len() != 2 {
+            return false;
+        }
+        let (marker, tail) = (ids[0], ids[1]);
+        if !self.is_universe(tail) {
+            return false;
+        }
+        matches!(
+            self.module.nodes[marker].value,
+            Some(Value::Ext(HighValue::TypeId(_)))
+        ) || self.module.nodes[marker].operation.is_some()
     }
 
     fn check_tuple_term(&mut self, e: ExprId) -> NodeId {
