@@ -29,6 +29,7 @@ Interpreter that type and value are same thing.
 - Recursive Function Apply.
 - Function Normalization.
 - Unification.
+- Macro Based Enum Extension (WIP): impl your own typechecker with no performance concern.
 
 ### Philosophy:
 
