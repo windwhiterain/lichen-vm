@@ -19,7 +19,6 @@ impl<P: Program> Module<P> {
         &mut self,
         function: FunctionId,
         argument: NodeId,
-        result_cell: Option<NodeId>,
         block: BlockId,
     ) -> Value<P> {
         self.apply_depth += 1;
@@ -78,23 +77,6 @@ impl<P: Program> Module<P> {
             self.unify(cloned_param, argument);
         }
         let result = self.evaluate_node(applied, Some(block));
-        // Bind the caller's result cell to the return value's type element —
-        // the per-application result type.  The cell lives in the call's
-        // operand array, so a call inside a function scope is cloned with
-        // that scope and each application checks its own clone: an annotation
-        // on the call site has already bound the cell, so this unify checks
-        // it against what the function actually returned (a mismatch is an
-        // error), while an unbound cell just binds.  The template's cells
-        // are never unified here, so a constraint from one call site cannot
-        // leak into another.
-        if let Some(result_cell) = result_cell
-            && let Value::Array(ptr) = result
-        {
-            let ids = unsafe { &*ptr };
-            if ids.len() == 2 {
-                self.unify(result_cell, ids[1]);
-            }
-        }
         self.apply_depth -= 1;
         result
     }

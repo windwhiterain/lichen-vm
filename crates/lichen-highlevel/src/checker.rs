@@ -147,22 +147,7 @@ impl Checker {
         if checker.module.unify_errors.is_empty() {
             checker.module.evaluate_node_deep(root_term, None);
         }
-        let mut ok = checker.module.unify_errors.is_empty();
-        // The root's type is whatever the runtime returned: unify the
-        // checker's record with the return value's type element, so the
-        // ambiguity check sees the determined type instead of the inert
-        // original result cell (a call's cell is only bound in the runtime
-        // clone).  When an annotation already anchored the cell, this merge
-        // re-confirms it against the runtime result.
-        if ok
-            && let Some(Value::Array(ptr)) = checker.module.nodes[root_term].value
-        {
-            let ids = unsafe { &*ptr };
-            if ids.len() == 2 {
-                checker.module.unify(root_ty, ids[1]);
-            }
-        }
-        ok = checker.module.unify_errors.is_empty();
+        let ok = checker.module.unify_errors.is_empty();
         let root_val = checker.value_of(root);
         Build {
             ir: checker.ir,
@@ -564,14 +549,13 @@ impl Checker {
             let fn_ty = self.array_node(self.current_block, &[shape, kind]);
             self.check_unify(f_ty, fn_ty, self.ir[e].span, DiagKind::Guard);
         }
-        // The result's type cell: the operand's third element.  The runtime
-        // apply unifies it with the return value's type element — the
-        // per-application result type — so an annotation on the result is
-        // checked against what the function actually returned, per call,
-        // without ever touching the function template's cells.  Unbound
-        // unless anchored by an annotation.
+        // The result's type cell: unbound unless anchored by an annotation.
+        // It is a lazy record — the runtime apply does not force the result
+        // type (evaluating a polymorphic template yields the parameterized
+        // marker), so the cell stays unbound until an annotation or a
+        // consumer unifies it.
         let c = self.fresh_cell();
-        let operands = self.array_node(self.current_block, &[ft, xt, c]);
+        let operands = self.array_node(self.current_block, &[ft, xt]);
         let node = self.op_node(self.current_block, Operator::Apply, Some(operands));
         self.term[e] = Some(node);
         self.val[e] = None;

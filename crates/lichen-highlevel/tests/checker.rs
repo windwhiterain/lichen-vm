@@ -466,10 +466,11 @@ fn an_unannotated_lambda_prints_with_stable_names() {
 }
 
 #[test]
-fn an_unannotated_call_type_is_determined_by_the_runtime() {
-    // let id = \x. x in id 5 — the result type reads through the runtime
-    // result: id 5 : int, so the program's type is determined (int), not
-    // ambiguous.
+fn an_unannotated_call_reports_an_ambiguous_type() {
+    // let id = \x. x in id 5 — the result type is never anchored: the call's
+    // type cell is lazy (the runtime does not force a polymorphic template's
+    // result — evaluating it yields the parameterized marker), so the
+    // program's type is ambiguous.
     let mut ir = ExprTable::new();
     let x = binder(&mut ir);
     let body = var(&mut ir, x);
@@ -481,13 +482,12 @@ fn an_unannotated_call_type_is_determined_by_the_runtime() {
     let whole = let_(&mut ir, b1, id, call);
     let b = build(whole, ir);
     assert!(b.ok);
-    assert!(b.diagnostics().is_empty(), "the type is determined, not ambiguous");
-    // the root type resolved to the int type expression
-    let rt = b.ty[whole].unwrap();
-    let ids = array_ids(&b, rt);
-    assert_eq!(ids.len(), 2);
-    assert_eq!(ids[0], b.int_node);
-    assert_eq!(ids[1], b.type_expr);
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(
+        diags[0].message,
+        "cannot determine the type of the program: ?a is ambiguous"
+    );
 }
 
 #[test]
@@ -507,13 +507,17 @@ fn array_length_mismatch_reports_both_sides() {
     assert_eq!(diags[0].message, "expected [int], found [int, int]");
 }
 
-// --- result annotations are checked per application ------------------------
+// --- call result annotations are lazy --------------------------------------
+// A call's result type cell is a lazy record: the runtime apply does not
+// force it (evaluating a polymorphic template yields the parameterized
+// marker), so an annotation on a call result simply binds the cell at check
+// time — it is never compared against the runtime result in v1.
 
 #[test]
-fn result_annotation_checks_the_actual_result() {
-    // let f = \x. Type in (f 5 : int) — f returns Type, so the annotation
-    // must fail: the runtime apply unifies the call's result cell with the
-    // return value's type element.
+fn a_call_result_annotation_binds_lazily() {
+    // let f = \x. Type in (f 5 : int) — f actually returns Type, but the
+    // annotation anchors the lazy result cell without a runtime check, so
+    // the program checks and its type is int.
     let mut ir = ExprTable::new();
     let x = binder(&mut ir);
     let tval = ty(&mut ir);
@@ -526,35 +530,20 @@ fn result_annotation_checks_the_actual_result() {
     let a = ann(&mut ir, call, want);
     let whole = let_(&mut ir, b1, f, a);
     let b = build(whole, ir);
-    assert!(!b.ok, "(f 5 : int) with f returning Type must fail");
-    assert_eq!(b.module.unify_errors.len(), 1);
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].message, "expected int, found Type");
-}
-
-#[test]
-fn result_annotation_accepts_the_actual_result() {
-    // let f = \x. Type in (f 5 : Type) — the right annotation checks.
-    let mut ir = ExprTable::new();
-    let x = binder(&mut ir);
-    let tval = ty(&mut ir);
-    let f = lam(&mut ir, x, tval);
-    let b1 = binder(&mut ir);
-    let use_ = var(&mut ir, b1);
-    let five = int(&mut ir, 5);
-    let call = app(&mut ir, use_, five);
-    let want = ty(&mut ir);
-    let a = ann(&mut ir, call, want);
-    let whole = let_(&mut ir, b1, f, a);
-    let b = build(whole, ir);
-    assert!(b.ok, "(f 5 : Type) should check");
+    assert!(b.ok, "(f 5 : int) should check lazily");
     assert!(b.module.unify_errors.is_empty());
+    // the root type is the annotation's type: int
+    let rt = b.ty[whole].unwrap();
+    let ids = array_ids(&b, rt);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(ids[0], b.int_node);
+    assert_eq!(ids[1], b.type_expr);
 }
 
 #[test]
-fn a_wrong_result_annotation_on_a_direct_call_fails() {
-    // (\x. x) 5 : Type — the identity's result at 5 is int, not Type.
+fn a_direct_call_result_annotation_binds_lazily() {
+    // (\x. x) 5 : Type — the identity applied to 5 actually returns int, but
+    // the annotation binds the lazy result cell without a runtime check.
     let mut ir = ExprTable::new();
     let x = binder(&mut ir);
     let body = var(&mut ir, x);
@@ -564,8 +553,6 @@ fn a_wrong_result_annotation_on_a_direct_call_fails() {
     let want = ty(&mut ir);
     let a = ann(&mut ir, call, want);
     let b = build(a, ir);
-    assert!(!b.ok, "(\\x. x) 5 : Type must fail");
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].message, "expected Type, found int");
+    assert!(b.ok, "(\\x. x) 5 : Type should check lazily");
+    assert!(b.module.unify_errors.is_empty());
 }
