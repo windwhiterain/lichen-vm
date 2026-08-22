@@ -1,0 +1,9 @@
+-- Dependent array length (pinning)
+--
+-- The length of `Int<n>` is an expression, so a bound parameter may size an
+-- array type.  The check pins `n` to the literal's length, 3 — the
+-- parameter is monomorphized, and applying any other length fails at the
+-- apply (`expected 3, found …`).
+-- output: [1, 2, 3]
+
+((n => ([1, 2, 3] : Int<n>)) 3) : Int<3>

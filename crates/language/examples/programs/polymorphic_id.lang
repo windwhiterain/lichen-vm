@@ -1,0 +1,9 @@
+-- Automatic let-polymorphism
+--
+-- Every lambda is polymorphic: one binder `id` used at `Int` and at `Type`
+-- in the same program.  Each application instantiates the parameter fresh
+-- (the runtime's per-apply clones), so no generalize/instantiate form is
+-- needed.
+-- output: [5, Type]
+
+((id => ((id 5 : Int), (id Type : Type))) (x => x)) : <Int, Type>

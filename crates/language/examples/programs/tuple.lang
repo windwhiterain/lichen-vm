@@ -1,0 +1,7 @@
+-- Tuples (heterogeneous)
+--
+-- `(1, (x => x))` holds an Int and a function in one value.  The runtime
+-- value is an array, so tuples print with `[ ]` like arrays.
+-- output: [1, Function]
+
+(1, (x => x))

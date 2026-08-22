@@ -117,7 +117,7 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     let ninety_nine = m.add_node(
         root,
         None,
-        Some(Value::Ext(TestValue::U128(p as *const u128))),
+        Some(Value::Ext(TestValue::U128(Handle(p as *const u128)))),
     );
     m.unify(arg, ninety_nine);
     m.nodes[call].value = None; // drop the cached marker

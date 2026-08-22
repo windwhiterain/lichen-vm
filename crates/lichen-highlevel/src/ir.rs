@@ -6,11 +6,30 @@
 //! checker only reads it (its products — pairs, type cells — are lowlevel
 //! nodes, so the table does not even grow).
 
-use crate::program::HighValue;
+/// A constant leaf value: an int literal or one of the type constants.  This
+/// is the frontend's closed vocabulary of constants — the subset of the
+/// lowlevel value type a program may embed directly.  The other values
+/// (`Array`, `Function`, `None`, `Parameterized`) are built by other
+/// expression kinds, never constants.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Constant {
+    /// An int literal.
+    USize(usize),
+    /// The `int` type constant.
+    TypeInt,
+    /// The `Type` constant — the canonical universe node itself (`Type : Type`).
+    TypeType,
+    /// The kind marker of function type expressions.
+    TypeFunction,
+    /// The kind marker of tuple type expressions.
+    TypeTuple,
+    /// The kind marker of array type expressions.
+    TypeArray,
+}
 
 /// A dense index into [`ExprTable::expr`].  References are pre-resolved: a
-/// [`ExprKind::Var`] points at the [`ExprKind::Binder`] it refers to, so the
-/// IR carries no name strings.
+/// use of a parameter *is* the [`ExprKind::Parameter`]'s own `ExprId` (the
+/// checker's scope stack is keyed by it), so the IR carries no name strings.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ExprId(pub u32);
 
@@ -27,9 +46,10 @@ pub type Span = (u32, u32);
 
 /// The highlevel program: a pure expression tree.
 #[derive(Clone, Debug)]
-pub struct ExprTable {
+pub struct IR {
     pub expr: Vec<Expr>,
-    /// One dense arena for all variadic [`ExprKind::Array`] children lists.
+    /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
+    /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
     pub children: Vec<ExprId>,
     pub root: ExprId,
 }
@@ -40,36 +60,67 @@ pub struct Expr {
     pub span: Option<Span>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExprKind {
-    /// Integer literal.
-    Int(u64),
-    /// The `Type` constant (`Type : Type`).
-    Type,
-    /// A program-defined constant value (e.g. the `int` type constant).
-    Const(HighValue),
-    /// A binding cell — the reference target of [`ExprKind::Var`].
-    Binder,
-    /// A pre-resolved reference to a [`ExprKind::Binder`].
-    Var(ExprId),
-    /// `(binder, body)`.
-    Lam(ExprId, ExprId),
-    /// `(binder, value, body)`.
-    Let(ExprId, ExprId, ExprId),
-    /// `(function, argument)`.
-    App(ExprId, ExprId),
-    /// `(expression, type-expression)`.
-    Ann(ExprId, ExprId),
-    /// `(input-type, output-type)` — a function type, compiled to the
-    /// kinded arrow `[[in, out], [FunctionType, Type]]`.
-    Arrow(ExprId, ExprId),
-    /// Elements stored in [`ExprTable::children`].
+    /// A constant leaf value — see [`Constant`].
+    Constant(Constant),
+    /// A function parameter (or, `let` desugared by the frontend, a let-bound
+    /// name).  Uses of the parameter in the return expression are the
+    /// parameter's own `ExprId`.
+    Parameter,
+    /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
+    Function {
+        parameter: ExprId,
+        r#return: ExprId,
+    },
+    /// `{ function, argument }`.
+    Apply { function: ExprId, argument: ExprId },
+    /// `{ array, index }` — element selection; `array` must be a tuple or
+    /// array value, `index` a `USize`.
+    Index { array: ExprId, index: ExprId },
+    /// `{ value, type }` — the value's type must unify with the type expression.
+    Annotation {
+        value: ExprId,
+        r#type: ExprId,
+    },
+    /// `{ parameter, return }` — a function type, compiled to the kinded
+    /// arrow `[[in, out], [FunctionType, Type]]`.
+    TypeFunction {
+        parameter: ExprId,
+        r#return: ExprId,
+    },
+    /// A tuple instance `[v1, ..., vn]` — one type slot per element, so the
+    /// elements may be heterogeneous.  Elements stored in
+    /// [`ExprTable::children`].
+    Tuple(ChildRange),
+    /// A tuple type expression `[T1, ..., Tn]` — the element types, kinded
+    /// `[[T1, ..., Tn], [TupleType, Type]]`.  Elements stored in
+    /// [`ExprTable::children`].
+    TypeTuple(ChildRange),
+    /// A struct type expression `[T1, ..., Tn]` — the field types
+    /// (positional, no names in v1), kinded with a *fresh nominal* id:
+    /// `[[T1, ..., Tn], [TypeId(n), Type]]`.  Each occurrence's `Fresh`
+    /// call allocates a new id, so two occurrences never unify; a struct
+    /// type is reused by binding it once through a parameter.  Elements
+    /// stored in [`ExprTable::children`].
+    TypeStruct(ChildRange),
+    /// An array instance `[v1, ..., vn]` — every element shares one type
+    /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
+    /// [`ExprTable::children`].
     Array(ChildRange),
+    /// The real array type `{ element_type, length }`.  Its type instance
+    /// is the 2-element shape `[element_type, length]` — element 0 is the
+    /// type shared by all elements, element 1 the length — kinded
+    /// `[[element_type, length], [ArrayType, Type]]`.
+    TypeArray {
+        element_type: ExprId,
+        length: ExprId,
+    },
 }
 
-impl ExprTable {
+impl IR {
     pub fn new() -> Self {
-        ExprTable {
+        IR {
             expr: Vec::new(),
             children: Vec::new(),
             root: ExprId(0),
@@ -82,14 +133,35 @@ impl ExprTable {
         id
     }
 
+    pub fn alloc_tuple(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::Tuple, span)
+    }
+
+    pub fn alloc_type_tuple(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::TypeTuple, span)
+    }
+
+    pub fn alloc_type_struct(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::TypeStruct, span)
+    }
+
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::Array, span)
+    }
+
+    fn alloc_variadic(
+        &mut self,
+        elements: &[ExprId],
+        make: fn(ChildRange) -> ExprKind,
+        span: Option<Span>,
+    ) -> ExprId {
         let start = self.children.len() as u32;
         self.children.extend_from_slice(elements);
         let range = ChildRange {
             start,
             end: self.children.len() as u32,
         };
-        self.alloc(ExprKind::Array(range), span)
+        self.alloc(make(range), span)
     }
 
     pub fn set_root(&mut self, root: ExprId) {
@@ -97,13 +169,13 @@ impl ExprTable {
     }
 }
 
-impl Default for ExprTable {
+impl Default for IR {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::ops::Index<ExprId> for ExprTable {
+impl std::ops::Index<ExprId> for IR {
     type Output = Expr;
     fn index(&self, id: ExprId) -> &Expr {
         &self.expr[id.0 as usize]

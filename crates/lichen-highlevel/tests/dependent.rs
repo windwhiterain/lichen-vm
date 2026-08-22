@@ -197,6 +197,45 @@ fn a_resolvable_computation_is_forced_and_compared() {
 }
 
 #[test]
+fn a_resolvable_index_read_pins_its_element() {
+    // A concrete expectation meets an `Index` read over an unbound element
+    // with a concrete index: the read resolves to a pure reference — the
+    // operator node is aliased to the element — and the concrete value is
+    // written onto it (pinning the element, the "monomorphized" trade).  The
+    // read keeps its operation — the operand edge stays live so an apply's
+    // clone can reach the element and enforce the pin — and a conflicting
+    // expectation fails against the pinned value.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let cell = unbound_node(&mut m, root);
+    let container = array_node(&mut m, root, &[cell]);
+    let zero = usize_node(&mut m, root, 0);
+    let read = index_node(&mut m, root, container, zero);
+    let three = usize_node(&mut m, root, 3);
+    m.unify(three, read);
+    assert!(m.unify_errors.is_empty());
+    assert_eq!(
+        m.equality_representative(three),
+        m.equality_representative(cell),
+        "the read aliased the element"
+    );
+    assert!(matches!(m.nodes[read].value, Some(Value::USize(3))));
+    assert!(
+        m.nodes[read].operation.is_some(),
+        "the pinned read keeps its operation (the operand edge must survive)"
+    );
+
+    // a conflicting expectation now fails against the pinned value
+    let five = usize_node(&mut m, root, 5);
+    m.unify(five, read);
+    assert_eq!(m.unify_errors.len(), 1);
+    assert_ne!(
+        m.equality_representative(five),
+        m.equality_representative(read)
+    );
+}
+
+#[test]
 fn two_resolvable_computations_are_compared_after_forcing() {
     let mut m = Module::new();
     let root = m.add_block(None);

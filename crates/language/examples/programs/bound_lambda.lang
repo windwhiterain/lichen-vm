@@ -1,0 +1,9 @@
+-- A bound lambda stays polymorphic
+--
+-- `a = x => x` shares one node across uses, but each application still
+-- instantiates the parameter fresh, so one binding works at `Int` and at
+-- `Type` — graph sharing monomorphizes values, not functions.
+-- output: [5, Type]
+
+a = x => x; 
+((a 5 : Int), (a Type : Type))

@@ -1,0 +1,11 @@
+-- Statements and bindings
+--
+-- A program is `name = expr;` bindings followed by the final expression.
+-- Each value compiles once into the IR graph and every use of the name is
+-- that node — no desugared lambda, so the root stays the final expression
+-- and the program checks like a bare one.
+-- output: 1
+
+a = [1, 2]; 
+b = 0; 
+a[b]

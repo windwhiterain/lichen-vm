@@ -1,8 +1,11 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::fmt;
+use std::fmt::Debug;
 
 use lichen_utils::disjoint::{self};
+
+pub use crate::equality::UnifyError;
+pub use crate::evaluation::EvalError;
 
 mod equality;
 mod evaluation;
@@ -10,39 +13,42 @@ mod function;
 mod gc;
 mod utils;
 
-pub trait Program: Sized + Copy {
+pub trait Program: Sized + Copy + Debug + PartialEq {
     type Value: ValueExt;
     type Operator: OperatorExt<Self>;
+    /// Program-global extension state, stored on [`Module`] and read or
+    /// mutated by extension operators — the highlevel's fresh-type-id
+    /// counter, for example.
+    type GlobalExt: Debug + Copy + PartialEq + Default;
 }
 
-/// Extension values are program-specific; [`PartialEq`] is what decides
-/// whether two of them unify.
-pub trait ValueExt: Copy + PartialEq {
-    fn is_ptr(&self) -> bool;
-    /// Available if [`Self::is_ptr()`].
-    fn ptr(&self) -> *const [u8] {
+/// [`PartialEq`] is what decides whether two of them unify.
+pub trait ValueExt: Debug + Copy + PartialEq {
+    fn is_handle(&self) -> bool;
+    /// Available if [`Self::is_handle()`].
+    fn handle(&self) -> Handle<[u8]> {
         unreachable!()
     }
-    /// Available if [`Self::is_ptr()`].
-    fn set_ptr(&mut self, _ptr: *const [u8]) {
+    /// Available if [`Self::is_handle()`].
+    fn set_handle(&mut self, _payload: Handle<[u8]>) {
         unreachable!()
     }
-    /// Available if [`Self::is_ptr()`].
+    /// Available if [`Self::is_handle()`].
     fn alignment() -> usize {
         unreachable!()
     }
 }
 
-pub trait OperatorExt<P: Program>: Copy {
+pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(
         &self,
         operand: Value<P>,
-        block: &mut Block,
-        nodes: &SlotMap<NodeId, Node<P>>,
+        block: BlockId,
+        module: &mut Module<P>,
     ) -> Value<P>;
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Value<P: Program> {
     Ext(P::Value),
     Array(*const [NodeId]),
@@ -52,23 +58,7 @@ pub enum Value<P: Program> {
     Parameterized,
 }
 
-/// Equality is what decides whether two concrete values merge in
-/// [`Module::unify`]; arrays are exempt there (they unify elementwise), so
-/// they only compare by address here.
-impl<P: Program> PartialEq for Value<P> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Value::Ext(a), Value::Ext(b)) => a == b,
-            (Value::Array(a), Value::Array(b)) => std::ptr::eq(a, b),
-            (Value::Function(a), Value::Function(b)) => a == b,
-            (Value::USize(a), Value::USize(b)) => a == b,
-            (Value::None, Value::None) | (Value::Parameterized, Value::Parameterized) => true,
-            _ => false,
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Operator<P: Program> {
     Ext(P::Operator),
     /// - `operand[0]`: array.
@@ -79,10 +69,49 @@ pub enum Operator<P: Program> {
     Apply,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Operation<P: Program> {
     pub operator: Operator<P>,
     pub operand: Option<NodeId>,
+}
+
+/// A class is unbound while it carries no value or only the lazy marker.
+/// The highlevel checker uses the same rule for its diagnostics.
+pub fn is_unbound<P: Program>(value: Option<Value<P>>) -> bool {
+    matches!(value, None | Some(Value::Parameterized))
+}
+
+/// Pointer into a [`Block::arena`].  
+/// `PartialEq` compares pointing value if not `UNIQUE`.
+#[derive(Debug)]
+pub struct Handle<T: ?Sized,const UNIQUE:bool = false>(pub *const T);
+impl<T: ?Sized> Clone for Handle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<T: ?Sized> Copy for Handle<T> {}
+
+impl<T: PartialEq + ?Sized,const UNIQUE:bool> PartialEq for Handle<T,UNIQUE> {
+    fn eq(&self, other: &Self) -> bool {
+        if std::ptr::eq(self.0 , other.0) {return true}
+        if !UNIQUE{
+            unsafe { *self.0 == *other.0 }
+        }else{
+            false
+        }
+        
+    }
+}
+
+impl Handle<[u8]> {
+    pub fn len(&self) -> usize {
+        let slice = unsafe { &*self.0 };
+        slice.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 new_key_type! {pub struct NodeId;}
@@ -93,6 +122,7 @@ new_key_type! {pub struct FunctionId;}
 /// # Contract
 /// - Only one node can be referenced from parent block
 /// - Referencing a node whose block was released is a panic
+#[derive(Debug)]
 pub struct Block {
     pub arena: Bump,
     pub parent: Option<BlockId>,
@@ -106,7 +136,7 @@ pub struct Block {
 
 /// # Contract:
 /// Only [`Self::nodes`] can reference [`Self::parameter`].
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone)]
 pub struct Function {
     /// including the `r#return` and [`Self::parameter`] entry points.
     pub nodes: Vec<NodeId>,
@@ -116,6 +146,7 @@ pub struct Function {
     pub block: BlockId,
 }
 
+#[derive(Debug)]
 pub struct Node<P: Program> {
     pub value: Option<Value<P>>,
     pub operation: Option<Operation<P>>,
@@ -129,120 +160,6 @@ pub struct Node<P: Program> {
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
     pub equality: disjoint::Meta<NodeId>,
-}
-
-impl<P: Program> disjoint::Node for Node<P> {
-    type Key = NodeId;
-    fn meta(&self) -> &disjoint::Meta<NodeId> {
-        &self.equality
-    }
-    fn meta_mut(&mut self) -> &mut disjoint::Meta<NodeId> {
-        &mut self.equality
-    }
-}
-
-/// A failed unification between two value classes.
-///
-/// `a` and `b` are the representatives of the two classes that could not
-/// be unified; [`Self::value_a`] and [`Self::value_b`] are the values that
-/// conflicted.  The lowlevel only records facts — the high-level checker
-/// reads these from [`Module::unify_errors`] to build diagnostics.
-#[derive(Clone, Copy)]
-pub struct UnifyError<P: Program> {
-    pub a: NodeId,
-    pub b: NodeId,
-    pub value_a: Option<Value<P>>,
-    pub value_b: Option<Value<P>>,
-}
-
-// --- Debug (dev aid) ---------------------------------------------------
-//
-// `Value` holds raw arena pointers, so these are hand-written: they read
-// through the pointers (the arena outlives any debug print) and elide the
-// program-specific `Ext` payload to a byte count.
-
-impl<P: Program> fmt::Debug for Value<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::Ext(ext) => {
-                if ext.is_ptr() {
-                    write!(f, "Ext({} bytes)", unsafe { &*ext.ptr() }.len())
-                } else {
-                    write!(f, "Ext(inline)")
-                }
-            }
-            Value::Array(ptr) => write!(f, "Array({ptr:?})"),
-            Value::Function(id) => write!(f, "Function({id:?})"),
-            Value::USize(n) => write!(f, "USize({n})"),
-            Value::None => write!(f, "None"),
-            Value::Parameterized => write!(f, "Parameterized"),
-        }
-    }
-}
-
-impl<P: Program> fmt::Debug for Operator<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Operator::Ext(_) => write!(f, "Ext"),
-            Operator::Index => write!(f, "Index"),
-            Operator::Apply => write!(f, "Apply"),
-        }
-    }
-}
-
-impl<P: Program> fmt::Debug for Operation<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Operation")
-            .field("operator", &self.operator)
-            .field("operand", &self.operand)
-            .finish()
-    }
-}
-
-impl fmt::Debug for Block {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Block")
-            .field("parent", &self.parent)
-            .field("children", &self.children)
-            .field("nodes", &self.nodes)
-            .field("functions", &self.functions)
-            .finish()
-    }
-}
-
-impl<P: Program> fmt::Debug for Node<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Node")
-            .field("value", &self.value)
-            .field("operation", &self.operation)
-            .field("block", &self.block)
-            .field("visiting", &self.visiting)
-            .field("parameterized_deep", &self.parameterized_deep)
-            .field("equality", &self.equality)
-            .finish()
-    }
-}
-
-impl<P: Program> fmt::Debug for UnifyError<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("UnifyError")
-            .field("a", &self.a)
-            .field("b", &self.b)
-            .field("value_a", &self.value_a)
-            .field("value_b", &self.value_b)
-            .finish()
-    }
-}
-
-impl<P: Program> fmt::Debug for Module<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Module")
-            .field("nodes", &self.nodes)
-            .field("blocks", &self.blocks)
-            .field("functions", &self.functions)
-            .field("unify_errors", &self.unify_errors)
-            .finish_non_exhaustive()
-    }
 }
 
 pub struct Module<P: Program> {
@@ -260,10 +177,13 @@ pub struct Module<P: Program> {
     /// which sits above the legitimately ~200k-deep block chains exercised
     /// by the `#[stacksafe]` tests; tests lower it to panic fast.
     pub evaluate_depth_limit: usize,
-    /// Failed unifications collected by [`Self::unify`]; the checker drains
-    /// this to build diagnostics.  A failed unify leaves the two classes
-    /// unmerged.
     pub unify_errors: Vec<UnifyError<P>>,
+    /// Runtime evaluation failures (an out-of-bounds [`Operator::Index`]),
+    /// recorded instead of panicking — same append-only, never-cleared
+    /// contract as [`Self::unify_errors`].
+    pub eval_errors: Vec<EvalError>,
+    /// Program-global extension state — see [`Program::GlobalExt`].
+    pub global_ext: P::GlobalExt,
     apply_depth: usize,
     deep_depth: usize,
 }
@@ -286,6 +206,8 @@ impl<P: Program> Module<P> {
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
+            eval_errors: Vec::new(),
+            global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             deep_depth: 0,
         }

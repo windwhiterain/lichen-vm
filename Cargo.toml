@@ -4,4 +4,5 @@ members = [
     "crates/lichen-utils",
     "crates/lichen-lowlevel",
     "crates/lichen-highlevel",
+    "crates/language",
 ]

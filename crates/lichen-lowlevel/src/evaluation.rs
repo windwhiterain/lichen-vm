@@ -2,6 +2,18 @@ use stacksafe::stacksafe;
 
 use crate::{BlockId, Module, NodeId, Operator, OperatorExt as _, Program, Value};
 
+/// A runtime evaluation failure — the only one today is an out-of-bounds
+/// [`Operator::Index`].  Structured facts (the index node, the index value,
+/// the container length) so the highlevel layer can attribute a span and
+/// render a message without walking the module graph.
+#[derive(Debug, Clone, Copy)]
+pub struct EvalError {
+    /// The index operand node — its source span attributes the diagnostic.
+    pub index: NodeId,
+    pub index_value: usize,
+    pub length: usize,
+}
+
 impl<P: Program> Module<P> {
     /// If `id` lives in a child of `referer`, it is a block root, and
     /// `Self::evaluate_block` is called on it.
@@ -41,10 +53,23 @@ impl<P: Program> Module<P> {
                             Value::USize(index) => {
                                 match self.evaluate_node(operands[0], Some(block)) {
                                     Value::Parameterized => Value::Parameterized,
-                                    Value::Array(ptr) => {
-                                        let array = unsafe { &*ptr };
+                                Value::Array(ptr) => {
+                                    let array = unsafe { &*ptr };
+                                    // An out-of-bounds index is a user error,
+                                    // not an invariant violation: record it
+                                    // and yield no value instead of panicking
+                                    // in raw slice indexing.
+                                    if index < array.len() {
                                         self.evaluate_node(array[index], Some(block))
+                                    } else {
+                                        self.eval_errors.push(EvalError {
+                                            index: operands[1],
+                                            index_value: index,
+                                            length: array.len(),
+                                        });
+                                        Value::None
                                     }
+                                }
                                     _ => unreachable!("Index target must be an array"),
                                 }
                             }
@@ -66,8 +91,7 @@ impl<P: Program> Module<P> {
                     }
                     None => Value::None,
                 };
-                let Module { nodes, blocks, .. } = self;
-                ext.run(operand, &mut blocks[block], nodes)
+                ext.run(operand, block, self)
             }
             Operator::Apply => {
                 let Some(operands) = operation.operand else {

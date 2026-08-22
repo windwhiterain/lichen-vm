@@ -1,0 +1,7 @@
+-- Literals and annotations
+--
+-- Every expression is a pair [value, type].  `5 : Int` checks the literal
+-- against Int, then the program's value is 5.
+-- output: 5
+
+5 : Int

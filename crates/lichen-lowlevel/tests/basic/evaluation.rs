@@ -45,6 +45,79 @@ fn index_selects_array_element() {
     assert_eq!(u128_of(value), 20);
 }
 #[test]
+fn index_out_of_bounds_records_an_eval_error() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = u128_node(&mut m, root, 10);
+    let b = u128_node(&mut m, root, 20);
+    let arr = array_node(&mut m, root, &[a, b]);
+    let idx = usize_node(&mut m, root, 5);
+    let operands = array_node(&mut m, root, &[arr, idx]);
+    let index = op_node(&mut m, root, Operator::Index, Some(operands));
+
+    let value = m.evaluate_node_deep(index, None);
+
+    // No panic, no element: the failure is recorded as facts instead.
+    assert!(matches!(value, Value::None));
+    assert_eq!(m.eval_errors.len(), 1);
+    let err = m.eval_errors[0];
+    assert_eq!(err.index, idx);
+    assert_eq!(err.index_value, 5);
+    assert_eq!(err.length, 2);
+    assert!(m.unify_errors.is_empty());
+}
+#[test]
+fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = u128_node(&mut m, root, 10);
+    let b = u128_node(&mut m, root, 20);
+    let arr = array_node(&mut m, root, &[a, b]);
+    // One past the end: the bound is exclusive.
+    let idx = usize_node(&mut m, root, 2);
+    let operands = array_node(&mut m, root, &[arr, idx]);
+    let index = op_node(&mut m, root, Operator::Index, Some(operands));
+
+    assert!(matches!(
+        m.evaluate_node_deep(index, None),
+        Value::None
+    ));
+    assert_eq!(m.eval_errors.len(), 1);
+    // Re-evaluating the same node reads the cached error result — no
+    // duplicate record.
+    m.evaluate_node_deep(index, None);
+    assert_eq!(m.eval_errors.len(), 1);
+
+    // The last element is still selectable.
+    let idx = usize_node(&mut m, root, 1);
+    let last_ops = array_node(&mut m, root, &[arr, idx]);
+    let last = op_node(&mut m, root, Operator::Index, Some(last_ops));
+    assert_eq!(u128_of(m.evaluate_node_deep(last, None)), 20);
+    assert_eq!(m.eval_errors.len(), 1);
+}
+#[test]
+fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let param = m.add_node(root, None, Some(Value::Parameterized));
+    // f(x) = [x, [10, 20][5]]: the OOB index sits in the return pair, so a
+    // deep evaluation of the return (the definition pass) hits it.
+    let a = u128_node(&mut m, root, 10);
+    let b = u128_node(&mut m, root, 20);
+    let arr = array_node(&mut m, root, &[a, b]);
+    let idx = usize_node(&mut m, root, 5);
+    let ops = array_node(&mut m, root, &[arr, idx]);
+    let oob = op_node(&mut m, root, Operator::Index, Some(ops));
+    let ret = array_node(&mut m, root, &[param, oob]);
+    wrap_function(&mut m, root, ret, param);
+
+    m.evaluate_node_deep(ret, None);
+
+    assert_eq!(m.eval_errors.len(), 1);
+    assert!(matches!(m.nodes[oob].value, Some(Value::None)));
+    assert!(matches!(m.nodes[param].value, Some(Value::Parameterized)));
+}
+#[test]
 #[should_panic(expected = "cycle")]
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();

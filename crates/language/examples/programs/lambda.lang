@@ -1,0 +1,6 @@
+-- Lambda and application
+--
+-- `(x => x) 5` applies the identity to 5.  Application is juxtaposition.
+-- output: 5
+
+(x => x) 5 : Int

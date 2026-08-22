@@ -40,7 +40,7 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     assert_eq!(u128_of(value), 42);
     // Relocated into root's arena: the copy was made after the marker,
     // so it sits below it in the same chunk.
-    assert!(ptr as *const u8 as usize + 16 <= marker_start);
+    assert!(ptr.0 as *const u8 as usize + 16 <= marker_start);
 
     // The child block was released: gone from the block table, yet the
     // value still points into root's arena.

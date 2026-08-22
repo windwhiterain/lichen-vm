@@ -1,0 +1,85 @@
+//! The language CLI: `cargo run -p language -- <program.lang>` compiles and
+//! runs one program, printing its output; a directory path runs every
+//! `.lang` file in it, printing `file: output` per program.
+
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let Some(arg) = std::env::args().nth(1) else {
+        eprintln!("usage: cargo run -p language -- <program.lang | directory>");
+        return ExitCode::FAILURE;
+    };
+    let path = PathBuf::from(arg);
+    if path.is_dir() {
+        run_directory(&path)
+    } else {
+        run_file(&path)
+    }
+}
+
+fn run_file(path: &Path) -> ExitCode {
+    let source = match std::fs::read_to_string(path) {
+        Ok(source) => source,
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    match language::run::evaluate(&source) {
+        Ok(output) => {
+            println!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(diags) => {
+            for d in &diags {
+                print!("{}", language::render::render(&source, d));
+            }
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_directory(dir: &Path) -> ExitCode {
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension() == Some(OsStr::new("lang")))
+            .collect(),
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", dir.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    files.sort();
+    let mut failed = 0;
+    for file in files {
+        let source = match std::fs::read_to_string(&file) {
+            Ok(source) => source,
+            Err(e) => {
+                eprintln!("{}: cannot read: {e}", file.display());
+                failed += 1;
+                continue;
+            }
+        };
+        match language::run::evaluate(&source) {
+            Ok(output) => {
+                println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
+            }
+            Err(diags) => {
+                failed += 1;
+                eprintln!("{}: failed", file.display());
+                for d in &diags {
+                    print!("{}", language::render::render(&source, d));
+                }
+            }
+        }
+    }
+    if failed == 0 {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}

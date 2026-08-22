@@ -1,0 +1,9 @@
+-- Indexing
+--
+-- `e[i]` reads the i-th element of an array or tuple.  A literal index into
+-- a literal array is bounds-checked at check time (out of bounds is an
+-- `index N out of bounds (array length M)` diagnostic); selecting element 1
+-- gives 2.
+-- output: 2
+
+([1, 2, 3])[1]

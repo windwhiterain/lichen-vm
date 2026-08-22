@@ -1,14 +1,16 @@
 //! Diagnostics for the highlevel checker.
 //!
 //! The lowlevel records unification failures as facts
-//! ([`lichen_lowlevel::Module::unify_errors`]); this module turns them into rendered
-//! diagnostics.  Each checker-issued unify is attributed in the **diary**
-//! ([`DiaryEntry`]): which error it produced, the source span, and what kind
-//! of check it implements — the kind drives the expected/found wording.
-//! Runtime apply-time failures (the parameter type check, executed by the
-//! VM) have no diary entry; they are attributed by walking the two conflict
-//! classes for checker-built nodes, via a node → span side table derived
-//! from the checker's records.
+//! ([`lichen_lowlevel::Module::unify_errors`]) and runtime evaluation
+//! failures (an out-of-bounds index) as facts
+//! ([`lichen_lowlevel::Module::eval_errors`]); this module turns them into
+//! rendered diagnostics.  Each checker-issued unify is attributed in the
+//! **diary** ([`DiaryEntry`]): which error it produced, the source span, and
+//! what kind of check it implements — the kind drives the expected/found
+//! wording.  Runtime apply-time failures (the parameter type check, executed
+//! by the VM) have no diary entry; they are attributed by walking the two
+//! conflict classes for checker-built nodes, via a node → span side table
+//! derived from the checker's records.
 //!
 //! The type printer renders values with stable `?a` names per class (one
 //! class, one name within a diagnostic — confluence), renders pending
@@ -17,24 +19,42 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{NodeId, Operator, UnifyError, Value};
+use lichen_lowlevel::{is_unbound, EvalError, NodeId, Operator, UnifyError, Value};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
-    expr::{ExprId, Span},
-    program::{HighProgram, HighValue},
+    ir::{ExprId, Span},
+    program::{HighOperator, HighProgram, HighValue},
 };
 
-/// A rendered diagnostic: a message plus the source span it is grounded in.
+/// A diagnostic: the structured facts of a unification failure (or the
+/// top-level ambiguity), plus the rendered message for display.  Tests and
+/// tooling match on the structured fields; `message` is derived for
+/// display/debug only.
 #[derive(Clone, Debug)]
 pub struct Diag {
     pub span: Option<Span>,
+    /// What kind of check failed — see [`DiagKind`] for the expected/found
+    /// direction of `a`/`b`.
+    pub kind: DiagKind,
+    /// The conflicting classes, as the lowlevel recorded them ([`UnifyError`]
+    /// snapshots `a`/`b` as class representatives).  For [`DiagKind::Ambiguity`]
+    /// both are the unbound root type class.
+    pub a: NodeId,
+    pub b: NodeId,
+    /// The conflicting classes' values at error time — snapshots, not
+    /// re-reads (a failed unify never merges the classes, so they are stable).
+    pub value_a: Option<Value<HighProgram>>,
+    pub value_b: Option<Value<HighProgram>>,
+    /// Rendered for display/debug — not the test contract.
     pub message: String,
 }
 
 /// What kind of check a checker-issued unification implements — drives the
-/// wording and the expected/found direction.
+/// wording and the expected/found direction of a [`Diag`]'s `a`/`b` (for
+/// checker kinds `a` is the found side and `b` the expected; runtime
+/// failures reverse them — `a` is the parameter's expected type).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.
@@ -43,6 +63,20 @@ pub enum DiagKind {
     Kinding,
     /// Applying a concretely non-function type — expected = a function.
     Guard,
+    /// An array literal's elements must share one type — expected = the
+    /// shared element type, found = this element's type.
+    ArrayElement,
+    /// A runtime apply-time failure (the parameter type check, executed by
+    /// the VM) — no diary entry.  Reversed direction: `a` = the parameter's
+    /// expected type, `b` = the argument's found type.
+    Runtime,
+    /// The program's root type stayed unbound — nothing to compare, both
+    /// sides are the root type class.
+    Ambiguity,
+    /// An out-of-bounds index — a runtime evaluation failure, not a unify.
+    /// `a` is the index node; `value_a` the index value, `value_b` the
+    /// container's length.
+    IndexOutOfBounds,
 }
 
 /// One checker-issued unification, attributed with where it came from.
@@ -75,6 +109,15 @@ impl Build {
         for (i, err) in self.module.unify_errors.iter().enumerate() {
             out.push(report.error(i, err));
         }
+        // Runtime evaluation failures (an out-of-bounds index).  The value
+        // and type evaluation of the same expression each record one, so
+        // identical facts collapse to a single diagnostic.
+        let mut seen = HashSet::new();
+        for err in &self.module.eval_errors {
+            if seen.insert((err.index, err.index_value, err.length)) {
+                out.push(report.eval_error(err));
+            }
+        }
         if self.ok && is_unbound(self.module.nodes[report.rep(self.root_ty)].value) {
             out.push(report.ambiguity());
         }
@@ -95,7 +138,10 @@ impl Build {
         for (i, expr) in self.ir.expr.iter().enumerate() {
             if let Some(span) = expr.span {
                 let e = ExprId(i as u32);
-                for node in [self.term[e], self.val[e], self.ty[e]].into_iter().flatten() {
+                for node in [self.term[e], self.val[e], self.ty[e]]
+                    .into_iter()
+                    .flatten()
+                {
                     self.record_span(node, span, &mut map, &mut visited);
                 }
             }
@@ -117,8 +163,8 @@ impl Build {
         if node == self.type_expr {
             return; // the shared universe — do not leak its span to its elements
         }
-        if let Some(Value::Array(ptr)) = self.module.nodes[node].value {
-            for &id in unsafe { &*ptr } {
+        if let Some(ids) = self.module.array_ids(node) {
+            for &id in ids {
                 self.record_span(id, span, map, visited);
             }
         }
@@ -161,9 +207,7 @@ impl Report<'_> {
         // The owning diary entry: the last one whose error_index <= i (one
         // unify may own a whole run of errors, e.g. elementwise).
         let entry = self.build.diary.iter().rev().find(|e| e.error_index <= i);
-        let span = entry
-            .and_then(|e| e.span)
-            .or_else(|| self.best_span(err));
+        let span = entry.and_then(|e| e.span).or_else(|| self.best_span(err));
         let mut message = match entry {
             Some(entry) => self.checker_error(entry, err),
             None => self.runtime_error(err),
@@ -173,7 +217,15 @@ impl Report<'_> {
             message.push_str("\n  ");
             message.push_str(&flow.join("\n  "));
         }
-        Diag { span, message }
+        Diag {
+            span,
+            kind: entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime),
+            a: err.a,
+            b: err.b,
+            value_a: err.value_a,
+            value_b: err.value_b,
+            message,
+        }
     }
 
     fn checker_error(&mut self, entry: &DiaryEntry, err: &UnifyError<HighProgram>) -> String {
@@ -187,8 +239,18 @@ impl Report<'_> {
                 self.print_type(err.b),
                 self.print_type(err.a)
             ),
-            DiagKind::Kinding => format!("expected Type, found {}", self.print_type(err.a)),
+            DiagKind::Kinding => format!("expected TypeType, found {}", self.print_type(err.a)),
             DiagKind::Guard => format!("expected a function, found {}", self.print_type(err.a)),
+            DiagKind::ArrayElement => format!(
+                "expected {}, found {}",
+                self.print_type(err.b),
+                self.print_type(err.a)
+            ),
+            // Diary entries are checker-issued unifies only — runtime
+            // failures and ambiguity are rendered elsewhere.
+            DiagKind::Runtime | DiagKind::Ambiguity | DiagKind::IndexOutOfBounds => {
+                unreachable!("the diary never attributes runtime or ambiguity diagnostics")
+            }
         }
     }
 
@@ -213,6 +275,23 @@ impl Report<'_> {
             }
         }
         None
+    }
+
+    /// A runtime evaluation failure — an out-of-bounds index.  The index
+    /// literal's span attributes it; there are no conflict classes to walk.
+    fn eval_error(&mut self, err: &EvalError) -> Diag {
+        Diag {
+            span: self.node_spans.get(&err.index).copied(),
+            kind: DiagKind::IndexOutOfBounds,
+            a: err.index,
+            b: err.index,
+            value_a: Some(Value::USize(err.index_value)),
+            value_b: Some(Value::USize(err.length)),
+            message: format!(
+                "index {} out of bounds (array length {})",
+                err.index_value, err.length
+            ),
+        }
     }
 
     /// The HM-loc-style journey: which checker-known members fixed either
@@ -249,27 +328,24 @@ impl Report<'_> {
             {
                 out.push(format!(
                     "{name} is fixed to {} at line {}",
-                    self.flow_value(member, value),
+                    self.print_type(member),
                     span.0
                 ));
             }
         }
     }
 
-    /// A fixed member's value: type expressions (arrays) render as types
-    /// (`[int, Type]` as `int`, the universe as `Type`), leaves by value.
-    fn flow_value(&mut self, member: NodeId, value: Value<HighProgram>) -> String {
-        match value {
-            Value::Array(_) => self.print_type(member),
-            _ => value_str(value),
-        }
-    }
-
     /// Residual unbound placeholders at the top level render as ambiguity.
     fn ambiguity(&mut self) -> Diag {
-        let name = self.name_of(self.rep(self.build.root_ty));
+        let rep = self.rep(self.build.root_ty);
+        let name = self.name_of(rep);
         Diag {
             span: self.build.ir[self.build.ir.root].span,
+            kind: DiagKind::Ambiguity,
+            a: rep,
+            b: rep,
+            value_a: None,
+            value_b: None,
             message: format!("cannot determine the type of the program: {name} is ambiguous"),
         }
     }
@@ -303,15 +379,21 @@ impl Report<'_> {
                     self.name_of(rep)
                 }
             }
-            Some(Value::Ext(HighValue::Int)) => "int".to_string(),
-            Some(Value::Ext(HighValue::Type)) => "Type".to_string(),
-            Some(Value::Ext(HighValue::FunctionType)) => "FunctionType".to_string(),
-            Some(Value::Ext(HighValue::ArrayType)) => "ArrayType".to_string(),
+            Some(Value::Ext(HighValue::TypeInt)) => "TypeInt".to_string(),
+            Some(Value::Ext(HighValue::TypeType)) => "TypeType".to_string(),
+            Some(Value::Ext(HighValue::TypeFunction)) => "TypeFunction".to_string(),
+            Some(Value::Ext(HighValue::TypeTuple)) => "TypeTuple".to_string(),
+            Some(Value::Ext(HighValue::TypeArray)) => "TypeArray".to_string(),
+            Some(Value::Ext(HighValue::TypeId(n))) => format!("TypeId({n})"),
             Some(Value::USize(n)) => n.to_string(),
-            Some(Value::None) => "unit".to_string(),
-            Some(Value::Function(_)) => "a function".to_string(),
-            Some(Value::Array(ptr)) => {
-                let ids = unsafe { &*ptr };
+            Some(Value::None) => "none".to_string(),
+            Some(Value::Function(_)) => "Function".to_string(),
+            Some(Value::Array(_)) => {
+                let ids = self
+                    .build
+                    .module
+                    .array_ids(rep)
+                    .expect("the value just matched as an array");
                 if ids.len() == 2 {
                     let kind = ids[1];
                     // `[shape, K]`: an atomic type expression — render the
@@ -321,26 +403,57 @@ impl Report<'_> {
                     }
                     // `[shape, [Kind, K]]`: a compound type expression —
                     // the kind decides the shape's rendering.
-                    if let Some(Value::Array(kptr)) = self.build.module.nodes[self.rep(kind)].value {
-                        let k = unsafe { &*kptr };
-                        if k.len() == 2 && self.rep(k[1]) == self.univ {
-                            match self.build.module.nodes[self.rep(k[0])].value {
-                                Some(Value::Ext(HighValue::FunctionType)) => {
+                    if let Some(k) = self.build.module.array_ids(self.rep(kind))
+                        && k.len() == 2
+                        && self.rep(k[1]) == self.univ
+                    {
+                        match self.build.module.nodes[self.rep(k[0])].value {
+                            Some(Value::Ext(HighValue::TypeFunction)) => {
+                                return format!(
+                                    "{} → {}",
+                                    self.print_inner(ids[0], visiting),
+                                    self.print_inner(ids[1], visiting)
+                                );
+                            }
+                            Some(Value::Ext(HighValue::TypeTuple)) => {
+                                let elements: Vec<String> = ids
+                                    .iter()
+                                    .map(|&id| self.print_inner(id, visiting))
+                                    .collect();
+                                return format!("[{}]", elements.join(", "));
+                            }
+                            Some(Value::Ext(HighValue::TypeArray)) => {
+                                // The array type's pair is [shape, kind]
+                                // where shape = [type, length] — render
+                                // `int[3]`, not `[int, 3]`.
+                                if let Some(s) =
+                                    self.build.module.array_ids(self.rep(ids[0]))
+                                    && s.len() == 2
+                                {
                                     return format!(
-                                        "{} → {}",
-                                        self.print_inner(ids[0], visiting),
-                                        self.print_inner(ids[1], visiting)
+                                        "{}[{}]",
+                                        self.print_inner(s[0], visiting),
+                                        self.print_inner(s[1], visiting)
                                     );
                                 }
-                                Some(Value::Ext(HighValue::ArrayType)) => {
-                                    let elements: Vec<String> = ids
-                                        .iter()
-                                        .map(|&id| self.print_inner(id, visiting))
-                                        .collect();
-                                    return format!("[{}]", elements.join(", "));
-                                }
-                                _ => {}
                             }
+                            Some(Value::Ext(HighValue::TypeId(n))) => {
+                                // A struct type: `[fields, [TypeId(n), Type]]`
+                                // — render `struct#n { f1, f2 }`, the shape
+                                // being the field-type list.
+                                let fields: Vec<String> =
+                                    if let Some(s) =
+                                        self.build.module.array_ids(self.rep(ids[0]))
+                                    {
+                                        s.iter()
+                                            .map(|&id| self.print_inner(id, visiting))
+                                            .collect()
+                                    } else {
+                                        vec![self.print_inner(ids[0], visiting)]
+                                    };
+                                return format!("struct#{n} {{ {} }}", fields.join(", "));
+                            }
+                            _ => {}
                         }
                     }
                     if self.class_is_arrow(rep) {
@@ -351,16 +464,17 @@ impl Report<'_> {
                         );
                     }
                 }
-                let elements: Vec<String> =
-                    ids.iter().map(|&id| self.print_inner(id, visiting)).collect();
+                let elements: Vec<String> = ids
+                    .iter()
+                    .map(|&id| self.print_inner(id, visiting))
+                    .collect();
                 format!("[{}]", elements.join(", "))
             }
         }
     }
 
     fn class_is_arrow(&self, rep: NodeId) -> bool {
-        disjoint::members(&self.build.module.nodes, rep)
-            .any(|m| self.build.arrows.contains(&m))
+        disjoint::members(&self.build.module.nodes, rep).any(|m| self.build.arrows.contains(&m))
     }
 
     fn class_has_pending_op(&self, rep: NodeId) -> bool {
@@ -377,7 +491,9 @@ impl Report<'_> {
         {
             Some(Operator::Index) => "Index".to_string(),
             Some(Operator::Apply) => "Apply".to_string(),
-            Some(Operator::Ext(_)) | None => "op".to_string(),
+            Some(Operator::Ext(HighOperator::IndexType)) => "Index".to_string(),
+            Some(Operator::Ext(HighOperator::Fresh)) => "Fresh".to_string(),
+            None => "op".to_string(),
         }
     }
 }
@@ -393,22 +509,4 @@ fn letter_name(i: usize) -> String {
     }
 }
 
-/// A class is unbound while it carries no value or only the lazy marker.
-fn is_unbound(value: Option<Value<HighProgram>>) -> bool {
-    matches!(value, None | Some(Value::Parameterized))
-}
 
-/// Render a concrete value for a flow line (not class-aware).
-fn value_str(value: Value<HighProgram>) -> String {
-    match value {
-        Value::Ext(HighValue::Int) => "int".to_string(),
-        Value::Ext(HighValue::Type) => "Type".to_string(),
-        Value::Ext(HighValue::FunctionType) => "FunctionType".to_string(),
-        Value::Ext(HighValue::ArrayType) => "ArrayType".to_string(),
-        Value::USize(n) => n.to_string(),
-        Value::Array(_) => "an array".to_string(),
-        Value::Function(_) => "a function".to_string(),
-        Value::None => "unit".to_string(),
-        Value::Parameterized => "unbound".to_string(),
-    }
-}

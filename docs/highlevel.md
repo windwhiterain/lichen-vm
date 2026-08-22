@@ -123,6 +123,17 @@ Bidirectional, guarded, with the checker owning a context stack:
 - **Literals** synth; arrays synth elementwise; `Index` selects a branch's
   type; etc. The operation set is whatever the surface needs on top of the
   lowlevel ops.
+- **Indexing** `a[i]`: the value is the structural `Index` over `value(a)`.
+  The type evaluation splits on the indexed value's type — a tuple's
+  element-type list is structural, so `ty(a[i])` is an `Index` over it (an
+  out-of-bounds index is then caught like any `Index`); an array's type
+  shape `[element_type, length]` holds the length *as data* rather than as
+  selectable positions, so `ty(a[i])` runs the custom
+  `HighOperator::IndexType`, which checks `i` against the ArrayType's
+  length and yields the element type.  A type known only at runtime (a
+  parameter, a call result) takes the operator too — it dispatches on the
+  kind the bound type carries, so the check stays lazy until the apply
+  binds the array's length.
 - **Context.** A checker-owned scope stack of name → type node. λ-bound
   parameters get a fresh placeholder (monomorphic); let-bound variables get
   generalized (below). "Free in context" is the standard generalization test.
@@ -140,7 +151,7 @@ Bidirectional, guarded, with the checker owning a context stack:
   they go through copies.
 - **Instantiation** (at each use): see D2 — copy the template, unify the copy
   with the use-site expected type.
-- **Class hygiene.** The checker creates a fresh unbound node for every binder
+- **Class hygiene.** The checker creates a fresh unbound node for every parameter
   and every fresh placeholder — never reuses — or two uses of `id`
   monomorphize each other. This is the classic silent bug; worth a test.
 
@@ -161,6 +172,15 @@ keeping unify structural and callers responsible is simpler.
   context: the DSU member lists. Side tables: `node → span` (HashMap, the only
   checker-owned global — needed because rendering explains *member nodes*, not
   just events).
+- **Runtime evaluation failures.** An out-of-bounds `Index` (the value side
+  of any indexing, the type side of tuple indexing) and the `IndexType`
+  operator (the type side of array indexing) record an
+  `EvalError{index, index_value, length}` in the lowlevel's `eval_errors`
+  collection instead of panicking — the same append-only, no-Result-threading
+  contract as `unify_errors`.  `Build::diagnostics` renders each (deduplicated
+  by its facts: the value and type evaluation of one expression record the
+  same error twice) as `index 5 out of bounds (array length 3)`, attributed
+  to the index literal's span.
 - **Rendering.** Stable class names `?a` (one class, one name within a
   diagnostic — confluence). Failure at span S renders:
   - bidirectional: "expected X, found Y" (the expected side is the annotation
@@ -203,10 +223,27 @@ keeping unify structural and callers responsible is simpler.
   GC'd (it is built once by the frontend and walked by the checker), so a plain
   `expr: Vec<Expr>` with `ExprId(u32)` indices suffices — no blocks, no
   generational keys, no deletion. One `children: Vec<ExprId>` arena serves all
-  variadic `Array` lists (an `Array` holds a `Range`). `Var(ExprId)` points at
-  a pre-resolved `Binder` expression — the language frontend resolves names to
-  ids before the highlevel sees the tree, and the checker's scope stack is
-  keyed by `ExprId` (no strings anywhere in the crate). The IR stays pure
+  variadic lists — `Tuple` (a tuple value), `TypeTuple` (a tuple type), and
+  `Array` (an array value) each hold a `Range` into it.  Naming follows the
+  convention that an instance variant uses the type name (`Tuple`, `Array`)
+  while the type variant gets the `Type` prefix (`TypeTuple`, `TypeArray`).
+  The real array type is the fixed-arity struct `TypeArray { element_type,
+  length }` compiling to `[[element_type, length], [TypeArray, Type]]`
+  (instance[0]: the type shared by all elements, instance[1]: the length);
+  an `Array` literal compiles to the same shape with the element types
+  unified into one shared cell and the length set to the element count.
+  Note: the spec's surface examples write `Array(n, int)` (length first);
+  the IR's fields are ordered by the instance — `element_type` first,
+  `length` second — the frontend maps the surface operands positionally. A use of a binding is
+  the pre-resolved `Parameter` expression's own `ExprId` — the language frontend
+  resolves names to ids before the highlevel sees the tree, and the checker's
+  scope stack is keyed by `ExprId` (no strings anywhere in the crate). `let`
+  is desugared by the frontend into an apply of a function over the value
+  (`Apply { function: Function { parameter, return }, argument: value }`;
+  the variants are struct-style with named fields — 2026-08-22: the `Var` and
+  `Let` variants were removed; the checker's
+  `Parameter` arm resolves the use to the compiled parameter pair). The IR stays
+  pure
   (structure + span only); the checker's products live in dense parallel
   arrays indexed by `ExprId` — `term: Vec<Option<NodeId>>` (compiled value
   node) and `ty: Vec<Option<ExprId>>` (**the type of an expression is itself an
@@ -216,9 +253,9 @@ keeping unify structural and callers responsible is simpler.
   `ty: ExprId → ExprId`; `type_of(e)` is expressible exactly as the Expr
   `ty(e)` — an expression whose value is e's type. Consequences:
   (a) new `ExprKind::TyVar` — a fresh type variable, compiles to a fresh
-  unbound node; each binder's type starts as a TyVar, and after unify its
+  unbound node; each parameter.s type starts as a TyVar, and after unify its
   node's class carries the type value, so it remains a correct type expression
-  for the binder's whole lifetime;
+  for the parameter.s whole lifetime;
   (b) the checker appends synthesized type expressions (TyVars, canonical
   type constants, structural arrow/array types) to the table — the
   frontend-built part is immutable, the checker only grows it;
@@ -234,6 +271,30 @@ keeping unify structural and callers responsible is simpler.
   instantiation (or confirm the existing copy machinery handles cycles);
   nothing else required for D1 (no occurs check). Unify, apply, GC, guards
   stay as they are.
+- **Nominal struct types (2026-08-22).** New types are created at runtime by
+  a fresh-type-id mechanism; identity is nominal, not structural.  The IR
+  form is `ExprKind::TypeStruct(ChildRange)` — the positional field types
+  (no names in v1) — compiling to the pair
+  `[field types, [TypeId(n), Type]]`: the same shape as a tuple type, but
+  the kind slot holds a *fresh nominal id* (`HighValue::TypeId(n)`) instead
+  of the fixed `TypeTuple` marker.  The id comes from `HighOperator::Fresh`,
+  a nullary extension operator that reads and increments
+  `HighGlobalExt::type_id_counter` — the highlevel's global extension state,
+  carried in the lowlevel `Module`'s `global_ext` slot via the new
+  `Program::GlobalExt` associated type (the lowlevel stays generic; the
+  counter lives in the highlevel's own state).  Because `Fresh` fires once
+  per source occurrence (and is cached), each `TypeStruct` expression
+  allocates a distinct id: unify (`PartialEq` on `TypeId`) merges equal ids
+  and conflicts on different ones, so two occurrences never unify, and a
+  struct never unifies with a same-shape tuple type.  A struct type is
+  reused by binding it once through a parameter — the same first-class-type
+  reuse as any type value.  Kinding accepts `[TypeId(n), Type]` as a kind;
+  an unevaluated `Fresh` marker (pending at check time) defers the kinding
+  check to the runtime.  Diagnostics render a struct as `struct#n { f1, f2 }`
+  and a bare id as `TypeId(n)`.  Out of scope for now: struct *value*
+  construction (an instance form / constructor), top-level `struct A { .. }`
+  declarations (the program is one expression; bind the type via a
+  parameter), and `struct` source syntax in the language layer.
 
 ## 9. Open items
 

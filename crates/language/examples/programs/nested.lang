@@ -1,0 +1,6 @@
+-- Arrays of arrays
+--
+-- `[[1, 2], [3, 4]]` is homogeneous (both elements are `Int<2>`), so it
+-- checks; the value printer recurses into nested arrays.
+-- output: [[1, 2], [3, 4]]
+[[1, 2], [3, 4]]
