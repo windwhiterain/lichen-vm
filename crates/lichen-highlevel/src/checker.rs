@@ -27,6 +27,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use stacksafe::stacksafe;
+
 use lichen_lowlevel::{is_unbound, BlockId, Module, NodeId, Operation, Operator, UnifyError, Value};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
@@ -143,7 +145,7 @@ impl Checker {
         checker.module.evaluate_node_deep(checker.int_type, None);
         let root = checker.ir.root;
         let root_term = checker.check_expr(root, Role::Term);
-        let root_ty = checker.ty[root].expect("the root expression must have a type");
+        let mut root_ty = checker.ty[root].expect("the root expression must have a type");
         // The definition pass: run the program so the apply-time type checks
         // fire.  Skipped when the checker-side unifies (annotations, kinding,
         // guards) already failed — the graph may then hit a non-function
@@ -154,6 +156,16 @@ impl Checker {
         let ok =
             checker.module.unify_errors.is_empty() && checker.module.eval_errors.is_empty();
         let root_val = checker.value_of(root);
+        // A call's result type is a lazy record — the runtime apply never
+        // fills the result cell — so an unannotated call's root type stays an
+        // unbound placeholder.  The checker pre-evaluates the type it checks:
+        // when the program evaluated, the root type is derived from the
+        // evaluated value (a concrete value carries its type).  A generic
+        // function's ends stay underdetermined, which is not an error.
+        if ok && is_unbound(checker.module.nodes[root_ty].value) {
+            let value = checker.module.evaluate_node_deep(root_val, None);
+            root_ty = checker.type_of_value(value, &mut HashSet::new());
+        }
         Build {
             ir: checker.ir,
             module: checker.module,
@@ -284,6 +296,50 @@ impl Checker {
         index
     }
 
+    /// The type of an evaluated value — how the checker pre-evaluates the
+    /// root type of a program whose own type cell stayed a lazy record (an
+    /// unannotated call).  Values carry their type structurally: a literal
+    /// is `int`, a function a fresh arrow shape (a generic function's ends
+    /// stay underdetermined — not an error), an array a tuple type of its
+    /// elements' types.  `visiting` cuts a structural cycle (the universe's
+    /// self-loop, which a value may reference) with a fresh cell.
+    #[stacksafe]
+    fn type_of_value(
+        &mut self,
+        value: Value<HighProgram>,
+        visiting: &mut HashSet<NodeId>,
+    ) -> NodeId {
+        match value {
+            Value::USize(_) => self.int_type,
+            Value::Ext(_) => self.type_expr,
+            Value::Function(_) => {
+                let domain = self.fresh_cell();
+                let codomain = self.fresh_cell();
+                let shape = self.array_node(self.current_block, &[domain, codomain]);
+                let kind = self.kind_expr(self.current_block, self.function_type_marker);
+                self.array_node(self.current_block, &[shape, kind])
+            }
+            Value::Array(ptr) => {
+                let ids = unsafe { &*ptr };
+                let mut tys = Vec::with_capacity(ids.len());
+                for &el in ids.iter() {
+                    if visiting.contains(&el) {
+                        tys.push(self.fresh_cell());
+                        continue;
+                    }
+                    visiting.insert(el);
+                    let element = self.module.nodes[el].value.unwrap_or(Value::None);
+                    tys.push(self.type_of_value(element, visiting));
+                    visiting.remove(&el);
+                }
+                let shape = self.array_node(self.current_block, &tys);
+                let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
+                self.array_node(self.current_block, &[shape, kind])
+            }
+            Value::None | Value::Parameterized => self.fresh_cell(),
+        }
+    }
+
     // --- the check -------------------------------------------------------
 
     /// A checker-issued unification, diary-attributed: records which error
@@ -406,6 +462,22 @@ impl Checker {
         self.kind_marker_is(kind, HighValue::TypeFunction)
     }
 
+    /// Whether `ty` is a concrete indexable type expression — a tuple type
+    /// (`[shape, [TypeTuple, K]]`) or an array type (`[shape, [TypeArray,
+    /// K]]`).  The index-target guard skips these; only concretely
+    /// *non*-indexable types are caught statically.
+    fn is_indexable_type(&mut self, ty: NodeId) -> bool {
+        let Some(ids) = self.module.array_ids(ty) else {
+            return false;
+        };
+        if ids.len() != 2 {
+            return false;
+        }
+        let kind = ids[1];
+        self.kind_marker_is(kind, HighValue::TypeTuple)
+            || self.kind_marker_is(kind, HighValue::TypeArray)
+    }
+
     fn check_term(&mut self, e: ExprId) -> NodeId {
         // The IR is a graph: statement bindings pre-resolve every use of a
         // name to the value's own `ExprId`, so one expression may be
@@ -474,6 +546,9 @@ impl Checker {
                 self.check_lam(e, parameter, r#return)
             }
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
+            ExprKind::Instantiate { type_expr, value } => {
+                self.check_instantiate(e, type_expr, value)
+            }
             ExprKind::Index { array, index } => self.check_index(e, array, index),
             ExprKind::Annotation {
                 value,
@@ -498,6 +573,22 @@ impl Checker {
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),
             ExprKind::TypeStruct(_) => self.check_type_struct(e),
             ExprKind::Array(_) => self.check_array_term(e),
+            ExprKind::Placeholder => {
+                // `_` — an inferrable type position: two fresh unbound
+                // cells, one for the type's value slot and one for its
+                // kind, so whatever the context unifies them with binds
+                // them.  The kind slot must be a cell too, not the
+                // universe: a compound type's kind slot holds a kind
+                // expression (`[FunctionType, Type]`), which would clash
+                // with `Type` itself.
+                let val = self.fresh_cell();
+                let ty_cell = self.fresh_cell();
+                let pair = self.pair_of(val, ty_cell);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(val);
+                self.ty[e] = Some(ty_cell);
+                pair
+            }
             ExprKind::TypeArray {
                 element_type,
                 length,
@@ -607,6 +698,31 @@ impl Checker {
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
         let value_node = self.op_node(self.current_block, Operator::Index, Some(value_ops));
         let array_ty = self.ty[array].unwrap();
+        // Index-target guard: indexing a *concretely* non-indexable type —
+        // a function, an atomic type, a struct type — is an error, not a
+        // runtime panic (mirroring the apply guard).  Tuple and array types
+        // pass; an unbound type (a parameter, a call result) defers to the
+        // runtime Index, which stays lazy until the type is known.
+        let concrete = matches!(
+            self.module.nodes[array_ty].value,
+            Some(Value::Ext(_)) | Some(Value::USize(_)) | Some(Value::Array(_))
+        );
+        if concrete && !self.is_indexable_type(array_ty) {
+            let error_index = self.module.unify_errors.len();
+            self.module.unify_errors.push(UnifyError {
+                a: array_ty,
+                b: array_ty,
+                value_a: self.module.nodes[array_ty].value,
+                value_b: self.module.nodes[array_ty].value,
+            });
+            self.diary.push(DiaryEntry {
+                error_index,
+                a: array_ty,
+                b: array_ty,
+                span: self.ir[e].span,
+                kind: DiagKind::IndexTarget,
+            });
+        }
         let tuple_shape = match self.module.array_ids(array_ty) {
             Some(ids) if ids.len() == 2 => {
                 // Copy the ids out of the slice borrow: kind_marker_is
@@ -651,39 +767,15 @@ impl Checker {
         self.check_expr(value, Role::Term);
         // The annotation compares the full type expressions: the value
         // expression's type against the type expression itself — both are
-        // pairs in the recursive encoding.
+        // pairs in the recursive encoding.  (Struct instantiation is not an
+        // annotation — it is the dedicated [`ExprKind::Instantiate`].)
         let type_pair = self.term[type_expr].unwrap();
-        // A struct instantiation: `(v1, ..., vn) : struct { T1, ..., Tn }`
-        // wraps a tuple value in the nominal type.  The plain unify would
-        // compare the kind slots — the tuple type's fixed marker against the
-        // struct's nominal id — and always conflict, so instead the tuple's
-        // element-type list is checked against the field list, and the
-        // annotation's type is the struct type itself.  A non-tuple value
-        // (a literal, an array, an already-wrapped instance) takes the plain
-        // path: literals conflict, an instance of the same struct passes
-        // trivially, a different occurrence conflicts nominally.
-        let value_ty = self.ty[value].unwrap();
-        let is_tuple = match self.module.array_ids(value_ty) {
-            Some(ids) if ids.len() == 2 => {
-                // Copy the id out of the slice borrow: kind_marker_is needs
-                // `&mut self` while `array_ids` borrows the module.
-                let kind = ids[1];
-                self.kind_marker_is(kind, HighValue::TypeTuple)
-            }
-            _ => false,
-        };
-        if self.is_struct_type(type_expr) && is_tuple {
-            let tuple_shape = self.module.array_ids(value_ty).unwrap()[0];
-            let field_list = self.module.array_ids(type_pair).unwrap()[0];
-            self.check_unify(tuple_shape, field_list, self.ir[e].span, DiagKind::Annotation);
-        } else {
-            self.check_unify(
-                self.ty[value].unwrap(),
-                type_pair,
-                self.ir[e].span,
-                DiagKind::Annotation,
-            );
-        }
+        self.check_unify(
+            self.ty[value].unwrap(),
+            type_pair,
+            self.ir[e].span,
+            DiagKind::Annotation,
+        );
         let value_node = self.value_of(value);
         let pair = self.pair_of(value_node, type_pair);
         self.term[e] = Some(pair);
@@ -692,25 +784,41 @@ impl Checker {
         pair
     }
 
-    /// Whether the type expression is a struct type: its kind slot is
-    /// `[TypeId(n) | <pending Fresh>, K]` — the marker is a nominal id (or
-    /// the unevaluated [`HighOperator::Fresh`] call that will produce one),
-    /// never one of the fixed markers.
-    fn is_struct_type(&mut self, e: ExprId) -> bool {
-        let Some(ids) = self.module.array_ids(self.ty[e].unwrap()) else {
-            return false;
+    /// Struct instantiation: `s(1, 2)` — the positional tuple `value` is
+    /// wrapped in the struct type `type_expr`.  The tuple's element-type
+    /// list is checked against the struct's field list, and the
+    /// expression's type is the struct type itself (the instance carries
+    /// the nominal id; the tuple's own kind marker is discarded).  A
+    /// non-tuple value fails the list check — a literal is not a struct
+    /// value.
+    fn check_instantiate(&mut self, e: ExprId, type_expr: ExprId, value: ExprId) -> NodeId {
+        self.check_expr(type_expr, Role::Type);
+        self.check_expr(value, Role::Term);
+        let type_pair = self.term[type_expr].unwrap();
+        let value_ty = self.ty[value].unwrap();
+        // The value's shape: the element-type list of a tuple type, or the
+        // type itself for anything else (which then fails the list check).
+        let value_shape = match self.module.array_ids(value_ty) {
+            Some(ids) if ids.len() == 2 => {
+                // Copy the ids out of the slice borrow: kind_marker_is needs
+                // `&mut self` while `array_ids` borrows the module.
+                let (shape, kind) = (ids[0], ids[1]);
+                if self.kind_marker_is(kind, HighValue::TypeTuple) {
+                    shape
+                } else {
+                    value_ty
+                }
+            }
+            _ => value_ty,
         };
-        if ids.len() != 2 {
-            return false;
-        }
-        let (marker, tail) = (ids[0], ids[1]);
-        if !self.is_universe(tail) {
-            return false;
-        }
-        matches!(
-            self.module.nodes[marker].value,
-            Some(Value::Ext(HighValue::TypeId(_)))
-        ) || self.module.nodes[marker].operation.is_some()
+        let field_list = self.module.array_ids(type_pair).unwrap()[0];
+        self.check_unify(value_shape, field_list, self.ir[e].span, DiagKind::Annotation);
+        let value_node = self.value_of(value);
+        let pair = self.pair_of(value_node, type_pair);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(type_pair);
+        pair
     }
 
     fn check_tuple_term(&mut self, e: ExprId) -> NodeId {

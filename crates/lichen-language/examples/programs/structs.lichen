@@ -1,8 +1,8 @@
 -- Nominal struct types
 --
--- `struct { T1, ..., Tn }` is a *new type* with positional fields: each
+-- `struct<T1, ..., Tn>` is a *new type* with positional fields: each
 -- source occurrence allocates a fresh nominal id, so two occurrences never
 -- unify.  Bind one occurrence and it is reusable — here the same bound type
 -- fills an array, and the element check sees a single nominal id.
 -- output: [[Int], [Int]]
-s = struct { Int }; [s, s]
+s = struct<Int>; [s, s]

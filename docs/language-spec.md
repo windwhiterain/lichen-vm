@@ -21,7 +21,7 @@ resolver, and IR emitter on top of the existing highlevel checker, which runs
    diagnostics. Every stage is testable on its own.
 2. **Proper diagnostics.** Every error — frontend or checker — is a value with
    a span and a message; bad input never panics. Checker failures keep the
-   highlevel's existing rendering (expected/found, the `?a` flow, ambiguity).
+   highlevel's existing rendering (expected/found, the `?a` flow).
 3. **No changes to the type layer.** The checker, the IR, and the lowlevel VM
    are used as-is; the frontend is a pure producer of `ExprTable`s.
 
@@ -39,12 +39,13 @@ expr     := name '=>' expr                        -- lambda; body extends maxima
           | atom
 atom     := int_literal
           | 'Int' | 'Type'                        -- the two type constants
+          | '_'                                   -- inference placeholder (type position only)
           | name
           | '(' expr ')'                          -- grouping
           | '(' expr ',' expr (',' expr)* ')'     -- tuple  (TypeTuple in type position)
           | '[' expr (',' expr)* ']'              -- array literal
           | '<' expr ',' expr (',' expr)* '>'     -- tuple type  (always TypeTuple)
-          | 'struct' '{' expr (',' expr)* '}'     -- struct type  (nominal, positional fields)
+          | 'struct' '<' expr (',' expr)* '>'     -- struct type  (nominal, positional fields)
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `=>`, `->`, `:`.  `=` binds a name in
@@ -52,6 +53,11 @@ atom     := int_literal
   of line).
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
   `Type`, and `struct` are reserved — they cannot be bound or used as names.
+- **The `_` placeholder.**  In type position (the right side of `:`, and the
+  components of the type forms under it), `_` is an inference placeholder:
+  the checker infers the type from context — `x : _`, `x : Int -> _`,
+  `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.  Outside type positions
+  `_` is an ordinary name, so `_ = 5; _` and `_ => _` stay legal.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
 - **Precedence** (loosest → tightest): `:` → `->` → application → postfix
@@ -66,10 +72,10 @@ atom     := int_literal
 
 ### 2.1 Distinct delimiters
 
-Brackets `[ ]` and parens `( )` build values; angle brackets `< >` and
-braces `{ }` build types.  `[1, 2]` is an array value and `(1, 2)` a tuple
-value; `T<3>` is the array type of length 3, `<Int, Type>` the tuple type,
-and `struct { Int, Type }` a nominal struct type.  A `<` directly
+Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
+types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `T<3>` is the
+array type of length 3, `<Int, Type>` the tuple type, and
+`struct<Int, Type>` a nominal struct type.  A `<` directly
 after an expression is *always* the array type — application is
 juxtaposition, so no whitespace rule exists (the earlier `T[e]` design needed
 one to tell `Int[3]` from `f [3]`; angle brackets removed it).  A type tuple
@@ -114,26 +120,33 @@ index it selects a branch.
   literal index into a statically-known array is checked against its length
   at check time (an out-of-bounds index is an `IndexOutOfBounds`
   diagnostic); an index known only at runtime (a parameter, a call result)
-  is checked when evaluated.  `[then, else][i]` is the language's only
+  is checked when evaluated.  Indexing a *concretely* non-indexable type —
+  a function, an atomic type, a struct type — is an `IndexTarget`
+  diagnostic at check time, not a runtime panic (mirroring the apply
+  guard).  `[then, else][i]` is the language's only
   conditional form — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
-- **Nominal struct types.**  `struct { T1, ..., Tn }` is a *new type* with
+- **Nominal struct types.**  `struct<T1, ..., Tn>` is a *new type* with
   positional fields (no names in v1).  Its kind slot holds a **fresh nominal
   id** — each occurrence of the syntax allocates a new id, so two
   occurrences never unify and a struct never unifies with a same-shape tuple
   type (nominal identity).  Bind one occurrence and it is reusable: the
   checker compiles each expression once, so a bound or parameter-passed
-  struct type used many times is the *same* type — `s = struct { Int }; [s, s]`
-  is a homogeneous array, while `[struct { Int }, struct { Int }]` (two
+  struct type used many times is the *same* type — `s = struct<Int>; [s, s]`
+  is a homogeneous array, while `[struct<Int>, struct<Int>]` (two
   source occurrences) is a nominal conflict.
-- **Struct instantiation.**  `(v1, ..., vn) : struct { T1, ..., Tn }` wraps
-  a positional tuple in the nominal type: the element types are checked
-  against the field list (arity and field types must match), and the
-  annotation's type is the struct type itself.  A literal is not a struct
-  value — `5 : struct { Int }` conflicts.  Re-annotating an instance with
-  the *same* struct type passes; a different source occurrence is a
-  different type.  Field access and values of struct type beyond the
-  wrapped tuple are future work.
+- **Struct instantiation.**  `s(1, 2)` — an application whose callee is a
+  struct type — wraps the positional tuple in the nominal type: it compiles
+  to the dedicated `Instantiate` expression, whose element types are checked
+  against the field list (arity and field types must match), and whose type
+  is the struct type itself.  A literal is not a positional value —
+  `s(5)` conflicts.  Instances of different source occurrences are
+  different types, even with the same fields.  The callee is recognized by
+  the frontend from its IR node (the literal `struct<...>` or a name bound
+  to one); a struct type arriving through a parameter is not recognized and
+  falls through to a plain application, which fails at runtime (applying a
+  non-function is a VM panic, not a diagnostic).  Field access and values of
+  struct type beyond the wrapped tuple are future work.
 - **Dependent array types (pinning).**  The length of `T<e>` is an arbitrary
   expression, so `Int<n>` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an
@@ -144,6 +157,15 @@ index it selects a branch.
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
+- **The `_` placeholder.**  A `_` in type position compiles to an unbound
+  cell: the annotation unifies the value's type against it, so the cell
+  binds to that type — `5 : _` infers `int`, `x => x : _` the arrow
+  `?a → ?a`, and `[1, 2, 3] : Int<_>` the length `3`.  Partial types infer
+  the rest: `((x => x) : (Int -> _)) 5` fixes the input to `int` and infers
+  the output.  Kinding is deferred for `_` like any unbound type, so `_`
+  never raises a kinding error; a `_` that never binds leaves the type
+  underdetermined — not an error — and a mismatch against a
+  partial type is still an error (`5 : Int -> _` fails).
 
 ## 4. Compilation: source → IR
 
@@ -160,10 +182,12 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `e1 e2` | `Apply { function, argument }` |
 | `e[i]` | `Index { array, index }` |
 | `e : T` | `Annotation { value, type }` |
+| `_` (type position) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |
-| `struct { T1, …, Tn }` | `TypeStruct(range)` — nominal, fresh id per occurrence |
+| `struct<T1, …, Tn>` | `TypeStruct(range)` — nominal, fresh id per occurrence |
+| `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
 
@@ -233,107 +257,3 @@ diagnostics show `TypeInt`, `TypeType`, `TypeFunction`, `TypeTuple`,
 `TypeArray`, `none`, `Function` even though the source spells the first two
 `Int` and `Type`.  `Int` (the value) prints as its own digits.
 
-## 6. Examples
-
-Well-typed programs (each checks and evaluates):
-
-```
-5                                        -- 5 : Int
-(x => x) 5 : Int                         -- 5
-x => x                                   -- a function, type ?a → ?a
-(((id => (id 5 : Int)) (x => x)) : Int) -- 5 (the root apply is annotated)
-(((id => ((id 5 : Int), (id Type : Type))) (x => x)) : <Int, Type>)  -- the polymorphic id
-(1, (x => x))                            -- a heterogeneous tuple
-([1, 2, 3] : Int<3>)                     -- array literal against its array type
-(((n => ([1, 2, 3] : Int<n>)) 3) : Int<3>)  -- dependent: the length pins n to 3
-([1, 2, 3])[1]                           -- 2 (an index)
-((i => [10, 20][i]) 1 : Int)             -- 20 (the index is a runtime parameter)
-a = [1, 2]; b = 0; a[b]                  -- 1 (statements: bindings, then the final expression)
-a = x => x; ((a 5 : Int), (a Type : Type))  -- (5, Type) — a bound lambda stays polymorphic
-struct { Int, Int }                      -- [Int, Int] (a nominal struct type, first-class value)
-s = struct { Int }; (s, s)               -- [[Int], [Int]] — one occurrence, reused
-(1, 2) : struct { Int, Int }             -- [1, 2] (instantiation: a tuple wrapped in the struct type)
-s = struct { Int, Int }; ((1, 2) : s)    -- [1, 2] (the same bound type, instantiated)
-```
-
-(A top-level *unannotated* application's result type is a lazy cell, so the
-program's type is ambiguous — annotate the root application, as above.
-Statement bindings don't wrap the root in an application, so a binding
-program's final expression is checked like a bare program.)
-
-Ill-typed programs (expected diagnostics):
-
-| program | diagnostic |
-|---|---|
-| `x` | `unresolved name 'x'` (resolve) |
-| `((id => id 5) (x => x))` | `cannot determine the type of the program: ?a is ambiguous` (check) |
-| `5 : Int -> Int` | `expected TypeInt → TypeInt, found TypeInt` (check) |
-| `5 : 5` | `expected TypeType, found TypeInt` (check, kinding) |
-| `(5 3)` | `expected a function, found TypeInt` (check, guard) |
-| `[1, x => x]` | the array elements do not share one type (check) |
-| `([1, 2, 3])[5]` | `index 5 out of bounds (array length 3)` (check) |
-| `a = 5; y` | `unresolved name 'y'` (resolve) |
-| `[struct { Int }, struct { Int }]` | `expected TypeId(1), found TypeId(0)` (check — two occurrences never unify) |
-| `(((n => ([1, 2, 3] : Int<n>)) 5) : Int<3>)` | `expected 3, found 5` (check, runtime — `n` is pinned to 3 by the annotation) |
-
-## 7. Non-goals (v1)
-
-- **No arithmetic** (`+`, `-`, …) — the lowlevel VM has no arithmetic
-  builtins, and adding them is a lowlevel change, not a frontend one.
-- **No dedicated `if`** — a branch is written `[then, else][i]` with an
-  integer index; there are no comparison operators, so a runtime condition
-  must come from a parameter or a call result.
-- **No recursion** — the IR is an acyclic graph; a function cannot mention
-  itself, and a binding cannot refer to itself (its value compiles before the
-  name is in scope).
-- **No multi-parameter functions** (single `Parameter` per `Function`; currying
-  is written `x => y => e`).
-- **No parameter annotations** (`x : T => e`), strings, booleans, or unit.
-- **No error recovery** — the frontend reports the first lex/parse/resolve
-  error.
-- **No modules or mutual definitions** — a program is statement bindings
-  followed by one final expression.
-
-## 8. Future work
-
-- Arithmetic and conditionals: promote a small operator set into the lowlevel
-  and add an `if`-branch form to the IR + checker.
-- Recursion: needs either cyclic IR or top-level `def`s with a
-  definition-pass environment.
-- Genuinely dependent lengths: v1 pins a bound length to the value the check
-  sees, monomorphizing the parameter.  Per-application checking — the same
-  template yielding a different type per argument — requires the annotation
-  check to travel with the apply (a runtime annotation), which is future
-  work.
-- Parameter annotations: desugar `x : T => e` to `x => (y => e) (x : T)` with
-  a fresh binder (the annotation binds `x`'s type cell at check time).
-- Error recovery / multi-error reporting; caret spans (start/end) instead of
-  single positions.
-
-## 9. Running the examples
-
-`crates/lichen-language/examples/programs/` holds one file per key feature (a
-literal, a lambda, polymorphism, tuples, arrays, indexing, the index-as-
-conditional, the dependent length, statements, first-class types, nested
-arrays), each with an `-- output:` comment promising its result.  Run one
-program from the workspace root:
-
-```
-cargo run -p lichen-language -- crates/lichen-language/examples/programs/bindings.lichen
-```
-
-or a whole directory (one `file: output` line per program):
-
-```
-cargo run -p lichen-language -- crates/lichen-language/examples/programs
-```
-
-The runner also installs as a standalone CLI named `lichen` — `cargo install
---path crates/lichen-language` from a checkout of the repo, or `cargo install
---git <repo-url> lichen-language` — after which `lichen <program.lichen |
-directory>` runs the same commands.
-
-`tests/examples.rs` checks every example file against its promised output,
-so the examples stay the living spec.  The value printer renders `USize`s as
-digits, arrays — and tuples, which are the same runtime value — as
-`[a, b]`, functions as `Function`, and the type constants as `Int` / `Type`.

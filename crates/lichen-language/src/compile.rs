@@ -56,6 +56,7 @@ impl Compiler {
             Expr::Name(name, span) => self.lookup(name).ok_or_else(|| {
                 Diag::new(Stage::Resolve, *span, format!("unresolved name '{name}'"))
             })?,
+            Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span),
             Expr::Lambda {
                 parameter,
                 parameter_span,
@@ -83,7 +84,22 @@ impl Compiler {
             } => {
                 let function = self.compile_expr(function)?;
                 let argument = self.compile_expr(argument)?;
-                self.alloc(ExprKind::Apply { function, argument }, span)
+                // An application whose callee is a struct type is
+                // instantiation, not function application: `s(1, 2)` with
+                // `s` bound to `struct<Int, Int>` wraps the tuple in the
+                // nominal type.  The callee is recognized by its IR node —
+                // the literal `struct<...>` or a name that resolved to one.
+                if matches!(self.ir[function].kind, ExprKind::TypeStruct(_)) {
+                    self.alloc(
+                        ExprKind::Instantiate {
+                            type_expr: function,
+                            value: argument,
+                        },
+                        span,
+                    )
+                } else {
+                    self.alloc(ExprKind::Apply { function, argument }, span)
+                }
             }
             Expr::Annotation {
                 value,
@@ -251,5 +267,18 @@ mod tests {
         assert_eq!(err.stage, Stage::Resolve);
         assert_eq!(err.message, "unresolved name 'y'");
         assert_eq!(err.span, Some((1, 6)));
+    }
+
+    #[test]
+    fn a_type_position_underscore_compiles_to_a_placeholder() {
+        // x => x : _ — the annotation's type is the placeholder kind.
+        let ir = compile_ok("x => x : _");
+        let ExprKind::Function { r#return, .. } = kind(&ir, ir.root) else {
+            panic!("expected a function")
+        };
+        let ExprKind::Annotation { r#type, .. } = kind(&ir, r#return) else {
+            panic!("expected an annotation")
+        };
+        assert!(matches!(kind(&ir, r#type), ExprKind::Placeholder));
     }
 }

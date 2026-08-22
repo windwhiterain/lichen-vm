@@ -65,7 +65,7 @@ fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_type_tuple(elements, None)
 }
-/// A struct type expression: `struct { T1, ..., Tn }` — positional fields.
+/// A struct type expression: `struct<T1, ..., Tn>` — positional fields.
 fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
     ir.alloc_type_struct(fields, None)
 }
@@ -82,6 +82,10 @@ fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
         },
         None,
     )
+}
+/// `_` — an inference placeholder in type position.
+fn hole(ir: &mut IR) -> ExprId {
+    ir.alloc(ExprKind::Placeholder, None)
 }
 
 fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build {
@@ -628,6 +632,40 @@ fn applying_a_non_function_reports_expected_function() {
 }
 
 #[test]
+fn indexing_a_function_reports_expected_tuple_or_array() {
+    // (\x. x)[0] — the index-target guard, mirroring the apply guard: a
+    // concretely-known function type is not indexable, reported statically
+    // instead of a runtime panic.
+    let mut ir = IR::new();
+    let x = param(&mut ir);
+    let l = lam(&mut ir, x, x);
+    let zero = int(&mut ir, 0);
+    let idx = index(&mut ir, l, zero);
+    ir.expr[idx.0 as usize].span = Some((3, 7));
+    let b = build(idx, ir);
+    assert!(!b.ok);
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::IndexTarget);
+    assert_eq!(diags[0].span, Some((3, 7)));
+    assert_eq!(diags[0].a, b.ty[l].unwrap());
+}
+
+#[test]
+fn indexing_an_int_reports_expected_tuple_or_array() {
+    // 5[0] — an atomic type is not indexable either.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let zero = int(&mut ir, 0);
+    let idx = index(&mut ir, five, zero);
+    let b = build(idx, ir);
+    assert!(!b.ok);
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::IndexTarget);
+}
+
+#[test]
 fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     // (\x. (x : Type)) 5 — the parameter's type is Type, the argument's int:
     // a runtime apply-time failure, attributed to the argument's span.
@@ -697,11 +735,10 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
 }
 
 #[test]
-fn an_unannotated_call_reports_an_ambiguous_type() {
-    // (\id. id 5) (\x. x) — the result type is never anchored: the call's
-    // type cell is lazy (the runtime does not force a polymorphic template's
-    // result — evaluating it yields the parameterized marker), so the
-    // program's type is ambiguous.
+fn an_unannotated_call_derives_its_root_type_from_the_value() {
+    // (\id. id 5) (\x. x) — the call's result type cell is a lazy record
+    // (the runtime apply never fills it), so the checker pre-evaluates the
+    // root type: the program evaluates to 5, whose type is int.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let id = lam(&mut ir, x, x);
@@ -712,10 +749,8 @@ fn an_unannotated_call_reports_an_ambiguous_type() {
     let whole = app(&mut ir, outer, id);
     let b = build(whole, ir);
     assert!(b.ok);
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Ambiguity);
-    assert!(diags[0].value_a.is_none(), "the root type is unbound");
+    assert!(b.diagnostics().is_empty());
+    assert_eq!(b.root_ty, b.int_type, "the derived root type is int");
 }
 
 #[test]
@@ -749,9 +784,10 @@ fn tuple_length_mismatch_reports_both_sides() {
 fn a_call_result_annotation_binds_lazily() {
     // (\f. (f 5 : int)) (\x. Type) — f actually returns Type, but the
     // annotation anchors the lazy result cell of `f 5` without a runtime
-    // check, so the call checks and its type is int.  The desugared let's
-    // own type is the outer apply's lazy cell — unanchored, so the root is
-    // ambiguous (the let no longer propagates the body's type).
+    // check, so the call checks and its type is int.  The outer apply's
+    // result cell is unanchored too, but the checker pre-evaluates the root
+    // type from the evaluated value — the Type constant — so the program
+    // checks cleanly.
     let mut ir = IR::new();
     let x = param(&mut ir);
     let tval = ty(&mut ir);
@@ -766,17 +802,15 @@ fn a_call_result_annotation_binds_lazily() {
     let b = build(whole, ir);
     assert!(b.ok, "(f 5 : int) should check lazily");
     assert!(b.module.unify_errors.is_empty());
+    assert!(b.diagnostics().is_empty());
     // the annotated call's type is int
     let rt = b.ty[a].unwrap();
     let ids = array_ids(&b, rt);
     assert_eq!(ids.len(), 2);
     assert_eq!(ids[0], b.int_marker);
     assert_eq!(ids[1], b.type_expr);
-    // the root (the desugared let's apply) is ambiguous
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Ambiguity);
-    assert!(diags[0].value_a.is_none(), "the root type is unbound");
+    // the root type is derived from the evaluated value (the Type constant)
+    assert_eq!(b.root_ty, b.type_expr, "the derived root type is Type's");
 }
 
 #[test]
@@ -1124,13 +1158,18 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     );
 }
 
+/// Struct instantiation: `s(1, 2)` — the struct type applied to a tuple.
+fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
+    ir.alloc_instantiate(type_expr, value, None)
+}
+
 // --- struct instantiation ----------------------------------------------------
-// `(v1, ..., vn) : struct { T1, ..., Tn }` wraps a positional tuple in the
-// nominal type: the tuple's element-type list is checked against the field
-// list, and the annotation's type is the struct type itself.
+// `s(1, 2)` wraps the positional tuple in the struct type: the element-type
+// list is checked against the field list, and the expression's type is the
+// struct type itself.
 
 #[test]
-fn a_tuple_annotated_with_a_struct_type_is_an_instance() {
+fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -1138,16 +1177,16 @@ fn a_tuple_annotated_with_a_struct_type_is_an_instance() {
     let f1 = int_t(&mut ir);
     let f2 = int_t(&mut ir);
     let s = type_struct(&mut ir, &[f1, f2]);
-    let a = ann(&mut ir, v, s);
-    let b = build(a, ir);
-    assert!(b.ok, "(1, 2) : struct {{ Int, Int }} must check");
+    let inst = instantiate(&mut ir, s, v);
+    let b = build(inst, ir);
+    assert!(b.ok, "s(1, 2) must check");
     assert!(b.module.unify_errors.is_empty());
-    // the annotation's type is the struct type, not the tuple type
-    assert_eq!(b.ty[a], b.term[s], "the instance's type is the struct type");
+    // the instance's type is the struct type, not the tuple type
+    assert_eq!(b.ty[inst], b.term[s], "the instance's type is the struct type");
 }
 
 #[test]
-fn a_struct_instance_checks_its_fields() {
+fn a_struct_instantiation_checks_its_fields() {
     // arity: two fields, one value
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
@@ -1155,9 +1194,9 @@ fn a_struct_instance_checks_its_fields() {
     let v = tuple(&mut ir, &[one, two]);
     let f = int_t(&mut ir);
     let s = type_struct(&mut ir, &[f]);
-    let a = ann(&mut ir, v, s);
-    let b = build(a, ir);
-    assert!(!b.ok, "(1, 2) : struct {{ Int }} must fail (arity)");
+    let inst = instantiate(&mut ir, s, v);
+    let b = build(inst, ir);
+    assert!(!b.ok, "s(1, 2) against a one-field struct must fail (arity)");
     // field type: the tuple's Ints are not Type
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
@@ -1166,33 +1205,24 @@ fn a_struct_instance_checks_its_fields() {
     let t1 = ty(&mut ir);
     let t2 = ty(&mut ir);
     let s = type_struct(&mut ir, &[t1, t2]);
-    let a = ann(&mut ir, v, s);
-    let b = build(a, ir);
-    assert!(!b.ok, "(1, 2) : struct {{ Type, Type }} must fail (fields)");
-}
-
-#[test]
-fn an_instance_annotated_with_the_same_struct_again_passes() {
-    // ((1, 2) : s) : s — re-annotating an instance with the same bound
-    // struct type is idempotent (the plain unify compares equal pairs).
+    let inst = instantiate(&mut ir, s, v);
+    let b = build(inst, ir);
+    assert!(!b.ok, "s(1, 2) against struct {{ Type, Type }} must fail (fields)");
+    // a literal is not a positional value
     let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let two = int(&mut ir, 2);
-    let v = tuple(&mut ir, &[one, two]);
-    let f1 = int_t(&mut ir);
-    let f2 = int_t(&mut ir);
-    let s = type_struct(&mut ir, &[f1, f2]);
-    let inner = ann(&mut ir, v, s);
-    let outer = ann(&mut ir, inner, s);
-    let b = build(outer, ir);
-    assert!(b.ok, "re-annotating with the same struct type passes");
-    assert!(b.module.unify_errors.is_empty());
+    let five = int(&mut ir, 5);
+    let f = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f]);
+    let inst = instantiate(&mut ir, s, five);
+    let b = build(inst, ir);
+    assert!(!b.ok, "s(5) must fail — a literal is not a struct value");
 }
 
 #[test]
-fn an_instance_of_a_different_struct_occurrence_conflicts() {
-    // ((1, 2) : s1) : s2 — a different source occurrence is a different
-    // nominal type, even with the same fields.
+fn instances_of_different_struct_occurrences_conflict() {
+    // [s1(1, 2), s2(1, 2)] — each instance carries its own nominal id, so
+    // the array element check reports the conflict (same fields, different
+    // types).
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
@@ -1200,13 +1230,136 @@ fn an_instance_of_a_different_struct_occurrence_conflicts() {
     let f1 = int_t(&mut ir);
     let f2 = int_t(&mut ir);
     let s1 = type_struct(&mut ir, &[f1, f2]);
+    let i1 = instantiate(&mut ir, s1, v);
     let f3 = int_t(&mut ir);
     let f4 = int_t(&mut ir);
     let s2 = type_struct(&mut ir, &[f3, f4]);
-    let inner = ann(&mut ir, v, s1);
-    let outer = ann(&mut ir, inner, s2);
-    let b = build(outer, ir);
-    assert!(!b.ok, "a different struct occurrence is a different type");
-    assert_eq!(b.diagnostics().len(), 1);
-    assert!(b.diagnostics()[0].message.contains("TypeId("));
+    let i2 = instantiate(&mut ir, s2, v);
+    let a = array(&mut ir, &[i1, i2]);
+    let b = build(a, ir);
+    assert!(!b.ok, "instances of different struct occurrences must conflict");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("TypeId("), "{}", diags[0].message);
+}
+
+// --- the `_` placeholder ----------------------------------------------------
+
+#[test]
+fn an_underscore_annotation_infers_the_type() {
+    // 5 : _ — the placeholder's value slot binds to the int marker, its
+    // kind slot to the universe.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let h = hole(&mut ir);
+    let a = ann(&mut ir, five, h);
+    let mut b = build(a, ir);
+    assert!(b.ok, "5 : _ should check");
+    let ids = array_ids(&b, b.ty[a].unwrap());
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        b.module.equality_representative(ids[0]),
+        b.module.equality_representative(b.int_marker),
+        "the placeholder's value slot binds to the int marker"
+    );
+    assert_eq!(
+        b.module.equality_representative(ids[1]),
+        b.module.equality_representative(b.type_expr),
+        "the placeholder's kind slot binds to the universe"
+    );
+}
+
+#[test]
+fn an_underscore_annotation_binds_a_function_type() {
+    // (\x. x) : _ — the placeholder's kind slot is a cell too, so it binds
+    // to the identity's kind expression instead of clashing with the
+    // universe; the parameter type stays unbound (inference does not guess).
+    let mut ir = IR::new();
+    let x = param(&mut ir);
+    let l = lam(&mut ir, x, x);
+    let h = hole(&mut ir);
+    let a = ann(&mut ir, l, h);
+    let mut b = build(a, ir);
+    assert!(b.ok, "(\\x. x) : _ should check");
+    // The placeholder's value slot binds to the arrow shape.
+    let ann_ids = array_ids(&b, b.ty[a].unwrap());
+    let shape = array_ids(&b, b.ty[l].unwrap())[0];
+    assert_eq!(
+        b.module.equality_representative(ann_ids[0]),
+        b.module.equality_representative(shape),
+        "the placeholder binds to the arrow shape"
+    );
+    // The parameter type cell stays unbound.
+    let shape_ids = array_ids(&b, shape);
+    assert!(
+        lichen_lowlevel::is_unbound(b.module.nodes[shape_ids[0]].value),
+        "the parameter type must not be guessed"
+    );
+}
+
+#[test]
+fn partial_inference_in_an_arrow_type() {
+    // (\x. x) : (Int -> _) — the parameter side fixes the input to int, the
+    // placeholder return binds to the output (int, for the identity).
+    let mut ir = IR::new();
+    let x = param(&mut ir);
+    let l = lam(&mut ir, x, x);
+    let it = int_t(&mut ir);
+    let h = hole(&mut ir);
+    let t = arrow(&mut ir, it, h);
+    let a = ann(&mut ir, l, t);
+    let mut b = build(a, ir);
+    assert!(b.ok, "the identity fits Int -> _");
+    let arrow = array_ids(&b, b.ty[l].unwrap());
+    let shape_ids = array_ids(&b, arrow[0]);
+    assert_eq!(
+        b.module.equality_representative(shape_ids[0]),
+        b.module.equality_representative(b.int_type),
+        "the parameter type unifies with int"
+    );
+}
+
+#[test]
+fn an_underscore_in_the_array_length_position() {
+    // [1, 2, 3] : Int<_> — the placeholder length binds to the element
+    // count.
+    let mut ir = IR::new();
+    let e1 = int(&mut ir, 1);
+    let e2 = int(&mut ir, 2);
+    let e3 = int(&mut ir, 3);
+    let arr = array(&mut ir, &[e1, e2, e3]);
+    let it = int_t(&mut ir);
+    let h = hole(&mut ir);
+    let t = type_array(&mut ir, it, h);
+    let a = ann(&mut ir, arr, t);
+    let mut b = build(a, ir);
+    assert!(b.ok, "[1, 2, 3] : Int<_> should check");
+    // The annotated type's length slot unifies with the literal's length 3.
+    let ann_shape = array_ids(&b, b.ty[a].unwrap())[0];
+    let length_slot = array_ids(&b, ann_shape)[1];
+    let arr_shape = array_ids(&b, b.ty[arr].unwrap())[0];
+    let len3 = array_ids(&b, arr_shape)[1];
+    assert!(matches!(b.module.nodes[len3].value, Some(Value::USize(3))));
+    assert_eq!(
+        b.module.equality_representative(length_slot),
+        b.module.equality_representative(len3),
+        "the placeholder length binds to the element count"
+    );
+}
+
+#[test]
+fn a_mismatch_against_a_partial_type_is_still_an_error() {
+    // 5 : (Int -> _) — the placeholder does not mask the mismatch between
+    // the literal and the function type.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let it = int_t(&mut ir);
+    let h = hole(&mut ir);
+    let t = arrow(&mut ir, it, h);
+    let a = ann(&mut ir, five, t);
+    let b = build(a, ir);
+    assert!(!b.ok);
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::Annotation);
 }

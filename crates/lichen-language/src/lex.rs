@@ -1,9 +1,9 @@
 //! The lexer: source text → tokens, each with a `(line, column)` span.
 //!
 //! `Int` and `Type` lex as keywords; everything else that starts an
-//! identifier is a name.  `<` `>` and `struct { }` build type-level forms
-//! (the array type `Int<3>`, the tuple type `<Int, Type>`, the struct type
-//! `struct { Int, Type }`); `[` `]` and `(` `)` stay value-level.  `;`
+//! identifier is a name.  `<` `>` build type-level forms (the array type
+//! `Int<3>`, the tuple type `<Int, Type>`, the struct type
+//! `struct<Int, Type>`); `[` `]` and `(` `)` stay value-level.  `;`
 //! separates statements, `=` binds a name (`a = [1, 2]`); `=>` is still the
 //! lambda.  `--` starts a line comment.  Any other character is a lex error
 //! — the first one stops the pipeline.
@@ -40,14 +40,10 @@ pub enum TokenKind {
     LBracket,
     RBracket,
     /// `<` — the array-type postfix after an expression, the tuple-type
-    /// prefix at expression start.  Exclusively type-level.
+    /// and struct-type prefixes at expression start.  Exclusively type-level.
     LAngle,
     /// `>` — closes `<`.
     RAngle,
-    /// `{` — opens a struct type's field list.
-    LBrace,
-    /// `}` — closes `{`.
-    RBrace,
     Eof,
 }
 
@@ -72,8 +68,6 @@ impl TokenKind {
             TokenKind::RBracket => "']'".to_string(),
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
-            TokenKind::LBrace => "'{'".to_string(),
-            TokenKind::RBrace => "'}'".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
         }
     }
@@ -129,8 +123,6 @@ impl Lexer<'_> {
                 b']' => self.push(line, col, 1, TokenKind::RBracket),
                 b'<' => self.push(line, col, 1, TokenKind::LAngle),
                 b'>' => self.push(line, col, 1, TokenKind::RAngle),
-                b'{' => self.push(line, col, 1, TokenKind::LBrace),
-                b'}' => self.push(line, col, 1, TokenKind::RBrace),
                 b',' => self.push(line, col, 1, TokenKind::Comma),
                 b':' => self.push(line, col, 1, TokenKind::Colon),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),

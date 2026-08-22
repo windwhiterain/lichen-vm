@@ -1,8 +1,0 @@
--- Indexing as a conditional
---
--- The index may be a runtime value — a parameter — so `[then, else][i]` is
--- the language's branch form.  The untaken element stays unevaluated (the
--- lowlevel Index is lazy on the unselected branch).
--- output: 20
-
-(i => [10, 20][i]) 1 : Int

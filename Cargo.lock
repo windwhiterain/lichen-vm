@@ -52,6 +52,7 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-utils",
  "slotmap",
+ "stacksafe",
 ]
 
 [[package]]

@@ -75,6 +75,12 @@ pub enum ExprKind {
     },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
+    /// `{ type_expr, value }` — struct instantiation: `s(1, 2)` wraps the
+    /// positional tuple `value` in the struct type `type_expr`.  The
+    /// value's element types are checked against the struct's field list,
+    /// and the expression's type is the struct type itself.  Emitted by the
+    /// frontend when an application's callee is a struct type.
+    Instantiate { type_expr: ExprId, value: ExprId },
     /// `{ array, index }` — element selection; `array` must be a tuple or
     /// array value, `index` a `USize`.
     Index { array: ExprId, index: ExprId },
@@ -108,6 +114,10 @@ pub enum ExprKind {
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`ExprTable::children`].
     Array(ChildRange),
+    /// `_` — an inferrable type position.  Compiles to a fresh unbound cell
+    /// that binds to whatever the context unifies it with: `x : _`,
+    /// `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.
+    Placeholder,
     /// The real array type `{ element_type, length }`.  Its type instance
     /// is the 2-element shape `[element_type, length]` — element 0 is the
     /// type shared by all elements, element 1 the length — kinded
@@ -143,6 +153,15 @@ impl IR {
 
     pub fn alloc_type_struct(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
         self.alloc_variadic(elements, ExprKind::TypeStruct, span)
+    }
+
+    pub fn alloc_instantiate(
+        &mut self,
+        type_expr: ExprId,
+        value: ExprId,
+        span: Option<Span>,
+    ) -> ExprId {
+        self.alloc(ExprKind::Instantiate { type_expr, value }, span)
     }
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {

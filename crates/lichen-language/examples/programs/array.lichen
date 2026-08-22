@@ -1,8 +1,1 @@
--- Arrays and the array type
---
--- The literal `[1, 2, 3]` checks against the array type `Int<3>` — angle
--- brackets are type-level, so the array type is distinct from the array
--- literal's brackets.
--- output: [1, 2, 3]
-
-([1, 2, 3] : Int<3>)
+[1, 2, 3] : Int<3>

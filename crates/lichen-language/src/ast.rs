@@ -19,6 +19,10 @@ pub enum Expr {
     TypeConst(TypeConst, Span),
     /// A use of a name — resolved by [`crate::compile`] to the binder's id.
     Name(String, Span),
+    /// `_` in type position — an inference placeholder (the checker infers
+    /// the type from context).  In term position `_` parses as a
+    /// [`Expr::Name`] and stays an ordinary (possibly discard) name.
+    Placeholder(Span),
     /// `x => e`.
     Lambda {
         parameter: String,
@@ -94,6 +98,7 @@ impl Expr {
             Expr::Int(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
             Expr::Name(_, s) => *s,
+            Expr::Placeholder(s) => *s,
             Expr::Lambda { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
             Expr::Index { span, .. } => *span,

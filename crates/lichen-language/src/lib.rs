@@ -14,6 +14,7 @@ pub mod compile;
 pub mod diag;
 pub mod lex;
 pub mod parse;
+pub mod readme;
 pub mod render;
 pub mod run;
 
@@ -26,8 +27,7 @@ pub use diag::{Diag, Stage};
 ///
 /// `build` is `Some` iff the frontend succeeded (lex, parse, resolve); the
 /// checker then ran on it.  `diagnostics` holds the first frontend error (if
-/// any) or the checker's rendered failures (which may be many, and include the
-/// top-level ambiguity diagnostic).
+/// any) or the checker's rendered failures (which may be many).
 pub struct Report {
     pub build: Option<Build>,
     pub diagnostics: Vec<Diag>,

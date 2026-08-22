@@ -4,9 +4,9 @@
 //! (see [`Program`]).  Within an expression, one grammar covers terms and
 //! types (types are expressions); a *type-mode* flag — set inside an
 //! annotation's right side — decides whether `(a, b)` is a `Tuple` value or
-//! a `TypeTuple` type expression.  Angle brackets and braces are
-//! exclusively type-level and need no flag: `<a, b>` is always a
-//! `TypeTuple`, `struct { T1, T2 }` always a `StructType`, and `T<e>` (a
+//! a `TypeTuple` type expression.  Angle brackets are exclusively
+//! type-level and need no flag: `<a, b>` is always a `TypeTuple`,
+//! `struct<T1, T2>` always a `StructType`, and `T<e>` (a
 //! `<` directly after an expression) is always the array type.  A `[`
 //! directly after an expression is always an index `e[i]` — the array
 //! literal is the prefix `[e, …]` form, so no whitespace rule decides, and
@@ -184,6 +184,7 @@ impl Parser<'_> {
             TokenKind::Int(n) => Expr::Int(*n, start.span),
             TokenKind::KwInt => Expr::TypeConst(TypeConst::Int, start.span),
             TokenKind::KwType => Expr::TypeConst(TypeConst::Type, start.span),
+            TokenKind::Name(name) if type_mode && name == "_" => Expr::Placeholder(start.span),
             TokenKind::Name(name) => Expr::Name(name.clone(), start.span),
             TokenKind::LParen => self.paren_or_tuple(type_mode, start.span)?,
             TokenKind::LBracket => self.array_literal(type_mode, start.span)?,
@@ -330,15 +331,15 @@ impl Parser<'_> {
         Ok(Expr::Array(elements, span))
     }
 
-    /// `struct { T1, ..., Tn }` — a nominal struct type, positional fields.
-    /// The fields are type expressions (parsed in type mode — braces are
-    /// exclusively type-level), at least one.  The opener `struct` has been
-    /// consumed by [`Parser::parse_atom`].
+    /// `struct<T1, ..., Tn>` — a nominal struct type, positional fields.
+    /// The fields are type expressions (parsed in type mode — angle
+    /// brackets are exclusively type-level), at least one.  The opener
+    /// `struct` has been consumed by [`Parser::parse_atom`].
     fn struct_type(&mut self, span: Span) -> Result<Expr, Diag> {
-        if !self.eat(&TokenKind::LBrace) {
-            return Err(self.error_found("'{'"));
+        if !self.eat(&TokenKind::LAngle) {
+            return Err(self.error_found("'<'"));
         }
-        if self.at(&TokenKind::RBrace) {
+        if self.at(&TokenKind::RAngle) {
             return Err(self.error_found("an expression"));
         }
         let mut fields = Vec::new();
@@ -347,12 +348,12 @@ impl Parser<'_> {
             if !self.eat(&TokenKind::Comma) {
                 break;
             }
-            if self.at(&TokenKind::RBrace) {
+            if self.at(&TokenKind::RAngle) {
                 break;
             }
         }
-        if !self.eat(&TokenKind::RBrace) {
-            return Err(self.error_found("'}'"));
+        if !self.eat(&TokenKind::RAngle) {
+            return Err(self.error_found("'>'"));
         }
         Ok(Expr::StructType(fields, span))
     }
@@ -497,9 +498,9 @@ mod tests {
     }
 
     #[test]
-    fn struct_types_are_positional_fields_in_braces() {
-        // struct { Int, Int -> Int } — fields are type expressions.
-        let Expr::StructType(fields, _) = parse_ok("struct { Int, Int -> Int }") else {
+    fn struct_types_are_positional_fields_in_angle_brackets() {
+        // struct<Int, Int -> Int> — fields are type expressions.
+        let Expr::StructType(fields, _) = parse_ok("struct<Int, Int -> Int>") else {
             panic!("expected a struct type")
         };
         assert_eq!(fields.len(), 2);
@@ -507,17 +508,17 @@ mod tests {
         assert!(matches!(fields[1], Expr::Arrow { .. }));
         // a single field is the newtype form.
         assert!(matches!(
-            parse_ok("struct { Int }"),
+            parse_ok("struct<Int>"),
             Expr::StructType(f, _) if f.len() == 1
         ));
         // struct types are first-class values: an apply argument, a binding.
-        let Expr::Apply { argument, .. } = parse_ok("f (struct { Int })") else {
+        let Expr::Apply { argument, .. } = parse_ok("f (struct<Int>)") else {
             panic!("expected an apply")
         };
         assert!(matches!(*argument, Expr::StructType(..)));
         // fields are type expressions, so `(Int, Type)` inside is a
         // TypeTuple, not a Tuple.
-        let Expr::StructType(fields, _) = parse_ok("struct { (Int, Type) }") else {
+        let Expr::StructType(fields, _) = parse_ok("struct<(Int, Type)>") else {
             panic!("expected a struct type")
         };
         assert!(matches!(fields[0], Expr::TypeTuple(..)));
@@ -526,13 +527,13 @@ mod tests {
     #[test]
     fn struct_type_errors_carry_spans() {
         let err = parse_err("struct");
-        assert_eq!(err.message, "expected '{', found the end of the program");
-        let err = parse_err("struct {");
+        assert_eq!(err.message, "expected '<', found the end of the program");
+        let err = parse_err("struct<");
         assert_eq!(err.message, "expected an expression, found the end of the program");
-        let err = parse_err("struct { }");
-        assert_eq!(err.message, "expected an expression, found '}'");
-        let err = parse_err("struct { Int");
-        assert_eq!(err.message, "expected '}', found the end of the program");
+        let err = parse_err("struct<>");
+        assert_eq!(err.message, "expected an expression, found '>'");
+        let err = parse_err("struct<Int");
+        assert_eq!(err.message, "expected '>', found the end of the program");
     }
 
     #[test]
@@ -624,5 +625,24 @@ mod tests {
         // arrow is left dangling.
         let err = parse_err("f x => e");
         assert_eq!(err.stage, Stage::Parse);
+    }
+
+    #[test]
+    fn an_underscore_in_type_position_is_a_placeholder() {
+        // `x : _` — the annotation's type is a placeholder.
+        let Expr::Annotation { r#type, .. } = parse_ok("x : _") else {
+            panic!("expected an annotation")
+        };
+        assert!(matches!(*r#type, Expr::Placeholder(_)));
+        // Nested: `x : Int -> _` — the arrow's return is a placeholder.
+        let Expr::Annotation { r#type, .. } = parse_ok("x : Int -> _") else {
+            panic!("expected an annotation")
+        };
+        let Expr::Arrow { r#return, .. } = *r#type else {
+            panic!("expected an arrow type")
+        };
+        assert!(matches!(*r#return, Expr::Placeholder(_)));
+        // In term position `_` stays an ordinary name.
+        assert!(matches!(parse_ok("_"), Expr::Name(name, _) if name == "_"));
     }
 }

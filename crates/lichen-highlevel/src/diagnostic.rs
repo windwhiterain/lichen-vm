@@ -28,10 +28,9 @@ use crate::{
     program::{HighOperator, HighProgram, HighValue},
 };
 
-/// A diagnostic: the structured facts of a unification failure (or the
-/// top-level ambiguity), plus the rendered message for display.  Tests and
-/// tooling match on the structured fields; `message` is derived for
-/// display/debug only.
+/// A diagnostic: the structured facts of a unification failure, plus the
+/// rendered message for display.  Tests and tooling match on the structured
+/// fields; `message` is derived for display/debug only.
 #[derive(Clone, Debug)]
 pub struct Diag {
     pub span: Option<Span>,
@@ -39,8 +38,7 @@ pub struct Diag {
     /// direction of `a`/`b`.
     pub kind: DiagKind,
     /// The conflicting classes, as the lowlevel recorded them ([`UnifyError`]
-    /// snapshots `a`/`b` as class representatives).  For [`DiagKind::Ambiguity`]
-    /// both are the unbound root type class.
+    /// snapshots `a`/`b` as class representatives).
     pub a: NodeId,
     pub b: NodeId,
     /// The conflicting classes' values at error time — snapshots, not
@@ -63,6 +61,9 @@ pub enum DiagKind {
     Kinding,
     /// Applying a concretely non-function type — expected = a function.
     Guard,
+    /// Indexing a concretely non-indexable type (a function, an atomic
+    /// type, a struct type) — expected = a tuple or array type.
+    IndexTarget,
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,
@@ -70,9 +71,6 @@ pub enum DiagKind {
     /// the VM) — no diary entry.  Reversed direction: `a` = the parameter's
     /// expected type, `b` = the argument's found type.
     Runtime,
-    /// The program's root type stayed unbound — nothing to compare, both
-    /// sides are the root type class.
-    Ambiguity,
     /// An out-of-bounds index — a runtime evaluation failure, not a unify.
     /// `a` is the index node; `value_a` the index value, `value_b` the
     /// container's length.
@@ -93,8 +91,7 @@ pub struct DiaryEntry {
 }
 
 impl Build {
-    /// Render the unification failures (plus top-level ambiguity) as
-    /// diagnostics — one per entry in
+    /// Render the unification failures as diagnostics — one per entry in
     /// [`lichen_lowlevel::Module::unify_errors`], in order.
     pub fn diagnostics(&self) -> Vec<Diag> {
         let mut report = Report {
@@ -117,9 +114,6 @@ impl Build {
             if seen.insert((err.index, err.index_value, err.length)) {
                 out.push(report.eval_error(err));
             }
-        }
-        if self.ok && is_unbound(self.module.nodes[report.rep(self.root_ty)].value) {
-            out.push(report.ambiguity());
         }
         out
     }
@@ -241,15 +235,19 @@ impl Report<'_> {
             ),
             DiagKind::Kinding => format!("expected TypeType, found {}", self.print_type(err.a)),
             DiagKind::Guard => format!("expected a function, found {}", self.print_type(err.a)),
+            DiagKind::IndexTarget => format!(
+                "expected a tuple or array type, found {}",
+                self.print_type(err.a)
+            ),
             DiagKind::ArrayElement => format!(
                 "expected {}, found {}",
                 self.print_type(err.b),
                 self.print_type(err.a)
             ),
             // Diary entries are checker-issued unifies only — runtime
-            // failures and ambiguity are rendered elsewhere.
-            DiagKind::Runtime | DiagKind::Ambiguity | DiagKind::IndexOutOfBounds => {
-                unreachable!("the diary never attributes runtime or ambiguity diagnostics")
+            // failures are rendered elsewhere.
+            DiagKind::Runtime | DiagKind::IndexOutOfBounds => {
+                unreachable!("the diary never attributes runtime diagnostics")
             }
         }
     }
@@ -335,21 +333,6 @@ impl Report<'_> {
         }
     }
 
-    /// Residual unbound placeholders at the top level render as ambiguity.
-    fn ambiguity(&mut self) -> Diag {
-        let rep = self.rep(self.build.root_ty);
-        let name = self.name_of(rep);
-        Diag {
-            span: self.build.ir[self.build.ir.root].span,
-            kind: DiagKind::Ambiguity,
-            a: rep,
-            b: rep,
-            value_a: None,
-            value_b: None,
-            message: format!("cannot determine the type of the program: {name} is ambiguous"),
-        }
-    }
-
     // --- the type printer -------------------------------------------------
 
     /// Render a node's class as a type.  Unbound cells get stable `?a`
@@ -409,11 +392,19 @@ impl Report<'_> {
                     {
                         match self.build.module.nodes[self.rep(k[0])].value {
                             Some(Value::Ext(HighValue::TypeFunction)) => {
-                                return format!(
-                                    "{} → {}",
-                                    self.print_inner(ids[0], visiting),
-                                    self.print_inner(ids[1], visiting)
-                                );
+                                // The pair is `[shape, [FunctionType, K]]`
+                                // where shape = [in, out] — render the
+                                // arrow `in → out`, not `shape → kind`.
+                                if let Some(s) =
+                                    self.build.module.array_ids(self.rep(ids[0]))
+                                    && s.len() == 2
+                                {
+                                    return format!(
+                                        "{} → {}",
+                                        self.print_inner(s[0], visiting),
+                                        self.print_inner(s[1], visiting)
+                                    );
+                                }
                             }
                             Some(Value::Ext(HighValue::TypeTuple)) => {
                                 let elements: Vec<String> = ids

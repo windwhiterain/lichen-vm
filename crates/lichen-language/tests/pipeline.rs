@@ -210,9 +210,9 @@ fn an_unresolved_name_in_a_statement_program_is_reported() {
 
 #[test]
 fn a_struct_type_kinds_and_evaluates() {
-    // struct { Int, Int } — the pair [[Int, Int], [TypeId(n), Type]]; a bare
+    // struct<Int, Int> — the pair [[Int, Int], [TypeId(n), Type]]; a bare
     // struct type is a well-typed program with a determined root.
-    run("struct { Int, Int }");
+    run("struct<Int, Int>");
 }
 
 #[test]
@@ -221,7 +221,7 @@ fn a_bound_struct_type_is_reusable() {
     // element check unifies the two uses, and they are the *same* compiled
     // node (the checker compiles each expression once, so the single
     // nominal id survives).
-    let (module, root) = run("s = struct { Int }; [s, s]");
+    let (module, root) = run("s = struct<Int>; [s, s]");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -232,10 +232,10 @@ fn a_bound_struct_type_is_reusable() {
 
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
-    // [struct { Int }, struct { Int }] — each occurrence allocates a fresh
+    // [struct<Int>, struct<Int>] — each occurrence allocates a fresh
     // nominal id, so the array element check reports the conflict (nominal
     // identity: same fields, different types).
-    let d = diags("[struct { Int }, struct { Int }]");
+    let d = diags("[struct<Int>, struct<Int>]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
@@ -243,47 +243,48 @@ fn two_struct_type_occurrences_do_not_unify() {
 
 #[test]
 fn an_annotation_against_a_struct_type_conflicts() {
-    // 5 : struct { Int } — the literal's int type is not the struct type.
-    let d = diags("5 : struct { Int }");
+    // 5 : struct<Int> — an annotation compares the full type expressions
+    // and the literal's int type is not the struct type; instantiation is
+    // the dedicated `s(1, 2)` form, not an annotation.
+    let d = diags("5 : struct<Int>");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
 }
 
 #[test]
-fn a_tuple_annotated_with_a_struct_type_is_an_instance() {
-    // (1, 2) : struct { Int, Int } — instantiation wraps the positional
-    // tuple in the nominal type: the element types are checked against the
-    // fields, and the result has the struct type.
-    let (module, root) = run("(1, 2) : struct { Int, Int }");
+fn a_struct_type_application_is_an_instance() {
+    // struct<Int, Int>(1, 2) — the struct type applied to a positional
+    // tuple compiles to the Instantiate expression: the element types are
+    // checked against the fields, and the result has the struct type.
+    let (module, root) = run("struct<Int, Int>(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    let (module, root) = run("s = struct { Int, Int }; ((1, 2) : s)");
+    // a bound struct type instantiates the same way
+    let (module, root) = run("s = struct<Int, Int>; s(1, 2)");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    // re-annotating the same bound instance with the same struct passes
-    run("s = struct { Int, Int }; (((1, 2) : s) : s)");
 }
 
 #[test]
 fn a_struct_instance_with_mismatched_fields_is_rejected() {
     // arity: two fields, one value
-    let d = diags("(1, 2) : struct { Int }");
+    let d = diags("struct<Int>(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // field types: the tuple's Ints are not Type
-    let d = diags("(1, 2) : struct { Type, Type }");
+    let d = diags("struct<Type, Type>(1, 2)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
     // a different source occurrence is a different nominal type
-    let d = diags("((1, 2) : struct { Int, Int }) : struct { Int, Int }");
+    let d = diags("s1 = struct<Int, Int>; s2 = struct<Int, Int>; [s1(1, 2), s2(1, 2)]");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::Annotation);
+    assert_eq!(check.kind, DiagKind::ArrayElement);
     assert!(check.message.contains("TypeId("), "{}", check.message);
 }
 
@@ -381,6 +382,39 @@ fn applying_a_non_function_is_a_guard_error() {
 }
 
 #[test]
+fn indexing_a_function_is_an_index_target_error() {
+    // `a[0]` where `a` is a bound function — a dependent selector over the
+    // heterogeneous tuple `(1, Int)` — is not an index of the function
+    // itself: the checker reports it statically instead of the runtime
+    // panicking on a non-array target.  The call is written `a 0`.
+    let d = diags("a = x => (1, Int)[x]; a[0]");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].span, Some((1, 23)), "the index starts at `a`");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::IndexTarget);
+    assert!(
+        check.message.contains("expected a tuple or array type"),
+        "{}",
+        check.message
+    );
+    // the corrected program applies the selector instead of indexing it
+    let (module, root) = run("a = x => (1, Int)[x]; a 0 : Int");
+    let mut module = module;
+    assert_eq!(
+        usize_of(&module.evaluate_node_deep(root, None)),
+        1,
+        "the dependent selector applied to 0 reads the value"
+    );
+    let (module, root) = run("a = x => (1, Int)[x]; a 1 : Type");
+    let mut module = module;
+    assert_eq!(
+        module.evaluate_node_deep(root, None),
+        Value::Ext(HighValue::TypeInt),
+        "applied to 1 it reads the type constant"
+    );
+}
+
+#[test]
 fn a_bare_lambda_checks() {
     // The root type is the arrow `?a → ?a` — unbound components, but the
     // arrow shape is determined, so there is no ambiguity diagnostic.
@@ -389,13 +423,10 @@ fn a_bare_lambda_checks() {
 }
 
 #[test]
-fn an_unannotated_call_reports_ambiguity() {
-    let d = diags("((id => id 5) (x => x))");
-    assert_eq!(d.len(), 1);
-    assert_eq!(
-        d[0].check.as_ref().expect("a checker diagnostic").kind,
-        DiagKind::Ambiguity
-    );
+fn an_unannotated_call_runs_and_its_type_is_derived() {
+    // The call's result type cell is a lazy record, so the checker
+    // pre-evaluates the root type from the evaluated value (5).
+    assert_eq!(usize_of(&evaluate("((id => id 5) (x => x))")), 5);
 }
 
 #[test]
@@ -477,4 +508,60 @@ fn diagnostics_render_with_carets() {
         out,
         "error: unresolved name 'y'\n  --> 1:6\n   |\n 1 | x => y\n   |      ^\n"
     );
+}
+
+// --- the `_` placeholder ----------------------------------------------------
+
+#[test]
+fn an_underscore_annotation_infers_the_type() {
+    assert_eq!(usize_of(&evaluate("5 : _")), 5);
+}
+
+#[test]
+fn an_underscore_annotation_on_an_apply() {
+    // (x => x) 5 : _ — the annotation binds loosest, so the apply is the
+    // annotated value.
+    assert_eq!(usize_of(&evaluate("(x => x) 5 : _")), 5);
+}
+
+#[test]
+fn partial_inference_in_an_arrow_type() {
+    // ((x => x) : (Int -> _)) 5 : Int — the input is fixed to Int by the
+    // annotation, the return inferred; the root annotation anchors the call's
+    // lazy result cell.
+    assert_eq!(usize_of(&evaluate("(((x => x) : (Int -> _)) 5) : Int")), 5);
+}
+
+#[test]
+fn an_underscore_in_the_array_length_position() {
+    // [1, 2, 3] : Int<_> — the length is inferred from the literal.
+    let ids = array_ids(evaluate("[1, 2, 3] : Int<_>"));
+    assert_eq!(ids.len(), 3);
+}
+
+#[test]
+fn a_mismatch_against_a_partial_type_is_reported() {
+    let d = diags("5 : (Int -> _)");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Check);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Annotation);
+}
+
+#[test]
+fn an_underscore_in_term_position_is_still_a_name() {
+    // `_` outside type positions is an ordinary name: a discard binding and
+    // a lambda parameter named `_`.
+    assert_eq!(usize_of(&evaluate("_ = 5; _")), 5);
+    assert_eq!(usize_of(&evaluate("(_ => _) 5 : Int")), 5);
+}
+
+#[test]
+fn an_underscore_as_a_value_is_unresolved() {
+    // `_ : Int` — the placeholder is type-position only; as a value `_` is an
+    // ordinary name and unresolved here.
+    let d = diags("_ : Int");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert_eq!(d[0].message, "unresolved name '_'");
 }

@@ -1,0 +1,12 @@
+-- Polymorphism
+--
+-- `a` applies its argument to 1; `b` selects an element of `[1, 2]` by
+-- index.  `a b` passes the function `b` to `a`, which applies it to 1 —
+-- the result is `[1, 2][1]`, i.e. 2.  A call's result type is a lazy
+-- record, so the checker derives the root type from the evaluated value:
+-- an unannotated polymorphic call runs and prints its result.
+-- output: 2
+
+a = x => x 1;
+b = x => [1,2][x];
+a b
