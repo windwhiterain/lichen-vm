@@ -1,15 +1,15 @@
-//! The language CLI. `lichen <program.lang>` compiles and runs one program,
-//! printing its output; a directory path runs every `.lang` file in it,
+//! The language CLI. `lichen <program.lichen>` compiles and runs one program,
+//! printing its output; a directory path runs every `.lichen` file in it,
 //! printing `file: output` per program.
 //!
-//! Install it with `cargo install --path crates/language` (from a checkout of
-//! this repo) or `cargo install --git <repo-url> language`.
+//! Install it with `cargo install --path crates/lichen-language` (from a
+//! checkout of this repo) or `cargo install --git <repo-url> lichen-language`.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: lichen <program.lang | directory>";
+const USAGE: &str = "usage: lichen <program.lichen | directory>";
 
 fn main() -> ExitCode {
     let mut args = std::env::args();
@@ -50,14 +50,14 @@ fn run_file(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    match language::run::evaluate(&source) {
+    match lichen_language::run::evaluate(&source) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
         }
         Err(diags) => {
             for d in &diags {
-                print!("{}", language::render::render(&source, d));
+                print!("{}", lichen_language::render::render(&source, d));
             }
             ExitCode::FAILURE
         }
@@ -69,7 +69,7 @@ fn run_directory(dir: &Path) -> ExitCode {
         Ok(entries) => entries
             .flatten()
             .map(|e| e.path())
-            .filter(|p| p.extension() == Some(OsStr::new("lang")))
+            .filter(|p| p.extension() == Some(OsStr::new("lichen")))
             .collect(),
         Err(e) => {
             eprintln!("cannot read {}: {e}", dir.display());
@@ -87,7 +87,7 @@ fn run_directory(dir: &Path) -> ExitCode {
                 continue;
             }
         };
-        match language::run::evaluate(&source) {
+        match lichen_language::run::evaluate(&source) {
             Ok(output) => {
                 println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
             }
@@ -95,7 +95,7 @@ fn run_directory(dir: &Path) -> ExitCode {
                 failed += 1;
                 eprintln!("{}: failed", file.display());
                 for d in &diags {
-                    print!("{}", language::render::render(&source, d));
+                    print!("{}", lichen_language::render::render(&source, d));
                 }
             }
         }

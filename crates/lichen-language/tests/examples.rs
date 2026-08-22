@@ -11,7 +11,7 @@ fn every_example_runs_and_prints_its_output() {
         .expect("examples/programs")
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "lang"))
+        .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
         .collect();
     files.sort();
     assert!(
@@ -26,7 +26,7 @@ fn every_example_runs_and_prints_its_output() {
             .find_map(|line| line.strip_prefix("-- output:"))
             .expect("an `-- output:` line")
             .trim();
-        let actual = language::run::evaluate(&source)
+        let actual = lichen_language::run::evaluate(&source)
             .unwrap_or_else(|diags| panic!("{} failed: {diags:?}", file.display()));
         assert_eq!(actual, expected, "{} prints the wrong output", file.display());
     }

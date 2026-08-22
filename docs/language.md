@@ -4,7 +4,7 @@
 ([`lichen-highlevel`](crates/lichen-highlevel)) and produces proper diagnostics.
 Brainstormed 2026-08-22; the surface decisions (lambda syntax, no `let`, type
 literal names, program shape) were settled by the user. Status: spec for the
-`crates/language` crate.*
+`crates/lichen-language` crate.*
 
 The language is deliberately small: a pure lambda calculus with annotations,
 tuples, and arrays, over a single `Type : Type` universe. It exists to be the
@@ -211,7 +211,7 @@ checker diagnostics can be many, in order.
 
 ```
 error: unresolved name 'y'
-  --> test.lang:1:5
+  --> test.lichen:1:5
    |
  1 | x => y
    |      ^
@@ -312,26 +312,26 @@ Ill-typed programs (expected diagnostics):
 
 ## 9. Running the examples
 
-`crates/language/examples/programs/` holds one file per key feature (a
+`crates/lichen-language/examples/programs/` holds one file per key feature (a
 literal, a lambda, polymorphism, tuples, arrays, indexing, the index-as-
 conditional, the dependent length, statements, first-class types, nested
 arrays), each with an `-- output:` comment promising its result.  Run one
 program from the workspace root:
 
 ```
-cargo run -p language -- crates/language/examples/programs/bindings.lang
+cargo run -p lichen-language -- crates/lichen-language/examples/programs/bindings.lichen
 ```
 
 or a whole directory (one `file: output` line per program):
 
 ```
-cargo run -p language -- crates/language/examples/programs
+cargo run -p lichen-language -- crates/lichen-language/examples/programs
 ```
 
 The runner also installs as a standalone CLI named `lichen` — `cargo install
---path crates/language` from a checkout of the repo, or `cargo install --git
-<repo-url> language` — after which `lichen <program.lang | directory>`
-runs the same commands.
+--path crates/lichen-language` from a checkout of the repo, or `cargo install
+--git <repo-url> lichen-language` — after which `lichen <program.lichen |
+directory>` runs the same commands.
 
 `tests/examples.rs` checks every example file against its promised output,
 so the examples stay the living spec.  The value printer renders `USize`s as

@@ -29,27 +29,27 @@ cargo test
 运行全部示例程序（每个示例输出一行 `文件: 输出`）：
 
 ```bash
-cargo run -p language -- crates/language/examples/programs
+cargo run -p lichen-language -- crates/lichen-language/examples/programs
 ```
 
 运行单个程序：
 
 ```bash
-cargo run -p language -- crates/language/examples/programs/bindings.lang
+cargo run -p lichen-language -- crates/lichen-language/examples/programs/bindings.lichen
 # 1
 ```
 
 安装 CLI（可执行文件名为 `lichen`）：
 
 ```bash
-cargo install --path crates/language          # 在本仓库的检出中执行
-cargo install --git git@github.com:windwhiterain/lichen-vm.git language
+cargo install --path crates/lichen-language  # 在本仓库的检出中执行
+cargo install --git git@github.com:windwhiterain/lichen-vm.git lichen-language
 ```
 
 然后直接运行：
 
 ```bash
-lichen crates/language/examples/programs/bindings.lang
+lichen crates/lichen-language/examples/programs/bindings.lichen
 # 1
 ```
 
@@ -82,7 +82,7 @@ a = [1, 2]; b = 0; a[b]             -- 语句与绑定：1
 |---|---|
 | [`lichen-lowlevel`](crates/lichen-lowlevel) | 虚拟机：节点、块、惰性求值、结构化合一、垃圾回收。 |
 | [`lichen-highlevel`](crates/lichen-highlevel) | IR 与检查器：每个表达式都是 [value, type] 对；检查与运行是同一个过程。 |
-| [`language`](crates/language) | 前端：源代码 → IR（带诊断信息），并提供命令行与示例程序。 |
+| [`lichen-language`](crates/lichen-language) | 前端：源代码 → IR（带诊断信息），并提供命令行与示例程序。 |
 | [`lichen-utils`](crates/lichen-utils) | 共享工具。 |
 
 ## 文档

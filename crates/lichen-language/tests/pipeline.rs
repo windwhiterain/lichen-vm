@@ -1,12 +1,12 @@
-//! End-to-end tests: source text → `language::compile` → checked build →
+//! End-to-end tests: source text → `lichen_language::compile` → checked build →
 //! evaluation, and the diagnostics (frontend + checker) with their spans.
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::program::{HighProgram, HighValue};
 use lichen_lowlevel::{Module, NodeId, Value};
 
-use language::diag::Stage;
-use language::{compile, frontend};
+use lichen_language::diag::Stage;
+use lichen_language::{compile, frontend};
 
 /// Compile and run a program, asserting it checks; returns the module and the
 /// root value node.
@@ -43,7 +43,7 @@ fn usize_of(value: &Value<HighProgram>) -> usize {
 }
 
 /// The rendered diagnostics of a failing program.
-fn diags(source: &str) -> Vec<language::Diag> {
+fn diags(source: &str) -> Vec<lichen_language::Diag> {
     let report = compile(source);
     assert!(!report.diagnostics.is_empty(), "{source:?} should fail");
     report.diagnostics
@@ -472,7 +472,7 @@ fn garbage_input_never_panics() {
 #[test]
 fn diagnostics_render_with_carets() {
     let d = diags("x => y");
-    let out = language::render::render("x => y", &d[0]);
+    let out = lichen_language::render::render("x => y", &d[0]);
     assert_eq!(
         out,
         "error: unresolved name 'y'\n  --> 1:6\n   |\n 1 | x => y\n   |      ^\n"

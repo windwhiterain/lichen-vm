@@ -6,4 +6,5 @@
 -- apply (`expected 3, found …`).
 -- output: [1, 2, 3]
 
-((n => ([1, 2, 3] : Int<n>)) 3) : Int<3>
+a = x => (1, Int)[x];
+((a 0),(a 1))
