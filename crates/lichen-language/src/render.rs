@@ -277,9 +277,15 @@ fn letter_name(i: usize) -> String {
 }
 
 /// The canonical universe `K = [Type, ↺]` — a node whose value is an array
-/// that contains the node itself.
+/// that contains a member of its own unification class.  A plain
+/// self-referential member (`contains(&node)`) is the canonical node itself;
+/// a cell unified into the universe class carries the replicated value, whose
+/// self-referential member is the canonical node — the class check covers
+/// both.
 fn is_universe(module: &Module<HighProgram>, node: NodeId) -> bool {
-    matches!(module.nodes[node].value, Some(Value::Array(ptr)) if unsafe { &*ptr }.contains(&node))
+    let rep = representative(module, node);
+    matches!(module.nodes[node].value, Some(Value::Array(ptr))
+        if unsafe { &*ptr }.iter().any(|&m| representative(module, m) == rep))
 }
 
 // --- the caret shell ---------------------------------------------------------
@@ -305,6 +311,12 @@ pub fn render(source: &str, diag: &Diag) -> String {
         }
     }
     out
+}
+
+/// Render a whole diagnostic list back to back, exactly as the CLI prints
+/// them: one caret block per diagnostic, no separator.
+pub fn render_all(source: &str, diags: &[Diag]) -> String {
+    diags.iter().map(|d| render(source, d)).collect()
 }
 
 // --- the pretty checker message ----------------------------------------------

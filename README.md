@@ -95,110 +95,6 @@ output:
 [1, 2, 3]: Int<3>
 ```
 
-### `dependent.lichen`
-
-```text
-a = x => (1, Int)[x];
-((a 0),(a 1))
-```
-
-output:
-```text
-[1, Int]: <?a, ?b>
-```
-
-### `function.lichen`
-
-```text
-f1 = x => x : Int -> Int;
-f2 = x => f1 x;
-f2
-```
-
-output:
-```text
-Function: ?a -> ?b
-```
-
-### `index.lichen`
-
-```text
-a = [1, 2];
-b = (1, Int);
-(a[0], a[1], b[0], b[1])
-```
-
-output:
-```text
-[1, 2, 1, Int]: <Int, Int, Int, Type>
-```
-
-### `placeholder.lichen`
-
-```text
-[1, 2, 3] : Int<_>
-```
-
-output:
-```text
-[1, 2, 3]: Int<3>
-```
-
-### `polymorphism.lichen`
-
-```text
--- Polymorphism
---
--- `a` applies its argument to 1; `b` selects an element of `[1, 2]` by
--- index.  `a b` passes the function `b` to `a`, which applies it to 1 —
--- the result is `[1, 2][1]`, i.e. 2.  A call's result type is a lazy
--- record, so the checker derives the root type from the evaluated value:
--- an unannotated polymorphic call runs and prints its result.
-
-a = x => x 1;
-b = x => [1,2][x];
-a b
-```
-
-output:
-```text
-2: Int
-```
-
-### `struct_instance.lichen`
-
-```text
--- Struct instantiation
---
--- `s(1, 2)` wraps a positional tuple in the nominal type: an application
--- whose callee is a struct type compiles to the `Instantiate` expression,
--- the element types are checked against the fields, and the result has the
--- struct type.  Bind the struct type once and reuse it.
-s = struct<Int, Int>; s(1, 2)
-```
-
-output:
-```text
-[1, 2]: struct<Int, Int>
-```
-
-### `structs.lichen`
-
-```text
--- Nominal struct types
---
--- `struct<T1, ..., Tn>` is a *new type* with positional fields: each
--- source occurrence allocates a fresh nominal id, so two occurrences never
--- unify.  Bind one occurrence and it is reusable — here the same bound type
--- fills an array, and the element check sees a single nominal id.
-s = struct<Int>; [s, s]
-```
-
-output:
-```text
-[[Int], [Int]]: TypeId(0)<2>
-```
-
 ### `tuple.lichen`
 
 ```text
@@ -210,20 +106,102 @@ output:
 [1, Int]: <Int, Type>
 ```
 
-### `types.lichen`
+### `index.lichen`
 
 ```text
--- First-class types
---
--- Types are ordinary values: `Type : Type` (the single universe), `Int`,
--- and a function type `Int -> Int` can all sit in a tuple.
-
-((Type : Type), Int, (x => x) : (Int -> Int))
+a = [1, 2]
+b = (1, Int)
+(a[0], a[1], b[0], b[1])
 ```
 
 output:
 ```text
-[Type, Int, Function]: <Type, Type, Int -> Int>
+[1, 2, 1, Int]: <Int, Int, Int, Type>
+```
+
+### `closure.lichen`
+
+```text
+a = 1
+f1 = x => {
+    b = 2
+    f2 = y => [a, b, x, y]
+    f2
+}
+f1 3 4 
+```
+
+output:
+```text
+[1, 2, 3, 4]: Int<4>
+```
+
+### `dependent_type.lichen`
+
+```text
+a = x => (1, Int)[x]
+(a 0, a 1)
+```
+
+output:
+```text
+[1, Int]: <Int, Type>
+```
+
+### `let_polymorphism.lichen`
+
+```text
+f = x => x
+(f 1, f Int)
+```
+
+output:
+```text
+[1, Int]: <Int, Type>
+```
+
+### `nested_function.lichen`
+
+```text
+f1 = x => {
+    f2 = y => [y, y]
+    f2 x 
+}
+f1 1
+```
+
+output:
+```text
+[1, 1]: ?a
+```
+
+### `placeholder.lichen`
+
+```text
+f1 = x => x : Int
+f2 = x => {
+    x: <Type, _>
+    f1 x[1]
+}
+f2
+```
+
+output:
+```text
+Function: <Type, [?a, ?b]> -> ?c
+```
+
+### `structs.lichen`
+
+```text
+s = struct<Int, Type>
+a = s(1, Int)
+(a, a[0], a[1])
+```
+
+output:
+```text
+[[1, Int], 1, Int]: <struct<Int, Type>, Int, Type>
 ```
 
 <!-- end: examples -->

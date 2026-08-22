@@ -37,7 +37,10 @@
 //! # Limitations
 //!
 //! - Same crate only: the base enum is fixed at the invocation site, so an
-//!   existing enum in another crate cannot be extended.
+//!   existing enum in another crate cannot be extended here. For a base and
+//!   extension in different crates, use the companion proc-macro crate
+//!   `lichen-extend` instead (`#[lichen_extend::enum_ext]` on the extension
+//!   enum, then its generated carrier at the base enum's call site).
 //! - Extension variants must be unit, tuple, or carry a discriminant. A
 //!   struct variant in an extension is a compile error, because the `From`
 //!   and `AsEnum` impls cannot be generated for it. The base enum's own

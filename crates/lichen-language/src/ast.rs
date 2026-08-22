@@ -23,10 +23,13 @@ pub enum Expr {
     /// the type from context).  In term position `_` parses as a
     /// [`Expr::Name`] and stays an ordinary (possibly discard) name.
     Placeholder(Span),
-    /// `x => e`.
+    /// `x => e`, or `x : T => e` — a lambda whose parameter is annotated.
+    /// The annotation is desugared by [`crate::compile`] to
+    /// `(x => e) : (T -> _)`.
     Lambda {
         parameter: String,
         parameter_span: Span,
+        parameter_type: Option<Box<Expr>>,
         r#return: Box<Expr>,
         span: Span,
     },
@@ -68,15 +71,27 @@ pub enum Expr {
         length: Box<Expr>,
         span: Span,
     },
-    /// `{ name = expr; …; expr }` — a block: scoped bindings followed by the
-    /// block's value.  The bindings are graph-shared like a program's; the
+    /// `{ stmt; …; expr }` — a block: scoped statements followed by the
+    /// block's value.  The statements are graph-shared like a program's; the
     /// block compiles to its final expression's own IR node (see
     /// [`crate::compile`]).
     Block {
-        bindings: Vec<Binding>,
+        statements: Vec<Stmt>,
         expr: Box<Expr>,
         span: Span,
     },
+}
+
+/// One statement: a binding or a bare expression (the program's non-final
+/// statements; the last statement is the final expression, kept separately in
+/// [`Program::expr`] / [`Expr::Block`]).
+#[derive(Clone, Debug)]
+pub enum Stmt {
+    /// `name = value` — a graph-sharing binding.
+    Binding(Binding),
+    /// A bare expression — evaluated for its type checks, its value
+    /// discarded.
+    Expr(Expr),
 }
 
 /// One statement binding: `name = value`.
@@ -88,15 +103,19 @@ pub struct Binding {
     pub value: Expr,
 }
 
-/// A program: `name = expr; …` bindings followed by the final expression.
+/// A program: `name = expr; …` statements followed by the final expression.
 ///
-/// The bindings are *graph sharing*, not sugar for application: each value
-/// compiles once into the IR arena and every use of its name is that same
-/// node id, so the IR stays a plain expression graph (no `let`, no desugared
-/// lambda).  The final expression is the program's value and its root.
+/// The statements are *graph sharing*, not sugar for application: each
+/// binding's value compiles once into the IR arena and every use of its name
+/// is that same node id, so the IR stays a plain expression graph (no `let`,
+/// no desugared lambda).  A bare expression statement is compiled too — the
+/// frontend wires every statement into the root so each is checked and
+/// evaluated (the runtime *is* the typechecker) — and the final expression is
+/// the program's value and its root.
 #[derive(Clone, Debug)]
 pub struct Program {
-    pub bindings: Vec<Binding>,
+    /// The non-final statements, in source order.
+    pub statements: Vec<Stmt>,
     pub expr: Expr,
 }
 

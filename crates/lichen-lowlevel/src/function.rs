@@ -83,21 +83,6 @@ impl<P: Program> Module<P> {
             // instead of unbound slots; positions the pattern treats as
             // opaque stay lazy.
             self.evaluate_pattern_argument(cloned_param, argument, block);
-            eprintln!(
-                "DBG function_apply: argument = {argument:?} value = {:?}, cloned_param = {cloned_param:?} value = {:?}",
-                self.nodes[argument].value,
-                self.nodes[cloned_param].value,
-            );
-            if let (Some(Value::Array(a)), Some(Value::Array(b))) = (
-                self.nodes[argument].value,
-                self.nodes[cloned_param].value,
-            ) {
-                let (a, b) = (unsafe { &*a }, unsafe { &*b });
-                eprintln!(
-                    "DBG   argument elems = {a:?} (values {:?}), cloned_param elems = {b:?}",
-                    a.iter().map(|&id| self.nodes[id].value).collect::<Vec<_>>()
-                );
-            }
             self.unify(cloned_param, argument);
         }
         let result = self.evaluate_node(applied, Some(block));

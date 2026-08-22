@@ -1,25 +1,30 @@
 //! The recursive-descent parser: tokens → AST.
 //!
-//! A program is `name = expr; …` bindings followed by a final expression
-//! (see [`Program`]) — the same statement list, wrapped in `{ … }`, forms a
-//! block expression (see [`Expr::Block`]).  Within an expression, one
-//! grammar covers terms and types (types are expressions); a *type-mode*
-//! flag — set inside an annotation's right side — decides whether `(a, b)`
-//! is a `Tuple` value or a `TypeTuple` type expression.  Angle brackets are
-//! exclusively type-level and need no flag: `<a, b>` is always a
-//! `TypeTuple`, `struct<T1, T2>` always a `StructType`, and `T<e>` (a
-//! `<` directly after an expression) is always the array type.  A `[`
-//! directly after an expression is always an index `e[i]` — the array
-//! literal is the prefix `[e, …]` form, so no whitespace rule decides, and
-//! an array literal in argument position needs parens: `f ([1, 2])`.
-//! Precedence (loosest → tightest): `:` (right) → `->` (right) →
-//! application (left) → postfix `<e>` / `[e]` / atoms.  `name =>` starts a
-//! lambda only in prefix position, so `f x => e` is a parse error rather
-//! than `f (x => e)`.
+//! A program is `name = expr; …` bindings and bare expressions followed by a
+//! final expression (see [`Program`]) — the same statement list, wrapped in
+//! `{ … }`, forms a block expression (see [`Expr::Block`]).  Statements are
+//! separated by `;` or a newline (the lexer lexes both as `Semicolon`), and
+//! consecutive, leading, and trailing separators are all tolerated.  A
+//! binding at statement start is `name =`; anything else is an expression —
+//! a bare expression is a statement anywhere, and only the last statement is
+//! the list's value.  Within an expression, one grammar covers terms and
+//! types (types are expressions); a *type-mode* flag — set inside an
+//! annotation's right side — decides whether `(a, b)` is a `Tuple` value or a
+//! `TypeTuple` type expression.  Angle brackets are exclusively type-level
+//! and need no flag: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>`
+//! always a `StructType`, and `T<e>` (a `<` directly after an expression) is
+//! always the array type.  A `[` directly after an expression is always an
+//! index `e[i]` — the array literal is the prefix `[e, …]` form, so no
+//! whitespace rule decides, and an array literal in argument position needs
+//! parens: `f ([1, 2])`.  Precedence (loosest → tightest): `:` (right) →
+//! `->` (right) → application (left) → postfix `<e>` / `[e]` / atoms.
+//! `name =>` starts a lambda only in prefix position, so `f x => e` is a
+//! parse error rather than `f (x => e)`; `name : T => e` is a lambda whose
+//! parameter is annotated with `T`.
 
 use lichen_highlevel::ir::Span;
 
-use crate::ast::{Binding, Expr, Program, TypeConst};
+use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
 
@@ -76,18 +81,21 @@ impl Parser<'_> {
 
     /// The program: the statement list, then `Eof`.
     fn parse_program(&mut self) -> Result<Program, Diag> {
-        let (bindings, expr) = self.parse_bindings_and_expr(false)?;
-        Ok(Program { bindings, expr })
+        let (statements, expr) = self.parse_bindings_and_expr(false)?;
+        Ok(Program { statements, expr })
     }
 
-    /// The statement list: `name = expr;` bindings, then the final
-    /// expression.  A `name =` at statement start is a binding; everything
-    /// else is an expression — a bare expression statement is only legal as
-    /// the last one (there is no dead code).  Bindings require the trailing
-    /// `;`; the final expression is the list's value.  The same list forms
-    /// a block's body (see [`Parser::block`]).
-    fn parse_bindings_and_expr(&mut self, type_mode: bool) -> Result<(Vec<Binding>, Expr), Diag> {
-        let mut bindings = Vec::new();
+    /// The statement list: `name = expr;` bindings and bare expressions,
+    /// then the final expression.  A `name =` at statement start is a
+    /// binding; anything else is an expression — a bare expression is a
+    /// statement anywhere in the list (there is no dead code: the compiler
+    /// checks every statement), and only the *last* one is the list's value.
+    /// Every non-final statement requires a trailing separator — `;` or a
+    /// newline (the lexer merges both into `Semicolon`).  The same list
+    /// forms a block's body (see [`Parser::block`]).
+    fn parse_bindings_and_expr(&mut self, type_mode: bool) -> Result<(Vec<Stmt>, Expr), Diag> {
+        let mut statements = Vec::new();
+        self.skip_separators();
         loop {
             let binding = matches!(
                 (
@@ -96,30 +104,53 @@ impl Parser<'_> {
                 ),
                 (TokenKind::Name(_), Some(TokenKind::Equals))
             );
-            if !binding {
-                break;
+            if binding {
+                let name = self.next();
+                let TokenKind::Name(binding_name) = name.kind else {
+                    unreachable!()
+                };
+                self.pos += 1; // the `=`
+                let value = self.parse_expr(type_mode)?;
+                statements.push(Stmt::Binding(Binding {
+                    name: binding_name,
+                    span: name.span,
+                    value,
+                }));
+                if !self.eat(&TokenKind::Semicolon) {
+                    return Err(self.error_found("';'"));
+                }
+                self.skip_separators();
+                continue;
             }
-            let name = self.next();
-            let TokenKind::Name(binding_name) = name.kind else {
-                unreachable!()
-            };
-            self.pos += 1; // the `=`
-            let value = self.parse_expr(type_mode)?;
-            bindings.push(Binding {
-                name: binding_name,
-                span: name.span,
-                value,
-            });
-            if !self.eat(&TokenKind::Semicolon) {
-                return Err(self.error_found("';'"));
+            // A bare expression: the final one unless a separator leads to
+            // more statements.
+            let expr = self.parse_expr(type_mode)?;
+            if self.at(&TokenKind::Semicolon) {
+                self.skip_separators();
+                if self.at(&TokenKind::Eof) || self.at(&TokenKind::RBrace) {
+                    // Trailing separators after the final expression.
+                    return Ok((statements, expr));
+                }
+                statements.push(Stmt::Expr(expr));
+                continue;
             }
+            return Ok((statements, expr));
         }
-        let expr = self.parse_expr(type_mode)?;
-        Ok((bindings, expr))
+    }
+
+    /// Skip statement separators — `;` or a newline, both lexed as
+    /// `Semicolon`.  Consecutive ones are empty statements, and leading and
+    /// trailing ones are ignored: `a = 1;\nb = 2` and a top-of-file comment's
+    /// newline both parse.
+    fn skip_separators(&mut self) {
+        while self.eat(&TokenKind::Semicolon) {}
     }
 
     /// An expression.  A name directly followed by `=>` starts a lambda whose
-    /// body extends maximally — through `:` and `->`.
+    /// body extends maximally — through `:` and `->`.  An annotation whose
+    /// value is a bare name directly followed by `=>` (`x : Int => e`) is
+    /// likewise a lambda — the parameter annotated with the annotation's
+    /// type.
     fn parse_expr(&mut self, type_mode: bool) -> Result<Expr, Diag> {
         let lambda = match &self.peek().kind {
             TokenKind::Name(_) => matches!(
@@ -138,11 +169,48 @@ impl Parser<'_> {
             return Ok(Expr::Lambda {
                 parameter,
                 parameter_span: name.span,
+                parameter_type: None,
                 r#return: Box::new(body),
                 span: name.span,
             });
         }
-        self.parse_infix(type_mode, 0)
+        let expr = self.parse_infix(type_mode, 0)?;
+        // `x : T => e` — the annotation's value is a bare name and `=>`
+        // follows: a lambda whose parameter is annotated with `T`.  This is
+        // the only parse of that token sequence (`=>` is not an infix
+        // operator, so the annotation cannot extend through it), so there is
+        // no ambiguity with a plain annotation.
+        let (parameter, parameter_span, parameter_type, span) = match expr {
+            Expr::Annotation { value, r#type, span } => match *value {
+                Expr::Name(parameter, parameter_span) => {
+                    (parameter, parameter_span, r#type, span)
+                }
+                value => {
+                    return Ok(Expr::Annotation {
+                        value: Box::new(value),
+                        r#type,
+                        span,
+                    })
+                }
+            },
+            expr => return Ok(expr),
+        };
+        if self.at(&TokenKind::FatArrow) {
+            self.next();
+            let body = self.parse_expr(type_mode)?;
+            return Ok(Expr::Lambda {
+                parameter,
+                parameter_span,
+                parameter_type: Some(parameter_type),
+                r#return: Box::new(body),
+                span,
+            });
+        }
+        Ok(Expr::Annotation {
+            value: Box::new(Expr::Name(parameter, parameter_span)),
+            r#type: parameter_type,
+            span,
+        })
     }
 
     fn parse_infix(&mut self, type_mode: bool, min_bp: u8) -> Result<Expr, Diag> {
@@ -367,17 +435,17 @@ impl Parser<'_> {
         Ok(Expr::StructType(fields, span))
     }
 
-    /// `{ name = expr; …; expr }` — a block: scoped bindings followed by the
+    /// `{ stmt; …; expr }` — a block: scoped statements followed by the
     /// block's value.  The opener has been consumed by
     /// [`Parser::parse_atom`]; the body is the same statement list as a
     /// program's, ending in the `}`.
     fn block(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        let (bindings, expr) = self.parse_bindings_and_expr(type_mode)?;
+        let (statements, expr) = self.parse_bindings_and_expr(type_mode)?;
         if !self.eat(&TokenKind::RBrace) {
             return Err(self.error_found("'}'"));
         }
         Ok(Expr::Block {
-            bindings,
+            statements,
             expr: Box::new(expr),
             span,
         })
@@ -414,28 +482,89 @@ mod tests {
         parse(&tokens).unwrap_err()
     }
 
+    /// The binding statements of a program, in order.
+    fn bindings(program: &Program) -> Vec<&Binding> {
+        program
+            .statements
+            .iter()
+            .filter_map(|stmt| match stmt {
+                Stmt::Binding(binding) => Some(binding),
+                Stmt::Expr(_) => None,
+            })
+            .collect()
+    }
+
     #[test]
     fn a_program_is_bindings_followed_by_the_final_expression() {
         let tokens = lex("a = [1, 2]; b = 0; a[b]").unwrap();
         let program = parse(&tokens).unwrap();
-        assert_eq!(program.bindings.len(), 2);
-        assert_eq!(program.bindings[0].name, "a");
-        assert_eq!(program.bindings[1].name, "b");
-        assert!(matches!(program.bindings[0].value, Expr::Array(..)));
+        let binds = bindings(&program);
+        assert_eq!(binds.len(), 2);
+        assert_eq!(binds[0].name, "a");
+        assert_eq!(binds[1].name, "b");
+        assert!(matches!(binds[0].value, Expr::Array(..)));
         assert!(matches!(program.expr, Expr::Index { .. }));
     }
 
     #[test]
     fn statement_errors_carry_spans() {
-        // A binding must be followed by `;`.
+        // A binding must be followed by a separator.
         let err = parse_err("a = 5");
         assert_eq!(err.message, "expected ';', found the end of the program");
-        // A bare expression statement is only legal as the last one.
-        let err = parse_err("5; a");
-        assert_eq!(err.message, "unexpected ';' after the program");
+        // A bare expression is accepted anywhere, but the list must end in a
+        // final expression — a trailing binding (with its required
+        // separator) leaves none.
+        let err = parse_err("5; a = 1");
+        assert_eq!(err.message, "expected ';', found the end of the program");
+        let err = parse_err("a = 1; 5; a = 2");
+        assert_eq!(err.message, "expected ';', found the end of the program");
+        let err = parse_err("a = 1;");
+        assert_eq!(err.message, "expected an expression, found the end of the program");
         // A binding without a value.
         let err = parse_err("a = ; 5");
         assert_eq!(err.message, "expected an expression, found ';'");
+    }
+
+    #[test]
+    fn bare_expressions_are_statements_anywhere() {
+        // 5; a = 1; a — an expression before and between bindings; the last
+        // statement is the final expression.
+        let tokens = lex("5; a = 1; 6; a").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(program.statements.len(), 3);
+        assert!(matches!(program.statements[0], Stmt::Expr(..)));
+        assert!(matches!(program.statements[1], Stmt::Binding(..)));
+        assert!(matches!(program.statements[2], Stmt::Expr(..)));
+        assert!(matches!(program.expr, Expr::Name(name, _) if name == "a"));
+        // 5; 6 — the last expression is the value.
+        let tokens = lex("5; 6").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(program.statements.len(), 1);
+        assert!(matches!(program.statements[0], Stmt::Expr(..)));
+        assert!(matches!(program.expr, Expr::Int(6, _)));
+    }
+
+    #[test]
+    fn newlines_separate_statements() {
+        // a = [1, 2]\nb = 0\na[b] — each binding ends at its newline.
+        let tokens = lex("a = [1, 2]\nb = 0\na[b]").unwrap();
+        let program = parse(&tokens).unwrap();
+        let binds = bindings(&program);
+        assert_eq!(binds.len(), 2);
+        assert_eq!(binds[0].name, "a");
+        assert_eq!(binds[1].name, "b");
+        assert!(matches!(program.expr, Expr::Index { .. }));
+        // A trailing newline after the final expression is not an error.
+        parse(&lex("a = 1\na\n").unwrap()).unwrap();
+        // `;` and newlines mix, and consecutive separators are empty
+        // statements.
+        let tokens = lex("a = 1;\nb = 2; c = 3\nc").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(bindings(&program).len(), 3);
+        // Leading newlines (e.g. a top-of-file comment's) are skipped.
+        let tokens = lex("\n\na = 1\na").unwrap();
+        let program = parse(&tokens).unwrap();
+        assert_eq!(bindings(&program).len(), 1);
     }
 
     #[test]
@@ -499,6 +628,43 @@ mod tests {
             panic!("expected a lambda")
         };
         assert!(matches!(*r#return, Expr::Lambda { .. }));
+    }
+
+    #[test]
+    fn an_annotated_parameter_is_a_lambda() {
+        // x : Int => x — the parameter carries the annotation.
+        let Expr::Lambda {
+            parameter,
+            parameter_type,
+            r#return,
+            ..
+        } = parse_ok("x : Int => x")
+        else {
+            panic!("expected a lambda")
+        };
+        assert_eq!(parameter, "x");
+        assert!(matches!(
+            parameter_type,
+            Some(t) if matches!(*t, Expr::TypeConst(TypeConst::Int, _))
+        ));
+        assert!(matches!(*r#return, Expr::Name(name, _) if name == "x"));
+        // An unannotated lambda has no parameter type.
+        assert!(matches!(
+            parse_ok("x => x"),
+            Expr::Lambda { parameter_type: None, .. }
+        ));
+        // The annotation can be a compound type: x : Int -> Int => e.
+        let Expr::Lambda { parameter_type, .. } = parse_ok("x : Int -> Int => x") else {
+            panic!("expected a lambda")
+        };
+        assert!(matches!(parameter_type, Some(t) if matches!(*t, Expr::Arrow { .. })));
+        // x : Int alone (no `=>`) stays an annotation.
+        assert!(matches!(parse_ok("x : Int"), Expr::Annotation { .. }));
+        // An annotated lambda parenthesized is the same form.
+        assert!(matches!(
+            parse_ok("(x : Int) => x"),
+            Expr::Lambda { parameter_type: Some(..), .. }
+        ));
     }
 
     #[test]
@@ -696,19 +862,22 @@ mod tests {
 
     #[test]
     fn a_block_is_bindings_followed_by_a_final_expression() {
-        let Expr::Block { bindings, expr, .. } = parse_ok("{a = 1; a}") else {
+        let Expr::Block { statements, expr, .. } = parse_ok("{a = 1; a}") else {
             panic!("expected a block")
         };
-        assert_eq!(bindings.len(), 1);
-        assert_eq!(bindings[0].name, "a");
-        assert!(matches!(bindings[0].value, Expr::Int(1, _)));
+        assert_eq!(statements.len(), 1);
+        let Stmt::Binding(binding) = &statements[0] else {
+            panic!("expected a binding")
+        };
+        assert_eq!(binding.name, "a");
+        assert!(matches!(binding.value, Expr::Int(1, _)));
         assert!(matches!(*expr, Expr::Name(name, _) if name == "a"));
         // A block with only a final expression.
         assert!(matches!(parse_ok("{5}"), Expr::Block { .. }));
-        // Bindings are graph-shared statements, not just literals.
+        // Statements are graph-shared bindings, not just literals.
         assert!(matches!(
             parse_ok("{a = [1, 2]; b = a[0]; b}"),
-            Expr::Block { bindings, .. } if bindings.len() == 2
+            Expr::Block { statements, .. } if statements.len() == 2
         ));
     }
 
@@ -718,6 +887,26 @@ mod tests {
             panic!("expected a lambda")
         };
         assert!(matches!(*r#return, Expr::Block { .. }));
+    }
+
+    #[test]
+    fn a_block_can_be_written_without_semicolons() {
+        // {a = 1\nb = 2\nb} — newlines separate the block's statements.
+        let Expr::Block { statements, expr, .. } = parse_ok("{a = 1\nb = 2\nb}") else {
+            panic!("expected a block")
+        };
+        assert_eq!(statements.len(), 2);
+        let Stmt::Binding(a) = &statements[0] else {
+            panic!("expected a binding")
+        };
+        let Stmt::Binding(b) = &statements[1] else {
+            panic!("expected a binding")
+        };
+        assert_eq!(a.name, "a");
+        assert_eq!(b.name, "b");
+        assert!(matches!(*expr, Expr::Name(name, _) if name == "b"));
+        // A trailing newline before the `}` is fine.
+        assert!(matches!(parse_ok("{a = 1\na\n}"), Expr::Block { .. }));
     }
 
     #[test]

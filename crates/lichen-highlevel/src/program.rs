@@ -109,10 +109,6 @@ impl OperatorExt<HighProgram> for HighOperator {
                 let operands = unsafe { &*operands };
                 let type_pair = operands[0];
                 let index_node = operands[1];
-                eprintln!(
-                    "DBG IndexType: operand ids = {operands:?}; type_pair {type_pair:?} value = {:?}",
-                    module.nodes[type_pair].value
-                );
                 let Value::USize(index) = module.nodes[index_node]
                     .value
                     .expect("the operand was deep-evaluated")
@@ -124,10 +120,7 @@ impl OperatorExt<HighProgram> for HighOperator {
                     .value
                     .expect("the operand was deep-evaluated")
                 else {
-                    panic!(
-                        "IndexType needs a type expression pair; type_pair={type_pair:?}, value={:?}, index_node={index_node:?}",
-                        module.nodes[type_pair].value,
-                    )
+                    unreachable!("IndexType needs a type expression pair")
                 };
                 let pair = unsafe { &*pair };
                 let shape = pair[0];
@@ -213,13 +206,7 @@ impl OperatorExt<HighProgram> for HighOperator {
                             Value::None
                         }
                     }
-                    _ => panic!(
-                        "IndexType target must be a tuple, array, or struct type; marker={:?}, marker_value={:?}, kind_cell_value={:?}, shape_value={:?}",
-                        marker,
-                        module.nodes[marker].value,
-                        module.nodes[kind_cell].value,
-                        module.nodes[shape].value,
-                    ),
+                    _ => unreachable!("IndexType target must be a tuple, array, or struct type"),
                 }
             }
             HighOperator::Fresh => {

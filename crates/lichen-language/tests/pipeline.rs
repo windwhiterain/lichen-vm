@@ -158,6 +158,63 @@ fn statement_bindings_check_and_evaluate() {
 }
 
 #[test]
+fn expression_statements_check_and_evaluate() {
+    // A bare expression is a statement anywhere; the program's value is the
+    // last expression.  The statements are wired into the root, so their
+    // type errors fire — an annotation mismatch...
+    assert_eq!(usize_of(&evaluate("5; 7")), 7);
+    assert_eq!(usize_of(&evaluate("5; a = 1; a")), 1);
+    let d = diags("5 : Type; 7");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Check);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Annotation);
+    // ...and an apply guard.
+    let d = diags("(5 3); 7");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Guard);
+    // The same inside a block.
+    assert_eq!(usize_of(&evaluate("{5; 7}")), 7);
+    let d = diags("f = x => {5 : Type; x}; (f 9 : Int)");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Annotation);
+}
+
+#[test]
+fn an_annotated_parameter_checks() {
+    // x : Int => x — the parameter is pinned to Int; applying at Int
+    // checks and runs, the body's use of the parameter is the identity.
+    assert_eq!(usize_of(&evaluate("(x : Int => x) 5")), 5);
+    assert_eq!(usize_of(&evaluate("(x : Int => x) 5 : Int")), 5);
+    // Applying it at Type clashes at the apply (the parameter's pinned
+    // type against the argument's).
+    let d = diags("(x : Int => x) Type");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Runtime);
+    assert_eq!(check.value_a, Some(Value::Ext(HighValue::TypeInt)));
+    // An annotated parameter in a bound function.
+    assert_eq!(usize_of(&evaluate("f = x : Int => x; (f 5 : Int)")), 5);
+    let d = diags("f = x : Int => x; f Type");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Runtime);
+}
+
+#[test]
+fn an_annotated_parameter_prints_its_pinned_type() {
+    // x : Int => x renders `Int -> Int`, and a `_` annotation renders the
+    // class it bound to (`Int`, not the raw `[Int, Type]` pair) — the type
+    // printer recognizes a cell unified into the universe class.
+    assert_eq!(
+        lichen_language::run::evaluate("x : Int => x").unwrap(),
+        "Function: Int -> Int"
+    );
+    assert_eq!(
+        lichen_language::run::evaluate("5 : _").unwrap(),
+        "5: Int"
+    );
+}
+
+#[test]
 fn a_binding_can_shadow_an_earlier_one() {
     assert_eq!(usize_of(&evaluate("a = 1; a = 2; a")), 2);
 }
@@ -378,8 +435,9 @@ fn a_struct_instance_indexes_its_fields() {
         "the second field is the `Int` type constant"
     );
     // indexing the instance through a parameter works too — the runtime
-    // IndexType sees the struct type and selects its field list
-    let (module, root) = run("f = a => a[0]; s = struct<Int, Type>; f s(1, Int) : Int");
+    // IndexType sees the struct type and selects its field list (the
+    // argument is parenthesized: `f s(1, Int)` would parse as `(f s)(1, Int)`)
+    let (module, root) = run("f = a => a[0]; s = struct<Int, Type>; f (s(1, Int)) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 1);
 }

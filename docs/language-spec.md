@@ -29,9 +29,12 @@ resolver, and IR emitter on top of the existing highlevel checker, which runs
 ## 2. Syntax
 
 ```
-program  := (name '=' expr ';')* expr              -- bindings, then the final expression
+program  := (stmt sep)* expr                        -- statements, then the final expression
+stmt     := name '=' expr                           -- binding
+          | expr                                    -- bare expression statement
+sep      := ';' | newline                           -- statement separator
 
-expr     := name '=>' expr                        -- lambda; body extends maximally
+expr     := name (':' expr)? '=>' expr             -- lambda; body extends maximally
           | expr ':' expr                         -- annotation; right-assoc, loosest
           | expr '->' expr                        -- function type; right-assoc
           | atom '<' expr '>'                     -- array type  T<e>
@@ -47,12 +50,22 @@ atom     := int_literal
           | '[' expr (',' expr)* ']'              -- array literal
           | '<' expr ',' expr (',' expr)* '>'     -- tuple type  (always TypeTuple)
           | 'struct' '<' expr (',' expr)* '>'     -- struct type  (nominal, positional fields)
-          | '{' (name '=' expr ';')* expr '}'     -- block: scoped bindings, then the block's value
+          | '{' (stmt sep)* expr '}'              -- block: scoped statements, then the block's value
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `=>`, `->`, `:`.  `=` binds a name in
-  a statement, `;` separates statements, and `{` `}` delimit a block (a
-  program-shaped expression).  `--` starts a line comment (to end of line).
+  a statement, a statement separator is `;` or a newline (they are
+  interchangeable — the lexer produces the same token for both), and `{` `}`
+  delimit a block (a program-shaped expression).  `--` starts a line comment
+  (to end of line).
+- **Newlines are separators, not whitespace.**  A newline is exactly a `;`, so
+  a statement ends at the end of its line: `a = 1\nb = 2\na` needs no `;`, and
+  `;` is only kept for one-line statement lists (`{a = 1; a}`).  Consecutive
+  separators (`;\n` at a line end) and leading/trailing ones (a comment line,
+  a final blank line) are tolerated.  The flip side is that an expression
+  cannot continue on the next line: a lambda body must start on the same line
+  as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
+  broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
   `Type`, and `struct` are reserved — they cannot be bound or used as names.
 - **The `_` placeholder.**  In type position (the right side of `:`, and the
@@ -66,6 +79,12 @@ atom     := int_literal
   `<e>` / `[e]` / atoms.  `x => e : T` parses as `x => (e : T)` — lambda bodies
   extend through annotations, as do array lengths: `Int<x : T>` is the array
   type whose length is the annotated expression.
+- **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
+  annotated with `T` — the frontend desugars it to `(x => e) : (T -> _)`, so
+  the parameter is pinned to `T` (applying the lambda at any other type fails
+  at the apply) while the codomain is inferred from the body.  The body still
+  extends maximally: `x : T => e : U` is `x : T => (e : U)`.  `x : T` without
+  a following `=>` stays an ordinary annotation.
 - **One grammar, one position flag.**  Types are expressions, so term and type
   forms share one grammar.  The parser threads a *type-mode* flag that only
   decides `(a, b)` — a `Tuple` value in term position, a `TypeTuple` type
@@ -96,8 +115,9 @@ index it selects a branch.
   definition pass (so apply-time type checks fire), and the program's value is
   the evaluation of its root: an `Int`, a tuple, an array, a function, or a
   type expression.
-- **Statements and bindings.**  A program is a sequence of `name = expr;`
-  bindings followed by a final expression.  A binding is *graph sharing*, not
+- **Statements and bindings.**  A program is a sequence of statements — a
+  `name = expr` binding or a bare expression — followed by a final expression,
+  each statement ended by a `;` or a newline.  A binding is *graph sharing*, not
   sugar: its value compiles once into the IR arena, and every use of the name
   is that same node id (the IR is a graph).  There is no `let` node and no
   desugared lambda — the final expression stays the program's root, so its
@@ -106,13 +126,20 @@ index it selects a branch.
   cannot refer to itself (its value compiles before the name is in scope).
   Sharing means a bound *non-function* value has one type across uses, while
   a bound lambda stays polymorphic — each application still instantiates the
-  parameter fresh via the runtime's per-apply clones.
-- **Blocks.**  `{ name = expr; …; expr }` is an expression: the same
-  statement list as a program, scoped to the block.  Bindings are graph-shared
+  parameter fresh via the runtime's per-apply clones.  A **bare expression
+  statement** (`5; 7`, `f 5` before more statements) is no dead code: the
+  frontend wires every statement into the root (`Index(Tuple([stmt₁, …,
+  stmtₙ, final]), n)`), so each is checked and evaluated — the runtime *is*
+  the typechecker — and only the final expression is the program's value.
+- **Blocks.**  `{ stmt …; expr }` is an expression: the same
+  statement list as a program (separators again `;` or newline, bare
+  expression statements included), scoped to
+  the block.  Bindings are graph-shared
   exactly as at the top level (each value compiles once, and a use of the name
   is the value's own node) and shadow outer names; the block's names are gone
   after the `}`.  Because a block is an expression, a function body can be one
-  naturally — `f = x => { a = 1; a }` — and so can any other subexpression
+  naturally — `f = x => { a = 1; a }` (or, newline-separated, a body written
+  as a multi-line block) — and so can any other subexpression
   (`{ a = 5; a }` as a program, an argument, a nested block).  A block
   compiles to its final expression's own node: there is no block node in the
   IR, so a bound lambda inside a block stays polymorphic and a block never
@@ -197,6 +224,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `Type` | `Constant(TypeType)` |
 | name use | the binder's own `ExprId` (pre-resolved) |
 | `x => e` | `Function { parameter, return }` — `parameter` is the `Parameter` expr for `x` |
+| `x : T => e` | `Annotation { value: Function, type: TypeFunction(T, _) }` — the desugared parameter annotation |
 | `e1 e2` | `Apply { function, argument }` |
 | `e[i]` | `Index { array, index }` |
 | `e : T` | `Annotation { value, type }` |
@@ -208,7 +236,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
-| `{ a = e; …; e }` | the final expression's own node — bindings are scope-entered, then popped |
+| `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 
 There is no desugar step (no `let`).
 

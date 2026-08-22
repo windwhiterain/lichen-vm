@@ -1,3 +1,4 @@
-s = struct<Int, Type>;
-a = s(1, Int);
+-- order: 3
+s = struct<Int, Type>
+a = s(1, Int)
 (a, a[0], a[1])

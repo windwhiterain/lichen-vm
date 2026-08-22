@@ -757,9 +757,6 @@ impl Checker {
             // bound type carries at runtime.
             None => {
                 let ty_ops = self.array_node(self.current_block, &[array_ty, index_value]);
-                eprintln!(
-                    "DBG check_index: array_ty = {array_ty:?}, index_value = {index_value:?}, ty_ops = {ty_ops:?}, value_node = {value_node:?}"
-                );
                 self.op_node(
                     self.current_block,
                     Operator::Ext(HighOperator::IndexType),
@@ -807,10 +804,6 @@ impl Checker {
         self.check_expr(type_expr, Role::Type);
         self.check_expr(value, Role::Term);
         let type_pair = self.term[type_expr].unwrap();
-        eprintln!(
-            "DBG check_instantiate: type_expr = {type_expr:?}, type_pair = {type_pair:?} value = {:?}",
-            self.module.nodes[type_pair].value
-        );
         let value_ty = self.ty[value].unwrap();
         // The value's shape: the element-type list of a tuple type, or the
         // type itself for anything else (which then fails the list check).

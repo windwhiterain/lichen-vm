@@ -16,9 +16,12 @@ fn every_example_runs() {
         .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
         .collect();
     files.sort();
+    // A sanity floor, not an exact count: examples may be merged (e.g.
+    // struct_instance.lichen folded into structs.lichen) as long as the
+    // set stays a reasonable living spec.
     assert!(
-        files.len() >= 10,
-        "expected at least 10 example programs, found {}",
+        files.len() >= 9,
+        "expected at least 9 example programs, found {}",
         files.len()
     );
     for file in files {

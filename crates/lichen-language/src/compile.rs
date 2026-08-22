@@ -8,9 +8,21 @@
 //! `a` is that same id — the IR is a graph and the binding is pure sharing
 //! (no `let`, no desugared application).  The IR therefore carries no name
 //! strings, and the checker's scope stack is keyed by the same ids.
-//! A block `{ a = e; …; e }` is a program-shaped expression: its bindings
-//! share the same way, its scope frames are popped at the `}`, and it
-//! compiles to its final expression's own node.
+//! A block `{ …; e }` is a program-shaped expression: its statements share
+//! the same way, its scope frames are popped at the `}`, and it compiles to
+//! its final expression's own node.
+//!
+//! Every statement — a binding or a bare expression — is compiled, and the
+//! statement list is wrapped in the root as `Index(Tuple([stmt₁, …, stmtₙ,
+//! final]), n)`: the checker compiles and runs every statement (the runtime
+//! *is* the typechecker), while the program's value stays the final
+//! expression.  The wrap is dropped when it would select the final
+//! expression's own node (`a = 1; a` stays the `1` node), preserving the
+//! sharing.
+//!
+//! An annotated parameter `x : T => e` desugars to `(x => e) : (T -> _)` —
+//! the annotation and arrow are ordinary expressions, so no new IR form is
+//! needed.
 //! Shadowing is allowed (the inner binding wins); an unknown name is a
 //! resolve diagnostic — the checker's `lookup` panics on unresolved ids, so
 //! resolution completes here.  Every emitted expression carries its source
@@ -20,7 +32,7 @@ use std::collections::HashMap;
 
 use lichen_highlevel::ir::{Constant, ExprId, ExprKind, IR, Span};
 
-use crate::ast::{Expr, Program, TypeConst};
+use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 
 pub fn compile(program: &Program) -> Result<IR, Diag> {
@@ -28,17 +40,16 @@ pub fn compile(program: &Program) -> Result<IR, Diag> {
         ir: IR::new(),
         scopes: Vec::new(),
     };
-    // Each binding compiles its value once and enters the scope; the scope
-    // is never popped, so later statements (and the final expression) see
-    // every earlier binding.
-    for binding in &program.bindings {
-        let id = compiler.compile_expr(&binding.value)?;
-        compiler
-            .scopes
-            .push(HashMap::from([(binding.name.clone(), id)]));
+    // Each statement compiles once and enters the scope (bindings) or just
+    // compiles (a bare expression); the scope is never popped, so later
+    // statements (and the final expression) see every earlier binding.
+    let mut statements = Vec::new();
+    for stmt in &program.statements {
+        statements.push(compiler.compile_stmt(stmt)?);
     }
-    let id = compiler.compile_expr(&program.expr)?;
-    compiler.ir.set_root(id);
+    let final_id = compiler.compile_expr(&program.expr)?;
+    let root = compiler.wrap(statements, final_id, &program.expr.span());
+    compiler.ir.set_root(root);
     Ok(compiler.ir)
 }
 
@@ -49,6 +60,44 @@ struct Compiler {
 }
 
 impl Compiler {
+    fn compile_stmt(&mut self, stmt: &Stmt) -> Result<ExprId, Diag> {
+        match stmt {
+            Stmt::Binding(binding) => {
+                let id = self.compile_expr(&binding.value)?;
+                self.scopes
+                    .push(HashMap::from([(binding.name.clone(), id)]));
+                Ok(id)
+            }
+            Stmt::Expr(e) => self.compile_expr(e),
+        }
+    }
+
+    /// Wire the statements into the root so the checker compiles and runs
+    /// every one of them: `Index(Tuple([stmt₁, …, stmtₙ, final]), n)`
+    /// selects the final expression as the program's value.  The tuple is
+    /// heterogeneous (no element-type unification), so a statement's
+    /// polymorphic type is not monomorphized by being wrapped.  A trailing
+    /// statement that already *is* the final expression's node (`a = 1; a`)
+    /// is dropped — the wrap would only select it again — so a program whose
+    /// last statement is its final expression stays that expression's own
+    /// node.
+    fn wrap(&mut self, statements: Vec<ExprId>, final_id: ExprId, span: &Span) -> ExprId {
+        let mut statements = statements;
+        if statements.last() == Some(&final_id) {
+            statements.pop();
+        }
+        if statements.is_empty() {
+            return final_id;
+        }
+        statements.push(final_id);
+        let tuple = self.ir.alloc_tuple(&statements, Some(*span));
+        let index = self.ir.alloc(
+            ExprKind::Constant(Constant::USize(statements.len() - 1)),
+            Some(*span),
+        );
+        self.ir
+            .alloc(ExprKind::Index { array: tuple, index }, Some(*span))
+    }
     fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
         let id = match e {
             Expr::Int(n, span) => self.alloc(ExprKind::Constant(Constant::USize(*n)), span),
@@ -65,22 +114,52 @@ impl Compiler {
             Expr::Lambda {
                 parameter,
                 parameter_span,
+                parameter_type,
                 r#return,
                 span,
             } => {
                 let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
                 self.scopes
                     .push(HashMap::from([(parameter.clone(), parameter_id)]));
+                // The annotated parameter's type is compiled in scope too —
+                // a type may reference the parameter (`x : x -> Int`).
                 let body = self.compile_expr(r#return);
+                let parameter_type = parameter_type
+                    .as_ref()
+                    .map(|t| self.compile_expr(t))
+                    .transpose();
                 self.scopes.pop();
                 let body = body?;
-                self.alloc(
+                let function = self.alloc(
                     ExprKind::Function {
                         parameter: parameter_id,
                         r#return: body,
                     },
                     span,
-                )
+                );
+                match parameter_type? {
+                    // `x : T => e`  ≡  `(x => e) : (T -> _)` — the parameter
+                    // annotation is an ordinary annotation of the lambda
+                    // with an arrow whose codomain is inferred.
+                    Some(t) => {
+                        let placeholder = self.alloc(ExprKind::Placeholder, span);
+                        let arrow = self.alloc(
+                            ExprKind::TypeFunction {
+                                parameter: t,
+                                r#return: placeholder,
+                            },
+                            span,
+                        );
+                        self.alloc(
+                            ExprKind::Annotation {
+                                value: function,
+                                r#type: arrow,
+                            },
+                            span,
+                        )
+                    }
+                    None => function,
+                }
             }
             Expr::Apply {
                 function,
@@ -166,20 +245,21 @@ impl Compiler {
                     span,
                 )
             }
-            Expr::Block { bindings, expr, .. } => {
-                // The same graph sharing as a program's bindings — each
+            Expr::Block { statements, expr, span } => {
+                // The same graph sharing as a program's statements — each
                 // value compiles once and names resolve to its own id — but
                 // the block's scope frames are dropped at the `}`, so a
-                // block compiles to its final expression's own node.
+                // block compiles to its final expression's own node (wired
+                // through the statement wrapper like a program's).
                 let scope_len = self.scopes.len();
-                for binding in bindings {
-                    let id = self.compile_expr(&binding.value)?;
-                    self.scopes
-                        .push(HashMap::from([(binding.name.clone(), id)]));
+                let mut stmts = Vec::new();
+                for stmt in statements {
+                    stmts.push(self.compile_stmt(stmt)?);
                 }
                 let body = self.compile_expr(expr);
                 self.scopes.truncate(scope_len);
-                body?
+                let body = body?;
+                self.wrap(stmts, body, span)
             }
         };
         Ok(id)
@@ -221,6 +301,24 @@ mod tests {
 
     fn kind(ir: &IR, id: ExprId) -> ExprKind {
         ir[id].kind
+    }
+
+    /// The node the statement wrapper selects: the root is either the final
+    /// expression's own node (no wrap) or `Index(Tuple([…, final]), n)`,
+    /// which unwraps to the final expression.
+    fn wrapped(ir: &IR) -> ExprId {
+        match ir[ir.root].kind {
+            ExprKind::Index { array, index } => {
+                let ExprKind::Tuple(range) = ir[array].kind else {
+                    panic!("expected the wrapped tuple")
+                };
+                let ExprKind::Constant(Constant::USize(n)) = ir[index].kind else {
+                    panic!("expected a constant index")
+                };
+                ir.children[range.start as usize + n]
+            }
+            _ => ir.root,
+        }
     }
 
     #[test]
@@ -327,17 +425,18 @@ mod tests {
     #[test]
     fn a_block_scopes_its_bindings() {
         // a = 2; {a = 1; a} — inside the block the name is the inner
-        // binding.
+        // binding.  The program's own binding (the `2`) is wrapped into the
+        // root; the block unwraps to the `1` node.
         let ir = compile_ok("a = 2; {a = 1; a}");
         assert!(matches!(
-            kind(&ir, ir.root),
+            kind(&ir, wrapped(&ir)),
             ExprKind::Constant(Constant::USize(1))
         ));
         // After the `}`, the block's bindings are gone and the outer name
         // resolves again: `{a = 1; a} a` applies the block (the `1` node) to
         // the outer `a` (the `2` node).
         let ir = compile_ok("a = 2; {a = 1; a} a");
-        let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
+        let ExprKind::Apply { function, argument } = kind(&ir, wrapped(&ir)) else {
             panic!("expected an apply")
         };
         assert!(matches!(
@@ -348,6 +447,69 @@ mod tests {
             kind(&ir, argument),
             ExprKind::Constant(Constant::USize(2))
         ));
+    }
+
+    #[test]
+    fn a_statement_expression_is_wired_into_the_root() {
+        // 5; 7 — the bare statement and the final expression ride in a
+        // tuple; the root selects the final one.
+        let ir = compile_ok("5; 7");
+        let ExprKind::Index { array, index } = kind(&ir, ir.root) else {
+            panic!("expected the statement wrapper")
+        };
+        assert!(matches!(
+            kind(&ir, array),
+            ExprKind::Tuple(range) if range.end - range.start == 2
+        ));
+        assert!(matches!(
+            kind(&ir, index),
+            ExprKind::Constant(Constant::USize(1))
+        ));
+        assert!(matches!(kind(&ir, wrapped(&ir)), ExprKind::Constant(Constant::USize(7))));
+        // A trailing statement identical to the final expression is not
+        // wrapped: `a = 1; a` stays the `1` node.
+        let ir = compile_ok("a = 1; a");
+        assert!(matches!(
+            kind(&ir, ir.root),
+            ExprKind::Constant(Constant::USize(1))
+        ));
+        // A bare expression statement between bindings is compiled too.
+        let ir = compile_ok("a = 1; 5; a");
+        let ExprKind::Tuple(range) = kind(&ir, match kind(&ir, ir.root) {
+            ExprKind::Index { array, .. } => array,
+            _ => panic!("expected the statement wrapper"),
+        }) else {
+            panic!("expected the wrapped tuple")
+        };
+        assert_eq!(range.end - range.start, 3);
+    }
+
+    #[test]
+    fn an_annotated_parameter_desugars_to_an_annotation() {
+        // x : Int => x  ≡  (x => x) : (Int -> _).
+        let ir = compile_ok("x : Int => x");
+        let ExprKind::Annotation { value, r#type } = kind(&ir, ir.root) else {
+            panic!("expected an annotation")
+        };
+        let ExprKind::Function { parameter, r#return } = kind(&ir, value) else {
+            panic!("expected the function")
+        };
+        assert_eq!(r#return, parameter, "the identity's body is the parameter");
+        let ExprKind::TypeFunction {
+            parameter: domain,
+            r#return: codomain,
+        } = kind(&ir, r#type)
+        else {
+            panic!("expected an arrow type")
+        };
+        assert!(matches!(
+            kind(&ir, domain),
+            ExprKind::Constant(Constant::TypeInt)
+        ));
+        assert!(matches!(kind(&ir, codomain), ExprKind::Placeholder));
+        // An unannotated lambda desugars to nothing.
+        let ir = compile_ok("x => x");
+        assert!(matches!(kind(&ir, ir.root), ExprKind::Function { .. }));
     }
 
     #[test]

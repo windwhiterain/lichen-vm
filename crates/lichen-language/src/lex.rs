@@ -5,7 +5,8 @@
 //! `Int<3>`, the tuple type `<Int, Type>`, the struct type
 //! `struct<Int, Type>`); `[` `]` and `(` `)` stay value-level; `{` `}`
 //! delimit a block — scoped bindings followed by the block's value.  `;`
-//! separates statements, `=` binds a name (`a = [1, 2]`); `=>` is still the
+//! separates statements, and so does a newline — both lex as the same
+//! `Semicolon` token.  `=` binds a name (`a = [1, 2]`); `=>` is still the
 //! lambda.  `--` starts a line comment.  Any other character is a lex error
 //! — the first one stops the pipeline.
 
@@ -33,7 +34,7 @@ pub enum TokenKind {
     Colon,
     /// `=` — a statement binding.
     Equals,
-    /// `;` — the statement separator.
+    /// `;` or a newline — the statement separator.
     Semicolon,
     Comma,
     LParen,
@@ -135,6 +136,11 @@ impl Lexer<'_> {
                 b',' => self.push(line, col, 1, TokenKind::Comma),
                 b':' => self.push(line, col, 1, TokenKind::Colon),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),
+                b'\n' => {
+                    self.push(line, col, 1, TokenKind::Semicolon);
+                    self.line += 1;
+                    self.col = 1;
+                }
                 b'-' if self.bytes.get(self.pos + 1) == Some(&b'>') => {
                     self.push(line, col, 2, TokenKind::Arrow)
                 }
@@ -150,16 +156,12 @@ impl Lexer<'_> {
         }
     }
 
-    /// Whitespace and `--` line comments.
+    /// Whitespace and `--` line comments.  A newline is *not* trivia: it
+    /// lexes as a `Semicolon` (see [`Lexer::run`]).
     fn skip_trivia(&mut self) {
         loop {
             match self.bytes.get(self.pos) {
                 Some(b' ') | Some(b'\t') | Some(b'\r') => self.step(1),
-                Some(b'\n') => {
-                    self.step(1);
-                    self.line += 1;
-                    self.col = 1;
-                }
                 Some(b'-') if self.bytes.get(self.pos + 1) == Some(&b'-') => {
                     while let Some(&b) = self.bytes.get(self.pos) {
                         if b == b'\n' {
@@ -302,9 +304,17 @@ mod tests {
 
     #[test]
     fn comments_are_skipped() {
+        // A comment is dropped, but the newline after it still lexes as the
+        // statement separator.
         assert_eq!(
             kinds("5 -- a comment\n-- another\n 6"),
-            vec![TokenKind::Int(5), TokenKind::Int(6), TokenKind::Eof]
+            vec![
+                TokenKind::Int(5),
+                TokenKind::Semicolon,
+                TokenKind::Semicolon,
+                TokenKind::Int(6),
+                TokenKind::Eof,
+            ]
         );
     }
 
@@ -312,8 +322,42 @@ mod tests {
     fn spans_track_line_and_column() {
         let token = lex_one("  x");
         assert_eq!(token.span, (1, 3));
-        let token = lex_one("\n\n  y");
-        assert_eq!(token.span, (3, 3));
+        // Each newline is a Semicolon and advances the line.
+        let tokens = lex("\n\n  y").unwrap();
+        let y = tokens.iter().find(|t| t.kind == TokenKind::Name("y".to_string())).unwrap();
+        assert_eq!(y.span, (3, 3));
+    }
+
+    #[test]
+    fn a_newline_lexes_as_a_semicolon() {
+        assert_eq!(
+            kinds("a = 1\nb = 2"),
+            vec![
+                TokenKind::Name("a".to_string()),
+                TokenKind::Equals,
+                TokenKind::Int(1),
+                TokenKind::Semicolon,
+                TokenKind::Name("b".to_string()),
+                TokenKind::Equals,
+                TokenKind::Int(2),
+                TokenKind::Eof,
+            ]
+        );
+        // `;` plus a newline are two separators in a row.
+        assert_eq!(
+            kinds("a = 1;\nb = 2"),
+            vec![
+                TokenKind::Name("a".to_string()),
+                TokenKind::Equals,
+                TokenKind::Int(1),
+                TokenKind::Semicolon,
+                TokenKind::Semicolon,
+                TokenKind::Name("b".to_string()),
+                TokenKind::Equals,
+                TokenKind::Int(2),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]

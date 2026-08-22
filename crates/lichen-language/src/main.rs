@@ -56,9 +56,7 @@ fn run_file(path: &Path) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(diags) => {
-            for d in &diags {
-                print!("{}", lichen_language::render::render(&source, d));
-            }
+            print!("{}", lichen_language::render::render_all(&source, &diags));
             ExitCode::FAILURE
         }
     }
@@ -94,9 +92,7 @@ fn run_directory(dir: &Path) -> ExitCode {
             Err(diags) => {
                 failed += 1;
                 eprintln!("{}: failed", file.display());
-                for d in &diags {
-                    print!("{}", lichen_language::render::render(&source, d));
-                }
+                print!("{}", lichen_language::render::render_all(&source, &diags));
             }
         }
     }
