@@ -1,8 +1,20 @@
 # LichenVM
 
+Infrastructure for custom type checker.
+
+## Highlevel
+
+Built program from lowlevel from IR (intermediate representation), checking and runtime are unified.
+
+## Features:
+
+- Hindley-Milner System: with let-polymorphism.
+- Dependent Type: via laziness.
+- First Class Type: type instantiation via partial function application.
+
 ## Lowlevel
 
-Type and value are same thing.
+Interpreter that type and value are same thing.
 
 ### Features:
 
@@ -19,12 +31,3 @@ Type and value are same thing.
 - Minimal Allocation.
 - High Speed For Trivial Program (complex one will be JIT compiled in the future).
 
-## Highlevel
-
-Built program from lowlevel from IR (intermediate representation), checking and runtime are unified.
-
-## Features:
-
-- Hindley-Milner System.
-- Dependent Type.
-- First Class Type.

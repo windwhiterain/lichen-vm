@@ -76,6 +76,8 @@ pub enum Operator<P: Program> {
     Index,
     /// - `operand[0]`: function.
     /// - `operand[1]`: argument.
+    /// - `operand[2]` (optional): the result type cell, unified with the
+    ///   return value's type element when the call returns.
     Apply,
 }
 

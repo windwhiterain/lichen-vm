@@ -82,7 +82,9 @@ impl<P: Program> Module<P> {
                         match self.evaluate_node(operands[0], Some(block)) {
                             Value::Parameterized => Value::Parameterized,
                             Value::Function(function) => {
-                                self.function_apply(function, operands[1], block)
+                                let result_cell =
+                                    if operands.len() == 3 { Some(operands[2]) } else { None };
+                                self.function_apply(function, operands[1], result_cell, block)
                             }
                             _ => unreachable!("Apply target must be a function value"),
                         }
