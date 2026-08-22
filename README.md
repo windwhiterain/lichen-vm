@@ -42,6 +42,7 @@ Interpreter that type and value are same thing.
 A minimal language demostrating the features.
 
 - [spec](docs/language-spec.md)
+- [soundness](docs/soundness.md)
 
 ## Quick start
 

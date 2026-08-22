@@ -6,13 +6,16 @@
 //! *actual* output, computed by running it — the README never relies on a
 //! hand-written promise in the file.  Each file may declare its place in the
 //! section with a `-- order: N` comment; entries sort by that number, with a
-//! file without one sorting last and then by name.  [`replace_examples`]
-//! splices the blob into the region between the
+//! file without one sorting last and then by name.  [`sync_output_comments`]
+//! rewrites each file's `-- output:` comment to that same actual output
+//! (appending it when the file has none), so the file and the README agree.
+//! [`replace_examples`] splices the rendered blob into the region between the
 //! `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
-//! `tests/readme.rs` resyncs the README in place whenever it drifts from the
-//! example files, so the two cannot go stale — `cargo test` self-heals a
-//! stale README (the sync binary does the same, for committing on demand).
+//! `tests/readme.rs` resyncs the README and the output comments in place
+//! whenever they drift, so they cannot go stale — `cargo test` self-heals a
+//! stale README or stale comment (the sync binary does the same, for
+//! committing on demand).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -65,6 +68,18 @@ fn declared_order(file: &Path, source: &str) -> Option<usize> {
     )
 }
 
+/// The program's actual output, or a panic naming the file and showing its
+/// diagnostics — the same rendering the CLI prints for a failing file.
+fn program_output(file: &Path, source: &str) -> String {
+    crate::run::evaluate(source).unwrap_or_else(|diags| {
+        panic!(
+            "{}: failed\n{}",
+            file.display(),
+            crate::render::render_all(source, &diags)
+        )
+    })
+}
+
 /// Render every example program as the markdown section between the markers.
 ///
 /// Each program becomes a `### \`name.lichen\`` heading, a `text` code block
@@ -100,21 +115,76 @@ pub fn render_examples() -> String {
                 .filter(|line| !line.starts_with("-- output:") && !line.starts_with("-- order:"))
                 .collect::<Vec<_>>()
                 .join("\n");
-            let output = crate::run::evaluate(&source)
-                .unwrap_or_else(|diags| {
-                    // The same rendering the CLI prints for a failing file,
-                    // so the panic names the file and shows the caret
-                    // diagnostics instead of a Debug dump.
-                    panic!(
-                        "{}: failed\n{}",
-                        file.display(),
-                        crate::render::render_all(&source, &diags)
-                    )
-                });
+            let output = program_output(&file, &source);
             format!("### `{name}`\n\n```text\n{text}\n```\n\noutput:\n```text\n{output}\n```")
         })
         .collect::<Vec<_>>()
         .join("\n\n")
+}
+
+/// Rewrite every example program's `-- output:` comment to its actual
+/// output, so each file shows what the language really prints.  An existing
+/// `-- output:` line is replaced in place; a file without one gets the
+/// comment appended.  A multi-line output becomes one `-- output:` line per
+/// line, so [`render_examples`]'s filter drops them all.  Returns true when
+/// any file was rewritten.
+pub fn sync_output_comments() -> bool {
+    let mut changed = false;
+    for entry in fs::read_dir(example_dir()).expect("examples/programs").flatten() {
+        let file = entry.path();
+        if file.extension().is_none_or(|e| e != "lichen") {
+            continue;
+        }
+        let source = read_normalized(&file);
+        let output = program_output(&file, &source);
+        let comment = output
+            .lines()
+            .map(|line| format!("-- output: {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let updated = replace_output_comment(&source, &comment);
+        if updated != source {
+            fs::write(&file, updated).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Replace the first run of `-- output:` lines in `source` with `comment`;
+/// append `comment` (on a fresh line) when there is no such line.  The
+/// result always ends with a newline.
+fn replace_output_comment(source: &str, comment: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+    let start = lines.iter().position(|line| line.starts_with("-- output:"));
+    let mut out = String::with_capacity(source.len() + comment.len() + 2);
+    match start {
+        Some(start) => {
+            let mut end = start;
+            while end < lines.len() && lines[end].starts_with("-- output:") {
+                end += 1;
+            }
+            for line in &lines[..start] {
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push_str(comment);
+            out.push('\n');
+            for line in &lines[end..] {
+                out.push_str(line);
+                out.push('\n');
+            }
+        }
+        None => {
+            out.push_str(source);
+            if !source.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(comment);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// Replace the region between the markers in `content` with `blob`.
@@ -212,6 +282,36 @@ mod tests {
         assert_eq!(declared_order(Path::new("a.lichen"), "-- order: 2\nx"), Some(2));
         assert_eq!(declared_order(Path::new("a.lichen"), "x\n-- order: 42"), Some(42));
         assert_eq!(declared_order(Path::new("a.lichen"), "no order here"), None);
+    }
+
+    #[test]
+    fn an_output_comment_is_replaced_in_place() {
+        let source = "-- order: 2\nrec f = x => x\nf 5\n-- output: stale\n";
+        assert_eq!(
+            replace_output_comment(source, "-- output: 5: Int"),
+            "-- order: 2\nrec f = x => x\nf 5\n-- output: 5: Int\n"
+        );
+        // A multi-line output becomes one `-- output:` line per line.
+        let source = "a\n-- output: x\n-- output: y\nb";
+        assert_eq!(
+            replace_output_comment(source, "-- output: 1\n-- output: 2"),
+            "a\n-- output: 1\n-- output: 2\nb\n"
+        );
+    }
+
+    #[test]
+    fn a_missing_output_comment_is_appended() {
+        let source = "rec f = x => x\nf 5\n";
+        assert_eq!(
+            replace_output_comment(source, "-- output: 5: Int"),
+            "rec f = x => x\nf 5\n-- output: 5: Int\n"
+        );
+        // A file without a trailing newline still ends up clean.
+        let source = "rec f = x => x\nf 5";
+        assert_eq!(
+            replace_output_comment(source, "-- output: 5: Int"),
+            "rec f = x => x\nf 5\n-- output: 5: Int\n"
+        );
     }
 
     #[test]

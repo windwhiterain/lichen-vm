@@ -16,11 +16,14 @@ use std::process::ExitCode;
 use lichen_language::readme;
 
 fn main() -> ExitCode {
+    if readme::sync_output_comments() {
+        println!("updated example output comments");
+    }
     let blob = readme::render_examples();
     let path = readme::readme_path();
     let content = readme::read_normalized(&path);
     match readme::replace_examples(&content, &blob) {
-        Ok(updated) => match fs::write(&path, updated) {
+        Ok(updated) if updated != content => match fs::write(&path, updated) {
             Ok(()) => {
                 println!("updated {}", path.display());
                 ExitCode::SUCCESS
@@ -30,6 +33,7 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Ok(_) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("{}: {e}", path.display());
             ExitCode::FAILURE
