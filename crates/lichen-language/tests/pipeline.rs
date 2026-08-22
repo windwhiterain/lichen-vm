@@ -337,6 +337,145 @@ fn an_unresolved_name_inside_a_block_is_reported() {
     assert_eq!(d[0].span, Some((1, 18)));
 }
 
+// --- binary operators -------------------------------------------------------
+
+#[test]
+fn binary_operators_check_and_evaluate() {
+    assert_eq!(usize_of(&evaluate("1 + 2")), 3);
+    assert_eq!(usize_of(&evaluate("5 - 3")), 2);
+    assert_eq!(usize_of(&evaluate("2 <= 1")), 0);
+    assert_eq!(usize_of(&evaluate("2 <= 2")), 1);
+    assert_eq!(usize_of(&evaluate("1 == 1")), 1);
+    assert_eq!(usize_of(&evaluate("1 == 2")), 0);
+    // A comparison's result drives a condition — there is no `Bool` value.
+    assert_eq!(usize_of(&evaluate("(1 == 1) + (2 == 3)")), 1);
+}
+
+#[test]
+fn operator_precedence_and_associativity() {
+    // Arithmetic binds tighter than comparison; both are left-associative.
+    assert_eq!(usize_of(&evaluate("1 + 2 <= 3")), 1); // (1 + 2) <= 3
+    assert_eq!(usize_of(&evaluate("5 - 3 - 1")), 1); // (5 - 3) - 1
+    // Application binds tighter than arithmetic: f x + 1 = (f x) + 1.
+    assert_eq!(usize_of(&evaluate("f = x => x; f 5 + 1 : Int")), 6);
+    // `->` keeps its place in the precedence ladder (looser than `+`).
+    assert_eq!(
+        lichen_language::run::evaluate("x => x + 1").unwrap(),
+        "Function: Int -> Int"
+    );
+}
+
+#[test]
+fn an_operator_operand_must_be_an_int() {
+    // A concrete non-Int operand is a check error.
+    let d = diags("1 + Int");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::BinOp);
+    // A lambda is not an Int either.
+    let d = diags("(x => x) <= 1");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::BinOp);
+    // An unbound operand is pinned to Int: applying the function at a
+    // non-Int is a runtime failure, not a panic inside the operator.
+    let d = diags("f = x => x + 1; f Type");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Runtime);
+}
+
+// --- `if` --------------------------------------------------------------------
+
+#[test]
+fn if_selects_a_branch() {
+    assert_eq!(usize_of(&evaluate("if 1 then 2 else 3")), 2);
+    assert_eq!(usize_of(&evaluate("if 0 then 2 else 3")), 3);
+    assert_eq!(usize_of(&evaluate("if 2 <= 1 then 2 else 3")), 3);
+    assert_eq!(usize_of(&evaluate("if 1 <= 2 then 2 else 3")), 2);
+    // The branches are one expression: if as an argument, as a lambda body.
+    assert_eq!(usize_of(&evaluate("(x => if x then 1 else 0) 1")), 1);
+    // An out-of-range condition is an out-of-bounds index at runtime.
+    let d = diags("if 5 then 1 else 2");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::IndexOutOfBounds);
+}
+
+// --- recursion ---------------------------------------------------------------
+
+#[test]
+fn a_recursive_function_checks_and_evaluates() {
+    // The countdown: f(n) = if n <= 0 then 0 else f(n-1).
+    assert_eq!(
+        usize_of(&evaluate("rec f = n => if n <= 0 then 0 else f (n - 1); f 5")),
+        0
+    );
+    // Fibonacci: the recursion example.
+    assert_eq!(
+        usize_of(&evaluate(
+            "rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
+        )),
+        55
+    );
+    assert_eq!(
+        lichen_language::run::evaluate(
+            "rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
+        )
+        .unwrap(),
+        "55: Int"
+    );
+}
+
+#[test]
+fn a_recursive_binding_parameter_cannot_be_annotated() {
+    // The parameter is pinned to Int anyway by the operator operand checks,
+    // and a wrong argument type is caught at the apply — annotate at the
+    // call site instead.
+    let d = diags("rec f = n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert_eq!(
+        d[0].message,
+        "a recursive binding's parameter cannot be annotated — annotate at the call site instead"
+    );
+    assert_eq!(usize_of(&evaluate("rec f = n => if n <= 0 then 0 else f (n - 1); f 5 : Int")), 0);
+    // A wrong argument type is a runtime apply failure, not a panic.
+    let d = diags("rec f = n => if n <= 0 then 0 else f (n - 1); f Int");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Runtime);
+}
+
+#[test]
+fn a_recursive_binding_inside_a_block_recurses() {
+    // g recurses without capturing the enclosing parameter.
+    assert_eq!(
+        usize_of(&evaluate(
+            "f = y => {rec g = z => if z <= 0 then 0 else g (z - 1); g 3}; f 5"
+        )),
+        0
+    );
+}
+
+#[test]
+fn a_recursive_binding_value_must_be_a_lambda() {
+    let d = diags("rec a = 5; a");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert_eq!(
+        d[0].message,
+        "a recursive binding's value must be a lambda ('a')"
+    );
+}
+
+#[test]
+#[should_panic(expected = "recursion depth exceeded")]
+fn a_non_terminating_recursive_function_panics_at_the_guard() {
+    // No base case: the definition pass runs the recursion forever, and the
+    // VM's application-depth guard panics instead of exhausting memory —
+    // the designed behavior of the core, not a diagnostic.
+    let _ = compile("rec f = n => f n; f 3");
+}
+
 // --- struct types ------------------------------------------------------------
 
 #[test]

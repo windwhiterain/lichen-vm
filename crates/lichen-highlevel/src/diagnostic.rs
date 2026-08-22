@@ -71,6 +71,10 @@ pub enum DiagKind {
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,
+    /// A binary operator's operand must be an `Int` (it is unified against
+    /// the int type expression, pinning an unbound operand) — expected =
+    /// `Int`, found = the operand's type.
+    BinOp,
     /// A runtime apply-time failure (the parameter type check, executed by
     /// the VM) — no diary entry.  Reversed direction: `a` = the parameter's
     /// expected type, `b` = the argument's found type.
@@ -249,6 +253,7 @@ impl Report<'_> {
                 self.print_type(err.b),
                 self.print_type(err.a)
             ),
+            DiagKind::BinOp => format!("expected Int, found {}", self.print_type(err.a)),
             // Diary entries are checker-issued unifies only — runtime
             // failures are rendered elsewhere.
             DiagKind::Runtime | DiagKind::IndexOutOfBounds => {
@@ -485,6 +490,9 @@ impl Report<'_> {
             Some(Operator::Apply) => "Apply".to_string(),
             Some(Operator::Ext(HighOperator::IndexType)) => "Index".to_string(),
             Some(Operator::Ext(HighOperator::Fresh)) => "Fresh".to_string(),
+            Some(Operator::Ext(
+                HighOperator::Add | HighOperator::Sub | HighOperator::Leq | HighOperator::Eq,
+            )) => "op".to_string(),
             None => "op".to_string(),
         }
     }

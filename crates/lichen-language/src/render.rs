@@ -357,6 +357,7 @@ pub fn checker_message(
                 printer.node(d.a)
             )
         }
+        DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
         // A runtime apply-time failure: the parameter is the expected side,
         // the argument the found side.
         DiagKind::Runtime => format!(

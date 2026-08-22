@@ -14,9 +14,11 @@ pub use crate::render::print_value;
 
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///
-/// On failure the diagnostics (frontend and checker) are returned.  Every
-/// v1 program terminates, so the deep evaluation cannot hit the VM's
-/// recursion guard.
+/// On failure the diagnostics (frontend and checker) are returned.  A
+/// terminating program evaluates to its value; a non-terminating one (a
+/// recursive function whose recursion never reaches a base case) panics at
+/// the VM's recursion-depth guard — that is the designed behavior of the
+/// core (an upper limit on nested applications), not a diagnostic.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag>> {
     let report = compile(source);
     if !report.diagnostics.is_empty() {

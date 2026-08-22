@@ -1,14 +1,16 @@
 //! The lexer: source text → tokens, each with a `(line, column)` span.
 //!
-//! `Int` and `Type` lex as keywords; everything else that starts an
-//! identifier is a name.  `<` `>` build type-level forms (the array type
-//! `Int<3>`, the tuple type `<Int, Type>`, the struct type
-//! `struct<Int, Type>`); `[` `]` and `(` `)` stay value-level; `{` `}`
-//! delimit a block — scoped bindings followed by the block's value.  `;`
-//! separates statements, and so does a newline — both lex as the same
-//! `Semicolon` token.  `=` binds a name (`a = [1, 2]`); `=>` is still the
-//! lambda.  `--` starts a line comment.  Any other character is a lex error
-//! — the first one stops the pipeline.
+//! `Int`, `Type`, `struct`, `rec`, `if`, `then`, and `else` lex as
+//! keywords; everything else that starts an identifier is a name.  `<` `>`
+//! build type-level forms (the array type `Int<3>`, the tuple type
+//! `<Int, Type>`, the struct type `struct<Int, Type>`); `[` `]` and `(`
+//! `)` stay value-level; `{` `}` delimit a block — scoped bindings followed
+//! by the block's value.  `;` separates statements, and so does a newline —
+//! both lex as the same `Semicolon` token.  `=` binds a name (`a = [1, 2]`);
+//! `=>` is still the lambda; `==` compares, `<=` compares, `+` and `-` add
+//! and subtract (and `->` is the function-type arrow).  `--` starts a line
+//! comment.  Any other character is a lex error — the first one stops the
+//! pipeline.
 
 use lichen_highlevel::ir::Span;
 
@@ -18,7 +20,8 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
-    /// An identifier, never `Int`/`Type` (those are keywords).
+    /// An identifier, never `Int`/`Type`/`struct`/`rec`/`if`/`then`/`else`
+    /// (those are keywords).
     Name(String),
     /// The `Int` type constant.
     KwInt,
@@ -26,6 +29,14 @@ pub enum TokenKind {
     KwType,
     /// The `struct` keyword — a nominal struct type.
     KwStruct,
+    /// The `rec` keyword — a recursive binding (`rec fib = n => …`).
+    KwRec,
+    /// The `if` keyword — a conditional expression.
+    KwIf,
+    /// The `then` keyword — the `if`'s then-branch delimiter.
+    KwThen,
+    /// The `else` keyword — the `if`'s else-branch delimiter.
+    KwElse,
     /// `->` — a function type.
     Arrow,
     /// `=>` — a lambda.
@@ -34,6 +45,14 @@ pub enum TokenKind {
     Colon,
     /// `=` — a statement binding.
     Equals,
+    /// `==` — equality (yields `USize(0/1)`).
+    Eq,
+    /// `<=` — less-or-equal (yields `USize(0/1)`).
+    Leq,
+    /// `+` — addition.
+    Plus,
+    /// `-` — subtraction.
+    Minus,
     /// `;` or a newline — the statement separator.
     Semicolon,
     Comma,
@@ -62,10 +81,18 @@ impl TokenKind {
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
+            TokenKind::KwRec => "'rec'".to_string(),
+            TokenKind::KwIf => "'if'".to_string(),
+            TokenKind::KwThen => "'then'".to_string(),
+            TokenKind::KwElse => "'else'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
             TokenKind::Equals => "'='".to_string(),
+            TokenKind::Eq => "'=='".to_string(),
+            TokenKind::Leq => "'<='".to_string(),
+            TokenKind::Plus => "'+'".to_string(),
+            TokenKind::Minus => "'-'".to_string(),
             TokenKind::Semicolon => "';'".to_string(),
             TokenKind::Comma => "','".to_string(),
             TokenKind::LParen => "'('".to_string(),
@@ -131,11 +158,15 @@ impl Lexer<'_> {
                 b']' => self.push(line, col, 1, TokenKind::RBracket),
                 b'{' => self.push(line, col, 1, TokenKind::LBrace),
                 b'}' => self.push(line, col, 1, TokenKind::RBrace),
+                b'<' if self.bytes.get(self.pos + 1) == Some(&b'=') => {
+                    self.push(line, col, 2, TokenKind::Leq)
+                }
                 b'<' => self.push(line, col, 1, TokenKind::LAngle),
                 b'>' => self.push(line, col, 1, TokenKind::RAngle),
                 b',' => self.push(line, col, 1, TokenKind::Comma),
                 b':' => self.push(line, col, 1, TokenKind::Colon),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),
+                b'+' => self.push(line, col, 1, TokenKind::Plus),
                 b'\n' => {
                     self.push(line, col, 1, TokenKind::Semicolon);
                     self.line += 1;
@@ -144,8 +175,12 @@ impl Lexer<'_> {
                 b'-' if self.bytes.get(self.pos + 1) == Some(&b'>') => {
                     self.push(line, col, 2, TokenKind::Arrow)
                 }
+                b'-' => self.push(line, col, 1, TokenKind::Minus),
                 b'=' if self.bytes.get(self.pos + 1) == Some(&b'>') => {
                     self.push(line, col, 2, TokenKind::FatArrow)
+                }
+                b'=' if self.bytes.get(self.pos + 1) == Some(&b'=') => {
+                    self.push(line, col, 2, TokenKind::Eq)
                 }
                 b'=' => self.push(line, col, 1, TokenKind::Equals),
                 _ => {
@@ -209,6 +244,10 @@ impl Lexer<'_> {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
+            "rec" => TokenKind::KwRec,
+            "if" => TokenKind::KwIf,
+            "then" => TokenKind::KwThen,
+            "else" => TokenKind::KwElse,
             _ => TokenKind::Name(text.to_string()),
         };
         self.tokens.push(Token {
@@ -354,6 +393,55 @@ mod tests {
                 TokenKind::Semicolon,
                 TokenKind::Name("b".to_string()),
                 TokenKind::Equals,
+                TokenKind::Int(2),
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn operators_and_keywords_lex() {
+        // A recursive fibonacci binding — every new token in one line.
+        assert_eq!(
+            kinds("rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
+            vec![
+                TokenKind::KwRec,
+                TokenKind::Name("fib".to_string()),
+                TokenKind::Equals,
+                TokenKind::Name("n".to_string()),
+                TokenKind::FatArrow,
+                TokenKind::KwIf,
+                TokenKind::Name("n".to_string()),
+                TokenKind::Leq,
+                TokenKind::Int(1),
+                TokenKind::KwThen,
+                TokenKind::Name("n".to_string()),
+                TokenKind::KwElse,
+                TokenKind::Name("fib".to_string()),
+                TokenKind::LParen,
+                TokenKind::Name("n".to_string()),
+                TokenKind::Minus,
+                TokenKind::Int(1),
+                TokenKind::RParen,
+                TokenKind::Plus,
+                TokenKind::Name("fib".to_string()),
+                TokenKind::LParen,
+                TokenKind::Name("n".to_string()),
+                TokenKind::Minus,
+                TokenKind::Int(2),
+                TokenKind::RParen,
+                TokenKind::Eof,
+            ]
+        );
+        // `==` and `<=` are two-char tokens, distinct from `=` and `<`.
+        assert_eq!(
+            kinds("a == 1 a <= 2"),
+            vec![
+                TokenKind::Name("a".to_string()),
+                TokenKind::Eq,
+                TokenKind::Int(1),
+                TokenKind::Name("a".to_string()),
+                TokenKind::Leq,
                 TokenKind::Int(2),
                 TokenKind::Eof,
             ]

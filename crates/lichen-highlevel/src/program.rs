@@ -86,6 +86,19 @@ pub enum HighOperator {
     /// cached value is reused wherever the struct type it tags is
     /// referenced.
     Fresh,
+    /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare and
+    /// yield `USize(0/1)` — no `Bool` value exists, the comparison result
+    /// drives the lazy `Index` branch of an `if` directly.
+    ///
+    /// Operand: `[left, right]`.  The lowlevel `Ext` arm deep-evaluates the
+    /// operand and gates on its parameterized subtree, so an unbound operand
+    /// (a template parameter during the definition pass) is already the lazy
+    /// marker; the checker pins both operand types to `Int`, so a wrong-shape
+    /// operand here is an invariant violation, not a user error.
+    Add,
+    Sub,
+    Leq,
+    Eq,
 }
 
 impl OperatorExt<HighProgram> for HighOperator {
@@ -213,6 +226,36 @@ impl OperatorExt<HighProgram> for HighOperator {
                 let id = module.global_ext.type_id_counter;
                 module.global_ext.type_id_counter += 1;
                 Value::Ext(HighValue::TypeId(id))
+            }
+            HighOperator::Add | HighOperator::Sub | HighOperator::Leq | HighOperator::Eq => {
+                // The Ext arm already deep-evaluates the operand and gates
+                // on its parameterized subtree, so an unbound operand is
+                // the lazy marker (the definition pass flags the node).
+                if matches!(operand, Value::Parameterized) {
+                    return Value::Parameterized;
+                }
+                let Value::Array(operands) = operand else {
+                    unreachable!("binary operators expect an operand array of [left, right]")
+                };
+                let operands = unsafe { &*operands };
+                // A non-USize operand is a *reported* type error, not an
+                // invariant violation: the checker pins both operands to
+                // `Int`, so a wrong shape only arrives here through an
+                // argument unify that already failed (recording the
+                // diagnostic) — stay lazy instead of panicking.
+                let Some(Value::USize(left)) = module.nodes[operands[0]].value else {
+                    return Value::Parameterized;
+                };
+                let Some(Value::USize(right)) = module.nodes[operands[1]].value else {
+                    return Value::Parameterized;
+                };
+                match self {
+                    HighOperator::Add => Value::USize(left.wrapping_add(right)),
+                    HighOperator::Sub => Value::USize(left.wrapping_sub(right)),
+                    HighOperator::Leq => Value::USize((left <= right) as usize),
+                    HighOperator::Eq => Value::USize((left == right) as usize),
+                    _ => unreachable!("all binary operators are handled above"),
+                }
             }
         }
     }

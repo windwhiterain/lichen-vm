@@ -1,6 +1,6 @@
 use stacksafe::stacksafe;
 
-use crate::{is_unbound, Module, Node, NodeId, Operator, Program, Value};
+use crate::{is_unbound, Module, Node, NodeId, Operation, Operator, Program, Value};
 use lichen_utils::disjoint::{self, Node as _};
 
 #[derive(Debug, Clone, Copy)]
@@ -71,9 +71,11 @@ impl<P: Program> Module<P> {
         // A class that is unbound and holds no unevaluated operation is a
         // pure cell: bind it to the other side.  A class with an unevaluated
         // operation is not bindable — it is a pending computation, and a
-        // concrete value bound over it would erase the computation.
-        let cell_a = is_unbound(va) && !self.class_has_pending_op(ra);
-        let cell_b = is_unbound(vb) && !self.class_has_pending_op(rb);
+        // concrete value bound over it would erase the computation.  A read
+        // of the class's own cell is not a pending computation — it is a
+        // self-reference that resolves via replication when the class binds.
+        let cell_a = is_unbound(va) && self.class_is_pure_cell(ra);
+        let cell_b = is_unbound(vb) && self.class_is_pure_cell(rb);
         if cell_a || cell_b {
             self.bind(ra, rb, va, vb);
             return true;
@@ -180,6 +182,67 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// Whether `rep`'s class is a pure cell for binding purposes: its value
+    /// is unbound and it holds no *independent* pending computation.  A read
+    /// of the class's own cell ([`Self::is_self_read`]) is excluded — it is
+    /// a reference to the class, resolved by replication when the class
+    /// binds, not a computation that a bind would erase.
+    fn class_is_pure_cell(&self, rep: NodeId) -> bool {
+        let mut member = rep;
+        loop {
+            if self.nodes[member].operation.is_some()
+                && is_unbound(self.nodes[member].value)
+                && !self.is_self_read(member, rep)
+            {
+                return false;
+            }
+            let Some(next) = self.nodes[member].meta().next else {
+                return true;
+            };
+            member = next;
+        }
+    }
+
+    /// Whether `op`'s pending `Index` reads a cell of `rep`'s own class — a
+    /// self-reference.  The read's target must be resolvable (a concrete
+    /// operand, index, and container); a read whose target is not yet known
+    /// counts as a pending computation, conservatively.
+    fn is_self_read(&self, op: NodeId, rep: NodeId) -> bool {
+        let Some(target) = self.index_target(op) else {
+            return false;
+        };
+        let mut n = target;
+        while let Some(parent) = self.nodes[n].equality.parent {
+            n = parent;
+        }
+        n == rep
+    }
+
+    /// The element an `Index` operation reads, when the operand array, the
+    /// index, and the container are all concrete.
+    fn index_target(&self, op: NodeId) -> Option<NodeId> {
+        let Operation { operator, operand } = self.nodes[op].operation?;
+        if !matches!(operator, Operator::Index) {
+            return None;
+        }
+        let operand = operand?;
+        let Value::Array(operands_ptr) = self.nodes[operand].value? else {
+            return None;
+        };
+        let operands = unsafe { &*operands_ptr };
+        if operands.len() != 2 {
+            return None;
+        }
+        let Value::USize(index) = self.nodes[operands[1]].value? else {
+            return None;
+        };
+        let Value::Array(container_ptr) = self.nodes[operands[0]].value? else {
+            return None;
+        };
+        let container = unsafe { &*container_ptr };
+        container.get(index).copied()
+    }
+
     /// The first pending operation node in `rep`'s class, if any.
     fn pending_op(&self, rep: NodeId) -> Option<NodeId> {
         let mut member = rep;
@@ -207,40 +270,16 @@ impl<P: Program> Module<P> {
         let Some(op) = self.pending_op(rep) else {
             return false;
         };
-        let (operator, operand) = {
-            let node = &self.nodes[op];
-            let Some(operation) = node.operation else {
-                return false;
-            };
-            (operation.operator, operation.operand)
-        };
-        if !matches!(operator, Operator::Index) {
-            return false;
-        }
-        let Some(operand) = operand else {
-            return false;
-        };
-        let Some(Value::Array(operands_ptr)) = self.nodes[operand].value else {
-            return false;
-        };
-        let operands = unsafe { &*operands_ptr };
-        if operands.len() != 2 {
-            return false;
-        }
-        let Some(Value::USize(index)) = self.nodes[operands[1]].value else {
-            return false;
-        };
-        let Some(Value::Array(container_ptr)) = self.nodes[operands[0]].value else {
-            return false;
-        };
-        let container = unsafe { &*container_ptr };
-        let Some(&indexed) = container.get(index) else {
+        let Some(indexed) = self.index_target(op) else {
             return false;
         };
         // Only alias onto a pure cell — the read must be a plain reference,
-        // not itself a computation or a concrete value.
+        // not itself a computation or a concrete value.  The reader's own
+        // operation is a self-read of the target's class once the
+        // evaluation-time alias joined them, so it does not make the target
+        // a pending computation.
         let target = disjoint::find(&mut self.nodes, indexed);
-        if self.class_has_pending_op(target) || !is_unbound(self.nodes[target].value) {
+        if !self.class_is_pure_cell(target) || !is_unbound(self.nodes[target].value) {
             return false;
         }
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
@@ -251,10 +290,37 @@ impl<P: Program> Module<P> {
             self.bind(op, indexed, Some(value), None);
         } else {
             // A plain alias: the read *is* the element, no computation
-            // remains.
+            // remains.  The node must stay well-formed — every node is
+            // either value-carrying or operation-carrying — so an aliased
+            // read with no cached value takes the marker, reading as the
+            // pure cell it now is.
             self.add_equality(op, indexed);
             self.nodes[op].operation = None;
+            if self.nodes[op].value.is_none() {
+                self.nodes[op].value = Some(Value::Parameterized);
+            }
         }
+        true
+    }
+
+    /// Join `reader` into `target`'s class when the target is a pure cell —
+    /// the evaluation-side counterpart of [`Self::alias_index`].  A read of
+    /// an inference variable is a reference, so the reader unifies with the
+    /// cell through the *standard* unify: both unbound → the classes merge,
+    /// and a reader whose class already carries a value (an annotation over
+    /// the read) replicates it onto the cell — a later conflicting bind then
+    /// fails against it, exactly as if the read had been evaluated after the
+    /// bind.  The guard is the precondition for the unify's bind path: a
+    /// concrete or pending target would force this (mid-evaluation) reader
+    /// and re-enter it.  The reader keeps its operation — the operand edge
+    /// must stay live for the apply's clone machinery, and for the unify pin
+    /// path to find the read.
+    pub(crate) fn alias_read(&mut self, reader: NodeId, target: NodeId) -> bool {
+        let rep = disjoint::find(&mut self.nodes, target);
+        if self.class_has_pending_op(rep) || !is_unbound(self.nodes[rep].value) {
+            return false;
+        }
+        self.unify(reader, target);
         true
     }
 

@@ -60,6 +60,16 @@ impl<P: Program> Module<P> {
                                         // and yield no value instead of panicking
                                         // in raw slice indexing.
                                         if index < array.len() {
+                                            // A read of a pure cell is a
+                                            // reference, not a snapshot:
+                                            // joining the reader to the
+                                            // cell's class lets a later bind
+                                            // reach it through replication,
+                                            // independent of evaluation
+                                            // order.  A non-cell element
+                                            // (a concrete value, another
+                                            // computation) reads as before.
+                                            self.alias_read(node, array[index]);
                                             self.evaluate_node(array[index], Some(block))
                                         } else {
                                             self.eval_errors.push(EvalError {
@@ -124,7 +134,14 @@ impl<P: Program> Module<P> {
                 }
             }
         };
-        self.nodes[node].value = Some(value);
+        // A transient marker is not a final answer: an operation whose
+        // operands were unbound at evaluation time re-runs on the next read,
+        // so a later binding is observed regardless of evaluation order
+        // (concrete results are memoized as usual).  Cells never reach this
+        // postlude — they return their cached marker from the top.
+        if !matches!(value, Value::Parameterized) {
+            self.nodes[node].value = Some(value);
+        }
         self.nodes[node].visiting = false;
         value
     }

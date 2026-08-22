@@ -2,10 +2,13 @@
 //!
 //! A program is `name = expr; …` bindings and bare expressions followed by a
 //! final expression (see [`Program`]) — the same statement list, wrapped in
-//! `{ … }`, forms a block expression (see [`Expr::Block`]).  Statements are
+//! `{ … }`, forms a block expression (see [`Expr::Block`]).  A `rec` before
+//! a binding (`rec fib = n => …`) makes it recursive: the name is in scope
+//! in its own value, whose value must be a lambda.  Statements are
 //! separated by `;` or a newline (the lexer lexes both as `Semicolon`), and
 //! consecutive, leading, and trailing separators are all tolerated.  A
-//! binding at statement start is `name =`; anything else is an expression —
+//! binding at statement start is `name =` (or `rec name =`); anything else
+//! is an expression —
 //! a bare expression is a statement anywhere, and only the last statement is
 //! the list's value.  Within an expression, one grammar covers terms and
 //! types (types are expressions); a *type-mode* flag — set inside an
@@ -17,14 +20,17 @@
 //! index `e[i]` — the array literal is the prefix `[e, …]` form, so no
 //! whitespace rule decides, and an array literal in argument position needs
 //! parens: `f ([1, 2])`.  Precedence (loosest → tightest): `:` (right) →
-//! `->` (right) → application (left) → postfix `<e>` / `[e]` / atoms.
+//! `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application (left) →
+//! postfix `<e>` / `[e]` / atoms.
 //! `name =>` starts a lambda only in prefix position, so `f x => e` is a
 //! parse error rather than `f (x => e)`; `name : T => e` is a lambda whose
-//! parameter is annotated with `T`.
+//! parameter is annotated with `T`.  `if cond then e1 else e2` is a
+//! conditional expression (the `then`/`else` keywords delimit the branches,
+//! which extend maximally).
 
 use lichen_highlevel::ir::Span;
 
-use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
+use crate::ast::{BinOp, Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
 
@@ -90,6 +96,8 @@ impl Parser<'_> {
     /// binding; anything else is an expression — a bare expression is a
     /// statement anywhere in the list (there is no dead code: the compiler
     /// checks every statement), and only the *last* one is the list's value.
+    /// A `rec name =` binding is recursive: the name is in scope in its own
+    /// value (see [`Parser::parse_bindings_and_expr`]).
     /// Every non-final statement requires a trailing separator — `;` or a
     /// newline (the lexer merges both into `Semicolon`).  The same list
     /// forms a block's body (see [`Parser::block`]).
@@ -97,24 +105,47 @@ impl Parser<'_> {
         let mut statements = Vec::new();
         self.skip_separators();
         loop {
-            let binding = matches!(
+            // `rec fib = …` — the recursive form: the `rec` keyword, then the
+            // ordinary `name =`.
+            let recursive = matches!(
                 (
                     &self.peek().kind,
-                    self.tokens.get(self.pos + 1).map(|t| &t.kind)
+                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
+                    self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 ),
-                (TokenKind::Name(_), Some(TokenKind::Equals))
+                (TokenKind::KwRec, Some(TokenKind::Name(_)), Some(TokenKind::Equals))
             );
+            let binding = recursive
+                || matches!(
+                    (
+                        &self.peek().kind,
+                        self.tokens.get(self.pos + 1).map(|t| &t.kind)
+                    ),
+                    (TokenKind::Name(_), Some(TokenKind::Equals))
+                );
             if binding {
-                let name = self.next();
-                let TokenKind::Name(binding_name) = name.kind else {
-                    unreachable!()
+                let (name, span, recursive) = if recursive {
+                    self.next(); // the `rec`
+                    let name = self.next();
+                    let TokenKind::Name(binding_name) = name.kind else {
+                        unreachable!()
+                    };
+                    self.pos += 1; // the `=`
+                    (binding_name, name.span, true)
+                } else {
+                    let name = self.next();
+                    let TokenKind::Name(binding_name) = name.kind else {
+                        unreachable!()
+                    };
+                    self.pos += 1; // the `=`
+                    (binding_name, name.span, false)
                 };
-                self.pos += 1; // the `=`
                 let value = self.parse_expr(type_mode)?;
                 statements.push(Stmt::Binding(Binding {
-                    name: binding_name,
-                    span: name.span,
+                    name,
+                    span,
                     value,
+                    recursive,
                 }));
                 if !self.eat(&TokenKind::Semicolon) {
                     return Err(self.error_found("';'"));
@@ -227,18 +258,26 @@ impl Parser<'_> {
                 };
                 continue;
             }
-            let (bp, is_annotation) = match &self.peek().kind {
-                TokenKind::Colon => (10, true),
-                TokenKind::Arrow => (20, false),
+            let operator = self.peek().kind.clone();
+            let (bp, is_annotation, is_left_assoc) = match &operator {
+                TokenKind::Colon => (10, true, false),
+                TokenKind::Arrow => (20, false, false),
+                // Comparisons bind looser than arithmetic; both are
+                // left-associative (unlike `:` and `->`, which are right).
+                TokenKind::Leq | TokenKind::Eq => (25, false, true),
+                TokenKind::Plus | TokenKind::Minus => (30, false, true),
                 _ => break,
             };
             if bp < min_bp {
                 break;
             }
             self.next();
-            // The annotation's right side is a type expression; `->` keeps
-            // the current mode.
-            let rhs = self.parse_infix(if is_annotation { true } else { type_mode }, bp)?;
+            // The annotation's right side is a type expression; the other
+            // operators keep the current mode.
+            let rhs = self.parse_infix(
+                if is_annotation { true } else { type_mode },
+                if is_left_assoc { bp + 1 } else { bp },
+            )?;
             let span = lhs.span();
             lhs = if is_annotation {
                 Expr::Annotation {
@@ -246,10 +285,24 @@ impl Parser<'_> {
                     r#type: Box::new(rhs),
                     span,
                 }
-            } else {
+            } else if matches!(operator, TokenKind::Arrow) {
                 Expr::Arrow {
                     parameter: Box::new(lhs),
                     r#return: Box::new(rhs),
+                    span,
+                }
+            } else {
+                let operator = match operator {
+                    TokenKind::Plus => BinOp::Add,
+                    TokenKind::Minus => BinOp::Sub,
+                    TokenKind::Leq => BinOp::Leq,
+                    TokenKind::Eq => BinOp::Eq,
+                    _ => unreachable!("only the binary operators reach here"),
+                };
+                Expr::BinOp {
+                    operator,
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
                     span,
                 }
             };
@@ -270,6 +323,7 @@ impl Parser<'_> {
             TokenKind::LBrace => self.block(type_mode, start.span)?,
             TokenKind::LAngle => self.angle_tuple(type_mode, start.span)?,
             TokenKind::KwStruct => self.struct_type(start.span)?,
+            TokenKind::KwIf => self.if_expr(type_mode, start.span)?,
             _ => {
                 return Err(Diag::new(
                     Stage::Parse,
@@ -451,6 +505,29 @@ impl Parser<'_> {
         })
     }
 
+    /// `if cond then e1 else e2` — a conditional.  `cond` is any expression
+    /// up to the `then` keyword (both keywords delimit it — neither is an
+    /// atom or an infix operator, so the condition cannot extend through
+    /// them); the branches extend maximally, like a lambda body.  The opener
+    /// `if` has been consumed by [`Parser::parse_atom`].
+    fn if_expr(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
+        let condition = self.parse_expr(type_mode)?;
+        if !self.eat(&TokenKind::KwThen) {
+            return Err(self.error_found("'then'"));
+        }
+        let then_branch = self.parse_expr(type_mode)?;
+        if !self.eat(&TokenKind::KwElse) {
+            return Err(self.error_found("'else'"));
+        }
+        let else_branch = self.parse_expr(type_mode)?;
+        Ok(Expr::If {
+            condition: Box::new(condition),
+            then_branch: Box::new(then_branch),
+            else_branch: Box::new(else_branch),
+            span,
+        })
+    }
+
     fn atom_start(&self) -> bool {
         matches!(
             &self.peek().kind,
@@ -458,6 +535,7 @@ impl Parser<'_> {
                 | TokenKind::KwInt
                 | TokenKind::KwType
                 | TokenKind::KwStruct
+                | TokenKind::KwIf
                 | TokenKind::Name(_)
                 | TokenKind::LParen
                 | TokenKind::LBracket

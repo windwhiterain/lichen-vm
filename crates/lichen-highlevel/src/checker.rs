@@ -17,9 +17,10 @@
 //! by the VM.
 //!
 //! The checker only *constructs* (pairs, type expressions, the universe)
-//! and issues the unifies that have no apply to express them: annotations
-//! and the function-ness guard (so applying a non-function is a reported
-//! error, not a runtime panic); kinding (a type expression's own type must
+//! and issues the unifies that have no apply to express them: annotations,
+//! a binary operator's operand-`Int` checks, and the function-ness guard
+//! (so applying a non-function is a reported error, not a runtime panic);
+//! kinding (a type expression's own type must
 //! be a kind) is structural and only fails for concrete non-kinds, like a
 //! literal in type position.  It then runs the definition pass so the
 //! apply-time checks fire; failures land in [`Module::unify_errors`], which
@@ -28,11 +29,11 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_lowlevel::{
-    BlockId, Module, NodeId, Operation, Operator, UnifyError, Value, is_unbound,
+    BlockId, Function, Module, NodeId, Operation, Operator, UnifyError, Value, is_unbound,
 };
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{Constant, ExprId, ExprKind, IR, Span};
+use crate::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
 use crate::program::{HighOperator, HighProgram, HighValue};
 
 /// Term position or type position.  The same expression can be a value in
@@ -82,6 +83,11 @@ pub struct Checker {
     /// The arrow nodes built by [`Checker::check_lam`] — the type printer
     /// renders these `[param, body]` shapes as `param → body`.
     arrows: HashSet<NodeId>,
+    /// The value nodes of recursive bindings' functions, collected by
+    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates them before
+    /// the definition pass (proving them concrete), so a recursive reference
+    /// stays in place instead of cloning the function per application.
+    recursive_func_nodes: Vec<NodeId>,
     int_marker: NodeId,
     type_marker: NodeId,
     function_type_marker: NodeId,
@@ -121,6 +127,13 @@ pub struct Build {
 impl Checker {
     pub fn build(ir: IR) -> Build {
         let mut module = Module::new();
+        // The lowlevel's default application guard (10k nested calls) sits
+        // below what a thread stack survives once the checker's per-call
+        // machinery (clone, unify, deep pass) is on the stack — a
+        // non-terminating recursion would overflow the stack before the
+        // guard fires.  Lower it so the guard panics cleanly; legitimate
+        // recursion (fib, countdown) nests far below this.
+        module.apply_depth_limit = 500;
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {
@@ -134,6 +147,7 @@ impl Checker {
             ty: vec![None; n],
             diary: Vec::new(),
             arrows: HashSet::new(),
+            recursive_func_nodes: Vec::new(),
             int_marker: NodeId::default(),
             type_marker: NodeId::default(),
             function_type_marker: NodeId::default(),
@@ -154,6 +168,17 @@ impl Checker {
         let root = checker.ir.root;
         let root_term = checker.check_expr(root, Role::Term);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
+        // Prove the recursive bindings' function values concrete before the
+        // definition pass: a recursive reference (the apply in the body)
+        // then stays in place, so every recursion level re-applies the
+        // template — whose own parameter is never deep-evaluated and is
+        // cloned fresh per level.  Without this, the deep pass evaluates the
+        // parameter clone of the first application, a second application
+        // reuses the already-bound clone instead of cloning it fresh, and
+        // the argument unify conflicts (the recursion cannot descend).
+        for &func_node in &checker.recursive_func_nodes {
+            checker.module.evaluate_node_deep(func_node, None);
+        }
         // The definition pass: run the program so the apply-time type checks
         // fire.  Skipped when the checker-side unifies (annotations, kinding,
         // guards) already failed — the graph may then hit a non-function
@@ -532,6 +557,11 @@ impl Checker {
                 r#return,
             } => self.check_lam(e, parameter, r#return),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
+            ExprKind::BinOp {
+                operator,
+                left,
+                right,
+            } => self.check_binop(e, operator, left, right),
             ExprKind::Instantiate { type_expr, value } => {
                 self.check_instantiate(e, type_expr, value)
             }
@@ -598,6 +628,25 @@ impl Checker {
         let param = self.array_node(return_block, &[value_cell, type_cell]);
         self.term[parameter] = Some(param);
         self.ty[parameter] = Some(type_cell);
+        // A recursive binding (`rec fib = n => e`): the IR is a cycle — the
+        // body references the function's own `ExprId`.  Register the
+        // function's pair *before* the body compiles, so the reference
+        // resolves to the pre-registered pair (whose value node is the
+        // function's own) instead of re-entering this check.  The pair's
+        // type slot is a cell, bound to the arrow below once the return
+        // type is known.
+        let recursive = self.ir.recursive.contains(&e);
+        let self_ref = if recursive {
+            let func_node = self.module.add_node(return_block, None, None);
+            let ty_cell = self.fresh_cell();
+            let pair = self.array_node(return_block, &[func_node, ty_cell]);
+            self.term[e] = Some(pair);
+            self.val[e] = Some(func_node);
+            self.ty[e] = Some(ty_cell);
+            Some((func_node, ty_cell))
+        } else {
+            None
+        };
         self.scopes.push(HashMap::from([(
             parameter,
             Binding {
@@ -624,13 +673,35 @@ impl Checker {
             .flat_map(|&block| self.module.blocks[block].nodes.iter().copied())
             .collect();
         nodes.insert(ret);
-        let func_node = self.module.add_function(return_block, ret, param, nodes);
+        // A recursive binding's value node pre-exists (the self-reference
+        // applied it during the body); it fills in now with the function id.
+        // `add_function` creates its own value node, so the manual insert
+        // mirrors it for the pre-registered node.
+        let func_node = if let Some((func_node, _)) = self_ref {
+            let function = self.module.functions.insert(Function {
+                nodes,
+                r#return: ret,
+                parameter: param,
+                block: return_block,
+            });
+            self.module.blocks[return_block].functions.push(function);
+            self.module.nodes[func_node].value = Some(Value::Function(function));
+            self.recursive_func_nodes.push(func_node);
+            func_node
+        } else {
+            self.module.add_function(return_block, ret, param, nodes)
+        };
         // The function's own type: the arrow shape `[parameter type, return
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
         let shape = self.array_node(return_block, &[type_cell, self.ty[r#return].unwrap()]);
         self.arrows.insert(shape);
         let kind = self.kind_expr(return_block, self.function_type_marker);
         let arrow = self.array_node(return_block, &[shape, kind]);
+        if let Some((_, ty_cell)) = self_ref {
+            // The self-reference's type cell now carries the arrow, so the
+            // in-body applications see the function's real type.
+            self.module.unify(ty_cell, arrow);
+        }
         let pair = self.array_node(return_block, &[func_node, arrow]);
         self.term[e] = Some(pair);
         self.val[e] = Some(func_node);
@@ -679,6 +750,37 @@ impl Checker {
         self.val[e] = None;
         self.ty[e] = Some(c);
         node
+    }
+
+    /// A binary integer operation `a op b`: both operands must be `Int`, and
+    /// the result is `Int` (a comparison yields `0/1` to drive an `if`'s
+    /// lazy `Index` branch).  Each operand's type is unified against the int
+    /// type expression — a concretely non-`Int` operand is a check error,
+    /// and an unbound operand (a parameter) is *pinned* to `Int`, so a
+    /// later apply at a non-`Int` argument is a runtime failure in the
+    /// argument unify, not a panic inside the operator.
+    fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
+        self.check_expr(left, Role::Term);
+        self.check_expr(right, Role::Term);
+        let span = self.ir[e].span;
+        self.check_unify(self.ty[left].unwrap(), self.int_type, span, DiagKind::BinOp);
+        self.check_unify(self.ty[right].unwrap(), self.int_type, span, DiagKind::BinOp);
+        let operator = match operator {
+            BinOp::Add => HighOperator::Add,
+            BinOp::Sub => HighOperator::Sub,
+            BinOp::Leq => HighOperator::Leq,
+            BinOp::Eq => HighOperator::Eq,
+        };
+        let left = self.value_of(left);
+        let right = self.value_of(right);
+        let operands = self.array_node(self.current_block, &[left, right]);
+        let value = self
+            .op_node(self.current_block, Operator::Ext(operator), Some(operands));
+        let pair = self.pair_of(value, self.int_type);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value);
+        self.ty[e] = Some(self.int_type);
+        pair
     }
 
     /// An indexing expression `a[i]`: the value is the structural `Index`

@@ -4,7 +4,10 @@
 //! Not slotmap-shaped: the IR never changes structurally, never runs, and is
 //! never GC'd, so a plain [`Vec`] with [`ExprId`] indices suffices.  The
 //! checker only reads it (its products — pairs, type cells — are lowlevel
-//! nodes, so the table does not even grow).
+//! nodes, so the table does not even grow).  One exception: a recursive
+//! binding's id is reserved *before* its lambda compiles (the body references
+//! the id being defined), so its [`Expr`] kind is filled in afterwards — the
+//! frontend records the id in [`IR::recursive`] and the checker reads that.
 
 /// A constant leaf value: an int literal or one of the type constants.  This
 /// is the frontend's closed vocabulary of constants — the subset of the
@@ -25,6 +28,18 @@ pub enum Constant {
     TypeTuple,
     /// The kind marker of array type expressions.
     TypeArray,
+}
+
+/// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`) yield
+/// their result; the comparisons (`Leq`, `Eq`) yield `USize(0/1)` so the
+/// result can drive the lazy `Index` branch of an `if` — there is no
+/// `Bool` value in the universe.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Leq,
+    Eq,
 }
 
 /// A dense index into [`ExprTable::expr`].  References are pre-resolved: a
@@ -52,6 +67,11 @@ pub struct IR {
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
     pub children: Vec<ExprId>,
     pub root: ExprId,
+    /// The ids of recursive bindings' lambdas (`rec fib = …`): a function
+    /// whose own name is in scope in its body, so its `ExprId` appears in
+    /// its own subtree — the IR is a cycle there, which the checker cuts by
+    /// registering the function's pair before the body compiles.
+    pub recursive: std::collections::HashSet<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -75,6 +95,14 @@ pub enum ExprKind {
     },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
+    /// `{ operator, left, right }` — a binary integer operation: `+`, `-`,
+    /// `<=`, `==`.  The operand types are checked against `Int`, and the
+    /// result's type is `Int` (a comparison's `0/1` drives an `if` branch).
+    BinOp {
+        operator: BinOp,
+        left: ExprId,
+        right: ExprId,
+    },
     /// `{ type_expr, value }` — struct instantiation: `s(1, 2)` wraps the
     /// positional tuple `value` in the struct type `type_expr`.  The
     /// value's element types are checked against the struct's field list,
@@ -134,6 +162,7 @@ impl IR {
             expr: Vec::new(),
             children: Vec::new(),
             root: ExprId(0),
+            recursive: std::collections::HashSet::new(),
         }
     }
 

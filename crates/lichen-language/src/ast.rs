@@ -11,6 +11,17 @@ pub enum TypeConst {
     Type,
 }
 
+/// A binary operator.  `+`/`-` are arithmetic; `<=`/`==` compare and yield
+/// `0` or `1` (there is no `Bool` — the comparison result drives an `if`
+/// branch).  All operate on `Int`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BinOp {
+    Add,
+    Sub,
+    Leq,
+    Eq,
+}
+
 #[derive(Clone, Debug)]
 pub enum Expr {
     /// An integer literal.
@@ -37,6 +48,23 @@ pub enum Expr {
     Apply {
         function: Box<Expr>,
         argument: Box<Expr>,
+        span: Span,
+    },
+    /// `a op b` — a binary integer operation.
+    BinOp {
+        operator: BinOp,
+        left: Box<Expr>,
+        right: Box<Expr>,
+        span: Span,
+    },
+    /// `if cond then e1 else e2` — a conditional.  Desugared by
+    /// [`crate::compile`] to the lazy `Index` branch `[e2, e1][cond]` — the
+    /// condition (`0`/`1`) selects the branch, and the untaken branch is
+    /// never evaluated.
+    If {
+        condition: Box<Expr>,
+        then_branch: Box<Expr>,
+        else_branch: Box<Expr>,
         span: Span,
     },
     /// `e[i]` — an index into an array or tuple.
@@ -94,13 +122,17 @@ pub enum Stmt {
     Expr(Expr),
 }
 
-/// One statement binding: `name = value`.
+/// One statement binding: `name = value`, or `rec name = value` for a
+/// recursive binding.
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub name: String,
     /// The name's span — diagnostics for the binding point here.
     pub span: Span,
     pub value: Expr,
+    /// `rec` — the name is in scope inside its own value (the value must be
+    /// a lambda), so the value may apply itself.
+    pub recursive: bool,
 }
 
 /// A program: `name = expr; …` statements followed by the final expression.
@@ -129,6 +161,8 @@ impl Expr {
             Expr::Placeholder(s) => *s,
             Expr::Lambda { span, .. } => *span,
             Expr::Apply { span, .. } => *span,
+            Expr::BinOp { span, .. } => *span,
+            Expr::If { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
             Expr::Arrow { span, .. } => *span,

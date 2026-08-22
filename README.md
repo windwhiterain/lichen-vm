@@ -173,7 +173,7 @@ f1 1
 
 output:
 ```text
-[1, 1]: ?a
+[1, 1]: Int<2>
 ```
 
 ### `placeholder.lichen`

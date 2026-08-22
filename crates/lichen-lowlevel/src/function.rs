@@ -105,7 +105,11 @@ impl<P: Program> Module<P> {
                 // Resolve the return type before binding the cell: the deep
                 // pass resolves the node later but does not replicate to
                 // class members, so an unresolved bind would leave the cell
-                // unbound.
+                // unbound.  A lazy return type — a body ending in a call —
+                // is an Index read, which already aliased its target cell at
+                // evaluation time (see the Index arm), so this unify joins
+                // the cell into that class and the binding propagates
+                // regardless of when the nested apply runs.
                 self.evaluate_node(ids[1], Some(block));
                 self.unify(cell, ids[1]);
                 result

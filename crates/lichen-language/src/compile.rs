@@ -8,6 +8,11 @@
 //! `a` is that same id — the IR is a graph and the binding is pure sharing
 //! (no `let`, no desugared application).  The IR therefore carries no name
 //! strings, and the checker's scope stack is keyed by the same ids.
+//! A recursive binding `rec fib = n => e` reverses the order: the id is
+//! allocated *first* (its kind filled in after the body compiles), the name
+//! is entered, and a use of `fib` inside the body resolves to the id being
+//! defined — the IR becomes a cycle there, recorded in `IR.recursive` so the
+//! checker registers the function's pair before its body compiles.
 //! A block `{ …; e }` is a program-shaped expression: its statements share
 //! the same way, its scope frames are popped at the `}`, and it compiles to
 //! its final expression's own node.
@@ -22,7 +27,9 @@
 //!
 //! An annotated parameter `x : T => e` desugars to `(x => e) : (T -> _)` —
 //! the annotation and arrow are ordinary expressions, so no new IR form is
-//! needed.
+//! needed.  A conditional `if c then t else e` desugars to the lazy branch
+//! `[e, t][c]` — the existing `Index` form, so no new IR form either.  A
+//! binary operation `a op b` compiles to `ExprKind::BinOp`.
 //! Shadowing is allowed (the inner binding wins); an unknown name is a
 //! resolve diagnostic — the checker's `lookup` panics on unresolved ids, so
 //! resolution completes here.  Every emitted expression carries its source
@@ -30,9 +37,9 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::ir::{Constant, ExprId, ExprKind, IR, Span};
+use lichen_highlevel::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
 
-use crate::ast::{Expr, Program, Stmt, TypeConst};
+use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 
 pub fn compile(program: &Program) -> Result<IR, Diag> {
@@ -62,6 +69,25 @@ struct Compiler {
 impl Compiler {
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<ExprId, Diag> {
         match stmt {
+            Stmt::Binding(binding) if binding.recursive => {
+                // The name is entered *before* the value compiles — the
+                // body may reference it — and stays in scope for later
+                // statements, exactly like an ordinary binding.  The id is
+                // reserved first; the value fills it in below.
+                let id = self.alloc(ExprKind::Placeholder, &binding.span);
+                self.ir.recursive.insert(id);
+                self.scopes
+                    .push(HashMap::from([(binding.name.clone(), id)]));
+                let value = self.compile_rec_value(binding, id)?;
+                // The body resolved the name to the function id; later
+                // statements resolve it to the value itself (a desugared
+                // annotation wrapper, when the parameter was annotated).
+                self.scopes
+                    .last_mut()
+                    .expect("the recursive binding's frame")
+                    .insert(binding.name.clone(), value);
+                Ok(value)
+            }
             Stmt::Binding(binding) => {
                 let id = self.compile_expr(&binding.value)?;
                 self.scopes
@@ -70,6 +96,55 @@ impl Compiler {
             }
             Stmt::Expr(e) => self.compile_expr(e),
         }
+    }
+
+    /// The value of a recursive binding, compiled into the reserved `id`:
+    /// `rec fib = n => e`.  A use of `fib` inside
+    /// the body resolves to `id` — the IR is a cycle there, recorded in
+    /// [`IR::recursive`] so the checker registers the function's pair before
+    /// the body compiles.  The value must be a bare lambda; an annotated
+    /// parameter is rejected (an annotation would compare the function's
+    /// type against the desugared `(T -> _)`, and a runtime-resolved return
+    /// type — an `if`'s — is a pending computation that cannot unify with
+    /// the placeholder at check time).  The parameter is pinned to `Int`
+    /// anyway when the body uses it in an operator, and a wrong argument
+    /// type is caught at the apply.
+    fn compile_rec_value(&mut self, binding: &Binding, id: ExprId) -> Result<ExprId, Diag> {
+        let Expr::Lambda {
+            parameter,
+            parameter_span,
+            parameter_type,
+            r#return,
+            span,
+        } = &binding.value
+        else {
+            return Err(Diag::new(
+                Stage::Resolve,
+                binding.span,
+                format!(
+                    "a recursive binding's value must be a lambda ('{}')",
+                    binding.name
+                ),
+            ));
+        };
+        if parameter_type.is_some() {
+            return Err(Diag::new(
+                Stage::Resolve,
+                binding.span,
+                "a recursive binding's parameter cannot be annotated — annotate at the call site instead",
+            ));
+        }
+        let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
+        self.scopes.push(HashMap::from([(parameter.clone(), parameter_id)]));
+        let body = self.compile_expr(r#return);
+        self.scopes.pop();
+        let body = body?;
+        self.ir.expr[id.0 as usize].kind = ExprKind::Function {
+            parameter: parameter_id,
+            r#return: body,
+        };
+        self.ir.expr[id.0 as usize].span = Some(*span);
+        Ok(id)
     }
 
     /// Wire the statements into the root so the checker compiles and runs
@@ -184,6 +259,52 @@ impl Compiler {
                 } else {
                     self.alloc(ExprKind::Apply { function, argument }, span)
                 }
+            }
+            Expr::BinOp {
+                operator,
+                left,
+                right,
+                span,
+            } => {
+                let operator = match operator {
+                    crate::ast::BinOp::Add => BinOp::Add,
+                    crate::ast::BinOp::Sub => BinOp::Sub,
+                    crate::ast::BinOp::Leq => BinOp::Leq,
+                    crate::ast::BinOp::Eq => BinOp::Eq,
+                };
+                let left = self.compile_expr(left)?;
+                let right = self.compile_expr(right)?;
+                self.alloc(
+                    ExprKind::BinOp {
+                        operator,
+                        left,
+                        right,
+                    },
+                    span,
+                )
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                span,
+            } => {
+                // `if c then t else e` ≡ `[e, t][c]` — the condition (0/1)
+                // selects the branch through the existing lazy `Index`, so
+                // the untaken branch is never evaluated.  The branch array
+                // is homogeneous (both branches share one type, like any
+                // conditional).
+                let condition = self.compile_expr(condition)?;
+                let then_branch = self.compile_expr(then_branch)?;
+                let else_branch = self.compile_expr(else_branch)?;
+                let branches = self.ir.alloc_array(&[else_branch, then_branch], Some(*span));
+                self.alloc(
+                    ExprKind::Index {
+                        array: branches,
+                        index: condition,
+                    },
+                    span,
+                )
             }
             Expr::Annotation {
                 value,
