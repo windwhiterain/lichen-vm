@@ -17,6 +17,16 @@ struct ApplyCtx<'a> {
     /// parameter — are rewritten to the fresh clones instead of pointing at
     /// the never-bound template cells.
     extra: Option<&'a HashSet<NodeId>>,
+    /// The function being applied: its own value node is the recursion
+    /// self-reference (referenced in place when proven concrete), while any
+    /// *other* function value in the scope is a nested closure and must be
+    /// cloned per call — its captures bind to this call's clones, which a
+    /// concreteness proof of the value node cannot see.
+    applied: FunctionId,
+    /// The applied function's parameter pair, always cloned: the parameter
+    /// check runs against the fresh clone, and every call must bind its own
+    /// cells (recursion re-applies the template per level).
+    parameter: NodeId,
     remap: &'a mut HashMap<NodeId, NodeId>,
 }
 
@@ -48,6 +58,8 @@ impl<P: Program> Module<P> {
             target: block,
             members: &members,
             extra: None,
+            applied: function,
+            parameter,
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
@@ -171,13 +183,29 @@ impl<P: Program> Module<P> {
         // never resolved (the Index/Apply arms read operands shallowly, so
         // those flags may still be `None`).  A node whose subtree evaluated
         // to a concrete value (`Some(false)`) is baked — reference it in
-        // place.
+        // place.  A *function value* is never baked by that proof: its
+        // body's dependence on this call is invisible to the deep pass, so
+        // any function value other than the applied function's own
+        // self-reference (the recursion point) is cloned per call — a
+        // nested closure's captures must rebind to this call's clones.  The
+        // same goes for a proven-concrete structure *containing* such a
+        // function value (a function's pair, a tuple of closures): the
+        // proof cannot see through the function's body either.
         let (value, operation, parameterized_deep) = {
             let source = &self.nodes[node];
             (source.value, source.operation, source.parameterized_deep)
         };
-        let depends_on_parameter =
-            (value.is_none() && operation.is_some()) || parameterized_deep != Some(false);
+        // An operation node always clones: its cached value may have been
+        // derived from the parameter (a read of a pinned parameter cell
+        // evaluates to the pinned value, looking concrete), so it must
+        // recompute against the remapped operands instead of being
+        // referenced in place.
+        let depends_on_parameter = node == ctx.parameter
+            || operation.is_some()
+            || parameterized_deep != Some(false)
+            || matches!(value, Some(Value::Function(function)) if function != ctx.applied)
+            || (parameterized_deep == Some(false)
+                && self.value_contains_foreign_function(value, ctx.applied));
         if !depends_on_parameter {
             return node;
         }
@@ -235,11 +263,15 @@ impl<P: Program> Module<P> {
                 // be rewritten to the fresh clones — the ones the apply's
                 // parameter unify binds.  The remap is shared, so a member
                 // reached from the outer body and from here is one clone.
+                // `applied` switches to the function being instantiated, so
+                // its own self-reference (if recursive) stays in place.
                 let target = ctx.target;
                 let mut inner = ApplyCtx {
                     target,
                     members: ctx.members,
                     extra: Some(&scope),
+                    applied: function,
+                    parameter: self.functions[function].parameter,
                     remap: ctx.remap,
                 };
                 let nodes: HashSet<NodeId> = scope
@@ -260,5 +292,29 @@ impl<P: Program> Module<P> {
             Value::Ext(ext) => Self::copy_ext(self, ext, ctx.target),
             value => value,
         }
+    }
+
+    /// Whether `value`'s array tree contains a function value other than
+    /// `applied` — a nested closure whose captures must rebind to this
+    /// call.  A concreteness proof ([`Node::parameterized_deep`]) cannot see
+    /// a function's body, so a proven-concrete structure that contains one
+    /// must still be cloned, never referenced in place.
+    fn value_contains_foreign_function(&self, value: Option<Value<P>>, applied: FunctionId) -> bool {
+        let Some(Value::Array(ptr)) = value else {
+            return false;
+        };
+        let mut stack: Vec<NodeId> = unsafe { &*ptr }.iter().copied().collect();
+        let mut seen = HashSet::new();
+        while let Some(node) = stack.pop() {
+            if !seen.insert(node) {
+                continue;
+            }
+            match self.nodes[node].value {
+                Some(Value::Function(function)) if function != applied => return true,
+                Some(Value::Array(ptr)) => stack.extend(unsafe { &*ptr }.iter().copied()),
+                _ => {}
+            }
+        }
+        false
     }
 }

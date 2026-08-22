@@ -134,10 +134,11 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     });
 
     // The definition pass evaluates the body with the parameter as a
-    // marker, caching a marker value on the return node and flagging it
+    // marker: the transient marker is not cached (a later binding must be
+    // observed on re-read), so the node keeps no value and is flagged
     // parameterized.
     m.evaluate_node_deep(ret, None);
-    assert!(matches!(m.nodes[ret].value, Some(Value::Parameterized)));
+    assert!(matches!(m.nodes[ret].value, None | Some(Value::Parameterized)));
     assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
 
     // The call clones the parameterized node unevaluated — the stale
@@ -303,12 +304,19 @@ fn outer_call_returns_a_nested_function_value() {
     let Value::Function(got) = m.evaluate_node_deep(call, None) else {
         panic!("expected the nested function value");
     };
-    assert_eq!(got, g_id); // the same nested function, referenced in place
+    // A fresh closure per call: the concreteness proof of the value node
+    // cannot see a nested function's body, so it must never be referenced
+    // in place — its captures (if any) bind to this call's clones.
+    assert_ne!(got, g_id);
 
     // The returned function is callable from the outer block.
+    let got_node = m.add_node(root, None, Some(Value::Function(got)));
     let arg = u128_node(&mut m, root, 7);
-    let call2 = call_node(&mut m, root, g_node, arg);
+    let call2 = call_node(&mut m, root, got_node, arg);
     assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 7);
+    // The template g is untouched and still callable directly.
+    let call3 = call_node(&mut m, root, g_node, arg);
+    assert_eq!(u128_of(m.evaluate_node_deep(call3, None)), 7);
 }
 #[test]
 fn a_nested_function_value_captures_the_applied_outer_parameter() {

@@ -180,9 +180,41 @@ impl Checker {
             checker.module.evaluate_node_deep(func_node, None);
         }
         // The definition pass: run the program so the apply-time type checks
-        // fire.  Skipped when the checker-side unifies (annotations, kinding,
+        // fire.  Each function body runs once first — its apply-time checks
+        // fire even when the function is never applied, and a body ending in
+        // a call resolves its result cell before the root pass walks the
+        // function's type spine (which would otherwise read the cell while
+        // it is still unbound).  The order against the root pass is
+        // irrelevant: reads alias their target cells (see the lowlevel Index
+        // arm), so bindings propagate class-wise however they happen.
+        // Skipped when the checker-side unifies (annotations, kinding,
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
+        // The definition pass: run the program so the apply-time type checks
+        // fire.  Each function body runs once first — its apply-time checks
+        // fire even when the function is never applied, and a body ending in
+        // a call resolves its result cell before the root pass walks the
+        // function's type spine (which would otherwise read the cell while
+        // it is still unbound).  The order against the root pass is
+        // irrelevant: reads alias their target cells (see the lowlevel Index
+        // arm), so bindings propagate class-wise however they happen.
+        // Skipped when the checker-side unifies (annotations, kinding,
+        // guards) already failed — the graph may then hit a non-function
+        // apply, which the runtime panics on.
+        if checker.module.unify_errors.is_empty() {
+            let functions: Vec<lichen_lowlevel::FunctionId> = checker.module.functions.keys().collect();
+            for function in functions {
+                let ret = checker.module.functions[function].r#return;
+                // Only bodies whose apply-time checks can fire need the pass.
+                // A body that is a function value or a plain annotation has
+                // no apply of its own, and deep-evaluating it would prove
+                // the body concrete — the clone rule would then reference it
+                // in place and the parameter check would never run.
+                if self_subtree_contains_apply(&checker.module, ret) {
+                    checker.module.evaluate_node_deep(ret, None);
+                }
+            }
+        }
         if checker.module.unify_errors.is_empty() {
             checker.module.evaluate_node_deep(root_term, None);
         }
@@ -1067,4 +1099,32 @@ impl Checker {
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
     }
+
 }
+
+/// Whether the compiled subtree of `root` contains an [`Operator::Apply`]
+/// operation — the criterion for the per-function definition pass (see
+/// [`Checker::build`]).
+fn self_subtree_contains_apply(module: &Module<HighProgram>, root: NodeId) -> bool {
+    let mut stack = vec![root];
+    let mut seen = HashSet::new();
+    while let Some(node) = stack.pop() {
+        if !seen.insert(node) {
+            continue;
+        }
+        let n = &module.nodes[node];
+        if let Some(operation) = n.operation {
+            if matches!(operation.operator, Operator::Apply) {
+                return true;
+            }
+            if let Some(operand) = operation.operand {
+                stack.push(operand);
+            }
+        }
+        if let Some(Value::Array(ptr)) = n.value {
+            stack.extend(unsafe { &*ptr }.iter().copied());
+        }
+    }
+    false
+}
+

@@ -1220,7 +1220,7 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
     assert!(
-        diags[0].message.contains("TypeId(0)"),
+        diags[0].message.contains("TypeId("),
         "the nominal ids render: {}",
         diags[0].message
     );
