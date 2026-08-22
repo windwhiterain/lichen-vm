@@ -1,12 +1,7 @@
-[package]
-name = "lichen-vm"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-bumpalo = "3.20.3"
-slotmap = "1.1.1"
-stacksafe = "1"
-
 [workspace]
-members = ["highlevel"]
+resolver = "3"
+members = [
+    "crates/lichen-utils",
+    "crates/lichen-lowlevel",
+    "crates/lichen-highlevel",
+]

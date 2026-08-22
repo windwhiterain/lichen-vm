@@ -2,10 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::{
-    lowlevel::{BlockId, Function, FunctionId, Module, NodeId, Operation, Program, Value},
-    utils::disjoint,
-};
+use crate::{BlockId, Function, FunctionId, Module, NodeId, Operation, Program, Value};
+use lichen_utils::disjoint;
 
 /// The fixed context of one clone pass: where the clones land, the
 /// template's membership set, and the running node-id remap (template node

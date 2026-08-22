@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_vm::lowlevel::{BlockId, Module, NodeId, Operation, Operator, UnifyError, Value};
+use lichen_lowlevel::{BlockId, Module, NodeId, Operation, Operator, UnifyError, Value};
 
 use crate::diag::{DiagKind, DiaryEntry};
 use crate::expr::{ExprId, ExprKind, ExprTable, Span};
@@ -101,7 +101,7 @@ pub struct Build {
     pub type_expr: NodeId,
     /// The checker's attributed unification sequence (see [`DiaryEntry`]).
     pub diary: Vec<DiaryEntry>,
-    /// Arrow nodes (see [`Checker::arrows`]); read by the diagnostics.
+    /// Arrow nodes; read by the diagnostics.
     pub arrows: HashSet<NodeId>,
     pub ok: bool,
 }

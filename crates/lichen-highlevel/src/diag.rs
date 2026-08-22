@@ -1,7 +1,7 @@
 //! Diagnostics for the highlevel checker.
 //!
 //! The lowlevel records unification failures as facts
-//! ([`Module::unify_errors`]); this module turns them into rendered
+//! ([`lichen_lowlevel::Module::unify_errors`]); this module turns them into rendered
 //! diagnostics.  Each checker-issued unify is attributed in the **diary**
 //! ([`DiaryEntry`]): which error it produced, the source span, and what kind
 //! of check it implements — the kind drives the expected/found wording.
@@ -17,10 +17,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_vm::{
-    lowlevel::{NodeId, Operator, UnifyError, Value},
-    utils::disjoint::{self, Node as _},
-};
+use lichen_lowlevel::{NodeId, Operator, UnifyError, Value};
+use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
@@ -50,7 +48,8 @@ pub enum DiagKind {
 /// One checker-issued unification, attributed with where it came from.
 #[derive(Clone, Copy, Debug)]
 pub struct DiaryEntry {
-    /// Index into [`Module::unify_errors`] of the first error this unify
+    /// Index into [`lichen_lowlevel::Module::unify_errors`] of the first
+    /// error this unify
     /// produced (one unify may record several, e.g. elementwise).
     pub error_index: usize,
     pub a: NodeId,
@@ -61,7 +60,8 @@ pub struct DiaryEntry {
 
 impl Build {
     /// Render the unification failures (plus top-level ambiguity) as
-    /// diagnostics — one per entry in [`Module::unify_errors`], in order.
+    /// diagnostics — one per entry in
+    /// [`lichen_lowlevel::Module::unify_errors`], in order.
     pub fn diagnostics(&self) -> Vec<Diag> {
         let mut report = Report {
             build: self,

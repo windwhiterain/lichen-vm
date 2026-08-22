@@ -110,15 +110,15 @@ impl std::ops::Index<ExprId> for ExprTable {
     }
 }
 
-impl std::ops::Index<ExprId> for Vec<Option<lichen_vm::lowlevel::NodeId>> {
-    type Output = Option<lichen_vm::lowlevel::NodeId>;
-    fn index(&self, id: ExprId) -> &Option<lichen_vm::lowlevel::NodeId> {
+impl std::ops::Index<ExprId> for Vec<Option<lichen_lowlevel::NodeId>> {
+    type Output = Option<lichen_lowlevel::NodeId>;
+    fn index(&self, id: ExprId) -> &Option<lichen_lowlevel::NodeId> {
         &self[id.0 as usize]
     }
 }
 
-impl std::ops::IndexMut<ExprId> for Vec<Option<lichen_vm::lowlevel::NodeId>> {
-    fn index_mut(&mut self, id: ExprId) -> &mut Option<lichen_vm::lowlevel::NodeId> {
+impl std::ops::IndexMut<ExprId> for Vec<Option<lichen_lowlevel::NodeId>> {
+    fn index_mut(&mut self, id: ExprId) -> &mut Option<lichen_lowlevel::NodeId> {
         &mut self[id.0 as usize]
     }
 }

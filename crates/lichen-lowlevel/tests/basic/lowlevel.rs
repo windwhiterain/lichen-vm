@@ -18,7 +18,7 @@ mod evaluation;
 mod function;
 mod recursion;
 
-use lichen_vm::lowlevel::{
+use lichen_lowlevel::{
     Block, BlockId, Function, FunctionId, Module, Node, NodeId, Operation, Operator, OperatorExt,
     Program, Value, ValueExt,
 };

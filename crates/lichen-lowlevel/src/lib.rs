@@ -2,7 +2,7 @@ use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
 use std::fmt;
 
-use crate::utils::disjoint::{self};
+use lichen_utils::disjoint::{self};
 
 mod equality;
 mod evaluation;
@@ -71,11 +71,11 @@ impl<P: Program> PartialEq for Value<P> {
 #[derive(Clone, Copy)]
 pub enum Operator<P: Program> {
     Ext(P::Operator),
-    /// - operand[0]: array.
-    /// - operand[1]: index.
+    /// - `operand[0]`: array.
+    /// - `operand[1]`: index.
     Index,
-    /// - operand[0]: function.
-    /// - operand[1]: argument.
+    /// - `operand[0]`: function.
+    /// - `operand[1]`: argument.
     Apply,
 }
 
@@ -98,8 +98,9 @@ pub struct Block {
     pub parent: Option<BlockId>,
     pub children: Vec<BlockId>,
     pub nodes: Vec<NodeId>,
-    /// Functions homed in this block, registered like nodes so
-    /// [`Module::release_block`] drops them (and their scopes) with it.
+    /// Functions homed in this block, registered like nodes so garbage
+    /// collection ([`Module::garbage_collect`]) drops them (and their
+    /// scopes) with it.
     pub functions: Vec<FunctionId>,
 }
 
@@ -107,7 +108,7 @@ pub struct Block {
 /// Only [`Self::nodes`] can reference [`Self::parameter`].
 #[derive(Clone, Debug)]
 pub struct Function {
-    /// including [`Self::r#return`] and [`Self::parameter`].
+    /// including the `r#return` and [`Self::parameter`] entry points.
     pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
@@ -126,7 +127,7 @@ pub struct Node<P: Program> {
     /// Is [`Some`] only if having run by [`Module::evaluate_node_deep`].   
     pub parameterized_deep: Option<bool>,
     /// Disjoint-set metadata for node equality classes, maintained by
-    /// [`Module::add_equality`] and [`Module::root_node`].
+    /// [`Module::add_equality`] and [`Module::equality_representative`].
     pub equality: disjoint::Meta<NodeId>,
 }
 

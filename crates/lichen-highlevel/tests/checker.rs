@@ -4,10 +4,10 @@
 //! the self-referential `Type : Type` universe, and the apply-time unify is
 //! the parameter type check.
 
-use highlevel::checker::Checker;
-use highlevel::expr::{ExprId, ExprKind, ExprTable};
-use highlevel::program::HighValue;
-use lichen_vm::lowlevel::Value;
+use lichen_highlevel::checker::Checker;
+use lichen_highlevel::expr::{ExprId, ExprKind, ExprTable};
+use lichen_highlevel::program::HighValue;
+use lichen_lowlevel::Value;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
 
@@ -45,13 +45,16 @@ fn array(ir: &mut ExprTable, elements: &[ExprId]) -> ExprId {
     ir.alloc_array(elements, None)
 }
 
-fn build(root: ExprId, mut ir: ExprTable) -> highlevel::checker::Build {
+fn build(root: ExprId, mut ir: ExprTable) -> lichen_highlevel::checker::Build {
     ir.set_root(root);
     Checker::build(ir)
 }
 
 /// The ids inside a checker-built array value.
-fn array_ids(b: &highlevel::checker::Build, node: lichen_vm::lowlevel::NodeId) -> Vec<lichen_vm::lowlevel::NodeId> {
+fn array_ids(
+    b: &lichen_highlevel::checker::Build,
+    node: lichen_lowlevel::NodeId,
+) -> Vec<lichen_lowlevel::NodeId> {
     let Some(Value::Array(ptr)) = b.module.nodes[node].value else {
         panic!("expected an array value")
     };

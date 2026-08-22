@@ -4,7 +4,7 @@
 //! type constant and the `Type` constant.  The real language's frontend will
 //! extend (or replace) this when it arrives.
 
-use lichen_vm::lowlevel::{Block, Node, NodeId, OperatorExt, Program, Value, ValueExt};
+use lichen_lowlevel::{Block, Node, NodeId, OperatorExt, Program, Value, ValueExt};
 use slotmap::SlotMap;
 
 #[derive(Clone, Copy)]

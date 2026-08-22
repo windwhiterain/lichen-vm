@@ -1,4 +1,4 @@
-use lichen_vm::utils::disjoint::{self, Node, Meta};
+use lichen_utils::disjoint::{self, Node, Meta};
 use slotmap::{SlotMap, new_key_type};
 
 new_key_type! {pub struct TestKey;}

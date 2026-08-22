@@ -6,7 +6,7 @@
 //! suite under `tests/basic/lowlevel/`.
 
 use super::*;
-use lichen_vm::utils::disjoint;
+use lichen_utils::disjoint;
 
 // --- the DSU equivalence classes behind unify --------------------------
 

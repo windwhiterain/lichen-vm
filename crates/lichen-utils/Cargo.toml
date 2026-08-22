@@ -1,0 +1,8 @@
+[package]
+name = "lichen-utils"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slotmap = "1.1.1"
+stacksafe = "1"

@@ -8,8 +8,8 @@
 //! build lowlevel graphs directly and exercise the laziness + unification
 //! rules the highlevel layer will sit on.
 
-use highlevel::program::HighProgram;
-use lichen_vm::lowlevel::{BlockId, Module, NodeId, Operation, Operator, Value};
+use lichen_highlevel::program::HighProgram;
+use lichen_lowlevel::{BlockId, Module, NodeId, Operation, Operator, Value};
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(Value::USize(n)))

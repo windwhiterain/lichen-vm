@@ -1,6 +1,6 @@
 use std::{alloc::Layout, ptr};
 
-use crate::lowlevel::{BlockId, Module, NodeId, Program, Value, ValueExt as _};
+use crate::{BlockId, Module, NodeId, Program, Value, ValueExt as _};
 
 impl<P: Program> Module<P> {
     /// Copy `nodes` into `block.arena` and return the new `nodes`.

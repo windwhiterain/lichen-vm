@@ -1,9 +1,7 @@
 use stacksafe::stacksafe;
 
-use crate::{
-    lowlevel::{Module, NodeId, Program, UnifyError, Value},
-    utils::disjoint::{self, Node as _},
-};
+use crate::{Module, NodeId, Program, UnifyError, Value};
+use lichen_utils::disjoint::{self, Node as _};
 
 impl<P: Program> Module<P> {
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {

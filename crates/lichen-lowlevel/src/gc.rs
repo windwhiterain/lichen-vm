@@ -1,9 +1,7 @@
 use stacksafe::stacksafe;
 
-use crate::{
-    lowlevel::{BlockId, Module, NodeId, Program, Value},
-    utils::disjoint::{self, Node as _},
-};
+use crate::{BlockId, Module, NodeId, Program, Value};
+use lichen_utils::disjoint::{self, Node as _};
 
 impl<P: Program> Module<P> {
     /// move the `block_root`'s reachable subtree into its `block.parent`.

@@ -1,9 +1,10 @@
 use stacksafe::stacksafe;
 
-use crate::lowlevel::{BlockId, Module, NodeId, Operator, OperatorExt as _, Program, Value};
+use crate::{BlockId, Module, NodeId, Operator, OperatorExt as _, Program, Value};
 
 impl<P: Program> Module<P> {
-    /// If `id` lives in a child of `referer`, its a block root, [`Self::evaluate_block`] will be called on it.
+    /// If `id` lives in a child of `referer`, it is a block root, and
+    /// `Self::evaluate_block` is called on it.
     pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> Value<P> {
         let block = self.nodes[node].block;
         debug_assert!(
