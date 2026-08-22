@@ -176,6 +176,18 @@ output:
 [1, 1]: Int<2>
 ```
 
+### `recursion.lichen`
+
+```text
+rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)
+fib 10
+```
+
+output:
+```text
+55: Int
+```
+
 ### `placeholder.lichen`
 
 ```text

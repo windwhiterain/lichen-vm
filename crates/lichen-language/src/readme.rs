@@ -10,8 +10,9 @@
 //! splices the blob into the region between the
 //! `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
-//! `tests/readme.rs` fails the suite if the README ever drifts from the
-//! example files, so the two cannot go stale.
+//! `tests/readme.rs` resyncs the README in place whenever it drifts from the
+//! example files, so the two cannot go stale — `cargo test` self-heals a
+//! stale README (the sync binary does the same, for committing on demand).
 
 use std::fs;
 use std::path::{Path, PathBuf};

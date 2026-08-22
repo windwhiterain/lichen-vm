@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use stacksafe::stacksafe;
 
 use crate::{is_unbound, Module, Node, NodeId, Operation, Operator, Program, Value};
@@ -38,8 +40,11 @@ impl<P: Program> Module<P> {
     /// value must never be bound over one — that would silently erase it
     /// (e.g. a dependent type branch that selects a different type per
     /// argument).  Such a computation is forced before comparing; if its
-    /// operands are still unbound and it cannot resolve, the unify fails.
-    /// Two concrete values merge iff they are equal ([`PartialEq`]), except
+    /// operands are still unbound and it cannot resolve, the unify fails —
+    /// except against an all-unbound skeleton (cells and arrays of cells),
+    /// which merges with the computation: nothing is erased, and the
+    /// computation's eventual value replicates onto the skeleton.  Two
+    /// concrete values merge iff they are equal ([`PartialEq`]), except
     /// arrays, which unify elementwise (their structure is the value).  A
     /// conflict records a [`UnifyError`] in [`Self::unify_errors`] and
     /// leaves the two classes unmerged.
@@ -106,6 +111,20 @@ impl<P: Program> Module<P> {
                 self.alias_index(rb, other)
             };
             if !resolved_a || !resolved_b {
+                // A pending computation whose operands are still unbound is
+                // compatible with an all-unbound skeleton on the other side:
+                // the skeleton holds no concrete value and no computation, so
+                // merging the classes erases nothing — the computation
+                // resolves later and its value replicates onto the skeleton.
+                // (The annotation `x : T => if …` hits this: the return type
+                // is a pending computation at check time, the annotation's
+                // `_` codomain is a skeleton, and they must simply join.)
+                if (pending_a && self.class_is_skeleton(rb))
+                    || (pending_b && self.class_is_skeleton(ra))
+                {
+                    self.add_equality(ra, rb);
+                    return true;
+                }
                 self.record_error(ra, rb);
                 return false;
             }
@@ -201,6 +220,56 @@ impl<P: Program> Module<P> {
             };
             member = next;
         }
+    }
+
+    /// Whether `rep`'s class is an all-unbound skeleton: every member is a
+    /// pure cell or an array whose elements are all skeletons — no
+    /// computation, no concrete value.  A pending computation merges onto
+    /// such a class without erasing anything; a class that holds any
+    /// concrete value or operation is not a skeleton, and binding a
+    /// computation onto it would corrupt it.
+    fn class_is_skeleton(&self, rep: NodeId) -> bool {
+        let mut member = rep;
+        loop {
+            if self.nodes[member].operation.is_some() {
+                return false;
+            }
+            match self.nodes[member].value {
+                None | Some(Value::Parameterized) => {}
+                Some(Value::Array(ptr)) => {
+                    let ids = unsafe { &*ptr };
+                    let mut seen = HashSet::new();
+                    if ids.iter().any(|&id| !self.value_is_skeleton(id, &mut seen)) {
+                        return false;
+                    }
+                }
+                _ => return false,
+            }
+            let Some(next) = self.nodes[member].meta().next else {
+                return true;
+            };
+            member = next;
+        }
+    }
+
+    /// Whether the subtree of array values rooted at `node` is all
+    /// skeletons; `seen` cuts the cycle of a self-referential structure
+    /// (which is a skeleton only if its own elements are).
+    fn value_is_skeleton(&self, node: NodeId, seen: &mut HashSet<NodeId>) -> bool {
+        if !seen.insert(node) {
+            return true;
+        }
+        let ok = self.nodes[node].operation.is_none()
+            && match self.nodes[node].value {
+                None | Some(Value::Parameterized) => true,
+                Some(Value::Array(ptr)) => {
+                    let ids = unsafe { &*ptr };
+                    ids.iter().all(|&id| self.value_is_skeleton(id, seen))
+                }
+                _ => false,
+            };
+        seen.remove(&node);
+        ok
     }
 
     /// Whether `op`'s pending `Index` reads a cell of `rep`'s own class — a

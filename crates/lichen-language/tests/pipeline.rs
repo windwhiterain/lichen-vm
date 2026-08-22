@@ -427,18 +427,14 @@ fn a_recursive_function_checks_and_evaluates() {
 }
 
 #[test]
-fn a_recursive_binding_parameter_cannot_be_annotated() {
-    // The parameter is pinned to Int anyway by the operator operand checks,
-    // and a wrong argument type is caught at the apply — annotate at the
-    // call site instead.
-    let d = diags("rec f = n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int");
-    assert_eq!(d.len(), 1);
-    assert_eq!(d[0].stage, Stage::Resolve);
+fn a_recursive_binding_parameter_can_be_annotated() {
+    // The annotation desugars like a plain lambda's — `n : Int => e` is
+    // `(n => e) : (Int -> _)` — and the `_` codomain binds lazily, so a
+    // runtime-resolved return type (an `if`'s) is not forced at check time.
     assert_eq!(
-        d[0].message,
-        "a recursive binding's parameter cannot be annotated — annotate at the call site instead"
+        usize_of(&evaluate("rec f = n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int")),
+        0
     );
-    assert_eq!(usize_of(&evaluate("rec f = n => if n <= 0 then 0 else f (n - 1); f 5 : Int")), 0);
     // A wrong argument type is a runtime apply failure, not a panic.
     let d = diags("rec f = n => if n <= 0 then 0 else f (n - 1); f Int");
     assert_eq!(d.len(), 1);

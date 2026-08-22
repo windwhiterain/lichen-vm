@@ -134,6 +134,18 @@ impl Checker {
         // guard fires.  Lower it so the guard panics cleanly; legitimate
         // recursion (fib, countdown) nests far below this.
         module.apply_depth_limit = 500;
+        // The lazy graph flattens most recursion (an apply returns its
+        // result pair; the deep pass descends into it), so nested depth
+        // alone does not bound a run — an infinite loop behind a lazy
+        // branch stays at depth 1, and a wide recursion (fib) is never deep.
+        // The total-application budget is the work bound that catches those;
+        // the definition pass runs the whole program, so it must be set
+        // here, before it starts.  Each application also grows the module's
+        // classes (every recursion level's parameter unifies into one
+        // shared class), so a tight budget stops a runaway recursion in
+        // seconds; legitimate programs (the examples, fib up to ~15,
+        // countdown) apply far fewer times than this.
+        module.apply_total_limit = 2_000;
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {

@@ -16,7 +16,12 @@ pub struct EvalError {
 
 impl<P: Program> Module<P> {
     /// If `id` lives in a child of `referer`, it is a block root, and
-    /// `Self::evaluate_block` is called on it.
+    /// `Self::evaluate_block` is called on it.  `#[stacksafe]`: application
+    /// recursion runs through here (and [`Module::function_apply`]) at one
+    /// frame per level, so the depth guards must be able to grow the stack —
+    /// otherwise a deep recursion overflows the native stack before the
+    /// guard panics.
+    #[stacksafe]
     pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> Value<P> {
         let block = self.nodes[node].block;
         debug_assert!(

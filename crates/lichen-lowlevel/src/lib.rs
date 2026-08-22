@@ -171,6 +171,15 @@ pub struct Module<P: Program> {
     /// directly, e.g. `f(x) = f(x)`).  Defaults to
     /// [`Self::MAX_APPLY_DEPTH`]; tests lower it to panic fast.
     pub apply_depth_limit: usize,
+    /// Total-application guard: a run panics when the *cumulative* number
+    /// of function applications exceeds this — the lazy graph flattens most
+    /// recursion (an apply returns its result pair and the outer deep pass
+    /// descends into it, so nested depth stays 1 even for an infinite loop
+    /// behind a lazy branch, and a wide recursion like fib is never deep at
+    /// all), so nested depth alone cannot bound the work.  The total count
+    /// bounds both.  Defaults to [`Self::MAX_APPLY_TOTAL`]; tests lower it
+    /// to panic fast.
+    pub apply_total_limit: usize,
     /// Deep-evaluation guard: a run panics when [`Self::evaluate_node_deep`]
     /// nests deeper than this (deep-evaluating an infinitely growing value,
     /// e.g. `f(x) = [x, f(x)]`).  Defaults to [`Self::MAX_DEEP_DEPTH`],
@@ -185,6 +194,7 @@ pub struct Module<P: Program> {
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
+    apply_total: usize,
     deep_depth: usize,
 }
 
@@ -196,6 +206,10 @@ impl<P: Program> Default for Module<P> {
 
 impl<P: Program> Module<P> {
     pub const MAX_APPLY_DEPTH: usize = 10_000;
+    /// The default total-application budget.  Each application clones its
+    /// function's body (~tens of nodes), so this also bounds the module's
+    /// growth — an indeterminate recursion stops before it drains memory.
+    pub const MAX_APPLY_TOTAL: usize = 100_000;
     pub const MAX_DEEP_DEPTH: usize = 300_000;
 
     pub fn new() -> Self {
@@ -204,11 +218,13 @@ impl<P: Program> Module<P> {
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
             apply_depth_limit: Self::MAX_APPLY_DEPTH,
+            apply_total_limit: Self::MAX_APPLY_TOTAL,
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
+            apply_total: 0,
             deep_depth: 0,
         }
     }

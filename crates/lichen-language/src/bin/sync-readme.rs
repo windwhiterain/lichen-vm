@@ -6,8 +6,9 @@
 //! The section lives between the `<!-- begin: examples -->` and
 //! `<!-- end: examples -->` markers; only that region is rewritten, so the
 //! heading and lead-in around it stay as they are.  Idempotent: running it
-//! twice changes nothing.  `tests/readme.rs` enforces it stays in sync, so
-//! commit the result of this command together with any example change.
+//! twice changes nothing.  `tests/readme.rs` resyncs the README in place on
+//! drift, so this command is only needed to commit the result of an example
+//! change right away.
 
 use std::fs;
 use std::process::ExitCode;

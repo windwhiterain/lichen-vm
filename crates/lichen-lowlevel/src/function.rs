@@ -31,6 +31,11 @@ struct ApplyCtx<'a> {
 }
 
 impl<P: Program> Module<P> {
+    /// `#[stacksafe]`: application recursion runs through here (and
+    /// [`Module::evaluate_node`]) at one frame per level, so the depth guard
+    /// must be able to grow the stack — otherwise a deep recursion overflows
+    /// the native stack before the guard panics.
+    #[stacksafe]
     pub(super) fn function_apply(
         &mut self,
         function: FunctionId,
@@ -40,10 +45,17 @@ impl<P: Program> Module<P> {
         cell: Option<NodeId>,
     ) -> Value<P> {
         self.apply_depth += 1;
+        self.apply_total += 1;
         if self.apply_depth > self.apply_depth_limit {
             panic!(
                 "recursion depth exceeded in function application (limit {}) — non-terminating function application?",
                 self.apply_depth_limit
+            );
+        }
+        if self.apply_total > self.apply_total_limit {
+            panic!(
+                "too many function applications (limit {}) — non-terminating recursion?",
+                self.apply_total_limit
             );
         }
         let (r#return, parameter) = {
@@ -303,7 +315,7 @@ impl<P: Program> Module<P> {
         let Some(Value::Array(ptr)) = value else {
             return false;
         };
-        let mut stack: Vec<NodeId> = unsafe { &*ptr }.iter().copied().collect();
+        let mut stack: Vec<NodeId> = unsafe { &*ptr }.to_vec();
         let mut seen = HashSet::new();
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {

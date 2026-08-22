@@ -102,13 +102,12 @@ impl Compiler {
     /// `rec fib = n => e`.  A use of `fib` inside
     /// the body resolves to `id` — the IR is a cycle there, recorded in
     /// [`IR::recursive`] so the checker registers the function's pair before
-    /// the body compiles.  The value must be a bare lambda; an annotated
-    /// parameter is rejected (an annotation would compare the function's
-    /// type against the desugared `(T -> _)`, and a runtime-resolved return
-    /// type — an `if`'s — is a pending computation that cannot unify with
-    /// the placeholder at check time).  The parameter is pinned to `Int`
-    /// anyway when the body uses it in an operator, and a wrong argument
-    /// type is caught at the apply.
+    /// the body compiles.  The value must be a lambda.  An annotated
+    /// parameter desugars exactly like a plain lambda's — `n : Int => e` is
+    /// `(n => e) : (Int -> _)`, the annotation wrapping the function node
+    /// (the checker's `check_ann` unifies the function's arrow against the
+    /// annotation's; the `_` placeholder binds lazily, so no pending
+    /// computation is forced at check time).
     fn compile_rec_value(&mut self, binding: &Binding, id: ExprId) -> Result<ExprId, Diag> {
         let Expr::Lambda {
             parameter,
@@ -127,16 +126,16 @@ impl Compiler {
                 ),
             ));
         };
-        if parameter_type.is_some() {
-            return Err(Diag::new(
-                Stage::Resolve,
-                binding.span,
-                "a recursive binding's parameter cannot be annotated — annotate at the call site instead",
-            ));
-        }
         let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
-        self.scopes.push(HashMap::from([(parameter.clone(), parameter_id)]));
+        self.scopes
+            .push(HashMap::from([(parameter.clone(), parameter_id)]));
+        // The annotated parameter's type is compiled in scope too — a type
+        // may reference the parameter (`x : x -> Int`).
         let body = self.compile_expr(r#return);
+        let parameter_type = parameter_type
+            .as_ref()
+            .map(|t| self.compile_expr(t))
+            .transpose();
         self.scopes.pop();
         let body = body?;
         self.ir.expr[id.0 as usize].kind = ExprKind::Function {
@@ -144,7 +143,29 @@ impl Compiler {
             r#return: body,
         };
         self.ir.expr[id.0 as usize].span = Some(*span);
-        Ok(id)
+        match parameter_type? {
+            // `rec f = n : T => e`  ≡  `rec f = (n => e) : (T -> _)` — the
+            // parameter annotation is an ordinary annotation of the lambda
+            // with an arrow whose codomain is inferred.
+            Some(t) => {
+                let placeholder = self.alloc(ExprKind::Placeholder, span);
+                let arrow = self.alloc(
+                    ExprKind::TypeFunction {
+                        parameter: t,
+                        r#return: placeholder,
+                    },
+                    span,
+                );
+                Ok(self.alloc(
+                    ExprKind::Annotation {
+                        value: id,
+                        r#type: arrow,
+                    },
+                    span,
+                ))
+            }
+            None => Ok(id),
+        }
     }
 
     /// Wire the statements into the root so the checker compiles and runs
