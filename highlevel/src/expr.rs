@@ -3,8 +3,8 @@
 //!
 //! Not slotmap-shaped: the IR never changes structurally, never runs, and is
 //! never GC'd, so a plain [`Vec`] with [`ExprId`] indices suffices.  The
-//! frontend-built part is immutable; the checker only *grows* the table with
-//! synthesized type expressions.
+//! checker only reads it (its products — pairs, type cells — are lowlevel
+//! nodes, so the table does not even grow).
 
 use crate::program::HighValue;
 
@@ -26,6 +26,7 @@ pub struct ChildRange {
 pub type Span = (u32, u32);
 
 /// The highlevel program: a pure expression tree.
+#[derive(Clone, Debug)]
 pub struct ExprTable {
     pub expr: Vec<Expr>,
     /// One dense arena for all variadic [`ExprKind::Array`] children lists.
@@ -47,9 +48,6 @@ pub enum ExprKind {
     Type,
     /// A program-defined constant value (e.g. the `int` type constant).
     Const(HighValue),
-    /// A fresh type variable; compiles to a fresh unbound node.  The checker
-    /// synthesizes these; the frontend normally does not.
-    TyVar,
     /// A binding cell — the reference target of [`ExprKind::Var`].
     Binder,
     /// A pre-resolved reference to a [`ExprKind::Binder`].
@@ -62,6 +60,9 @@ pub enum ExprKind {
     App(ExprId, ExprId),
     /// `(expression, type-expression)`.
     Ann(ExprId, ExprId),
+    /// `(input-type, output-type)` — a function type, compiled to the
+    /// kinded arrow `[[in, out], [FunctionType, Type]]`.
+    Arrow(ExprId, ExprId),
     /// Elements stored in [`ExprTable::children`].
     Array(ChildRange),
 }
@@ -106,19 +107,6 @@ impl std::ops::Index<ExprId> for ExprTable {
     type Output = Expr;
     fn index(&self, id: ExprId) -> &Expr {
         &self.expr[id.0 as usize]
-    }
-}
-
-impl std::ops::Index<ExprId> for Vec<Option<ExprId>> {
-    type Output = Option<ExprId>;
-    fn index(&self, id: ExprId) -> &Option<ExprId> {
-        &self[id.0 as usize]
-    }
-}
-
-impl std::ops::IndexMut<ExprId> for Vec<Option<ExprId>> {
-    fn index_mut(&mut self, id: ExprId) -> &mut Option<ExprId> {
-        &mut self[id.0 as usize]
     }
 }
 

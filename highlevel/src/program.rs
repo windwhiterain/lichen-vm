@@ -16,11 +16,16 @@ impl Program for HighProgram {
 }
 
 /// Extension values.  For v1: the type constants.  `Int` is the int type;
-/// `Type` is the type of types.
+/// `Type` is the type of types; `FunctionType` and `ArrayType` are the kind
+/// markers of compound type expressions — a function type is
+/// `[[in, out], [FunctionType, Type]]`, a tuple type
+/// `[[elem types], [ArrayType, Type]]`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HighValue {
     Int,
     Type,
+    FunctionType,
+    ArrayType,
 }
 
 impl ValueExt for HighValue {

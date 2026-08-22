@@ -59,6 +59,29 @@ fn cyclic_operations_panic_instead_of_looping() {
     });
     m.evaluate_node_deep(b, None);
 }
+
+#[test]
+fn deep_eval_cuts_a_self_referential_value_cycle() {
+    // A node whose array value contains itself (the `Type : Type` universe
+    // `K = [Type, K]` shape, which every type spine in the recursive-pair
+    // encoding reaches).  A value cycle is cut by the deep-evaluation guard
+    // — the cached value is re-read, not recomputed — while an *operation*
+    // cycle still panics (see above).
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let marker = u128_node(&mut m, root, 7);
+    let k = m.add_node(root, None, None);
+    let slice = m.blocks[root].arena.alloc_slice_copy(&[marker, k]);
+    m.nodes[k].value = Some(Value::Array(std::ptr::slice_from_raw_parts(
+        slice.as_ptr(),
+        slice.len(),
+    )));
+
+    let value = m.evaluate_node_deep(k, None);
+
+    assert!(matches!(value, Value::Array(_)));
+    assert!(m.nodes.values().all(|n| !n.visiting));
+}
 #[test]
 fn visiting_markers_are_cleared_after_evaluation() {
     let mut m = Module::new();

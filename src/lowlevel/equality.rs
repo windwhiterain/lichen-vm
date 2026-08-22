@@ -16,9 +16,14 @@ impl<P: Program> Module<P> {
 
     /// Structurally unify the classes of `a` and `b`.
     ///
-    /// Unification is over values: an unbound class (`value: None` or
-    /// [`Value::Parameterized`]) binds to the other side's value; two
-    /// concrete values merge iff they are equal ([`PartialEq`]), except
+    /// Unification is over values: a class holding no value and no pending
+    /// operation (a pure unbound cell) binds to the other side's value; an
+    /// unevaluated operation is a *pending computation*, and a concrete
+    /// value must never be bound over one — that would silently erase it
+    /// (e.g. a dependent type branch that selects a different type per
+    /// argument).  Such a computation is forced before comparing; if its
+    /// operands are still unbound and it cannot resolve, the unify fails.
+    /// Two concrete values merge iff they are equal ([`PartialEq`]), except
     /// arrays, which unify elementwise (their structure is the value).  A
     /// conflict records a [`UnifyError`] in [`Self::unify_errors`] and
     /// leaves the two classes unmerged.
@@ -47,10 +52,35 @@ impl<P: Program> Module<P> {
         }
         let va = self.nodes[ra].value;
         let vb = self.nodes[rb].value;
-        if is_unbound(va) || is_unbound(vb) {
+        // A class that is unbound and holds no unevaluated operation is a
+        // pure cell: bind it to the other side.  A class with an unevaluated
+        // operation is not bindable — it is a pending computation, and a
+        // concrete value bound over it would erase the computation.
+        let cell_a = is_unbound(va) && !self.class_has_pending_op(ra);
+        let cell_b = is_unbound(vb) && !self.class_has_pending_op(rb);
+        if cell_a || cell_b {
             self.bind(ra, rb, va, vb);
             return true;
         }
+        // Neither side is a pure cell: force any pending computations so the
+        // comparison sees their resolved values.  A computation whose
+        // operands are still unbound cannot resolve — the two sides cannot
+        // be compared, so this fails rather than binding over it.
+        loop {
+            let pending_a = self.class_has_pending_op(ra);
+            let pending_b = self.class_has_pending_op(rb);
+            if !pending_a && !pending_b {
+                break;
+            }
+            if (pending_a && self.force_pending(ra).is_none())
+                || (pending_b && self.force_pending(rb).is_none())
+            {
+                self.record_error(ra, rb);
+                return false;
+            }
+        }
+        let va = self.nodes[ra].value;
+        let vb = self.nodes[rb].value;
         match (va, vb) {
             (Some(Value::Array(pa)), Some(Value::Array(pb))) => {
                 let (left, right) = (unsafe { &*pa }, unsafe { &*pb });
@@ -101,6 +131,54 @@ impl<P: Program> Module<P> {
                 member = next;
             }
         }
+    }
+
+    /// Whether `rep`'s class holds an unevaluated operation: a node with an
+    /// operation whose value is still unbound.  Such nodes are pending
+    /// computations, never bindable cells.
+    fn class_has_pending_op(&self, rep: NodeId) -> bool {
+        let mut member = rep;
+        loop {
+            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
+                return true;
+            }
+            let Some(next) = self.nodes[member].meta().next else {
+                return false;
+            };
+            member = next;
+        }
+    }
+
+    /// Force the first unevaluated operation in `rep`'s class.  When the
+    /// computation resolves, its value is replicated to the class's pure
+    /// cells so reads stay locally correct — operation-bearing members keep
+    /// their own computed value — and the value is returned.  `None` when
+    /// the computation stays lazy, because its operands are still unbound.
+    #[stacksafe]
+    fn force_pending(&mut self, rep: NodeId) -> Option<Value<P>> {
+        let mut member = rep;
+        loop {
+            if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
+                break;
+            }
+            member = self.nodes[member].meta().next?;
+        }
+        let block = self.nodes[member].block;
+        let value = self.evaluate_node(member, Some(block));
+        if is_unbound(Some(value)) {
+            return None;
+        }
+        let mut m = rep;
+        loop {
+            if self.nodes[m].operation.is_none() && is_unbound(self.nodes[m].value) {
+                self.nodes[m].value = Some(value);
+            }
+            let Some(next) = self.nodes[m].meta().next else {
+                break;
+            };
+            m = next;
+        }
+        Some(value)
     }
 
     fn record_error(&mut self, ra: NodeId, rb: NodeId) {

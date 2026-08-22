@@ -1,5 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
+use std::fmt;
 
 use crate::utils::disjoint::{self};
 
@@ -104,7 +105,7 @@ pub struct Block {
 
 /// # Contract:
 /// Only [`Self::nodes`] can reference [`Self::parameter`].
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Function {
     /// including [`Self::r#return`] and [`Self::parameter`].
     pub nodes: Vec<NodeId>,
@@ -151,6 +152,96 @@ pub struct UnifyError<P: Program> {
     pub b: NodeId,
     pub value_a: Option<Value<P>>,
     pub value_b: Option<Value<P>>,
+}
+
+// --- Debug (dev aid) ---------------------------------------------------
+//
+// `Value` holds raw arena pointers, so these are hand-written: they read
+// through the pointers (the arena outlives any debug print) and elide the
+// program-specific `Ext` payload to a byte count.
+
+impl<P: Program> fmt::Debug for Value<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::Ext(ext) => {
+                if ext.is_ptr() {
+                    write!(f, "Ext({} bytes)", unsafe { &*ext.ptr() }.len())
+                } else {
+                    write!(f, "Ext(inline)")
+                }
+            }
+            Value::Array(ptr) => write!(f, "Array({ptr:?})"),
+            Value::Function(id) => write!(f, "Function({id:?})"),
+            Value::USize(n) => write!(f, "USize({n})"),
+            Value::None => write!(f, "None"),
+            Value::Parameterized => write!(f, "Parameterized"),
+        }
+    }
+}
+
+impl<P: Program> fmt::Debug for Operator<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Operator::Ext(_) => write!(f, "Ext"),
+            Operator::Index => write!(f, "Index"),
+            Operator::Apply => write!(f, "Apply"),
+        }
+    }
+}
+
+impl<P: Program> fmt::Debug for Operation<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Operation")
+            .field("operator", &self.operator)
+            .field("operand", &self.operand)
+            .finish()
+    }
+}
+
+impl fmt::Debug for Block {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Block")
+            .field("parent", &self.parent)
+            .field("children", &self.children)
+            .field("nodes", &self.nodes)
+            .field("functions", &self.functions)
+            .finish()
+    }
+}
+
+impl<P: Program> fmt::Debug for Node<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Node")
+            .field("value", &self.value)
+            .field("operation", &self.operation)
+            .field("block", &self.block)
+            .field("visiting", &self.visiting)
+            .field("parameterized_deep", &self.parameterized_deep)
+            .field("equality", &self.equality)
+            .finish()
+    }
+}
+
+impl<P: Program> fmt::Debug for UnifyError<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UnifyError")
+            .field("a", &self.a)
+            .field("b", &self.b)
+            .field("value_a", &self.value_a)
+            .field("value_b", &self.value_b)
+            .finish()
+    }
+}
+
+impl<P: Program> fmt::Debug for Module<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Module")
+            .field("nodes", &self.nodes)
+            .field("blocks", &self.blocks)
+            .field("functions", &self.functions)
+            .field("unify_errors", &self.unify_errors)
+            .finish_non_exhaustive()
+    }
 }
 
 pub struct Module<P: Program> {

@@ -87,9 +87,26 @@ impl<P: Program> Module<P> {
     /// parameter) references, so the apply's unify sees the argument's
     /// element values instead of unbound slots.  Only array positions in
     /// the pattern recurse; sub-values the pattern treats as opaque stay
-    /// unevaluated.
+    /// unevaluated.  `seen` holds the `(pattern, argument)` pairs on the
+    /// current recursion, so a structural cycle (the `Type : Type` universe,
+    /// which a typed pattern's spine reaches twice) is walked once instead
+    /// of looping.
     #[stacksafe]
     fn evaluate_pattern_argument(&mut self, pattern: NodeId, argument: NodeId, block: BlockId) {
+        self.evaluate_pattern_argument_inner(pattern, argument, block, &mut HashSet::new());
+    }
+
+    #[stacksafe]
+    fn evaluate_pattern_argument_inner(
+        &mut self,
+        pattern: NodeId,
+        argument: NodeId,
+        block: BlockId,
+        seen: &mut HashSet<(NodeId, NodeId)>,
+    ) {
+        if !seen.insert((pattern, argument)) {
+            return;
+        }
         self.evaluate_node(argument, Some(block));
         let (Some(Value::Array(pattern_ids)), Some(Value::Array(argument_ids))) =
             (self.nodes[pattern].value, self.nodes[argument].value)
@@ -99,7 +116,7 @@ impl<P: Program> Module<P> {
         for (&pattern_id, &argument_id) in
             unsafe { &*pattern_ids }.iter().zip(unsafe { &*argument_ids }.iter())
         {
-            self.evaluate_pattern_argument(pattern_id, argument_id, block);
+            self.evaluate_pattern_argument_inner(pattern_id, argument_id, block, seen);
         }
     }
 

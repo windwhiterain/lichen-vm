@@ -19,7 +19,7 @@ use stacksafe::stacksafe;
 ///   they are never read elsewhere.
 /// - The member list is acyclic: [`union`] splices a root (a None-terminated
 ///   list head) onto the tail of another root's list, so `next` never loops.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct Meta<K: Copy> {
     /// The representative of the set; `None` means this node is its own root.
     pub parent: Option<K>,

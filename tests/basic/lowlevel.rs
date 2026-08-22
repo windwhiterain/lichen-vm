@@ -6,7 +6,7 @@
 //! - `evaluation` — operators, the cycle guard, visiting/parameterized markers
 //! - `function` — `Apply` semantics, nested and higher-order functions
 //! - `recursion` — lazy recursion, definition passes, depth guards
-//! - `equality` — the DSU equivalence classes `unify` binds through
+//! - `equality` — `unify` and the DSU equivalence classes it binds through
 //!
 //! The shared harness (the test `Program`/`Value`/`Operator` and the node
 //! and function builders) lives here; each category module pulls it in with
@@ -202,6 +202,16 @@ fn array_node(m: &mut Module<TestProgram>, block: BlockId, ids: &[NodeId]) -> No
 
 fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(Value::USize(n)))
+}
+
+/// An unbound cell — `Value::Parameterized`, so deep evaluation stays lazy
+/// instead of panicking on a missing operation.
+fn unbound_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
+    m.add_node(block, None, Some(Value::Parameterized))
+}
+
+fn unit_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
+    m.add_node(block, None, Some(Value::None))
 }
 
 fn op_node(

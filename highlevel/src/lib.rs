@@ -10,5 +10,6 @@
 //! are pre-resolved references to binder expressions.
 
 pub mod checker;
+pub mod diag;
 pub mod expr;
 pub mod program;

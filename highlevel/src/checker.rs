@@ -1,74 +1,108 @@
-//! The builder/checker: walks an [`ExprTable`], checks types, and constructs
-//! the lowlevel [`Module`] — one pass, interleaved.
+//! The builder/checker: compiles an [`ExprTable`] into a lowlevel [`Module`]
+//! where the runtime *is* the typechecker.
 //!
-//! Typing model: every expression `e` has a type *expression* `ty(e)` (a
-//! first-class citizen — `type_of(e)` is exactly the Expr `ty(e)`).  The
-//! checker's judgment is `unify(node(ty(e)), node(expected))` — the
-//! type-expression nodes unify, never the value nodes.  A binder's type
-//! starts as a fresh [`ExprKind::TyVar`] whose node is a separate class from
-//! the parameter node (the parameter is a runtime value cell, unified only at
-//! apply time); after unification the TyVar's node class carries the type
-//! value, so the same expression stays a correct type throughout.
+//! Every expression compiles to a **recursive pair** `[value, type]` — a
+//! 2-element array node whose elements are the value and its type, where the
+//! type slot is itself such a pair.  Every type spine bottoms out at the
+//! canonical universe `K = [Type, ↺]` — the self-referential `Type : Type`
+//! node — so a literal is `[5, [int, K]]`, a function value
+//! `[f, [[in, out], [FunctionType, K]]]`, and a tuple
+//! `[[1, 2], [[int, int], [ArrayType, K]]]`.  A function parameter is such
+//! a pair (`f(x: int)` maps to the parameter `[x, int-type]`), and a call
+//! passes the argument's pair, so the apply-time unification
+//! `unify(cloned_param, argument)` matches value-to-value and
+//! **type-to-type** — that is the function parameter type check, executed
+//! by the VM.
+//!
+//! The checker only *constructs* (pairs, type expressions, the universe)
+//! and issues the unifies that have no apply to express them: annotations
+//! and the function-ness guard (so applying a non-function is a reported
+//! error, not a runtime panic); kinding (a type expression's own type must
+//! be a kind) is structural and only fails for concrete non-kinds, like a
+//! literal in type position.  It then runs the definition pass so the
+//! apply-time checks fire; failures land in [`Module::unify_errors`], which
+//! is the checker's error channel.
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_vm::lowlevel::{BlockId, Module, NodeId, Operation, Operator, Value};
+use lichen_vm::lowlevel::{BlockId, Module, NodeId, Operation, Operator, UnifyError, Value};
 
+use crate::diag::{DiagKind, DiaryEntry};
 use crate::expr::{ExprId, ExprKind, ExprTable, Span};
 use crate::program::{HighProgram, HighValue};
 
-/// Term position or type position.  The checker threads it because the same
-/// expression can be used as a value in one place and a type in another
-/// (first-class types).
+/// Term position or type position.  The same expression can be a value in
+/// one place and a type in another (first-class types); in type position its
+/// value *is* the type and kinding (`ty : Type`) is enforced.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     Term,
     Type,
 }
 
-/// A variable in scope.
-#[derive(Clone)]
+/// A variable in scope: the parameter pair `[value, type]` plus its type
+/// cell.  Uses reference the pair (so the apply's clone always includes it —
+/// the lowlevel's `function_apply` only runs the argument unify when the
+/// parameter was cloned); a value use extracts element 0 via
+/// `Index(pair, 0)`.
+#[derive(Clone, Copy)]
 struct Binding {
-    /// The runtime node (a parameter).
     term: NodeId,
-    /// Monomorphic: the shared type expression.  Polymorphic: the
-    /// generalized template.
-    ty: ExprId,
-    poly: bool,
-    /// Free type variables of the template (polymorphic only); instantiation
-    /// copies these and references everything else in place.
-    free: Vec<ExprId>,
+    ty: NodeId,
 }
 
 pub struct Checker {
     ir: ExprTable,
     module: Module<HighProgram>,
-    /// Where the checker's synthesized type nodes live; never released.
-    types_block: BlockId,
-    /// Where runtime nodes for the current expression go.
     current_block: BlockId,
     scopes: Vec<HashMap<ExprId, Binding>>,
-    /// Compiled lowlevel node per expression (the value node for terms, the
-    /// type structure for type expressions).
+    /// The compiled pair node `[value, type]` per expression.
     term: Vec<Option<NodeId>>,
-    /// Type expression per expression.
-    ty: Vec<Option<ExprId>>,
-    int_ty: ExprId,
-    type_ty: ExprId,
+    /// Element 0 of the pair (the value).  `None` for call results, whose
+    /// value is only known at runtime — built lazily as
+    /// `Index(pair, 0)` via [`Checker::value_of`] when the value is needed.
+    val: Vec<Option<NodeId>>,
+    /// Element 1 of the pair (the type).
+    ty: Vec<Option<NodeId>>,
+    /// The checker's own unification sequence, attributed for diagnostics:
+    /// each entry records which `unify_errors` entry (if any) the unify
+    /// produced, plus its span and check kind.
+    diary: Vec<DiaryEntry>,
+    /// The arrow nodes built by [`Checker::check_lam`] — the type printer
+    /// renders these `[param, body]` shapes as `param → body`.
+    arrows: HashSet<NodeId>,
+    int_node: NodeId,
+    type_node: NodeId,
+    function_type_node: NodeId,
+    array_type_node: NodeId,
+    /// The shared `[int, Type]` type expression every literal's pair carries.
+    int_type: NodeId,
+    /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
+    type_expr: NodeId,
 }
 
-/// The result of checking a program: the built Module plus the checker's
+/// The result of building a program: the compiled Module plus the checker's
 /// records.  `ok` is false when any unification failed (`unify_errors` is
 /// non-empty); rendering diagnostics from those is future work.
 pub struct Build {
     pub ir: ExprTable,
     pub module: Module<HighProgram>,
     pub term: Vec<Option<NodeId>>,
-    pub ty: Vec<Option<ExprId>>,
+    pub val: Vec<Option<NodeId>>,
+    pub ty: Vec<Option<NodeId>>,
     pub root_term: NodeId,
-    pub root_ty: ExprId,
-    pub int_ty: ExprId,
-    pub type_ty: ExprId,
+    pub root_val: NodeId,
+    pub root_ty: NodeId,
+    pub int_node: NodeId,
+    pub type_node: NodeId,
+    /// The shared `[int, Type]` type expression.
+    pub int_type: NodeId,
+    /// The canonical universe `[Type, ↺]`.
+    pub type_expr: NodeId,
+    /// The checker's attributed unification sequence (see [`DiaryEntry`]).
+    pub diary: Vec<DiaryEntry>,
+    /// Arrow nodes (see [`Checker::arrows`]); read by the diagnostics.
+    pub arrows: HashSet<NodeId>,
     pub ok: bool,
 }
 
@@ -76,94 +110,97 @@ impl Checker {
     pub fn build(ir: ExprTable) -> Build {
         let mut module = Module::new();
         let root_block = module.add_block(None);
-        let types_block = module.add_block(None);
+        let n = ir.expr.len();
         let mut checker = Checker {
             ir,
             module,
-            types_block,
             current_block: root_block,
             scopes: Vec::new(),
-            term: Vec::new(),
-            ty: Vec::new(),
-            int_ty: ExprId(0),
-            type_ty: ExprId(0),
+            term: vec![None; n],
+            val: vec![None; n],
+            ty: vec![None; n],
+            diary: Vec::new(),
+            arrows: HashSet::new(),
+            int_node: NodeId::default(),
+            type_node: NodeId::default(),
+            function_type_node: NodeId::default(),
+            array_type_node: NodeId::default(),
+            int_type: NodeId::default(),
+            type_expr: NodeId::default(),
         };
-        checker.term = vec![None; checker.ir.expr.len()];
-        checker.ty = vec![None; checker.ir.expr.len()];
-        checker.install_canonical();
+        checker.install_constants();
         let root = checker.ir.root;
-        let root_term = checker.check_expr(root, None, Role::Term);
+        let root_term = checker.check_expr(root, Role::Term);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
+        // The definition pass: run the program so the apply-time type checks
+        // fire.  Skipped when the checker-side unifies (annotations, kinding,
+        // guards) already failed — the graph may then hit a non-function
+        // apply, which the runtime panics on.
+        if checker.module.unify_errors.is_empty() {
+            checker.module.evaluate_node_deep(root_term, None);
+        }
         let ok = checker.module.unify_errors.is_empty();
+        let root_val = checker.value_of(root);
         Build {
             ir: checker.ir,
             module: checker.module,
             term: checker.term,
+            val: checker.val,
             ty: checker.ty,
             root_term,
+            root_val,
             root_ty,
-            int_ty: checker.int_ty,
-            type_ty: checker.type_ty,
+            int_node: checker.int_node,
+            type_node: checker.type_node,
+            int_type: checker.int_type,
+            type_expr: checker.type_expr,
+            diary: checker.diary,
+            arrows: checker.arrows,
             ok,
         }
     }
 
-    /// The canonical `Type` and `int` type constants, appended to the table
-    /// so the frontend-built part keeps its ids.
-    fn install_canonical(&mut self) {
-        let type_ty = self.alloc(ExprKind::Type, None);
-        let int_ty = self.alloc(ExprKind::Const(HighValue::Int), None);
-        let type_node =
-            self.module
-                .add_node(self.types_block, None, Some(Value::Ext(HighValue::Type)));
-        let int_node =
-            self.module
-                .add_node(self.types_block, None, Some(Value::Ext(HighValue::Int)));
-        self.term[type_ty] = Some(type_node);
-        self.ty[type_ty] = Some(type_ty); // Type : Type
-        self.term[int_ty] = Some(int_node);
-        self.ty[int_ty] = Some(type_ty); // int : Type
-        self.type_ty = type_ty;
-        self.int_ty = int_ty;
+    /// The type constants as plain nodes in the root block (types are
+    /// first-class values — they live in the runtime graph), plus the two
+    /// canonical structures: the universe `K = [Type, ↺]` whose type slot is
+    /// itself (`Type : Type` closes every type spine) and the shared int
+    /// type expression `[int, K]` every literal's pair carries.
+    fn install_constants(&mut self) {
+        let root = self.current_block;
+        self.int_node = self
+            .module
+            .add_node(root, None, Some(Value::Ext(HighValue::Int)));
+        self.type_node = self
+            .module
+            .add_node(root, None, Some(Value::Ext(HighValue::Type)));
+        self.function_type_node = self
+            .module
+            .add_node(root, None, Some(Value::Ext(HighValue::FunctionType)));
+        self.array_type_node = self
+            .module
+            .add_node(root, None, Some(Value::Ext(HighValue::ArrayType)));
+        // `K = [Type, K]`: allocate the node, then point its type slot at
+        // itself.  The self-loop is cut by the lowlevel deep-evaluation
+        // cycle guard whenever the definition pass reaches it.
+        let universe = self.module.add_node(root, None, None);
+        let slice = self.module.blocks[root]
+            .arena
+            .alloc_slice_copy(&[self.type_node, universe]);
+        self.module.nodes[universe].value = Some(Value::Array(std::ptr::slice_from_raw_parts(
+            slice.as_ptr(),
+            slice.len(),
+        )));
+        self.type_expr = universe;
+        self.int_type = self.array_node(root, &[self.int_node, self.type_expr]);
     }
 
     // --- allocation ------------------------------------------------------
 
-    fn alloc(&mut self, kind: ExprKind, span: Option<Span>) -> ExprId {
-        let id = self.ir.alloc(kind, span);
-        self.term.push(None);
-        self.ty.push(None);
-        id
-    }
-
-    fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
-        let start = self.ir.children.len() as u32;
-        self.ir.children.extend_from_slice(elements);
-        let range = crate::expr::ChildRange {
-            start,
-            end: self.ir.children.len() as u32,
-        };
-        self.alloc(ExprKind::Array(range), span)
-    }
-
-    /// A fresh type variable: a new Expr plus a fresh unbound node in the
-    /// types block.
-    fn fresh_tyvar(&mut self) -> ExprId {
-        let id = self.alloc(ExprKind::TyVar, None);
-        let node = self.module.add_node(self.types_block, None, None);
-        self.term[id] = Some(node);
-        self.ty[id] = Some(self.type_ty);
-        id
-    }
-
-    /// The arrow type `[dom, codom]` (an array value of the two type nodes).
-    fn arrow_type(&mut self, dom: ExprId, cod: ExprId) -> ExprId {
-        let id = self.alloc_array(&[dom, cod], None);
-        let elements = [self.term[dom].unwrap(), self.term[cod].unwrap()];
-        let node = self.array_node(self.types_block, &elements);
-        self.term[id] = Some(node);
-        self.ty[id] = Some(self.type_ty);
-        id
+    /// A fresh, unbound type cell (a parameterized node — evaluating it
+    /// yields the lazy marker, never a panic).
+    fn fresh_cell(&mut self) -> NodeId {
+        self.module
+            .add_node(self.current_block, None, Some(Value::Parameterized))
     }
 
     fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
@@ -188,220 +225,351 @@ impl Checker {
             .add_node(block, Some(Operation { operator, operand }), None)
     }
 
-    /// Unify the compiled nodes of two type expressions.  Both must already
-    /// be compiled (their `term` entries set).
-    fn unify_types(&mut self, a: ExprId, b: ExprId) {
-        let na = self.term[a].expect("type expression must be compiled");
-        let nb = self.term[b].expect("type expression must be compiled");
-        self.module.unify(na, nb);
+    /// A pair node `[value, type]` built around two already-compiled nodes.
+    fn pair_of(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+        self.array_node(self.current_block, &[value, ty])
+    }
+
+    /// The value of an expression: element 0 of its pair.  For expressions
+    /// whose pair is a static node (literals, variables, lambdas) this is
+    /// stored; for call results it is extracted at runtime with
+    /// `Index(pair, 0)` and memoized.
+    fn value_of(&mut self, e: ExprId) -> NodeId {
+        if let Some(value) = self.val[e] {
+            return value;
+        }
+        let pair = self.term[e].expect("expression must be compiled");
+        let zero = self
+            .module
+            .add_node(self.current_block, None, Some(Value::USize(0)));
+        let operands = self.array_node(self.current_block, &[pair, zero]);
+        let index = self.op_node(self.current_block, Operator::Index, Some(operands));
+        self.val[e] = Some(index);
+        index
     }
 
     // --- the check -------------------------------------------------------
 
-    fn check_expr(&mut self, e: ExprId, expected: Option<ExprId>, role: Role) -> NodeId {
-        let node = match (role, self.ir[e].kind) {
-            (Role::Type, ExprKind::Var(target)) => self.check_var_type(e, target),
-            (Role::Type, ExprKind::Array(_)) => self.check_array_type(e),
-            // Type-position literals, lambdas, etc. are not syntactic types:
-            // check as a term, then kinding records the mismatch.
-            (Role::Type, _) => {
-                let node = self.check_term(e);
-                self.unify_types(self.ty[e].unwrap(), self.type_ty);
-                node
-            }
-            (Role::Term, _) => self.check_term(e),
+    /// A checker-issued unification, diary-attributed: records which error
+    /// (if any) it produced, with the span and check kind that drive the
+    /// diagnostic's wording and expected/found direction.
+    fn check_unify(&mut self, a: NodeId, b: NodeId, span: Option<Span>, kind: DiagKind) {
+        let before = self.module.unify_errors.len();
+        self.module.unify(a, b);
+        if self.module.unify_errors.len() > before {
+            self.diary.push(DiaryEntry {
+                error_index: before,
+                a,
+                b,
+                span,
+                kind,
+            });
+        }
+    }
+
+    fn check_expr(&mut self, e: ExprId, role: Role) -> NodeId {
+        let node = match self.ir[e].kind {
+            ExprKind::Array(_) if role == Role::Type => self.check_array_type(e),
+            _ => self.check_term(e),
         };
-        if role == Role::Term
-            && let Some(exp) = expected
-        {
-            self.unify_types(self.ty[e].unwrap(), exp);
+        if role == Role::Type {
+            self.check_kinding(e);
         }
         node
+    }
+
+    /// Kinding: a type expression's own type must be a kind — the universe
+    /// `K` itself (atomic types: `int : Type`) or a kind expression
+    /// `[Kind, K]` (compound types: `[in, out] : FunctionType : Type`).  An
+    /// unbound type (a parameter, a call result) defers to the runtime; a
+    /// concrete non-kind — a literal in type position, e.g. `1 : 3` — is a
+    /// reported error rather than a check that silently passes.
+    fn check_kinding(&mut self, e: ExprId) {
+        let ty = self.ty[e].unwrap();
+        if self.is_kind(ty) || unbound(self.module.nodes[ty].value) {
+            return;
+        }
+        let error_index = self.module.unify_errors.len();
+        self.module.unify_errors.push(UnifyError {
+            a: ty,
+            b: self.type_expr,
+            value_a: self.module.nodes[ty].value,
+            value_b: self.module.nodes[self.type_expr].value,
+        });
+        self.diary.push(DiaryEntry {
+            error_index,
+            a: ty,
+            b: self.type_expr,
+            span: self.ir[e].span,
+            kind: DiagKind::Kinding,
+        });
+    }
+
+    /// Whether `node` is a kind: the universe `K` itself, or a kind
+    /// expression `[FunctionType | ArrayType, K]`.
+    fn is_kind(&mut self, node: NodeId) -> bool {
+        if self.is_universe(node) {
+            return true;
+        }
+        let Some(Value::Array(ptr)) = self.module.nodes[node].value else {
+            return false;
+        };
+        let ids = unsafe { &*ptr };
+        ids.len() == 2
+            && self.is_universe(ids[1])
+            && matches!(
+                self.module.nodes[ids[0]].value,
+                Some(Value::Ext(HighValue::FunctionType) | Value::Ext(HighValue::ArrayType))
+            )
+    }
+
+    /// Whether the class of `node` is the canonical universe `K`.
+    fn is_universe(&mut self, node: NodeId) -> bool {
+        self.module.equality_representative(node)
+            == self.module.equality_representative(self.type_expr)
+    }
+
+    /// Whether `kind` is the kind expression `[marker, K]`.
+    fn kind_marker_is(&mut self, kind: NodeId, marker: HighValue) -> bool {
+        let Some(Value::Array(ptr)) = self.module.nodes[kind].value else {
+            return false;
+        };
+        let ids = unsafe { &*ptr };
+        ids.len() == 2
+            && self.module.nodes[ids[0]].value == Some(Value::Ext(marker))
+            && self.is_universe(ids[1])
+    }
+
+    /// Whether `ty` is a concrete function type expression:
+    /// `[shape, [FunctionType, K]]`.  The function-ness guard skips these —
+    /// only concretely *non*-function types are caught statically.
+    fn is_function_type(&mut self, ty: NodeId) -> bool {
+        let Some(Value::Array(ptr)) = self.module.nodes[ty].value else {
+            return false;
+        };
+        let ids = unsafe { &*ptr };
+        ids.len() == 2 && self.kind_marker_is(ids[1], HighValue::FunctionType)
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
         match self.ir[e].kind {
             ExprKind::Int(n) => {
-                let node =
-                    self.module
-                        .add_node(self.current_block, None, Some(Value::USize(n as usize)));
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.int_ty);
-                node
+                let value = self
+                    .module
+                    .add_node(self.current_block, None, Some(Value::USize(n as usize)));
+                let pair = self.pair_of(value, self.int_type);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(value);
+                self.ty[e] = Some(self.int_type);
+                pair
             }
-            ExprKind::Type => {
-                let node = self.term[self.type_ty].unwrap();
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.type_ty);
-                node
+            ExprKind::Type | ExprKind::Const(HighValue::Type) => {
+                // `Type` is the canonical universe node itself — `Type : Type`.
+                self.term[e] = Some(self.type_expr);
+                self.val[e] = Some(self.type_node);
+                self.ty[e] = Some(self.type_expr);
+                self.type_expr
             }
             ExprKind::Const(HighValue::Int) => {
-                let node = self.term[self.int_ty].unwrap();
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.type_ty);
-                node
+                // The int type constant: `[int, Type]` — its value is the
+                // marker and its type is the universe.
+                self.term[e] = Some(self.int_type);
+                self.val[e] = Some(self.int_node);
+                self.ty[e] = Some(self.type_expr);
+                self.int_type
             }
-            ExprKind::Const(HighValue::Type) => {
-                let node = self.term[self.type_ty].unwrap();
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.type_ty);
-                node
-            }
-            ExprKind::TyVar => {
-                let node = self.module.add_node(self.types_block, None, None);
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.type_ty);
-                node
+            ExprKind::Const(value) => {
+                // A kind marker as an expression: `[marker, Type]` — the
+                // kind expression, first-class like any type.
+                let marker = match value {
+                    HighValue::FunctionType => self.function_type_node,
+                    HighValue::ArrayType => self.array_type_node,
+                    _ => unreachable!("Int and Type are handled above"),
+                };
+                let pair = self.array_node(self.current_block, &[marker, self.type_expr]);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(marker);
+                self.ty[e] = Some(self.type_expr);
+                pair
             }
             ExprKind::Binder => {
                 debug_assert!(false, "a binder used as a value");
-                let node =
-                    self.module
-                        .add_node(self.current_block, None, Some(Value::Parameterized));
-                self.term[e] = Some(node);
-                self.ty[e] = Some(self.fresh_tyvar());
-                node
+                let value = self.fresh_cell();
+                let ty = self.fresh_cell();
+                let pair = self.pair_of(value, ty);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(value);
+                self.ty[e] = Some(ty);
+                pair
             }
-            ExprKind::Var(target) => self.check_var(e, target),
+            ExprKind::Var(target) => {
+                let binding = self.lookup(target);
+                self.term[e] = Some(binding.term);
+                self.val[e] = None;
+                self.ty[e] = Some(binding.ty);
+                binding.term
+            }
             ExprKind::Lam(binder, body) => self.check_lam(e, binder, body),
             ExprKind::Let(binder, value, body) => self.check_let(e, binder, value, body),
             ExprKind::App(f, x) => self.check_app(e, f, x),
             ExprKind::Ann(inner, t) => self.check_ann(e, inner, t),
+            ExprKind::Arrow(d, c) => {
+                self.check_expr(d, Role::Type);
+                self.check_expr(c, Role::Type);
+                let shape = self.array_node(
+                    self.current_block,
+                    &[self.term[d].unwrap(), self.term[c].unwrap()],
+                );
+                let kind = self.array_node(
+                    self.current_block,
+                    &[self.function_type_node, self.type_expr],
+                );
+                let pair = self.array_node(self.current_block, &[shape, kind]);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(shape);
+                self.ty[e] = Some(kind);
+                pair
+            }
             ExprKind::Array(_) => self.check_array_term(e),
         }
-    }
-
-    fn check_var(&mut self, e: ExprId, target: ExprId) -> NodeId {
-        match self.lookup(target) {
-            Some(binding) if binding.poly => {
-                let instance = self.instantiate(binding.ty, &binding.free);
-                self.term[e] = Some(binding.term);
-                self.ty[e] = Some(instance);
-            }
-            Some(binding) => {
-                self.term[e] = Some(binding.term);
-                self.ty[e] = Some(binding.ty);
-            }
-            None => {
-                debug_assert!(false, "unresolved variable reference");
-                self.term[e] = Some(self.term[self.type_ty].unwrap());
-                self.ty[e] = Some(self.type_ty);
-            }
-        }
-        self.term[e].unwrap()
-    }
-
-    /// A variable used in type position.  Its value *is* the type: for a
-    /// monomorphic binding the parameter node (which holds the type at
-    /// runtime), for a polymorphic binding the instantiated type node.  The
-    /// referenced value's own type must be `Type` (kinding).
-    fn check_var_type(&mut self, e: ExprId, target: ExprId) -> NodeId {
-        match self.lookup(target) {
-            Some(binding) if binding.poly => {
-                let instance = self.instantiate(binding.ty, &binding.free);
-                self.term[e] = Some(self.term[instance].unwrap());
-                self.ty[e] = Some(self.type_ty);
-            }
-            Some(binding) => {
-                self.term[e] = Some(binding.term);
-                self.ty[e] = Some(binding.ty);
-                let node = self.term[binding.ty].unwrap();
-                self.module.unify(node, self.term[self.type_ty].unwrap());
-            }
-            None => {
-                debug_assert!(false, "unresolved variable reference");
-                self.term[e] = Some(self.term[self.type_ty].unwrap());
-                self.ty[e] = Some(self.type_ty);
-            }
-        }
-        self.term[e].unwrap()
     }
 
     fn check_lam(&mut self, e: ExprId, binder: ExprId, body: ExprId) -> NodeId {
         let body_block = self.module.add_block(None);
         let saved = self.current_block;
         self.current_block = body_block;
-        let param = self
-            .module
-            .add_node(body_block, None, Some(Value::Parameterized));
-        let tyvar = self.fresh_tyvar();
+        let value_cell = self.fresh_cell();
+        let type_cell = self.fresh_cell();
+        // The parameter *is* the pair `[value, type]`; the cells live in the
+        // function's scope so the apply's clone yields fresh cells per call
+        // (that is what makes a polymorphic value usable at several types).
+        let param = self.array_node(body_block, &[value_cell, type_cell]);
         self.term[binder] = Some(param);
-        self.ty[binder] = Some(tyvar);
+        self.ty[binder] = Some(type_cell);
         self.scopes.push(HashMap::from([(
             binder,
             Binding {
                 term: param,
-                ty: tyvar,
-                poly: false,
-                free: Vec::new(),
+                ty: type_cell,
             },
         )]));
-        let ret = self.check_expr(body, None, Role::Term);
+        let ret = self.check_expr(body, Role::Term);
         self.scopes.pop();
         self.current_block = saved;
-        let nodes = self.module.blocks[body_block].nodes.clone();
+        // The return (the body's pair) must be in the function's scope, even
+        // when the body is a nested structure whose pair lives in a deeper
+        // block (e.g. a lambda inside a let body).
+        let mut nodes = self.module.blocks[body_block].nodes.clone();
+        if !nodes.contains(&ret) {
+            nodes.push(ret);
+        }
         let func_node = self.module.add_function(body_block, ret, param, &nodes);
-        let arrow = self.arrow_type(tyvar, self.ty[body].unwrap());
-        self.term[e] = Some(func_node);
+        // The function's own type: the arrow shape `[param type, body type]`
+        // kinded as a function — `[[in, out], [FunctionType, Type]]`.
+        let shape = self.array_node(body_block, &[type_cell, self.ty[body].unwrap()]);
+        self.arrows.insert(shape);
+        let kind = self.array_node(body_block, &[self.function_type_node, self.type_expr]);
+        let arrow = self.array_node(body_block, &[shape, kind]);
+        let pair = self.array_node(body_block, &[func_node, arrow]);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(func_node);
         self.ty[e] = Some(arrow);
-        func_node
+        pair
     }
 
     fn check_let(&mut self, e: ExprId, binder: ExprId, value: ExprId, body: ExprId) -> NodeId {
-        let vt = self.check_expr(value, None, Role::Term);
-        let vty = self.ty[value].unwrap();
-        let free = self.generalize(vty);
+        self.check_expr(value, Role::Term);
         let body_block = self.module.add_block(None);
         let saved = self.current_block;
         self.current_block = body_block;
-        let param = self
-            .module
-            .add_node(body_block, None, Some(Value::Parameterized));
+        let value_cell = self.fresh_cell();
+        let type_cell = self.fresh_cell();
+        let param = self.array_node(body_block, &[value_cell, type_cell]);
         self.term[binder] = Some(param);
-        self.ty[binder] = Some(vty);
+        self.ty[binder] = Some(type_cell);
         self.scopes.push(HashMap::from([(
             binder,
             Binding {
                 term: param,
-                ty: vty,
-                poly: true,
-                free,
+                ty: type_cell,
             },
         )]));
-        let ret = self.check_expr(body, None, Role::Term);
+        let ret = self.check_expr(body, Role::Term);
         self.scopes.pop();
         self.current_block = saved;
-        let nodes = self.module.blocks[body_block].nodes.clone();
-        let func_node = self.module.add_function(body_block, ret, param, &nodes);
-        // Runtime encoding of `let x = e in b`: apply a function over `e`.
-        let operands = self.array_node(saved, &[func_node, vt]);
+        let mut nodes = self.module.blocks[body_block].nodes.clone();
+        if !nodes.contains(&ret) {
+            nodes.push(ret);
+        }
+        let func = self.module.add_function(body_block, ret, param, &nodes);
+        // `let x = e in b` runs as `(\x. b) e`: the argument is e's pair, and
+        // the apply's unify pairs x's cells with e's value and type — the
+        // runtime binding *is* the assignment.
+        let operands = self.array_node(saved, &[func, self.term[value].unwrap()]);
         let node = self.op_node(saved, Operator::Apply, Some(operands));
         self.term[e] = Some(node);
+        self.val[e] = None;
         self.ty[e] = Some(self.ty[body].unwrap());
         node
     }
 
     fn check_app(&mut self, e: ExprId, f: ExprId, x: ExprId) -> NodeId {
-        let ft = self.check_expr(f, None, Role::Term);
-        let d = self.fresh_tyvar();
-        let c = self.fresh_tyvar();
-        let arrow = self.arrow_type(d, c);
-        // The guard: the function's type must unify with an arrow.
-        self.unify_types(self.ty[f].unwrap(), arrow);
-        let xt = self.check_expr(x, Some(d), Role::Term);
+        self.check_expr(f, Role::Term);
+        self.check_expr(x, Role::Term);
+        // The function slot is the function's *value* (the runtime apply
+        // needs a `Value::Function`, not the pair); the argument slot is the
+        // full pair, so the apply's unify compares type cell to type cell.
+        let ft = self.value_of(f);
+        let xt = self.term[x].unwrap();
+        // Function-ness guard: catch *concretely* non-function types
+        // statically (applying a literal is an error, not a runtime panic).
+        // Concrete function types and unbound types (parameters, lambdas,
+        // call results) are left to the runtime apply — unifying the shared
+        // cell here would chain the type cells of every use of a polymorphic
+        // value.  A failed unify never merges classes, so this cannot chain
+        // either.
+        let f_ty = self.ty[f].unwrap();
+        let concrete = matches!(
+            self.module.nodes[f_ty].value,
+            Some(Value::Ext(_)) | Some(Value::USize(_)) | Some(Value::Array(_))
+        );
+        if concrete && !self.is_function_type(f_ty) {
+            let d = self.fresh_cell();
+            let c = self.fresh_cell();
+            let shape = self.array_node(self.current_block, &[d, c]);
+            let kind = self.array_node(self.current_block, &[self.function_type_node, self.type_expr]);
+            let fn_ty = self.array_node(self.current_block, &[shape, kind]);
+            self.check_unify(f_ty, fn_ty, self.ir[e].span, DiagKind::Guard);
+        }
+        // The result's type cell: unbound unless anchored by an annotation.
+        let c = self.fresh_cell();
         let operands = self.array_node(self.current_block, &[ft, xt]);
         let node = self.op_node(self.current_block, Operator::Apply, Some(operands));
         self.term[e] = Some(node);
+        self.val[e] = None;
         self.ty[e] = Some(c);
         node
     }
 
     fn check_ann(&mut self, e: ExprId, inner: ExprId, t: ExprId) -> NodeId {
-        self.check_expr(t, None, Role::Type);
-        let it = self.check_expr(inner, Some(t), Role::Term);
-        self.term[e] = Some(it);
-        self.ty[e] = Some(t);
-        it
+        self.check_expr(t, Role::Type);
+        self.check_expr(inner, Role::Term);
+        // The annotation compares the full type expressions: the inner
+        // expression's type against the type expression `t` itself — both
+        // are pairs in the recursive encoding.
+        let t_ty = self.term[t].unwrap();
+        self.check_unify(
+            self.ty[inner].unwrap(),
+            t_ty,
+            self.ir[e].span,
+            DiagKind::Annotation,
+        );
+        let inner_val = self.value_of(inner);
+        let pair = self.pair_of(inner_val, t_ty);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(inner_val);
+        self.ty[e] = Some(t_ty);
+        pair
     }
 
     fn check_array_term(&mut self, e: ExprId) -> NodeId {
@@ -411,27 +579,26 @@ impl Checker {
         };
         let elements: Vec<ExprId> =
             self.ir.children[range.start as usize..range.end as usize].to_vec();
-        let mut terms = Vec::new();
+        let mut vals = Vec::new();
         let mut tys = Vec::new();
         for &el in &elements {
-            let t = self.check_expr(el, None, Role::Term);
-            terms.push(t);
+            self.check_expr(el, Role::Term);
+            vals.push(self.value_of(el));
             tys.push(self.ty[el].unwrap());
         }
-        let node = self.array_node(self.current_block, &terms);
-        // The array type is an array of the element type expressions.
-        let ty_id = self.alloc_array(&tys, None);
-        let nodes: Vec<NodeId> = tys.iter().map(|&ty| self.term[ty].unwrap()).collect();
-        let ty_node = self.array_node(self.types_block, &nodes);
-        self.term[ty_id] = Some(ty_node);
-        self.ty[ty_id] = Some(self.type_ty);
-        self.term[e] = Some(node);
-        self.ty[e] = Some(ty_id);
-        node
+        // A tuple: `[values, [[element types], [ArrayType, Type]]]`.
+        let value = self.array_node(self.current_block, &vals);
+        let shape = self.array_node(self.current_block, &tys);
+        let kind = self.array_node(self.current_block, &[self.array_type_node, self.type_expr]);
+        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.pair_of(value, ty_node);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value);
+        self.ty[e] = Some(ty_node);
+        pair
     }
 
-    /// An array used as a type: its value *is* the type structure (an array
-    /// of the element type nodes), and its own type is `Type`.
+    /// An array in type position: the tuple type `[[element types], [ArrayType, Type]]`.
     fn check_array_type(&mut self, e: ExprId) -> NodeId {
         let range = match self.ir[e].kind {
             ExprKind::Array(range) => range,
@@ -439,109 +606,30 @@ impl Checker {
         };
         let elements: Vec<ExprId> =
             self.ir.children[range.start as usize..range.end as usize].to_vec();
+        let mut tys = Vec::new();
         for &el in &elements {
-            self.check_expr(el, None, Role::Type);
+            self.check_expr(el, Role::Type);
+            tys.push(self.term[el].unwrap());
         }
-        let nodes: Vec<NodeId> = elements.iter().map(|&el| self.term[el].unwrap()).collect();
-        let node = self.array_node(self.types_block, &nodes);
-        self.term[e] = Some(node);
-        self.ty[e] = Some(self.type_ty);
-        node
+        let shape = self.array_node(self.current_block, &tys);
+        let kind = self.array_node(self.current_block, &[self.array_type_node, self.type_expr]);
+        let pair = self.array_node(self.current_block, &[shape, kind]);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(shape);
+        self.ty[e] = Some(kind);
+        pair
     }
 
-    // --- polymorphism ----------------------------------------------------
-
-    fn lookup(&self, target: ExprId) -> Option<Binding> {
+    fn lookup(&self, target: ExprId) -> Binding {
         self.scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&target).cloned())
+            .find_map(|scope| scope.get(&target).copied())
+            .expect("unresolved variable reference (frontend bug)")
     }
+}
 
-    /// Generalize the free type variables of `ty`: the type variables
-    /// reachable from it that are not merged with any context binding's
-    /// type.  (A merged variable is bound by the context and must not be
-    /// re-instantiated at uses.)
-    fn generalize(&mut self, ty: ExprId) -> Vec<ExprId> {
-        let mut free = Vec::new();
-        let mut seen = HashSet::new();
-        self.collect_tyvars(ty, &mut seen, &mut free);
-        free.retain(|&tv| {
-            let tv_rep = self.module.equality_representative(self.term[tv].unwrap());
-            !self.scopes.iter().any(|scope| {
-                scope.values().any(|b| {
-                    let b_rep = self
-                        .module
-                        .equality_representative(self.term[b.ty].unwrap());
-                    tv_rep == b_rep
-                })
-            })
-        });
-        free
-    }
-
-    fn collect_tyvars(&self, e: ExprId, seen: &mut HashSet<ExprId>, out: &mut Vec<ExprId>) {
-        if !seen.insert(e) {
-            return;
-        }
-        match self.ir[e].kind {
-            ExprKind::TyVar => out.push(e),
-            ExprKind::Array(range) => {
-                for &c in &self.ir.children[range.start as usize..range.end as usize] {
-                    self.collect_tyvars(c, seen, out);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    /// Instantiate a generalized template at a use: copy the type
-    /// expression, giving the free variables fresh nodes (they *are* the
-    /// fresh instance variables); everything else is referenced in place.
-    /// The copy preserves the template's sharing — a free variable that
-    /// appears twice (e.g. the domain and codomain of `\x. x`) becomes the
-    /// *same* fresh variable in the instance.
-    fn instantiate(&mut self, template: ExprId, free: &[ExprId]) -> ExprId {
-        let mut memo = HashMap::new();
-        self.copy_type(template, free, &mut memo)
-    }
-
-    fn copy_type(
-        &mut self,
-        e: ExprId,
-        free: &[ExprId],
-        memo: &mut HashMap<ExprId, ExprId>,
-    ) -> ExprId {
-        match self.ir[e].kind {
-            ExprKind::TyVar => {
-                if free.contains(&e) {
-                    *memo.entry(e).or_insert_with(|| self.fresh_tyvar())
-                } else {
-                    e
-                }
-            }
-            ExprKind::Array(range) => {
-                let children: Vec<ExprId> =
-                    self.ir.children[range.start as usize..range.end as usize].to_vec();
-                let children: Vec<ExprId> = children
-                    .iter()
-                    .map(|&c| self.copy_type(c, free, memo))
-                    .collect();
-                let id = self.alloc_array(&children, None);
-                let nodes: Vec<NodeId> = children.iter().map(|&c| self.term[c].unwrap()).collect();
-                let node = self.array_node(self.types_block, &nodes);
-                self.term[id] = Some(node);
-                self.ty[id] = Some(self.type_ty);
-                id
-            }
-            ExprKind::Type | ExprKind::Const(_) => e,
-            other => {
-                debug_assert!(
-                    false,
-                    "type expression contains a non-type construct: {other:?}"
-                );
-                e
-            }
-        }
-    }
+/// A class is unbound while it carries no value or only the lazy marker.
+fn unbound(value: Option<Value<HighProgram>>) -> bool {
+    matches!(value, None | Some(Value::Parameterized))
 }

@@ -98,6 +98,18 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> Value<P> {
+        // A structural cycle (e.g. the `Type : Type` universe `[Type, ↺]`,
+        // which every type spine in the recursive-pair encoding reaches) is
+        // cut here: the node is being deep-evaluated by an outer frame and
+        // already holds its cached value, so re-entering it would only loop.
+        // A node marked visiting with no cached value is an *operation* cycle
+        // mid-computation — it falls through so [`Self::evaluate_node`]'s
+        // own guard panics, as before.
+        if self.nodes[node].visiting
+            && let Some(value) = self.nodes[node].value
+        {
+            return value;
+        }
         self.deep_depth += 1;
         if self.deep_depth > self.evaluate_depth_limit {
             panic!(
@@ -107,10 +119,12 @@ impl<P: Program> Module<P> {
         }
         let value = self.evaluate_node(node, current);
         if let Value::Array(array) = value {
+            self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
             for &id in unsafe { &*array } {
                 self.evaluate_node_deep(id, Some(block));
             }
+            self.nodes[node].visiting = false;
         }
         let parameterized = matches!(value, Value::Parameterized)
             || matches!(
