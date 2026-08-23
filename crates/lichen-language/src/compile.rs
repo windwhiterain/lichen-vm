@@ -90,6 +90,7 @@ impl Compiler {
             {
                 let p = self.alloc(ExprKind::Placeholder, &binding.span);
                 frame.insert(binding.name.clone(), p);
+                self.ir.block_roots.insert(p);
             }
         }
         if !frame.is_empty() {

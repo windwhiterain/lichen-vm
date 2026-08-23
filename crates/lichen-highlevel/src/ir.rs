@@ -4,10 +4,12 @@
 //! Not slotmap-shaped: the IR never changes structurally, never runs, and is
 //! never GC'd, so a plain [`Vec`] with [`ExprId`] indices suffices.  The
 //! checker only reads it (its products — pairs, type cells — are lowlevel
-//! nodes, so the table does not even grow).  One exception: a recursive
-//! binding's id is reserved *before* its lambda compiles (the body references
-//! the id being defined), so its [`Expr`] kind is filled in afterwards — the
-//! frontend records the id in [`IR::recursive`] and the checker reads that.
+//! nodes, so the table does not even grow).  The frontend records the
+//! block-wide binding placeholder ids in [`IR::block_roots`]; the checker
+//! uses that set to place its cycle-cut skeleton only where a cycle can
+//! actually form.
+
+use std::collections::HashSet;
 
 /// A constant leaf value: an int literal or one of the type constants.  This
 /// is the frontend's closed vocabulary of constants — the subset of the
@@ -67,6 +69,13 @@ pub struct IR {
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
     pub children: Vec<ExprId>,
     pub root: ExprId,
+    /// The block-wide binding placeholder ids — the only `ExprId`s whose
+    /// subtree can reference themselves (a self/mutual cycle).  The checker
+    /// pre-registers a cycle-cut skeleton only for these: an inline compound
+    /// term can never cycle, and its skeleton's extra cells would otherwise
+    /// poison the apply-time unify (a placeholder reached through an
+    /// index-typed apply would stay an unbound `?a`).
+    pub block_roots: HashSet<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -156,6 +165,7 @@ impl IR {
             expr: Vec::new(),
             children: Vec::new(),
             root: ExprId(0),
+            block_roots: HashSet::new(),
         }
     }
 

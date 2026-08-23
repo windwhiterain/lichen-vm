@@ -564,28 +564,28 @@ impl Checker {
         if let Some(pair) = self.term[e] {
             return pair;
         }
-        // A cycle: a compound expression where a child reaches back to `e`.
-        // Pre-register a skeleton pair `[val_cell, type_cell]` before walking
-        // the children, so the memo above resolves the re-entering reference
-        // to the skeleton instead of recursing (the checker's own cycle-cut).
-        // Recurse, build the real pair, then bind the skeleton's cells to
-        // the real value and type.  Functions are left to `check_lam`, which
-        // pre-registers its value node (and feeds the recursive-function
-        // pre-pass) directly.
-        let skeleton = if matches!(
-            self.ir[e].kind,
-            ExprKind::Apply { .. }
-                | ExprKind::BinOp { .. }
-                | ExprKind::Instantiate { .. }
-                | ExprKind::Index { .. }
-                | ExprKind::Annotation { .. }
-                | ExprKind::TypeFunction { .. }
-                | ExprKind::Tuple(_)
-                | ExprKind::TypeTuple(_)
-                | ExprKind::TypeStruct(_)
-                | ExprKind::Array(_)
-                | ExprKind::TypeArray { .. }
-        ) {
+        // A cycle can only form through a block-wide binding placeholder —
+        // an inline compound term's subtree can never reference its own root,
+        // so pre-registering a skeleton for one would only add spurious cells
+        // that poison the apply-time unify (a placeholder reached through an
+        // index-typed apply would stay an unbound `?a` instead of binding to
+        // the actual type).  Gate the skeleton on `block_roots`.
+        let skeleton = if self.ir.block_roots.contains(&e)
+            && matches!(
+                self.ir[e].kind,
+                ExprKind::Apply { .. }
+                    | ExprKind::BinOp { .. }
+                    | ExprKind::Instantiate { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Annotation { .. }
+                    | ExprKind::TypeFunction { .. }
+                    | ExprKind::Tuple(_)
+                    | ExprKind::TypeTuple(_)
+                    | ExprKind::TypeStruct(_)
+                    | ExprKind::Array(_)
+                    | ExprKind::TypeArray { .. }
+            )
+        {
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
             let skel = self.array_node(self.current_block, &[vc, tc]);

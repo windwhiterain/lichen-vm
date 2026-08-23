@@ -215,7 +215,7 @@ f2
 
 output:
 ```text
-Function: <Type, [?a, ?b]> -> Int
+Function: <Type, Int> -> Int
 ```
 
 ### `structs.lichen`
