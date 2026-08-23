@@ -676,11 +676,11 @@ impl<V: ValueType> Checker<V> {
                 parameter,
                 r#return,
             } => {
-                self.check_expr(parameter, Role::Type);
-                self.check_expr(r#return, Role::Type);
+                let parameter_ty = self.check_type_element(parameter);
+                let return_ty = self.check_type_element(r#return);
                 let shape = self.array_node(
                     self.current_block,
-                    &[self.term[parameter].unwrap(), self.term[r#return].unwrap()],
+                    &[parameter_ty, return_ty],
                 );
                 self.arrows.insert(shape);
                 let kind = self.kind_expr(self.current_block, self.function_type_marker);
@@ -1114,8 +1114,7 @@ impl<V: ValueType> Checker<V> {
         let elements = self.range_children(e);
         let mut tys = Vec::new();
         for &el in &elements {
-            self.check_expr(el, Role::Type);
-            tys.push(self.term[el].unwrap());
+            tys.push(self.check_type_element(el));
         }
         let shape = self.array_node(self.current_block, &tys);
         let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
@@ -1124,6 +1123,26 @@ impl<V: ValueType> Checker<V> {
         self.val[e] = Some(shape);
         self.ty[e] = Some(kind);
         pair
+    }
+
+    /// The type an expression contributes in a type position — a struct
+    /// field, a tuple-type element, a function-type side.  A type is just a
+    /// value: when the expression's own type is a kind, the expression *is*
+    /// a type and its pair is the type it denotes (`Int`, a nested
+    /// `struct<…>`, a binding to either); otherwise it is a term and the
+    /// type it denotes is its type slot — `struct<Int, b>` with `b : B` has
+    /// field type `B`.  An unbound pair (a parameter, a call result, `_`)
+    /// pushes the pair itself: it absorbs whichever way the runtime
+    /// resolves it.  No kinding gate — any expression may sit in a type
+    /// position, and a literal contributes its own type.
+    fn check_type_element(&mut self, el: ExprId) -> NodeId {
+        self.check_expr(el, Role::Term);
+        let ty = self.ty[el].unwrap();
+        if self.is_kind(ty) || is_unbound(self.module.nodes[ty].value) {
+            self.term[el].unwrap()
+        } else {
+            ty
+        }
     }
 
     /// A struct type expression: `[[field types], [TypeId(n), Type]]` —
@@ -1137,8 +1156,7 @@ impl<V: ValueType> Checker<V> {
         let elements = self.range_children(e);
         let mut tys = Vec::new();
         for &el in &elements {
-            self.check_expr(el, Role::Type);
-            tys.push(self.term[el].unwrap());
+            tys.push(self.check_type_element(el));
         }
         let shape = self.array_node(self.current_block, &tys);
         let id = self.op_node(self.current_block, HighProgramOperator::Fresh, None);

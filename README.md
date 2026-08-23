@@ -221,8 +221,8 @@ Function: <Type, Int> -> Int
 ### `struct.lichen`
 
 ```text
-s = struct<Int, Type>
-a = s(1, Int)
+A = struct<Int, Type>
+a = A(1, Int)
 (a, a[0], a[1])
 ```
 
@@ -234,14 +234,16 @@ output:
 ### `struct_recursion.lichen`
 
 ```text
-a = struct<Int, b>
-b = struct<Type, a>
-(a , b)
+A = struct<Int, b>
+B = struct<Type, a>
+a = A(1, b)
+b = B(Int, a)
+(A , B, a, b)
 ```
 
 output:
 ```text
-[[Int, [[Type, [[Int, …], TypeId(0)]], TypeId(1)]], [Type, [[Int, […, TypeId(1)]], TypeId(0)]]]: <TypeId(0), TypeId(1)>
+[[Int, [[Type, [[Int, […, TypeId(0)]], TypeId(1)]], TypeId(0)]], [Type, [[Int, […, TypeId(0)]], TypeId(1)]], [1, [Int, …]], [Int, [1, [Int, …]]]]: <TypeId(1), TypeId(0), struct<Int, struct<Type, …>>, struct<Type, struct<Int, struct<Type, …>>>>
 ```
 
 <!-- end: examples -->

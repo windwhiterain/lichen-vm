@@ -681,6 +681,35 @@ fn a_struct_instance_index_out_of_bounds_is_rejected() {
 }
 
 #[test]
+fn mutually_recursive_structs_check_and_evaluate() {
+    // A = struct<Int, b>; B = struct<Type, a>; a = A(1, b); b = B(Int, a) —
+    // two struct types whose fields reference each other *through the
+    // instances' types* (b : B is the field type of A, a : A of B).  A term
+    // in a type position contributes its type, so the field lists close into
+    // the regular recursive types A = struct<Int, B>, B = struct<Type, A>;
+    // the checker's skeleton cuts the IR cycle and the deep pass the value
+    // cycle.  The final tuple prints the two struct types and both cyclic
+    // instances.
+    let report = compile(
+        "A = struct<Int, b>
+         B = struct<Type, a>
+         a = A(1, b)
+         b = B(Int, a)
+         (A, B, a, b)",
+    );
+    assert!(
+        report.ok(),
+        "expected mutually recursive structs to check: {:?}",
+        report.diagnostics
+    );
+    let build = report.build.unwrap();
+    let mut module = build.module;
+    let value = module.evaluate_node_deep(build.root_val, None);
+    let ids = array_ids(value);
+    assert_eq!(ids.len(), 4, "the final tuple holds A, B, a, b");
+}
+
+#[test]
 fn a_function_type_is_a_first_class_value() {
     // `Int -> Int` checks in term position; the identity is such a function.
     run("(x => x) : (Int -> Int)");
