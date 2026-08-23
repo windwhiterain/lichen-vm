@@ -688,17 +688,15 @@ fn a_struct_instance_index_out_of_bounds_is_rejected() {
 
 #[test]
 fn mutually_recursive_structs_check_and_evaluate() {
-    // A = struct<Int, b>; B = struct<Type, a>; a = A(1, b); b = B(Int, a) —
-    // two struct types whose fields reference each other *through the
-    // instances' types* (b : B is the field type of A, a : A of B).  A term
-    // in a type position contributes its type, so the field lists close into
-    // the regular recursive types A = struct<Int, B>, B = struct<Type, A>;
-    // the checker's skeleton cuts the IR cycle and the deep pass the value
-    // cycle.  The final tuple prints the two struct types and both cyclic
-    // instances.
+    // A = struct<Int, B>; B = struct<Type, A>; a = A(1, b); b = B(Int, a) —
+    // two struct types that reference each other *as types*, plus a pair of
+    // mutually-recursive instances.  The types close into A = struct<Int, B>,
+    // B = struct<Type, A>; the checker's skeleton cuts the IR cycle and the
+    // deep pass the value cycle.  The final tuple prints the two struct types
+    // and both cyclic instances.
     let report = compile(
-        "A = struct<Int, b>
-         B = struct<Type, a>
+        "A = struct<Int, B>
+         B = struct<Type, A>
          a = A(1, b)
          b = B(Int, a)
          (A, B, a, b)",

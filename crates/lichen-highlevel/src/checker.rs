@@ -1130,23 +1130,17 @@ impl<V: ValueType> Checker<V> {
     }
 
     /// The type an expression contributes in a type position — a struct
-    /// field, a tuple-type element, a function-type side.  A type is just a
-    /// value: when the expression's own type is a kind, the expression *is*
-    /// a type and its pair is the type it denotes (`Int`, a nested
-    /// `struct<…>`, a binding to either); otherwise it is a term and the
-    /// type it denotes is its type slot — `struct<Int, b>` with `b : B` has
-    /// field type `B`.  An unbound pair (a parameter, a call result, `_`)
-    /// pushes the pair itself: it absorbs whichever way the runtime
-    /// resolves it.  No kinding gate — any expression may sit in a type
-    /// position, and a literal contributes its own type.
+    /// field, a tuple-type element, a function-type side.  There is no
+    /// term/type distinction: the expression is used as-is, its pair being
+    /// the type it denotes.  A genuine type (a value whose own type is a
+    /// kind, or an unbound cell) contributes its pair directly; a *term*
+    /// put in a type position contributes its own value pair too, and the
+    /// subsequent unification fails (a term's value pair does not unify
+    /// with its own type) — `struct<Int, b>` with `b : B` fails, while
+    /// `struct<Int, B>` works.
     fn check_type_element(&mut self, el: ExprId) -> NodeId {
         self.check_expr(el, Role::Term);
-        let ty = self.ty[el].unwrap();
-        if self.is_kind(ty) || is_unbound(self.module.nodes[ty].value) {
-            self.term[el].unwrap()
-        } else {
-            ty
-        }
+        self.term[el].unwrap()
     }
 
     /// A struct type expression: `[[TypeId(n), field types], [TypeStruct,

@@ -246,8 +246,8 @@ output:
 ### `struct_recursion.lichen`
 
 ```text
-A = struct<Int, b>
-B = struct<Type, a>
+A = struct<Int, B>
+B = struct<Type, A>
 a = A(1, b)
 b = B(Int, a)
 (A , B, a, b)
@@ -255,7 +255,7 @@ b = B(Int, a)
 
 output:
 ```text
-[[TypeId(0), [Int, [[TypeId(1), [Type, [[parameterized, [Int, […, TypeStruct]]], TypeStruct]]], TypeStruct]]], [TypeId(1), [Type, [[parameterized, [Int, […, TypeStruct]]], TypeStruct]]], [1, [Int, …]], [Int, [1, [Int, …]]]]: <TypeStruct, TypeStruct, struct<Int, struct<Type, …>>, struct<Type, struct<Int, struct<Type, …>>>>
+[[TypeId(0), [Int, [[TypeId(1), [Type, [[TypeId(0), …], TypeStruct]]], TypeStruct]]], [TypeId(1), [Type, [[TypeId(0), [Int, […, TypeStruct]]], TypeStruct]]], [1, [Int, [1, …]]], [Int, [1, …]]]: <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>
 ```
 
 <!-- end: examples -->
