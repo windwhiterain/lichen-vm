@@ -7,12 +7,12 @@
 //! union [`HighProgramOperator`] — so the checker builds and inspects every
 //! value and emits every operator without an `Ext` wrapper.
 
-use lichen_lowlevel::{
-    BlockId, EvalError, FunctionId, Module, NodeId, OperatorExt, Program, ValueExt,
-};
+use std::marker::PhantomData;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HighProgram;
+use lichen_lowlevel::{
+    BlockId, EvalError, FunctionId, LowValue, Module, NodeId, OperatorExt, Program, ValueExt,
+};
+use lichen_utils::extend::AsEnum;
 
 /// The highlevel's global extension state, injected into the lowlevel
 /// [`Module`]'s `global_ext` slot and threaded through the extension
@@ -25,18 +25,17 @@ pub struct HighGlobalExt {
     pub type_id_counter: usize,
 }
 
-impl Program for HighProgram {
-    type Value = HighProgramValue;
-    type Operator = HighProgramOperator;
-    type GlobalExt = HighGlobalExt;
-}
-
 // The highlevel program's value vocabulary: the lowlevel structural values
 // (spliced in from the lowlevel `LowValue` enum, so the lowlevel can
-// inspect them through `AsEnum`) plus the type values below.
+// inspect them through `AsEnum`) plus the type values below.  The
+// `#[enum_ext]` makes this union itself an extension point: an extended
+// vocabulary (a crate that adds variants) calls the generated
+// `extend_HighProgramValue!` carrier, which re-splices these variants into
+// its own flat union.
 lichen_lowlevel::extend_LowValue! {
     /// The highlevel program's value vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq)]
+    #[lichen_extend::enum_ext]
     pub enum HighProgramValue {
         /// The `int` type constant.
         TypeInt,
@@ -62,6 +61,87 @@ lichen_lowlevel::extend_LowValue! {
 impl ValueExt for HighProgramValue {
     fn is_handle(&self) -> bool {
         false
+    }
+}
+
+/// The value→type contract a value vocabulary must satisfy to flow through
+/// the checker: the type-constant markers it installs, the value→type
+/// mapping for constants, and the kind classification the checker's
+/// structural type checks dispatch on.  Every value union — the highlevel's
+/// own [`HighProgramValue`] or an extended one — implements this; the
+/// checker is generic over it.
+pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
+    /// The `int` type marker — `USize` literals pair with `[Self::int_marker(), K]`.
+    fn int_marker() -> Self;
+    /// The `Type` marker — the canonical universe node itself (`Type : Type`).
+    fn type_marker() -> Self;
+    /// The kind marker of function type expressions.
+    fn function_type_marker() -> Self;
+    /// The kind marker of tuple type expressions.
+    fn tuple_type_marker() -> Self;
+    /// The kind marker of array type expressions.
+    fn array_type_marker() -> Self;
+    /// The value→type mapping: what type this value, used as a constant,
+    /// pairs with.  `USize(_)` → the int marker; every type constant → the
+    /// `Type` marker.  The checker only asks for constants (an int literal
+    /// or a type value).
+    fn type_of(&self) -> Self;
+    /// Whether this value is a compound-type kind marker (function, tuple,
+    /// array) or a nominal type id — the kinding check's vocabulary.
+    fn is_kind(&self) -> bool;
+    /// The nominal id of a struct type value, if this is one.
+    fn type_id(&self) -> Option<usize>;
+    /// A nominal type id value — what the checker's `Fresh` operator yields.
+    fn type_id_value(n: usize) -> Self;
+}
+
+impl ValueType for HighProgramValue {
+    fn int_marker() -> Self {
+        HighProgramValue::TypeInt
+    }
+    fn type_marker() -> Self {
+        HighProgramValue::TypeType
+    }
+    fn function_type_marker() -> Self {
+        HighProgramValue::TypeFunction
+    }
+    fn tuple_type_marker() -> Self {
+        HighProgramValue::TypeTuple
+    }
+    fn array_type_marker() -> Self {
+        HighProgramValue::TypeArray
+    }
+    fn type_of(&self) -> Self {
+        match self {
+            HighProgramValue::USize(_) => HighProgramValue::TypeInt,
+            HighProgramValue::TypeInt
+            | HighProgramValue::TypeType
+            | HighProgramValue::TypeFunction
+            | HighProgramValue::TypeTuple
+            | HighProgramValue::TypeArray
+            | HighProgramValue::TypeId(_) => HighProgramValue::TypeType,
+            // Array, Function, None, Parameterized are built by other
+            // expression kinds — the checker never asks their type.
+            _ => unreachable!("a structural non-USize value is not a constant"),
+        }
+    }
+    fn is_kind(&self) -> bool {
+        matches!(
+            self,
+            HighProgramValue::TypeFunction
+                | HighProgramValue::TypeTuple
+                | HighProgramValue::TypeArray
+                | HighProgramValue::TypeId(_)
+        )
+    }
+    fn type_id(&self) -> Option<usize> {
+        match self {
+            HighProgramValue::TypeId(n) => Some(*n),
+            _ => None,
+        }
+    }
+    fn type_id_value(n: usize) -> Self {
+        HighProgramValue::TypeId(n)
     }
 }
 
@@ -109,13 +189,8 @@ lichen_lowlevel::extend_LowOperator! {
     }
 }
 
-impl OperatorExt<HighProgram> for HighProgramOperator {
-    fn run(
-        &self,
-        operand: HighProgramValue,
-        _block: BlockId,
-        module: &mut Module<HighProgram>,
-    ) -> HighProgramValue {
+impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
+    fn run(&self, operand: V, _block: BlockId, module: &mut Module<HighProgram<V>>) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
@@ -126,119 +201,124 @@ impl OperatorExt<HighProgram> for HighProgramOperator {
                 // The VM deep-evaluates the operand and gates on its
                 // parameterized subtree before calling `run`, so an unbound
                 // type or index has already been turned into the lazy marker.
-                if matches!(operand, HighProgramValue::Parameterized) {
-                    return HighProgramValue::Parameterized;
+                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
+                    return V::from(LowValue::Parameterized);
                 }
-                let HighProgramValue::Array(operands) = operand else {
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("IndexType expects an operand array of [type, index]")
                 };
                 let operands = unsafe { &*operands };
                 let type_pair = operands[0];
                 let index_node = operands[1];
-                let HighProgramValue::USize(index) = module.nodes[index_node]
+                let Some(LowValue::USize(index)) = module.nodes[index_node]
                     .value
                     .expect("the operand was deep-evaluated")
+                    .as_enum()
                 else {
                     unreachable!("IndexType needs a USize index node")
                 };
                 // type_pair's value: [shape, [kind marker, K]].
-                let HighProgramValue::Array(pair) = module.nodes[type_pair]
+                let Some(LowValue::Array(pair)) = module.nodes[type_pair]
                     .value
                     .expect("the operand was deep-evaluated")
+                    .as_enum()
                 else {
                     unreachable!("IndexType needs a type expression pair")
                 };
                 let pair = unsafe { &*pair };
                 let shape = pair[0];
                 let kind_cell = pair[1];
-                let HighProgramValue::Array(kind) = module.nodes[kind_cell]
+                let Some(LowValue::Array(kind)) = module.nodes[kind_cell]
                     .value
                     .expect("the operand was deep-evaluated")
+                    .as_enum()
                 else {
                     unreachable!("IndexType needs a kind expression")
                 };
                 let marker = unsafe { &*kind }[0];
-                match module.nodes[marker].value {
-                    Some(HighProgramValue::TypeTuple) => {
-                        let HighProgramValue::Array(elements) = module.nodes[shape]
+                let marker_value = module.nodes[marker].value;
+                if marker_value == Some(V::tuple_type_marker()) {
+                    let Some(LowValue::Array(elements)) = module.nodes[shape]
+                        .value
+                        .expect("the operand was deep-evaluated")
+                        .as_enum()
+                    else {
+                        unreachable!("a tuple type shape is its element-type list")
+                    };
+                    let elements = unsafe { &*elements };
+                    if index < elements.len() {
+                        module.nodes[elements[index]]
                             .value
                             .expect("the operand was deep-evaluated")
-                        else {
-                            unreachable!("a tuple type shape is its element-type list")
-                        };
-                        let elements = unsafe { &*elements };
-                        if index < elements.len() {
-                            module.nodes[elements[index]]
-                                .value
-                                .expect("the operand was deep-evaluated")
-                        } else {
-                            module.eval_errors.push(EvalError {
-                                index: index_node,
-                                index_value: index,
-                                length: elements.len(),
-                            });
-                            HighProgramValue::None
-                        }
+                    } else {
+                        module.eval_errors.push(EvalError {
+                            index: index_node,
+                            index_value: index,
+                            length: elements.len(),
+                        });
+                        V::from(LowValue::None)
                     }
-                    Some(HighProgramValue::TypeArray) => {
-                        let HighProgramValue::Array(shape_ids) = module.nodes[shape]
+                } else if marker_value == Some(V::array_type_marker()) {
+                    let Some(LowValue::Array(shape_ids)) = module.nodes[shape]
+                        .value
+                        .expect("the operand was deep-evaluated")
+                        .as_enum()
+                    else {
+                        unreachable!("an array type shape is [element type, length]")
+                    };
+                    let shape_ids = unsafe { &*shape_ids };
+                    let element_type = shape_ids[0];
+                    let Some(LowValue::USize(length)) = module.nodes[shape_ids[1]]
+                        .value
+                        .expect("the operand was deep-evaluated")
+                        .as_enum()
+                    else {
+                        unreachable!("the ArrayType length must be a USize")
+                    };
+                    if index < length {
+                        module.nodes[element_type]
                             .value
                             .expect("the operand was deep-evaluated")
-                        else {
-                            unreachable!("an array type shape is [element type, length]")
-                        };
-                        let shape_ids = unsafe { &*shape_ids };
-                        let element_type = shape_ids[0];
-                        let HighProgramValue::USize(length) = module.nodes[shape_ids[1]]
-                            .value
-                            .expect("the operand was deep-evaluated")
-                        else {
-                            unreachable!("the ArrayType length must be a USize")
-                        };
-                        if index < length {
-                            module.nodes[element_type]
-                                .value
-                                .expect("the operand was deep-evaluated")
-                        } else {
-                            module.eval_errors.push(EvalError {
-                                index: index_node,
-                                index_value: index,
-                                length,
-                            });
-                            HighProgramValue::None
-                        }
+                    } else {
+                        module.eval_errors.push(EvalError {
+                            index: index_node,
+                            index_value: index,
+                            length,
+                        });
+                        V::from(LowValue::None)
                     }
-                    Some(HighProgramValue::TypeId(_)) => {
-                        // A struct type's shape is its positional field-type
-                        // list — selecting an element is field access, exactly
-                        // like a tuple type's element-type list.
-                        let HighProgramValue::Array(elements) = module.nodes[shape]
+                } else if marker_value.is_some_and(|value| value.type_id().is_some()) {
+                    // A struct type's shape is its positional field-type
+                    // list — selecting an element is field access, exactly
+                    // like a tuple type's element-type list.
+                    let Some(LowValue::Array(elements)) = module.nodes[shape]
+                        .value
+                        .expect("the operand was deep-evaluated")
+                        .as_enum()
+                    else {
+                        unreachable!("a struct type shape is its field-type list")
+                    };
+                    let elements = unsafe { &*elements };
+                    if index < elements.len() {
+                        module.nodes[elements[index]]
                             .value
                             .expect("the operand was deep-evaluated")
-                        else {
-                            unreachable!("a struct type shape is its field-type list")
-                        };
-                        let elements = unsafe { &*elements };
-                        if index < elements.len() {
-                            module.nodes[elements[index]]
-                                .value
-                                .expect("the operand was deep-evaluated")
-                        } else {
-                            module.eval_errors.push(EvalError {
-                                index: index_node,
-                                index_value: index,
-                                length: elements.len(),
-                            });
-                            HighProgramValue::None
-                        }
+                    } else {
+                        module.eval_errors.push(EvalError {
+                            index: index_node,
+                            index_value: index,
+                            length: elements.len(),
+                        });
+                        V::from(LowValue::None)
                     }
-                    _ => unreachable!("IndexType target must be a tuple, array, or struct type"),
+                } else {
+                    unreachable!("IndexType target must be a tuple, array, or struct type")
                 }
             }
             HighProgramOperator::Fresh => {
                 let id = module.global_ext.type_id_counter;
                 module.global_ext.type_id_counter += 1;
-                HighProgramValue::TypeId(id)
+                V::type_id_value(id)
             }
             HighProgramOperator::Add
             | HighProgramOperator::Sub
@@ -247,10 +327,10 @@ impl OperatorExt<HighProgram> for HighProgramOperator {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
-                if matches!(operand, HighProgramValue::Parameterized) {
-                    return HighProgramValue::Parameterized;
+                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
+                    return V::from(LowValue::Parameterized);
                 }
-                let HighProgramValue::Array(operands) = operand else {
+                let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
                 let operands = unsafe { &*operands };
@@ -259,20 +339,41 @@ impl OperatorExt<HighProgram> for HighProgramOperator {
                 // `Int`, so a wrong shape only arrives here through an
                 // argument unify that already failed (recording the
                 // diagnostic) — stay lazy instead of panicking.
-                let Some(HighProgramValue::USize(left)) = module.nodes[operands[0]].value else {
-                    return HighProgramValue::Parameterized;
+                let Some(LowValue::USize(left)) = module.nodes[operands[0]]
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.as_enum())
+                else {
+                    return V::from(LowValue::Parameterized);
                 };
-                let Some(HighProgramValue::USize(right)) = module.nodes[operands[1]].value else {
-                    return HighProgramValue::Parameterized;
+                let Some(LowValue::USize(right)) = module.nodes[operands[1]]
+                    .value
+                    .as_ref()
+                    .and_then(|value| value.as_enum())
+                else {
+                    return V::from(LowValue::Parameterized);
                 };
                 match self {
-                    HighProgramOperator::Add => HighProgramValue::USize(left.wrapping_add(right)),
-                    HighProgramOperator::Sub => HighProgramValue::USize(left.wrapping_sub(right)),
-                    HighProgramOperator::Leq => HighProgramValue::USize((left <= right) as usize),
-                    HighProgramOperator::Eq => HighProgramValue::USize((left == right) as usize),
+                    HighProgramOperator::Add => V::from(LowValue::USize(left.wrapping_add(right))),
+                    HighProgramOperator::Sub => V::from(LowValue::USize(left.wrapping_sub(right))),
+                    HighProgramOperator::Leq => V::from(LowValue::USize((left <= right) as usize)),
+                    HighProgramOperator::Eq => V::from(LowValue::USize((left == right) as usize)),
                     _ => unreachable!("all binary operators are handled above"),
                 }
             }
         }
     }
+}
+
+/// The highlevel's concrete lowlevel program: a marker generic over the
+/// value vocabulary (defaults to [`HighProgramValue`]), so the checker runs
+/// on any union that implements [`ValueType`] — the operators and the global
+/// extension state are the highlevel's own regardless of the value type.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HighProgram<V: ValueType = HighProgramValue>(PhantomData<V>);
+
+impl<V: ValueType> Program for HighProgram<V> {
+    type Value = V;
+    type Operator = HighProgramOperator;
+    type GlobalExt = HighGlobalExt;
 }

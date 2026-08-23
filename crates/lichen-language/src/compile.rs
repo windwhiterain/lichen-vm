@@ -38,17 +38,18 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
+use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR, Span};
+use lichen_highlevel::program::HighProgramValue;
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 
-    pub fn compile(program: &Program) -> Result<IR, Diag> {
-        let mut compiler = Compiler {
-            ir: IR::new(),
-            scopes: Vec::new(),
-            fn_depth: 0,
-        };
+pub fn compile(program: &Program) -> Result<IR, Diag> {
+    let mut compiler = Compiler {
+        ir: IR::new(),
+        scopes: Vec::new(),
+        fn_depth: 0,
+    };
     // The whole program is one scope: block-wide bindings are entered before
     // any value compiles, restrictive `let` bindings are entered as they're
     // seen; the scope is never popped, so later statements (and the final
@@ -177,7 +178,7 @@ impl Compiler {
         statements.push(final_id);
         let tuple = self.ir.alloc_tuple(&statements, Some(*span));
         let index = self.ir.alloc(
-            ExprKind::Constant(Constant::USize(statements.len() - 1)),
+            ExprKind::Constant(HighProgramValue::USize(statements.len() - 1)),
             Some(*span),
         );
         self.ir.alloc(
@@ -190,12 +191,12 @@ impl Compiler {
     }
     fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
         let id = match e {
-            Expr::Int(n, span) => self.alloc(ExprKind::Constant(Constant::USize(*n)), span),
+            Expr::Int(n, span) => self.alloc(ExprKind::Constant(HighProgramValue::USize(*n)), span),
             Expr::TypeConst(TypeConst::Int, span) => {
-                self.alloc(ExprKind::Constant(Constant::TypeInt), span)
+                self.alloc(ExprKind::Constant(HighProgramValue::TypeInt), span)
             }
             Expr::TypeConst(TypeConst::Type, span) => {
-                self.alloc(ExprKind::Constant(Constant::TypeType), span)
+                self.alloc(ExprKind::Constant(HighProgramValue::TypeType), span)
             }
             Expr::Name(name, span) => self.lookup(name).ok_or_else(|| {
                 Diag::new(Stage::Resolve, *span, format!("unresolved name '{name}'"))
@@ -422,7 +423,7 @@ impl Compiler {
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn alloc(&mut self, kind: ExprKind, span: &Span) -> ExprId {
+    fn alloc(&mut self, kind: ExprKind<HighProgramValue>, span: &Span) -> ExprId {
         self.ir.alloc(kind, Some(*span))
     }
 }
@@ -445,7 +446,7 @@ mod tests {
         compile(&ast).unwrap_err()
     }
 
-    fn kind(ir: &IR, id: ExprId) -> ExprKind {
+    fn kind(ir: &IR, id: ExprId) -> ExprKind<HighProgramValue> {
         ir[id].kind
     }
 
@@ -458,7 +459,7 @@ mod tests {
                 let ExprKind::Tuple(range) = ir[array].kind else {
                     panic!("expected the wrapped tuple")
                 };
-                let ExprKind::Constant(Constant::USize(n)) = ir[index].kind else {
+                let ExprKind::Constant(HighProgramValue::USize(n)) = ir[index].kind else {
                     panic!("expected a constant index")
                 };
                 ir.children[range.start as usize + n]
@@ -493,7 +494,7 @@ mod tests {
         assert!(matches!(kind(&ir, function), ExprKind::Function { .. }));
         assert!(matches!(
             kind(&ir, argument),
-            ExprKind::Constant(Constant::USize(5))
+            ExprKind::Constant(HighProgramValue::USize(5))
         ));
     }
 
@@ -555,7 +556,7 @@ mod tests {
         let ir = compile_ok("{a = 1; a}");
         assert!(matches!(
             kind(&ir, ir.root),
-            ExprKind::Constant(Constant::USize(1))
+            ExprKind::Constant(HighProgramValue::USize(1))
         ));
         // The same holds through a lambda body: x => {y = x; y} is the
         // identity function, whose return is the parameter itself.
@@ -579,7 +580,7 @@ mod tests {
         let ir = compile_ok("a = 2; {a = 1; a}");
         assert!(matches!(
             kind(&ir, wrapped(&ir)),
-            ExprKind::Constant(Constant::USize(1))
+            ExprKind::Constant(HighProgramValue::USize(1))
         ));
         // After the `}`, the block's bindings are gone and the outer name
         // resolves again: `{a = 1; a} a` applies the block (the `1` node) to
@@ -590,11 +591,11 @@ mod tests {
         };
         assert!(matches!(
             kind(&ir, function),
-            ExprKind::Constant(Constant::USize(1))
+            ExprKind::Constant(HighProgramValue::USize(1))
         ));
         assert!(matches!(
             kind(&ir, argument),
-            ExprKind::Constant(Constant::USize(2))
+            ExprKind::Constant(HighProgramValue::USize(2))
         ));
     }
 
@@ -612,18 +613,18 @@ mod tests {
         ));
         assert!(matches!(
             kind(&ir, index),
-            ExprKind::Constant(Constant::USize(1))
+            ExprKind::Constant(HighProgramValue::USize(1))
         ));
         assert!(matches!(
             kind(&ir, wrapped(&ir)),
-            ExprKind::Constant(Constant::USize(7))
+            ExprKind::Constant(HighProgramValue::USize(7))
         ));
         // A trailing statement identical to the final expression is not
         // wrapped: `a = 1; a` stays the `1` node.
         let ir = compile_ok("a = 1; a");
         assert!(matches!(
             kind(&ir, ir.root),
-            ExprKind::Constant(Constant::USize(1))
+            ExprKind::Constant(HighProgramValue::USize(1))
         ));
         // A bare expression statement between bindings is compiled too.
         let ir = compile_ok("a = 1; 5; a");
@@ -664,7 +665,7 @@ mod tests {
         };
         assert!(matches!(
             kind(&ir, domain),
-            ExprKind::Constant(Constant::TypeInt)
+            ExprKind::Constant(HighProgramValue::TypeInt)
         ));
         assert!(matches!(kind(&ir, codomain), ExprKind::Placeholder));
         // An unannotated lambda desugars to nothing.

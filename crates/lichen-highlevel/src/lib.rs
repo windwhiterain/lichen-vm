@@ -14,3 +14,11 @@ pub mod checker;
 pub mod diagnostic;
 pub mod ir;
 pub mod program;
+
+// The value vocabulary is itself an extension point: `#[enum_ext]` on the
+// union generates a carrier macro whose body resolves `$crate::HighProgramValue`
+// and `$crate::__extend_shape_HighProgramValue` at this crate's root, so both
+// must be re-exported here (a downstream crate calls
+// `lichen_highlevel::extend_HighProgramValue!` to splice its own variants in).
+pub use program::__extend_shape_HighProgramValue;
+pub use program::{HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ValueType};

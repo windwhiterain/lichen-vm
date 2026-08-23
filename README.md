@@ -154,12 +154,12 @@ output:
 
 ```text
 f = x => x
-(f 1, f Int)
+(f, f 1, f Int)
 ```
 
 output:
 ```text
-[1, Int]: <Int, Type>
+[Function, 1, Int]: <?a -> ?a, Int, Type>
 ```
 
 ### `mutual_recursion.lichen`
@@ -218,7 +218,7 @@ output:
 Function: <Type, Int> -> Int
 ```
 
-### `structs.lichen`
+### `struct.lichen`
 
 ```text
 s = struct<Int, Type>
@@ -229,6 +229,19 @@ a = s(1, Int)
 output:
 ```text
 [[1, Int], 1, Int]: <struct<Int, Type>, Int, Type>
+```
+
+### `struct_recursion.lichen`
+
+```text
+a = struct<Int, b>
+b = struct<Type, a>
+(a , b)
+```
+
+output:
+```text
+[[Int, [[Type, [[Int, …], TypeId(0)]], TypeId(1)]], [Type, [[Int, […, TypeId(1)]], TypeId(0)]]]: <TypeId(0), TypeId(1)>
 ```
 
 <!-- end: examples -->

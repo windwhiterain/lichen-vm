@@ -1,4 +1,4 @@
 -- order: 2
 f = x => x
-(f 1, f Int)
--- output: [1, Int]: <Int, Type>
+(f, f 1, f Int)
+-- output: [Function, 1, Int]: <?a -> ?a, Int, Type>

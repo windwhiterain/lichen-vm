@@ -6,19 +6,22 @@
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{Constant, ExprId, ExprKind, IR};
+use lichen_highlevel::ir::{ExprId, ExprKind, IR};
 use lichen_highlevel::program::HighProgramValue;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
 
 fn int(ir: &mut IR, n: u64) -> ExprId {
-    ir.alloc(ExprKind::Constant(Constant::USize(n as usize)), None)
+    ir.alloc(
+        ExprKind::Constant(HighProgramValue::USize(n as usize)),
+        None,
+    )
 }
 fn ty(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Constant(Constant::TypeType), None)
+    ir.alloc(ExprKind::Constant(HighProgramValue::TypeType), None)
 }
 fn int_t(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Constant(Constant::TypeInt), None)
+    ir.alloc(ExprKind::Constant(HighProgramValue::TypeInt), None)
 }
 fn param(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Parameter, None)

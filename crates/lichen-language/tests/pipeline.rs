@@ -502,11 +502,9 @@ fn mutually_recursive_functions_evaluate_in_place() {
     // apply clone references the peer in place instead of cloning it per
     // level — the recursion descends and terminates, and exactly two
     // function templates exist.
-    let (mut module, root) = run(
-        "f = n => if n <= 0 then 0 else g (n - 1);
+    let (mut module, root) = run("f = n => if n <= 0 then 0 else g (n - 1);
          g = n => if n <= 0 then 0 else f (n - 1);
-         f 5",
-    );
+         f 5");
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 0);
     assert_eq!(module.functions.len(), 2, "peers are referenced in place");
 }

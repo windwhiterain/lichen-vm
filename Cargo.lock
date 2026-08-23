@@ -67,6 +67,7 @@ dependencies = [
 name = "lichen-highlevel"
 version = "0.1.0"
 dependencies = [
+ "lichen-extend",
  "lichen-lowlevel",
  "lichen-utils",
  "slotmap",

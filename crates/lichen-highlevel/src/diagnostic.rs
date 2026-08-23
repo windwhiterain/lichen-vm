@@ -19,20 +19,20 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{EvalError, NodeId, UnifyError, is_unbound};
+use lichen_lowlevel::{EvalError, LowValue, NodeId, UnifyError, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    program::{HighProgram, HighProgramOperator, HighProgramValue},
+    program::{HighProgram, HighProgramOperator, HighProgramValue, ValueType},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
 /// rendered message for display.  Tests and tooling match on the structured
 /// fields; `message` is derived for display/debug only.
 #[derive(Clone, Debug)]
-pub struct Diag {
+pub struct Diag<V: ValueType = HighProgramValue> {
     pub span: Option<Span>,
     /// What kind of check failed — see [`DiagKind`] for the expected/found
     /// direction of `a`/`b`.
@@ -43,8 +43,8 @@ pub struct Diag {
     pub b: NodeId,
     /// The conflicting classes' values at error time — snapshots, not
     /// re-reads (a failed unify never merges the classes, so they are stable).
-    pub value_a: Option<HighProgramValue>,
-    pub value_b: Option<HighProgramValue>,
+    pub value_a: Option<V>,
+    pub value_b: Option<V>,
     /// Which `Module::unify_errors` entry this diagnostic came from — the
     /// key back to its diary entry, for callers (the language crate) that
     /// re-render the message.  `None` for runtime evaluation failures.
@@ -98,10 +98,10 @@ pub struct DiaryEntry {
     pub kind: DiagKind,
 }
 
-impl Build {
+impl<V: ValueType> Build<V> {
     /// Render the unification failures as diagnostics — one per entry in
     /// [`lichen_lowlevel::Module::unify_errors`], in order.
-    pub fn diagnostics(&self) -> Vec<Diag> {
+    pub fn diagnostics(&self) -> Vec<Diag<V>> {
         let mut report = Report {
             build: self,
             names: HashMap::new(),
@@ -173,8 +173,8 @@ impl Build {
     }
 }
 
-struct Report<'a> {
-    build: &'a Build,
+struct Report<'a, V: ValueType> {
+    build: &'a Build<V>,
     /// Stable class names: representative → `?a`, `?b`, … within one
     /// diagnostic.
     names: HashMap<NodeId, String>,
@@ -184,7 +184,7 @@ struct Report<'a> {
     univ: NodeId,
 }
 
-impl Report<'_> {
+impl<'a, V: ValueType> Report<'a, V> {
     /// The class representative of `node`, via a read-only `parent` walk (the
     /// printer never mutates the module).
     fn rep(&self, node: NodeId) -> NodeId {
@@ -205,7 +205,7 @@ impl Report<'_> {
         name
     }
 
-    fn error(&mut self, i: usize, err: &UnifyError<HighProgram>) -> Diag {
+    fn error(&mut self, i: usize, err: &UnifyError<HighProgram<V>>) -> Diag<V> {
         // The owning diary entry: the last one whose error_index <= i (one
         // unify may own a whole run of errors, e.g. elementwise).
         let entry = self.build.diary.iter().rev().find(|e| e.error_index <= i);
@@ -231,7 +231,7 @@ impl Report<'_> {
         }
     }
 
-    fn checker_error(&mut self, entry: &DiaryEntry, err: &UnifyError<HighProgram>) -> String {
+    fn checker_error(&mut self, entry: &DiaryEntry, err: &UnifyError<HighProgram<V>>) -> String {
         // The message renders the *conflicting* classes (err.a/err.b — for an
         // elementwise failure these are the elements that clashed, not the
         // top-level unified nodes); the diary entry supplies the wording and
@@ -264,7 +264,7 @@ impl Report<'_> {
 
     /// A runtime apply-time failure: the parameter is the expected side, the
     /// argument the found side.
-    fn runtime_error(&mut self, err: &UnifyError<HighProgram>) -> String {
+    fn runtime_error(&mut self, err: &UnifyError<HighProgram<V>>) -> String {
         format!(
             "expected {}, found {}",
             self.print_type(err.a),
@@ -274,7 +274,7 @@ impl Report<'_> {
 
     /// Attribution for runtime failures: walk both conflict classes for
     /// checker-built nodes; the first known span wins.
-    fn best_span(&self, err: &UnifyError<HighProgram>) -> Option<Span> {
+    fn best_span(&self, err: &UnifyError<HighProgram<V>>) -> Option<Span> {
         for rep in [err.a, err.b] {
             for member in disjoint::members(&self.build.module.nodes, rep) {
                 if let Some(span) = self.node_spans.get(&member) {
@@ -287,14 +287,14 @@ impl Report<'_> {
 
     /// A runtime evaluation failure — an out-of-bounds index.  The index
     /// literal's span attributes it; there are no conflict classes to walk.
-    fn eval_error(&mut self, err: &EvalError) -> Diag {
+    fn eval_error(&mut self, err: &EvalError) -> Diag<V> {
         Diag {
             span: self.node_spans.get(&err.index).copied(),
             kind: DiagKind::IndexOutOfBounds,
             a: err.index,
             b: err.index,
-            value_a: Some(HighProgramValue::USize(err.index_value)),
-            value_b: Some(HighProgramValue::USize(err.length)),
+            value_a: Some(V::from(LowValue::USize(err.index_value))),
+            value_b: Some(V::from(LowValue::USize(err.length))),
             message: format!(
                 "index {} out of bounds (array length {})",
                 err.index_value, err.length
@@ -308,7 +308,11 @@ impl Report<'_> {
     /// markers where the merge failed) are walked first; for a
     /// diary-attributed check the top-level unified nodes are hunted too —
     /// e.g. the expected side of `5 : Type` is the universe `K` itself.
-    fn flow(&mut self, entry: Option<&DiaryEntry>, err: &UnifyError<HighProgram>) -> Vec<String> {
+    fn flow(
+        &mut self,
+        entry: Option<&DiaryEntry>,
+        err: &UnifyError<HighProgram<V>>,
+    ) -> Vec<String> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
         let name_a = self.name_of(self.rep(err.a));
@@ -365,44 +369,46 @@ impl Report<'_> {
 
     fn render(&mut self, rep: NodeId, visiting: &mut HashSet<NodeId>) -> String {
         let value = self.build.module.nodes[rep].value;
-        match value {
-            None | Some(HighProgramValue::Parameterized) => {
-                if self.class_has_pending_op(rep) {
-                    format!("⟨{}⟩", self.op_name(rep))
-                } else {
-                    self.name_of(rep)
-                }
+        // An unbound cell (no value, or the lazy marker) renders as a stable
+        // class name — or symbolically when a pending computation (a
+        // dependent codomain) is behind it.
+        let pending = value.is_none()
+            || value.is_some_and(|v| matches!(v.as_enum(), Some(LowValue::Parameterized)));
+        if pending {
+            if self.class_has_pending_op(rep) {
+                format!("⟨{}⟩", self.op_name(rep))
+            } else {
+                self.name_of(rep)
             }
-            Some(HighProgramValue::TypeInt) => "TypeInt".to_string(),
-            Some(HighProgramValue::TypeType) => "TypeType".to_string(),
-            Some(HighProgramValue::TypeFunction) => "TypeFunction".to_string(),
-            Some(HighProgramValue::TypeTuple) => "TypeTuple".to_string(),
-            Some(HighProgramValue::TypeArray) => "TypeArray".to_string(),
-            Some(HighProgramValue::TypeId(n)) => format!("TypeId({n})"),
-            Some(HighProgramValue::USize(n)) => n.to_string(),
-            Some(HighProgramValue::None) => "none".to_string(),
-            Some(HighProgramValue::Function(_)) => "Function".to_string(),
-            Some(HighProgramValue::Array(_)) => {
-                let ids = self
-                    .build
-                    .module
-                    .array_ids(rep)
-                    .expect("the value just matched as an array");
-                if ids.len() == 2 {
-                    let kind = ids[1];
-                    // `[shape, K]`: an atomic type expression — render the
-                    // shape's marker (`int`, `Type`, …).
-                    if self.rep(kind) == self.univ {
-                        return self.print_inner(ids[0], visiting);
-                    }
-                    // `[shape, [Kind, K]]`: a compound type expression —
-                    // the kind decides the shape's rendering.
-                    if let Some(k) = self.build.module.array_ids(self.rep(kind))
-                        && k.len() == 2
-                        && self.rep(k[1]) == self.univ
-                    {
-                        match self.build.module.nodes[self.rep(k[0])].value {
-                            Some(HighProgramValue::TypeFunction) => {
+        } else {
+            let value = value.expect("a non-pending cell carries a concrete value");
+            match value.as_enum() {
+                Some(LowValue::USize(n)) => n.to_string(),
+                Some(LowValue::None) => "none".to_string(),
+                Some(LowValue::Function(_)) => "Function".to_string(),
+                Some(LowValue::Parameterized) => unreachable!("handled above"),
+                Some(LowValue::Array(_)) => {
+                    let ids = self
+                        .build
+                        .module
+                        .array_ids(rep)
+                        .expect("the value just matched as an array");
+                    if ids.len() == 2 {
+                        let kind = ids[1];
+                        // `[shape, K]`: an atomic type expression — render the
+                        // shape's marker (`int`, `Type`, …).
+                        if self.rep(kind) == self.univ {
+                            return self.print_inner(ids[0], visiting);
+                        }
+                        // `[shape, [Kind, K]]`: a compound type expression —
+                        // the kind decides the shape's rendering.
+                        if let Some(k) = self.build.module.array_ids(self.rep(kind))
+                            && k.len() == 2
+                            && self.rep(k[1]) == self.univ
+                        {
+                            let kind_node = self.rep(k[0]);
+                            let kind_value = self.build.module.nodes[kind_node].value;
+                            if kind_value == Some(V::function_type_marker()) {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
@@ -415,15 +421,13 @@ impl Report<'_> {
                                         self.print_inner(s[1], visiting)
                                     );
                                 }
-                            }
-                            Some(HighProgramValue::TypeTuple) => {
+                            } else if kind_value == Some(V::tuple_type_marker()) {
                                 let elements: Vec<String> = ids
                                     .iter()
                                     .map(|&id| self.print_inner(id, visiting))
                                     .collect();
                                 return format!("[{}]", elements.join(", "));
-                            }
-                            Some(HighProgramValue::TypeArray) => {
+                            } else if kind_value == Some(V::array_type_marker()) {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
@@ -436,8 +440,7 @@ impl Report<'_> {
                                         self.print_inner(s[1], visiting)
                                     );
                                 }
-                            }
-                            Some(HighProgramValue::TypeId(n)) => {
+                            } else if let Some(n) = kind_value.as_ref().and_then(|v| v.type_id()) {
                                 // A struct type: `[fields, [TypeId(n), Type]]`
                                 // — render `struct#n { f1, f2 }`, the shape
                                 // being the field-type list.
@@ -450,22 +453,24 @@ impl Report<'_> {
                                 };
                                 return format!("struct#{n} {{ {} }}", fields.join(", "));
                             }
-                            _ => {}
+                        }
+                        if self.class_is_arrow(rep) {
+                            return format!(
+                                "{} → {}",
+                                self.print_inner(ids[0], visiting),
+                                self.print_inner(ids[1], visiting)
+                            );
                         }
                     }
-                    if self.class_is_arrow(rep) {
-                        return format!(
-                            "{} → {}",
-                            self.print_inner(ids[0], visiting),
-                            self.print_inner(ids[1], visiting)
-                        );
-                    }
+                    let elements: Vec<String> = ids
+                        .iter()
+                        .map(|&id| self.print_inner(id, visiting))
+                        .collect();
+                    format!("[{}]", elements.join(", "))
                 }
-                let elements: Vec<String> = ids
-                    .iter()
-                    .map(|&id| self.print_inner(id, visiting))
-                    .collect();
-                format!("[{}]", elements.join(", "))
+                // Extension values (the type constants, a nominal id) render
+                // via Debug — the raw `TypeInt` / `TypeId(3)` names.
+                None => format!("{value:?}"),
             }
         }
     }

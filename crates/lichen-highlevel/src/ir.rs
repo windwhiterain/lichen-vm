@@ -11,26 +11,7 @@
 
 use std::collections::HashSet;
 
-/// A constant leaf value: an int literal or one of the type constants.  This
-/// is the frontend's closed vocabulary of constants — the subset of the
-/// lowlevel value type a program may embed directly.  The other values
-/// (`Array`, `Function`, `None`, `Parameterized`) are built by other
-/// expression kinds, never constants.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Constant {
-    /// An int literal.
-    USize(usize),
-    /// The `int` type constant.
-    TypeInt,
-    /// The `Type` constant — the canonical universe node itself (`Type : Type`).
-    TypeType,
-    /// The kind marker of function type expressions.
-    TypeFunction,
-    /// The kind marker of tuple type expressions.
-    TypeTuple,
-    /// The kind marker of array type expressions.
-    TypeArray,
-}
+use crate::program::HighProgramValue;
 
 /// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`) yield
 /// their result; the comparisons (`Leq`, `Eq`) yield `USize(0/1)` so the
@@ -61,10 +42,11 @@ pub struct ChildRange {
 /// A source span, supplied by the language frontend: `(line, column)`.
 pub type Span = (u32, u32);
 
-/// The highlevel program: a pure expression tree.
+/// The highlevel program: a pure expression tree, generic over the value
+/// vocabulary it embeds (defaults to the highlevel's own [`HighProgramValue`]).
 #[derive(Clone, Debug)]
-pub struct IR {
-    pub expr: Vec<Expr>,
+pub struct IR<V = HighProgramValue> {
+    pub expr: Vec<Expr<V>>,
     /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
     pub children: Vec<ExprId>,
@@ -79,15 +61,19 @@ pub struct IR {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Expr {
-    pub kind: ExprKind,
+pub struct Expr<V> {
+    pub kind: ExprKind<V>,
     pub span: Option<Span>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ExprKind {
-    /// A constant leaf value — see [`Constant`].
-    Constant(Constant),
+/// The expression kinds.  Generic over the constant vocabulary `V`: a
+/// constant leaf is a value of the program's union directly (an int literal
+/// or one of the type constants — the other values are built by other
+/// expression kinds, never constants).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum ExprKind<V> {
+    /// A constant leaf value — an int literal or a type constant.
+    Constant(V),
     /// A function parameter (or, `let` desugared by the frontend, a let-bound
     /// name).  Uses of the parameter in the return expression are the
     /// parameter's own `ExprId`.
@@ -159,7 +145,7 @@ pub enum ExprKind {
     },
 }
 
-impl IR {
+impl<V> IR<V> {
     pub fn new() -> Self {
         IR {
             expr: Vec::new(),
@@ -169,7 +155,7 @@ impl IR {
         }
     }
 
-    pub fn alloc(&mut self, kind: ExprKind, span: Option<Span>) -> ExprId {
+    pub fn alloc(&mut self, kind: ExprKind<V>, span: Option<Span>) -> ExprId {
         let id = ExprId(self.expr.len() as u32);
         self.expr.push(Expr { kind, span });
         id
@@ -203,7 +189,7 @@ impl IR {
     fn alloc_variadic(
         &mut self,
         elements: &[ExprId],
-        make: fn(ChildRange) -> ExprKind,
+        make: fn(ChildRange) -> ExprKind<V>,
         span: Option<Span>,
     ) -> ExprId {
         let start = self.children.len() as u32;
@@ -220,15 +206,15 @@ impl IR {
     }
 }
 
-impl Default for IR {
+impl<V> Default for IR<V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::ops::Index<ExprId> for IR {
-    type Output = Expr;
-    fn index(&self, id: ExprId) -> &Expr {
+impl<V> std::ops::Index<ExprId> for IR<V> {
+    type Output = Expr<V>;
+    fn index(&self, id: ExprId) -> &Expr<V> {
         &self.expr[id.0 as usize]
     }
 }
