@@ -61,8 +61,6 @@ pub struct Diag<V: ValueType = HighProgramValue> {
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.
     Annotation,
-    /// Type-position kinding `ty[e] : Type` — expected = `Type`.
-    Kinding,
     /// Applying a concretely non-function type — expected = a function.
     Guard,
     /// Indexing a concretely non-indexable type (a function, an atomic
@@ -242,7 +240,6 @@ impl<'a, V: ValueType> Report<'a, V> {
                 self.print_type(err.b),
                 self.print_type(err.a)
             ),
-            DiagKind::Kinding => format!("expected TypeType, found {}", self.print_type(err.a)),
             DiagKind::Guard => format!("expected a function, found {}", self.print_type(err.a)),
             DiagKind::IndexTarget => format!(
                 "expected a tuple, array, or struct type, found {}",

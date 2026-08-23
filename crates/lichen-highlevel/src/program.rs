@@ -94,9 +94,6 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     /// `Type` marker.  The checker only asks for constants (an int literal
     /// or a type value).
     fn type_of(&self) -> Self;
-    /// Whether this value is a compound-type kind marker (function, tuple,
-    /// array) or a nominal type id — the kinding check's vocabulary.
-    fn is_kind(&self) -> bool;
     /// The nominal id of a struct type value, if this is one.
     fn type_id(&self) -> Option<usize>;
     /// A nominal type id value — what the checker's `Fresh` operator yields.
@@ -136,15 +133,6 @@ impl ValueType for HighProgramValue {
             // expression kinds — the checker never asks their type.
             _ => unreachable!("a structural non-USize value is not a constant"),
         }
-    }
-    fn is_kind(&self) -> bool {
-        matches!(
-            self,
-            HighProgramValue::TypeFunction
-                | HighProgramValue::TypeTuple
-                | HighProgramValue::TypeArray
-                | HighProgramValue::TypeStruct
-        )
     }
     fn type_id(&self) -> Option<usize> {
         match self {

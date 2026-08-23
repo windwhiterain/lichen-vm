@@ -784,27 +784,6 @@ fn an_annotation_mismatch_reports_expected_and_found() {
 }
 
 #[test]
-fn a_literal_in_type_position_is_a_kinding_error() {
-    // 5 : 5 — the type expression `5` is not a kind; the annotation also
-    // fails with its own mismatch.
-    let d = diags("5 : 5");
-    assert_eq!(d.len(), 2);
-    // kinding: the type expression `5` is not a kind — its type expression
-    // pair `[int, Type]` is the found side
-    let first = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(first.kind, DiagKind::Kinding);
-    assert_eq!(
-        array_ids(first.value_a.expect("the found type expression")).len(),
-        2
-    );
-    // the annotation against the literal type expression
-    let second = d[1].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(second.kind, DiagKind::Annotation);
-    assert_eq!(second.value_a, Some(HighProgramValue::TypeInt));
-    assert_eq!(second.value_b, Some(HighProgramValue::USize(5)));
-}
-
-#[test]
 fn applying_a_non_function_is_a_guard_error() {
     let d = diags("(5 3)");
     assert_eq!(d.len(), 1);

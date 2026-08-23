@@ -19,31 +19,18 @@
 //! The checker only *constructs* (pairs, type expressions, the universe)
 //! and issues the unifies that have no apply to express them: annotations,
 //! a binary operator's operand-`Int` checks, and the function-ness guard
-//! (so applying a non-function is a reported error, not a runtime panic);
-//! kinding (a type expression's own type must
-//! be a kind) is structural and only fails for concrete non-kinds, like a
-//! literal in type position.  It then runs the definition pass so the
+//! (so applying a non-function is a reported error, not a runtime panic).
+//! It then runs the definition pass so the
 //! apply-time checks fire; failures land in [`Module::unify_errors`], which
 //! is the checker's error channel.
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{
-    BlockId, Function, LowValue, Module, NodeId, Operation, UnifyError, is_unbound,
-};
+use lichen_lowlevel::{BlockId, Function, LowValue, Module, NodeId, Operation, UnifyError};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
 use crate::program::{HighProgram, HighProgramOperator, HighProgramValue, ValueType};
-
-/// Term position or type position.  The same expression can be a value in
-/// one place and a type in another (first-class types); in type position its
-/// value *is* the type and kinding (`ty : Type`) is enforced.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    Term,
-    Type,
-}
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -193,7 +180,7 @@ impl<V: ValueType> Checker<V> {
         checker.module.evaluate_node_deep(checker.type_expr, None);
         checker.module.evaluate_node_deep(checker.int_type, None);
         let root = checker.ir.root;
-        let root_term = checker.check_expr(root, Role::Term);
+        let root_term = checker.check_expr(root);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
         // Prove the recursive bindings' function values concrete before the
         // definition pass: a recursive reference (the apply in the body)
@@ -214,7 +201,7 @@ impl<V: ValueType> Checker<V> {
         // it is still unbound).  The order against the root pass is
         // irrelevant: reads alias their target cells (see the lowlevel Index
         // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations, kinding,
+        // Skipped when the checker-side unifies (annotations,
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
         // The definition pass: run the program so the apply-time type checks
@@ -225,7 +212,7 @@ impl<V: ValueType> Checker<V> {
         // it is still unbound).  The order against the root pass is
         // irrelevant: reads alias their target cells (see the lowlevel Index
         // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations, kinding,
+        // Skipped when the checker-side unifies (annotations,
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
         if checker.module.unify_errors.is_empty() {
@@ -408,69 +395,15 @@ impl<V: ValueType> Checker<V> {
         }
     }
 
-    fn check_expr(&mut self, e: ExprId, role: Role) -> NodeId {
+    fn check_expr(&mut self, e: ExprId) -> NodeId {
         // The variant decides the compilation (a `Tuple` is a value, a
         // `TypeTuple` a type expression — the frontend picks per syntactic
-        // role); the role only gates kinding.
-        let node = self.check_term(e);
-        if role == Role::Type {
-            self.check_kinding(e);
-        }
-        node
+        // role).  There is no term/type distinction in the checker: every
+        // expression compiles to its pair, and correctness is decided by the
+        // unifications the surrounding construct issues.
+        self.check_term(e)
     }
 
-    /// Kinding: a type expression's own type must be a kind — the universe
-    /// `K` itself (atomic types: `int : Type`) or a kind expression
-    /// `[Kind, K]` (compound types: `[in, out] : FunctionType : Type`).  An
-    /// unbound type (a parameter, a call result) defers to the runtime; a
-    /// concrete non-kind — a literal in type position, e.g. `1 : 3` — is a
-    /// reported error rather than a check that silently passes.
-    fn check_kinding(&mut self, e: ExprId) {
-        let ty = self.ty[e].unwrap();
-        if self.is_kind(ty) || is_unbound(self.module.nodes[ty].value) {
-            return;
-        }
-        let error_index = self.module.unify_errors.len();
-        self.module.unify_errors.push(UnifyError {
-            a: ty,
-            b: self.type_expr,
-            value_a: self.module.nodes[ty].value,
-            value_b: self.module.nodes[self.type_expr].value,
-        });
-        self.diary.push(DiaryEntry {
-            error_index,
-            a: ty,
-            b: self.type_expr,
-            span: self.ir[e].span,
-            kind: DiagKind::Kinding,
-        });
-    }
-
-    /// Whether `node` is a kind: the universe `K` itself, or a kind
-    /// expression `[FunctionType | TupleType | ArrayType | TypeStruct, K]`.
-    /// An unevaluated kind marker (the pending `Fresh`/`TypeId` call in a
-    /// struct type's shape, which has no value until the runtime forces it)
-    /// defers the check — the kind marker itself is always concrete by the
-    /// time the definition pass has run.
-    fn is_kind(&mut self, node: NodeId) -> bool {
-        if self.is_universe(node) {
-            return true;
-        }
-        let Some(ids) = self.module.array_ids(node) else {
-            return false;
-        };
-        if ids.len() != 2 {
-            return false;
-        }
-        // Copy the ids out of the slice borrow: the mutating helpers below
-        // need `&mut self` while `array_ids` borrows `self.module`.
-        let marker = ids[0];
-        let kind = ids[1];
-        self.is_universe(kind)
-            && self.module.nodes[marker]
-                .value
-                .is_none_or(|value| value.is_kind())
-    }
 
     /// Whether the class of `node` is the canonical universe `K`.
     fn is_universe(&mut self, node: NodeId) -> bool {
@@ -753,7 +686,7 @@ impl<V: ValueType> Checker<V> {
                 ty: type_cell,
             },
         )]));
-        let ret = self.check_expr(r#return, Role::Term);
+        let ret = self.check_expr(r#return);
         self.scopes.pop();
         self.current_block = saved;
         // The scope is the closure the body can reach: every block created
@@ -826,8 +759,8 @@ impl<V: ValueType> Checker<V> {
     }
 
     fn check_app(&mut self, e: ExprId, function: ExprId, argument: ExprId) -> NodeId {
-        self.check_expr(function, Role::Term);
-        self.check_expr(argument, Role::Term);
+        self.check_expr(function);
+        self.check_expr(argument);
         // The function slot is the function's *value* (the runtime apply
         // needs a `HighProgramValue::Function`, not the pair); the argument slot is the
         // full pair, so the apply's unify compares type cell to type cell.
@@ -882,8 +815,8 @@ impl<V: ValueType> Checker<V> {
     /// later apply at a non-`Int` argument is a runtime failure in the
     /// argument unify, not a panic inside the operator.
     fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
-        self.check_expr(left, Role::Term);
-        self.check_expr(right, Role::Term);
+        self.check_expr(left);
+        self.check_expr(right);
         let span = self.ir[e].span;
         self.check_unify(self.ty[left].unwrap(), self.int_type, span, DiagKind::BinOp);
         self.check_unify(
@@ -919,8 +852,8 @@ impl<V: ValueType> Checker<V> {
     /// ArrayType's *length*: the array type's shape `[element_type, length]`
     /// holds the length as data, so no structural selection can check it.
     fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
-        self.check_expr(array, Role::Term);
-        self.check_expr(index, Role::Term);
+        self.check_expr(array);
+        self.check_expr(index);
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
@@ -1011,8 +944,8 @@ impl<V: ValueType> Checker<V> {
     }
 
     fn check_ann(&mut self, e: ExprId, value: ExprId, type_expr: ExprId) -> NodeId {
-        self.check_expr(type_expr, Role::Type);
-        self.check_expr(value, Role::Term);
+        self.check_expr(type_expr);
+        self.check_expr(value);
         // The annotation compares the full type expressions: the value
         // expression's type against the type expression itself — both are
         // pairs in the recursive encoding.  (Struct instantiation is not an
@@ -1040,8 +973,8 @@ impl<V: ValueType> Checker<V> {
     /// non-tuple value fails the list check — a literal is not a struct
     /// value.
     fn check_instantiate(&mut self, e: ExprId, type_expr: ExprId, value: ExprId) -> NodeId {
-        self.check_expr(type_expr, Role::Type);
-        self.check_expr(value, Role::Term);
+        self.check_expr(type_expr);
+        self.check_expr(value);
         let type_pair = self.term[type_expr].unwrap();
         let value_ty = self.ty[value].unwrap();
         // The value's shape: the element-type list of a tuple type, or the
@@ -1097,7 +1030,7 @@ impl<V: ValueType> Checker<V> {
         let mut vals = Vec::new();
         let mut tys = Vec::new();
         for &el in &elements {
-            self.check_expr(el, Role::Term);
+            self.check_expr(el);
             vals.push(self.value_of(el));
             tys.push(self.ty[el].unwrap());
         }
@@ -1139,7 +1072,7 @@ impl<V: ValueType> Checker<V> {
     /// with its own type) — `struct<Int, b>` with `b : B` fails, while
     /// `struct<Int, B>` works.
     fn check_type_element(&mut self, el: ExprId) -> NodeId {
-        self.check_expr(el, Role::Term);
+        self.check_expr(el);
         self.term[el].unwrap()
     }
 
@@ -1179,7 +1112,7 @@ impl<V: ValueType> Checker<V> {
         let mut vals = Vec::new();
         let element_ty = self.fresh_cell();
         for &el in &elements {
-            self.check_expr(el, Role::Term);
+            self.check_expr(el);
             vals.push(self.value_of(el));
             // Found = this element's type, expected = the shared cell: the
             // first element binds the cell, a later one that differs
@@ -1216,8 +1149,8 @@ impl<V: ValueType> Checker<V> {
     /// type expression is a first-class value, so the array type *is* its
     /// pair.
     fn check_array_type(&mut self, e: ExprId, element_type: ExprId, length: ExprId) -> NodeId {
-        self.check_expr(element_type, Role::Type);
-        self.check_expr(length, Role::Term);
+        self.check_expr(element_type);
+        self.check_expr(length);
         let length_value = self.value_of(length);
         let shape = self.array_node(
             self.current_block,

@@ -79,12 +79,6 @@ impl ValueType for ProbeValue {
             _ => unreachable!("a structural non-USize value is not a constant"),
         }
     }
-    fn is_kind(&self) -> bool {
-        matches!(
-            self,
-            Self::TypeFunction | Self::TypeTuple | Self::TypeArray | Self::TypeStruct
-        )
-    }
     fn type_id(&self) -> Option<usize> {
         match self {
             Self::TypeId(n) => Some(*n),
@@ -153,7 +147,7 @@ fn the_checker_runs_on_an_extended_union() {
 
 #[test]
 fn an_extended_union_reports_type_conflicts() {
-    // `5 : Type` is a kinding error even on the extended union — the
+    // `5 : Type` is an annotation conflict even on the extended union — the
     // generic checker's diagnostics carry the extended value type.
     let mut ir: IR<ProbeValue> = IR::new();
     let five = ir.alloc(ExprKind::Constant(ProbeValue::USize(5)), None);

@@ -370,7 +370,6 @@ pub fn checker_message(
             printer.node(d.b),
             printer.node(d.a)
         ),
-        DiagKind::Kinding => format!("expected Type, found {}", printer.node(d.a)),
         DiagKind::Guard => format!("expected a function, found {}", printer.node(d.a)),
         DiagKind::IndexTarget => {
             format!(
@@ -508,19 +507,6 @@ mod tests {
         assert_eq!(
             report.diagnostics[0].message,
             "expected Int, found ?a -> ?a\n  ?b is fixed to ?a -> ?a at line 1\n  ?c is fixed to Int at line 1\n  ?c is fixed to Int at line 1"
-        );
-    }
-
-    #[test]
-    fn a_kinding_error_renders_the_universe_as_type() {
-        let report = crate::compile("5 : 5");
-        assert_eq!(
-            report.diagnostics[0].message,
-            "expected Type, found Int\n  ?a is fixed to Int at line 1"
-        );
-        assert_eq!(
-            report.diagnostics[1].message,
-            "expected 5, found Int\n  ?c is fixed to Int at line 1\n  ?d is fixed to 5 at line 1"
         );
     }
 

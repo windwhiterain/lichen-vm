@@ -306,29 +306,7 @@ fn real_array_type_is_type_and_length() {
 }
 
 #[test]
-fn array_element_type_must_be_a_type() {
-    // Array(5, 3) — 5 in type position is not a Type: a kinding error.
-    let mut ir = IR::new();
-    let bad = int(&mut ir, 5);
-    let n = int(&mut ir, 3);
-    let arr = type_array(&mut ir, bad, n);
-    let b = build(arr, ir);
-    assert!(!b.ok);
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::Kinding);
-    assert_eq!(
-        diags[0].a, b.int_type,
-        "the found side is the literal's type expression"
-    );
-    assert_eq!(
-        diags[0].b, b.type_expr,
-        "kinding compares against the Type universe"
-    );
-}
-
-#[test]
-fn the_array_type_is_kinded_not_a_type() {
+fn the_array_type_has_a_kind_not_a_type() {
     // Array(int, 3) : Type — the array type's own type is the kind
     // [ArrayType, Type], not the universe.
     let mut ir = IR::new();
@@ -363,7 +341,7 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     assert_eq!(
         diags.len(),
         1,
-        "the array kinding passes; only the shape clashes"
+        "the array kind passes; only the shape clashes"
     );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(3)));
@@ -630,24 +608,6 @@ fn annotation_mismatch_reports_expected_found() {
     assert_eq!(diags[0].span, Some((3, 7)));
     assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeInt));
     assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeType));
-}
-
-#[test]
-fn kinding_mismatch_reports_expected_type() {
-    // 1 : 3 — the type expression `3` is an int literal, not a Type
-    let mut ir = IR::new();
-    let one = int(&mut ir, 1);
-    let three = int(&mut ir, 3);
-    let a = ann(&mut ir, one, three);
-    let b = build(a, ir);
-    assert!(!b.ok);
-    let diags = b.diagnostics();
-    assert_eq!(diags.len(), 2);
-    assert_eq!(diags[0].kind, DiagKind::Kinding);
-    assert_eq!(diags[0].a, b.int_type);
-    assert_eq!(diags[1].kind, DiagKind::Annotation);
-    assert_eq!(diags[1].value_a, Some(HighProgramValue::TypeInt));
-    assert_eq!(diags[1].value_b, Some(HighProgramValue::USize(3)));
 }
 
 #[test]
@@ -1079,7 +1039,7 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 // do, and a struct never unifies with a same-shape tuple — nominal identity.
 
 #[test]
-fn struct_type_is_kinded_and_carries_a_fresh_type_id() {
+fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     // struct { Int, Type } — the pair [[TypeId(0), [int, Type]], [TypeStruct, Type]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);

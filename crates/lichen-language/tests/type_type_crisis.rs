@@ -11,9 +11,9 @@
 //!
 //! The surface language cannot express the textbook `∀A:Type. ...` types, so
 //! the paradox is transcribed in the checker's own terms: unannotated
-//! lambdas (an unbound parameter type defers the apply guard and kinding),
+//! lambdas (an unbound parameter type defers the apply guard),
 //! the opaque `U = Type` placeholder (the term never destructs `U`), a
-//! call-result arrow domain (kinding defers on an unbound cell), and a lazy
+//! call-result arrow domain (an unbound cell defers), and a lazy
 //! `if 1 then 5 else …` around the one direct apply whose argument cannot
 //! resolve while its parameter is unbound.  The term is Geuvers' direct `λU`
 //! transcription of Hurkens' paradox (*Inconsistency of classical logic in
