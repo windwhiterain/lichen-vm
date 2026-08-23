@@ -106,6 +106,7 @@ pub struct Checker<V: ValueType> {
     function_type_marker: NodeId,
     tuple_type_marker: NodeId,
     array_type_marker: NodeId,
+    type_struct_marker: NodeId,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
@@ -178,6 +179,7 @@ impl<V: ValueType> Checker<V> {
             function_type_marker: NodeId::default(),
             tuple_type_marker: NodeId::default(),
             array_type_marker: NodeId::default(),
+            type_struct_marker: NodeId::default(),
             int_type: NodeId::default(),
             type_expr: NodeId::default(),
         };
@@ -289,6 +291,9 @@ impl<V: ValueType> Checker<V> {
         self.array_type_marker = self
             .module
             .add_node(root, None, Some(V::array_type_marker()));
+        self.type_struct_marker = self
+            .module
+            .add_node(root, None, Some(V::type_struct_marker()));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
@@ -344,7 +349,7 @@ impl<V: ValueType> Checker<V> {
 
     /// The kind expression of a compound type: `[marker, Type]`, where
     /// `marker` is one of the kind markers (`FunctionType`, `TupleType`,
-    /// `ArrayType`).
+    /// `ArrayType`, `TypeStruct`).
     fn kind_expr(&mut self, block: BlockId, marker: NodeId) -> NodeId {
         self.array_node(block, &[marker, self.type_expr])
     }
@@ -442,11 +447,11 @@ impl<V: ValueType> Checker<V> {
     }
 
     /// Whether `node` is a kind: the universe `K` itself, or a kind
-    /// expression `[FunctionType | TupleType | ArrayType | TypeId(n), K]`.
-    /// An unevaluated kind marker (the pending `Fresh` call of a struct
-    /// type, which has no value until the runtime forces it) defers the
-    /// check — it is always concrete by the time the definition pass has
-    /// run.
+    /// expression `[FunctionType | TupleType | ArrayType | TypeStruct, K]`.
+    /// An unevaluated kind marker (the pending `Fresh`/`TypeId` call in a
+    /// struct type's shape, which has no value until the runtime forces it)
+    /// defers the check — the kind marker itself is always concrete by the
+    /// time the definition pass has run.
     fn is_kind(&mut self, node: NodeId) -> bool {
         if self.is_universe(node) {
             return true;
@@ -502,8 +507,8 @@ impl<V: ValueType> Checker<V> {
 
     /// Whether `ty` is a concrete indexable type expression — a tuple type
     /// (`[shape, [TypeTuple, K]]`), an array type (`[shape, [TypeArray,
-    /// K]]`), or a struct type (`[shape, [TypeId(n), K]]`, whose shape is the
-    /// positional field list).  The index-target guard skips these; only
+    /// K]]`), or a struct type (`[shape, [TypeStruct, K]]`, whose shape is
+    /// `[TypeId(n), field types]`).  The index-target guard skips these; only
     /// concretely *non*-indexable types are caught statically.
     fn is_indexable_type(&mut self, ty: NodeId) -> bool {
         let Some(ids) = self.module.array_ids(ty) else {
@@ -515,31 +520,7 @@ impl<V: ValueType> Checker<V> {
         let kind = ids[1];
         self.kind_marker_is(kind, V::tuple_type_marker())
             || self.kind_marker_is(kind, V::array_type_marker())
-            || self.kind_marker_is_type_id(kind)
-    }
-
-    /// Whether `kind` is a struct type's kind expression `[TypeId(n), K]` —
-    /// the fresh nominal marker, as opposed to the fixed structural markers
-    /// [`HighProgramValue::TypeTuple`] / [`HighProgramValue::TypeArray`].  The marker slot
-    /// holds the *pending* [`HighProgramOperator::Fresh`] call at check time — its
-    /// value, the nominal id, only appears when the definition pass runs the
-    /// operator — so an unevaluated Fresh marker counts as a struct kind too.
-    fn kind_marker_is_type_id(&mut self, kind: NodeId) -> bool {
-        let Some(ids) = self.module.array_ids(kind) else {
-            return false;
-        };
-        if ids.len() != 2 {
-            return false;
-        }
-        let head = ids[0];
-        let tail = ids[1];
-        self.is_universe(tail)
-            && (self.module.nodes[head]
-                .value
-                .is_some_and(|value| value.type_id().is_some())
-                || self.module.nodes[head]
-                    .operation
-                    .is_some_and(|op| matches!(op.operator, HighProgramOperator::Fresh)))
+            || self.kind_marker_is(kind, V::type_struct_marker())
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -979,7 +960,8 @@ impl<V: ValueType> Checker<V> {
         }
         // The element-type list of a tuple type, or the field-type list of a
         // struct type — both positional lists, so a literal index into a
-        // statically-known tuple or struct is bounds-checked at check time.
+        // statically-known tuple or struct is bounds-checked at check time
+        // (a struct's list sits at shape[1], behind its [TypeId, …] shape).
         // An array type's shape is `[element_type, length]` — not a
         // positional list — so it (and any type known only at runtime) goes
         // to the IndexType operator below.
@@ -988,10 +970,14 @@ impl<V: ValueType> Checker<V> {
                 // Copy the ids out of the slice borrow: kind_marker_is
                 // needs `&mut self` while `array_ids` borrows the module.
                 let (shape, kind) = (ids[0], ids[1]);
-                if self.kind_marker_is(kind, V::tuple_type_marker())
-                    || self.kind_marker_is_type_id(kind)
-                {
+                if self.kind_marker_is(kind, V::tuple_type_marker()) {
                     Some(shape)
+                } else if self.kind_marker_is(kind, V::type_struct_marker()) {
+                    // A struct type's shape is [TypeId, field types] — the
+                    // positional list is at shape[1].
+                    self.module.array_ids(shape).and_then(|s| {
+                        (s.len() == 2).then_some(s[1])
+                    })
                 } else {
                     None
                 }
@@ -1073,7 +1059,25 @@ impl<V: ValueType> Checker<V> {
             }
             _ => value_ty,
         };
-        let field_list = self.module.array_ids(type_pair).unwrap()[0];
+        // The struct pair's shape is [TypeId, field types] — the positional
+        // field list is at shape[1].  During a recursive struct's own descent
+        // the shape is still an unbound cell (the bindings are mutually
+        // recursive), so defer the field-list check through a probe shape.
+        let shape = self.module.array_ids(type_pair).unwrap()[0];
+        let field_list = match self.module.array_ids(shape) {
+            Some(s) if s.len() == 2 => s[1],
+            // The struct's shape cell is not resolved yet (mid-recursion):
+            // bind it to a [TypeId, field-list] probe and check the value
+            // against the field-list slot.  When the descent completes the
+            // cell unifies with the real shape, closing the deferred check.
+            _ => {
+                let id_cell = self.fresh_cell();
+                let fields_cell = self.fresh_cell();
+                let probe = self.array_node(self.current_block, &[id_cell, fields_cell]);
+                self.module.unify(shape, probe);
+                fields_cell
+            }
+        };
         self.check_unify(
             value_shape,
             field_list,
@@ -1145,22 +1149,24 @@ impl<V: ValueType> Checker<V> {
         }
     }
 
-    /// A struct type expression: `[[field types], [TypeId(n), Type]]` —
-    /// like a tuple type, but the kind slot holds a *fresh nominal* id
-    /// instead of the fixed `TupleType` marker.  The id comes from the
-    /// [`HighProgramOperator::Fresh`] call in the kind slot, so each occurrence
-    /// allocates a new id and two occurrences never unify (nominal
-    /// identity); a struct type is reused by binding it once through a
-    /// parameter.  Fields are positional (no names in v1).
+    /// A struct type expression: `[[TypeId(n), field types], [TypeStruct,
+    /// Type]]` — the shape bundles a *fresh nominal* id with the positional
+    /// field-type list (mirroring an array type's `[element type, length]`
+    /// shape), and the kind slot holds the fixed `TypeStruct` marker.  The
+    /// id comes from the [`HighProgramOperator::Fresh`] call at shape[0], so
+    /// each occurrence allocates a new id and two occurrences never unify
+    /// (nominal identity); a struct type is reused by binding it once
+    /// through a parameter.  Fields are positional (no names in v1).
     fn check_type_struct(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let mut tys = Vec::new();
         for &el in &elements {
             tys.push(self.check_type_element(el));
         }
-        let shape = self.array_node(self.current_block, &tys);
         let id = self.op_node(self.current_block, HighProgramOperator::Fresh, None);
-        let kind = self.array_node(self.current_block, &[id, self.type_expr]);
+        let fields = self.array_node(self.current_block, &tys);
+        let shape = self.array_node(self.current_block, &[id, fields]);
+        let kind = self.kind_expr(self.current_block, self.type_struct_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);

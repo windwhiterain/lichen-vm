@@ -585,13 +585,19 @@ fn a_bound_struct_type_is_reusable() {
 
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
-    // [struct<Int>, struct<Int>] — each occurrence allocates a fresh
-    // nominal id, so the array element check reports the conflict (nominal
-    // identity: same fields, different types).
-    let d = diags("[struct<Int>, struct<Int>]");
-    assert_eq!(d.len(), 1);
-    let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::ArrayElement);
+    // Nominal identity is a *value*-level property now: a struct type's
+    // shape is [TypeId(n), fields], so two occurrences differ in their
+    // values (TypeId(0) vs TypeId(1)) but share one type ([TypeStruct,
+    // Type]) — a bare array of two struct type values is type-homogeneous
+    // and checks.  The nominality surfaces when the occurrences are
+    // *instantiated*: [s1(1, 2), s2(1, 2)] conflicts (covered by
+    // a_struct_instance_with_mismatched_fields_is_rejected).
+    let report = compile("[struct<Int>, struct<Int>]");
+    assert!(
+        report.ok(),
+        "two struct types share the type [TypeStruct, Type]: {:?}",
+        report.diagnostics
+    );
 }
 
 #[test]

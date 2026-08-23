@@ -233,12 +233,14 @@ Function: <Type, Int> -> Int
 ```text
 A = struct<Int, Type>
 a = A(1, Int)
-(a, a[0], a[1])
+B = struct<Int>
+b = B((1,))
+(A, a, a[0], a[1], B, b, b[0])
 ```
 
 output:
 ```text
-[[1, Int], 1, Int]: <struct<Int, Type>, Int, Type>
+[[TypeId(0), Int], [1, Int], 1, Int, [TypeId(1), [Int]], [1], 1]: <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>
 ```
 
 ### `struct_recursion.lichen`
@@ -253,7 +255,7 @@ b = B(Int, a)
 
 output:
 ```text
-[[Int, [[Type, [[Int, […, TypeId(0)]], TypeId(1)]], TypeId(0)]], [Type, [[Int, […, TypeId(0)]], TypeId(1)]], [1, [Int, …]], [Int, [1, [Int, …]]]]: <TypeId(1), TypeId(0), struct<Int, struct<Type, …>>, struct<Type, struct<Int, struct<Type, …>>>>
+[[TypeId(0), [Int, [[TypeId(1), [Type, [[parameterized, [Int, […, TypeStruct]]], TypeStruct]]], TypeStruct]]], [TypeId(1), [Type, [[parameterized, [Int, […, TypeStruct]]], TypeStruct]]], [1, [Int, …]], [Int, [1, [Int, …]]]]: <TypeStruct, TypeStruct, struct<Int, struct<Type, …>>, struct<Type, struct<Int, struct<Type, …>>>>
 ```
 
 <!-- end: examples -->

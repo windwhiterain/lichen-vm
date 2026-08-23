@@ -62,6 +62,9 @@ impl ValueType for ProbeValue {
     fn array_type_marker() -> Self {
         Self::TypeArray
     }
+    fn type_struct_marker() -> Self {
+        Self::TypeStruct
+    }
     fn type_of(&self) -> Self {
         match self {
             ProbeValue::USize(_) => Self::TypeInt,
@@ -71,6 +74,7 @@ impl ValueType for ProbeValue {
             | ProbeValue::TypeFunction
             | ProbeValue::TypeTuple
             | ProbeValue::TypeArray
+            | ProbeValue::TypeStruct
             | ProbeValue::TypeId(_) => Self::TypeType,
             _ => unreachable!("a structural non-USize value is not a constant"),
         }
@@ -78,7 +82,7 @@ impl ValueType for ProbeValue {
     fn is_kind(&self) -> bool {
         matches!(
             self,
-            Self::TypeFunction | Self::TypeTuple | Self::TypeArray | Self::TypeId(_)
+            Self::TypeFunction | Self::TypeTuple | Self::TypeArray | Self::TypeStruct
         )
     }
     fn type_id(&self) -> Option<usize> {

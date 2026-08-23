@@ -1,5 +1,7 @@
 -- order: 3
 A = struct<Int, Type>
 a = A(1, Int)
-(a, a[0], a[1])
--- output: [[1, Int], 1, Int]: <struct<Int, Type>, Int, Type>
+B = struct<Int>
+b = B((1,))
+(A, a, a[0], a[1], B, b, b[0])
+-- output: [[TypeId(0), Int], [1, Int], 1, Int, [TypeId(1), [Int]], [1], 1]: <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>

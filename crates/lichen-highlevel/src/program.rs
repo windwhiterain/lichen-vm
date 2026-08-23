@@ -51,9 +51,14 @@ lichen_lowlevel::extend_LowValue! {
         /// The kind marker of array type expressions — the shape is
         /// `[element type, length]`.
         TypeArray,
-        /// A nominal type id — the kind marker of a struct type.  Equal ids
-        /// unify, different ids don't (nominal identity), and an id never
-        /// unifies with the structural markers above.
+        /// The kind marker of struct type expressions — the shape is
+        /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
+        /// the positional field-type list.
+        TypeStruct,
+        /// A nominal type id — a struct type's identity marker, living at
+        /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
+        /// different ids don't (nominal identity), and an id never unifies
+        /// with the structural markers above.
         TypeId(usize),
     }
 }
@@ -81,6 +86,9 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     fn tuple_type_marker() -> Self;
     /// The kind marker of array type expressions.
     fn array_type_marker() -> Self;
+    /// The kind marker of struct type expressions — the shape is
+    /// `[TypeId(n), fields_types_array]`.
+    fn type_struct_marker() -> Self;
     /// The value→type mapping: what type this value, used as a constant,
     /// pairs with.  `USize(_)` → the int marker; every type constant → the
     /// `Type` marker.  The checker only asks for constants (an int literal
@@ -111,6 +119,9 @@ impl ValueType for HighProgramValue {
     fn array_type_marker() -> Self {
         HighProgramValue::TypeArray
     }
+    fn type_struct_marker() -> Self {
+        HighProgramValue::TypeStruct
+    }
     fn type_of(&self) -> Self {
         match self {
             HighProgramValue::USize(_) => HighProgramValue::TypeInt,
@@ -119,6 +130,7 @@ impl ValueType for HighProgramValue {
             | HighProgramValue::TypeFunction
             | HighProgramValue::TypeTuple
             | HighProgramValue::TypeArray
+            | HighProgramValue::TypeStruct
             | HighProgramValue::TypeId(_) => HighProgramValue::TypeType,
             // Array, Function, None, Parameterized are built by other
             // expression kinds — the checker never asks their type.
@@ -131,7 +143,7 @@ impl ValueType for HighProgramValue {
             HighProgramValue::TypeFunction
                 | HighProgramValue::TypeTuple
                 | HighProgramValue::TypeArray
-                | HighProgramValue::TypeId(_)
+                | HighProgramValue::TypeStruct
         )
     }
     fn type_id(&self) -> Option<usize> {
@@ -157,7 +169,7 @@ lichen_lowlevel::extend_LowOperator! {
         ///
         /// Operand: `[type_pair, index]` where `type_pair` is the indexed
         /// value's type expression.  A tuple type (`TypeTuple` kind) and a
-        /// struct type (`TypeId` kind) select their element/field-type list
+        /// struct type (`TypeStruct` kind) select their element/field-type list
         /// position — a structural out of bounds.  An array type
         /// (`TypeArray` kind) checks the index against the *length* stored
         /// in its shape `[element_type, length]` — the check the structural
@@ -287,16 +299,25 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                         });
                         V::from(LowValue::None)
                     }
-                } else if marker_value.is_some_and(|value| value.type_id().is_some()) {
-                    // A struct type's shape is its positional field-type
-                    // list — selecting an element is field access, exactly
-                    // like a tuple type's element-type list.
-                    let Some(LowValue::Array(elements)) = module.nodes[shape]
+                } else if marker_value == Some(V::type_struct_marker()) {
+                    // A struct type's shape is [TypeId, field-types array] —
+                    // field access selects from the positional field list at
+                    // shape[1], exactly like a tuple type's element-type list.
+                    let Some(LowValue::Array(shape_ids)) = module.nodes[shape]
                         .value
                         .expect("the operand was deep-evaluated")
                         .as_enum()
                     else {
-                        unreachable!("a struct type shape is its field-type list")
+                        unreachable!("a struct type shape is [TypeId, field types]")
+                    };
+                    let shape_ids = unsafe { &*shape_ids };
+                    let field_list = shape_ids[1];
+                    let Some(LowValue::Array(elements)) = module.nodes[field_list]
+                        .value
+                        .expect("the operand was deep-evaluated")
+                        .as_enum()
+                    else {
+                        unreachable!("a struct type's field list is an array")
                     };
                     let elements = unsafe { &*elements };
                     if index < elements.len() {

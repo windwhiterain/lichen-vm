@@ -56,6 +56,7 @@ fn print_inner(
         HighProgramValue::TypeFunction => "TypeFunction".to_string(),
         HighProgramValue::TypeTuple => "TypeTuple".to_string(),
         HighProgramValue::TypeArray => "TypeArray".to_string(),
+        HighProgramValue::TypeStruct => "TypeStruct".to_string(),
         HighProgramValue::TypeId(n) => format!("TypeId({n})"),
         HighProgramValue::Array(ptr) => {
             let elements = unsafe { &*ptr };
@@ -179,6 +180,7 @@ impl<'a> TypePrinter<'a> {
             HighProgramValue::TypeFunction => "TypeFunction".to_string(),
             HighProgramValue::TypeTuple => "TypeTuple".to_string(),
             HighProgramValue::TypeArray => "TypeArray".to_string(),
+            HighProgramValue::TypeStruct => "TypeStruct".to_string(),
             HighProgramValue::TypeId(n) => format!("TypeId({n})"),
             HighProgramValue::Function(_) => "Function".to_string(),
             HighProgramValue::None | HighProgramValue::Parameterized => {
@@ -228,11 +230,17 @@ impl<'a> TypePrinter<'a> {
                         return format!("{}<{}>", self.node(s[0]), self.node(s[1]));
                     }
                 }
-                Some(HighProgramValue::TypeId(_)) => {
-                    // A struct type: shape = the field-type list — render
-                    // `struct<T1, ..., Tn>`.
-                    let fields = self.fields(elements[0]);
-                    return format!("struct<{}>", fields.join(", "));
+                Some(HighProgramValue::TypeStruct) => {
+                    // A struct type: shape = [TypeId, field-type list] —
+                    // render `struct<T1, ..., Tn>` from the list at shape[1].
+                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                        self.module.nodes[elements[0]].value
+                        && let s = unsafe { &*shape_ptr }
+                        && s.len() == 2
+                    {
+                        let fields = self.fields(s[1]);
+                        return format!("struct<{}>", fields.join(", "));
+                    }
                 }
                 _ => {}
             }

@@ -121,11 +121,13 @@ pub enum ExprKind<V> {
     /// [`ExprTable::children`].
     TypeTuple(ChildRange),
     /// A struct type expression `[T1, ..., Tn]` — the field types
-    /// (positional, no names in v1), kinded with a *fresh nominal* id:
-    /// `[[T1, ..., Tn], [TypeId(n), Type]]`.  Each occurrence's `Fresh`
-    /// call allocates a new id, so two occurrences never unify; a struct
-    /// type is reused by binding it once through a parameter.  Elements
-    /// stored in [`ExprTable::children`].
+    /// (positional, no names in v1), kinded with a fixed `TypeStruct` marker
+    /// and shaped `[TypeId(n), [T1, ..., Tn]]`: a *fresh nominal* id bundled
+    /// with the field-type list (mirroring an array type's `[element type,
+    /// length]` shape).  Each occurrence's `Fresh` call allocates a new id,
+    /// so two occurrences never unify at the value level; a struct type is
+    /// reused by binding it once through a parameter.  Elements stored in
+    /// [`ExprTable::children`].
     TypeStruct(ChildRange),
     /// An array instance `[v1, ..., vn]` — every element shares one type
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in

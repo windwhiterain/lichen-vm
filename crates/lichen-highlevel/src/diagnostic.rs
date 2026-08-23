@@ -440,17 +440,33 @@ impl<'a, V: ValueType> Report<'a, V> {
                                         self.print_inner(s[1], visiting)
                                     );
                                 }
-                            } else if let Some(n) = kind_value.as_ref().and_then(|v| v.type_id()) {
-                                // A struct type: `[fields, [TypeId(n), Type]]`
-                                // — render `struct#n { f1, f2 }`, the shape
-                                // being the field-type list.
-                                let fields: Vec<String> = if let Some(s) =
+                            } else if kind_value == Some(V::type_struct_marker()) {
+                                // A struct type: `[[TypeId(n), fields],
+                                // [TypeStruct, Type]]` — render
+                                // `struct#n { f1, f2 }`, the id from shape[0]
+                                // and the field list from shape[1].
+                                let mut n = 0;
+                                let mut list = ids[0];
+                                if let Some(s) =
                                     self.build.module.array_ids(self.rep(ids[0]))
+                                    && s.len() == 2
                                 {
-                                    s.iter().map(|&id| self.print_inner(id, visiting)).collect()
-                                } else {
-                                    vec![self.print_inner(ids[0], visiting)]
-                                };
+                                    n = self.build.module.nodes[s[0]]
+                                        .value
+                                        .and_then(|v| v.type_id())
+                                        .unwrap_or(0);
+                                    list = s[1];
+                                }
+                                let field_ids: Vec<NodeId> = self
+                                    .build
+                                    .module
+                                    .array_ids(self.rep(list))
+                                    .map(|fs| fs.to_vec())
+                                    .unwrap_or_else(|| vec![list]);
+                                let fields: Vec<String> = field_ids
+                                    .iter()
+                                    .map(|&id| self.print_inner(id, visiting))
+                                    .collect();
                                 return format!("struct#{n} {{ {} }}", fields.join(", "));
                             }
                         }

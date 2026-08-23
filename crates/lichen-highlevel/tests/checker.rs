@@ -1072,15 +1072,15 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 }
 
 // --- struct types ----------------------------------------------------------
-// A struct type is the pair [field types, [TypeId(n), Type]]: like a tuple
-// type, but the kind slot holds a *fresh nominal* id (from the Fresh
-// operator) instead of the fixed TupleType marker.  Equal ids unify,
-// different ids never do, and a struct never unifies with a same-shape
-// tuple — nominal identity.
+// A struct type is the pair [[TypeId(n), field types], [TypeStruct, Type]]:
+// like an array type (shape [element type, length]), the shape bundles a
+// *fresh nominal* id with the positional field-type list, and the kind slot
+// holds the fixed TypeStruct marker.  Equal ids unify, different ids never
+// do, and a struct never unifies with a same-shape tuple — nominal identity.
 
 #[test]
 fn struct_type_is_kinded_and_carries_a_fresh_type_id() {
-    // struct { Int, Type } — the pair [[int, Type], [TypeId(0), Type]].
+    // struct { Int, Type } — the pair [[TypeId(0), [int, Type]], [TypeStruct, Type]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1088,20 +1088,26 @@ fn struct_type_is_kinded_and_carries_a_fresh_type_id() {
     let b = build(s, ir);
     assert!(b.ok, "struct {{ Int, Type }} should kind");
     assert!(b.module.unify_errors.is_empty());
-    // the shape is the field-type list [int, Type]
+    // the shape bundles the nominal id with the field-type list [int, Type]
     let shape = b.val[s].unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
-    assert_eq!(shape_ids[0], b.int_type);
-    // the kind slot is [TypeId(0), K]
+    assert!(matches!(
+        b.module.nodes[shape_ids[0]].value,
+        Some(HighProgramValue::TypeId(0))
+    ));
+    let fields = array_ids(&b, shape_ids[1]);
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0], b.int_type);
+    // the kind slot is [TypeStruct, K]
     let kind = b.ty[s].unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     assert_eq!(kind_ids[1], b.type_expr);
-    assert!(matches!(
+    assert_eq!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeId(0))
-    ));
+        Some(HighProgramValue::TypeStruct)
+    );
     // one source occurrence consumed exactly one fresh id
     assert_eq!(b.module.global_ext.type_id_counter, 1);
 }
@@ -1116,8 +1122,8 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let b = build(pair, ir);
     assert!(b.ok);
     assert_eq!(b.module.global_ext.type_id_counter, 2);
-    let id1 = array_ids(&b, b.ty[s1].unwrap())[0];
-    let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
+    let id1 = array_ids(&b, b.val[s1].unwrap())[0];
+    let id2 = array_ids(&b, b.val[s2].unwrap())[0];
     assert!(matches!(
         b.module.nodes[id1].value,
         Some(HighProgramValue::TypeId(0))
@@ -1158,10 +1164,12 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut module = b.module;
     module.unify(b.term[s].unwrap(), b.term[t].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
+    // The struct shape is [TypeId, field list] (2 elements) while the tuple
+    // shape is the field list itself (1 element) — the arity clash at the
+    // shape level is what keeps a struct from ever unifying with a tuple.
     let err = module.unify_errors[0];
-    // the kind slot clashed: the nominal id vs the structural marker
-    assert!(matches!(err.value_a, Some(HighProgramValue::TypeId(0))));
-    assert!(matches!(err.value_b, Some(HighProgramValue::TypeTuple)));
+    assert!(matches!(err.value_a, Some(HighProgramValue::Array(_))));
+    assert!(matches!(err.value_b, Some(HighProgramValue::Array(_))));
 }
 
 #[test]
@@ -1197,8 +1205,8 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeInt));
     assert!(
-        diags[0].message.contains("expected [TypeInt]"),
-        "the struct's field list renders as the expected side: {}",
+        diags[0].message.starts_with("expected ["),
+        "the struct's shape renders as the expected side: {}",
         diags[0].message
     );
 }
