@@ -122,17 +122,22 @@ pub enum Stmt {
     Expr(Expr),
 }
 
-/// One statement binding: `name = value`, or `rec name = value` for a
-/// recursive binding.
+/// One statement binding: `name = value` (block-wide visible — the name is
+/// in scope in its own value and in every statement of the block), or
+/// `let name = value` for a *restrictive* binding (the name is in scope only
+/// in later statements).
 #[derive(Clone, Debug)]
 pub struct Binding {
     pub name: String,
     /// The name's span — diagnostics for the binding point here.
     pub span: Span,
     pub value: Expr,
-    /// `rec` — the name is in scope inside its own value (the value must be
-    /// a lambda), so the value may apply itself.
-    pub recursive: bool,
+    /// `let` — the name is visible only to *later* statements (the name is
+    /// not in scope in its own value, so `let a = a` resolves `a` to the
+    /// outer binding).  `false` (the default) — the name is visible
+    /// throughout the block, so it may reference and recurse with itself and
+    /// with any other binding in the block.
+    pub restrictive: bool,
 }
 
 /// A program: `name = expr; …` statements followed by the final expression.

@@ -1,12 +1,13 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, Module, NodeId, Program, Value};
+use crate::{BlockId, LowValue, Module, NodeId, Program};
 use lichen_utils::disjoint::{self, Node as _};
+use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
     /// move the `block_root`'s reachable subtree into its `block.parent`.
     #[stacksafe]
-    pub fn garbage_collect(&mut self, block_root: NodeId) -> Option<Value<P>> {
+    pub fn garbage_collect(&mut self, block_root: NodeId) -> Option<P::Value> {
         let source = self.nodes[block_root].block;
         let Some(target) = self.blocks[source].parent else {
             return self.nodes[block_root].value; // root block: nothing to move or release
@@ -22,7 +23,7 @@ impl<P: Program> Module<P> {
         node: NodeId,
         source: BlockId,
         target: BlockId,
-    ) -> Option<Value<P>> {
+    ) -> Option<P::Value> {
         if !self.descends_from(self.nodes[node].block, source) {
             return self.nodes[node].value; // lives outside the vacated subtree — stays put
         }
@@ -41,15 +42,15 @@ impl<P: Program> Module<P> {
         {
             self.garbage_collect_node(operand, source, target);
         }
-        let value = current.map(|value| match value {
-            Value::Array(array) => {
+        let value = current.map(|value| match value.as_enum() {
+            Some(LowValue::Array(array)) => {
                 let nodes = unsafe { &*array };
                 for &node in nodes {
                     self.garbage_collect_node(node, source, target);
                 }
-                Value::Array(self.copy_nodes(nodes, target))
+                P::Value::from(LowValue::Array(self.copy_nodes(nodes, target)))
             }
-            Value::Function(function) => {
+            Some(LowValue::Function(function)) => {
                 // The template's nodes must outlive the closing block, so
                 // the scope is mapped like an array slice: each member
                 // homed in the vacated subtree moves into the target.  The
@@ -65,10 +66,12 @@ impl<P: Program> Module<P> {
                     self.functions[function].block = target;
                     self.blocks[target].functions.push(function);
                 }
-                Value::Function(function)
+                P::Value::from(LowValue::Function(function))
             }
-            Value::Ext(ext) => Self::copy_ext(self, ext, target),
-            value => value,
+            // A program-specific value may carry a handle into an arena —
+            // relocate it into the target block like any other payload.
+            None => Self::copy_ext(self, value, target),
+            _ => value,
         });
         self.nodes[node].value = value;
         value
@@ -104,12 +107,15 @@ impl<P: Program> Module<P> {
             if let Some(prev) = prev {
                 self.nodes[prev].meta_mut().next = Some(member);
             }
-            self.nodes[member].meta_mut().parent = (member != representative).then_some(representative);
+            self.nodes[member].meta_mut().parent =
+                (member != representative).then_some(representative);
             prev = Some(member);
             tail = Some(member);
             size += 1;
         }
-        let Some(representative) = new_rep else { return };
+        let Some(representative) = new_rep else {
+            return;
+        };
         let last = prev.expect("a surviving member was elected representative");
         self.nodes[last].meta_mut().next = None;
         let meta = self.nodes[representative].meta_mut();

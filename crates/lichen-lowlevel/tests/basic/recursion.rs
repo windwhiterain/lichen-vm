@@ -25,7 +25,7 @@ fn recursive_function_applies_itself_lazily() {
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
     assert_eq!(m.equality_representative(ids[0]), rep_five);
-    assert!(matches!(m.nodes[ids[0]].value, Some(Value::Ext(_))));
+    assert!(matches!(m.nodes[ids[0]].value, Some(TestValue::U128(_))));
     let c1 = ids[1];
     assert!(m.nodes[c1].value.is_none()); // unevaluated until forced
     assert!(matches!(
@@ -62,7 +62,10 @@ fn recursive_function_applies_itself_lazily() {
     // three times, referenced in place.
     assert_eq!(m.functions.len(), 1);
     assert_eq!(m.functions[f_id].block, m.nodes[f_node].block);
-    assert!(matches!(m.nodes[f_node].value, Some(Value::Function(_))));
+    assert!(matches!(
+        m.nodes[f_node].value,
+        Some(TestValue::Function(_))
+    ));
 }
 #[test]
 fn undefined_recursive_function_clones_a_function_per_level() {
@@ -86,7 +89,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
 
     let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
-    let Value::Function(cloned) = m.nodes[operand_ids[0]].value.unwrap() else {
+    let TestValue::Function(cloned) = m.nodes[operand_ids[0]].value.unwrap() else {
         panic!("expected a cloned function value")
     };
     assert_ne!(cloned, f_id);
@@ -101,7 +104,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     assert_ne!(c2, c1);
     let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
     let operand_ids = array_ids(m.nodes[ops].value.unwrap());
-    let Value::Function(cloned2) = m.nodes[operand_ids[0]].value.unwrap() else {
+    let TestValue::Function(cloned2) = m.nodes[operand_ids[0]].value.unwrap() else {
         panic!("expected a cloned function value")
     };
     assert_ne!(cloned2, cloned);
@@ -182,7 +185,7 @@ fn countdown_definition_pass_terminates() {
     // behind a lazy branch, so the definition pass completes even though
     // the body applies itself.
     let body = m.add_block(None);
-    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let zero = u128_node(&mut m, body, 0);
     let one = u128_node(&mut m, body, 1);
@@ -236,8 +239,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     // even(x) = if x == 0 then 1 else odd(x-1)
     // odd(x)  = if x == 0 then 0 else even(x-1)
     let body = m.add_block(None);
-    let e_param = m.add_node(body, None, Some(Value::Parameterized));
-    let o_param = m.add_node(body, None, Some(Value::Parameterized));
+    let e_param = m.add_node(body, None, Some(TestValue::Parameterized));
+    let o_param = m.add_node(body, None, Some(TestValue::Parameterized));
     let e_func = m.add_node(body, None, None); // placeholders
     let o_func = m.add_node(body, None, None);
     let zero = u128_node(&mut m, body, 0);
@@ -319,8 +322,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         block: body,
     });
     m.blocks[body].functions.extend([even, odd]);
-    m.nodes[e_func].value = Some(Value::Function(even));
-    m.nodes[o_func].value = Some(Value::Function(odd));
+    m.nodes[e_func].value = Some(TestValue::Function(even));
+    m.nodes[o_func].value = Some(TestValue::Function(odd));
 
     // Both bodies are definable: a marker condition keeps the Index arm
     // lazy, so the cross-call is never forced.
@@ -383,7 +386,7 @@ fn flattened_recursion_panics_at_the_total_apply_budget() {
     // nested-depth guard.  The total-application budget is the work bound
     // that catches it.
     let body = m.add_block(None);
-    let param = m.add_node(body, None, Some(Value::Parameterized));
+    let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let func_node = m.add_node(body, None, None);
     let ops = array_node(&mut m, body, &[func_node, param]);
     let call = op_node(&mut m, body, Operator::Apply, Some(ops));
@@ -395,4 +398,3 @@ fn flattened_recursion_panics_at_the_total_apply_budget() {
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
 }
-

@@ -1,6 +1,7 @@
 use std::{alloc::Layout, ptr};
 
-use crate::{BlockId, Module, NodeId, Handle, Program, Value, ValueExt as _};
+use crate::{BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _};
+use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
     /// The ids of `node`'s array value, if it has one.
@@ -12,10 +13,11 @@ impl<P: Program> Module<P> {
     /// a reachable node always has its arena alive, and the slice is valid
     /// for the lifetime of `&self`.
     pub fn array_ids(&self, node: NodeId) -> Option<&[NodeId]> {
-        match self.nodes[node].value {
-            Some(Value::Array(ptr)) => Some(unsafe { &*ptr }),
-            _ => None,
-        }
+        let value = self.nodes[node].value?;
+        let LowValue::Array(ptr) = value.as_enum()? else {
+            return None;
+        };
+        Some(unsafe { &*ptr })
     }
 
     /// Copy `nodes` into `block.arena` and return the new `nodes`.
@@ -24,18 +26,20 @@ impl<P: Program> Module<P> {
         ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
     }
 
-    /// Copy `ext` into `block.arena` and return the new `ext`.
-    pub(super) fn copy_ext(&self, mut ext: P::Value, block: BlockId) -> Value<P> {
+    /// Copy `value` into `block.arena` and return the new `value`.  Only a
+    /// handle-carrying program-specific value relocates; everything else is
+    /// returned untouched.
+    pub(super) fn copy_ext(&self, mut value: P::Value, block: BlockId) -> P::Value {
         let arena = &self.blocks[block].arena;
-        if !ext.is_handle() {
-            return Value::Ext(ext);
+        if !value.is_handle() {
+            return value;
         }
-        let old = ext.handle();
+        let old = value.handle();
         let layout = Layout::from_size_align(old.len(), P::Value::alignment()).unwrap();
         let dst = arena.alloc_layout(layout);
         unsafe { ptr::copy_nonoverlapping(old.0 as *const u8, dst.as_ptr(), old.len()) };
-        ext.set_handle(Handle(ptr::slice_from_raw_parts(dst.as_ptr(), old.len())));
-        Value::Ext(ext)
+        value.set_handle(Handle(ptr::slice_from_raw_parts(dst.as_ptr(), old.len())));
+        value
     }
 
     /// True if `block` is `ancestor` or a descendant of it.

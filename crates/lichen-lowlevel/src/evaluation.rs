@@ -1,6 +1,7 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, Module, NodeId, Operator, OperatorExt as _, Program, Value};
+use crate::{BlockId, LowValue, Module, NodeId, Operator, OperatorExt as _, Program};
+use lichen_utils::extend::AsEnum;
 
 /// A runtime evaluation failure — the only one today is an out-of-bounds
 /// [`Operator::Index`].  Structured facts (the index node, the index value,
@@ -22,7 +23,7 @@ impl<P: Program> Module<P> {
     /// otherwise a deep recursion overflows the native stack before the
     /// guard panics.
     #[stacksafe]
-    pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> Value<P> {
+    pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> P::Value {
         let block = self.nodes[node].block;
         debug_assert!(
             self.blocks.contains_key(block),
@@ -49,16 +50,20 @@ impl<P: Program> Module<P> {
                 // A marker anywhere in the operand chain means the index
                 // can't be resolved yet — stay lazy so the definition pass
                 // can flag the node.
-                match self.evaluate_node(operands, Some(block)) {
-                    Value::Parameterized => Value::Parameterized,
-                    Value::Array(ptr) => {
+                match self.evaluate_node(operands, Some(block)).as_enum() {
+                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                    Some(LowValue::Array(ptr)) => {
                         let operands = unsafe { &*ptr };
-                        match self.evaluate_node(operands[1], Some(block)) {
-                            Value::Parameterized => Value::Parameterized,
-                            Value::USize(index) => {
-                                match self.evaluate_node(operands[0], Some(block)) {
-                                    Value::Parameterized => Value::Parameterized,
-                                    Value::Array(ptr) => {
+                        match self.evaluate_node(operands[1], Some(block)).as_enum() {
+                            Some(LowValue::Parameterized) => {
+                                P::Value::from(LowValue::Parameterized)
+                            }
+                            Some(LowValue::USize(index)) => {
+                                match self.evaluate_node(operands[0], Some(block)).as_enum() {
+                                    Some(LowValue::Parameterized) => {
+                                        P::Value::from(LowValue::Parameterized)
+                                    }
+                                    Some(LowValue::Array(ptr)) => {
                                         let array = unsafe { &*ptr };
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
@@ -82,7 +87,7 @@ impl<P: Program> Module<P> {
                                                 index_value: index,
                                                 length: array.len(),
                                             });
-                                            Value::None
+                                            P::Value::from(LowValue::None)
                                         }
                                     }
                                     _ => unreachable!("Index target must be an array"),
@@ -99,12 +104,12 @@ impl<P: Program> Module<P> {
                     Some(operand) => {
                         let value = self.evaluate_node_deep(operand, Some(block));
                         if self.nodes[operand].parameterized_deep.unwrap() {
-                            Value::Parameterized
+                            P::Value::from(LowValue::Parameterized)
                         } else {
                             value
                         }
                     }
-                    None => Value::None,
+                    None => P::Value::from(LowValue::None),
                 };
                 ext.run(operand, block, self)
             }
@@ -114,13 +119,15 @@ impl<P: Program> Module<P> {
                 };
                 // A marker target — the body's own parameter during the
                 // definition pass — stays lazy instead of panicking.
-                match self.evaluate_node(operands, Some(block)) {
-                    Value::Parameterized => Value::Parameterized,
-                    Value::Array(ptr) => {
+                match self.evaluate_node(operands, Some(block)).as_enum() {
+                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                    Some(LowValue::Array(ptr)) => {
                         let operands = unsafe { &*ptr };
-                        match self.evaluate_node(operands[0], Some(block)) {
-                            Value::Parameterized => Value::Parameterized,
-                            Value::Function(function) => {
+                        match self.evaluate_node(operands[0], Some(block)).as_enum() {
+                            Some(LowValue::Parameterized) => {
+                                P::Value::from(LowValue::Parameterized)
+                            }
+                            Some(LowValue::Function(function)) => {
                                 // Element 2 is the checker-wired result
                                 // cell, when present — the lowlevel tests
                                 // build bare 2-element operands.
@@ -144,7 +151,7 @@ impl<P: Program> Module<P> {
         // so a later binding is observed regardless of evaluation order
         // (concrete results are memoized as usual).  Cells never reach this
         // postlude — they return their cached marker from the top.
-        if !matches!(value, Value::Parameterized) {
+        if !matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             self.nodes[node].value = Some(value);
         }
         self.nodes[node].visiting = false;
@@ -153,7 +160,7 @@ impl<P: Program> Module<P> {
 
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
-    pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> Value<P> {
+    pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
         // A structural cycle (e.g. the `Type : Type` universe `[Type, ↺]`,
         // which every type spine in the recursive-pair encoding reaches) is
         // cut here: the node is being deep-evaluated by an outer frame and
@@ -174,7 +181,7 @@ impl<P: Program> Module<P> {
             );
         }
         let value = self.evaluate_node(node, current);
-        if let Value::Array(array) = value {
+        if let Some(LowValue::Array(array)) = value.as_enum() {
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
             for &id in unsafe { &*array } {
@@ -182,10 +189,10 @@ impl<P: Program> Module<P> {
             }
             self.nodes[node].visiting = false;
         }
-        let parameterized = matches!(value, Value::Parameterized)
+        let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
             || matches!(
-                value,
-                Value::Array(array)
+                value.as_enum(),
+                Some(LowValue::Array(array))
                     if unsafe { &*array }.iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
             )
             || self.nodes[node].operation.is_some_and(|op| {
@@ -202,7 +209,7 @@ impl<P: Program> Module<P> {
         value
     }
 
-    fn evaluate_block(&mut self, root: NodeId) -> Value<P> {
+    fn evaluate_block(&mut self, root: NodeId) -> P::Value {
         self.evaluate_node_deep(root, None);
         self.garbage_collect(root).expect("evaluated return node")
     }

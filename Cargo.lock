@@ -87,6 +87,7 @@ name = "lichen-lowlevel"
 version = "0.1.0"
 dependencies = [
  "bumpalo",
+ "lichen-extend",
  "lichen-utils",
  "slotmap",
  "stacksafe",

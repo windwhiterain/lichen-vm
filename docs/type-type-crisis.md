@@ -24,7 +24,7 @@ placeholder (the term never destructs `U`, so its λ-reduction is unaffected),
 a call-result arrow domain (kinding defers on an unbound cell), and a lazy
 `if 1 then 5 else …` around the one direct apply whose argument cannot
 resolve while its parameter is unbound.  The final binding is a **closed
-pure-λ term** — no `rec`, no constructors:
+27	pure-λ term** — no constructors:
 
 ```
 U = Type

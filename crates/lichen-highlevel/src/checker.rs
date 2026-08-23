@@ -29,12 +29,13 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_lowlevel::{
-    BlockId, Function, Module, NodeId, Operation, Operator, UnifyError, Value, is_unbound,
+    BlockId, Function, LowValue, Module, NodeId, Operation, Operator, UnifyError, is_unbound,
 };
+use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
-use crate::program::{HighOperator, HighProgram, HighValue};
+use crate::program::{HighOperator, HighProgram, HighProgramValue};
 
 /// Term position or type position.  The same expression can be a value in
 /// one place and a type in another (first-class types); in type position its
@@ -214,7 +215,8 @@ impl Checker {
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
         if checker.module.unify_errors.is_empty() {
-            let functions: Vec<lichen_lowlevel::FunctionId> = checker.module.functions.keys().collect();
+            let functions: Vec<lichen_lowlevel::FunctionId> =
+                checker.module.functions.keys().collect();
             for function in functions {
                 let ret = checker.module.functions[function].r#return;
                 // Only bodies whose apply-time checks can fire need the pass.
@@ -266,19 +268,19 @@ impl Checker {
         let root = self.current_block;
         self.int_marker = self
             .module
-            .add_node(root, None, Some(Value::Ext(HighValue::TypeInt)));
+            .add_node(root, None, Some(HighProgramValue::TypeInt));
         self.type_marker = self
             .module
-            .add_node(root, None, Some(Value::Ext(HighValue::TypeType)));
+            .add_node(root, None, Some(HighProgramValue::TypeType));
         self.function_type_marker =
             self.module
-                .add_node(root, None, Some(Value::Ext(HighValue::TypeFunction)));
+                .add_node(root, None, Some(HighProgramValue::TypeFunction));
         self.tuple_type_marker =
             self.module
-                .add_node(root, None, Some(Value::Ext(HighValue::TypeTuple)));
+                .add_node(root, None, Some(HighProgramValue::TypeTuple));
         self.array_type_marker =
             self.module
-                .add_node(root, None, Some(Value::Ext(HighValue::TypeArray)));
+                .add_node(root, None, Some(HighProgramValue::TypeArray));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
@@ -286,10 +288,9 @@ impl Checker {
         let slice = self.module.blocks[root]
             .arena
             .alloc_slice_copy(&[self.type_marker, universe]);
-        self.module.nodes[universe].value = Some(Value::Array(std::ptr::slice_from_raw_parts(
-            slice.as_ptr(),
-            slice.len(),
-        )));
+        self.module.nodes[universe].value = Some(HighProgramValue::Array(
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
+        ));
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
     }
@@ -299,8 +300,11 @@ impl Checker {
     /// A fresh, unbound type cell (a parameterized node — evaluating it
     /// yields the lazy marker, never a panic).
     fn fresh_cell(&mut self) -> NodeId {
-        self.module
-            .add_node(self.current_block, None, Some(Value::Parameterized))
+        self.module.add_node(
+            self.current_block,
+            None,
+            Some(HighProgramValue::Parameterized),
+        )
     }
 
     fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
@@ -308,7 +312,7 @@ impl Checker {
         self.module.add_node(
             block,
             None,
-            Some(Value::Array(std::ptr::slice_from_raw_parts(
+            Some(HighProgramValue::Array(std::ptr::slice_from_raw_parts(
                 slice.as_ptr(),
                 slice.len(),
             ))),
@@ -361,7 +365,7 @@ impl Checker {
         let pair = self.term[e].expect("expression must be compiled");
         let zero = self
             .module
-            .add_node(self.current_block, None, Some(Value::USize(0)));
+            .add_node(self.current_block, None, Some(HighProgramValue::USize(0)));
         let operands = self.array_node(self.current_block, &[pair, zero]);
         let index = self.op_node(self.current_block, Operator::Index, Some(operands));
         self.val[e] = Some(index);
@@ -448,12 +452,12 @@ impl Checker {
         self.is_universe(kind)
             && matches!(
                 self.module.nodes[marker].value,
-                Some(Value::Ext(
-                    HighValue::TypeFunction
-                        | HighValue::TypeTuple
-                        | HighValue::TypeArray
-                        | HighValue::TypeId(_)
-                )) | None
+                Some(
+                    HighProgramValue::TypeFunction
+                        | HighProgramValue::TypeTuple
+                        | HighProgramValue::TypeArray
+                        | HighProgramValue::TypeId(_)
+                ) | None
             )
     }
 
@@ -464,7 +468,7 @@ impl Checker {
     }
 
     /// Whether `kind` is the kind expression `[marker, K]`.
-    fn kind_marker_is(&mut self, kind: NodeId, marker: HighValue) -> bool {
+    fn kind_marker_is(&mut self, kind: NodeId, marker: HighProgramValue) -> bool {
         let Some(ids) = self.module.array_ids(kind) else {
             return false;
         };
@@ -473,7 +477,7 @@ impl Checker {
         }
         let head = ids[0];
         let tail = ids[1];
-        self.module.nodes[head].value == Some(Value::Ext(marker)) && self.is_universe(tail)
+        self.module.nodes[head].value == Some(marker) && self.is_universe(tail)
     }
 
     /// Whether `ty` is a concrete function type expression:
@@ -487,7 +491,7 @@ impl Checker {
             return false;
         }
         let kind = ids[1];
-        self.kind_marker_is(kind, HighValue::TypeFunction)
+        self.kind_marker_is(kind, HighProgramValue::TypeFunction)
     }
 
     /// Whether `ty` is a concrete indexable type expression — a tuple type
@@ -503,14 +507,14 @@ impl Checker {
             return false;
         }
         let kind = ids[1];
-        self.kind_marker_is(kind, HighValue::TypeTuple)
-            || self.kind_marker_is(kind, HighValue::TypeArray)
+        self.kind_marker_is(kind, HighProgramValue::TypeTuple)
+            || self.kind_marker_is(kind, HighProgramValue::TypeArray)
             || self.kind_marker_is_type_id(kind)
     }
 
     /// Whether `kind` is a struct type's kind expression `[TypeId(n), K]` —
     /// the fresh nominal marker, as opposed to the fixed structural markers
-    /// [`HighValue::TypeTuple`] / [`HighValue::TypeArray`].  The marker slot
+    /// [`HighProgramValue::TypeTuple`] / [`HighProgramValue::TypeArray`].  The marker slot
     /// holds the *pending* [`HighOperator::Fresh`] call at check time — its
     /// value, the nominal id, only appears when the definition pass runs the
     /// operator — so an unevaluated Fresh marker counts as a struct kind too.
@@ -526,10 +530,10 @@ impl Checker {
         self.is_universe(tail)
             && (matches!(
                 self.module.nodes[head].value,
-                Some(Value::Ext(HighValue::TypeId(_)))
-            ) || self.module.nodes[head].operation.is_some_and(|op| {
-                matches!(op.operator, Operator::Ext(HighOperator::Fresh))
-            }))
+                Some(HighProgramValue::TypeId(_))
+            ) || self.module.nodes[head]
+                .operation
+                .is_some_and(|op| matches!(op.operator, Operator::Ext(HighOperator::Fresh))))
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -543,11 +547,45 @@ impl Checker {
         if let Some(pair) = self.term[e] {
             return pair;
         }
-        match self.ir[e].kind {
+        // A cycle: a compound expression where a child reaches back to `e`.
+        // Pre-register a skeleton pair `[val_cell, type_cell]` before walking
+        // the children, so the memo above resolves the re-entering reference
+        // to the skeleton instead of recursing (the checker's own cycle-cut).
+        // Recurse, build the real pair, then bind the skeleton's cells to
+        // the real value and type.  Functions are left to `check_lam`, which
+        // pre-registers its value node (and feeds the recursive-function
+        // pre-pass) directly.
+        let skeleton = if matches!(
+            self.ir[e].kind,
+            ExprKind::Apply { .. }
+                | ExprKind::BinOp { .. }
+                | ExprKind::Instantiate { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Annotation { .. }
+                | ExprKind::TypeFunction { .. }
+                | ExprKind::Tuple(_)
+                | ExprKind::TypeTuple(_)
+                | ExprKind::TypeStruct(_)
+                | ExprKind::Array(_)
+                | ExprKind::TypeArray { .. }
+        ) {
+            let vc = self.fresh_cell();
+            let tc = self.fresh_cell();
+            let skel = self.array_node(self.current_block, &[vc, tc]);
+            self.term[e] = Some(skel);
+            self.val[e] = Some(vc);
+            self.ty[e] = Some(tc);
+            Some((vc, tc))
+        } else {
+            None
+        };
+        let pair = match self.ir[e].kind {
             ExprKind::Constant(Constant::USize(n)) => {
-                let value = self
-                    .module
-                    .add_node(self.current_block, None, Some(Value::USize(n)));
+                let value = self.module.add_node(
+                    self.current_block,
+                    None,
+                    Some(HighProgramValue::USize(n)),
+                );
                 let pair = self.pair_of(value, self.int_type);
                 self.term[e] = Some(pair);
                 self.val[e] = Some(value);
@@ -656,7 +694,17 @@ impl Checker {
                 element_type,
                 length,
             } => self.check_array_type(e, element_type, length),
+        };
+        // Bind the skeleton's cells to the real value and type, so every
+        // reference that resolved to the skeleton during the descent now
+        // equals the finished expression.
+        if let Some((vc, tc)) = skeleton {
+            let value = self.value_of(e);
+            let ty = self.ty[e].expect("a compound kind sets a type");
+            self.module.unify(vc, value);
+            self.module.unify(tc, ty);
         }
+        pair
     }
 
     fn check_lam(&mut self, e: ExprId, parameter: ExprId, r#return: ExprId) -> NodeId {
@@ -672,25 +720,21 @@ impl Checker {
         let param = self.array_node(return_block, &[value_cell, type_cell]);
         self.term[parameter] = Some(param);
         self.ty[parameter] = Some(type_cell);
-        // A recursive binding (`rec fib = n => e`): the IR is a cycle — the
-        // body references the function's own `ExprId`.  Register the
-        // function's pair *before* the body compiles, so the reference
+        // A self- or mutually-recursive binding (`fib = n => e`): the IR is a
+        // cycle — the body references the function's own `ExprId`.  Register
+        // the function's pair *before* the body compiles, so the reference
         // resolves to the pre-registered pair (whose value node is the
-        // function's own) instead of re-entering this check.  The pair's
-        // type slot is a cell, bound to the arrow below once the return
-        // type is known.
-        let recursive = self.ir.recursive.contains(&e);
-        let self_ref = if recursive {
-            let func_node = self.module.add_node(return_block, None, None);
-            let ty_cell = self.fresh_cell();
-            let pair = self.array_node(return_block, &[func_node, ty_cell]);
-            self.term[e] = Some(pair);
-            self.val[e] = Some(func_node);
-            self.ty[e] = Some(ty_cell);
-            Some((func_node, ty_cell))
-        } else {
-            None
-        };
+        // function's own) instead of re-entering this check.  Every lambda
+        // takes this path (a non-referencing lambda's pre-registration is
+        // overwritten identically below); the pair's type slot is a cell,
+        // bound to the arrow below once the return type is known.
+        let func_node = self.module.add_node(return_block, None, None);
+        let ty_cell = self.fresh_cell();
+        let pair = self.array_node(return_block, &[func_node, ty_cell]);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(func_node);
+        self.ty[e] = Some(ty_cell);
+        let self_ref = Some((func_node, ty_cell));
         self.scopes.push(HashMap::from([(
             parameter,
             Binding {
@@ -729,7 +773,7 @@ impl Checker {
                 block: return_block,
             });
             self.module.blocks[return_block].functions.push(function);
-            self.module.nodes[func_node].value = Some(Value::Function(function));
+            self.module.nodes[func_node].value = Some(HighProgramValue::Function(function));
             self.recursive_func_nodes.push(func_node);
             func_node
         } else {
@@ -757,7 +801,7 @@ impl Checker {
         self.check_expr(function, Role::Term);
         self.check_expr(argument, Role::Term);
         // The function slot is the function's *value* (the runtime apply
-        // needs a `Value::Function`, not the pair); the argument slot is the
+        // needs a `HighProgramValue::Function`, not the pair); the argument slot is the
         // full pair, so the apply's unify compares type cell to type cell.
         let function_value = self.value_of(function);
         let argument_pair = self.term[argument].unwrap();
@@ -769,10 +813,12 @@ impl Checker {
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
         let function_ty = self.ty[function].unwrap();
-        let concrete = matches!(
-            self.module.nodes[function_ty].value,
-            Some(Value::Ext(_)) | Some(Value::USize(_)) | Some(Value::Array(_))
-        );
+        let concrete = self.module.nodes[function_ty].value.is_some_and(|value| {
+            matches!(
+                value.as_enum(),
+                None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+            )
+        });
         if concrete && !self.is_function_type(function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
@@ -808,7 +854,12 @@ impl Checker {
         self.check_expr(right, Role::Term);
         let span = self.ir[e].span;
         self.check_unify(self.ty[left].unwrap(), self.int_type, span, DiagKind::BinOp);
-        self.check_unify(self.ty[right].unwrap(), self.int_type, span, DiagKind::BinOp);
+        self.check_unify(
+            self.ty[right].unwrap(),
+            self.int_type,
+            span,
+            DiagKind::BinOp,
+        );
         let operator = match operator {
             BinOp::Add => HighOperator::Add,
             BinOp::Sub => HighOperator::Sub,
@@ -818,8 +869,7 @@ impl Checker {
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
-        let value = self
-            .op_node(self.current_block, Operator::Ext(operator), Some(operands));
+        let value = self.op_node(self.current_block, Operator::Ext(operator), Some(operands));
         let pair = self.pair_of(value, self.int_type);
         self.term[e] = Some(pair);
         self.val[e] = Some(value);
@@ -850,10 +900,12 @@ impl Checker {
         // (a struct's shape is its field list, so instances are indexable);
         // an unbound type (a parameter, a call result) defers to the
         // runtime Index, which stays lazy until the type is known.
-        let concrete = matches!(
-            self.module.nodes[array_ty].value,
-            Some(Value::Ext(_)) | Some(Value::USize(_)) | Some(Value::Array(_))
-        );
+        let concrete = self.module.nodes[array_ty].value.is_some_and(|value| {
+            matches!(
+                value.as_enum(),
+                None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+            )
+        });
         if concrete && !self.is_indexable_type(array_ty) {
             let error_index = self.module.unify_errors.len();
             self.module.unify_errors.push(UnifyError {
@@ -881,7 +933,7 @@ impl Checker {
                 // Copy the ids out of the slice borrow: kind_marker_is
                 // needs `&mut self` while `array_ids` borrows the module.
                 let (shape, kind) = (ids[0], ids[1]);
-                if self.kind_marker_is(kind, HighValue::TypeTuple)
+                if self.kind_marker_is(kind, HighProgramValue::TypeTuple)
                     || self.kind_marker_is_type_id(kind)
                 {
                     Some(shape)
@@ -958,7 +1010,7 @@ impl Checker {
                 // Copy the ids out of the slice borrow: kind_marker_is needs
                 // `&mut self` while `array_ids` borrows the module.
                 let (shape, kind) = (ids[0], ids[1]);
-                if self.kind_marker_is(kind, HighValue::TypeTuple) {
+                if self.kind_marker_is(kind, HighProgramValue::TypeTuple) {
                     shape
                 } else {
                     value_ty
@@ -1067,9 +1119,11 @@ impl Checker {
             );
         }
         let value = self.array_node(self.current_block, &vals);
-        let length = self
-            .module
-            .add_node(self.current_block, None, Some(Value::USize(vals.len())));
+        let length = self.module.add_node(
+            self.current_block,
+            None,
+            Some(HighProgramValue::USize(vals.len())),
+        );
         let shape = self.array_node(self.current_block, &[element_ty, length]);
         let kind = self.kind_expr(self.current_block, self.array_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
@@ -1111,7 +1165,6 @@ impl Checker {
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
     }
-
 }
 
 /// Whether the compiled subtree of `root` contains an [`Operator::Apply`]
@@ -1133,10 +1186,9 @@ fn self_subtree_contains_apply(module: &Module<HighProgram>, root: NodeId) -> bo
                 stack.push(operand);
             }
         }
-        if let Some(Value::Array(ptr)) = n.value {
+        if let Some(HighProgramValue::Array(ptr)) = n.value {
             stack.extend(unsafe { &*ptr }.iter().copied());
         }
     }
     false
 }
-

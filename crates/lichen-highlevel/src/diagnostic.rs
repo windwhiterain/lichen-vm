@@ -19,13 +19,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{EvalError, NodeId, Operator, UnifyError, Value, is_unbound};
+use lichen_lowlevel::{EvalError, NodeId, Operator, UnifyError, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    program::{HighOperator, HighProgram, HighValue},
+    program::{HighOperator, HighProgram, HighProgramValue},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
@@ -43,8 +43,8 @@ pub struct Diag {
     pub b: NodeId,
     /// The conflicting classes' values at error time — snapshots, not
     /// re-reads (a failed unify never merges the classes, so they are stable).
-    pub value_a: Option<Value<HighProgram>>,
-    pub value_b: Option<Value<HighProgram>>,
+    pub value_a: Option<HighProgramValue>,
+    pub value_b: Option<HighProgramValue>,
     /// Which `Module::unify_errors` entry this diagnostic came from — the
     /// key back to its diary entry, for callers (the language crate) that
     /// re-render the message.  `None` for runtime evaluation failures.
@@ -293,8 +293,8 @@ impl Report<'_> {
             kind: DiagKind::IndexOutOfBounds,
             a: err.index,
             b: err.index,
-            value_a: Some(Value::USize(err.index_value)),
-            value_b: Some(Value::USize(err.length)),
+            value_a: Some(HighProgramValue::USize(err.index_value)),
+            value_b: Some(HighProgramValue::USize(err.length)),
             message: format!(
                 "index {} out of bounds (array length {})",
                 err.index_value, err.length
@@ -366,23 +366,23 @@ impl Report<'_> {
     fn render(&mut self, rep: NodeId, visiting: &mut HashSet<NodeId>) -> String {
         let value = self.build.module.nodes[rep].value;
         match value {
-            None | Some(Value::Parameterized) => {
+            None | Some(HighProgramValue::Parameterized) => {
                 if self.class_has_pending_op(rep) {
                     format!("⟨{}⟩", self.op_name(rep))
                 } else {
                     self.name_of(rep)
                 }
             }
-            Some(Value::Ext(HighValue::TypeInt)) => "TypeInt".to_string(),
-            Some(Value::Ext(HighValue::TypeType)) => "TypeType".to_string(),
-            Some(Value::Ext(HighValue::TypeFunction)) => "TypeFunction".to_string(),
-            Some(Value::Ext(HighValue::TypeTuple)) => "TypeTuple".to_string(),
-            Some(Value::Ext(HighValue::TypeArray)) => "TypeArray".to_string(),
-            Some(Value::Ext(HighValue::TypeId(n))) => format!("TypeId({n})"),
-            Some(Value::USize(n)) => n.to_string(),
-            Some(Value::None) => "none".to_string(),
-            Some(Value::Function(_)) => "Function".to_string(),
-            Some(Value::Array(_)) => {
+            Some(HighProgramValue::TypeInt) => "TypeInt".to_string(),
+            Some(HighProgramValue::TypeType) => "TypeType".to_string(),
+            Some(HighProgramValue::TypeFunction) => "TypeFunction".to_string(),
+            Some(HighProgramValue::TypeTuple) => "TypeTuple".to_string(),
+            Some(HighProgramValue::TypeArray) => "TypeArray".to_string(),
+            Some(HighProgramValue::TypeId(n)) => format!("TypeId({n})"),
+            Some(HighProgramValue::USize(n)) => n.to_string(),
+            Some(HighProgramValue::None) => "none".to_string(),
+            Some(HighProgramValue::Function(_)) => "Function".to_string(),
+            Some(HighProgramValue::Array(_)) => {
                 let ids = self
                     .build
                     .module
@@ -402,7 +402,7 @@ impl Report<'_> {
                         && self.rep(k[1]) == self.univ
                     {
                         match self.build.module.nodes[self.rep(k[0])].value {
-                            Some(Value::Ext(HighValue::TypeFunction)) => {
+                            Some(HighProgramValue::TypeFunction) => {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
@@ -416,14 +416,14 @@ impl Report<'_> {
                                     );
                                 }
                             }
-                            Some(Value::Ext(HighValue::TypeTuple)) => {
+                            Some(HighProgramValue::TypeTuple) => {
                                 let elements: Vec<String> = ids
                                     .iter()
                                     .map(|&id| self.print_inner(id, visiting))
                                     .collect();
                                 return format!("[{}]", elements.join(", "));
                             }
-                            Some(Value::Ext(HighValue::TypeArray)) => {
+                            Some(HighProgramValue::TypeArray) => {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
@@ -437,7 +437,7 @@ impl Report<'_> {
                                     );
                                 }
                             }
-                            Some(Value::Ext(HighValue::TypeId(n))) => {
+                            Some(HighProgramValue::TypeId(n)) => {
                                 // A struct type: `[fields, [TypeId(n), Type]]`
                                 // — render `struct#n { f1, f2 }`, the shape
                                 // being the field-type list.

@@ -2,8 +2,8 @@
 //! evaluation, and the diagnostics (frontend + checker) with their spans.
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::program::{HighProgram, HighValue};
-use lichen_lowlevel::{Module, NodeId, Value};
+use lichen_highlevel::program::{HighProgram, HighProgramValue};
+use lichen_lowlevel::{Module, NodeId};
 
 use lichen_language::diag::Stage;
 use lichen_language::{compile, frontend};
@@ -22,21 +22,21 @@ fn run(source: &str) -> (Module<HighProgram>, NodeId) {
     (build.module, root)
 }
 
-fn evaluate(source: &str) -> Value<HighProgram> {
+fn evaluate(source: &str) -> HighProgramValue {
     let (mut module, root) = run(source);
     module.evaluate_node_deep(root, None)
 }
 
 /// The node ids of an array value.
-fn array_ids(value: Value<HighProgram>) -> Vec<NodeId> {
-    let Value::Array(ptr) = value else {
+fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
+    let HighProgramValue::Array(ptr) = value else {
         panic!("expected an array value, got {value:?}");
     };
     unsafe { &*ptr }.to_vec()
 }
 
-fn usize_of(value: &Value<HighProgram>) -> usize {
-    let Value::USize(n) = value else {
+fn usize_of(value: &HighProgramValue) -> usize {
+    let HighProgramValue::USize(n) = value else {
         panic!("expected a usize value, got {value:?}");
     };
     *n
@@ -87,10 +87,7 @@ fn the_polymorphic_identity_checks() {
     assert_eq!(ids.len(), 2, "the tuple has two elements");
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(
-            module.nodes[ids[1]].value,
-            Some(Value::Ext(HighValue::TypeType))
-        ),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
         "the second element is the Type constant"
     );
 }
@@ -107,7 +104,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
             module.nodes[id].value,
-            Some(Value::USize(n)),
+            Some(HighProgramValue::USize(n)),
             "element {n} must be a bound value, not the leaked parameter"
         );
     }
@@ -191,7 +188,7 @@ fn an_annotated_parameter_checks() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
-    assert_eq!(check.value_a, Some(Value::Ext(HighValue::TypeInt)));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
     // An annotated parameter in a bound function.
     assert_eq!(usize_of(&evaluate("f = x : Int => x; (f 5 : Int)")), 5);
     let d = diags("f = x : Int => x; f Type");
@@ -208,10 +205,7 @@ fn an_annotated_parameter_prints_its_pinned_type() {
         lichen_language::run::evaluate("x : Int => x").unwrap(),
         "Function: Int -> Int"
     );
-    assert_eq!(
-        lichen_language::run::evaluate("5 : _").unwrap(),
-        "5: Int"
-    );
+    assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
 }
 
 #[test]
@@ -242,10 +236,7 @@ fn a_bound_lambda_is_still_polymorphic() {
     assert_eq!(ids.len(), 2);
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(
-            module.nodes[ids[1]].value,
-            Some(Value::Ext(HighValue::TypeType))
-        ),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
         "the second element is the Type constant"
     );
 }
@@ -263,8 +254,12 @@ fn a_statement_program_with_an_out_of_bounds_index_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(Value::USize(5)), "the index");
-    assert_eq!(check.value_b, Some(Value::USize(2)), "the length");
+    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(
+        check.value_b,
+        Some(HighProgramValue::USize(2)),
+        "the length"
+    );
 }
 
 #[test]
@@ -320,10 +315,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     assert_eq!(ids.len(), 2);
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(
-            module.nodes[ids[1]].value,
-            Some(Value::Ext(HighValue::TypeType))
-        ),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
         "the second element is the Type constant"
     );
 }
@@ -398,7 +390,10 @@ fn if_selects_a_branch() {
     // An out-of-range condition is an out-of-bounds index at runtime.
     let d = diags("if 5 then 1 else 2");
     assert_eq!(d.len(), 1);
-    assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::IndexOutOfBounds);
+    assert_eq!(
+        d[0].check.as_ref().unwrap().kind,
+        DiagKind::IndexOutOfBounds
+    );
 }
 
 // --- recursion ---------------------------------------------------------------
@@ -407,19 +402,21 @@ fn if_selects_a_branch() {
 fn a_recursive_function_checks_and_evaluates() {
     // The countdown: f(n) = if n <= 0 then 0 else f(n-1).
     assert_eq!(
-        usize_of(&evaluate("rec f = n => if n <= 0 then 0 else f (n - 1); f 5")),
+        usize_of(&evaluate(
+            "f = n => if n <= 0 then 0 else f (n - 1); f 5"
+        )),
         0
     );
     // Fibonacci: the recursion example.
     assert_eq!(
         usize_of(&evaluate(
-            "rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
+            "fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
         )),
         55
     );
     assert_eq!(
         lichen_language::run::evaluate(
-            "rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
+            "fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2); fib 10"
         )
         .unwrap(),
         "55: Int"
@@ -432,11 +429,13 @@ fn a_recursive_binding_parameter_can_be_annotated() {
     // `(n => e) : (Int -> _)` — and the `_` codomain binds lazily, so a
     // runtime-resolved return type (an `if`'s) is not forced at check time.
     assert_eq!(
-        usize_of(&evaluate("rec f = n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int")),
+        usize_of(&evaluate(
+            "f = n : Int => if n <= 0 then 0 else f (n - 1); f 5 : Int"
+        )),
         0
     );
     // A wrong argument type is a runtime apply failure, not a panic.
-    let d = diags("rec f = n => if n <= 0 then 0 else f (n - 1); f Int");
+    let d = diags("f = n => if n <= 0 then 0 else f (n - 1); f Int");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].check.as_ref().unwrap().kind, DiagKind::Runtime);
 }
@@ -446,21 +445,20 @@ fn a_recursive_binding_inside_a_block_recurses() {
     // g recurses without capturing the enclosing parameter.
     assert_eq!(
         usize_of(&evaluate(
-            "f = y => {rec g = z => if z <= 0 then 0 else g (z - 1); g 3}; f 5"
+            "f = y => {g = z => if z <= 0 then 0 else g (z - 1); g 3}; f 5"
         )),
         0
     );
 }
 
 #[test]
-fn a_recursive_binding_value_must_be_a_lambda() {
-    let d = diags("rec a = 5; a");
-    assert_eq!(d.len(), 1);
-    assert_eq!(d[0].stage, Stage::Resolve);
-    assert_eq!(
-        d[0].message,
-        "a recursive binding's value must be a lambda ('a')"
-    );
+fn a_blockwide_binding_need_not_be_a_lambda() {
+    // A block-wide binding may be any value, not only a lambda: `a = a`
+    // resolves `a` to itself (no "must be a lambda" resolve error) — a
+    // self-referential, non-productive value.  It *checks*; evaluating it is
+    // the programmer's responsibility, like any non-termination.
+    let report = compile("a = a; a");
+    assert!(report.ok(), "expected no diagnostic: {:?}", report.diagnostics);
 }
 
 #[test]
@@ -469,7 +467,75 @@ fn a_non_terminating_recursive_function_panics_at_the_guard() {
     // No base case: the definition pass runs the recursion forever, and the
     // VM's application-depth guard panics instead of exhausting memory —
     // the designed behavior of the core, not a diagnostic.
-    let _ = compile("rec f = n => f n; f 3");
+    let _ = compile("f = n => f n; f 3");
+}
+
+// --- block-wide visibility --------------------------------------------------
+
+#[test]
+fn mutually_recursive_functions_check() {
+    // A recursion *chain* across two block bindings: f calls g, g calls f.
+    // Block-wide visibility (the default) lets either reference the other,
+    // in both directions, without `rec`, and the checker totalizes the cycle
+    // (no stack overflow, no diagnostics).  The runtime evaluation of a
+    // mutual chain is a separate concern (see the sibling-template note in
+    // the checker): this test pins the *check-time* capability.
+    let report = compile(
+        "f = n => if n <= 0 then 0 else g (n - 1);
+         g = n => if n <= 0 then 0 else f (n - 1);
+         f 3",
+    );
+    assert!(report.ok(), "expected mutual recursion to check: {:?}", report.diagnostics);
+}
+
+#[test]
+fn a_binding_can_forward_reference_a_later_block_wide_binding() {
+    // `a = b` reads `b` before it is defined: block-wide names are entered
+    // before any value compiles, so a forward (and self/mutual) reference
+    // resolves.  `a` aliases `b`'s node.
+    assert_eq!(
+        usize_of(&evaluate("a = b; b = [1, 2]; a[0]")),
+        1
+    );
+}
+
+#[test]
+fn a_let_binding_is_visible_only_to_later_statements() {
+    // `let a = a` is restrictive: the value compiles before the name enters
+    // scope, so `a` resolves to the block-wide `a` (the outer `5`) — the
+    // sequential rebinding semantics, not a self-reference.
+    assert_eq!(usize_of(&evaluate("a = 5; let a = a; a")), 5);
+    // With no outer binding, `let a = a` is a resolve error (the name is not
+    // visible to its own value).
+    let d = diags("let a = a; a");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Resolve);
+    assert_eq!(d[0].message, "unresolved name 'a'");
+}
+
+#[test]
+fn a_self_referential_array_checks_without_overflow() {
+    // `a = [a]` — a non-lambda self-reference.  It must check (the checker
+    // cuts the cycle with a skeleton pair; it must not stack-overflow); a
+    // self-referential value is a benign knot, and forcing it is the
+    // programmer's responsibility.
+    let report = compile("a = [a]; a");
+    // It either checks cleanly or reports a type diagnostic — but must never
+    // panic (the checker's cycle cut totalizes the IR term).
+    if let Some(s) = report.diagnostics.first() {
+        assert_eq!(s.stage, Stage::Resolve, "{s:?}");
+    }
+}
+
+#[test]
+fn a_self_nested_struct_checks_without_overflow() {
+    // `s = struct<s>` — a struct type whose field is the struct type itself.
+    // The checker cuts the type-level cycle (a struct is a nominal type, not
+    // a value, so the nominal id is allocated once); it must not overflow.
+    let report = compile("s = struct<s>; s");
+    if let Some(s) = report.diagnostics.first() {
+        assert_eq!(s.stage, Stage::Resolve, "{s:?}");
+    }
 }
 
 // --- struct types ------------------------------------------------------------
@@ -492,7 +558,10 @@ fn a_bound_struct_type_is_reusable() {
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
     for id in ids {
-        assert!(matches!(module.nodes[id].value, Some(Value::Array(_))));
+        assert!(matches!(
+            module.nodes[id].value,
+            Some(HighProgramValue::Array(_))
+        ));
     }
 }
 
@@ -566,7 +635,7 @@ fn a_struct_instance_indexes_its_fields() {
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 1);
     assert_eq!(
         module.nodes[ids[1]].value,
-        Some(Value::Ext(HighValue::TypeInt)),
+        Some(HighProgramValue::TypeInt),
         "the second field is the `Int` type constant"
     );
     // indexing the instance through a parameter works too — the runtime
@@ -585,8 +654,12 @@ fn a_struct_instance_index_out_of_bounds_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(Value::USize(5)), "the index");
-    assert_eq!(check.value_b, Some(Value::USize(2)), "the field count");
+    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(
+        check.value_b,
+        Some(HighProgramValue::USize(2)),
+        "the field count"
+    );
 }
 
 #[test]
@@ -616,8 +689,16 @@ fn a_dependent_array_length_rejects_other_lengths() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
-    assert_eq!(check.value_a, Some(Value::USize(3)), "the pinned length");
-    assert_eq!(check.value_b, Some(Value::USize(5)), "the argument");
+    assert_eq!(
+        check.value_a,
+        Some(HighProgramValue::USize(3)),
+        "the pinned length"
+    );
+    assert_eq!(
+        check.value_b,
+        Some(HighProgramValue::USize(5)),
+        "the argument"
+    );
 }
 
 // --- ill-typed programs -----------------------------------------------------
@@ -643,7 +724,7 @@ fn an_annotation_mismatch_reports_expected_and_found() {
     assert_eq!(d[0].span, Some((1, 1)));
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
-    assert_eq!(check.value_a, Some(Value::Ext(HighValue::TypeInt)));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
     // the expected side is the arrow type — an array of two elements
     assert_eq!(
         array_ids(check.value_b.expect("the expected arrow type")).len(),
@@ -668,8 +749,8 @@ fn a_literal_in_type_position_is_a_kinding_error() {
     // the annotation against the literal type expression
     let second = d[1].check.as_ref().expect("a checker diagnostic");
     assert_eq!(second.kind, DiagKind::Annotation);
-    assert_eq!(second.value_a, Some(Value::Ext(HighValue::TypeInt)));
-    assert_eq!(second.value_b, Some(Value::USize(5)));
+    assert_eq!(second.value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(second.value_b, Some(HighProgramValue::USize(5)));
 }
 
 #[test]
@@ -679,7 +760,7 @@ fn applying_a_non_function_is_a_guard_error() {
     assert_eq!(d[0].span, Some((1, 2)), "the apply starts at the `5`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(check.value_a, Some(Value::Ext(HighValue::TypeInt)));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
 }
 
 #[test]
@@ -694,7 +775,9 @@ fn indexing_a_function_is_an_index_target_error() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexTarget);
     assert!(
-        check.message.contains("expected a tuple, array, or struct type"),
+        check
+            .message
+            .contains("expected a tuple, array, or struct type"),
         "{}",
         check.message
     );
@@ -710,7 +793,7 @@ fn indexing_a_function_is_an_index_target_error() {
     let mut module = module;
     assert_eq!(
         module.evaluate_node_deep(root, None),
-        Value::Ext(HighValue::TypeInt),
+        HighProgramValue::TypeInt,
         "applied to 1 it reads the type constant"
     );
 }
@@ -736,7 +819,7 @@ fn a_heterogeneous_array_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
-    assert_eq!(check.value_b, Some(Value::Ext(HighValue::TypeInt)));
+    assert_eq!(check.value_b, Some(HighProgramValue::TypeInt));
     // the found side is the lambda's arrow shape — an array of two cells
     assert_eq!(
         array_ids(check.value_a.expect("the found arrow shape")).len(),
@@ -750,8 +833,8 @@ fn an_array_of_the_wrong_length_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
-    assert_eq!(check.value_a, Some(Value::USize(2)));
-    assert_eq!(check.value_b, Some(Value::USize(3)));
+    assert_eq!(check.value_a, Some(HighProgramValue::USize(2)));
+    assert_eq!(check.value_b, Some(HighProgramValue::USize(3)));
 }
 
 #[test]
@@ -763,8 +846,12 @@ fn an_out_of_bounds_index_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(Value::USize(5)), "the index");
-    assert_eq!(check.value_b, Some(Value::USize(3)), "the length");
+    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(
+        check.value_b,
+        Some(HighProgramValue::USize(3)),
+        "the length"
+    );
     assert_eq!(d[0].span, Some((1, 13)), "the index's span");
 }
 

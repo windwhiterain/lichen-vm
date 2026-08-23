@@ -1,4 +1,4 @@
-use lichen_utils::disjoint::{self, Node, Meta};
+use lichen_utils::disjoint::{self, Meta, Node};
 use slotmap::{SlotMap, new_key_type};
 
 new_key_type! {pub struct TestKey;}
@@ -76,7 +76,10 @@ fn find_is_stack_safe_on_deep_chains() {
 
     assert_eq!(root, chain[0]);
     for &id in &chain {
-        assert_eq!(nodes[id].meta().parent, (id != chain[0]).then_some(chain[0]));
+        assert_eq!(
+            nodes[id].meta().parent,
+            (id != chain[0]).then_some(chain[0])
+        );
     }
 }
 

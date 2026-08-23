@@ -180,7 +180,7 @@ output:
 ### `recursion.lichen`
 
 ```text
-rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)
+fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)
 fib 10
 ```
 
@@ -202,7 +202,7 @@ f2
 
 output:
 ```text
-Function: <Type, Int> -> Int
+Function: <Type, [?a, ?b]> -> Int
 ```
 
 ### `structs.lichen`

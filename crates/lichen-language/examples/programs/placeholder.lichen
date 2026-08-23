@@ -5,4 +5,4 @@ f2 = x => {
     f1 x[1]
 }
 f2
--- output: Function: <Type, Int> -> Int
+-- output: Function: <Type, [?a, ?b]> -> Int

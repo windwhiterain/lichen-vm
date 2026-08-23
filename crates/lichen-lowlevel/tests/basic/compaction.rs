@@ -34,7 +34,7 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
 
     let value = m.evaluate_node_deep(root_node, None);
-    let Value::Ext(TestValue::U128(ptr)) = value else {
+    let TestValue::U128(ptr) = value else {
         panic!("expected U128")
     };
     assert_eq!(u128_of(value), 42);
@@ -257,7 +257,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let grandchild = m.add_block(Some(child));
     // f(x) = Id(x), homed in the un-compacted grandchild block.
     let ret_f = m.add_node(grandchild, None, None);
-    let param_f = m.add_node(grandchild, None, Some(Value::Parameterized));
+    let param_f = m.add_node(grandchild, None, Some(TestValue::Parameterized));
     m.nodes[ret_f].operation = Some(Operation {
         operator: Operator::Ext(TestOperator::Id),
         operand: Some(param_f),

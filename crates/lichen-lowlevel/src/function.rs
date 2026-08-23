@@ -2,8 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::{BlockId, Function, FunctionId, Module, NodeId, Operation, Program, Value};
+use crate::{BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program};
 use lichen_utils::disjoint;
+use lichen_utils::extend::AsEnum;
 
 /// The fixed context of one clone pass: where the clones land, the
 /// template's membership set, and the running node-id remap (template node
@@ -43,7 +44,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
         node: NodeId,
         cell: Option<NodeId>,
-    ) -> Value<P> {
+    ) -> P::Value {
         self.apply_depth += 1;
         self.apply_total += 1;
         if self.apply_depth > self.apply_depth_limit {
@@ -121,8 +122,8 @@ impl<P: Program> Module<P> {
         // template — leaves the cell bound to an unresolved class, which
         // reads as unbound until the deep pass resolves it.  An apply
         // without a wired cell (a hand-built lowlevel graph) is unchanged.
-        match (cell, result) {
-            (Some(cell), Value::Array(ptr)) if unsafe { &*ptr }.len() == 2 => {
+        match (cell, result.as_enum()) {
+            (Some(cell), Some(LowValue::Array(ptr))) if unsafe { &*ptr }.len() == 2 => {
                 let ids = unsafe { &*ptr };
                 self.nodes[node].value = Some(result);
                 self.unify(node, applied);
@@ -167,9 +168,10 @@ impl<P: Program> Module<P> {
             return;
         }
         self.evaluate_node(argument, Some(block));
-        let (Some(Value::Array(pattern_ids)), Some(Value::Array(argument_ids))) =
-            (self.nodes[pattern].value, self.nodes[argument].value)
-        else {
+        let (Some(Some(LowValue::Array(pattern_ids))), Some(Some(LowValue::Array(argument_ids)))) = (
+            self.nodes[pattern].value.map(|value| value.as_enum()),
+            self.nodes[argument].value.map(|value| value.as_enum()),
+        ) else {
             return;
         };
         for (&pattern_id, &argument_id) in unsafe { &*pattern_ids }
@@ -215,7 +217,12 @@ impl<P: Program> Module<P> {
         let depends_on_parameter = node == ctx.parameter
             || operation.is_some()
             || parameterized_deep != Some(false)
-            || matches!(value, Some(Value::Function(function)) if function != ctx.applied)
+            || value.is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    Some(LowValue::Function(function)) if function != ctx.applied
+                )
+            })
             || (parameterized_deep == Some(false)
                 && self.value_contains_foreign_function(value, ctx.applied));
         if !depends_on_parameter {
@@ -247,16 +254,16 @@ impl<P: Program> Module<P> {
     }
 
     #[stacksafe]
-    fn value_apply(&mut self, value: Value<P>, ctx: &mut ApplyCtx<'_>) -> Value<P> {
-        match value {
-            Value::Array(array) => {
+    fn value_apply(&mut self, value: P::Value, ctx: &mut ApplyCtx<'_>) -> P::Value {
+        match value.as_enum() {
+            Some(LowValue::Array(array)) => {
                 let nodes: Vec<NodeId> = unsafe { &*array }
                     .iter()
                     .map(|&id| self.node_apply(id, ctx))
                     .collect();
-                Value::Array(self.copy_nodes(&nodes, ctx.target))
+                P::Value::from(LowValue::Array(self.copy_nodes(&nodes, ctx.target)))
             }
-            Value::Function(function) => {
+            Some(LowValue::Function(function)) => {
                 // A cloned function's scope is mapped like an array: every
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
@@ -299,10 +306,12 @@ impl<P: Program> Module<P> {
                     block: target,
                 });
                 self.blocks[target].functions.push(function);
-                Value::Function(function)
+                P::Value::from(LowValue::Function(function))
             }
-            Value::Ext(ext) => Self::copy_ext(self, ext, ctx.target),
-            value => value,
+            // A program-specific value may carry a handle into an arena —
+            // relocate it into the target block like any other payload.
+            None => Self::copy_ext(self, value, ctx.target),
+            _ => value,
         }
     }
 
@@ -311,8 +320,15 @@ impl<P: Program> Module<P> {
     /// call.  A concreteness proof ([`Node::parameterized_deep`]) cannot see
     /// a function's body, so a proven-concrete structure that contains one
     /// must still be cloned, never referenced in place.
-    fn value_contains_foreign_function(&self, value: Option<Value<P>>, applied: FunctionId) -> bool {
-        let Some(Value::Array(ptr)) = value else {
+    fn value_contains_foreign_function(
+        &self,
+        value: Option<P::Value>,
+        applied: FunctionId,
+    ) -> bool {
+        let Some(value) = value else {
+            return false;
+        };
+        let Some(LowValue::Array(ptr)) = value.as_enum() else {
             return false;
         };
         let mut stack: Vec<NodeId> = unsafe { &*ptr }.to_vec();
@@ -321,9 +337,9 @@ impl<P: Program> Module<P> {
             if !seen.insert(node) {
                 continue;
             }
-            match self.nodes[node].value {
-                Some(Value::Function(function)) if function != applied => return true,
-                Some(Value::Array(ptr)) => stack.extend(unsafe { &*ptr }.iter().copied()),
+            match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                Some(LowValue::Function(function)) if function != applied => return true,
+                Some(LowValue::Array(ptr)) => stack.extend(unsafe { &*ptr }.iter().copied()),
                 _ => {}
             }
         }

@@ -10,9 +10,14 @@ fn add_sums_u128_operands() {
     let a = u128_node(&mut m, root, 3);
     let b = u128_node(&mut m, root, 4);
     let operands = array_node(&mut m, root, &[a, b]);
-    let add = op_node(&mut m, root, Operator::Ext(TestOperator::Add), Some(operands));
+    let add = op_node(
+        &mut m,
+        root,
+        Operator::Ext(TestOperator::Add),
+        Some(operands),
+    );
 
-    let value = m.evaluate_node_deep(add,None);
+    let value = m.evaluate_node_deep(add, None);
 
     assert_eq!(u128_of(value), 7);
 }
@@ -23,9 +28,14 @@ fn concat_joins_string_operands() {
     let a = str_node(&mut m, root, &['a', 'b']);
     let b = str_node(&mut m, root, &['c', 'd']);
     let operands = array_node(&mut m, root, &[a, b]);
-    let concat = op_node(&mut m, root, Operator::Ext(TestOperator::Concat), Some(operands));
+    let concat = op_node(
+        &mut m,
+        root,
+        Operator::Ext(TestOperator::Concat),
+        Some(operands),
+    );
 
-    let value = m.evaluate_node_deep(concat,None);
+    let value = m.evaluate_node_deep(concat, None);
 
     assert_eq!(string_of(value), vec!['a', 'b', 'c', 'd']);
 }
@@ -40,7 +50,7 @@ fn index_selects_array_element() {
     let operands = array_node(&mut m, root, &[arr, idx]);
     let index = op_node(&mut m, root, Operator::Index, Some(operands));
 
-    let value = m.evaluate_node_deep(index,None);
+    let value = m.evaluate_node_deep(index, None);
 
     assert_eq!(u128_of(value), 20);
 }
@@ -58,7 +68,7 @@ fn index_out_of_bounds_records_an_eval_error() {
     let value = m.evaluate_node_deep(index, None);
 
     // No panic, no element: the failure is recorded as facts instead.
-    assert!(matches!(value, Value::None));
+    assert!(matches!(value, TestValue::None));
     assert_eq!(m.eval_errors.len(), 1);
     let err = m.eval_errors[0];
     assert_eq!(err.index, idx);
@@ -78,10 +88,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     let operands = array_node(&mut m, root, &[arr, idx]);
     let index = op_node(&mut m, root, Operator::Index, Some(operands));
 
-    assert!(matches!(
-        m.evaluate_node_deep(index, None),
-        Value::None
-    ));
+    assert!(matches!(m.evaluate_node_deep(index, None), TestValue::None));
     assert_eq!(m.eval_errors.len(), 1);
     // Re-evaluating the same node reads the cached error result — no
     // duplicate record.
@@ -99,7 +106,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
 fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = m.add_node(root, None, Some(Value::Parameterized));
+    let param = m.add_node(root, None, Some(TestValue::Parameterized));
     // f(x) = [x, [10, 20][5]]: the OOB index sits in the return pair, so a
     // deep evaluation of the return (the definition pass) hits it.
     let a = u128_node(&mut m, root, 10);
@@ -114,8 +121,11 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     m.evaluate_node_deep(ret, None);
 
     assert_eq!(m.eval_errors.len(), 1);
-    assert!(matches!(m.nodes[oob].value, Some(Value::None)));
-    assert!(matches!(m.nodes[param].value, Some(Value::Parameterized)));
+    assert!(matches!(m.nodes[oob].value, Some(TestValue::None)));
+    assert!(matches!(
+        m.nodes[param].value,
+        Some(TestValue::Parameterized)
+    ));
 }
 #[test]
 #[should_panic(expected = "cycle")]
@@ -145,14 +155,14 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
     let marker = u128_node(&mut m, root, 7);
     let k = m.add_node(root, None, None);
     let slice = m.blocks[root].arena.alloc_slice_copy(&[marker, k]);
-    m.nodes[k].value = Some(Value::Array(std::ptr::slice_from_raw_parts(
+    m.nodes[k].value = Some(TestValue::Array(std::ptr::slice_from_raw_parts(
         slice.as_ptr(),
         slice.len(),
     )));
 
     let value = m.evaluate_node_deep(k, None);
 
-    assert!(matches!(value, Value::Array(_)));
+    assert!(matches!(value, TestValue::Array(_)));
     assert!(m.nodes.values().all(|n| !n.visiting));
 }
 #[test]
@@ -162,7 +172,12 @@ fn visiting_markers_are_cleared_after_evaluation() {
     let a = u128_node(&mut m, root, 3);
     let b = u128_node(&mut m, root, 4);
     let operands = array_node(&mut m, root, &[a, b]);
-    let add = op_node(&mut m, root, Operator::Ext(TestOperator::Add), Some(operands));
+    let add = op_node(
+        &mut m,
+        root,
+        Operator::Ext(TestOperator::Add),
+        Some(operands),
+    );
 
     m.evaluate_node_deep(add, None);
 
@@ -172,7 +187,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
 fn parameterized_deep_marks_subtrees_with_parameters() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let p = m.add_node(root, None, Some(Value::Parameterized));
+    let p = m.add_node(root, None, Some(TestValue::Parameterized));
     let x = u128_node(&mut m, root, 5);
     let arr = array_node(&mut m, root, &[x, p]);
     let id_arr = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(arr));
@@ -199,14 +214,25 @@ fn sub_eq_lt_operators_compute_concrete_results() {
     let three = u128_node(&mut m, root, 3);
     // Sub: 3 - 2 = 1
     let sub_ops = array_node(&mut m, root, &[three, two]);
-    let sub = op_node(&mut m, root, Operator::Ext(TestOperator::Sub), Some(sub_ops));
+    let sub = op_node(
+        &mut m,
+        root,
+        Operator::Ext(TestOperator::Sub),
+        Some(sub_ops),
+    );
     assert_eq!(u128_of(m.evaluate_node_deep(sub, None)), 1);
     // Eq: 3 == 3
     let eq_ops = array_node(&mut m, root, &[three, three]);
     let eq = op_node(&mut m, root, Operator::Ext(TestOperator::Eq), Some(eq_ops));
-    assert!(matches!(m.evaluate_node_deep(eq, None), Value::USize(1)));
+    assert!(matches!(
+        m.evaluate_node_deep(eq, None),
+        TestValue::USize(1)
+    ));
     // Lt: 3 < 2 is false
     let lt_ops = array_node(&mut m, root, &[three, two]);
     let lt = op_node(&mut m, root, Operator::Ext(TestOperator::Lt), Some(lt_ops));
-    assert!(matches!(m.evaluate_node_deep(lt, None), Value::USize(0)));
+    assert!(matches!(
+        m.evaluate_node_deep(lt, None),
+        TestValue::USize(0)
+    ));
 }

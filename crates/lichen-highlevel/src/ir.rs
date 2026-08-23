@@ -67,11 +67,6 @@ pub struct IR {
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
     pub children: Vec<ExprId>,
     pub root: ExprId,
-    /// The ids of recursive bindings' lambdas (`rec fib = …`): a function
-    /// whose own name is in scope in its body, so its `ExprId` appears in
-    /// its own subtree — the IR is a cycle there, which the checker cuts by
-    /// registering the function's pair before the body compiles.
-    pub recursive: std::collections::HashSet<ExprId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -89,10 +84,7 @@ pub enum ExprKind {
     /// parameter's own `ExprId`.
     Parameter,
     /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
-    Function {
-        parameter: ExprId,
-        r#return: ExprId,
-    },
+    Function { parameter: ExprId, r#return: ExprId },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
     /// `{ operator, left, right }` — a binary integer operation: `+`, `-`,
@@ -113,16 +105,10 @@ pub enum ExprKind {
     /// array value, `index` a `USize`.
     Index { array: ExprId, index: ExprId },
     /// `{ value, type }` — the value's type must unify with the type expression.
-    Annotation {
-        value: ExprId,
-        r#type: ExprId,
-    },
+    Annotation { value: ExprId, r#type: ExprId },
     /// `{ parameter, return }` — a function type, compiled to the kinded
     /// arrow `[[in, out], [FunctionType, Type]]`.
-    TypeFunction {
-        parameter: ExprId,
-        r#return: ExprId,
-    },
+    TypeFunction { parameter: ExprId, r#return: ExprId },
     /// A tuple instance `[v1, ..., vn]` — one type slot per element, so the
     /// elements may be heterogeneous.  Elements stored in
     /// [`ExprTable::children`].
@@ -162,7 +148,6 @@ impl IR {
             expr: Vec::new(),
             children: Vec::new(),
             root: ExprId(0),
-            recursive: std::collections::HashSet::new(),
         }
     }
 

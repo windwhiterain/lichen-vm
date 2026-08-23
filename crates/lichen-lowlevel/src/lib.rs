@@ -4,6 +4,7 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 
 use lichen_utils::disjoint::{self};
+use lichen_utils::extend::AsEnum;
 
 pub use crate::equality::UnifyError;
 pub use crate::evaluation::EvalError;
@@ -15,12 +16,33 @@ mod gc;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
-    type Value: ValueExt;
+    /// The program's full value vocabulary: the structural [`LowValue`]
+    /// spliced together with the program's own value variants.  The
+    /// lowlevel reads and builds structural values through
+    /// [`AsEnum::as_enum`] and [`From<LowValue>`]; the program's own
+    /// variants are opaque to it.
+    type Value: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone;
     type Operator: OperatorExt<Self>;
     /// Program-global extension state, stored on [`Module`] and read or
     /// mutated by extension operators — the highlevel's fresh-type-id
     /// counter, for example.
     type GlobalExt: Debug + Copy + PartialEq + Default;
+}
+
+/// The structural values the lowlevel itself produces and consumes — the
+/// non-extension subset of the former `Value<P>`.  A program's value type is
+/// this enum extended with the program's own variants via the generated
+/// `extend_LowValue!` carrier (see the `lichen-extend` crate), so the
+/// lowlevel can always inspect a value through [`AsEnum::as_enum`] and
+/// build one through [`From<LowValue>`] without naming the extension part.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[lichen_extend::enum_ext]
+pub enum LowValue {
+    USize(usize),
+    Array(*const [NodeId]),
+    Function(FunctionId),
+    None,
+    Parameterized,
 }
 
 /// [`PartialEq`] is what decides whether two of them unify.
@@ -41,17 +63,7 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 }
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
-    fn run(&self, operand: Value<P>, block: BlockId, module: &mut Module<P>) -> Value<P>;
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Value<P: Program> {
-    Ext(P::Value),
-    Array(*const [NodeId]),
-    Function(FunctionId),
-    USize(usize),
-    None,
-    Parameterized,
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,8 +85,8 @@ pub struct Operation<P: Program> {
 
 /// A class is unbound while it carries no value or only the lazy marker.
 /// The highlevel checker uses the same rule for its diagnostics.
-pub fn is_unbound<P: Program>(value: Option<Value<P>>) -> bool {
-    matches!(value, None | Some(Value::Parameterized))
+pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
+    value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
 
 /// Pointer into a [`Block::arena`].  
@@ -148,13 +160,13 @@ pub struct Function {
 
 #[derive(Debug)]
 pub struct Node<P: Program> {
-    pub value: Option<Value<P>>,
+    pub value: Option<P::Value>,
     pub operation: Option<Operation<P>>,
     /// Owner.
     pub block: BlockId,
     /// Detect circular recursion.
     pub visiting: bool,
-    /// Any node in self's reachable subtree has a [`Value::Parameterized`].
+    /// Any node in self's reachable subtree has a [`LowValue::Parameterized`].
     /// Is [`Some`] only if having run by [`Module::evaluate_node_deep`].   
     pub parameterized_deep: Option<bool>,
     /// Disjoint-set metadata for node equality classes, maintained by
@@ -247,7 +259,7 @@ impl<P: Program> Module<P> {
         &mut self,
         block: BlockId,
         operation: Option<Operation<P>>,
-        value: Option<Value<P>>,
+        value: Option<P::Value>,
     ) -> NodeId {
         let node = self.nodes.insert(Node {
             value,
@@ -276,6 +288,10 @@ impl<P: Program> Module<P> {
             block,
         });
         self.blocks[block].functions.push(function);
-        self.add_node(block, None, Some(Value::Function(function)))
+        self.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Function(function))),
+        )
     }
 }

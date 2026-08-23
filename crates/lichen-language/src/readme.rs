@@ -61,11 +61,12 @@ const DEFAULT_ORDER: usize = usize::MAX;
 fn declared_order(file: &Path, source: &str) -> Option<usize> {
     let line = source.lines().find(|l| l.starts_with("-- order:"))?;
     let value = line.strip_prefix("-- order:").unwrap().trim();
-    Some(
-        value
-            .parse()
-            .unwrap_or_else(|_| panic!("{}: expected a number after `-- order:`, found {value:?}", file.display())),
-    )
+    Some(value.parse().unwrap_or_else(|_| {
+        panic!(
+            "{}: expected a number after `-- order:`, found {value:?}",
+            file.display()
+        )
+    }))
 }
 
 /// The program's actual output, or a panic naming the file and showing its
@@ -130,7 +131,10 @@ pub fn render_examples() -> String {
 /// any file was rewritten.
 pub fn sync_output_comments() -> bool {
     let mut changed = false;
-    for entry in fs::read_dir(example_dir()).expect("examples/programs").flatten() {
+    for entry in fs::read_dir(example_dir())
+        .expect("examples/programs")
+        .flatten()
+    {
         let file = entry.path();
         if file.extension().is_none_or(|e| e != "lichen") {
             continue;
@@ -221,8 +225,7 @@ mod tests {
     fn replaces_the_region_between_markers() {
         let content = "before\n<!-- begin: examples -->\nstale\n<!-- end: examples -->\nafter";
         let blob = "### `x.lichen`\n\n```text\n1\n```";
-        let expected =
-            "before\n<!-- begin: examples -->\n\n### `x.lichen`\n\n```text\n1\n```\n\n\
+        let expected = "before\n<!-- begin: examples -->\n\n### `x.lichen`\n\n```text\n1\n```\n\n\
              <!-- end: examples -->\nafter";
         assert_eq!(replace_examples(content, blob).unwrap(), expected);
     }
@@ -231,7 +234,9 @@ mod tests {
     fn missing_markers_are_errors() {
         assert!(replace_examples("no markers", "blob").is_err());
         assert!(replace_examples("<!-- begin: examples -->\nno end", "blob").is_err());
-        assert!(replace_examples("<!-- end: examples -->\n<!-- begin: examples -->", "blob").is_err());
+        assert!(
+            replace_examples("<!-- end: examples -->\n<!-- begin: examples -->", "blob").is_err()
+        );
     }
 
     #[test]
@@ -246,7 +251,10 @@ mod tests {
         let blob = render_examples();
         let headings: Vec<String> = blob
             .lines()
-            .filter_map(|line| line.strip_prefix("### `").and_then(|rest| rest.strip_suffix('`')))
+            .filter_map(|line| {
+                line.strip_prefix("### `")
+                    .and_then(|rest| rest.strip_suffix('`'))
+            })
             .map(str::to_owned)
             .collect();
         let mut expected: Vec<(usize, String)> = fs::read_dir(example_dir())
@@ -257,13 +265,19 @@ mod tests {
             .map(|file| {
                 let source = read_normalized(&file);
                 let order = declared_order(&file, &source).unwrap_or(DEFAULT_ORDER);
-                (order, file.file_name().unwrap().to_string_lossy().into_owned())
+                (
+                    order,
+                    file.file_name().unwrap().to_string_lossy().into_owned(),
+                )
             })
             .collect();
         expected.sort();
         assert_eq!(
             headings,
-            expected.into_iter().map(|(_, name)| name).collect::<Vec<_>>(),
+            expected
+                .into_iter()
+                .map(|(_, name)| name)
+                .collect::<Vec<_>>(),
             "entries follow the `-- order:` comments"
         );
         // The output is computed by running the program, not read from the
@@ -274,13 +288,22 @@ mod tests {
             "the runner's output is embedded"
         );
         assert!(!blob.contains("-- output:"), "file promises are not shown");
-        assert!(!blob.contains("-- order:"), "order directives are not shown");
+        assert!(
+            !blob.contains("-- order:"),
+            "order directives are not shown"
+        );
     }
 
     #[test]
     fn declared_order_reads_the_comment_from_any_line() {
-        assert_eq!(declared_order(Path::new("a.lichen"), "-- order: 2\nx"), Some(2));
-        assert_eq!(declared_order(Path::new("a.lichen"), "x\n-- order: 42"), Some(42));
+        assert_eq!(
+            declared_order(Path::new("a.lichen"), "-- order: 2\nx"),
+            Some(2)
+        );
+        assert_eq!(
+            declared_order(Path::new("a.lichen"), "x\n-- order: 42"),
+            Some(42)
+        );
         assert_eq!(declared_order(Path::new("a.lichen"), "no order here"), None);
     }
 
@@ -323,10 +346,26 @@ mod tests {
     #[test]
     fn declared_order_breaks_ties_by_name() {
         let files = [
-            ("c.lichen".to_string(), PathBuf::from("c.lichen"), "-- order: 2".to_string()),
-            ("a.lichen".to_string(), PathBuf::from("a.lichen"), "-- order: 1".to_string()),
-            ("b.lichen".to_string(), PathBuf::from("b.lichen"), "-- order: 1".to_string()),
-            ("d.lichen".to_string(), PathBuf::from("d.lichen"), "no order".to_string()),
+            (
+                "c.lichen".to_string(),
+                PathBuf::from("c.lichen"),
+                "-- order: 2".to_string(),
+            ),
+            (
+                "a.lichen".to_string(),
+                PathBuf::from("a.lichen"),
+                "-- order: 1".to_string(),
+            ),
+            (
+                "b.lichen".to_string(),
+                PathBuf::from("b.lichen"),
+                "-- order: 1".to_string(),
+            ),
+            (
+                "d.lichen".to_string(),
+                PathBuf::from("d.lichen"),
+                "no order".to_string(),
+            ),
         ];
         let mut files = files.to_vec();
         files.sort_by(|(name_a, file_a, source_a), (name_b, file_b, source_b)| {

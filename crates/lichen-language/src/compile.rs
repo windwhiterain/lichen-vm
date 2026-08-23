@@ -3,16 +3,17 @@
 //! A use of a name *is* the binder's own `ExprId`: compiling `x => e`
 //! allocates the `Parameter` expression first (span = the name's), pushes `x`
 //! on a scope stack, compiles `e`, then wraps `Function { parameter, return }`.
-//! A statement binding `a = e` is the same resolution without a lambda: the
-//! value compiles to one `ExprId`, the scope maps `a` to it, and every use of
-//! `a` is that same id — the IR is a graph and the binding is pure sharing
-//! (no `let`, no desugared application).  The IR therefore carries no name
-//! strings, and the checker's scope stack is keyed by the same ids.
-//! A recursive binding `rec fib = n => e` reverses the order: the id is
-//! allocated *first* (its kind filled in after the body compiles), the name
-//! is entered, and a use of `fib` inside the body resolves to the id being
-//! defined — the IR becomes a cycle there, recorded in `IR.recursive` so the
-//! checker registers the function's pair before its body compiles.
+//! A statement binding `a = e` is the same resolution without a lambda: a
+//! block-wide binding reserves a `Placeholder` id, enters the name, compiles
+//! the value, then fills the placeholder with the value's kind — so a value
+//! may reference its own name (and any other binding of the block, in either
+//! direction), and the IR becomes a cycle where it does.  A use of the name
+//! is the value's own id; the IR is a graph and the binding is pure sharing
+//! (no `let`-as-application desugaring).  A restrictive binding `let a = e`
+//! compiles the value *before* entering the name, so the name is visible only
+//! to later statements — the sequential, non-recursive case.  The IR
+//! therefore carries no name strings, and the checker's scope stack is keyed
+//! by the same ids.
 //! A block `{ …; e }` is a program-shaped expression: its statements share
 //! the same way, its scope frames are popped at the `}`, and it compiles to
 //! its final expression's own node.
@@ -39,7 +40,7 @@ use std::collections::HashMap;
 
 use lichen_highlevel::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
 
-use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
+use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 
 pub fn compile(program: &Program) -> Result<IR, Diag> {
@@ -47,13 +48,11 @@ pub fn compile(program: &Program) -> Result<IR, Diag> {
         ir: IR::new(),
         scopes: Vec::new(),
     };
-    // Each statement compiles once and enters the scope (bindings) or just
-    // compiles (a bare expression); the scope is never popped, so later
-    // statements (and the final expression) see every earlier binding.
-    let mut statements = Vec::new();
-    for stmt in &program.statements {
-        statements.push(compiler.compile_stmt(stmt)?);
-    }
+    // The whole program is one scope: block-wide bindings are entered before
+    // any value compiles, restrictive `let` bindings are entered as they're
+    // seen; the scope is never popped, so later statements (and the final
+    // expression) see every earlier binding.
+    let statements = compiler.compile_scope_statements(&program.statements)?;
     let final_id = compiler.compile_expr(&program.expr)?;
     let root = compiler.wrap(statements, final_id, &program.expr.span());
     compiler.ir.set_root(root);
@@ -67,104 +66,85 @@ struct Compiler {
 }
 
 impl Compiler {
-    fn compile_stmt(&mut self, stmt: &Stmt) -> Result<ExprId, Diag> {
-        match stmt {
-            Stmt::Binding(binding) if binding.recursive => {
-                // The name is entered *before* the value compiles — the
-                // body may reference it — and stays in scope for later
-                // statements, exactly like an ordinary binding.  The id is
-                // reserved first; the value fills it in below.
-                let id = self.alloc(ExprKind::Placeholder, &binding.span);
-                self.ir.recursive.insert(id);
-                self.scopes
-                    .push(HashMap::from([(binding.name.clone(), id)]));
-                let value = self.compile_rec_value(binding, id)?;
-                // The body resolved the name to the function id; later
-                // statements resolve it to the value itself (a desugared
-                // annotation wrapper, when the parameter was annotated).
-                self.scopes
-                    .last_mut()
-                    .expect("the recursive binding's frame")
-                    .insert(binding.name.clone(), value);
-                Ok(value)
+    /// Compile a statement list, entering every block-wide binding's name
+    /// *before* any value compiles so a value may forward- or mutually-
+    /// reference the block's bindings.  Restrictive `let` bindings are
+    /// entered during the pass (their value compiles first, so the name is
+    /// visible only to later statements).
+    fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Result<Vec<ExprId>, Diag> {
+        // Pre-pass: reserve a `Placeholder` per block-wide binding and enter
+        // the name, in one frame.  A scope's block-wide bindings are mutually
+        // visible in both directions.
+        let mut frame = HashMap::new();
+        for stmt in statements {
+            if let Stmt::Binding(binding) = stmt
+                && !binding.restrictive
+            {
+                let p = self.alloc(ExprKind::Placeholder, &binding.span);
+                frame.insert(binding.name.clone(), p);
             }
-            Stmt::Binding(binding) => {
-                let id = self.compile_expr(&binding.value)?;
-                self.scopes
-                    .push(HashMap::from([(binding.name.clone(), id)]));
-                Ok(id)
-            }
-            Stmt::Expr(e) => self.compile_expr(e),
         }
+        if !frame.is_empty() {
+            self.scopes.push(frame);
+        }
+
+        // Compile pass: each statement becomes one id in order.
+        let mut out = Vec::new();
+        for stmt in statements {
+            out.push(match stmt {
+                Stmt::Binding(binding) if binding.restrictive => {
+                    // `let a = e` — the value compiles before the name enters
+                    // scope, so it is visible only to later statements and
+                    // never to itself.  `let a = a` resolves `a` to the outer
+                    // (or block-wise) binding, exactly the sequential case.
+                    let id = self.compile_expr(&binding.value)?;
+                    self.scopes
+                        .push(HashMap::from([(binding.name.clone(), id)]));
+                    id
+                }
+                Stmt::Binding(binding) => {
+                    // Block-wide binding: the name already maps to the
+                    // reserved placeholder `p`.  Compile the value; if the
+                    // value *is* a block-wide placeholder (a bare name
+                    // reference, e.g. `b = a` or the degenerate `a = a`),
+                    // alias the name to it — otherwise transplant the value's
+                    // kind into `p` so the placeholder becomes the value node
+                    // and any self/mutual reference (which resolves to `p`)
+                    // points at the value.
+                    let p = self
+                        .lookup(&binding.name)
+                        .expect("a block-wide binding's name is pre-entered");
+                    let value = self.compile_expr(&binding.value)?;
+                    if matches!(&binding.value, Expr::Name(..)) {
+                        // A bare name reference (`b = a`, `y = x`, and the
+                        // degenerate `a = a`): share the resolved id rather
+                        // than copying the kind, so the binding aliases it.
+                        self.remap(&binding.name, p, value);
+                        value
+                    } else {
+                        self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
+                        self.ir.expr[p.0 as usize].span = self.ir.expr[value.0 as usize].span;
+                        p
+                    }
+                }
+                Stmt::Expr(e) => self.compile_expr(e)?,
+            });
+        }
+        Ok(out)
     }
 
-    /// The value of a recursive binding, compiled into the reserved `id`:
-    /// `rec fib = n => e`.  A use of `fib` inside
-    /// the body resolves to `id` — the IR is a cycle there, recorded in
-    /// [`IR::recursive`] so the checker registers the function's pair before
-    /// the body compiles.  The value must be a lambda.  An annotated
-    /// parameter desugars exactly like a plain lambda's — `n : Int => e` is
-    /// `(n => e) : (Int -> _)`, the annotation wrapping the function node
-    /// (the checker's `check_ann` unifies the function's arrow against the
-    /// annotation's; the `_` placeholder binds lazily, so no pending
-    /// computation is forced at check time).
-    fn compile_rec_value(&mut self, binding: &Binding, id: ExprId) -> Result<ExprId, Diag> {
-        let Expr::Lambda {
-            parameter,
-            parameter_span,
-            parameter_type,
-            r#return,
-            span,
-        } = &binding.value
-        else {
-            return Err(Diag::new(
-                Stage::Resolve,
-                binding.span,
-                format!(
-                    "a recursive binding's value must be a lambda ('{}')",
-                    binding.name
-                ),
-            ));
-        };
-        let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
-        self.scopes
-            .push(HashMap::from([(parameter.clone(), parameter_id)]));
-        // The annotated parameter's type is compiled in scope too — a type
-        // may reference the parameter (`x : x -> Int`).
-        let body = self.compile_expr(r#return);
-        let parameter_type = parameter_type
-            .as_ref()
-            .map(|t| self.compile_expr(t))
-            .transpose();
-        self.scopes.pop();
-        let body = body?;
-        self.ir.expr[id.0 as usize].kind = ExprKind::Function {
-            parameter: parameter_id,
-            r#return: body,
-        };
-        self.ir.expr[id.0 as usize].span = Some(*span);
-        match parameter_type? {
-            // `rec f = n : T => e`  ≡  `rec f = (n => e) : (T -> _)` — the
-            // parameter annotation is an ordinary annotation of the lambda
-            // with an arrow whose codomain is inferred.
-            Some(t) => {
-                let placeholder = self.alloc(ExprKind::Placeholder, span);
-                let arrow = self.alloc(
-                    ExprKind::TypeFunction {
-                        parameter: t,
-                        r#return: placeholder,
-                    },
-                    span,
-                );
-                Ok(self.alloc(
-                    ExprKind::Annotation {
-                        value: id,
-                        r#type: arrow,
-                    },
-                    span,
-                ))
+    /// Change the mapping of `name` from the reserved placeholder `p` to `to`
+    /// (the shared value), in the frame holding that placeholder.  The
+    /// placeholder is unique to this binding, so the innermost frame whose
+    /// `name` maps to exactly `p` is the pre-pass frame; a restrictive `let`
+    /// frame shadowing the same name maps it to a different id and is left
+    /// alone (it stays shadowed, as intended).
+    fn remap(&mut self, name: &str, p: ExprId, to: ExprId) {
+        for frame in self.scopes.iter_mut().rev() {
+            if frame.get(name) == Some(&p) {
+                frame.insert(name.to_string(), to);
+                return;
             }
-            None => Ok(id),
         }
     }
 
@@ -191,8 +171,13 @@ impl Compiler {
             ExprKind::Constant(Constant::USize(statements.len() - 1)),
             Some(*span),
         );
-        self.ir
-            .alloc(ExprKind::Index { array: tuple, index }, Some(*span))
+        self.ir.alloc(
+            ExprKind::Index {
+                array: tuple,
+                index,
+            },
+            Some(*span),
+        )
     }
     fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
         let id = match e {
@@ -318,7 +303,9 @@ impl Compiler {
                 let condition = self.compile_expr(condition)?;
                 let then_branch = self.compile_expr(then_branch)?;
                 let else_branch = self.compile_expr(else_branch)?;
-                let branches = self.ir.alloc_array(&[else_branch, then_branch], Some(*span));
+                let branches = self
+                    .ir
+                    .alloc_array(&[else_branch, then_branch], Some(*span));
                 self.alloc(
                     ExprKind::Index {
                         array: branches,
@@ -387,17 +374,18 @@ impl Compiler {
                     span,
                 )
             }
-            Expr::Block { statements, expr, span } => {
+            Expr::Block {
+                statements,
+                expr,
+                span,
+            } => {
                 // The same graph sharing as a program's statements — each
                 // value compiles once and names resolve to its own id — but
                 // the block's scope frames are dropped at the `}`, so a
                 // block compiles to its final expression's own node (wired
                 // through the statement wrapper like a program's).
                 let scope_len = self.scopes.len();
-                let mut stmts = Vec::new();
-                for stmt in statements {
-                    stmts.push(self.compile_stmt(stmt)?);
-                }
+                let stmts = self.compile_scope_statements(statements)?;
                 let body = self.compile_expr(expr);
                 self.scopes.truncate(scope_len);
                 let body = body?;
@@ -607,7 +595,10 @@ mod tests {
             kind(&ir, index),
             ExprKind::Constant(Constant::USize(1))
         ));
-        assert!(matches!(kind(&ir, wrapped(&ir)), ExprKind::Constant(Constant::USize(7))));
+        assert!(matches!(
+            kind(&ir, wrapped(&ir)),
+            ExprKind::Constant(Constant::USize(7))
+        ));
         // A trailing statement identical to the final expression is not
         // wrapped: `a = 1; a` stays the `1` node.
         let ir = compile_ok("a = 1; a");
@@ -617,10 +608,13 @@ mod tests {
         ));
         // A bare expression statement between bindings is compiled too.
         let ir = compile_ok("a = 1; 5; a");
-        let ExprKind::Tuple(range) = kind(&ir, match kind(&ir, ir.root) {
-            ExprKind::Index { array, .. } => array,
-            _ => panic!("expected the statement wrapper"),
-        }) else {
+        let ExprKind::Tuple(range) = kind(
+            &ir,
+            match kind(&ir, ir.root) {
+                ExprKind::Index { array, .. } => array,
+                _ => panic!("expected the statement wrapper"),
+            },
+        ) else {
             panic!("expected the wrapped tuple")
         };
         assert_eq!(range.end - range.start, 3);
@@ -633,7 +627,11 @@ mod tests {
         let ExprKind::Annotation { value, r#type } = kind(&ir, ir.root) else {
             panic!("expected an annotation")
         };
-        let ExprKind::Function { parameter, r#return } = kind(&ir, value) else {
+        let ExprKind::Function {
+            parameter,
+            r#return,
+        } = kind(&ir, value)
+        else {
             panic!("expected the function")
         };
         assert_eq!(r#return, parameter, "the identity's body is the parameter");

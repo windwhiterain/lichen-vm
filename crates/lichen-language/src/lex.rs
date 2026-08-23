@@ -1,6 +1,6 @@
 //! The lexer: source text → tokens, each with a `(line, column)` span.
 //!
-//! `Int`, `Type`, `struct`, `rec`, `if`, `then`, and `else` lex as
+//! `Int`, `Type`, `struct`, `let`, `if`, `then`, and `else` lex as
 //! keywords; everything else that starts an identifier is a name.  `<` `>`
 //! build type-level forms (the array type `Int<3>`, the tuple type
 //! `<Int, Type>`, the struct type `struct<Int, Type>`); `[` `]` and `(`
@@ -20,7 +20,7 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
-    /// An identifier, never `Int`/`Type`/`struct`/`rec`/`if`/`then`/`else`
+    /// An identifier, never `Int`/`Type`/`struct`/`let`/`if`/`then`/`else`
     /// (those are keywords).
     Name(String),
     /// The `Int` type constant.
@@ -29,8 +29,9 @@ pub enum TokenKind {
     KwType,
     /// The `struct` keyword — a nominal struct type.
     KwStruct,
-    /// The `rec` keyword — a recursive binding (`rec fib = n => …`).
-    KwRec,
+    /// The `let` keyword — a restrictive binding (`let a = e`): the name is
+    /// visible only to later bindings, never to itself.
+    KwLet,
     /// The `if` keyword — a conditional expression.
     KwIf,
     /// The `then` keyword — the `if`'s then-branch delimiter.
@@ -81,7 +82,7 @@ impl TokenKind {
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
-            TokenKind::KwRec => "'rec'".to_string(),
+            TokenKind::KwLet => "'let'".to_string(),
             TokenKind::KwIf => "'if'".to_string(),
             TokenKind::KwThen => "'then'".to_string(),
             TokenKind::KwElse => "'else'".to_string(),
@@ -244,7 +245,7 @@ impl Lexer<'_> {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
-            "rec" => TokenKind::KwRec,
+            "let" => TokenKind::KwLet,
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,
             "else" => TokenKind::KwElse,
@@ -363,7 +364,10 @@ mod tests {
         assert_eq!(token.span, (1, 3));
         // Each newline is a Semicolon and advances the line.
         let tokens = lex("\n\n  y").unwrap();
-        let y = tokens.iter().find(|t| t.kind == TokenKind::Name("y".to_string())).unwrap();
+        let y = tokens
+            .iter()
+            .find(|t| t.kind == TokenKind::Name("y".to_string()))
+            .unwrap();
         assert_eq!(y.span, (3, 3));
     }
 
@@ -401,11 +405,11 @@ mod tests {
 
     #[test]
     fn operators_and_keywords_lex() {
-        // A recursive fibonacci binding — every new token in one line.
+        // A restrictive-`let` fibonacci binding — every new token in one line.
         assert_eq!(
-            kinds("rec fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
+            kinds("let fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
             vec![
-                TokenKind::KwRec,
+                TokenKind::KwLet,
                 TokenKind::Name("fib".to_string()),
                 TokenKind::Equals,
                 TokenKind::Name("n".to_string()),

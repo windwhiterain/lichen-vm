@@ -8,15 +8,15 @@
 //! build lowlevel graphs directly and exercise the laziness + unification
 //! rules the highlevel layer will sit on.
 
-use lichen_highlevel::program::HighProgram;
-use lichen_lowlevel::{BlockId, Module, NodeId, Operation, Operator, Value};
+use lichen_highlevel::program::{HighProgram, HighProgramValue};
+use lichen_lowlevel::{BlockId, Module, NodeId, Operation, Operator};
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
-    m.add_node(block, None, Some(Value::USize(n)))
+    m.add_node(block, None, Some(HighProgramValue::USize(n)))
 }
 
 fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
-    m.add_node(block, None, Some(Value::Parameterized))
+    m.add_node(block, None, Some(HighProgramValue::Parameterized))
 }
 
 fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
@@ -24,7 +24,7 @@ fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> No
     m.add_node(
         block,
         None,
-        Some(Value::Array(std::ptr::slice_from_raw_parts(
+        Some(HighProgramValue::Array(std::ptr::slice_from_raw_parts(
             slice.as_ptr(),
             slice.len(),
         ))),
@@ -64,8 +64,8 @@ fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: No
     )
 }
 
-fn array_ids(value: Value<HighProgram>) -> Vec<NodeId> {
-    let Value::Array(ptr) = value else {
+fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
+    let HighProgramValue::Array(ptr) = value else {
         panic!("expected an array value")
     };
     unsafe { &*ptr }.to_vec()
@@ -108,7 +108,10 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let value = m.evaluate_node_deep(call, None);
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
-    assert!(matches!(m.nodes[ids[1]].value, Some(Value::USize(1))));
+    assert!(matches!(
+        m.nodes[ids[1]].value,
+        Some(HighProgramValue::USize(1))
+    ));
 
     // applied to 0: the same template picks the `float` branch
     let zero = usize_node(&mut m, root, 0);
@@ -116,7 +119,10 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let value = m.evaluate_node_deep(call, None);
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
-    assert!(matches!(m.nodes[ids[1]].value, Some(Value::USize(0))));
+    assert!(matches!(
+        m.nodes[ids[1]].value,
+        Some(HighProgramValue::USize(0))
+    ));
 }
 
 #[test]
@@ -198,7 +204,10 @@ fn a_resolvable_computation_is_forced_and_compared() {
         m.equality_representative(four),
         m.equality_representative(pick_five)
     );
-    assert!(matches!(m.nodes[pick_five].value, Some(Value::USize(5))));
+    assert!(matches!(
+        m.nodes[pick_five].value,
+        Some(HighProgramValue::USize(5))
+    ));
 }
 
 #[test]
@@ -224,7 +233,10 @@ fn a_resolvable_index_read_pins_its_element() {
         m.equality_representative(cell),
         "the read aliased the element"
     );
-    assert!(matches!(m.nodes[read].value, Some(Value::USize(3))));
+    assert!(matches!(
+        m.nodes[read].value,
+        Some(HighProgramValue::USize(3))
+    ));
     assert!(
         m.nodes[read].operation.is_some(),
         "the pinned read keeps its operation (the operand edge must survive)"
@@ -260,8 +272,14 @@ fn two_resolvable_computations_are_compared_after_forcing() {
         m.equality_representative(pick4)
     );
     // each kept its own computed value — neither was erased onto the other
-    assert!(matches!(m.nodes[pick5].value, Some(Value::USize(5))));
-    assert!(matches!(m.nodes[pick4].value, Some(Value::USize(4))));
+    assert!(matches!(
+        m.nodes[pick5].value,
+        Some(HighProgramValue::USize(5))
+    ));
+    assert!(matches!(
+        m.nodes[pick4].value,
+        Some(HighProgramValue::USize(4))
+    ));
 
     // equal computations merge
     let cond1b = usize_node(&mut m, root, 1);

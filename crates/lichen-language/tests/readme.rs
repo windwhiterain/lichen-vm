@@ -18,8 +18,8 @@ fn readme_embeds_the_current_example_programs() {
     let blob = readme::render_examples();
     let path = readme::readme_path();
     let content = readme::read_normalized(&path);
-    let expected =
-        readme::replace_examples(&content, &blob).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+    let expected = readme::replace_examples(&content, &blob)
+        .unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     if content != expected {
         fs::write(&path, expected).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         eprintln!(

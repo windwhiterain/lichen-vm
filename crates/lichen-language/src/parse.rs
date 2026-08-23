@@ -2,12 +2,14 @@
 //!
 //! A program is `name = expr; …` bindings and bare expressions followed by a
 //! final expression (see [`Program`]) — the same statement list, wrapped in
-//! `{ … }`, forms a block expression (see [`Expr::Block`]).  A `rec` before
-//! a binding (`rec fib = n => …`) makes it recursive: the name is in scope
-//! in its own value, whose value must be a lambda.  Statements are
+//! `{ … }`, forms a block expression (see [`Expr::Block`]).  A binding
+//! without `let` is *block-wide*: its name is in scope throughout the block,
+//! so it may recurse with itself and with the block's other bindings.  A
+//! `let` before a binding (`let a = …`) is *restrictive*: the name is in
+//! scope only in later statements, never in its own value.  Statements are
 //! separated by `;` or a newline (the lexer lexes both as `Semicolon`), and
 //! consecutive, leading, and trailing separators are all tolerated.  A
-//! binding at statement start is `name =` (or `rec name =`); anything else
+//! binding at statement start is `name =` (or `let name =`); anything else
 //! is an expression —
 //! a bare expression is a statement anywhere, and only the last statement is
 //! the list's value.  Within an expression, one grammar covers terms and
@@ -96,8 +98,11 @@ impl Parser<'_> {
     /// binding; anything else is an expression — a bare expression is a
     /// statement anywhere in the list (there is no dead code: the compiler
     /// checks every statement), and only the *last* one is the list's value.
-    /// A `rec name =` binding is recursive: the name is in scope in its own
-    /// value (see [`Parser::parse_bindings_and_expr`]).
+    /// A binding without `let` is *block-wide*: its name is in scope
+    /// throughout the block, forward and backward, so bindings may reference
+    /// and recurse with each other.  A `let name =` binding is *restrictive*:
+    /// the name is in scope only in later statements (see
+    /// [`Parser::parse_bindings_and_expr`]).
     /// Every non-final statement requires a trailing separator — `;` or a
     /// newline (the lexer merges both into `Semicolon`).  The same list
     /// forms a block's body (see [`Parser::block`]).
@@ -105,17 +110,22 @@ impl Parser<'_> {
         let mut statements = Vec::new();
         self.skip_separators();
         loop {
-            // `rec fib = …` — the recursive form: the `rec` keyword, then the
-            // ordinary `name =`.
-            let recursive = matches!(
+            // `let name = …` — the restrictive form: the `let` keyword, then
+            // the ordinary `name =`.  Without `let`, a binding is block-wide
+            // (visible throughout the block, so it may recurse with itself).
+            let restrictive = matches!(
                 (
                     &self.peek().kind,
                     self.tokens.get(self.pos + 1).map(|t| &t.kind),
                     self.tokens.get(self.pos + 2).map(|t| &t.kind),
                 ),
-                (TokenKind::KwRec, Some(TokenKind::Name(_)), Some(TokenKind::Equals))
+                (
+                    TokenKind::KwLet,
+                    Some(TokenKind::Name(_)),
+                    Some(TokenKind::Equals)
+                )
             );
-            let binding = recursive
+            let binding = restrictive
                 || matches!(
                     (
                         &self.peek().kind,
@@ -124,8 +134,8 @@ impl Parser<'_> {
                     (TokenKind::Name(_), Some(TokenKind::Equals))
                 );
             if binding {
-                let (name, span, recursive) = if recursive {
-                    self.next(); // the `rec`
+                let (name, span, restrictive) = if restrictive {
+                    self.next(); // the `let`
                     let name = self.next();
                     let TokenKind::Name(binding_name) = name.kind else {
                         unreachable!()
@@ -145,7 +155,7 @@ impl Parser<'_> {
                     name,
                     span,
                     value,
-                    recursive,
+                    restrictive,
                 }));
                 if !self.eat(&TokenKind::Semicolon) {
                     return Err(self.error_found("';'"));
@@ -212,16 +222,18 @@ impl Parser<'_> {
         // operator, so the annotation cannot extend through it), so there is
         // no ambiguity with a plain annotation.
         let (parameter, parameter_span, parameter_type, span) = match expr {
-            Expr::Annotation { value, r#type, span } => match *value {
-                Expr::Name(parameter, parameter_span) => {
-                    (parameter, parameter_span, r#type, span)
-                }
+            Expr::Annotation {
+                value,
+                r#type,
+                span,
+            } => match *value {
+                Expr::Name(parameter, parameter_span) => (parameter, parameter_span, r#type, span),
                 value => {
                     return Ok(Expr::Annotation {
                         value: Box::new(value),
                         r#type,
                         span,
-                    })
+                    });
                 }
             },
             expr => return Ok(expr),
@@ -597,7 +609,10 @@ mod tests {
         let err = parse_err("a = 1; 5; a = 2");
         assert_eq!(err.message, "expected ';', found the end of the program");
         let err = parse_err("a = 1;");
-        assert_eq!(err.message, "expected an expression, found the end of the program");
+        assert_eq!(
+            err.message,
+            "expected an expression, found the end of the program"
+        );
         // A binding without a value.
         let err = parse_err("a = ; 5");
         assert_eq!(err.message, "expected an expression, found ';'");
@@ -729,7 +744,10 @@ mod tests {
         // An unannotated lambda has no parameter type.
         assert!(matches!(
             parse_ok("x => x"),
-            Expr::Lambda { parameter_type: None, .. }
+            Expr::Lambda {
+                parameter_type: None,
+                ..
+            }
         ));
         // The annotation can be a compound type: x : Int -> Int => e.
         let Expr::Lambda { parameter_type, .. } = parse_ok("x : Int -> Int => x") else {
@@ -741,7 +759,10 @@ mod tests {
         // An annotated lambda parenthesized is the same form.
         assert!(matches!(
             parse_ok("(x : Int) => x"),
-            Expr::Lambda { parameter_type: Some(..), .. }
+            Expr::Lambda {
+                parameter_type: Some(..),
+                ..
+            }
         ));
     }
 
@@ -940,7 +961,10 @@ mod tests {
 
     #[test]
     fn a_block_is_bindings_followed_by_a_final_expression() {
-        let Expr::Block { statements, expr, .. } = parse_ok("{a = 1; a}") else {
+        let Expr::Block {
+            statements, expr, ..
+        } = parse_ok("{a = 1; a}")
+        else {
             panic!("expected a block")
         };
         assert_eq!(statements.len(), 1);
@@ -970,7 +994,10 @@ mod tests {
     #[test]
     fn a_block_can_be_written_without_semicolons() {
         // {a = 1\nb = 2\nb} — newlines separate the block's statements.
-        let Expr::Block { statements, expr, .. } = parse_ok("{a = 1\nb = 2\nb}") else {
+        let Expr::Block {
+            statements, expr, ..
+        } = parse_ok("{a = 1\nb = 2\nb}")
+        else {
             panic!("expected a block")
         };
         assert_eq!(statements.len(), 2);

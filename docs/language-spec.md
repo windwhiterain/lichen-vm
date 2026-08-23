@@ -30,7 +30,7 @@ resolver, and IR emitter on top of the existing highlevel checker, which runs
 
 ```
 program  := (stmt sep)* expr                        -- statements, then the final expression
-stmt     := name '=' expr                           -- binding
+stmt     := ['let'] name '=' expr                   -- binding (block-wide by default; `let` restrictive)
           | expr                                    -- bare expression statement
 sep      := ';' | newline                           -- statement separator
 
@@ -53,8 +53,11 @@ atom     := int_literal
           | '{' (stmt sep)* expr '}'              -- block: scoped statements, then the block's value
 ```
 
-- **Keywords:** `Int`, `Type`, `struct`, `=>`, `->`, `:`.  `=` binds a name in
-  a statement, a statement separator is `;` or a newline (they are
+- **Keywords:** `Int`, `Type`, `struct`, `let`, `=>`, `->`, `:`.  `=` binds a name in
+  a statement; a binding is **block-wide** by default (its name is in scope
+  throughout the block, forward and backward, so it may reference and recurse
+  with the block's other bindings) and gets the restrictive, sequential form
+  with `let`.  A statement separator is `;` or a newline (they are
   interchangeable — the lexer produces the same token for both), and `{` `}`
   delimit a block (a program-shaped expression).  `--` starts a line comment
   (to end of line).
@@ -121,12 +124,22 @@ index it selects a branch.
   sugar: its value compiles once into the IR arena, and every use of the name
   is that same node id (the IR is a graph).  There is no `let` node and no
   desugared lambda — the final expression stays the program's root, so its
-  type is determinable exactly like a bare program's.  Bindings are
-  sequential (a value may read earlier bindings) and shadowable; a binding
-  cannot refer to itself (its value compiles before the name is in scope).
-  Sharing means a bound *non-function* value has one type across uses, while
-  a bound lambda stays polymorphic — each application still instantiates the
-  parameter fresh via the runtime's per-apply clones.  A **bare expression
+  type is determinable exactly like a bare program's.  A binding is
+  **block-wide** by default: its name is in scope throughout the block —
+  forward *and* backward — so a value may reference its own name, a later
+  binding, or any other binding of the block, and may recurse with them.  The
+  frontend reserves a placeholder id per block-wide binding, enters all the
+  names before compiling any value, then fills each placeholder with its
+  value's node — so a self/mutual reference makes the IR a cycle there (the
+  graph contains a back-edge), which the checker totalizes by pre-registering
+  a skeleton pair and binding the skeleton's cells to the finished pair (no
+  recursion, no overflow).  `let name = expr` is the *restrictive* form: the
+  value compiles before the name enters scope, so the name is visible only to
+  later statements (`let a = a` resolves `a` to the outer binding — the
+  sequential, non-recursive case).  Sharing means a bound *non-function* value
+  has one type across uses, while a bound lambda stays polymorphic — each
+  application still instantiates the parameter fresh via the runtime's
+  per-apply clones.  A **bare expression
   statement** (`5; 7`, `f 5` before more statements) is no dead code: the
   frontend wires every statement into the root (`Index(Tuple([stmt₁, …,
   stmtₙ, final]), n)`), so each is checked and evaluated — the runtime *is*
@@ -134,7 +147,7 @@ index it selects a branch.
 - **Blocks.**  `{ stmt …; expr }` is an expression: the same
   statement list as a program (separators again `;` or newline, bare
   expression statements included), scoped to
-  the block.  Bindings are graph-shared
+  the block.  Bindings are block-wide inside it
   exactly as at the top level (each value compiles once, and a use of the name
   is the value's own node) and shadow outer names; the block's names are gone
   after the `}`.  Because a block is an expression, a function body can be one
@@ -238,7 +251,10 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `T<e>` | `TypeArray { element_type, length }` |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 
-There is no desugar step (no `let`).
+There is no desugar step: bindings are graph sharing, and a block-wide
+binding reserves a placeholder id, compiles its value, then fills the id with
+the value's node — so a self/mutual reference makes the IR a cycle there,
+which the checker totalizes with a skeleton pair.
 
 ### Name resolution
 
@@ -250,13 +266,17 @@ A scope stack of `name → ExprId`.  Compiling `x => e`:
 4. pop, then allocate `Function { parameter, return }`.
 
 A use of `x` in `e` therefore *is* the parameter's own `ExprId` — the checker's
-scope stack is keyed by it, and the IR carries no name strings.  A statement
-binding `a = e` resolves the same way without a lambda: the value compiles to
-one `ExprId`, `a` is pushed onto the stack (never popped — later statements
-see it), and a use of `a` is the value's own `ExprId`.  A block
-`{ a = e; …; e }` pushes its bindings the same way and pops them (truncates)
-at the `}` — inside, the block's names shadow outer ones; after the `}`, the
-outer names are back.  Shadowing is allowed
+scope stack is keyed by it, and the IR carries no name strings.  A block-wide
+binding `a = e` resolves differently: the frontend first reserves a
+`Placeholder` id for every block-wide binding of the scope, enters all the
+names in one frame, then compiles each value — so a value may reference a
+binding defined *later* or *itself*.  A use of `a` in a value resolves to the
+reserved id; once the value compiles, the id is filled with the value's node
+(a bare `a = b` aliases `b`'s node instead).  A restrictive `let a = e`
+compiles the value first and pushes `a` afterwards, so the name is visible
+only to later statements.  A block `{ a = e; …; e }` does the same and pops
+its scope frames (truncates) at the `}` — inside, the block's names shadow
+outer ones; after the `}`, the outer names are back.  Shadowing is allowed
 (the inner binding wins).  A name in no scope is a **resolve diagnostic** at
 the name's span — the checker's `lookup` panics on unresolved ids, so the
 frontend guarantees resolution before the IR leaves the crate.

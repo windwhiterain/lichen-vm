@@ -22,8 +22,8 @@ use std::collections::{HashMap, HashSet};
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind, DiaryEntry};
 use lichen_highlevel::ir::Span;
-use lichen_highlevel::program::{HighProgram, HighValue};
-use lichen_lowlevel::{Module, NodeId, Value, is_unbound};
+use lichen_highlevel::program::{HighProgram, HighProgramValue};
+use lichen_lowlevel::{Module, NodeId, is_unbound};
 use lichen_utils::disjoint;
 
 use crate::diag::Diag;
@@ -40,31 +40,33 @@ use crate::diag::Diag;
 /// source spellings `Int` / `Type`.  A type pair `[head, [Type, ↺]]` renders
 /// as its head (`[TypeInt, K]` → `Int`), and the self-looping universe as
 /// `Type` — otherwise the recursive pair encoding would loop forever.
-pub fn print_value(module: &Module<HighProgram>, value: Value<HighProgram>) -> String {
+pub fn print_value(module: &Module<HighProgram>, value: HighProgramValue) -> String {
     print_inner(module, value, &mut Vec::new())
 }
 
 fn print_inner(
     module: &Module<HighProgram>,
-    value: Value<HighProgram>,
+    value: HighProgramValue,
     path: &mut Vec<NodeId>,
 ) -> String {
     match value {
-        Value::USize(n) => n.to_string(),
-        Value::Ext(HighValue::TypeInt) => "Int".to_string(),
-        Value::Ext(HighValue::TypeType) => "Type".to_string(),
-        Value::Ext(HighValue::TypeFunction) => "TypeFunction".to_string(),
-        Value::Ext(HighValue::TypeTuple) => "TypeTuple".to_string(),
-        Value::Ext(HighValue::TypeArray) => "TypeArray".to_string(),
-        Value::Ext(HighValue::TypeId(n)) => format!("TypeId({n})"),
-        Value::Array(ptr) => {
+        HighProgramValue::USize(n) => n.to_string(),
+        HighProgramValue::TypeInt => "Int".to_string(),
+        HighProgramValue::TypeType => "Type".to_string(),
+        HighProgramValue::TypeFunction => "TypeFunction".to_string(),
+        HighProgramValue::TypeTuple => "TypeTuple".to_string(),
+        HighProgramValue::TypeArray => "TypeArray".to_string(),
+        HighProgramValue::TypeId(n) => format!("TypeId({n})"),
+        HighProgramValue::Array(ptr) => {
             let elements = unsafe { &*ptr };
             // A type pair `[head, K]`: the kind slot is the self-looping
             // universe, so render just the head (and cut the cycle).
             if elements.len() == 2 && is_universe(module, elements[1]) {
                 return print_inner(
                     module,
-                    module.nodes[elements[0]].value.unwrap_or(Value::None),
+                    module.nodes[elements[0]]
+                        .value
+                        .unwrap_or(HighProgramValue::None),
                     path,
                 );
             }
@@ -74,7 +76,7 @@ fn print_inner(
                     out.push("…".to_string());
                 } else {
                     path.push(id);
-                    let element = module.nodes[id].value.unwrap_or(Value::None);
+                    let element = module.nodes[id].value.unwrap_or(HighProgramValue::None);
                     let text = print_inner(module, element, path);
                     path.pop();
                     out.push(text);
@@ -82,9 +84,9 @@ fn print_inner(
             }
             format!("[{}]", out.join(", "))
         }
-        Value::Function(_) => "Function".to_string(),
-        Value::None => "none".to_string(),
-        Value::Parameterized => "parameterized".to_string(),
+        HighProgramValue::Function(_) => "Function".to_string(),
+        HighProgramValue::None => "none".to_string(),
+        HighProgramValue::Parameterized => "parameterized".to_string(),
     }
 }
 
@@ -140,8 +142,13 @@ impl<'a> TypePrinter<'a> {
         if self.path.contains(&node) {
             return "…".to_string();
         }
-        let value = self.module.nodes[node].value.unwrap_or(Value::None);
-        if matches!(value, Value::None | Value::Parameterized) {
+        let value = self.module.nodes[node]
+            .value
+            .unwrap_or(HighProgramValue::None);
+        if matches!(
+            value,
+            HighProgramValue::None | HighProgramValue::Parameterized
+        ) {
             return self.class_name(node);
         }
         self.path.push(node);
@@ -164,18 +171,20 @@ impl<'a> TypePrinter<'a> {
     }
 
     /// Render a type value, descending into arrays.
-    fn value(&mut self, node: NodeId, value: Value<HighProgram>) -> String {
+    fn value(&mut self, node: NodeId, value: HighProgramValue) -> String {
         match value {
-            Value::USize(n) => n.to_string(),
-            Value::Ext(HighValue::TypeInt) => "Int".to_string(),
-            Value::Ext(HighValue::TypeType) => "Type".to_string(),
-            Value::Ext(HighValue::TypeFunction) => "TypeFunction".to_string(),
-            Value::Ext(HighValue::TypeTuple) => "TypeTuple".to_string(),
-            Value::Ext(HighValue::TypeArray) => "TypeArray".to_string(),
-            Value::Ext(HighValue::TypeId(n)) => format!("TypeId({n})"),
-            Value::Function(_) => "Function".to_string(),
-            Value::None | Value::Parameterized => unreachable!("handled by node()"),
-            Value::Array(ptr) => self.elements(node, unsafe { &*ptr }),
+            HighProgramValue::USize(n) => n.to_string(),
+            HighProgramValue::TypeInt => "Int".to_string(),
+            HighProgramValue::TypeType => "Type".to_string(),
+            HighProgramValue::TypeFunction => "TypeFunction".to_string(),
+            HighProgramValue::TypeTuple => "TypeTuple".to_string(),
+            HighProgramValue::TypeArray => "TypeArray".to_string(),
+            HighProgramValue::TypeId(n) => format!("TypeId({n})"),
+            HighProgramValue::Function(_) => "Function".to_string(),
+            HighProgramValue::None | HighProgramValue::Parameterized => {
+                unreachable!("handled by node()")
+            }
+            HighProgramValue::Array(ptr) => self.elements(node, unsafe { &*ptr }),
         }
     }
 
@@ -188,36 +197,38 @@ impl<'a> TypePrinter<'a> {
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
         if elements.len() == 2
-            && let Some(Value::Array(kind_ptr)) = self.module.nodes[elements[1]].value
+            && let Some(HighProgramValue::Array(kind_ptr)) = self.module.nodes[elements[1]].value
             && let kind = unsafe { &*kind_ptr }
             && kind.len() == 2
             && is_universe(self.module, kind[1])
         {
             match self.module.nodes[kind[0]].value {
-                Some(Value::Ext(HighValue::TypeFunction)) => {
+                Some(HighProgramValue::TypeFunction) => {
                     // shape = [in, out] — render `in -> out`.
-                    if let Some(Value::Array(shape_ptr)) = self.module.nodes[elements[0]].value
+                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                        self.module.nodes[elements[0]].value
                         && let s = unsafe { &*shape_ptr }
                         && s.len() == 2
                     {
                         return format!("{} -> {}", self.node(s[0]), self.node(s[1]));
                     }
                 }
-                Some(Value::Ext(HighValue::TypeTuple)) => {
+                Some(HighProgramValue::TypeTuple) => {
                     // shape = the field-type list — render `<T1, ..., Tn>`.
                     let fields = self.fields(elements[0]);
                     return format!("<{}>", fields.join(", "));
                 }
-                Some(Value::Ext(HighValue::TypeArray)) => {
+                Some(HighProgramValue::TypeArray) => {
                     // shape = [element type, length] — render `T<len>`.
-                    if let Some(Value::Array(shape_ptr)) = self.module.nodes[elements[0]].value
+                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                        self.module.nodes[elements[0]].value
                         && let s = unsafe { &*shape_ptr }
                         && s.len() == 2
                     {
                         return format!("{}<{}>", self.node(s[0]), self.node(s[1]));
                     }
                 }
-                Some(Value::Ext(HighValue::TypeId(_))) => {
+                Some(HighProgramValue::TypeId(_)) => {
                     // A struct type: shape = the field-type list — render
                     // `struct<T1, ..., Tn>`.
                     let fields = self.fields(elements[0]);
@@ -249,7 +260,9 @@ impl<'a> TypePrinter<'a> {
     /// or a single field for a non-array shape.
     fn fields(&mut self, shape: NodeId) -> Vec<String> {
         match self.module.nodes[shape].value {
-            Some(Value::Array(ptr)) => unsafe { &*ptr }.iter().map(|&f| self.node(f)).collect(),
+            Some(HighProgramValue::Array(ptr)) => {
+                unsafe { &*ptr }.iter().map(|&f| self.node(f)).collect()
+            }
             _ => vec![self.node(shape)],
         }
     }
@@ -284,7 +297,7 @@ fn letter_name(i: usize) -> String {
 /// both.
 fn is_universe(module: &Module<HighProgram>, node: NodeId) -> bool {
     let rep = representative(module, node);
-    matches!(module.nodes[node].value, Some(Value::Array(ptr))
+    matches!(module.nodes[node].value, Some(HighProgramValue::Array(ptr))
         if unsafe { &*ptr }.iter().any(|&m| representative(module, m) == rep))
 }
 
@@ -366,7 +379,8 @@ pub fn checker_message(
             printer.node(d.b)
         ),
         DiagKind::IndexOutOfBounds => {
-            let (Some(Value::USize(index)), Some(Value::USize(length))) = (d.value_a, d.value_b)
+            let (Some(HighProgramValue::USize(index)), Some(HighProgramValue::USize(length))) =
+                (d.value_a, d.value_b)
             else {
                 return "index out of bounds".to_string();
             };

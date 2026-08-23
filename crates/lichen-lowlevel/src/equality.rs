@@ -2,15 +2,16 @@ use std::collections::HashSet;
 
 use stacksafe::stacksafe;
 
-use crate::{is_unbound, Module, Node, NodeId, Operation, Operator, Program, Value};
+use crate::{LowValue, Module, Node, NodeId, Operation, Operator, Program, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
+use lichen_utils::extend::AsEnum;
 
 #[derive(Debug, Clone, Copy)]
 pub struct UnifyError<P: Program> {
     pub a: NodeId,
     pub b: NodeId,
-    pub value_a: Option<Value<P>>,
-    pub value_b: Option<Value<P>>,
+    pub value_a: Option<P::Value>,
+    pub value_b: Option<P::Value>,
 }
 
 impl<P: Program> disjoint::Node for Node<P> {
@@ -133,8 +134,11 @@ impl<P: Program> Module<P> {
         let rb = disjoint::find(&mut self.nodes, rb);
         let va = self.nodes[ra].value;
         let vb = self.nodes[rb].value;
-        match (va, vb) {
-            (Some(Value::Array(pa)), Some(Value::Array(pb))) => {
+        match (
+            va.map(|value| value.as_enum()),
+            vb.map(|value| value.as_enum()),
+        ) {
+            (Some(Some(LowValue::Array(pa))), Some(Some(LowValue::Array(pb)))) => {
                 let (left, right) = (unsafe { &*pa }, unsafe { &*pb });
                 if left.len() != right.len() {
                     self.record_error(ra, rb);
@@ -167,7 +171,7 @@ impl<P: Program> Module<P> {
     /// stays locally correct — reads need no representative lookup, and the
     /// binding survives members being garbage-collected (the representative
     /// may die while another member is still live).
-    fn bind(&mut self, ra: NodeId, rb: NodeId, va: Option<Value<P>>, vb: Option<Value<P>>) {
+    fn bind(&mut self, ra: NodeId, rb: NodeId, va: Option<P::Value>, vb: Option<P::Value>) {
         let concrete = if is_unbound(va) { vb } else { va };
         let rep = self.add_equality(ra, rb);
         if let Some(value) = concrete
@@ -234,9 +238,10 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() {
                 return false;
             }
-            match self.nodes[member].value {
-                None | Some(Value::Parameterized) => {}
-                Some(Value::Array(ptr)) => {
+            match self.nodes[member].value.and_then(|value| value.as_enum()) {
+                None => {}
+                Some(LowValue::Parameterized) => {}
+                Some(LowValue::Array(ptr)) => {
                     let ids = unsafe { &*ptr };
                     let mut seen = HashSet::new();
                     if ids.iter().any(|&id| !self.value_is_skeleton(id, &mut seen)) {
@@ -260,9 +265,10 @@ impl<P: Program> Module<P> {
             return true;
         }
         let ok = self.nodes[node].operation.is_none()
-            && match self.nodes[node].value {
-                None | Some(Value::Parameterized) => true,
-                Some(Value::Array(ptr)) => {
+            && match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                None => true,
+                Some(LowValue::Parameterized) => true,
+                Some(LowValue::Array(ptr)) => {
                     let ids = unsafe { &*ptr };
                     ids.iter().all(|&id| self.value_is_skeleton(id, seen))
                 }
@@ -295,17 +301,20 @@ impl<P: Program> Module<P> {
             return None;
         }
         let operand = operand?;
-        let Value::Array(operands_ptr) = self.nodes[operand].value? else {
+        let operands = self.nodes[operand].value?;
+        let Some(LowValue::Array(operands_ptr)) = operands.as_enum() else {
             return None;
         };
         let operands = unsafe { &*operands_ptr };
         if operands.len() != 2 {
             return None;
         }
-        let Value::USize(index) = self.nodes[operands[1]].value? else {
+        let index_value = self.nodes[operands[1]].value?;
+        let Some(LowValue::USize(index)) = index_value.as_enum() else {
             return None;
         };
-        let Value::Array(container_ptr) = self.nodes[operands[0]].value? else {
+        let container_value = self.nodes[operands[0]].value?;
+        let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
         let container = unsafe { &*container_ptr };
@@ -335,7 +344,7 @@ impl<P: Program> Module<P> {
     /// Returns `false` when the pending computation is not such an `Index` —
     /// e.g. the index is itself a parameter, so the read genuinely cannot
     /// resolve until it is bound; the caller reports the unify failure.
-    fn alias_index(&mut self, rep: NodeId, value: Option<Value<P>>) -> bool {
+    fn alias_index(&mut self, rep: NodeId, value: Option<P::Value>) -> bool {
         let Some(op) = self.pending_op(rep) else {
             return false;
         };
@@ -366,7 +375,7 @@ impl<P: Program> Module<P> {
             self.add_equality(op, indexed);
             self.nodes[op].operation = None;
             if self.nodes[op].value.is_none() {
-                self.nodes[op].value = Some(Value::Parameterized);
+                self.nodes[op].value = Some(P::Value::from(LowValue::Parameterized));
             }
         }
         true
@@ -399,7 +408,7 @@ impl<P: Program> Module<P> {
     /// their own computed value — and the value is returned.  `None` when
     /// the computation stays lazy, because its operands are still unbound.
     #[stacksafe]
-    fn force_pending(&mut self, rep: NodeId) -> Option<Value<P>> {
+    fn force_pending(&mut self, rep: NodeId) -> Option<P::Value> {
         let mut member = rep;
         loop {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
