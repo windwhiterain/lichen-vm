@@ -202,6 +202,11 @@ impl Compiler {
                 Diag::new(Stage::Resolve, *span, format!("unresolved name '{name}'"))
             })?,
             Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span),
+            // A recovered parse error: a compile-time leaf — an inference
+            // placeholder, so the partial program still compiles and checks
+            // (the parse diagnostic is reported alongside; the placeholder's
+            // type is inferred, never a source of spurious check errors).
+            Expr::Err(span) => self.alloc(ExprKind::Placeholder, span),
             Expr::Lambda {
                 parameter,
                 parameter_span,
@@ -435,14 +440,14 @@ mod tests {
     use crate::parse::parse;
 
     fn compile_ok(source: &str) -> IR {
-        let tokens = lex(source).unwrap();
-        let ast = parse(&tokens).unwrap();
+        let tokens = lex(source).tokens;
+        let ast = parse(&tokens).program;
         compile(&ast).unwrap()
     }
 
     fn compile_err(source: &str) -> Diag {
-        let tokens = lex(source).unwrap();
-        let ast = parse(&tokens).unwrap();
+        let tokens = lex(source).tokens;
+        let ast = parse(&tokens).program;
         compile(&ast).unwrap_err()
     }
 

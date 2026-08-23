@@ -906,7 +906,7 @@ fn an_out_of_bounds_index_is_rejected() {
 
 #[test]
 fn the_frontend_builds_a_rooted_table() {
-    let ir = frontend("(x => x) 5").unwrap();
+    let ir = frontend("(x => x) 5").ir.unwrap();
     assert_eq!(
         ir.root,
         lichen_highlevel::ir::ExprId(ir.expr.len() as u32 - 1)
@@ -926,10 +926,9 @@ fn garbage_input_never_panics() {
             !report.diagnostics.is_empty(),
             "{source:?} must produce a diagnostic"
         );
-        assert!(
-            report.build.is_none(),
-            "the frontend must fail before the checker for {source:?}"
-        );
+        // The frontend *recovers*: the checker runs on the partial program
+        // (an error node marks the gap), so `build` is usually `Some` — the
+        // assertion is that garbage never panics, not that it fails fast.
     }
 }
 

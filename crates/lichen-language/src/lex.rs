@@ -9,8 +9,9 @@
 //! both lex as the same `Semicolon` token.  `=` binds a name (`a = [1, 2]`);
 //! `=>` is still the lambda; `==` compares, `<=` compares, `+` and `-` add
 //! and subtract (and `->` is the function-type arrow).  `--` starts a line
-//! comment.  Any other character is a lex error — the first one stops the
-//! pipeline.
+//! comment.  Any other character is a lex error — errors accumulate (the
+//! bad character is skipped and lexing continues), so a single stray
+//! character does not hide the rest of the program's errors.
 
 use lichen_highlevel::ir::Span;
 
@@ -109,14 +110,32 @@ impl TokenKind {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
-    /// `(line, column)`, 1-based.
+    /// `(line, column)`, 1-based — the token's start.
     pub span: Span,
+    /// The token's byte range in the source, half-open — the offset-based
+    /// twin of `span`, for tooling (an LSP) that works in byte offsets.
+    pub range: (u32, u32),
 }
 
-pub fn lex(source: &str) -> Result<Vec<Token>, Diag> {
+impl std::fmt::Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.kind.describe())
+    }
+}
+
+/// The result of lexing: the tokens (always ending with `Eof`) plus any
+/// lex errors.  Errors accumulate — an unexpected character is skipped and
+/// lexing continues, so a stray character does not hide the rest of the
+/// program's errors.
+pub struct Lexed {
+    pub tokens: Vec<Token>,
+    pub errors: Vec<Diag>,
+}
+
+pub fn lex(source: &str) -> Lexed {
     let mut lexer = Lexer {
         source,
         bytes: source.as_bytes(),
@@ -124,13 +143,18 @@ pub fn lex(source: &str) -> Result<Vec<Token>, Diag> {
         line: 1,
         col: 1,
         tokens: Vec::new(),
+        errors: Vec::new(),
     };
-    lexer.run()?;
+    lexer.run();
     lexer.tokens.push(Token {
         kind: TokenKind::Eof,
         span: (lexer.line, lexer.col),
+        range: (lexer.pos as u32, lexer.pos as u32),
     });
-    Ok(lexer.tokens)
+    Lexed {
+        tokens: lexer.tokens,
+        errors: lexer.errors,
+    }
 }
 
 struct Lexer<'a> {
@@ -140,18 +164,19 @@ struct Lexer<'a> {
     line: u32,
     col: u32,
     tokens: Vec<Token>,
+    errors: Vec<Diag>,
 }
 
 impl Lexer<'_> {
-    fn run(&mut self) -> Result<(), Diag> {
+    fn run(&mut self) {
         loop {
             self.skip_trivia();
             let (line, col) = (self.line, self.col);
             let Some(&b) = self.bytes.get(self.pos) else {
-                return Ok(());
+                return;
             };
             match b {
-                b'0'..=b'9' => self.int_literal(line, col)?,
+                b'0'..=b'9' => self.int_literal(line, col),
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.name_or_keyword(line, col),
                 b'(' => self.push(line, col, 1, TokenKind::LParen),
                 b')' => self.push(line, col, 1, TokenKind::RParen),
@@ -186,7 +211,12 @@ impl Lexer<'_> {
                 b'=' => self.push(line, col, 1, TokenKind::Equals),
                 _ => {
                     let ch = self.source[self.pos..].chars().next().unwrap();
-                    return Err(self.error(line, col, format!("unexpected character '{ch}'")));
+                    self.errors.push(Diag::new(
+                        Stage::Lex,
+                        (line, col),
+                        format!("unexpected character '{ch}'"),
+                    ));
+                    self.step(ch.len_utf8());
                 }
             }
         }
@@ -211,24 +241,37 @@ impl Lexer<'_> {
         }
     }
 
-    fn int_literal(&mut self, line: u32, col: u32) -> Result<(), Diag> {
+    fn int_literal(&mut self, line: u32, col: u32) {
+        let start = self.pos;
         let mut value: usize = 0;
         while let Some(&b) = self.bytes.get(self.pos) {
             if !b.is_ascii_digit() {
                 break;
             }
             let digit = (b - b'0') as usize;
-            value = value
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(digit))
-                .ok_or_else(|| self.error(line, col, "integer literal out of range".to_string()))?;
+            match value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
+                Some(v) => value = v,
+                None => {
+                    self.errors.push(Diag::new(
+                        Stage::Lex,
+                        (line, col),
+                        "integer literal out of range".to_string(),
+                    ));
+                    // Skip the remaining digits so the overflowed number does
+                    // not re-lex as separate literals; no token is emitted.
+                    while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
+                        self.step(1);
+                    }
+                    return;
+                }
+            }
             self.step(1);
         }
         self.tokens.push(Token {
             kind: TokenKind::Int(value),
             span: (line, col),
+            range: (start as u32, self.pos as u32),
         });
-        Ok(())
     }
 
     fn name_or_keyword(&mut self, line: u32, col: u32) {
@@ -254,14 +297,17 @@ impl Lexer<'_> {
         self.tokens.push(Token {
             kind,
             span: (line, col),
+            range: (start as u32, self.pos as u32),
         });
     }
 
     fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
+        let start = self.pos;
         self.step(len);
         self.tokens.push(Token {
             kind,
             span: (line, col),
+            range: (start as u32, self.pos as u32),
         });
     }
 
@@ -271,10 +317,6 @@ impl Lexer<'_> {
             self.col += 1;
         }
     }
-
-    fn error(&self, line: u32, col: u32, message: String) -> Diag {
-        Diag::new(Stage::Lex, (line, col), message)
-    }
 }
 
 #[cfg(test)]
@@ -282,11 +324,11 @@ mod tests {
     use super::*;
 
     fn kinds(source: &str) -> Vec<TokenKind> {
-        lex(source).unwrap().into_iter().map(|t| t.kind).collect()
+        lex(source).tokens.into_iter().map(|t| t.kind).collect()
     }
 
     fn lex_one(source: &str) -> Token {
-        let tokens = lex(source).unwrap();
+        let tokens = lex(source).tokens;
         assert_eq!(tokens.len(), 2, "one token plus Eof");
         tokens.into_iter().next().unwrap()
     }
@@ -363,7 +405,7 @@ mod tests {
         let token = lex_one("  x");
         assert_eq!(token.span, (1, 3));
         // Each newline is a Semicolon and advances the line.
-        let tokens = lex("\n\n  y").unwrap();
+        let tokens = lex("\n\n  y").tokens;
         let y = tokens
             .iter()
             .find(|t| t.kind == TokenKind::Name("y".to_string()))
@@ -492,15 +534,34 @@ mod tests {
 
     #[test]
     fn an_unexpected_character_is_a_lex_error() {
-        let err = lex("x @ y").unwrap_err();
-        assert_eq!(err.stage, Stage::Lex);
-        assert_eq!(err.message, "unexpected character '@'");
-        assert_eq!(err.span, Some((1, 3)));
+        // The error is recorded and the character skipped — the rest of the
+        // line still lexes.
+        let Lexed { errors, .. } = lex("x @ y");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].stage, Stage::Lex);
+        assert_eq!(errors[0].message, "unexpected character '@'");
+        assert_eq!(errors[0].span, Some((1, 3)));
+        assert_eq!(
+            kinds("x @ y"),
+            vec![
+                TokenKind::Name("x".to_string()),
+                TokenKind::Name("y".to_string()),
+                TokenKind::Eof,
+            ]
+        );
     }
 
     #[test]
     fn an_overflowing_literal_is_a_lex_error() {
-        let err = lex("99999999999999999999999999999999999999").unwrap_err();
-        assert_eq!(err.message, "integer literal out of range");
+        let errors = lex("99999999999999999999999999999999999999").errors;
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, "integer literal out of range");
+    }
+
+    #[test]
+    fn tokens_carry_their_byte_range() {
+        let token = lex_one("  x");
+        assert_eq!(token.span, (1, 3));
+        assert_eq!(token.range, (2, 3));
     }
 }

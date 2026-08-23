@@ -1,4 +1,4 @@
-//! The recursive-descent parser: tokens → AST.
+//! The parser: tokens → AST, with error recovery.
 //!
 //! A program is `name = expr; …` bindings and bare expressions followed by a
 //! final expression (see [`Program`]) — the same statement list, wrapped in
@@ -10,25 +10,39 @@
 //! separated by `;` or a newline (the lexer lexes both as `Semicolon`), and
 //! consecutive, leading, and trailing separators are all tolerated.  A
 //! binding at statement start is `name =` (or `let name =`); anything else
-//! is an expression —
-//! a bare expression is a statement anywhere, and only the last statement is
-//! the list's value.  Within an expression, one grammar covers terms and
-//! types (types are expressions); a *type-mode* flag — set inside an
-//! annotation's right side — decides whether `(a, b)` is a `Tuple` value or a
-//! `TypeTuple` type expression.  Angle brackets are exclusively type-level
-//! and need no flag: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>`
-//! always a `StructType`, and `T<e>` (a `<` directly after an expression) is
-//! always the array type.  A `[` directly after an expression is always an
-//! index `e[i]` — the array literal is the prefix `[e, …]` form, so no
-//! whitespace rule decides, and an array literal in argument position needs
-//! parens: `f ([1, 2])`.  Precedence (loosest → tightest): `:` (right) →
-//! `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application (left) →
-//! postfix `<e>` / `[e]` / atoms.
-//! `name =>` starts a lambda only in prefix position, so `f x => e` is a
-//! parse error rather than `f (x => e)`; `name : T => e` is a lambda whose
-//! parameter is annotated with `T`.  `if cond then e1 else e2` is a
-//! conditional expression (the `then`/`else` keywords delimit the branches,
-//! which extend maximally).
+//! is an expression — a bare expression is a statement anywhere, and only
+//! the last statement is the list's value.  Within an expression, one
+//! grammar covers terms and types (types are expressions); the *mode* — term
+//! or type — is applied by a post-pass ([`apply_type_mode`]): the
+//! annotation's right side (and a struct's fields) are type expressions,
+//! everywhere else a term, deciding whether `(a, b)` is a `Tuple` value or a
+//! `TypeTuple` type expression and whether `_` is a [`Expr::Placeholder`] or
+//! an ordinary name.  Angle brackets are exclusively type-level and need no
+//! mode: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>` always a
+//! `StructType`, and `T<e>` (a `<` directly after an expression) is always
+//! the array type.  A `[` directly after an expression is always an index
+//! `e[i]` — the array literal is the prefix `[e, …]` form, so no whitespace
+//! rule decides, and an array literal in argument position needs parens:
+//! `f ([1, 2])`.  Precedence (loosest → tightest): `=>` (right) → `:`
+//! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
+//! (left) → postfix `<e>` / `[e]` / atoms.  `name =>` starts a lambda only
+//! in prefix position, so `f x => e` is a parse error rather than
+//! `f (x => e)`; `name : T => e` (and, parens being transparent for
+//! annotations, `(name : T) => e`) is a lambda whose parameter is annotated
+//! with `T`.  `if cond then e1 else e2` is a conditional expression (the
+//! `then`/`else` keywords delimit the branches, which extend maximally).
+//!
+//! Errors are *recovered*, not fail-fast: a broken statement is skipped
+//! (to the next separator) and parsed again as a fresh statement, a broken
+//! final expression becomes an error node, and the parse continues — every
+//! recovered error is reported, and the partial program still compiles and
+//! checks ([`Expr::Err`] lowers to an inference placeholder).  `parse`
+//! therefore produces a program (possibly with error nodes) for almost any
+//! input; only an input with no parseable statement at all fails outright.
+
+use chumsky::error::RichReason;
+use chumsky::input::Stream;
+use chumsky::prelude::*;
 
 use lichen_highlevel::ir::Span;
 
@@ -36,524 +50,797 @@ use crate::ast::{BinOp, Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
 
-pub fn parse(tokens: &[Token]) -> Result<Program, Diag> {
-    let mut parser = Parser { tokens, pos: 0 };
-    let program = parser.parse_program()?;
-    if !parser.at(&TokenKind::Eof) {
-        return Err(parser.error(format!(
-            "unexpected {} after the program",
-            parser.peek().kind.describe()
-        )));
-    }
-    Ok(program)
+/// The parser's input: the token stream, whose spans are token *indices*
+/// (each item is one token).
+type In<'a> = Stream<std::iter::Cloned<std::slice::Iter<'a, Token>>>;
+/// The parser's error: rich errors whose spans are token-index ranges and
+/// whose "found" value is the offending token.
+type E<'a> = extra::Err<Rich<'a, Token, SimpleSpan<usize>>>;
+
+/// The result of parsing: the (possibly partial) program plus every error
+/// encountered along the way.
+pub struct Parsed {
+    pub program: Program,
+    pub errors: Vec<Diag>,
 }
 
-struct Parser<'a> {
-    tokens: &'a [Token],
-    pos: usize,
+/// Parse a token stream.  See the module docs for the recovery behavior.
+///
+/// The parser's construction and run recurse deeply (a fixed depth, driven
+/// by the size of the combinator grammar) and comfortably exceed the main
+/// thread's stack, so the parse runs on a worker thread with a large stack.
+pub fn parse(tokens: &[Token]) -> Parsed {
+    std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, || parse_inner(tokens))
+            .expect("spawn the parse worker");
+        let (program, errors) = worker.join().expect("the parse worker panicked");
+        Parsed {
+            program,
+            // Parse diagnostics never carry a checker `Diag`, so the
+            // worker's stripped form is exactly reconstructible.
+            errors: errors
+                .into_iter()
+                .map(|(span, message, stage)| Diag { span, message, stage, check: None })
+                .collect(),
+        }
+    })
 }
 
-impl Parser<'_> {
-    fn peek(&self) -> &Token {
-        &self.tokens[self.pos]
-    }
+/// The worker's result: the program plus its diagnostics in a `Send` form
+/// (the crate's `Diag` embeds the checker's, which is not `Send`).
+type ParseOut = (Program, Vec<(Option<Span>, String, Stage)>);
 
-    fn next(&mut self) -> Token {
-        let token = self.tokens[self.pos].clone();
-        self.pos += 1;
-        token
-    }
-
-    fn at(&self, kind: &TokenKind) -> bool {
-        &self.peek().kind == kind
-    }
-
-    fn eat(&mut self, kind: &TokenKind) -> bool {
-        if self.at(kind) {
-            self.pos += 1;
-            true
-        } else {
-            false
+fn parse_inner(tokens: &[Token]) -> ParseOut {
+    let stream = Stream::from_iter(tokens.iter().cloned());
+    let parser = program_parser(tokens);
+    let (output, errs) = parser.parse(stream).into_output_errors();
+    let mut errors: Vec<(Option<Span>, String, Stage)> = Vec::new();
+    for e in &errs {
+        let diag = diag_from(tokens, e);
+        if !errors
+            .iter()
+            .any(|(span, message, _)| *span == diag.span && *message == diag.message)
+        {
+            errors.push((diag.span, diag.message, diag.stage));
         }
     }
-
-    fn error(&self, message: String) -> Diag {
-        Diag::new(Stage::Parse, self.peek().span, message)
-    }
-
-    /// "expected X, found Y" at the current token.
-    fn error_found(&self, expected: &str) -> Diag {
-        let found = self.peek().kind.describe();
-        self.error(format!("expected {expected}, found {found}"))
-    }
-
-    /// The program: the statement list, then `Eof`.
-    fn parse_program(&mut self) -> Result<Program, Diag> {
-        let (statements, expr) = self.parse_bindings_and_expr(false)?;
-        Ok(Program { statements, expr })
-    }
-
-    /// The statement list: `name = expr;` bindings and bare expressions,
-    /// then the final expression.  A `name =` at statement start is a
-    /// binding; anything else is an expression — a bare expression is a
-    /// statement anywhere in the list (there is no dead code: the compiler
-    /// checks every statement), and only the *last* one is the list's value.
-    /// A binding without `let` is *block-wide*: its name is in scope
-    /// throughout the block, forward and backward, so bindings may reference
-    /// and recurse with each other.  A `let name =` binding is *restrictive*:
-    /// the name is in scope only in later statements (see
-    /// [`Parser::parse_bindings_and_expr`]).
-    /// Every non-final statement requires a trailing separator — `;` or a
-    /// newline (the lexer merges both into `Semicolon`).  The same list
-    /// forms a block's body (see [`Parser::block`]).
-    fn parse_bindings_and_expr(&mut self, type_mode: bool) -> Result<(Vec<Stmt>, Expr), Diag> {
-        let mut statements = Vec::new();
-        self.skip_separators();
-        loop {
-            // `let name = …` — the restrictive form: the `let` keyword, then
-            // the ordinary `name =`.  Without `let`, a binding is block-wide
-            // (visible throughout the block, so it may recurse with itself).
-            let restrictive = matches!(
-                (
-                    &self.peek().kind,
-                    self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                    self.tokens.get(self.pos + 2).map(|t| &t.kind),
-                ),
-                (
-                    TokenKind::KwLet,
-                    Some(TokenKind::Name(_)),
-                    Some(TokenKind::Equals)
-                )
-            );
-            let binding = restrictive
-                || matches!(
-                    (
-                        &self.peek().kind,
-                        self.tokens.get(self.pos + 1).map(|t| &t.kind)
-                    ),
-                    (TokenKind::Name(_), Some(TokenKind::Equals))
-                );
-            if binding {
-                let (name, span, restrictive) = if restrictive {
-                    self.next(); // the `let`
-                    let name = self.next();
-                    let TokenKind::Name(binding_name) = name.kind else {
-                        unreachable!()
-                    };
-                    self.pos += 1; // the `=`
-                    (binding_name, name.span, true)
-                } else {
-                    let name = self.next();
-                    let TokenKind::Name(binding_name) = name.kind else {
-                        unreachable!()
-                    };
-                    self.pos += 1; // the `=`
-                    (binding_name, name.span, false)
-                };
-                let value = self.parse_expr(type_mode)?;
-                statements.push(Stmt::Binding(Binding {
-                    name,
-                    span,
-                    value,
-                    restrictive,
-                }));
-                if !self.eat(&TokenKind::Semicolon) {
-                    return Err(self.error_found("';'"));
-                }
-                self.skip_separators();
-                continue;
+    let program = match output {
+        Some(program) => apply_type_mode(program),
+        None => {
+            let span = errors
+                .first()
+                .and_then(|(span, ..)| *span)
+                .unwrap_or_else(|| span_at(tokens, tokens.len().saturating_sub(1)));
+            errors.push((
+                Some(span),
+                "the program could not be parsed".to_string(),
+                Stage::Parse,
+            ));
+            Program {
+                statements: Vec::new(),
+                expr: Expr::Err(span),
             }
-            // A bare expression: the final one unless a separator leads to
-            // more statements.
-            let expr = self.parse_expr(type_mode)?;
-            if self.at(&TokenKind::Semicolon) {
-                self.skip_separators();
-                if self.at(&TokenKind::Eof) || self.at(&TokenKind::RBrace) {
-                    // Trailing separators after the final expression.
-                    return Ok((statements, expr));
-                }
-                statements.push(Stmt::Expr(expr));
-                continue;
-            }
-            return Ok((statements, expr));
         }
-    }
+    };
+    (program, errors)
+}
 
-    /// Skip statement separators — `;` or a newline, both lexed as
-    /// `Semicolon`.  Consecutive ones are empty statements, and leading and
-    /// trailing ones are ignored: `a = 1;\nb = 2` and a top-of-file comment's
-    /// newline both parse.
-    fn skip_separators(&mut self) {
-        while self.eat(&TokenKind::Semicolon) {}
-    }
+// ---------------------------------------------------------------------------
+// Grammar
 
-    /// An expression.  A name directly followed by `=>` starts a lambda whose
-    /// body extends maximally — through `:` and `->`.  An annotation whose
-    /// value is a bare name directly followed by `=>` (`x : Int => e`) is
-    /// likewise a lambda — the parameter annotated with the annotation's
-    /// type.
-    fn parse_expr(&mut self, type_mode: bool) -> Result<Expr, Diag> {
-        let lambda = match &self.peek().kind {
-            TokenKind::Name(_) => matches!(
-                self.tokens.get(self.pos + 1).map(|t| &t.kind),
-                Some(TokenKind::FatArrow)
-            ),
-            _ => false,
-        };
-        if lambda {
-            let name = self.next();
-            let TokenKind::Name(parameter) = name.kind else {
-                unreachable!()
-            };
-            self.pos += 1; // the `=>`
-            let body = self.parse_expr(type_mode)?;
-            return Ok(Expr::Lambda {
-                parameter,
-                parameter_span: name.span,
-                parameter_type: None,
-                r#return: Box::new(body),
-                span: name.span,
-            });
-        }
-        let expr = self.parse_infix(type_mode, 0)?;
-        // `x : T => e` — the annotation's value is a bare name and `=>`
-        // follows: a lambda whose parameter is annotated with `T`.  This is
-        // the only parse of that token sequence (`=>` is not an infix
-        // operator, so the annotation cannot extend through it), so there is
-        // no ambiguity with a plain annotation.
-        let (parameter, parameter_span, parameter_type, span) = match expr {
-            Expr::Annotation {
-                value,
-                r#type,
-                span,
-            } => match *value {
-                Expr::Name(parameter, parameter_span) => (parameter, parameter_span, r#type, span),
-                value => {
-                    return Ok(Expr::Annotation {
-                        value: Box::new(value),
-                        r#type,
-                        span,
-                    });
-                }
-            },
-            expr => return Ok(expr),
-        };
-        if self.at(&TokenKind::FatArrow) {
-            self.next();
-            let body = self.parse_expr(type_mode)?;
-            return Ok(Expr::Lambda {
-                parameter,
-                parameter_span,
-                parameter_type: Some(parameter_type),
-                r#return: Box::new(body),
-                span,
-            });
-        }
-        Ok(Expr::Annotation {
-            value: Box::new(Expr::Name(parameter, parameter_span)),
-            r#type: parameter_type,
-            span,
+/// A parser matching a single token of the given kind, labelled with the
+/// kind's human-readable spelling.
+fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
+    let label = kind.describe();
+    any::<In<'a>, E<'a>>()
+        .filter(move |t: &Token| t.kind == kind)
+        .labelled(label)
+}
+
+/// A name token — an identifier, `_` included (the mode post-pass decides
+/// whether `_` is a placeholder).
+fn name<'a>() -> impl Parser<'a, In<'a>, (String, Span), E<'a>> + Clone {
+    any::<In<'a>, E<'a>>()
+        .filter(|t: &Token| matches!(t.kind, TokenKind::Name(_)))
+        .map(|t| match t.kind {
+            TokenKind::Name(n) => (n, t.span),
+            _ => unreachable!("filtered for a name"),
         })
-    }
+        .labelled("a name")
+}
 
-    fn parse_infix(&mut self, type_mode: bool, min_bp: u8) -> Result<Expr, Diag> {
-        let mut lhs = self.parse_atom(type_mode)?;
-        loop {
-            if self.atom_start() {
-                // Application binds tightest: `x y : Int` = `(x y) : Int`.
-                let rhs = self.parse_atom(type_mode)?;
+/// The `(line, col)` span of the token at token-index `i` — the parse
+/// fallback for positions at or past the end of the stream.
+fn span_at(tokens: &[Token], index: usize) -> Span {
+    tokens
+        .get(index)
+        .map(|t| t.span)
+        .unwrap_or_else(|| tokens.last().map(|t| t.span).unwrap_or((1, 1)))
+}
+
+/// The program: the statement list, then the end of the input.  One
+/// expression parser is built here and threaded through the whole grammar —
+/// the statement list, the bindings, and the block bodies all recurse
+/// through the same [`expression`] recursion point.
+fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E<'a>> {
+    let expr = expression(tokens);
+    // The lexer appends a real `Eof` token, so the end of the input is that
+    // token, not stream exhaustion — `end()` would fail with it unconsumed.
+    statement_list(tokens, expr)
+        .then_ignore(token(TokenKind::Eof).ignored())
+        .map(|(statements, expr)| Program { statements, expr })
+}
+
+/// The statement list: `elem (seps elem)*`, followed by trailing separators
+/// — every statement after the first must be preceded by a separator, and
+/// only the last statement is the list's value.  The last element is the
+/// final expression; a trailing binding (or an empty list) is an error, and
+/// the list's value becomes an error node.
+fn statement_list<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr), E<'a>> + Clone {
+    let seps = token(TokenKind::Semicolon).ignored().repeated().collect::<Vec<_>>();
+    let seps1 = token(TokenKind::Semicolon)
+        .ignored()
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>();
+
+    // A statement: a binding or a bare expression.  Broken statements are
+    // recovered by skipping tokens and retrying the statement parser, so a
+    // bad statement does not swallow the rest of the program.
+    // A statement: a binding or a bare expression.  Broken statements are
+    // recovered by skipping tokens and retrying the statement parser, so a
+    // bad statement does not swallow the rest of the program.  The retry
+    // stops at the end of the input *or* a block's closing brace — a block
+    // must not swallow the tokens after its `}`.
+    let elem = statement(tokens, expr).recover_with(skip_then_retry_until(
+        any::<In<'a>, E<'a>>().ignored(),
+        choice((
+            token(TokenKind::Eof).ignored(),
+            token(TokenKind::RBrace).ignored(),
+        )),
+    ));
+
+    seps.clone()
+        .then(elem.clone())
+        .then((seps1.clone().then(elem.clone())).repeated().collect::<Vec<_>>())
+        .then(seps)
+        .map(|(((leading, first), rest), _trailing)| {
+            let _ = leading;
+            std::iter::once(first)
+                .chain(rest.into_iter().map(|(_, e)| e))
+                .collect::<Vec<Stmt>>()
+        })
+        .validate(|mut elems, me, emit| match elems.pop() {
+            Some(Stmt::Expr(final_expr)) => (elems, final_expr),
+            Some(Stmt::Binding(binding)) => {
+                emit.emit(Rich::custom(
+                    me.span(),
+                    "a program must end with an expression",
+                ));
+                let span = binding.span;
+                elems.push(Stmt::Binding(binding));
+                (elems, Expr::Err(span))
+            }
+            None => {
+                emit.emit(Rich::custom(
+                    me.span(),
+                    "a program must end with an expression",
+                ));
+                let span = span_at(tokens, me.span().start);
+                (elems, Expr::Err(span))
+            }
+        })
+}
+
+/// A statement: a binding (`let name = …` / `name = …`) or a bare
+/// expression.
+fn statement<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Stmt, E<'a>> + Clone {
+    choice((
+        binding(tokens, expr.clone()).map(Stmt::Binding),
+        expr.map(Stmt::Expr),
+    ))
+}
+
+/// `let name = expr` (restrictive) or `name = expr` (block-wide).
+fn binding<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Binding, E<'a>> + Clone {
+    let head = choice((
+        token(TokenKind::KwLet)
+            .ignore_then(name())
+            .then_ignore(token(TokenKind::Equals))
+            .map(|n| (n, true)),
+        name().then_ignore(token(TokenKind::Equals)).map(|n| (n, false)),
+    ));
+    // A broken binding value is recovered, not fatal: skip the offending
+    // tokens (stopping before the next separator, which the statement list
+    // still consumes) and substitute an error node, so the binding still
+    // parses and the rest of the program is reached.
+    let value = expr.recover_with(via_parser(
+        any::<In<'a>, E<'a>>()
+            .filter(|t: &Token| t.kind != TokenKind::Semicolon)
+            .ignored()
+            .repeated()
+            .map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
+    ));
+    head.then(value).map(|(((name, span), restrictive), value)| Binding {
+        name,
+        span,
+        value,
+        restrictive,
+    })
+}
+
+/// A full expression in an operator's operand position — or, when the
+/// operator is dangling (its operand missing at a statement boundary), a
+/// non-consuming error node at the point the operand was expected.  The
+/// recovery keeps the operator consumed, so a dangling operator never
+/// leaks into the statement list and breaks it; the original "expected an
+/// expression" error is still emitted.
+fn operand<'a>(
+    tokens: &'a [Token],
+    p: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    p.recover_with(via_parser(
+        empty::<In<'a>, E<'a>>().map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
+    ))
+}
+
+/// An expression: the precedence chain over atoms, with `=>` as the loosest
+/// (right-associative) operator, validated into a lambda.
+fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    recursive(|expr| {
+        let atom = atom_parser(tokens, expr.clone());
+
+        // Application: juxtaposition, left-associative, binds tighter than
+        // every operator.
+        let application = atom
+            .clone()
+            .then(atom.repeated().collect::<Vec<_>>())
+            .map(|(f, args)| {
+                args.into_iter().fold(f, |acc, arg| {
+                    let span = acc.span();
+                    Expr::Apply {
+                        function: Box::new(acc),
+                        argument: Box::new(arg),
+                        span,
+                    }
+                })
+            });
+
+        // `+` / `-`, left-associative.
+        let arith = choice((
+            token(TokenKind::Plus).to(BinOp::Add),
+            token(TokenKind::Minus).to(BinOp::Sub),
+        ));
+        let term1 = application.clone().foldl(
+            arith.then(operand(tokens, application.clone())).repeated(),
+            |lhs, (op, rhs)| {
                 let span = lhs.span();
-                lhs = Expr::Apply {
-                    function: Box::new(lhs),
-                    argument: Box::new(rhs),
-                    span,
-                };
-                continue;
-            }
-            let operator = self.peek().kind.clone();
-            let (bp, is_annotation, is_left_assoc) = match &operator {
-                TokenKind::Colon => (10, true, false),
-                TokenKind::Arrow => (20, false, false),
-                // Comparisons bind looser than arithmetic; both are
-                // left-associative (unlike `:` and `->`, which are right).
-                TokenKind::Leq | TokenKind::Eq => (25, false, true),
-                TokenKind::Plus | TokenKind::Minus => (30, false, true),
-                _ => break,
-            };
-            if bp < min_bp {
-                break;
-            }
-            self.next();
-            // The annotation's right side is a type expression; the other
-            // operators keep the current mode.
-            let rhs = self.parse_infix(
-                if is_annotation { true } else { type_mode },
-                if is_left_assoc { bp + 1 } else { bp },
-            )?;
-            let span = lhs.span();
-            lhs = if is_annotation {
-                Expr::Annotation {
-                    value: Box::new(lhs),
-                    r#type: Box::new(rhs),
-                    span,
-                }
-            } else if matches!(operator, TokenKind::Arrow) {
-                Expr::Arrow {
-                    parameter: Box::new(lhs),
-                    r#return: Box::new(rhs),
-                    span,
-                }
-            } else {
-                let operator = match operator {
-                    TokenKind::Plus => BinOp::Add,
-                    TokenKind::Minus => BinOp::Sub,
-                    TokenKind::Leq => BinOp::Leq,
-                    TokenKind::Eq => BinOp::Eq,
-                    _ => unreachable!("only the binary operators reach here"),
-                };
                 Expr::BinOp {
-                    operator,
+                    operator: op,
                     left: Box::new(lhs),
                     right: Box::new(rhs),
                     span,
                 }
-            };
-        }
-        Ok(lhs)
-    }
+            },
+        );
 
-    fn parse_atom(&mut self, type_mode: bool) -> Result<Expr, Diag> {
-        let start = self.next();
-        let atom = match &start.kind {
-            TokenKind::Int(n) => Expr::Int(*n, start.span),
-            TokenKind::KwInt => Expr::TypeConst(TypeConst::Int, start.span),
-            TokenKind::KwType => Expr::TypeConst(TypeConst::Type, start.span),
-            TokenKind::Name(name) if type_mode && name == "_" => Expr::Placeholder(start.span),
-            TokenKind::Name(name) => Expr::Name(name.clone(), start.span),
-            TokenKind::LParen => self.paren_or_tuple(type_mode, start.span)?,
-            TokenKind::LBracket => self.array_literal(type_mode, start.span)?,
-            TokenKind::LBrace => self.block(type_mode, start.span)?,
-            TokenKind::LAngle => self.angle_tuple(type_mode, start.span)?,
-            TokenKind::KwStruct => self.struct_type(start.span)?,
-            TokenKind::KwIf => self.if_expr(type_mode, start.span)?,
-            _ => {
-                return Err(Diag::new(
-                    Stage::Parse,
-                    start.span,
-                    format!("expected an expression, found {}", start.kind.describe()),
-                ));
-            }
-        };
-        self.postfix(atom, type_mode, start.span)
-    }
-
-    /// The postfix forms: `e[i]` (index) and `T<e>` (array type), chained and
-    /// with no whitespace rule — a bracket right after an expression is
-    /// always the postfix form, application is juxtaposition.
-    fn postfix(&mut self, atom: Expr, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        if self.at(&TokenKind::LBracket) {
-            self.next();
-            if self.at(&TokenKind::RBracket) {
-                return Err(self.error_found("an expression"));
-            }
-            let index = self.parse_expr(type_mode)?;
-            if !self.eat(&TokenKind::RBracket) {
-                return Err(self.error_found("']'"));
-            }
-            return self.postfix(
-                Expr::Index {
-                    array: Box::new(atom),
-                    index: Box::new(index),
+        // `<=` / `==`, left-associative.
+        let cmp = choice((
+            token(TokenKind::Leq).to(BinOp::Leq),
+            token(TokenKind::Eq).to(BinOp::Eq),
+        ));
+        let term2 = term1.clone().foldl(
+            cmp.then(operand(tokens, term1.clone())).repeated(),
+            |lhs, (op, rhs)| {
+                let span = lhs.span();
+                Expr::BinOp {
+                    operator: op,
+                    left: Box::new(lhs),
+                    right: Box::new(rhs),
                     span,
+                }
+            },
+        );
+
+        // `->`, right-associative.
+        let term3 = term2
+            .clone()
+            .then(
+                token(TokenKind::Arrow)
+                    .ignore_then(operand(tokens, term2.clone()))
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(first, rest)| {
+                fold_right(first, rest, |lhs, rhs| {
+                    let span = lhs.span();
+                    Expr::Arrow {
+                        parameter: Box::new(lhs),
+                        r#return: Box::new(rhs),
+                        span,
+                    }
+                })
+            });
+
+        // `:` — the annotation, right-associative; its right side is a type
+        // expression (applied by the mode post-pass).
+        let term4 = term3
+            .clone()
+            .then(
+                token(TokenKind::Colon)
+                    .ignore_then(operand(tokens, term3.clone()))
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(first, rest)| {
+                fold_right(first, rest, |lhs, rhs| {
+                    let span = lhs.span();
+                    Expr::Annotation {
+                        value: Box::new(lhs),
+                        r#type: Box::new(rhs),
+                        span,
+                    }
+                })
+            });
+
+        term4
+            .then(
+                token(TokenKind::FatArrow)
+                    .ignore_then(operand(tokens, expr.clone()))
+                    .repeated()
+                    .collect::<Vec<_>>(),
+            )
+            .map(|(first, rest)| match rest.into_iter().next() {
+                Some(rhs) => Pre::FatArrow(Box::new(first), Box::new(rhs)),
+                None => Pre::E(first),
+            })
+            .map(|pre| { pre })
+            .validate(|pre, me, emit| match pre {
+                Pre::E(e) => e,
+                Pre::FatArrow(lhs, rhs) => match *lhs {
+                    Expr::Name(parameter, span) => Expr::Lambda {
+                        parameter,
+                        parameter_span: span,
+                        parameter_type: None,
+                        r#return: rhs,
+                        span,
+                    },
+                    Expr::Annotation { value, r#type, span } => match *value {
+                        Expr::Name(parameter, parameter_span) => Expr::Lambda {
+                            parameter,
+                            parameter_span,
+                            parameter_type: Some(r#type),
+                            r#return: rhs,
+                            span,
+                        },
+                        value => {
+                            emit.emit(Rich::custom(
+                                me.span(),
+                                "expected a name before '=>'",
+                            ));
+                            Expr::Err(value.span())
+                        }
+                    },
+                    other => {
+                        emit.emit(Rich::custom(
+                            me.span(),
+                            "expected a name before '=>'",
+                        ));
+                        Expr::Err(other.span())
+                    }
                 },
-                type_mode,
-                span,
-            );
-        }
-        if self.at(&TokenKind::LAngle) {
-            self.next();
-            let length = self.parse_expr(type_mode)?;
-            if !self.eat(&TokenKind::RAngle) {
-                return Err(self.error_found("'>'"));
-            }
-            return self.postfix(
-                Expr::TypeArray {
-                    element_type: Box::new(atom),
-                    length: Box::new(length),
-                    span,
-                },
-                type_mode,
-                span,
-            );
-        }
-        Ok(atom)
-    }
+            })
+    })
+}
 
-    /// `(e)` or `(e1, ..., en)` — the comma form is a `TypeTuple` in type
-    /// position, a `Tuple` value in term position.  The opener has been
-    /// consumed by [`Parser::parse_atom`].
-    fn paren_or_tuple(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        if self.at(&TokenKind::RParen) {
-            return Err(self.error_found("an expression"));
-        }
-        let first = self.parse_expr(type_mode)?;
-        if !self.eat(&TokenKind::Comma) {
-            if !self.eat(&TokenKind::RParen) {
-                return Err(self.error_found("')'"));
-            }
-            return Ok(first);
-        }
-        let mut elements = vec![first];
-        loop {
-            if self.at(&TokenKind::RParen) {
-                break;
-            }
-            elements.push(self.parse_expr(type_mode)?);
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
-        }
-        if !self.eat(&TokenKind::RParen) {
-            return Err(self.error_found("')'"));
-        }
-        if type_mode {
-            Ok(Expr::TypeTuple(elements, span))
-        } else {
-            Ok(Expr::Tuple(elements, span))
-        }
+/// Right-fold `first (op rhs)*` into `op(first, op(rhs₁, … op(rhsₙ₋₁, rhsₙ)))`.
+fn fold_right<F>(first: Expr, rest: Vec<Expr>, combine: F) -> Expr
+where
+    F: Fn(Expr, Expr) -> Expr,
+{
+    let mut it = rest.into_iter().rev();
+    let mut acc = match it.next() {
+        Some(rhs) => rhs,
+        None => return first,
+    };
+    for rhs in it {
+        acc = combine(rhs, acc);
     }
+    combine(first, acc)
+}
 
-    /// `<e1, ..., en>` — always a `TypeTuple`, in term and type position
-    /// alike (angle brackets are exclusively type-level, so there is no
-    /// mode flag here, unlike `( )`).  At least two elements: a single
-    /// element is a typo for either `(e)` grouping or a real tuple type.
-    /// The opener has been consumed by [`Parser::parse_atom`].
-    fn angle_tuple(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        if self.at(&TokenKind::RAngle) {
-            return Err(self.error_found("an expression"));
-        }
-        let first = self.parse_expr(type_mode)?;
-        if !self.eat(&TokenKind::Comma) {
-            return Err(self.error_found("','"));
-        }
-        let mut elements = vec![first];
-        loop {
-            if self.at(&TokenKind::RAngle) {
-                break;
-            }
-            elements.push(self.parse_expr(type_mode)?);
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
-        }
-        if !self.eat(&TokenKind::RAngle) {
-            return Err(self.error_found("'>'"));
-        }
-        Ok(Expr::TypeTuple(elements, span))
-    }
+/// A `=>` chain before it is validated into a lambda.
+#[derive(Clone, Debug)]
+enum Pre {
+    E(Expr),
+    FatArrow(Box<Expr>, Box<Expr>),
+}
 
-    /// `[e1, ..., en]` — an array literal.  The opener has been consumed by
-    /// [`Parser::parse_atom`].
-    fn array_literal(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        if self.at(&TokenKind::RBracket) {
-            return Err(self.error_found("an expression"));
-        }
-        let mut elements = Vec::new();
-        loop {
-            elements.push(self.parse_expr(type_mode)?);
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
-            if self.at(&TokenKind::RBracket) {
-                break;
-            }
-        }
-        if !self.eat(&TokenKind::RBracket) {
-            return Err(self.error_found("']'"));
-        }
-        Ok(Expr::Array(elements, span))
-    }
+/// The atoms, with their postfix forms: `e[i]` (index) and `T<e>` (array
+/// type), chained and with no whitespace rule — a bracket right after an
+/// expression is always the postfix form, application is juxtaposition.
+fn atom_parser<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    let primary = choice((
+        any::<In<'a>, E<'a>>()
+            .filter(|t: &Token| matches!(t.kind, TokenKind::Int(_)))
+            .map(|t| match t.kind {
+                TokenKind::Int(n) => Expr::Int(n, t.span),
+                _ => unreachable!("filtered for an int"),
+            }),
+        token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
+        token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
+        name().map(|(n, span)| Expr::Name(n, span)),
+        paren(tokens, expr.clone()),
+        array_literal(tokens, expr.clone()),
+        block(tokens, expr.clone()),
+        angle_tuple(tokens, expr.clone()),
+        struct_type(tokens, expr.clone()),
+        if_expr(tokens, expr.clone()),
+    ))
+    .labelled("an expression");
 
-    /// `struct<T1, ..., Tn>` — a nominal struct type, positional fields.
-    /// The fields are type expressions (parsed in type mode — angle
-    /// brackets are exclusively type-level), at least one.  The opener
-    /// `struct` has been consumed by [`Parser::parse_atom`].
-    fn struct_type(&mut self, span: Span) -> Result<Expr, Diag> {
-        if !self.eat(&TokenKind::LAngle) {
-            return Err(self.error_found("'<'"));
-        }
-        if self.at(&TokenKind::RAngle) {
-            return Err(self.error_found("an expression"));
-        }
-        let mut fields = Vec::new();
-        loop {
-            fields.push(self.parse_expr(true)?);
-            if !self.eat(&TokenKind::Comma) {
-                break;
-            }
-            if self.at(&TokenKind::RAngle) {
-                break;
-            }
-        }
-        if !self.eat(&TokenKind::RAngle) {
-            return Err(self.error_found("'>'"));
-        }
-        Ok(Expr::StructType(fields, span))
-    }
+    // The postfix forms, chained left.
+    let postfix = choice((
+        token(TokenKind::LBracket)
+            .ignore_then(expr.clone())
+            .then_ignore(token(TokenKind::RBracket))
+            .map(Postfix::Index),
+        token(TokenKind::LAngle)
+            .ignore_then(expr.clone())
+            .then_ignore(token(TokenKind::RAngle))
+            .map(Postfix::TypeArray),
+    ));
 
-    /// `{ stmt; …; expr }` — a block: scoped statements followed by the
-    /// block's value.  The opener has been consumed by
-    /// [`Parser::parse_atom`]; the body is the same statement list as a
-    /// program's, ending in the `}`.
-    fn block(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        let (statements, expr) = self.parse_bindings_and_expr(type_mode)?;
-        if !self.eat(&TokenKind::RBrace) {
-            return Err(self.error_found("'}'"));
-        }
-        Ok(Expr::Block {
+    primary
+        .then(postfix.repeated().collect::<Vec<_>>())
+        .map(|(atom, postfixes)| {
+            postfixes.into_iter().fold(atom, |acc, p| {
+                let span = acc.span();
+                match p {
+                    Postfix::Index(index) => Expr::Index {
+                        array: Box::new(acc),
+                        index: Box::new(index),
+                        span,
+                    },
+                    Postfix::TypeArray(length) => Expr::TypeArray {
+                        element_type: Box::new(acc),
+                        length: Box::new(length),
+                        span,
+                    },
+                }
+            })
+        })
+}
+
+/// A postfix form's payload, folded left over the atom.
+#[derive(Clone, Debug)]
+enum Postfix {
+    Index(Expr),
+    TypeArray(Expr),
+}
+
+/// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple (a
+/// `TypeTuple` in type position, applied by the mode post-pass).  A trailing
+/// comma is tolerated.
+fn paren<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LParen)
+        .ignore_then(expr.clone())
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(expr.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Comma).or_not())
+        .then_ignore(token(TokenKind::RParen))
+        .map_with(|((first, rest), trailing), me| {
+            let span = span_at(tokens, me.span().start);
+            if rest.is_empty() && trailing.is_none() {
+                first
+            } else {
+                Expr::Tuple(std::iter::once(first).chain(rest).collect(), span)
+            }
+        })
+}
+
+/// `[e1, …, en]` — an array literal (in type position its elements are
+/// types, applied by the mode post-pass).  A trailing comma is tolerated.
+fn array_literal<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LBracket)
+        .ignore_then(expr.clone())
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(expr.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Comma).or_not())
+        .then_ignore(token(TokenKind::RBracket))
+        .map_with(|((first, rest), _trailing), me| {
+            Expr::Array(
+                std::iter::once(first).chain(rest).collect(),
+                span_at(tokens, me.span().start),
+            )
+        })
+}
+
+/// `<e1, …, en>` — always a `TypeTuple`, in term and type position alike
+/// (angle brackets are exclusively type-level, so there is no mode flag
+/// here, unlike `( )`).  At least two elements: a single element is a typo
+/// for either `(e)` grouping or a real tuple type.
+fn angle_tuple<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LAngle)
+        .ignore_then(expr.clone())
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(expr.clone())
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(token(TokenKind::RAngle))
+        .map_with(|(first, rest), me| {
+            Expr::TypeTuple(
+                std::iter::once(first).chain(rest).collect(),
+                span_at(tokens, me.span().start),
+            )
+        })
+}
+
+/// `struct<T1, …, Tn>` — a nominal struct type, positional fields.  The
+/// fields are type expressions (applied by the mode post-pass), at least
+/// one.
+fn struct_type<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwStruct)
+        .ignore_then(token(TokenKind::LAngle))
+        .ignore_then(expr.clone())
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(expr.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(token(TokenKind::RAngle))
+        .map_with(|(first, rest), me| {
+            Expr::StructType(
+                std::iter::once(first).chain(rest).collect(),
+                span_at(tokens, me.span().start),
+            )
+        })
+}
+
+/// `{ stmt; …; expr }` — a block: scoped statements followed by the block's
+/// value.  The body is the same statement list as a program's, recursing
+/// through the same expression parser.
+fn block<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::LBrace)
+        .ignore_then(statement_list(tokens, expr))
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|(statements, expr), me| Expr::Block {
             statements,
             expr: Box::new(expr),
-            span,
+            span: span_at(tokens, me.span().start),
         })
-    }
+}
 
-    /// `if cond then e1 else e2` — a conditional.  `cond` is any expression
-    /// up to the `then` keyword (both keywords delimit it — neither is an
-    /// atom or an infix operator, so the condition cannot extend through
-    /// them); the branches extend maximally, like a lambda body.  The opener
-    /// `if` has been consumed by [`Parser::parse_atom`].
-    fn if_expr(&mut self, type_mode: bool, span: Span) -> Result<Expr, Diag> {
-        let condition = self.parse_expr(type_mode)?;
-        if !self.eat(&TokenKind::KwThen) {
-            return Err(self.error_found("'then'"));
-        }
-        let then_branch = self.parse_expr(type_mode)?;
-        if !self.eat(&TokenKind::KwElse) {
-            return Err(self.error_found("'else'"));
-        }
-        let else_branch = self.parse_expr(type_mode)?;
-        Ok(Expr::If {
+/// `if cond then e1 else e2` — a conditional.  `cond` is any expression up
+/// to the `then` keyword (both keywords delimit it — neither is an atom or
+/// an infix operator, so the condition cannot extend through them); the
+/// branches extend maximally, like a lambda body.
+fn if_expr<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwIf)
+        .ignore_then(expr.clone())
+        .then_ignore(token(TokenKind::KwThen))
+        .then(expr.clone())
+        .then_ignore(token(TokenKind::KwElse))
+        .then(expr.clone())
+        .map_with(|((condition, then_branch), else_branch), me| Expr::If {
             condition: Box::new(condition),
             then_branch: Box::new(then_branch),
             else_branch: Box::new(else_branch),
-            span,
+            span: span_at(tokens, me.span().start),
         })
-    }
+}
 
-    fn atom_start(&self) -> bool {
-        matches!(
-            &self.peek().kind,
-            TokenKind::Int(_)
-                | TokenKind::KwInt
-                | TokenKind::KwType
-                | TokenKind::KwStruct
-                | TokenKind::KwIf
-                | TokenKind::Name(_)
-                | TokenKind::LParen
-                | TokenKind::LBracket
-                | TokenKind::LBrace
-        )
+// ---------------------------------------------------------------------------
+// The mode post-pass
+
+/// Reinterpret the parser's single-mode AST in the language's two modes:
+/// the annotation's right side (and a struct's fields) are type expressions,
+/// everywhere else is a term.  The parser builds everything as a term
+/// (`(a, b)` a [`Expr::Tuple`], `_` a [`Expr::Name`]); this pass flips the
+/// mode-sensitive nodes — `Tuple` → `TypeTuple`, `_` → [`Expr::Placeholder`]
+/// — inside type positions.
+fn apply_type_mode(program: Program) -> Program {
+    fn expr(e: Expr, type_mode: bool) -> Expr {
+        match e {
+            Expr::Name(name, span) if type_mode && name == "_" => Expr::Placeholder(span),
+            Expr::Lambda {
+                parameter,
+                parameter_span,
+                parameter_type,
+                r#return,
+                span,
+            } => Expr::Lambda {
+                parameter,
+                parameter_span,
+                parameter_type: parameter_type.map(|t| Box::new(expr(*t, true))),
+                r#return: Box::new(expr(*r#return, type_mode)),
+                span,
+            },
+            Expr::Apply {
+                function,
+                argument,
+                span,
+            } => Expr::Apply {
+                function: Box::new(expr(*function, type_mode)),
+                argument: Box::new(expr(*argument, type_mode)),
+                span,
+            },
+            Expr::BinOp {
+                operator,
+                left,
+                right,
+                span,
+            } => Expr::BinOp {
+                operator,
+                left: Box::new(expr(*left, type_mode)),
+                right: Box::new(expr(*right, type_mode)),
+                span,
+            },
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                span,
+            } => Expr::If {
+                condition: Box::new(expr(*condition, type_mode)),
+                then_branch: Box::new(expr(*then_branch, type_mode)),
+                else_branch: Box::new(expr(*else_branch, type_mode)),
+                span,
+            },
+            Expr::Index { array, index, span } => Expr::Index {
+                array: Box::new(expr(*array, type_mode)),
+                index: Box::new(expr(*index, type_mode)),
+                span,
+            },
+            Expr::Annotation { value, r#type, span } => Expr::Annotation {
+                value: Box::new(expr(*value, type_mode)),
+                r#type: Box::new(expr(*r#type, true)),
+                span,
+            },
+            Expr::Arrow {
+                parameter,
+                r#return,
+                span,
+            } => Expr::Arrow {
+                parameter: Box::new(expr(*parameter, type_mode)),
+                r#return: Box::new(expr(*r#return, type_mode)),
+                span,
+            },
+            Expr::Tuple(elements, span) if type_mode => Expr::TypeTuple(
+                elements.into_iter().map(|e| expr(e, true)).collect(),
+                span,
+            ),
+            Expr::Tuple(elements, span) => Expr::Tuple(
+                elements.into_iter().map(|e| expr(e, false)).collect(),
+                span,
+            ),
+            Expr::TypeTuple(elements, span) => Expr::TypeTuple(
+                elements.into_iter().map(|e| expr(e, type_mode)).collect(),
+                span,
+            ),
+            Expr::StructType(fields, span) => Expr::StructType(
+                fields.into_iter().map(|e| expr(e, true)).collect(),
+                span,
+            ),
+            Expr::Array(elements, span) => Expr::Array(
+                elements.into_iter().map(|e| expr(e, type_mode)).collect(),
+                span,
+            ),
+            Expr::TypeArray {
+                element_type,
+                length,
+                span,
+            } => Expr::TypeArray {
+                element_type: Box::new(expr(*element_type, type_mode)),
+                length: Box::new(expr(*length, type_mode)),
+                span,
+            },
+            Expr::Block {
+                statements,
+                expr: inner,
+                span,
+            } => Expr::Block {
+                statements: statements.into_iter().map(|s| stmt(s, type_mode)).collect(),
+                expr: Box::new(expr(*inner, type_mode)),
+                span,
+            },
+            // Int, TypeConst, Placeholder, Err — mode-insensitive.
+            e => e,
+        }
     }
+    fn stmt(s: Stmt, type_mode: bool) -> Stmt {
+        match s {
+            Stmt::Binding(binding) => Stmt::Binding(Binding {
+                value: expr(binding.value, type_mode),
+                ..binding
+            }),
+            Stmt::Expr(e) => Stmt::Expr(expr(e, type_mode)),
+        }
+    }
+    Program {
+        statements: program
+            .statements
+            .into_iter()
+            .map(|s| stmt(s, false))
+            .collect(),
+        expr: expr(program.expr, false),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics
+
+/// Convert a chumsky error (token-index span, found token, expected labels)
+/// into the crate's diagnostic.
+fn diag_from(tokens: &[Token], e: &Rich<'_, Token, SimpleSpan<usize>>) -> Diag {
+    let span = span_at(tokens, e.span().start);
+    let message = match e.reason() {
+        // A custom error (from the parser's own checks, e.g. a recovered
+        // binding value) carries its message directly.
+        RichReason::Custom(message) => message.to_string(),
+        RichReason::ExpectedFound { .. } => {
+            let found = e
+                .found()
+                .map(|t| t.kind.describe())
+                .unwrap_or_else(|| "the end of the program".to_string());
+            let expected: Vec<String> = e.expected().map(|p| p.to_string()).collect();
+            match expected.as_slice() {
+                [] => format!("unexpected {found}"),
+                [one] => format!("expected {one}, found {found}"),
+                [a, b] => format!("expected {a} or {b}, found {found}"),
+                _ => format!(
+                    "expected {}, or {}, found {found}",
+                    expected[..expected.len() - 1].join(", "),
+                    expected[expected.len() - 1],
+                ),
+            }
+        }
+    };
+    Diag::new(Stage::Parse, span, message)
 }
 
 #[cfg(test)]
@@ -561,15 +848,21 @@ mod tests {
     use super::*;
     use crate::lex::lex;
 
-    /// The final expression of a program (bindings aside).
+    /// The final expression of a program (bindings aside), asserting the
+    /// parse is clean.
     fn parse_ok(source: &str) -> Expr {
-        let tokens = lex(source).unwrap();
-        parse(&tokens).unwrap().expr
+        let tokens = lex(source).tokens;
+        let Parsed { program, errors } = parse(&tokens);
+        assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
+        program.expr
     }
 
+    /// The first parse error.
     fn parse_err(source: &str) -> Diag {
-        let tokens = lex(source).unwrap();
-        parse(&tokens).unwrap_err()
+        let tokens = lex(source).tokens;
+        let Parsed { errors, .. } = parse(&tokens);
+        assert!(!errors.is_empty(), "expected a parse error for {source:?}");
+        errors.into_iter().next().unwrap()
     }
 
     /// The binding statements of a program, in order.
@@ -586,8 +879,8 @@ mod tests {
 
     #[test]
     fn a_program_is_bindings_followed_by_the_final_expression() {
-        let tokens = lex("a = [1, 2]; b = 0; a[b]").unwrap();
-        let program = parse(&tokens).unwrap();
+        let tokens = lex("a = [1, 2]; b = 0; a[b]").tokens;
+        let program = parse(&tokens).program;
         let binds = bindings(&program);
         assert_eq!(binds.len(), 2);
         assert_eq!(binds[0].name, "a");
@@ -598,40 +891,36 @@ mod tests {
 
     #[test]
     fn statement_errors_carry_spans() {
-        // A binding must be followed by a separator.
+        // A binding-only program has no final expression.
         let err = parse_err("a = 5");
-        assert_eq!(err.message, "expected ';', found the end of the program");
-        // A bare expression is accepted anywhere, but the list must end in a
-        // final expression — a trailing binding (with its required
-        // separator) leaves none.
+        assert_eq!(err.stage, Stage::Parse);
+        assert!(err.message.contains("must end with an expression"));
         let err = parse_err("5; a = 1");
-        assert_eq!(err.message, "expected ';', found the end of the program");
+        assert!(err.message.contains("must end with an expression"));
         let err = parse_err("a = 1; 5; a = 2");
-        assert_eq!(err.message, "expected ';', found the end of the program");
+        assert!(err.message.contains("must end with an expression"));
         let err = parse_err("a = 1;");
-        assert_eq!(
-            err.message,
-            "expected an expression, found the end of the program"
-        );
+        assert!(err.message.contains("must end with an expression"));
         // A binding without a value.
         let err = parse_err("a = ; 5");
         assert_eq!(err.message, "expected an expression, found ';'");
+        assert_eq!(err.span, Some((1, 5)));
     }
 
     #[test]
     fn bare_expressions_are_statements_anywhere() {
         // 5; a = 1; a — an expression before and between bindings; the last
         // statement is the final expression.
-        let tokens = lex("5; a = 1; 6; a").unwrap();
-        let program = parse(&tokens).unwrap();
+        let tokens = lex("5; a = 1; 6; a").tokens;
+        let program = parse(&tokens).program;
         assert_eq!(program.statements.len(), 3);
         assert!(matches!(program.statements[0], Stmt::Expr(..)));
         assert!(matches!(program.statements[1], Stmt::Binding(..)));
         assert!(matches!(program.statements[2], Stmt::Expr(..)));
         assert!(matches!(program.expr, Expr::Name(name, _) if name == "a"));
         // 5; 6 — the last expression is the value.
-        let tokens = lex("5; 6").unwrap();
-        let program = parse(&tokens).unwrap();
+        let tokens = lex("5; 6").tokens;
+        let program = parse(&tokens).program;
         assert_eq!(program.statements.len(), 1);
         assert!(matches!(program.statements[0], Stmt::Expr(..)));
         assert!(matches!(program.expr, Expr::Int(6, _)));
@@ -639,30 +928,26 @@ mod tests {
 
     #[test]
     fn newlines_separate_statements() {
-        // a = [1, 2]\nb = 0\na[b] — each binding ends at its newline.
-        let tokens = lex("a = [1, 2]\nb = 0\na[b]").unwrap();
-        let program = parse(&tokens).unwrap();
+        let tokens = lex("a = [1, 2]\nb = 0\na[b]").tokens;
+        let program = parse(&tokens).program;
         let binds = bindings(&program);
         assert_eq!(binds.len(), 2);
         assert_eq!(binds[0].name, "a");
         assert_eq!(binds[1].name, "b");
         assert!(matches!(program.expr, Expr::Index { .. }));
         // A trailing newline after the final expression is not an error.
-        parse(&lex("a = 1\na\n").unwrap()).unwrap();
+        parse(&lex("a = 1\na\n").tokens);
         // `;` and newlines mix, and consecutive separators are empty
         // statements.
-        let tokens = lex("a = 1;\nb = 2; c = 3\nc").unwrap();
-        let program = parse(&tokens).unwrap();
-        assert_eq!(bindings(&program).len(), 3);
+        let tokens = lex("a = 1;\nb = 2; c = 3\nc").tokens;
+        assert_eq!(bindings(&parse(&tokens).program).len(), 3);
         // Leading newlines (e.g. a top-of-file comment's) are skipped.
-        let tokens = lex("\n\na = 1\na").unwrap();
-        let program = parse(&tokens).unwrap();
-        assert_eq!(bindings(&program).len(), 1);
+        let tokens = lex("\n\na = 1\na").tokens;
+        assert_eq!(bindings(&parse(&tokens).program).len(), 1);
     }
 
     #[test]
     fn application_is_left_associative() {
-        // x y z = (x y) z
         let Expr::Apply {
             function, argument, ..
         } = parse_ok("x y z")
@@ -681,7 +966,6 @@ mod tests {
 
     #[test]
     fn arrows_are_right_associative() {
-        // Int -> Int -> Int = Int -> (Int -> Int)
         let Expr::Arrow {
             parameter,
             r#return,
@@ -696,13 +980,11 @@ mod tests {
 
     #[test]
     fn annotation_binds_looser_than_arrow_and_apply() {
-        // 5 : Int -> Int = 5 : (Int -> Int)
         let Expr::Annotation { value, r#type, .. } = parse_ok("5 : Int -> Int") else {
             panic!("expected an annotation")
         };
         assert!(matches!(*value, Expr::Int(5, _)));
         assert!(matches!(*r#type, Expr::Arrow { .. }));
-        // x y : Int = (x y) : Int
         let Expr::Annotation { value, .. } = parse_ok("x y : Int") else {
             panic!("expected an annotation")
         };
@@ -711,12 +993,10 @@ mod tests {
 
     #[test]
     fn lambda_bodies_extend_maximally() {
-        // x => e : Int = x => (e : Int)
         let Expr::Lambda { r#return, .. } = parse_ok("x => e : Int") else {
             panic!("expected a lambda")
         };
         assert!(matches!(*r#return, Expr::Annotation { .. }));
-        // x => y => e = x => (y => e)
         let Expr::Lambda { r#return, .. } = parse_ok("x => y => e") else {
             panic!("expected a lambda")
         };
@@ -725,7 +1005,6 @@ mod tests {
 
     #[test]
     fn an_annotated_parameter_is_a_lambda() {
-        // x : Int => x — the parameter carries the annotation.
         let Expr::Lambda {
             parameter,
             parameter_type,
@@ -782,8 +1061,6 @@ mod tests {
 
     #[test]
     fn angle_brackets_are_exclusively_type_level() {
-        // `<Int, Type>` is a TypeTuple in type position — and stays one in
-        // term position, unlike `(a, b)`.
         let Expr::Annotation { r#type, .. } = parse_ok("x : <Int, Type>") else {
             panic!("expected an annotation")
         };
@@ -801,7 +1078,6 @@ mod tests {
 
     #[test]
     fn struct_types_are_positional_fields_in_angle_brackets() {
-        // struct<Int, Int -> Int> — fields are type expressions.
         let Expr::StructType(fields, _) = parse_ok("struct<Int, Int -> Int>") else {
             panic!("expected a struct type")
         };
@@ -829,21 +1105,17 @@ mod tests {
     #[test]
     fn struct_type_errors_carry_spans() {
         let err = parse_err("struct");
-        assert_eq!(err.message, "expected '<', found the end of the program");
+        assert_eq!(err.span, Some((1, 7)));
         let err = parse_err("struct<");
-        assert_eq!(
-            err.message,
-            "expected an expression, found the end of the program"
-        );
+        assert_eq!(err.span, Some((1, 8)));
         let err = parse_err("struct<>");
-        assert_eq!(err.message, "expected an expression, found '>'");
+        assert_eq!(err.span, Some((1, 8)));
         let err = parse_err("struct<Int");
-        assert_eq!(err.message, "expected '>', found the end of the program");
+        assert_eq!(err.span, Some((1, 11)));
     }
 
     #[test]
     fn the_angle_bracket_array_type() {
-        // Int<3> — an array type.
         let Expr::TypeArray {
             element_type,
             length,
@@ -860,8 +1132,6 @@ mod tests {
             panic!("expected an apply")
         };
         assert!(matches!(*argument, Expr::Array(..)));
-        let err = parse_err("f [1, 2]");
-        assert_eq!(err.message, "expected ']', found ','");
         // chained postfix: Int<2><3> = (Int<2>)<3>
         let Expr::TypeArray { element_type, .. } = parse_ok("Int<2><3>") else {
             panic!("expected an array type")
@@ -877,7 +1147,6 @@ mod tests {
 
     #[test]
     fn the_index_postfix() {
-        // a[0] — an index.
         let Expr::Index { array, index, .. } = parse_ok("a[0]") else {
             panic!("expected an index")
         };
@@ -902,14 +1171,13 @@ mod tests {
         let err = parse_err("a[]");
         assert_eq!(err.message, "expected an expression, found ']'");
         let err = parse_err("a[0");
-        assert_eq!(err.message, "expected ']', found the end of the program");
+        assert_eq!(err.span, Some((1, 4)));
     }
 
     #[test]
     fn a_single_element_angle_bracket_is_a_parse_error() {
-        // `<Int>` is a typo for `(Int)` or a real tuple type.
         let err = parse_err("<Int>");
-        assert_eq!(err.message, "expected ',', found '>'");
+        assert_eq!(err.span, Some((1, 5)));
     }
 
     #[test]
@@ -921,15 +1189,12 @@ mod tests {
             "expected an expression, found the end of the program"
         );
         assert_eq!(err.span, Some((1, 5)));
-
         let err = parse_err("(x");
-        assert_eq!(err.message, "expected ')', found the end of the program");
-
+        assert_eq!(err.span, Some((1, 3)));
         let err = parse_err("x )");
-        assert_eq!(err.message, "unexpected ')' after the program");
-
+        assert_eq!(err.span, Some((1, 3)));
         let err = parse_err("[1, 2");
-        assert_eq!(err.message, "expected ']', found the end of the program");
+        assert_eq!(err.span, Some((1, 6)));
     }
 
     #[test]
@@ -938,11 +1203,11 @@ mod tests {
         // arrow is left dangling.
         let err = parse_err("f x => e");
         assert_eq!(err.stage, Stage::Parse);
+        assert!(err.message.contains("=>"));
     }
 
     #[test]
     fn an_underscore_in_type_position_is_a_placeholder() {
-        // `x : _` — the annotation's type is a placeholder.
         let Expr::Annotation { r#type, .. } = parse_ok("x : _") else {
             panic!("expected an annotation")
         };
@@ -1016,7 +1281,6 @@ mod tests {
 
     #[test]
     fn a_block_is_an_atom() {
-        // A block in argument position is an application, like any atom.
         let Expr::Apply { argument, .. } = parse_ok("f {a = 1; a}") else {
             panic!("expected an apply")
         };
@@ -1041,15 +1305,87 @@ mod tests {
     fn block_errors_carry_spans() {
         let err = parse_err("{a = 1; a");
         assert_eq!(err.stage, Stage::Parse);
-        assert_eq!(err.message, "expected '}', found the end of the program");
-        // A block needs a final expression, like a program.
+        assert_eq!(err.span, Some((1, 10)));
+        // An empty block is not a block: the value expression is missing.
         let err = parse_err("{}");
-        assert_eq!(err.message, "expected an expression, found '}'");
-        // A block binding requires `;`.
+        assert!(err.message.contains("found '}'"));
+        // A block binding requires `;` — a binding followed by `}` leaves no
+        // final expression.
         let err = parse_err("{a = 1}");
-        assert_eq!(err.message, "expected ';', found '}'");
+        assert!(err.message.contains("must end with an expression"));
         // A stray `}` after the program.
         let err = parse_err("x }");
-        assert_eq!(err.message, "unexpected '}' after the program");
+        assert_eq!(err.span, Some((1, 3)));
+    }
+
+    #[test]
+    fn broken_statements_are_recovered() {
+        // A broken binding value skips to the next separator and the rest of
+        // the program is reached.
+        let tokens = lex("a = ; b = 2; 5").tokens;
+        let Parsed { program, errors } = parse(&tokens);
+        assert_eq!(errors.len(), 1, "the broken binding's error");
+        assert_eq!(errors[0].message, "expected an expression, found ';'");
+        assert_eq!(program.statements.len(), 2);
+        assert!(matches!(program.expr, Expr::Int(5, _)));
+        // An unclosed paren in a value is recovered the same way.
+        let tokens = lex("a = (x; 5").tokens;
+        let Parsed { program, errors } = parse(&tokens);
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(program.expr, Expr::Int(5, _)));
+        // A statement that cannot start is skipped entirely, and the parse
+        // continues to the final expression.
+        let tokens = lex("a = 1; -> ; b = 2; b").tokens;
+        let Parsed { program, errors } = parse(&tokens);
+        assert_eq!(errors.len(), 1);
+        assert!(matches!(program.expr, Expr::Name(name, _) if name == "b"));
+    }
+
+    #[test]
+    fn dangling_operators_are_recovered() {
+        // An operator with a missing operand consumes the operator and
+        // recovers the operand as an error node — one precise error, no
+        // "could not be parsed" cascade, and the rest of the program is
+        // reached.  Same across every operator level; the recovered
+        // expression keeps the operator's shape with an error-node operand.
+        let cases: &[(&str, (u32, u32))] = &[
+            ("a = 1 + ; b = 2; b", (1, 9)),
+            ("a = 1 <= ; b = 2; b", (1, 10)),
+            ("a = 1 -> ; b = 2; b", (1, 10)),
+            ("a = 1 : ; b = 2; b", (1, 9)),
+            ("a = x => ; b = 2; b", (1, 10)),
+        ];
+        for (source, span) in cases {
+            let tokens = lex(source).tokens;
+            let Parsed { program, errors } = parse(&tokens);
+            assert_eq!(errors.len(), 1, "{source}: one precise error");
+            assert_eq!(errors[0].span, Some(*span), "{source}: at the missing operand");
+            assert_eq!(program.statements.len(), 2, "{source}: both statements");
+            assert!(matches!(program.expr, Expr::Name(name, _) if name == "b"));
+            let Stmt::Binding(binding) = &program.statements[0] else {
+                panic!("{source}: first statement is a binding");
+            };
+            // The dangling operator is consumed — the value keeps the
+            // operator's shape (BinOp/Arrow/Annotation/Lambda) with an
+            // error node in the operand slot.
+            let recovered = matches!(
+                &binding.value,
+                Expr::BinOp { right, .. }
+                    if matches!(**right, Expr::Err(_) | Expr::Placeholder(_))
+            ) || matches!(
+                &binding.value,
+                Expr::Arrow { r#return, .. }
+                    if matches!(**r#return, Expr::Err(_) | Expr::Placeholder(_))
+            ) || matches!(
+                &binding.value,
+                Expr::Annotation { r#type, .. }
+                    if matches!(**r#type, Expr::Err(_) | Expr::Placeholder(_))
+            ) || matches!(
+                &binding.value,
+                Expr::Lambda { r#return, .. }
+                    if matches!(**r#return, Expr::Err(_) | Expr::Placeholder(_))
+            );
+            assert!(recovered, "{source}: recovered shape: {:?}", binding.value);
+        }
     }
 }

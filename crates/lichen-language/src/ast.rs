@@ -108,6 +108,11 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// A syntactic error recovered by the parser — the position where the
+    /// broken construct started.  A compile-time leaf: it lowers to an
+    /// inference placeholder, so a partially parsed program still compiles
+    /// and checks (the parse error is reported alongside).
+    Err(Span),
 }
 
 /// One statement: a binding or a bare expression (the program's non-final
@@ -177,6 +182,7 @@ impl Expr {
             Expr::Array(_, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
+            Expr::Err(s) => *s,
         }
     }
 }
