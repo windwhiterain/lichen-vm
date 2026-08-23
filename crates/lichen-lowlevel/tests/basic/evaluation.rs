@@ -10,12 +10,7 @@ fn add_sums_u128_operands() {
     let a = u128_node(&mut m, root, 3);
     let b = u128_node(&mut m, root, 4);
     let operands = array_node(&mut m, root, &[a, b]);
-    let add = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Add),
-        Some(operands),
-    );
+    let add = op_node(&mut m, root, TestOperator::Add, Some(operands));
 
     let value = m.evaluate_node_deep(add, None);
 
@@ -28,12 +23,7 @@ fn concat_joins_string_operands() {
     let a = str_node(&mut m, root, &['a', 'b']);
     let b = str_node(&mut m, root, &['c', 'd']);
     let operands = array_node(&mut m, root, &[a, b]);
-    let concat = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Concat),
-        Some(operands),
-    );
+    let concat = op_node(&mut m, root, TestOperator::Concat, Some(operands));
 
     let value = m.evaluate_node_deep(concat, None);
 
@@ -48,7 +38,7 @@ fn index_selects_array_element() {
     let arr = array_node(&mut m, root, &[a, b]);
     let idx = usize_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[arr, idx]);
-    let index = op_node(&mut m, root, Operator::Index, Some(operands));
+    let index = op_node(&mut m, root, TestOperator::Index, Some(operands));
 
     let value = m.evaluate_node_deep(index, None);
 
@@ -63,7 +53,7 @@ fn index_out_of_bounds_records_an_eval_error() {
     let arr = array_node(&mut m, root, &[a, b]);
     let idx = usize_node(&mut m, root, 5);
     let operands = array_node(&mut m, root, &[arr, idx]);
-    let index = op_node(&mut m, root, Operator::Index, Some(operands));
+    let index = op_node(&mut m, root, TestOperator::Index, Some(operands));
 
     let value = m.evaluate_node_deep(index, None);
 
@@ -86,7 +76,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     // One past the end: the bound is exclusive.
     let idx = usize_node(&mut m, root, 2);
     let operands = array_node(&mut m, root, &[arr, idx]);
-    let index = op_node(&mut m, root, Operator::Index, Some(operands));
+    let index = op_node(&mut m, root, TestOperator::Index, Some(operands));
 
     assert!(matches!(m.evaluate_node_deep(index, None), TestValue::None));
     assert_eq!(m.eval_errors.len(), 1);
@@ -98,7 +88,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     // The last element is still selectable.
     let idx = usize_node(&mut m, root, 1);
     let last_ops = array_node(&mut m, root, &[arr, idx]);
-    let last = op_node(&mut m, root, Operator::Index, Some(last_ops));
+    let last = op_node(&mut m, root, TestOperator::Index, Some(last_ops));
     assert_eq!(u128_of(m.evaluate_node_deep(last, None)), 20);
     assert_eq!(m.eval_errors.len(), 1);
 }
@@ -114,7 +104,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let arr = array_node(&mut m, root, &[a, b]);
     let idx = usize_node(&mut m, root, 5);
     let ops = array_node(&mut m, root, &[arr, idx]);
-    let oob = op_node(&mut m, root, Operator::Index, Some(ops));
+    let oob = op_node(&mut m, root, TestOperator::Index, Some(ops));
     let ret = array_node(&mut m, root, &[param, oob]);
     wrap_function(&mut m, root, ret, param);
 
@@ -132,12 +122,12 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let a = op_node(&mut m, root, Operator::Ext(TestOperator::Id), None);
-    let b = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(a));
+    let a = op_node(&mut m, root, TestOperator::Id, None);
+    let b = op_node(&mut m, root, TestOperator::Id, Some(a));
     // Close the loop a -> b -> a through the public operation fields; the
     // evaluating state marks b as in-progress on re-entry and panics.
     m.nodes[a].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(b),
     });
     m.evaluate_node_deep(b, None);
@@ -172,12 +162,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
     let a = u128_node(&mut m, root, 3);
     let b = u128_node(&mut m, root, 4);
     let operands = array_node(&mut m, root, &[a, b]);
-    let add = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Add),
-        Some(operands),
-    );
+    let add = op_node(&mut m, root, TestOperator::Add, Some(operands));
 
     m.evaluate_node_deep(add, None);
 
@@ -190,8 +175,8 @@ fn parameterized_deep_marks_subtrees_with_parameters() {
     let p = m.add_node(root, None, Some(TestValue::Parameterized));
     let x = u128_node(&mut m, root, 5);
     let arr = array_node(&mut m, root, &[x, p]);
-    let id_arr = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(arr));
-    let id_p = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(p));
+    let id_arr = op_node(&mut m, root, TestOperator::Id, Some(arr));
+    let id_p = op_node(&mut m, root, TestOperator::Id, Some(p));
 
     m.evaluate_node_deep(id_arr, None);
 
@@ -214,23 +199,18 @@ fn sub_eq_lt_operators_compute_concrete_results() {
     let three = u128_node(&mut m, root, 3);
     // Sub: 3 - 2 = 1
     let sub_ops = array_node(&mut m, root, &[three, two]);
-    let sub = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Sub),
-        Some(sub_ops),
-    );
+    let sub = op_node(&mut m, root, TestOperator::Sub, Some(sub_ops));
     assert_eq!(u128_of(m.evaluate_node_deep(sub, None)), 1);
     // Eq: 3 == 3
     let eq_ops = array_node(&mut m, root, &[three, three]);
-    let eq = op_node(&mut m, root, Operator::Ext(TestOperator::Eq), Some(eq_ops));
+    let eq = op_node(&mut m, root, TestOperator::Eq, Some(eq_ops));
     assert!(matches!(
         m.evaluate_node_deep(eq, None),
         TestValue::USize(1)
     ));
     // Lt: 3 < 2 is false
     let lt_ops = array_node(&mut m, root, &[three, two]);
-    let lt = op_node(&mut m, root, Operator::Ext(TestOperator::Lt), Some(lt_ops));
+    let lt = op_node(&mut m, root, TestOperator::Lt, Some(lt_ops));
     assert!(matches!(
         m.evaluate_node_deep(lt, None),
         TestValue::USize(0)

@@ -22,7 +22,11 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// [`AsEnum::as_enum`] and [`From<LowValue>`]; the program's own
     /// variants are opaque to it.
     type Value: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone;
-    type Operator: OperatorExt<Self>;
+    /// The program's full operator vocabulary: the structural [`LowOperator`]
+    /// spliced together with the program's own operator variants.  The
+    /// lowlevel dispatches structural operators through [`AsEnum::as_enum`];
+    /// everything else falls through to [`OperatorExt::run`].
+    type Operator: OperatorExt<Self> + From<LowOperator> + AsEnum<LowOperator>;
     /// Program-global extension state, stored on [`Module`] and read or
     /// mutated by extension operators — the highlevel's fresh-type-id
     /// counter, for example.
@@ -43,6 +47,24 @@ pub enum LowValue {
     Function(FunctionId),
     None,
     Parameterized,
+}
+
+/// The structural operators the lowlevel itself dispatches — the
+/// non-extension subset of the former `Operator<P>`.  A program's operator
+/// type is this enum extended with the program's own variants via the
+/// generated `extend_LowOperator!` carrier, so the lowlevel can always pick
+/// its own operators out of a value through [`AsEnum::as_enum`]; everything
+/// `as_enum` doesn't recognise is a program operator and runs through
+/// [`OperatorExt::run`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[lichen_extend::enum_ext]
+pub enum LowOperator {
+    /// - `operand[0]`: array.
+    /// - `operand[1]`: index.
+    Index,
+    /// - `operand[0]`: function.
+    /// - `operand[1]`: argument.
+    Apply,
 }
 
 /// [`PartialEq`] is what decides whether two of them unify.
@@ -67,19 +89,8 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Operator<P: Program> {
-    Ext(P::Operator),
-    /// - `operand[0]`: array.
-    /// - `operand[1]`: index.
-    Index,
-    /// - `operand[0]`: function.
-    /// - `operand[1]`: argument.
-    Apply,
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct Operation<P: Program> {
-    pub operator: Operator<P>,
+    pub operator: P::Operator,
     pub operand: Option<NodeId>,
 }
 
@@ -199,7 +210,7 @@ pub struct Module<P: Program> {
     /// by the `#[stacksafe]` tests; tests lower it to panic fast.
     pub evaluate_depth_limit: usize,
     pub unify_errors: Vec<UnifyError<P>>,
-    /// Runtime evaluation failures (an out-of-bounds [`Operator::Index`]),
+    /// Runtime evaluation failures (an out-of-bounds [`LowOperator::Index`]),
     /// recorded instead of panicking — same append-only, never-cleared
     /// contract as [`Self::unify_errors`].
     pub eval_errors: Vec<EvalError>,

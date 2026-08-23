@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use stacksafe::stacksafe;
 
-use crate::{LowValue, Module, Node, NodeId, Operation, Operator, Program, is_unbound};
+use crate::{LowOperator, LowValue, Module, Node, NodeId, Operation, Program, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
@@ -297,7 +297,7 @@ impl<P: Program> Module<P> {
     /// index, and the container are all concrete.
     fn index_target(&self, op: NodeId) -> Option<NodeId> {
         let Operation { operator, operand } = self.nodes[op].operation?;
-        if !matches!(operator, Operator::Index) {
+        if !matches!(operator.as_enum(), Some(LowOperator::Index)) {
             return None;
         }
         let operand = operand?;

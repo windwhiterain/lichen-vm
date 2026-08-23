@@ -60,7 +60,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
     let root = m.add_block(None);
     let (func_node, ret, _param) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });

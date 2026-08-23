@@ -1,10 +1,13 @@
-//! The value union: `HighProgramValue` is the lowlevel `LowValue` extended
-//! with the checker's type values.  `From<LowValue>` builds a structural
-//! value, `AsEnum<LowValue>` inspects one, and the type values read as
-//! `None` — the two halves the lowlevel distinguishes through `as_enum`.
+//! The value and operator unions: `HighProgramValue` is the lowlevel
+//! `LowValue` extended with the checker's type values, and
+//! `HighProgramOperator` is the lowlevel `LowOperator` extended with the
+//! checker's type-level operators.  `From<LowValue>`/`From<LowOperator>`
+//! build a structural value/operator, `AsEnum` inspects one, and the
+//! extension variants read as `None` — the two halves the lowlevel
+//! distinguishes through `as_enum`.
 
-use lichen_highlevel::program::HighProgramValue;
-use lichen_lowlevel::LowValue;
+use lichen_highlevel::program::{HighProgramOperator, HighProgramValue};
+use lichen_lowlevel::{LowOperator, LowValue};
 use lichen_utils::extend::AsEnum;
 
 #[test]
@@ -27,4 +30,22 @@ fn markers_read_as_their_structural_self() {
         Some(LowValue::Parameterized)
     );
     assert_eq!(HighProgramValue::None.as_enum(), Some(LowValue::None));
+}
+
+#[test]
+fn structural_operators_round_trip_through_from_and_as_enum() {
+    let op: HighProgramOperator = LowOperator::Index.into();
+    assert_eq!(op, HighProgramOperator::Index);
+    assert_eq!(op.as_enum(), Some(LowOperator::Index));
+    assert_eq!(
+        HighProgramOperator::Apply.as_enum(),
+        Some(LowOperator::Apply)
+    );
+}
+
+#[test]
+fn extension_operators_read_as_none() {
+    assert_eq!(HighProgramOperator::IndexType.as_enum(), None);
+    assert_eq!(HighProgramOperator::Fresh.as_enum(), None);
+    assert_eq!(HighProgramOperator::Add.as_enum(), None);
 }

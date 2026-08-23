@@ -1,10 +1,10 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, LowValue, Module, NodeId, Operator, OperatorExt as _, Program};
+use crate::{BlockId, LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program};
 use lichen_utils::extend::AsEnum;
 
 /// A runtime evaluation failure — the only one today is an out-of-bounds
-/// [`Operator::Index`].  Structured facts (the index node, the index value,
+/// [`LowOperator::Index`].  Structured facts (the index node, the index value,
 /// the container length) so the highlevel layer can attribute a span and
 /// render a message without walking the module graph.
 #[derive(Debug, Clone, Copy)]
@@ -42,8 +42,9 @@ impl<P: Program> Module<P> {
         }
         self.nodes[node].visiting = true;
         let operation = self.nodes[node].operation.unwrap();
-        let value = match operation.operator {
-            Operator::Index => {
+        let operator = operation.operator;
+        let value = match operator.as_enum() {
+            Some(LowOperator::Index) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Index expects an operand array node")
                 };
@@ -99,7 +100,7 @@ impl<P: Program> Module<P> {
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            Operator::Ext(ext) => {
+            None => {
                 let operand = match operation.operand {
                     Some(operand) => {
                         let value = self.evaluate_node_deep(operand, Some(block));
@@ -111,9 +112,9 @@ impl<P: Program> Module<P> {
                     }
                     None => P::Value::from(LowValue::None),
                 };
-                ext.run(operand, block, self)
+                operator.run(operand, block, self)
             }
-            Operator::Apply => {
+            Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
                 };

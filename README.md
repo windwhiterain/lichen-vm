@@ -162,6 +162,19 @@ output:
 [1, Int]: <Int, Type>
 ```
 
+### `mutual_recursion.lichen`
+
+```text
+is_even = x => [is_old (x - 1), 1][x == 0]
+is_old = x => [is_even (x - 1), 0][x == 0]
+(is_even 3, is_old 3)
+```
+
+output:
+```text
+[0, 1]: <Int, Int>
+```
+
 ### `nested_function.lichen`
 
 ```text
@@ -180,7 +193,7 @@ output:
 ### `recursion.lichen`
 
 ```text
-fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)
+fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]
 fib 10
 ```
 

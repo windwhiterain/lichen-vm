@@ -19,8 +19,8 @@ mod function;
 mod recursion;
 
 use lichen_lowlevel::{
-    BlockId, Function, FunctionId, Handle, LowValue, Module, NodeId, Operation, Operator,
-    OperatorExt, Program, ValueExt,
+    BlockId, Function, FunctionId, Handle, LowValue, Module, NodeId, Operation, OperatorExt,
+    Program, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -86,17 +86,21 @@ impl ValueExt for TestValue {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum TestOperator {
-    /// Pass the operand through untouched.
-    Id,
-    Add,
-    Sub,
-    Concat,
-    /// `a == b`, returning `TestValue::USize(1/0)` so it can drive `Index`.
-    Eq,
-    /// `a < b`, returning `TestValue::USize(1/0)` so it can drive `Index`.
-    Lt,
+// The test operator vocabulary: the lowlevel structural operators spliced
+// in from [`LowOperator`], plus the test operators below.
+lichen_lowlevel::extend_LowOperator! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum TestOperator {
+        /// Pass the operand through untouched.
+        Id,
+        Add,
+        Sub,
+        Concat,
+        /// `a == b`, returning `TestValue::USize(1/0)` so it can drive `Index`.
+        Eq,
+        /// `a < b`, returning `TestValue::USize(1/0)` so it can drive `Index`.
+        Lt,
+    }
 }
 
 impl OperatorExt<TestProgram> for TestOperator {
@@ -107,6 +111,11 @@ impl OperatorExt<TestProgram> for TestOperator {
         module: &mut Module<TestProgram>,
     ) -> TestValue {
         match self {
+            // The structural operators never reach `run`: the VM dispatches
+            // them through `AsEnum` before falling through.
+            TestOperator::Index | TestOperator::Apply => {
+                unreachable!("structural operators are dispatched by the VM")
+            }
             TestOperator::Id => operand,
             // Binary ops receive their operands as an array of two node
             // ids; the elements are already evaluated.  A parameterized
@@ -223,7 +232,7 @@ fn unit_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
 fn op_node(
     m: &mut Module<TestProgram>,
     block: BlockId,
-    operator: Operator<TestProgram>,
+    operator: TestOperator,
     operand: Option<NodeId>,
 ) -> NodeId {
     m.add_node(block, Some(Operation { operator, operand }), None)
@@ -288,7 +297,7 @@ fn call_node(
     arg: NodeId,
 ) -> NodeId {
     let operands = array_node(m, block, &[func_node, arg]);
-    op_node(m, block, Operator::Apply, Some(operands))
+    op_node(m, block, TestOperator::Apply, Some(operands))
 }
 
 /// Register a function whose body lives in `block`: insert the `Function`
@@ -325,7 +334,7 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     // creates the value node last) cannot be used here.
     let func_node = m.add_node(body, None, None);
     let operands = array_node(m, body, &[func_node, param]);
-    let apply = op_node(m, body, Operator::Apply, Some(operands));
+    let apply = op_node(m, body, TestOperator::Apply, Some(operands));
     let ret = array_node(m, body, &[param, apply]);
     let function = m.functions.insert(Function {
         nodes: HashSet::from([param, func_node, operands, apply, ret]),
@@ -351,11 +360,11 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     let g_func = m.add_node(body, None, None);
     // f(x) = [x, g(x)]
     let f_ops = array_node(m, body, &[g_func, f_param]);
-    let f_apply = op_node(m, body, Operator::Apply, Some(f_ops));
+    let f_apply = op_node(m, body, TestOperator::Apply, Some(f_ops));
     let f_ret = array_node(m, body, &[f_param, f_apply]);
     // g(x) = [x, f(x)]
     let g_ops = array_node(m, body, &[f_func, g_param]);
-    let g_apply = op_node(m, body, Operator::Apply, Some(g_ops));
+    let g_apply = op_node(m, body, TestOperator::Apply, Some(g_ops));
     let g_ret = array_node(m, body, &[g_param, g_apply]);
     let f = m.functions.insert(Function {
         nodes: HashSet::from([f_param, f_func, f_ops, f_apply, f_ret]),
@@ -390,23 +399,23 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let two = u128_node(m, body, 2);
     // fib(x-1)
     let sub1_ops = array_node(m, body, &[param, one]);
-    let sub1 = op_node(m, body, Operator::Ext(TestOperator::Sub), Some(sub1_ops));
+    let sub1 = op_node(m, body, TestOperator::Sub, Some(sub1_ops));
     let fib1_ops = array_node(m, body, &[fib_func, sub1]);
-    let fib1 = op_node(m, body, Operator::Apply, Some(fib1_ops));
+    let fib1 = op_node(m, body, TestOperator::Apply, Some(fib1_ops));
     // fib(x-2)
     let sub2_ops = array_node(m, body, &[param, two]);
-    let sub2 = op_node(m, body, Operator::Ext(TestOperator::Sub), Some(sub2_ops));
+    let sub2 = op_node(m, body, TestOperator::Sub, Some(sub2_ops));
     let fib2_ops = array_node(m, body, &[fib_func, sub2]);
-    let fib2 = op_node(m, body, Operator::Apply, Some(fib2_ops));
+    let fib2 = op_node(m, body, TestOperator::Apply, Some(fib2_ops));
     // rec = fib(x-1) + fib(x-2)
     let rec_ops = array_node(m, body, &[fib1, fib2]);
-    let rec = op_node(m, body, Operator::Ext(TestOperator::Add), Some(rec_ops));
+    let rec = op_node(m, body, TestOperator::Add, Some(rec_ops));
     // ret = if x < 2 then x else rec
     let lt_ops = array_node(m, body, &[param, two]);
-    let lt = op_node(m, body, Operator::Ext(TestOperator::Lt), Some(lt_ops));
+    let lt = op_node(m, body, TestOperator::Lt, Some(lt_ops));
     let branch = array_node(m, body, &[rec, param]);
     let index_ops = array_node(m, body, &[branch, lt]);
-    let ret = op_node(m, body, Operator::Index, Some(index_ops));
+    let ret = op_node(m, body, TestOperator::Index, Some(index_ops));
     let function = finish_function(m, body, ret, param, fib_func);
     (fib_func, function)
 }
@@ -418,7 +427,7 @@ fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId)
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let operands = array_node(m, body, &[func_node, param]);
-    let ret = op_node(m, body, Operator::Apply, Some(operands));
+    let ret = op_node(m, body, TestOperator::Apply, Some(operands));
     let function = finish_function(m, body, ret, param, func_node);
     (func_node, function)
 }

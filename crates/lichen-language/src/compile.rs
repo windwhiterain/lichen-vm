@@ -43,11 +43,12 @@ use lichen_highlevel::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 
-pub fn compile(program: &Program) -> Result<IR, Diag> {
-    let mut compiler = Compiler {
-        ir: IR::new(),
-        scopes: Vec::new(),
-    };
+    pub fn compile(program: &Program) -> Result<IR, Diag> {
+        let mut compiler = Compiler {
+            ir: IR::new(),
+            scopes: Vec::new(),
+            fn_depth: 0,
+        };
     // The whole program is one scope: block-wide bindings are entered before
     // any value compiles, restrictive `let` bindings are entered as they're
     // seen; the scope is never popped, so later statements (and the final
@@ -63,6 +64,13 @@ struct Compiler {
     ir: IR,
     /// The in-scope binders, innermost last.
     scopes: Vec<HashMap<String, ExprId>>,
+    /// The count of enclosing function scopes at the current compilation
+    /// point — the `depth` carried on each lambda's [`ExprKind::Function`],
+    /// which the checker uses to make sibling functions' template scopes
+    /// disjoint while absorbing nested closures into their parent's scope.
+    /// Incremented only around a lambda's `r#return` compilation (a lambda's
+    /// own depth is the value *before* its body opens).
+    fn_depth: usize,
 }
 
 impl Compiler {
@@ -199,12 +207,18 @@ impl Compiler {
                 r#return,
                 span,
             } => {
+                let depth = self.fn_depth as u32;
                 let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
                 self.scopes
                     .push(HashMap::from([(parameter.clone(), parameter_id)]));
                 // The annotated parameter's type is compiled in scope too —
                 // a type may reference the parameter (`x : x -> Int`).
-                let body = self.compile_expr(r#return);
+                let body = {
+                    self.fn_depth += 1;
+                    let body = self.compile_expr(r#return);
+                    self.fn_depth -= 1;
+                    body
+                };
                 let parameter_type = parameter_type
                     .as_ref()
                     .map(|t| self.compile_expr(t))
@@ -215,6 +229,7 @@ impl Compiler {
                     ExprKind::Function {
                         parameter: parameter_id,
                         r#return: body,
+                        depth,
                     },
                     span,
                 );
@@ -458,6 +473,7 @@ mod tests {
         let ExprKind::Function {
             parameter,
             r#return,
+            ..
         } = kind(&ir, ir.root)
         else {
             panic!("expected a function")
@@ -494,6 +510,7 @@ mod tests {
         let ExprKind::Function {
             parameter: inner,
             r#return,
+            ..
         } = kind(&ir, outer_body)
         else {
             panic!("expected the inner function")
@@ -545,6 +562,7 @@ mod tests {
         let ExprKind::Function {
             parameter,
             r#return,
+            ..
         } = kind(&ir, ir.root)
         else {
             panic!("expected a function")
@@ -630,6 +648,7 @@ mod tests {
         let ExprKind::Function {
             parameter,
             r#return,
+            ..
         } = kind(&ir, value)
         else {
             panic!("expected the function")

@@ -2,8 +2,10 @@
 //!
 //! The value universe is the lowlevel structural values (spliced in from
 //! the lowlevel `LowValue` enum) together with the type values below — the
-//! union [`HighProgramValue`] — so the checker builds and inspects every
-//! value without an `Ext` wrapper.
+//! union [`HighProgramValue`] — and the operator universe is the lowlevel
+//! `LowOperator` enum together with the type-level operators below — the
+//! union [`HighProgramOperator`] — so the checker builds and inspects every
+//! value and emits every operator without an `Ext` wrapper.
 
 use lichen_lowlevel::{
     BlockId, EvalError, FunctionId, Module, NodeId, OperatorExt, Program, ValueExt,
@@ -17,7 +19,7 @@ pub struct HighProgram;
 /// operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct HighGlobalExt {
-    /// The next nominal type id — [`HighOperator::Fresh`] reads and
+    /// The next nominal type id — [`HighProgramOperator::Fresh`] reads and
     /// increments it, so each call yields a distinct
     /// [`HighProgramValue::TypeId`].
     pub type_id_counter: usize,
@@ -25,7 +27,7 @@ pub struct HighGlobalExt {
 
 impl Program for HighProgram {
     type Value = HighProgramValue;
-    type Operator = HighOperator;
+    type Operator = HighProgramOperator;
     type GlobalExt = HighGlobalExt;
 }
 
@@ -63,44 +65,51 @@ impl ValueExt for HighProgramValue {
     }
 }
 
-/// The extension operators the checker emits — the type-level computations
-/// that have no structural operator form.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum HighOperator {
-    /// The type evaluation of an indexing expression `a[i]`.
-    ///
-    /// Operand: `[type_pair, index]` where `type_pair` is the indexed
-    /// value's type expression.  A tuple type (`TypeTuple` kind) and a
-    /// struct type (`TypeId` kind) select their element/field-type list
-    /// position — a structural out of bounds.  An array type (`ArrayType`
-    /// kind) checks the index against the *length* stored in its shape
-    /// `[element_type, length]` — the check the structural `Index` cannot
-    /// express (the shape holds the length as data, not as selectable
-    /// positions).  Out of bounds records an [`EvalError`] and yields
-    /// `HighProgramValue::None`.
-    IndexType,
-    /// A fresh nominal type id: each call reads and increments
-    /// [`HighGlobalExt::type_id_counter`] and returns
-    /// `HighProgramValue::TypeId(n)`.  Nullary — the checker emits it with
-    /// no operand, so it fires once per source occurrence and the cached
-    /// value is reused wherever the struct type it tags is referenced.
-    Fresh,
-    /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare and
-    /// yield `USize(0/1)` — no `Bool` value exists, the comparison result
-    /// drives the lazy `Index` branch of an `if` directly.
-    ///
-    /// Operand: `[left, right]`.  The lowlevel `Ext` arm deep-evaluates the
-    /// operand and gates on its parameterized subtree, so an unbound operand
-    /// (a template parameter during the definition pass) is already the lazy
-    /// marker; the checker pins both operand types to `Int`, so a wrong-shape
-    /// operand here is an invariant violation, not a user error.
-    Add,
-    Sub,
-    Leq,
-    Eq,
+// The extension operators the checker emits — the type-level computations
+// that have no structural operator form.
+lichen_lowlevel::extend_LowOperator! {
+    /// The highlevel program's operator vocabulary: the structural
+    /// [`LowOperator::Index`]/[`LowOperator::Apply`] spliced in from the
+    /// lowlevel, plus the type-level operators below.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum HighProgramOperator {
+        /// The type evaluation of an indexing expression `a[i]`.
+        ///
+        /// Operand: `[type_pair, index]` where `type_pair` is the indexed
+        /// value's type expression.  A tuple type (`TypeTuple` kind) and a
+        /// struct type (`TypeId` kind) select their element/field-type list
+        /// position — a structural out of bounds.  An array type
+        /// (`TypeArray` kind) checks the index against the *length* stored
+        /// in its shape `[element_type, length]` — the check the structural
+        /// `Index` cannot express (the shape holds the length as data, not
+        /// as selectable positions).  Out of bounds records an
+        /// [`EvalError`] and yields `HighProgramValue::None`.
+        IndexType,
+        /// A fresh nominal type id: each call reads and increments
+        /// [`HighGlobalExt::type_id_counter`] and returns
+        /// `HighProgramValue::TypeId(n)`.  Nullary — the checker emits it
+        /// with no operand, so it fires once per source occurrence and the
+        /// cached value is reused wherever the struct type it tags is
+        /// referenced.
+        Fresh,
+        /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare
+        /// and yield `USize(0/1)` — no `Bool` value exists, the comparison
+        /// result drives the lazy `Index` branch of an `if` directly.
+        ///
+        /// Operand: `[left, right]`.  The lowlevel deep-evaluates the operand
+        /// and gates on its parameterized subtree before calling `run`, so an
+        /// unbound operand (a template parameter during the definition pass)
+        /// is already the lazy marker; the checker pins both operand types to
+        /// `Int`, so a wrong-shape operand here is an invariant violation, not
+        /// a user error.
+        Add,
+        Sub,
+        Leq,
+        Eq,
+    }
 }
 
-impl OperatorExt<HighProgram> for HighOperator {
+impl OperatorExt<HighProgram> for HighProgramOperator {
     fn run(
         &self,
         operand: HighProgramValue,
@@ -108,10 +117,15 @@ impl OperatorExt<HighProgram> for HighOperator {
         module: &mut Module<HighProgram>,
     ) -> HighProgramValue {
         match self {
-            HighOperator::IndexType => {
-                // The Ext arm deep-evaluates the operand and gates on its
-                // parameterized subtree, so an unbound type or index has
-                // already been turned into the lazy marker.
+            // The structural operators never reach `run`: the VM dispatches
+            // them through `AsEnum` before falling through.
+            HighProgramOperator::Index | HighProgramOperator::Apply => {
+                unreachable!("structural operators are dispatched by the VM")
+            }
+            HighProgramOperator::IndexType => {
+                // The VM deep-evaluates the operand and gates on its
+                // parameterized subtree before calling `run`, so an unbound
+                // type or index has already been turned into the lazy marker.
                 if matches!(operand, HighProgramValue::Parameterized) {
                     return HighProgramValue::Parameterized;
                 }
@@ -221,15 +235,18 @@ impl OperatorExt<HighProgram> for HighOperator {
                     _ => unreachable!("IndexType target must be a tuple, array, or struct type"),
                 }
             }
-            HighOperator::Fresh => {
+            HighProgramOperator::Fresh => {
                 let id = module.global_ext.type_id_counter;
                 module.global_ext.type_id_counter += 1;
                 HighProgramValue::TypeId(id)
             }
-            HighOperator::Add | HighOperator::Sub | HighOperator::Leq | HighOperator::Eq => {
-                // The Ext arm already deep-evaluates the operand and gates
-                // on its parameterized subtree, so an unbound operand is
-                // the lazy marker (the definition pass flags the node).
+            HighProgramOperator::Add
+            | HighProgramOperator::Sub
+            | HighProgramOperator::Leq
+            | HighProgramOperator::Eq => {
+                // The VM already deep-evaluates the operand and gates on its
+                // parameterized subtree, so an unbound operand is the lazy
+                // marker (the definition pass flags the node).
                 if matches!(operand, HighProgramValue::Parameterized) {
                     return HighProgramValue::Parameterized;
                 }
@@ -249,10 +266,10 @@ impl OperatorExt<HighProgram> for HighOperator {
                     return HighProgramValue::Parameterized;
                 };
                 match self {
-                    HighOperator::Add => HighProgramValue::USize(left.wrapping_add(right)),
-                    HighOperator::Sub => HighProgramValue::USize(left.wrapping_sub(right)),
-                    HighOperator::Leq => HighProgramValue::USize((left <= right) as usize),
-                    HighOperator::Eq => HighProgramValue::USize((left == right) as usize),
+                    HighProgramOperator::Add => HighProgramValue::USize(left.wrapping_add(right)),
+                    HighProgramOperator::Sub => HighProgramValue::USize(left.wrapping_sub(right)),
+                    HighProgramOperator::Leq => HighProgramValue::USize((left <= right) as usize),
+                    HighProgramOperator::Eq => HighProgramValue::USize((left == right) as usize),
                     _ => unreachable!("all binary operators are handled above"),
                 }
             }

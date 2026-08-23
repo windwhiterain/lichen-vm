@@ -24,10 +24,17 @@ fn param(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Parameter, None)
 }
 fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
+    lam_at(ir, b, body, 0)
+}
+/// A lambda at a given lexical depth — the count of enclosing function
+/// scopes (0 = top-level).  The checker uses this to absorb a nested closure
+/// into its parent's template while keeping siblings' templates disjoint.
+fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, depth: u32) -> ExprId {
     ir.alloc(
         ExprKind::Function {
             parameter: b,
             r#return: body,
+            depth,
         },
         None,
     )
@@ -482,7 +489,7 @@ fn let_bound_functions_are_polymorphic() {
     let call2 = app(&mut ir, b1, type_val); // a second use of id
     let t2 = ty(&mut ir);
     let body2 = ann(&mut ir, call2, t2);
-    let inner_lam = lam(&mut ir, b2, body2);
+    let inner_lam = lam_at(&mut ir, b2, body2, 1);
     let inner = app(&mut ir, inner_lam, a);
     let outer_lam = lam(&mut ir, b1, inner);
     let whole = app(&mut ir, outer_lam, id);
@@ -540,7 +547,7 @@ fn types_are_first_class() {
     let tval = int_t(&mut ir);
     let bx = param(&mut ir);
     let body = ann(&mut ir, bx, bt); // (x : T) — both uses are parameter ids
-    let l = lam(&mut ir, bx, body);
+    let l = lam_at(&mut ir, bx, body, 1);
     let t_lam = lam(&mut ir, bt, l);
     let whole = app(&mut ir, t_lam, tval);
     let b = build(whole, ir);
@@ -912,7 +919,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let x = param(&mut ir);
     let y = param(&mut ir);
     let f2_body = array(&mut ir, &[a, b, x, y]);
-    let f2 = lam(&mut ir, y, f2_body);
+    let f2 = lam_at(&mut ir, y, f2_body, 1);
     let f1 = lam(&mut ir, x, f2);
     let three = int(&mut ir, 3);
     let four = int(&mut ir, 4);

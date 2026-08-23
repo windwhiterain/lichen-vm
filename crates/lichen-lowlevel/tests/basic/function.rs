@@ -9,7 +9,7 @@ fn function_call_operator_clones_body_and_maps_parameter() {
     let root = m.add_block(None);
     let (func_node, ret, param) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });
@@ -93,9 +93,9 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     let f = m.add_block(None);
     let ret = m.add_node(f, None, None); // RETURN_IDX
     let param = m.add_node(f, None, Some(TestValue::Parameterized)); // PARAMETER_IDX
-    let mid = op_node(&mut m, f, Operator::Ext(TestOperator::Id), Some(param));
+    let mid = op_node(&mut m, f, TestOperator::Id, Some(param));
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(mid),
     });
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
@@ -127,7 +127,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
     let root = m.add_block(None);
     let (func_node, ret, param) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });
@@ -161,7 +161,7 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
     let (func_node, ret, param) = function(&mut m, |m, ret, _param| {
         let seven = u128_node(m, m.nodes[ret].block, 7);
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(seven),
         });
     });
@@ -187,7 +187,7 @@ fn function_in_local_block_survives_compaction() {
     let ret = m.add_node(child, None, None); // RETURN_IDX
     let param = m.add_node(child, None, Some(TestValue::Parameterized)); // PARAMETER_IDX
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(param),
     });
     let (func_node, _) = wrap_function(&mut m, child, ret, param);
@@ -199,12 +199,7 @@ fn function_in_local_block_survives_compaction() {
 
     // Running the block compacts the function value into the root and maps
     // the template nodes along with it.
-    let root_node = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Id),
-        Some(func_node),
-    );
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(func_node));
     let TestValue::Function(mapped) = m.evaluate_node_deep(root_node, None) else {
         panic!("expected function")
     };
@@ -229,7 +224,7 @@ fn function_scope_is_dropped_with_its_block() {
     let ret = m.add_node(child, None, None);
     let param = m.add_node(child, None, Some(TestValue::Parameterized));
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(param),
     });
     let (func_node, func) = wrap_function(&mut m, child, ret, param);
@@ -239,7 +234,7 @@ fn function_scope_is_dropped_with_its_block() {
     // return-reachable tree, then releases the rest — the function's home
     // node included, dropping the function and its scope.
     let x = u128_node(&mut m, child, 5);
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
     assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 5);
 
     assert!(!m.blocks.contains_key(child));
@@ -258,7 +253,7 @@ fn nested_function_is_called_by_the_outer_body() {
     let gret = m.add_node(f, None, None);
     let gparam = m.add_node(f, None, Some(TestValue::Parameterized));
     m.nodes[gret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(gparam),
     });
     let (g_node, _) = wrap_function(&mut m, f, gret, gparam);
@@ -266,7 +261,7 @@ fn nested_function_is_called_by_the_outer_body() {
     let param = m.add_node(f, None, Some(TestValue::Parameterized));
     let operands = array_node(&mut m, f, &[g_node, param]);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Apply,
+        operator: TestOperator::Apply,
         operand: Some(operands),
     });
     let (f_node, _) = wrap_function(&mut m, f, ret, param);
@@ -291,13 +286,13 @@ fn outer_call_returns_a_nested_function_value() {
     let gret = m.add_node(f, None, None);
     let gparam = m.add_node(f, None, Some(TestValue::Parameterized));
     m.nodes[gret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(gparam),
     });
     let (g_node, g_id) = wrap_function(&mut m, f, gret, gparam);
     let ret = m.add_node(f, None, None);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(g_node),
     });
     let param = m.add_node(f, None, Some(TestValue::Parameterized));
@@ -339,12 +334,12 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let f = m.add_block(None);
     let param = m.add_node(f, None, Some(TestValue::Parameterized));
     m.nodes[gret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(param),
     });
     let ret = m.add_node(f, None, None);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(g_node),
     });
     let mut nodes = m.blocks[f].nodes.clone();
@@ -371,7 +366,7 @@ fn higher_order_function_passes_a_function_argument_through() {
     // apply with a function argument hands that function back.
     let (apply_node, ret, _param) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });
@@ -380,7 +375,7 @@ fn higher_order_function_passes_a_function_argument_through() {
     // g(x) = Id(x).
     let (g_node, _, _) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });
@@ -410,7 +405,7 @@ fn higher_order_function_calls_its_function_argument() {
     let forty_two = u128_node(&mut m, body, 42);
     let operands = array_node(&mut m, body, &[param, forty_two]);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Apply,
+        operator: TestOperator::Apply,
         operand: Some(operands),
     });
     let (apply_node, _) = wrap_function(&mut m, body, ret, param);
@@ -419,7 +414,7 @@ fn higher_order_function_calls_its_function_argument() {
     // g(x) = Id(x): passing g as the argument makes apply evaluate g(42).
     let (g_node, _, _) = function(&mut m, |m, ret, param| {
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Id),
+            operator: TestOperator::Id,
             operand: Some(param),
         });
     });
@@ -440,7 +435,7 @@ fn function_can_index_into_parameterized_array() {
     let zero = usize_node(&mut m, body, 0);
     let operands = array_node(&mut m, body, &[array, zero]);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Index,
+        operator: TestOperator::Index,
         operand: Some(operands),
     });
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
@@ -469,16 +464,11 @@ fn manually_partially_evaluated_function_applies_correctly() {
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let one = u128_node(&mut m, body, 1);
     let inner_ops = array_node(&mut m, body, &[param, one]);
-    let inner = op_node(
-        &mut m,
-        body,
-        Operator::Ext(TestOperator::Add),
-        Some(inner_ops),
-    );
+    let inner = op_node(&mut m, body, TestOperator::Add, Some(inner_ops));
     let two = u128_node(&mut m, body, 2);
     let ret_ops = array_node(&mut m, body, &[inner, two]);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Add),
+        operator: TestOperator::Add,
         operand: Some(ret_ops),
     });
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
@@ -534,7 +524,7 @@ fn unevaluated_function_applies_correctly() {
         let one = u128_node(m, m.nodes[ret].block, 1);
         let operands = array_node(m, m.nodes[ret].block, &[param, one]);
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Add),
+            operator: TestOperator::Add,
             operand: Some(operands),
         });
     });
@@ -563,7 +553,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
     let seven = u128_node(&mut m, child, 7);
     let operands = array_node(&mut m, child, &[param, seven]);
     m.nodes[ret].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Add),
+        operator: TestOperator::Add,
         operand: Some(operands),
     });
     let (g_node, g_id) = wrap_function(&mut m, child, ret, param);
@@ -576,7 +566,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
 
     // The root pulls g out of the child: compaction re-homes the function
     // and moves its whole scope, then releases the rest of the block.
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(g_node));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(g_node));
     let TestValue::Function(mapped) = m.evaluate_node_deep(root_node, None) else {
         panic!("expected function")
     };
@@ -600,7 +590,7 @@ fn call_return_is_shallow_for_container_bodies() {
     let f = m.add_block(None);
     let ret = m.add_node(f, None, None); // RETURN_IDX
     let param = m.add_node(f, None, Some(TestValue::Parameterized)); // PARAMETER_IDX
-    let id2 = op_node(&mut m, f, Operator::Ext(TestOperator::Id), Some(param));
+    let id2 = op_node(&mut m, f, TestOperator::Id, Some(param));
     let slice = m.blocks[f].arena.alloc_slice_copy(&[param, id2]);
     m.nodes[ret].value = Some(TestValue::Array(std::ptr::slice_from_raw_parts(
         slice.as_ptr(),
@@ -652,21 +642,11 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
     let one = u128_node(&mut m, root, 1);
     let two = u128_node(&mut m, root, 2);
     let add_ops = array_node(&mut m, root, &[one, two]);
-    let add = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Add),
-        Some(add_ops),
-    );
+    let add = op_node(&mut m, root, TestOperator::Add, Some(add_ops));
     let five = u128_node(&mut m, root, 5);
     let three = u128_node(&mut m, root, 3);
     let sub_ops = array_node(&mut m, root, &[five, three]);
-    let sub = op_node(
-        &mut m,
-        root,
-        Operator::Ext(TestOperator::Sub),
-        Some(sub_ops),
-    );
+    let sub = op_node(&mut m, root, TestOperator::Sub, Some(sub_ops));
     let arg = array_node(&mut m, root, &[add, sub]);
     let call = call_node(&mut m, root, f, arg);
     let value = m.evaluate_node_deep(call, None);

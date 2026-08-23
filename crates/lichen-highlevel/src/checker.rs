@@ -29,13 +29,13 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_lowlevel::{
-    BlockId, Function, LowValue, Module, NodeId, Operation, Operator, UnifyError, is_unbound,
+    BlockId, Function, LowValue, Module, NodeId, Operation, UnifyError, is_unbound,
 };
 use lichen_utils::extend::AsEnum;
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, Constant, ExprId, ExprKind, IR, Span};
-use crate::program::{HighOperator, HighProgram, HighProgramValue};
+use crate::program::{HighProgram, HighProgramOperator, HighProgramValue};
 
 /// Term position or type position.  The same expression can be a value in
 /// one place and a type in another (first-class types); in type position its
@@ -57,6 +57,15 @@ struct Binding {
     ty: NodeId,
 }
 
+/// One frame per [`Checker::check_lam`] on the stack: the function's lexical
+/// depth and the blocks created while compiling its body (its own return
+/// block plus any absorbed nested-closure blocks).  See
+/// [`Checker::body_blocks`].
+struct BodyFrame {
+    depth: u32,
+    blocks: Vec<BlockId>,
+}
+
 pub struct Checker {
     ir: IR,
     module: Module<HighProgram>,
@@ -64,11 +73,15 @@ pub struct Checker {
     scopes: Vec<HashMap<ExprId, Binding>>,
     /// The blocks created while compiling each enclosing function's body —
     /// one frame per [`Checker::check_lam`] on the stack, innermost last.
-    /// A function's scope is the union of its frame's blocks, so an apply's
-    /// clone instantiates a nested function value (with its captures) as a
-    /// fresh closure instead of referencing the template's never-bound
-    /// parameter cells.
-    body_blocks: Vec<Vec<BlockId>>,
+    /// A function absorbs its blocks into its *lexical parent* — the
+    /// innermost enclosing frame with `depth - 1` — so a genuinely-nested
+    /// closure's scope joins the parent's template (the apply's clone then
+    /// instantiates the nested function value per call, rebinding its
+    /// captures), while a sibling at the same depth stays disjoint (its value
+    /// node is outside the template, so the clone references it in place —
+    /// the mutual-recursion invariant).  Each frame's own `nodes` are built
+    /// from its `blocks` regardless of whether it absorbed upward.
+    body_blocks: Vec<BodyFrame>,
     /// The compiled pair node `[value, type]` per expression.
     term: Vec<Option<NodeId>>,
     /// Element 0 of the pair (the value).  `None` for call results, whose
@@ -322,7 +335,7 @@ impl Checker {
     fn op_node(
         &mut self,
         block: BlockId,
-        operator: Operator<HighProgram>,
+        operator: HighProgramOperator,
         operand: Option<NodeId>,
     ) -> NodeId {
         self.module
@@ -367,7 +380,11 @@ impl Checker {
             .module
             .add_node(self.current_block, None, Some(HighProgramValue::USize(0)));
         let operands = self.array_node(self.current_block, &[pair, zero]);
-        let index = self.op_node(self.current_block, Operator::Index, Some(operands));
+        let index = self.op_node(
+            self.current_block,
+            HighProgramOperator::Index,
+            Some(operands),
+        );
         self.val[e] = Some(index);
         index
     }
@@ -515,7 +532,7 @@ impl Checker {
     /// Whether `kind` is a struct type's kind expression `[TypeId(n), K]` —
     /// the fresh nominal marker, as opposed to the fixed structural markers
     /// [`HighProgramValue::TypeTuple`] / [`HighProgramValue::TypeArray`].  The marker slot
-    /// holds the *pending* [`HighOperator::Fresh`] call at check time — its
+    /// holds the *pending* [`HighProgramOperator::Fresh`] call at check time — its
     /// value, the nominal id, only appears when the definition pass runs the
     /// operator — so an unevaluated Fresh marker counts as a struct kind too.
     fn kind_marker_is_type_id(&mut self, kind: NodeId) -> bool {
@@ -533,7 +550,7 @@ impl Checker {
                 Some(HighProgramValue::TypeId(_))
             ) || self.module.nodes[head]
                 .operation
-                .is_some_and(|op| matches!(op.operator, Operator::Ext(HighOperator::Fresh))))
+                .is_some_and(|op| matches!(op.operator, HighProgramOperator::Fresh)))
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -637,6 +654,7 @@ impl Checker {
             ExprKind::Function {
                 parameter,
                 r#return,
+                ..
             } => self.check_lam(e, parameter, r#return),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {
@@ -708,8 +726,18 @@ impl Checker {
     }
 
     fn check_lam(&mut self, e: ExprId, parameter: ExprId, r#return: ExprId) -> NodeId {
+        let depth = match self.ir[e].kind {
+            // The frontend records the count of enclosing function scopes;
+            // the checker uses it below to absorb into the lexical parent
+            // only, keeping siblings' templates disjoint.
+            ExprKind::Function { depth, .. } => depth,
+            _ => unreachable!("check_lam is only entered for a Function expression"),
+        };
         let return_block = self.module.add_block(None);
-        self.body_blocks.push(vec![return_block]);
+        self.body_blocks.push(BodyFrame {
+            depth,
+            blocks: vec![return_block],
+        });
         let saved = self.current_block;
         self.current_block = return_block;
         let value_cell = self.fresh_cell();
@@ -752,15 +780,29 @@ impl Checker {
         // references to this function's members are rewritten to the clones
         // the argument unify binds (a captured parameter), and its own cells
         // are fresh per call.
-        let blocks = self.body_blocks.pop().expect("a function's body blocks");
-        if let Some(outer) = self.body_blocks.last_mut() {
-            outer.extend(blocks.iter().copied());
-        }
+        let frame = self.body_blocks.pop().expect("a function's body blocks");
+        let depth = frame.depth;
+        let blocks = frame.blocks;
         let mut nodes: HashSet<NodeId> = blocks
             .iter()
             .flat_map(|&block| self.module.blocks[block].nodes.iter().copied())
             .collect();
         nodes.insert(ret);
+        // Absorb this function's blocks into its *lexical parent* — the
+        // innermost enclosing frame with `depth - 1`.  A genuinely-nested
+        // closure's scope then joins the parent's template (the apply's clone
+        // instantiates the nested function value per call, rebinding its
+        // capture), while a sibling at the same depth stays disjoint — its
+        // value node is outside the template, so the clone references it in
+        // place, which is the mutual-recursion invariant.  A depth-0 function
+        // is top-level: no parent.
+        if depth > 0 {
+            let parent_depth = depth - 1;
+            if let Some(idx) = self.body_blocks.iter().rposition(|frame| frame.depth == parent_depth)
+            {
+                self.body_blocks[idx].blocks.extend(blocks.iter().copied());
+            }
+        }
         // A recursive binding's value node pre-exists (the self-reference
         // applied it during the body); it fills in now with the function id.
         // `add_function` creates its own value node, so the manual insert
@@ -835,7 +877,11 @@ impl Checker {
         // lazy result leaves it unbound.
         let c = self.fresh_cell();
         let operands = self.array_node(self.current_block, &[function_value, argument_pair, c]);
-        let node = self.op_node(self.current_block, Operator::Apply, Some(operands));
+        let node = self.op_node(
+            self.current_block,
+            HighProgramOperator::Apply,
+            Some(operands),
+        );
         self.term[e] = Some(node);
         self.val[e] = None;
         self.ty[e] = Some(c);
@@ -861,15 +907,15 @@ impl Checker {
             DiagKind::BinOp,
         );
         let operator = match operator {
-            BinOp::Add => HighOperator::Add,
-            BinOp::Sub => HighOperator::Sub,
-            BinOp::Leq => HighOperator::Leq,
-            BinOp::Eq => HighOperator::Eq,
+            BinOp::Add => HighProgramOperator::Add,
+            BinOp::Sub => HighProgramOperator::Sub,
+            BinOp::Leq => HighProgramOperator::Leq,
+            BinOp::Eq => HighProgramOperator::Eq,
         };
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
-        let value = self.op_node(self.current_block, Operator::Ext(operator), Some(operands));
+        let value = self.op_node(self.current_block, operator, Some(operands));
         let pair = self.pair_of(value, self.int_type);
         self.term[e] = Some(pair);
         self.val[e] = Some(value);
@@ -883,7 +929,7 @@ impl Checker {
     /// over the element/field-type list — both sides then catch an
     /// out-of-bounds index.  For an array (or a type known only at runtime
     /// — a parameter, a call result) it is the custom
-    /// [`HighOperator::IndexType`], which checks the index against the
+    /// [`HighProgramOperator::IndexType`], which checks the index against the
     /// ArrayType's *length*: the array type's shape `[element_type, length]`
     /// holds the length as data, so no structural selection can check it.
     fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
@@ -892,7 +938,11 @@ impl Checker {
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
-        let value_node = self.op_node(self.current_block, Operator::Index, Some(value_ops));
+        let value_node = self.op_node(
+            self.current_block,
+            HighProgramOperator::Index,
+            Some(value_ops),
+        );
         let array_ty = self.ty[array].unwrap();
         // Index-target guard: indexing a *concretely* non-indexable type —
         // a function, an atomic type — is an error, not a runtime panic
@@ -948,7 +998,7 @@ impl Checker {
             // index is caught by the lowlevel `Index` bounds check.
             Some(tys) => {
                 let ty_ops = self.array_node(self.current_block, &[tys, index_value]);
-                self.op_node(self.current_block, Operator::Index, Some(ty_ops))
+                self.op_node(self.current_block, HighProgramOperator::Index, Some(ty_ops))
             }
             // The length lives inside the ArrayType as data: the check
             // runs in the custom operator, dispatched on the kind the
@@ -957,7 +1007,7 @@ impl Checker {
                 let ty_ops = self.array_node(self.current_block, &[array_ty, index_value]);
                 self.op_node(
                     self.current_block,
-                    Operator::Ext(HighOperator::IndexType),
+                    HighProgramOperator::IndexType,
                     Some(ty_ops),
                 )
             }
@@ -1074,7 +1124,7 @@ impl Checker {
     /// A struct type expression: `[[field types], [TypeId(n), Type]]` —
     /// like a tuple type, but the kind slot holds a *fresh nominal* id
     /// instead of the fixed `TupleType` marker.  The id comes from the
-    /// [`HighOperator::Fresh`] call in the kind slot, so each occurrence
+    /// [`HighProgramOperator::Fresh`] call in the kind slot, so each occurrence
     /// allocates a new id and two occurrences never unify (nominal
     /// identity); a struct type is reused by binding it once through a
     /// parameter.  Fields are positional (no names in v1).
@@ -1086,7 +1136,7 @@ impl Checker {
             tys.push(self.term[el].unwrap());
         }
         let shape = self.array_node(self.current_block, &tys);
-        let id = self.op_node(self.current_block, Operator::Ext(HighOperator::Fresh), None);
+        let id = self.op_node(self.current_block, HighProgramOperator::Fresh, None);
         let kind = self.array_node(self.current_block, &[id, self.type_expr]);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
@@ -1167,7 +1217,7 @@ impl Checker {
     }
 }
 
-/// Whether the compiled subtree of `root` contains an [`Operator::Apply`]
+/// Whether the compiled subtree of `root` contains an [`HighProgramOperator::Apply`]
 /// operation — the criterion for the per-function definition pass (see
 /// [`Checker::build`]).
 fn self_subtree_contains_apply(module: &Module<HighProgram>, root: NodeId) -> bool {
@@ -1179,7 +1229,7 @@ fn self_subtree_contains_apply(module: &Module<HighProgram>, root: NodeId) -> bo
         }
         let n = &module.nodes[node];
         if let Some(operation) = n.operation {
-            if matches!(operation.operator, Operator::Apply) {
+            if matches!(operation.operator, HighProgramOperator::Apply) {
                 return true;
             }
             if let Some(operand) = operation.operand {

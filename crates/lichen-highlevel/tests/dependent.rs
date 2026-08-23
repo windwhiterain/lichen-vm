@@ -8,8 +8,8 @@
 //! build lowlevel graphs directly and exercise the laziness + unification
 //! rules the highlevel layer will sit on.
 
-use lichen_highlevel::program::{HighProgram, HighProgramValue};
-use lichen_lowlevel::{BlockId, Module, NodeId, Operation, Operator};
+use lichen_highlevel::program::{HighProgram, HighProgramOperator, HighProgramValue};
+use lichen_lowlevel::{BlockId, Module, NodeId, Operation};
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(HighProgramValue::USize(n)))
@@ -44,7 +44,7 @@ fn index_node(
     m.add_node(
         block,
         Some(Operation {
-            operator: Operator::Index,
+            operator: HighProgramOperator::Index,
             operand: Some(operands),
         }),
         None,
@@ -57,7 +57,7 @@ fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: No
     m.add_node(
         block,
         Some(Operation {
-            operator: Operator::Apply,
+            operator: HighProgramOperator::Apply,
             operand: Some(operands),
         }),
         None,
@@ -88,7 +88,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let codomain = m.add_node(
         root,
         Some(Operation {
-            operator: Operator::Index,
+            operator: HighProgramOperator::Index,
             operand: Some(codomain_operands),
         }),
         None,

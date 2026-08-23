@@ -84,7 +84,15 @@ pub enum ExprKind {
     /// parameter's own `ExprId`.
     Parameter,
     /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
-    Function { parameter: ExprId, r#return: ExprId },
+    /// `depth` is the count of enclosing function scopes at declaration (0
+    /// for a top-level function).  The checker uses it to keep sibling
+    /// functions' template scopes disjoint while absorbing truly-nested
+    /// closures into their parent's template.
+    Function {
+        parameter: ExprId,
+        r#return: ExprId,
+        depth: u32,
+    },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
     /// `{ operator, left, right }` — a binary integer operation: `+`, `-`,

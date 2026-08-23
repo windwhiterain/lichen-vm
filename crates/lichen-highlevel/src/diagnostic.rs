@@ -19,13 +19,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{EvalError, NodeId, Operator, UnifyError, is_unbound};
+use lichen_lowlevel::{EvalError, NodeId, UnifyError, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    program::{HighOperator, HighProgram, HighProgramValue},
+    program::{HighProgram, HighProgramOperator, HighProgramValue},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
@@ -486,13 +486,17 @@ impl Report<'_> {
             .find_map(|m| self.build.module.nodes[m].operation)
             .map(|op| op.operator)
         {
-            Some(Operator::Index) => "Index".to_string(),
-            Some(Operator::Apply) => "Apply".to_string(),
-            Some(Operator::Ext(HighOperator::IndexType)) => "Index".to_string(),
-            Some(Operator::Ext(HighOperator::Fresh)) => "Fresh".to_string(),
-            Some(Operator::Ext(
-                HighOperator::Add | HighOperator::Sub | HighOperator::Leq | HighOperator::Eq,
-            )) => "op".to_string(),
+            Some(HighProgramOperator::Index | HighProgramOperator::IndexType) => {
+                "Index".to_string()
+            }
+            Some(HighProgramOperator::Apply) => "Apply".to_string(),
+            Some(HighProgramOperator::Fresh) => "Fresh".to_string(),
+            Some(
+                HighProgramOperator::Add
+                | HighProgramOperator::Sub
+                | HighProgramOperator::Leq
+                | HighProgramOperator::Eq,
+            ) => "op".to_string(),
             None => "op".to_string(),
         }
     }

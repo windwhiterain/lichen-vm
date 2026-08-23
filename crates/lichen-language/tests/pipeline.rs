@@ -402,9 +402,7 @@ fn if_selects_a_branch() {
 fn a_recursive_function_checks_and_evaluates() {
     // The countdown: f(n) = if n <= 0 then 0 else f(n-1).
     assert_eq!(
-        usize_of(&evaluate(
-            "f = n => if n <= 0 then 0 else f (n - 1); f 5"
-        )),
+        usize_of(&evaluate("f = n => if n <= 0 then 0 else f (n - 1); f 5")),
         0
     );
     // Fibonacci: the recursion example.
@@ -458,7 +456,11 @@ fn a_blockwide_binding_need_not_be_a_lambda() {
     // self-referential, non-productive value.  It *checks*; evaluating it is
     // the programmer's responsibility, like any non-termination.
     let report = compile("a = a; a");
-    assert!(report.ok(), "expected no diagnostic: {:?}", report.diagnostics);
+    assert!(
+        report.ok(),
+        "expected no diagnostic: {:?}",
+        report.diagnostics
+    );
 }
 
 #[test]
@@ -477,15 +479,36 @@ fn mutually_recursive_functions_check() {
     // A recursion *chain* across two block bindings: f calls g, g calls f.
     // Block-wide visibility (the default) lets either reference the other,
     // in both directions, without `rec`, and the checker totalizes the cycle
-    // (no stack overflow, no diagnostics).  The runtime evaluation of a
-    // mutual chain is a separate concern (see the sibling-template note in
-    // the checker): this test pins the *check-time* capability.
+    // (no stack overflow, no diagnostics).  Sibling template scopes are
+    // disjoint, so the runtime descends in place — see the evaluate test
+    // below; this one pins the check-time capability with a non-forcing
+    // program.
     let report = compile(
         "f = n => if n <= 0 then 0 else g (n - 1);
          g = n => if n <= 0 then 0 else f (n - 1);
-         f 3",
+         f",
     );
-    assert!(report.ok(), "expected mutual recursion to check: {:?}", report.diagnostics);
+    assert!(
+        report.ok(),
+        "expected mutual recursion to check: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn mutually_recursive_functions_evaluate_in_place() {
+    // The *runtime* of a mutual chain: f calls g, g calls f, down to the
+    // base case.  Sibling functions' template scopes are disjoint, so the
+    // apply clone references the peer in place instead of cloning it per
+    // level — the recursion descends and terminates, and exactly two
+    // function templates exist.
+    let (mut module, root) = run(
+        "f = n => if n <= 0 then 0 else g (n - 1);
+         g = n => if n <= 0 then 0 else f (n - 1);
+         f 5",
+    );
+    assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 0);
+    assert_eq!(module.functions.len(), 2, "peers are referenced in place");
 }
 
 #[test]
@@ -493,10 +516,7 @@ fn a_binding_can_forward_reference_a_later_block_wide_binding() {
     // `a = b` reads `b` before it is defined: block-wide names are entered
     // before any value compiles, so a forward (and self/mutual) reference
     // resolves.  `a` aliases `b`'s node.
-    assert_eq!(
-        usize_of(&evaluate("a = b; b = [1, 2]; a[0]")),
-        1
-    );
+    assert_eq!(usize_of(&evaluate("a = b; b = [1, 2]; a[0]")), 1);
 }
 
 #[test]

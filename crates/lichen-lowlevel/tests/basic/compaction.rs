@@ -11,7 +11,7 @@ fn redundant_nodes_are_not_compacted() {
     let child = m.add_block(Some(root));
     let x = u128_node(&mut m, child, 5);
     let y = u128_node(&mut m, child, 7); // redundant: never referenced
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -31,7 +31,7 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
 
     let child = m.add_block(Some(root));
     let x = u128_node(&mut m, child, 42);
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
     let value = m.evaluate_node_deep(root_node, None);
     let TestValue::U128(ptr) = value else {
@@ -56,7 +56,7 @@ fn array_return_compacts_elements_into_parent() {
     let b = u128_node(&mut m, child, 20);
     let c = u128_node(&mut m, child, 30);
     let ret = array_node(&mut m, child, &[a, b, c]);
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(ret));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(ret));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -76,12 +76,7 @@ fn nested_scalar_return_compacts_into_grandparent() {
     let inner = m.add_block(Some(outer));
     let x = u128_node(&mut m, inner, 9);
     let ret = array_node(&mut m, outer, &[x]); // outer's return references inner's return x
-    let root_node = op_node(
-        &mut m,
-        grandparent,
-        Operator::Ext(TestOperator::Id),
-        Some(ret),
-    );
+    let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(ret));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -98,12 +93,7 @@ fn nested_array_return_relocates_data_twice() {
     let c = u128_node(&mut m, inner, 7);
     let inner_ret = array_node(&mut m, inner, &[c]);
     let outer_ret = array_node(&mut m, outer, &[inner_ret]);
-    let root_node = op_node(
-        &mut m,
-        grandparent,
-        Operator::Ext(TestOperator::Id),
-        Some(outer_ret),
-    );
+    let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(outer_ret));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -125,7 +115,7 @@ fn unreferenced_child_blocks_are_released() {
     let x = u128_node(&mut m, child, 5);
     let grandchild = m.add_block(Some(child));
     let orphan = u128_node(&mut m, grandchild, 9); // never referenced
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(x));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(x));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -141,10 +131,10 @@ fn block_run_pulls_outer_and_sibling_blocks() {
     let c = m.add_block(Some(p));
     let s = m.add_block(Some(p)); // sibling of c
     let z = u128_node(&mut m, s, 11); // s's return
-    let y = op_node(&mut m, p, Operator::Ext(TestOperator::Id), Some(z)); // p's node uses sibling s
-    let c_ret = op_node(&mut m, c, Operator::Ext(TestOperator::Id), Some(y)); // c references outer y
-    let p_ret = op_node(&mut m, p, Operator::Ext(TestOperator::Id), Some(c_ret)); // p's return is c's result
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(p_ret));
+    let y = op_node(&mut m, p, TestOperator::Id, Some(z)); // p's node uses sibling s
+    let c_ret = op_node(&mut m, c, TestOperator::Id, Some(y)); // c references outer y
+    let p_ret = op_node(&mut m, p, TestOperator::Id, Some(c_ret)); // p's return is c's result
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(p_ret));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -190,9 +180,9 @@ fn deep_block_chain_evaluates_stack_safely() {
     // child block's return node, so evaluation nests 100_000 block runs deep.
     let mut ret = u128_node(&mut m, *chain.last().unwrap(), 7);
     for i in (1..chain.len() - 1).rev() {
-        ret = op_node(&mut m, chain[i], Operator::Ext(TestOperator::Id), Some(ret));
+        ret = op_node(&mut m, chain[i], TestOperator::Id, Some(ret));
     }
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(ret));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(ret));
 
     let value = m.evaluate_node_deep(root_node, None);
 
@@ -259,7 +249,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let ret_f = m.add_node(grandchild, None, None);
     let param_f = m.add_node(grandchild, None, Some(TestValue::Parameterized));
     m.nodes[ret_f].operation = Some(Operation {
-        operator: Operator::Ext(TestOperator::Id),
+        operator: TestOperator::Id,
         operand: Some(param_f),
     });
     let (func_node, f) = wrap_function(&mut m, grandchild, ret_f, param_f);
@@ -292,7 +282,7 @@ fn garbage_collect_hoists_unevaluated_scalar_operand() {
     let child = m.add_block(Some(root));
     let grandchild = m.add_block(Some(child));
     let x = u128_node(&mut m, grandchild, 42);
-    let ret = op_node(&mut m, child, Operator::Ext(TestOperator::Id), Some(x));
+    let ret = op_node(&mut m, child, TestOperator::Id, Some(x));
     let orphan = u128_node(&mut m, grandchild, 99); // never referenced
 
     // `ret` is unevaluated, so its operand is still live: collecting the
@@ -316,12 +306,7 @@ fn garbage_collect_enters_unevaluated_subtree_via_operand() {
     let grandchild = m.add_block(Some(child));
     let x = u128_node(&mut m, grandchild, 7);
     let operands = array_node(&mut m, grandchild, &[x]);
-    let ret = op_node(
-        &mut m,
-        child,
-        Operator::Ext(TestOperator::Id),
-        Some(operands),
-    );
+    let ret = op_node(&mut m, child, TestOperator::Id, Some(operands));
 
     // The unevaluated subtree behind `ret`'s operand is entered through
     // the operand edge: the operand array is hoisted, and its array
@@ -343,12 +328,7 @@ fn garbage_collect_skips_operands_of_evaluated_nodes() {
     let grandchild = m.add_block(Some(child));
     let x = u128_node(&mut m, grandchild, 7);
     let operands = array_node(&mut m, grandchild, &[x]);
-    let ret = op_node(
-        &mut m,
-        child,
-        Operator::Ext(TestOperator::Id),
-        Some(operands),
-    );
+    let ret = op_node(&mut m, child, TestOperator::Id, Some(operands));
 
     // Evaluating `ret` memoizes its result, so the operand edge is dead: a
     // later collect must not drag the operand subtree up with it.  Only
@@ -374,7 +354,7 @@ fn call_clones_are_compacted_with_the_calling_block() {
         let one = u128_node(m, m.nodes[ret].block, 1);
         let operands = array_node(m, m.nodes[ret].block, &[param, one]);
         m.nodes[ret].operation = Some(Operation {
-            operator: Operator::Ext(TestOperator::Add),
+            operator: TestOperator::Add,
             operand: Some(operands),
         });
     });
@@ -388,7 +368,7 @@ fn call_clones_are_compacted_with_the_calling_block() {
 
     // Compacting the child moves the call node (with its cached result)
     // into the root; the clone nodes it used are released with the block.
-    let root_node = op_node(&mut m, root, Operator::Ext(TestOperator::Id), Some(call));
+    let root_node = op_node(&mut m, root, TestOperator::Id, Some(call));
     assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 6);
     assert_eq!(m.nodes[call].block, root);
     assert!(!m.blocks.contains_key(child));
