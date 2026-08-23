@@ -43,6 +43,17 @@ A minimal language demostrating the features.
 
 - [spec](docs/language-spec.md)
 
+## How To Use
+
+- Compile your program to lichen program with:
+    - Computatal operator replaced by fake operator.
+    - Complex value replaced by fake value. 
+- Then run lichen program
+
+Since lichen-highlevel preserve the consistancy of `value : type` pair, as long as input `value : type` pairs are consistant, any evaluated `value : type` pair are.
+
+Warning: `Type : Type` gives you most flexibility, the decidability of the lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
+
 ## Quick start
 
 Requires a Rust toolchain.
