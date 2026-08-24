@@ -54,9 +54,8 @@ fn function_call_operator_clones_array_body() {
     let param = m.add_node(f, None, Some(TestValue::Parameterized)); // PARAMETER_IDX
     let seven = u128_node(&mut m, f, 7);
     let slice = m.blocks[f].arena.alloc_slice_copy(&[param, seven]);
-    m.nodes[ret].value = Some(TestValue::Array(std::ptr::slice_from_raw_parts(
-        slice.as_ptr(),
-        slice.len(),
+    m.nodes[ret].value = Some(TestValue::Array(ArrayRef::new(
+        std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
     )));
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
@@ -259,7 +258,7 @@ fn nested_function_is_called_by_the_outer_body() {
     let (g_node, _) = wrap_function(&mut m, f, gret, gparam);
     let ret = m.add_node(f, None, None);
     let param = m.add_node(f, None, Some(TestValue::Parameterized));
-    let operands = array_node(&mut m, f, &[g_node, param]);
+    let operands = array_node(&mut m, f, &[g_node, param], None);
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Apply,
         operand: Some(operands),
@@ -403,7 +402,7 @@ fn higher_order_function_calls_its_function_argument() {
     let ret = m.add_node(body, None, None);
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let forty_two = u128_node(&mut m, body, 42);
-    let operands = array_node(&mut m, body, &[param, forty_two]);
+    let operands = array_node(&mut m, body, &[param, forty_two], None);
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Apply,
         operand: Some(operands),
@@ -431,9 +430,9 @@ fn function_can_index_into_parameterized_array() {
     let ret = m.add_node(body, None, None);
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let seven = u128_node(&mut m, body, 7);
-    let array = array_node(&mut m, body, &[param, seven]);
+    let array = array_node(&mut m, body, &[param, seven], None);
     let zero = usize_node(&mut m, body, 0);
-    let operands = array_node(&mut m, body, &[array, zero]);
+    let operands = array_node(&mut m, body, &[array, zero], None);
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Index,
         operand: Some(operands),
@@ -463,10 +462,10 @@ fn manually_partially_evaluated_function_applies_correctly() {
     let ret = m.add_node(body, None, None);
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let one = u128_node(&mut m, body, 1);
-    let inner_ops = array_node(&mut m, body, &[param, one]);
+    let inner_ops = array_node(&mut m, body, &[param, one], None);
     let inner = op_node(&mut m, body, TestOperator::Add, Some(inner_ops));
     let two = u128_node(&mut m, body, 2);
-    let ret_ops = array_node(&mut m, body, &[inner, two]);
+    let ret_ops = array_node(&mut m, body, &[inner, two], None);
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Add,
         operand: Some(ret_ops),
@@ -522,7 +521,7 @@ fn unevaluated_function_applies_correctly() {
     // before applying: every body node keeps parameterized_deep = None.
     let (f_node, ret, param) = function(&mut m, |m, ret, param| {
         let one = u128_node(m, m.nodes[ret].block, 1);
-        let operands = array_node(m, m.nodes[ret].block, &[param, one]);
+        let operands = array_node(m, m.nodes[ret].block, &[param, one], None);
         m.nodes[ret].operation = Some(Operation {
             operator: TestOperator::Add,
             operand: Some(operands),
@@ -551,7 +550,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
     let ret = m.add_node(child, None, None);
     let param = m.add_node(child, None, Some(TestValue::Parameterized));
     let seven = u128_node(&mut m, child, 7);
-    let operands = array_node(&mut m, child, &[param, seven]);
+    let operands = array_node(&mut m, child, &[param, seven], None);
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Add,
         operand: Some(operands),
@@ -592,9 +591,8 @@ fn call_return_is_shallow_for_container_bodies() {
     let param = m.add_node(f, None, Some(TestValue::Parameterized)); // PARAMETER_IDX
     let id2 = op_node(&mut m, f, TestOperator::Id, Some(param));
     let slice = m.blocks[f].arena.alloc_slice_copy(&[param, id2]);
-    m.nodes[ret].value = Some(TestValue::Array(std::ptr::slice_from_raw_parts(
-        slice.as_ptr(),
-        slice.len(),
+    m.nodes[ret].value = Some(TestValue::Array(ArrayRef::new(
+        std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
     )));
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
     m.evaluate_node_deep(ret, None); // definition pass flags the array parameterized
@@ -632,24 +630,92 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
     let param = m.add_node(
         root,
         None,
-        Some(TestValue::Array(std::ptr::slice_from_raw_parts(
-            slice.as_ptr(),
-            slice.len(),
+        Some(TestValue::Array(ArrayRef::new(
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
         ))),
     );
     let f = m.add_function(root, param, param, [param, x0, x1]);
     // argument: [Add(1, 2), Sub(5, 3)] = [3, 2]
     let one = u128_node(&mut m, root, 1);
     let two = u128_node(&mut m, root, 2);
-    let add_ops = array_node(&mut m, root, &[one, two]);
+    let add_ops = array_node(&mut m, root, &[one, two], None);
     let add = op_node(&mut m, root, TestOperator::Add, Some(add_ops));
     let five = u128_node(&mut m, root, 5);
     let three = u128_node(&mut m, root, 3);
-    let sub_ops = array_node(&mut m, root, &[five, three]);
+    let sub_ops = array_node(&mut m, root, &[five, three], None);
     let sub = op_node(&mut m, root, TestOperator::Sub, Some(sub_ops));
-    let arg = array_node(&mut m, root, &[add, sub]);
+    let arg = array_node(&mut m, root, &[add, sub], None);
     let call = call_node(&mut m, root, f, arg);
     let value = m.evaluate_node_deep(call, None);
     assert!(m.unify_errors.is_empty());
     assert_u128_array(&m, value, &[3, 2]);
+}
+#[test]
+fn apply_clone_preserves_the_shallow_mask() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = [x, Add(x, 1)] with position 1 marked shallow: the deep pass
+    // on the definition keeps the Add lazy, and the apply's clone must
+    // carry the mask so the marked element stays lazy in the call too.
+    let f = m.add_block(None);
+    let param = m.add_node(f, None, Some(TestValue::Parameterized));
+    let one = u128_node(&mut m, f, 1);
+    let add_ops = array_node(&mut m, f, &[param, one], None);
+    let add = op_node(&mut m, f, TestOperator::Add, Some(add_ops));
+    let ret = array_node(&mut m, f, &[param, add], Some(&[false, true]));
+    let (func_node, _) = wrap_function(&mut m, f, ret, param);
+
+    m.evaluate_node_deep(ret, None); // definition pass
+    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+
+    let arg = u128_node(&mut m, root, 10);
+    let call = call_node(&mut m, root, func_node, arg);
+    let value = m.evaluate_node_deep(call, None);
+
+    let TestValue::Array(cloned) = value else {
+        panic!("expected an array result")
+    };
+    assert_eq!(cloned.mask(), &[false, true], "the mask travels through the clone");
+    assert_eq!(u128_of(m.nodes[cloned.ids()[0]].value.unwrap()), 10);
+    assert!(
+        m.nodes[cloned.ids()[1]].value.is_none(),
+        "the marked element stays lazy in the call"
+    );
+}
+#[test]
+fn pattern_argument_evaluation_skips_shallow_positions() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // f(x) = x with x = [x0, x1]: the pattern's position 1 is shallow, so
+    // the apply must not force the argument's element there.
+    let x0 = m.add_node(root, None, Some(TestValue::Parameterized));
+    let x1 = m.add_node(root, None, Some(TestValue::Parameterized));
+    let param = array_node(&mut m, root, &[x0, x1], Some(&[false, true]));
+    let f = m.add_function(root, param, param, [param, x0, x1]);
+    // argument: [7, Add(1, 2)] — the Add is at the masked position.
+    let seven = u128_node(&mut m, root, 7);
+    let one = u128_node(&mut m, root, 1);
+    let two = u128_node(&mut m, root, 2);
+    let add_ops = array_node(&mut m, root, &[one, two], None);
+    let add = op_node(&mut m, root, TestOperator::Add, Some(add_ops));
+    let arg = array_node(&mut m, root, &[seven, add], None);
+    let call = call_node(&mut m, root, f, arg);
+    let value = m.evaluate_node_deep(call, None);
+
+    assert!(m.unify_errors.is_empty());
+    let ids = array_ids(value);
+    assert_eq!(ids.len(), 2);
+    assert_eq!(u128_of(m.nodes[ids[0]].value.unwrap()), 7);
+    // The shallow pattern position stays lazy: the argument's element there
+    // (an unevaluated Add) is never forced by the apply, and the masked
+    // position itself is never walked.
+    assert!(
+        m.nodes[add].value.is_none(),
+        "the shallow pattern position is not forced by the apply"
+    );
+    assert_eq!(
+        m.nodes[ids[1]].parameterized_deep,
+        None,
+        "the masked position is never walked"
+    );
 }

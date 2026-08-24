@@ -48,8 +48,14 @@ pub type Span = (u32, u32);
 pub struct IR<V = HighProgramValue> {
     pub expr: Vec<Expr<V>>,
     /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
-    /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`]).
+    /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
+    /// [`ExprKind::ShallowArray`]).
     pub children: Vec<ExprId>,
+    /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
+    /// — one `usize` per element: 0 = unmarked, `usize::MAX` = the bare `~`
+    /// (the whole subtree shallow), n = the value slot at each of the first
+    /// n levels of the element's type spine shallow.
+    pub depths: Vec<usize>,
     pub root: ExprId,
     /// The block-wide binding placeholder ids — the only `ExprId`s whose
     /// subtree can reference themselves (a self/mutual cycle).  The checker
@@ -133,6 +139,17 @@ pub enum ExprKind<V> {
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`ExprTable::children`].
     Array(ChildRange),
+    /// An array instance with `~`-marked positions — `[v1, ~ v2, ~2 v3]`.
+    /// Typed like a tuple (per-element type slots — a homogeneous
+    /// [`Self::Array`] type would reject `[x, ~ f(x+1)]` with an `Int` head
+    /// and a `Stream` tail).  Elements stored in [`ExprTable::children`],
+    /// the per-element depths in [`IR::depths`] (0 = unmarked, `usize::MAX`
+    /// = the bare `~`, n = the value slot shallow at the first n levels of
+    /// the element's type spine).
+    ShallowArray {
+        range: ChildRange,
+        depths: ChildRange,
+    },
     /// `_` — an inferrable type position.  Compiles to a fresh unbound cell
     /// that binds to whatever the context unifies it with: `x : _`,
     /// `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.
@@ -152,6 +169,7 @@ impl<V> IR<V> {
         IR {
             expr: Vec::new(),
             children: Vec::new(),
+            depths: Vec::new(),
             root: ExprId(0),
             block_roots: HashSet::new(),
         }
@@ -186,6 +204,30 @@ impl<V> IR<V> {
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
         self.alloc_variadic(elements, ExprKind::Array, span)
+    }
+
+    /// Allocate a shallow-marked array: each `(element, depth)` pair carries
+    /// the element's `~` depth (0 = unmarked, `usize::MAX` = bare `~`).
+    pub fn alloc_shallow_array(
+        &mut self,
+        elements: &[(ExprId, usize)],
+        span: Option<Span>,
+    ) -> ExprId {
+        let start = self.children.len() as u32;
+        let dstart = self.depths.len() as u32;
+        for &(element, depth) in elements {
+            self.children.push(element);
+            self.depths.push(depth);
+        }
+        let range = ChildRange {
+            start,
+            end: self.children.len() as u32,
+        };
+        let depths = ChildRange {
+            start: dstart,
+            end: self.depths.len() as u32,
+        };
+        self.alloc(ExprKind::ShallowArray { range, depths }, span)
     }
 
     fn alloc_variadic(

@@ -378,8 +378,37 @@ impl Compiler {
                 self.ir.alloc_type_struct(&ids, Some(*span))
             }
             Expr::Array(elements, span) => {
-                let ids = self.compile_all(elements)?;
-                self.ir.alloc_array(&ids, Some(*span))
+                // A `~`-marked element (the parser accepts `~` only inside
+                // array literals) contributes its inner expression plus a
+                // depth; a plain element contributes depth 0.  Any non-zero
+                // depth makes the array a shallow array.
+                let mut ids = Vec::with_capacity(elements.len());
+                let mut depths = Vec::with_capacity(elements.len());
+                for element in elements {
+                    match element {
+                        Expr::Shallow(inner, depth, _) => {
+                            ids.push(self.compile_expr(inner)?);
+                            depths.push(*depth);
+                        }
+                        _ => {
+                            ids.push(self.compile_expr(&element)?);
+                            depths.push(0);
+                        }
+                    }
+                }
+                if depths.iter().any(|&d| d != 0) {
+                    let elements: Vec<(ExprId, usize)> =
+                        ids.into_iter().zip(depths).collect();
+                    self.ir.alloc_shallow_array(&elements, Some(*span))
+                } else {
+                    self.ir.alloc_array(&ids, Some(*span))
+                }
+            }
+            Expr::Shallow(inner, _, _) => {
+                // Unreachable through the parser (`~` is accepted only as an
+                // array element, which the `Array` arm unwraps); compile the
+                // inner expression defensively so the match stays total.
+                self.compile_expr(inner)?
             }
             Expr::TypeArray {
                 element_type,

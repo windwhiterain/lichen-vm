@@ -562,15 +562,18 @@ fn paren<'a>(
 
 /// `[e1, …, en]` — an array literal (in type position its elements are
 /// types, applied by the mode post-pass).  A trailing comma is tolerated.
+/// An element may be prefixed with the `~` shallow marker — the only place
+/// `~` is accepted.
 fn array_literal<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    let element = tilde_marked(expr.clone());
     token(TokenKind::LBracket)
-        .ignore_then(expr.clone())
+        .ignore_then(element.clone())
         .then(
             token(TokenKind::Comma)
-                .ignore_then(expr.clone())
+                .ignore_then(element.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
@@ -581,6 +584,27 @@ fn array_literal<'a>(
                 std::iter::once(first).chain(rest).collect(),
                 span_at(tokens, me.span().start),
             )
+        })
+}
+
+/// An array element with an optional `~` prefix: `~ e`, `~2 e`, or a plain
+/// `e`.  The marker token carries the depth (`usize::MAX` = the bare `~`);
+/// the marker wraps the element as [`Expr::Shallow`], keeping the marker's
+/// own span.
+fn tilde_marked<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    any::<In<'a>, E<'a>>()
+        .filter_map(|t: Token| match t.kind {
+            TokenKind::Tilde(depth) => Some((depth, t.span)),
+            _ => None,
+        })
+        .labelled("'~'")
+        .or_not()
+        .then(expr)
+        .map(|(marker, element)| match marker {
+            Some((depth, span)) => Expr::Shallow(Box::new(element), depth, span),
+            None => element,
         })
 }
 
@@ -770,6 +794,9 @@ fn apply_type_mode(program: Program) -> Program {
                 elements.into_iter().map(|e| expr(e, type_mode)).collect(),
                 span,
             ),
+            Expr::Shallow(inner, depth, span) => {
+                Expr::Shallow(Box::new(expr(*inner, type_mode)), depth, span)
+            }
             Expr::TypeArray {
                 element_type,
                 length,
@@ -1168,8 +1195,10 @@ mod tests {
 
     #[test]
     fn index_errors_carry_spans() {
+        // `a[]` is application of `a` to an empty array literal — the
+        // element error mentions the `~` prefix the array parser now accepts.
         let err = parse_err("a[]");
-        assert_eq!(err.message, "expected an expression, found ']'");
+        assert_eq!(err.message, "expected '~' or an expression, found ']'");
         let err = parse_err("a[0");
         assert_eq!(err.span, Some((1, 4)));
     }

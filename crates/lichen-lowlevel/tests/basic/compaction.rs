@@ -55,7 +55,7 @@ fn array_return_compacts_elements_into_parent() {
     let a = u128_node(&mut m, child, 10);
     let b = u128_node(&mut m, child, 20);
     let c = u128_node(&mut m, child, 30);
-    let ret = array_node(&mut m, child, &[a, b, c]);
+    let ret = array_node(&mut m, child, &[a, b, c], None);
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(ret));
 
     let value = m.evaluate_node_deep(root_node, None);
@@ -75,7 +75,7 @@ fn nested_scalar_return_compacts_into_grandparent() {
     let outer = m.add_block(Some(grandparent));
     let inner = m.add_block(Some(outer));
     let x = u128_node(&mut m, inner, 9);
-    let ret = array_node(&mut m, outer, &[x]); // outer's return references inner's return x
+    let ret = array_node(&mut m, outer, &[x], None); // outer's return references inner's return x
     let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(ret));
 
     let value = m.evaluate_node_deep(root_node, None);
@@ -91,8 +91,8 @@ fn nested_array_return_relocates_data_twice() {
     let outer = m.add_block(Some(grandparent));
     let inner = m.add_block(Some(outer));
     let c = u128_node(&mut m, inner, 7);
-    let inner_ret = array_node(&mut m, inner, &[c]);
-    let outer_ret = array_node(&mut m, outer, &[inner_ret]);
+    let inner_ret = array_node(&mut m, inner, &[c], None);
+    let outer_ret = array_node(&mut m, outer, &[inner_ret], None);
     let root_node = op_node(&mut m, grandparent, TestOperator::Id, Some(outer_ret));
 
     let value = m.evaluate_node_deep(root_node, None);
@@ -106,6 +106,39 @@ fn nested_array_return_relocates_data_twice() {
     assert_eq!(u128_of(m.nodes[ids[0]].value.unwrap()), 7);
     assert_eq!(m.nodes.len(), 4); // root_node + outer_ret + inner_ret + c
     assert!(m.nodes.contains_key(c));
+}
+#[test]
+fn compact_preserves_the_shallow_mask() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    // [7, Add(1, 2)] with position 1 marked shallow, homed in the child:
+    // compaction moves the ids into root's arena and must carry the mask
+    // with them.
+    let seven = u128_node(&mut m, child, 7);
+    let one = u128_node(&mut m, child, 1);
+    let two = u128_node(&mut m, child, 2);
+    let add_ops = array_node(&mut m, child, &[one, two], None);
+    let add = op_node(&mut m, child, TestOperator::Add, Some(add_ops));
+    let ret = array_node(&mut m, child, &[seven, add], Some(&[false, true]));
+
+    let value = m.evaluate_node_deep(ret, None);
+    let TestValue::Array(array) = value else {
+        panic!("expected an array result")
+    };
+    assert_eq!(array.mask(), &[false, true]);
+
+    m.garbage_collect(ret);
+    let TestValue::Array(array) = m.nodes[ret].value.unwrap() else {
+        panic!("expected an array after compaction")
+    };
+    assert_eq!(array.mask(), &[false, true], "the mask survives compaction");
+    assert_eq!(array.ids().len(), 2);
+    assert_eq!(m.nodes[ret].block, root, "compacted into the parent");
+    assert!(
+        m.nodes[array.ids()[1]].value.is_none(),
+        "shallow element stays lazy"
+    );
 }
 #[test]
 fn unreferenced_child_blocks_are_released() {
@@ -199,7 +232,7 @@ fn garbage_collect_hoists_uncompacted_descendants() {
     let a = u128_node(&mut m, grandchild, 10);
     let b = u128_node(&mut m, grandchild, 20);
     let orphan = u128_node(&mut m, grandchild, 99); // never referenced
-    let ret = array_node(&mut m, child, &[a, b]);
+    let ret = array_node(&mut m, child, &[a, b], None);
 
     // Collect the child's return *without* deep-evaluating it first: the
     // elements still live in the un-compacted grandchild block, so the
@@ -227,7 +260,7 @@ fn garbage_collect_leaves_sibling_and_ancestor_content_in_place() {
     let sibling = m.add_block(Some(grandparent));
     let c_gp = u128_node(&mut m, grandparent, 1); // ancestor, not the target
     let s_node = u128_node(&mut m, sibling, 2);
-    let ret = array_node(&mut m, child, &[c_gp, s_node]);
+    let ret = array_node(&mut m, child, &[c_gp, s_node], None);
 
     let value = m.garbage_collect(ret).expect("evaluated return node");
 
@@ -253,7 +286,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
         operand: Some(param_f),
     });
     let (func_node, f) = wrap_function(&mut m, grandchild, ret_f, param_f);
-    let ret = array_node(&mut m, child, &[func_node]);
+    let ret = array_node(&mut m, child, &[func_node], None);
 
     // A direct collect re-homes the function and maps its scope members
     // into the root, releasing the vacated subtree in the same call.
@@ -305,7 +338,7 @@ fn garbage_collect_enters_unevaluated_subtree_via_operand() {
     let child = m.add_block(Some(root));
     let grandchild = m.add_block(Some(child));
     let x = u128_node(&mut m, grandchild, 7);
-    let operands = array_node(&mut m, grandchild, &[x]);
+    let operands = array_node(&mut m, grandchild, &[x], None);
     let ret = op_node(&mut m, child, TestOperator::Id, Some(operands));
 
     // The unevaluated subtree behind `ret`'s operand is entered through
@@ -327,7 +360,7 @@ fn garbage_collect_skips_operands_of_evaluated_nodes() {
     let child = m.add_block(Some(root));
     let grandchild = m.add_block(Some(child));
     let x = u128_node(&mut m, grandchild, 7);
-    let operands = array_node(&mut m, grandchild, &[x]);
+    let operands = array_node(&mut m, grandchild, &[x], None);
     let ret = op_node(&mut m, child, TestOperator::Id, Some(operands));
 
     // Evaluating `ret` memoizes its result, so the operand edge is dead: a
@@ -352,7 +385,7 @@ fn call_clones_are_compacted_with_the_calling_block() {
     // g(x) = Add(x, 1) lives at the root level.
     let (g_node, g_ret, _g_param) = function(&mut m, |m, ret, param| {
         let one = u128_node(m, m.nodes[ret].block, 1);
-        let operands = array_node(m, m.nodes[ret].block, &[param, one]);
+        let operands = array_node(m, m.nodes[ret].block, &[param, one], None);
         m.nodes[ret].operation = Some(Operation {
             operator: TestOperator::Add,
             operand: Some(operands),

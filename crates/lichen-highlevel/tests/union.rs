@@ -45,7 +45,7 @@ fn structural_operators_round_trip_through_from_and_as_enum() {
 
 #[test]
 fn extension_operators_read_as_none() {
-    assert_eq!(HighProgramOperator::IndexType.as_enum(), None);
+    assert_eq!(HighProgramOperator::IndexTypeDispatch.as_enum(), None);
     assert_eq!(HighProgramOperator::Fresh.as_enum(), None);
     assert_eq!(HighProgramOperator::Add.as_enum(), None);
 }

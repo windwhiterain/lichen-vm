@@ -29,10 +29,10 @@ fn evaluate(source: &str) -> HighProgramValue {
 
 /// The node ids of an array value.
 fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
-    let HighProgramValue::Array(ptr) = value else {
+    let HighProgramValue::Array(array) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    unsafe { &*ptr }.to_vec()
+    array.ids().to_vec()
 }
 
 fn usize_of(value: &HighProgramValue) -> usize {
@@ -663,7 +663,7 @@ fn a_struct_instance_indexes_its_fields() {
         "the second field is the `Int` type constant"
     );
     // indexing the instance through a parameter works too — the runtime
-    // IndexType sees the struct type and selects its field list (the
+    // dispatch sees the struct kind and selects its field list (the
     // argument is parenthesized: `f s(1, Int)` would parse as `(f s)(1, Int)`)
     let (module, root) = run("f = a => a[0]; s = struct<Int, Type>; f (s(1, Int)) : Int");
     let mut module = module;
@@ -981,4 +981,47 @@ fn an_underscore_as_a_value_is_unresolved() {
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].stage, Stage::Resolve);
     assert_eq!(d[0].message, "unresolved name '_'");
+}
+
+#[test]
+fn a_shallow_marked_recursive_tail_stays_lazy() {
+    // f = x => [x, ~ f (x + 1)] — the bare `~` cuts the deep pass at the
+    // tail, so the definition pass terminates; each index read forces the
+    // next apply on demand, and the stream's type resolves level by level.
+    let out = lichen_language::run::evaluate(
+        "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf[1][0], inf[1][1][0], inf[1][1][1][0])",
+    )
+    .expect("the stream should check and terminate");
+    assert_eq!(out, "[1, 2, 3]: <Int, Int, Int>");
+}
+
+#[test]
+fn a_tilde_n_wrap_marks_value_slots_shallow() {
+    // ~2 on a plain array: the deep pass terminates (the marked value slots
+    // are skipped), and the read gives the element's value with an
+    // underdetermined type — the wrapped term is a lazy region, so its
+    // reads never claim a concrete type that would silently mismatch it.
+    let out = lichen_language::run::evaluate("([1, ~2 [2, 3]])[1][0]")
+        .expect("the marked array should check");
+    assert!(
+        out.starts_with("[2, 3]: ?"),
+        "value concrete, type underdetermined, got {out:?}"
+    );
+}
+
+#[test]
+fn a_tilde_one_on_a_recursive_tail_terminates() {
+    // ~1 on the recursive tail: the old depth-budget descent used to loop
+    // on this; the compile-time wrap cannot descend the unbound spine, so
+    // the definition pass terminates and the reads stay underdetermined
+    // (sound), never a guard panic.
+    let out = lichen_language::run::evaluate(
+        "f = x => [x, ~1 f (x + 1)]; inf = f 0; (inf[1][0], inf[1][1][0], inf[1][1][1][0])",
+    )
+    .expect("the marked stream should terminate");
+    assert!(
+        out.ends_with(": <?a, ?b, ?c>"),
+        "the reads are underdetermined, got {out:?}"
+    );
+    assert!(out.starts_with("["), "a tuple value, got {out:?}");
 }

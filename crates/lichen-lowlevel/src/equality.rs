@@ -139,7 +139,7 @@ impl<P: Program> Module<P> {
             vb.map(|value| value.as_enum()),
         ) {
             (Some(Some(LowValue::Array(pa))), Some(Some(LowValue::Array(pb)))) => {
-                let (left, right) = (unsafe { &*pa }, unsafe { &*pb });
+                let (left, right) = (pa.ids(), pb.ids());
                 if left.len() != right.len() {
                     self.record_error(ra, rb);
                     return false;
@@ -241,8 +241,8 @@ impl<P: Program> Module<P> {
             match self.nodes[member].value.and_then(|value| value.as_enum()) {
                 None => {}
                 Some(LowValue::Parameterized) => {}
-                Some(LowValue::Array(ptr)) => {
-                    let ids = unsafe { &*ptr };
+                Some(LowValue::Array(array)) => {
+                    let ids = array.ids();
                     let mut seen = HashSet::new();
                     if ids.iter().any(|&id| !self.value_is_skeleton(id, &mut seen)) {
                         return false;
@@ -268,9 +268,11 @@ impl<P: Program> Module<P> {
             && match self.nodes[node].value.and_then(|value| value.as_enum()) {
                 None => true,
                 Some(LowValue::Parameterized) => true,
-                Some(LowValue::Array(ptr)) => {
-                    let ids = unsafe { &*ptr };
-                    ids.iter().all(|&id| self.value_is_skeleton(id, seen))
+                Some(LowValue::Array(array)) => {
+                    array
+                        .ids()
+                        .iter()
+                        .all(|&id| self.value_is_skeleton(id, seen))
                 }
                 _ => false,
             };
@@ -302,10 +304,10 @@ impl<P: Program> Module<P> {
         }
         let operand = operand?;
         let operands = self.nodes[operand].value?;
-        let Some(LowValue::Array(operands_ptr)) = operands.as_enum() else {
+        let Some(LowValue::Array(array)) = operands.as_enum() else {
             return None;
         };
-        let operands = unsafe { &*operands_ptr };
+        let operands = array.ids();
         if operands.len() != 2 {
             return None;
         }
@@ -317,7 +319,7 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
-        let container = unsafe { &*container_ptr };
+        let container = container_ptr.ids();
         container.get(index).copied()
     }
 

@@ -58,8 +58,8 @@ fn print_inner(
         HighProgramValue::TypeArray => "TypeArray".to_string(),
         HighProgramValue::TypeStruct => "TypeStruct".to_string(),
         HighProgramValue::TypeId(n) => format!("TypeId({n})"),
-        HighProgramValue::Array(ptr) => {
-            let elements = unsafe { &*ptr };
+        HighProgramValue::Array(array) => {
+            let elements = array.ids();
             // A type pair `[head, K]`: the kind slot is the self-looping
             // universe, so render just the head (and cut the cycle).
             if elements.len() == 2 && is_universe(module, elements[1]) {
@@ -186,7 +186,7 @@ impl<'a> TypePrinter<'a> {
             HighProgramValue::None | HighProgramValue::Parameterized => {
                 unreachable!("handled by node()")
             }
-            HighProgramValue::Array(ptr) => self.elements(node, unsafe { &*ptr }),
+            HighProgramValue::Array(array) => self.elements(node, array.ids()),
         }
     }
 
@@ -199,17 +199,17 @@ impl<'a> TypePrinter<'a> {
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
         if elements.len() == 2
-            && let Some(HighProgramValue::Array(kind_ptr)) = self.module.nodes[elements[1]].value
-            && let kind = unsafe { &*kind_ptr }
+            && let Some(HighProgramValue::Array(kind)) = self.module.nodes[elements[1]].value
+            && let kind = kind.ids()
             && kind.len() == 2
             && is_universe(self.module, kind[1])
         {
             match self.module.nodes[kind[0]].value {
                 Some(HighProgramValue::TypeFunction) => {
                     // shape = [in, out] — render `in -> out`.
-                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                    if let Some(HighProgramValue::Array(shape)) =
                         self.module.nodes[elements[0]].value
-                        && let s = unsafe { &*shape_ptr }
+                        && let s = shape.ids()
                         && s.len() == 2
                     {
                         return format!("{} -> {}", self.node(s[0]), self.node(s[1]));
@@ -222,9 +222,9 @@ impl<'a> TypePrinter<'a> {
                 }
                 Some(HighProgramValue::TypeArray) => {
                     // shape = [element type, length] — render `T<len>`.
-                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                    if let Some(HighProgramValue::Array(shape)) =
                         self.module.nodes[elements[0]].value
-                        && let s = unsafe { &*shape_ptr }
+                        && let s = shape.ids()
                         && s.len() == 2
                     {
                         return format!("{}<{}>", self.node(s[0]), self.node(s[1]));
@@ -233,9 +233,9 @@ impl<'a> TypePrinter<'a> {
                 Some(HighProgramValue::TypeStruct) => {
                     // A struct type: shape = [TypeId, field-type list] —
                     // render `struct<T1, ..., Tn>` from the list at shape[1].
-                    if let Some(HighProgramValue::Array(shape_ptr)) =
+                    if let Some(HighProgramValue::Array(shape)) =
                         self.module.nodes[elements[0]].value
-                        && let s = unsafe { &*shape_ptr }
+                        && let s = shape.ids()
                         && s.len() == 2
                     {
                         let fields = self.fields(s[1]);
@@ -268,8 +268,8 @@ impl<'a> TypePrinter<'a> {
     /// or a single field for a non-array shape.
     fn fields(&mut self, shape: NodeId) -> Vec<String> {
         match self.module.nodes[shape].value {
-            Some(HighProgramValue::Array(ptr)) => {
-                unsafe { &*ptr }.iter().map(|&f| self.node(f)).collect()
+            Some(HighProgramValue::Array(array)) => {
+                array.ids().iter().map(|&f| self.node(f)).collect()
             }
             _ => vec![self.node(shape)],
         }
@@ -305,8 +305,8 @@ fn letter_name(i: usize) -> String {
 /// both.
 fn is_universe(module: &Module<HighProgram>, node: NodeId) -> bool {
     let rep = representative(module, node);
-    matches!(module.nodes[node].value, Some(HighProgramValue::Array(ptr))
-        if unsafe { &*ptr }.iter().any(|&m| representative(module, m) == rep))
+    matches!(module.nodes[node].value, Some(HighProgramValue::Array(array))
+        if array.ids().iter().any(|&m| representative(module, m) == rep))
 }
 
 // --- the caret shell ---------------------------------------------------------

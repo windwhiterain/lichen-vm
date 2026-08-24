@@ -504,7 +504,7 @@ impl<'a, V: ValueType> Report<'a, V> {
             .find_map(|m| self.build.module.nodes[m].operation)
             .map(|op| op.operator)
         {
-            Some(HighProgramOperator::Index | HighProgramOperator::IndexType) => {
+            Some(HighProgramOperator::Index | HighProgramOperator::IndexTypeDispatch) => {
                 "Index".to_string()
             }
             Some(HighProgramOperator::Apply) => "Apply".to_string(),

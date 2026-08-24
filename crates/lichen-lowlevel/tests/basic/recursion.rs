@@ -190,18 +190,18 @@ fn countdown_definition_pass_terminates() {
     let zero = u128_node(&mut m, body, 0);
     let one = u128_node(&mut m, body, 1);
     // f(x-1)
-    let sub_ops = array_node(&mut m, body, &[param, one]);
+    let sub_ops = array_node(&mut m, body, &[param, one], None);
     let sub = op_node(&mut m, body, TestOperator::Sub, Some(sub_ops));
-    let call_ops = array_node(&mut m, body, &[func_node, sub]);
+    let call_ops = array_node(&mut m, body, &[func_node, sub], None);
     let call = op_node(&mut m, body, TestOperator::Apply, Some(call_ops));
     // Add(f(x-1), 1)
-    let rec_ops = array_node(&mut m, body, &[call, one]);
+    let rec_ops = array_node(&mut m, body, &[call, one], None);
     let rec = op_node(&mut m, body, TestOperator::Add, Some(rec_ops));
     // if x == 0 then 0 else rec
-    let cond_ops = array_node(&mut m, body, &[param, zero]);
+    let cond_ops = array_node(&mut m, body, &[param, zero], None);
     let cond = op_node(&mut m, body, TestOperator::Eq, Some(cond_ops));
-    let branch = array_node(&mut m, body, &[rec, zero]);
-    let index_ops = array_node(&mut m, body, &[branch, cond]);
+    let branch = array_node(&mut m, body, &[rec, zero], None);
+    let index_ops = array_node(&mut m, body, &[branch, cond], None);
     let ret = op_node(&mut m, body, TestOperator::Index, Some(index_ops));
     let function = finish_function(&mut m, body, ret, param, func_node);
     m.evaluate_node_deep(func_node, None); // self-ref stays in place
@@ -231,14 +231,14 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     let zero = u128_node(&mut m, body, 0);
     let one = u128_node(&mut m, body, 1);
     // even: if x == 0 then 1 else odd(x-1)
-    let e_cond_ops = array_node(&mut m, body, &[e_param, zero]);
+    let e_cond_ops = array_node(&mut m, body, &[e_param, zero], None);
     let e_cond = op_node(&mut m, body, TestOperator::Eq, Some(e_cond_ops));
-    let e_sub_ops = array_node(&mut m, body, &[e_param, one]);
+    let e_sub_ops = array_node(&mut m, body, &[e_param, one], None);
     let e_sub = op_node(&mut m, body, TestOperator::Sub, Some(e_sub_ops));
-    let e_call_ops = array_node(&mut m, body, &[o_func, e_sub]);
+    let e_call_ops = array_node(&mut m, body, &[o_func, e_sub], None);
     let e_call = op_node(&mut m, body, TestOperator::Apply, Some(e_call_ops));
-    let e_branch = array_node(&mut m, body, &[e_call, one]);
-    let e_index_ops = array_node(&mut m, body, &[e_branch, e_cond]);
+    let e_branch = array_node(&mut m, body, &[e_call, one], None);
+    let e_index_ops = array_node(&mut m, body, &[e_branch, e_cond], None);
     let e_ret = op_node(&mut m, body, TestOperator::Index, Some(e_index_ops));
     let even = m.functions.insert(Function {
         nodes: HashSet::from([
@@ -259,14 +259,14 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         block: body,
     });
     // odd: if x == 0 then 0 else even(x-1)
-    let o_cond_ops = array_node(&mut m, body, &[o_param, zero]);
+    let o_cond_ops = array_node(&mut m, body, &[o_param, zero], None);
     let o_cond = op_node(&mut m, body, TestOperator::Eq, Some(o_cond_ops));
-    let o_sub_ops = array_node(&mut m, body, &[o_param, one]);
+    let o_sub_ops = array_node(&mut m, body, &[o_param, one], None);
     let o_sub = op_node(&mut m, body, TestOperator::Sub, Some(o_sub_ops));
-    let o_call_ops = array_node(&mut m, body, &[e_func, o_sub]);
+    let o_call_ops = array_node(&mut m, body, &[e_func, o_sub], None);
     let o_call = op_node(&mut m, body, TestOperator::Apply, Some(o_call_ops));
-    let o_branch = array_node(&mut m, body, &[o_call, zero]);
-    let o_index_ops = array_node(&mut m, body, &[o_branch, o_cond]);
+    let o_branch = array_node(&mut m, body, &[o_call, zero], None);
+    let o_index_ops = array_node(&mut m, body, &[o_branch, o_cond], None);
     let o_ret = op_node(&mut m, body, TestOperator::Index, Some(o_index_ops));
     let odd = m.functions.insert(Function {
         nodes: HashSet::from([
@@ -353,10 +353,10 @@ fn flattened_recursion_panics_at_the_total_apply_budget() {
     let body = m.add_block(None);
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let func_node = m.add_node(body, None, None);
-    let ops = array_node(&mut m, body, &[func_node, param]);
+    let ops = array_node(&mut m, body, &[func_node, param], None);
     let call = op_node(&mut m, body, TestOperator::Apply, Some(ops));
     let zero = u128_node(&mut m, body, 0);
-    let ret = array_node(&mut m, body, &[call, zero]);
+    let ret = array_node(&mut m, body, &[call, zero], None);
     let _function = finish_function(&mut m, body, ret, param, func_node);
     m.apply_total_limit = 4;
     let arg = u128_node(&mut m, root, 1);

@@ -203,7 +203,7 @@ fn conflicting_kinds_record_an_error_and_stay_separate() {
     let block = m.add_block(None);
     let a = usize_node(&mut m, block, 1);
     let inner = usize_node(&mut m, block, 2);
-    let b = array_node(&mut m, block, &[inner]);
+    let b = array_node(&mut m, block, &[inner], None);
     m.unify(a, b);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(m.equality_representative(a), m.equality_representative(b));
@@ -243,10 +243,10 @@ fn arrays_unify_elementwise() {
     let block = m.add_block(None);
     let x = unbound_node(&mut m, block);
     let y = unbound_node(&mut m, block);
-    let left = array_node(&mut m, block, &[x, y]);
+    let left = array_node(&mut m, block, &[x, y], None);
     let one = usize_node(&mut m, block, 1);
     let two = usize_node(&mut m, block, 2);
-    let right = array_node(&mut m, block, &[one, two]);
+    let right = array_node(&mut m, block, &[one, two], None);
     m.unify(left, right);
     assert!(m.unify_errors.is_empty());
     let rep_x = m.equality_representative(x);
@@ -264,10 +264,10 @@ fn array_length_mismatch_records_an_error() {
     let mut m = Module::new();
     let block = m.add_block(None);
     let a = usize_node(&mut m, block, 1);
-    let left = array_node(&mut m, block, &[a]);
+    let left = array_node(&mut m, block, &[a], None);
     let b = usize_node(&mut m, block, 2);
     let c = usize_node(&mut m, block, 3);
-    let right = array_node(&mut m, block, &[b, c]);
+    let right = array_node(&mut m, block, &[b, c], None);
     m.unify(left, right);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(
@@ -282,10 +282,10 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
     let block = m.add_block(None);
     let x = unbound_node(&mut m, block);
     let one = usize_node(&mut m, block, 1);
-    let left = array_node(&mut m, block, &[x, one]);
+    let left = array_node(&mut m, block, &[x, one], None);
     let two = usize_node(&mut m, block, 2);
     let s = str_node(&mut m, block, &['s']);
-    let right = array_node(&mut m, block, &[two, s]);
+    let right = array_node(&mut m, block, &[two, s], None);
     m.unify(left, right);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(
@@ -338,8 +338,8 @@ fn mutually_self_referential_arrays_record_an_error_instead_of_looping() {
     let block = m.add_block(None);
     let a = unbound_node(&mut m, block);
     let b = unbound_node(&mut m, block);
-    let arr_a = array_node(&mut m, block, &[a]);
-    let arr_b = array_node(&mut m, block, &[b]);
+    let arr_a = array_node(&mut m, block, &[a], None);
+    let arr_b = array_node(&mut m, block, &[b], None);
     let val_a = m.nodes[arr_a].value;
     let val_b = m.nodes[arr_b].value;
     m.nodes[a].value = val_a;
@@ -367,7 +367,7 @@ fn multiple_conflicts_accumulate() {
     let s = str_node(&mut m, block, &['x']);
     m.unify(a, s);
     let u = unbound_node(&mut m, block);
-    let arr = array_node(&mut m, block, &[u]);
+    let arr = array_node(&mut m, block, &[u], None);
     m.unify(a, arr);
     let two = usize_node(&mut m, block, 2);
     m.unify(a, two); // unequal concrete values: conflict
@@ -519,11 +519,11 @@ fn apply_unifies_array_parameters_elementwise() {
     // so the apply unifies it elementwise against the argument.
     let x0 = unbound_node(&mut m, root);
     let x1 = unbound_node(&mut m, root);
-    let param = array_node(&mut m, root, &[x0, x1]);
+    let param = array_node(&mut m, root, &[x0, x1], None);
     let f = m.add_function(root, param, param, [param, x0, x1]);
     let one = usize_node(&mut m, root, 1);
     let two = usize_node(&mut m, root, 2);
-    let arg = array_node(&mut m, root, &[one, two]);
+    let arg = array_node(&mut m, root, &[one, two], None);
     let call = call_node(&mut m, root, f, arg);
     let value = m.evaluate_node_deep(call, None);
     assert!(m.unify_errors.is_empty());
@@ -589,7 +589,7 @@ fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     // elements, so the argument is forced to satisfy it.
     let x0 = unbound_node(&mut m, root);
     let x1 = unbound_node(&mut m, root);
-    let param = array_node(&mut m, root, &[x0, x1]);
+    let param = array_node(&mut m, root, &[x0, x1], None);
     let f = m.add_function(root, param, param, [param, x0, x1]);
     m.unify(x0, x1);
     assert!(m.unify_errors.is_empty());
@@ -598,7 +598,7 @@ fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     // re-established pattern class.
     let one = usize_node(&mut m, root, 1);
     let two = usize_node(&mut m, root, 2);
-    let arg = array_node(&mut m, root, &[one, two]);
+    let arg = array_node(&mut m, root, &[one, two], None);
     let call = call_node(&mut m, root, f, arg);
     m.evaluate_node_deep(call, None);
     assert_eq!(m.unify_errors.len(), 1);
@@ -606,7 +606,7 @@ fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     // [1, 1] merges.
     let one_a = usize_node(&mut m, root, 1);
     let one_b = usize_node(&mut m, root, 1);
-    let arg2 = array_node(&mut m, root, &[one_a, one_b]);
+    let arg2 = array_node(&mut m, root, &[one_a, one_b], None);
     let call2 = call_node(&mut m, root, f, arg2);
     m.evaluate_node_deep(call2, None);
     assert_eq!(m.unify_errors.len(), 1);

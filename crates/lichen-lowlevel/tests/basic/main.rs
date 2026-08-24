@@ -19,8 +19,8 @@ mod function;
 mod recursion;
 
 use lichen_lowlevel::{
-    BlockId, Function, FunctionId, Handle, LowValue, Module, NodeId, Operation, OperatorExt,
-    Program, ValueExt,
+    ArrayRef, BlockId, Function, FunctionId, Handle, LowValue, Module, NodeId, Operation,
+    OperatorExt, Program, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -132,7 +132,7 @@ impl OperatorExt<TestProgram> for TestOperator {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary ops expect an array of two node ids")
                 };
-                let operands = unsafe { &*operands };
+                let operands = operands.ids();
                 let left = module.nodes[operands[0]].value.unwrap();
                 let right = module.nodes[operands[1]].value.unwrap();
                 match self {
@@ -203,15 +203,25 @@ fn str_node(m: &mut Module<TestProgram>, block: BlockId, chars: &[char]) -> Node
     )
 }
 
-fn array_node(m: &mut Module<TestProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
+fn array_node(
+    m: &mut Module<TestProgram>,
+    block: BlockId,
+    ids: &[NodeId],
+    mask: Option<&[bool]>,
+) -> NodeId {
     let slice = m.blocks[block].arena.alloc_slice_copy(ids);
+    let ids_ptr = std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len());
+    let shallow = match mask {
+        Some(mask) if mask.iter().any(|&marked| marked) => {
+            let slice = m.blocks[block].arena.alloc_slice_copy(mask);
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
+        }
+        _ => std::ptr::slice_from_raw_parts(std::ptr::null(), 0),
+    };
     m.add_node(
         block,
         None,
-        Some(TestValue::Array(std::ptr::slice_from_raw_parts(
-            slice.as_ptr(),
-            slice.len(),
-        ))),
+        Some(TestValue::Array(ArrayRef { ids: ids_ptr, shallow })),
     )
 }
 
@@ -240,10 +250,10 @@ fn op_node(
 
 /// The node ids inside `value` if it's an array.
 fn array_ids(value: TestValue) -> &'static [NodeId] {
-    let TestValue::Array(ptr) = value else {
+    let TestValue::Array(array) = value else {
         panic!("expected array")
     };
-    unsafe { &*ptr }
+    array.ids()
 }
 
 /// Assert `value` is an array whose elements hold the given `u128`s.
@@ -296,7 +306,7 @@ fn call_node(
     func_node: NodeId,
     arg: NodeId,
 ) -> NodeId {
-    let operands = array_node(m, block, &[func_node, arg]);
+    let operands = array_node(m, block, &[func_node, arg], None);
     op_node(m, block, TestOperator::Apply, Some(operands))
 }
 
@@ -333,9 +343,9 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     // reference it before the function exists, so `add_function` (which
     // creates the value node last) cannot be used here.
     let func_node = m.add_node(body, None, None);
-    let operands = array_node(m, body, &[func_node, param]);
+    let operands = array_node(m, body, &[func_node, param], None);
     let apply = op_node(m, body, TestOperator::Apply, Some(operands));
-    let ret = array_node(m, body, &[param, apply]);
+    let ret = array_node(m, body, &[param, apply], None);
     let function = m.functions.insert(Function {
         nodes: HashSet::from([param, func_node, operands, apply, ret]),
         r#return: ret,
@@ -359,13 +369,13 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     let f_func = m.add_node(body, None, None);
     let g_func = m.add_node(body, None, None);
     // f(x) = [x, g(x)]
-    let f_ops = array_node(m, body, &[g_func, f_param]);
+    let f_ops = array_node(m, body, &[g_func, f_param], None);
     let f_apply = op_node(m, body, TestOperator::Apply, Some(f_ops));
-    let f_ret = array_node(m, body, &[f_param, f_apply]);
+    let f_ret = array_node(m, body, &[f_param, f_apply], None);
     // g(x) = [x, f(x)]
-    let g_ops = array_node(m, body, &[f_func, g_param]);
+    let g_ops = array_node(m, body, &[f_func, g_param], None);
     let g_apply = op_node(m, body, TestOperator::Apply, Some(g_ops));
-    let g_ret = array_node(m, body, &[g_param, g_apply]);
+    let g_ret = array_node(m, body, &[g_param, g_apply], None);
     let f = m.functions.insert(Function {
         nodes: HashSet::from([f_param, f_func, f_ops, f_apply, f_ret]),
         r#return: f_ret,
@@ -398,23 +408,23 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let one = u128_node(m, body, 1);
     let two = u128_node(m, body, 2);
     // fib(x-1)
-    let sub1_ops = array_node(m, body, &[param, one]);
+    let sub1_ops = array_node(m, body, &[param, one], None);
     let sub1 = op_node(m, body, TestOperator::Sub, Some(sub1_ops));
-    let fib1_ops = array_node(m, body, &[fib_func, sub1]);
+    let fib1_ops = array_node(m, body, &[fib_func, sub1], None);
     let fib1 = op_node(m, body, TestOperator::Apply, Some(fib1_ops));
     // fib(x-2)
-    let sub2_ops = array_node(m, body, &[param, two]);
+    let sub2_ops = array_node(m, body, &[param, two], None);
     let sub2 = op_node(m, body, TestOperator::Sub, Some(sub2_ops));
-    let fib2_ops = array_node(m, body, &[fib_func, sub2]);
+    let fib2_ops = array_node(m, body, &[fib_func, sub2], None);
     let fib2 = op_node(m, body, TestOperator::Apply, Some(fib2_ops));
     // rec = fib(x-1) + fib(x-2)
-    let rec_ops = array_node(m, body, &[fib1, fib2]);
+    let rec_ops = array_node(m, body, &[fib1, fib2], None);
     let rec = op_node(m, body, TestOperator::Add, Some(rec_ops));
     // ret = if x < 2 then x else rec
-    let lt_ops = array_node(m, body, &[param, two]);
+    let lt_ops = array_node(m, body, &[param, two], None);
     let lt = op_node(m, body, TestOperator::Lt, Some(lt_ops));
-    let branch = array_node(m, body, &[rec, param]);
-    let index_ops = array_node(m, body, &[branch, lt]);
+    let branch = array_node(m, body, &[rec, param], None);
+    let index_ops = array_node(m, body, &[branch, lt], None);
     let ret = op_node(m, body, TestOperator::Index, Some(index_ops));
     let function = finish_function(m, body, ret, param, fib_func);
     (fib_func, function)
@@ -426,7 +436,7 @@ fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId)
     let body = m.add_block(None);
     let param = m.add_node(body, None, Some(TestValue::Parameterized));
     let func_node = m.add_node(body, None, None); // placeholder self-ref
-    let operands = array_node(m, body, &[func_node, param]);
+    let operands = array_node(m, body, &[func_node, param], None);
     let ret = op_node(m, body, TestOperator::Apply, Some(operands));
     let function = finish_function(m, body, ret, param, func_node);
     (func_node, function)

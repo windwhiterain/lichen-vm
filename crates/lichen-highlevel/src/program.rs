@@ -10,7 +10,7 @@
 use std::marker::PhantomData;
 
 use lichen_lowlevel::{
-    BlockId, EvalError, FunctionId, LowValue, Module, NodeId, OperatorExt, Program, ValueExt,
+    ArrayRef, BlockId, FunctionId, LowValue, Module, OperatorExt, Program, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -153,18 +153,20 @@ lichen_lowlevel::extend_LowOperator! {
     /// lowlevel, plus the type-level operators below.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramOperator {
-        /// The type evaluation of an indexing expression `a[i]`.
+        /// The dispatch code of a type's kind — the one step a native
+        /// `Index` table cannot express.
         ///
-        /// Operand: `[type_pair, index]` where `type_pair` is the indexed
-        /// value's type expression.  A tuple type (`TypeTuple` kind) and a
-        /// struct type (`TypeStruct` kind) select their element/field-type list
-        /// position — a structural out of bounds.  An array type
-        /// (`TypeArray` kind) checks the index against the *length* stored
-        /// in its shape `[element_type, length]` — the check the structural
-        /// `Index` cannot express (the shape holds the length as data, not
-        /// as selectable positions).  Out of bounds records an
-        /// [`EvalError`] and yields `HighProgramValue::None`.
-        IndexType,
+        /// Operand: a type value's *kind* — its `[marker, K]` type slot
+        /// (position 1 of the `[shape, kind]` pair).  The kind holds only
+        /// the marker and the universe, never the shape, so the deep pass
+        /// never marks it parameterized for a bound type and this operator
+        /// runs even when the shape's spine still holds unbound cells (a
+        /// lazy stream).  Yields `USize(code)`: 0 = tuple, 1 = struct,
+        /// 2 = array, 3 = any other kind.  The checker feeds the code to a
+        /// native `Index(table, code)` branch table — the code is an
+        /// internal dispatch value, never stored in a type value or
+        /// rendered.
+        IndexTypeDispatch,
         /// A fresh nominal type id: each call reads and increments
         /// [`HighGlobalExt::type_id_counter`] and returns
         /// `HighProgramValue::TypeId(n)`.  Nullary — the checker emits it
@@ -197,132 +199,31 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
             HighProgramOperator::Index | HighProgramOperator::Apply => {
                 unreachable!("structural operators are dispatched by the VM")
             }
-            HighProgramOperator::IndexType => {
-                // The VM deep-evaluates the operand and gates on its
-                // parameterized subtree before calling `run`, so an unbound
-                // type or index has already been turned into the lazy marker.
+            HighProgramOperator::IndexTypeDispatch => {
+                // The kind expression `[marker, K]` carries no shape, so a
+                // bound type's kind is never marked parameterized and this
+                // operator runs even when the type's shape spine still
+                // holds unbound cells — the lazy-stream case a whole-type
+                // dispatch used to gate on.  An unbound kind is already the
+                // lazy marker (the VM gates on the operand's parameterized
+                // subtree).
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
                     return V::from(LowValue::Parameterized);
                 }
-                let Some(LowValue::Array(operands)) = operand.as_enum() else {
-                    unreachable!("IndexType expects an operand array of [type, index]")
+                let Some(LowValue::Array(kind)) = operand.as_enum() else {
+                    unreachable!("IndexTypeDispatch expects a kind expression pair")
                 };
-                let operands = unsafe { &*operands };
-                let type_pair = operands[0];
-                let index_node = operands[1];
-                let Some(LowValue::USize(index)) = module.nodes[index_node]
-                    .value
-                    .expect("the operand was deep-evaluated")
-                    .as_enum()
-                else {
-                    unreachable!("IndexType needs a USize index node")
-                };
-                // type_pair's value: [shape, [kind marker, K]].
-                let Some(LowValue::Array(pair)) = module.nodes[type_pair]
-                    .value
-                    .expect("the operand was deep-evaluated")
-                    .as_enum()
-                else {
-                    unreachable!("IndexType needs a type expression pair")
-                };
-                let pair = unsafe { &*pair };
-                let shape = pair[0];
-                let kind_cell = pair[1];
-                let Some(LowValue::Array(kind)) = module.nodes[kind_cell]
-                    .value
-                    .expect("the operand was deep-evaluated")
-                    .as_enum()
-                else {
-                    unreachable!("IndexType needs a kind expression")
-                };
-                let marker = unsafe { &*kind }[0];
-                let marker_value = module.nodes[marker].value;
-                if marker_value == Some(V::tuple_type_marker()) {
-                    let Some(LowValue::Array(elements)) = module.nodes[shape]
-                        .value
-                        .expect("the operand was deep-evaluated")
-                        .as_enum()
-                    else {
-                        unreachable!("a tuple type shape is its element-type list")
-                    };
-                    let elements = unsafe { &*elements };
-                    if index < elements.len() {
-                        module.nodes[elements[index]]
-                            .value
-                            .expect("the operand was deep-evaluated")
-                    } else {
-                        module.eval_errors.push(EvalError {
-                            index: index_node,
-                            index_value: index,
-                            length: elements.len(),
-                        });
-                        V::from(LowValue::None)
-                    }
-                } else if marker_value == Some(V::array_type_marker()) {
-                    let Some(LowValue::Array(shape_ids)) = module.nodes[shape]
-                        .value
-                        .expect("the operand was deep-evaluated")
-                        .as_enum()
-                    else {
-                        unreachable!("an array type shape is [element type, length]")
-                    };
-                    let shape_ids = unsafe { &*shape_ids };
-                    let element_type = shape_ids[0];
-                    let Some(LowValue::USize(length)) = module.nodes[shape_ids[1]]
-                        .value
-                        .expect("the operand was deep-evaluated")
-                        .as_enum()
-                    else {
-                        unreachable!("the ArrayType length must be a USize")
-                    };
-                    if index < length {
-                        module.nodes[element_type]
-                            .value
-                            .expect("the operand was deep-evaluated")
-                    } else {
-                        module.eval_errors.push(EvalError {
-                            index: index_node,
-                            index_value: index,
-                            length,
-                        });
-                        V::from(LowValue::None)
-                    }
-                } else if marker_value == Some(V::type_struct_marker()) {
-                    // A struct type's shape is [TypeId, field-types array] —
-                    // field access selects from the positional field list at
-                    // shape[1], exactly like a tuple type's element-type list.
-                    let Some(LowValue::Array(shape_ids)) = module.nodes[shape]
-                        .value
-                        .expect("the operand was deep-evaluated")
-                        .as_enum()
-                    else {
-                        unreachable!("a struct type shape is [TypeId, field types]")
-                    };
-                    let shape_ids = unsafe { &*shape_ids };
-                    let field_list = shape_ids[1];
-                    let Some(LowValue::Array(elements)) = module.nodes[field_list]
-                        .value
-                        .expect("the operand was deep-evaluated")
-                        .as_enum()
-                    else {
-                        unreachable!("a struct type's field list is an array")
-                    };
-                    let elements = unsafe { &*elements };
-                    if index < elements.len() {
-                        module.nodes[elements[index]]
-                            .value
-                            .expect("the operand was deep-evaluated")
-                    } else {
-                        module.eval_errors.push(EvalError {
-                            index: index_node,
-                            index_value: index,
-                            length: elements.len(),
-                        });
-                        V::from(LowValue::None)
-                    }
+                let marker = module.nodes[kind.ids()[0]].value;
+                let code = if marker == Some(V::tuple_type_marker()) {
+                    0
+                } else if marker == Some(V::type_struct_marker()) {
+                    1
+                } else if marker == Some(V::array_type_marker()) {
+                    2
                 } else {
-                    unreachable!("IndexType target must be a tuple, array, or struct type")
-                }
+                    3
+                };
+                V::from(LowValue::USize(code))
             }
             HighProgramOperator::Fresh => {
                 let id = module.global_ext.type_id_counter;
@@ -342,7 +243,7 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
-                let operands = unsafe { &*operands };
+                let operands = operands.ids();
                 // A non-USize operand is a *reported* type error, not an
                 // invariant violation: the checker pins both operands to
                 // `Int`, so a wrong shape only arrives here through an

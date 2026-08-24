@@ -14,15 +14,25 @@ impl<P: Program> Module<P> {
     /// for the lifetime of `&self`.
     pub fn array_ids(&self, node: NodeId) -> Option<&[NodeId]> {
         let value = self.nodes[node].value?;
-        let LowValue::Array(ptr) = value.as_enum()? else {
+        let LowValue::Array(array) = value.as_enum()? else {
             return None;
         };
-        Some(unsafe { &*ptr })
+        Some(array.ids())
     }
 
     /// Copy `nodes` into `block.arena` and return the new `nodes`.
     pub(super) fn copy_nodes(&self, nodes: &[NodeId], block: BlockId) -> *const [NodeId] {
         let slice = self.blocks[block].arena.alloc_slice_copy(nodes);
+        ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
+    }
+
+    /// Copy `mask` into `block.arena` and return the new `mask` — null when
+    /// no position is marked (the canonical unmasked form).
+    pub(super) fn copy_mask(&self, mask: &[bool], block: BlockId) -> *const [bool] {
+        if mask.iter().all(|&marked| !marked) {
+            return std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
+        }
+        let slice = self.blocks[block].arena.alloc_slice_copy(mask);
         ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
     }
 

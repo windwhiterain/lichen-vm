@@ -39,11 +39,61 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
 /// `extend_LowValue!` carrier (see the `lichen-extend` crate), so the
 /// lowlevel can always inspect a value through [`AsEnum::as_enum`] and
 /// build one through [`From<LowValue>`] without naming the extension part.
+/// A structural array value: the element ids plus an optional per-position
+/// shallow mask.  `shallow` is null when no position is marked, otherwise a
+/// `[bool]` in the same arena as `ids` — one entry per position, `true` =
+/// the position's whole subtree is shallow.  The mask is inert metadata:
+/// structure and unification ignore it, but it travels with the ids through
+/// GC and apply clones, and [`Module::evaluate_node_deep`] skips the subtree
+/// of a marked position, so the element stays lazy until a read forces it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrayRef {
+    pub ids: *const [NodeId],
+    pub shallow: *const [bool],
+}
+
+impl ArrayRef {
+    /// An unmasked array (`shallow` is null).
+    pub fn new(ids: *const [NodeId]) -> Self {
+        ArrayRef {
+            ids,
+            shallow: null_mask(),
+        }
+    }
+    /// The element ids — valid for as long as the array's home block is
+    /// alive (the caller's existing safety contract for arena payloads).
+    pub fn ids(&self) -> &'static [NodeId] {
+        unsafe { &*self.ids }
+    }
+    /// The shallow mask — empty when the array is unmasked.
+    pub fn mask(&self) -> &'static [bool] {
+        if self.shallow.is_null() {
+            &[]
+        } else {
+            unsafe { &*self.shallow }
+        }
+    }
+    /// Whether position `index` is marked shallow.
+    pub fn is_shallow(&self, index: usize) -> bool {
+        self.mask().get(index).copied() == Some(true)
+    }
+    /// Whether any position is marked shallow.
+    pub fn has_shallow(&self) -> bool {
+        self.mask().iter().any(|&marked| marked)
+    }
+}
+
+/// The null form of a `*const [bool]` mask (a fat pointer — `ptr::null`
+/// itself requires a thin type).
+fn null_mask() -> *const [bool] {
+    std::ptr::slice_from_raw_parts(std::ptr::null(), 0)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[lichen_extend::enum_ext]
 pub enum LowValue {
     USize(usize),
-    Array(*const [NodeId]),
+    Array(ArrayRef),
     Function(FunctionId),
     None,
     Parameterized,

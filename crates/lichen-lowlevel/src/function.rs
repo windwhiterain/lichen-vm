@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::{BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program};
+use crate::{ArrayRef, BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
@@ -123,8 +123,8 @@ impl<P: Program> Module<P> {
         // reads as unbound until the deep pass resolves it.  An apply
         // without a wired cell (a hand-built lowlevel graph) is unchanged.
         match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(ptr))) if unsafe { &*ptr }.len() == 2 => {
-                let ids = unsafe { &*ptr };
+            (Some(cell), Some(LowValue::Array(array))) if array.ids().len() == 2 => {
+                let ids = array.ids();
                 self.nodes[node].value = Some(result);
                 self.unify(node, applied);
                 // Resolve the return type before binding the cell: the deep
@@ -168,16 +168,24 @@ impl<P: Program> Module<P> {
             return;
         }
         self.evaluate_node(argument, Some(block));
-        let (Some(Some(LowValue::Array(pattern_ids))), Some(Some(LowValue::Array(argument_ids)))) = (
+        let (Some(Some(LowValue::Array(pattern))), Some(Some(LowValue::Array(argument)))) = (
             self.nodes[pattern].value.map(|value| value.as_enum()),
             self.nodes[argument].value.map(|value| value.as_enum()),
         ) else {
             return;
         };
-        for (&pattern_id, &argument_id) in unsafe { &*pattern_ids }
+        for (i, (&pattern_id, &argument_id)) in pattern
+            .ids()
             .iter()
-            .zip(unsafe { &*argument_ids }.iter())
+            .zip(argument.ids().iter())
+            .enumerate()
         {
+            // A shallow position on either side is opaque — its subtree
+            // stays lazy, so the apply's argument evaluation does not force
+            // what the marker deliberately left unevaluated.
+            if pattern.is_shallow(i) || argument.is_shallow(i) {
+                continue;
+            }
             self.evaluate_pattern_argument_inner(pattern_id, argument_id, block, seen);
         }
     }
@@ -257,11 +265,18 @@ impl<P: Program> Module<P> {
     fn value_apply(&mut self, value: P::Value, ctx: &mut ApplyCtx<'_>) -> P::Value {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
-                let nodes: Vec<NodeId> = unsafe { &*array }
+                // The mask travels with the ids: each call's clone honors
+                // its own markers.
+                let nodes: Vec<NodeId> = array
+                    .ids()
                     .iter()
                     .map(|&id| self.node_apply(id, ctx))
                     .collect();
-                P::Value::from(LowValue::Array(self.copy_nodes(&nodes, ctx.target)))
+                let mask: Vec<bool> = array.mask().to_vec();
+                P::Value::from(LowValue::Array(ArrayRef {
+                    ids: self.copy_nodes(&nodes, ctx.target),
+                    shallow: self.copy_mask(&mask, ctx.target),
+                }))
             }
             Some(LowValue::Function(function)) => {
                 // A cloned function's scope is mapped like an array: every
@@ -328,10 +343,10 @@ impl<P: Program> Module<P> {
         let Some(value) = value else {
             return false;
         };
-        let Some(LowValue::Array(ptr)) = value.as_enum() else {
+        let Some(LowValue::Array(array)) = value.as_enum() else {
             return false;
         };
-        let mut stack: Vec<NodeId> = unsafe { &*ptr }.to_vec();
+        let mut stack: Vec<NodeId> = array.ids().to_vec();
         let mut seen = HashSet::new();
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
@@ -339,7 +354,7 @@ impl<P: Program> Module<P> {
             }
             match self.nodes[node].value.and_then(|value| value.as_enum()) {
                 Some(LowValue::Function(function)) if function != applied => return true,
-                Some(LowValue::Array(ptr)) => stack.extend(unsafe { &*ptr }.iter().copied()),
+                Some(LowValue::Array(array)) => stack.extend(array.ids().iter().copied()),
                 _ => {}
             }
         }

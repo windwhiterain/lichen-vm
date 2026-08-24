@@ -10,7 +10,7 @@ use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
 use lichen_highlevel::program::{HighProgramValue, ValueType};
-use lichen_lowlevel::{FunctionId, LowValue, NodeId, ValueExt};
+use lichen_lowlevel::{ArrayRef, FunctionId, LowValue, ValueExt};
 use lichen_utils::extend::AsEnum;
 
 // A probe extension: a type constant beyond the highlevel's vocabulary.

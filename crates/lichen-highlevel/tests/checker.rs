@@ -891,10 +891,10 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let mut b = build(whole, ir);
     assert!(b.ok, "the closure program must check");
     let value = b.module.evaluate_node_deep(b.root_val, None);
-    let HighProgramValue::Array(ptr) = value else {
+    let HighProgramValue::Array(array) = value else {
         panic!("expected an array result, got {value:?}");
     };
-    let ids = unsafe { &*ptr };
+    let ids = array.ids();
     let expected = [1usize, 2, 3, 4];
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
@@ -938,8 +938,9 @@ fn tuple_index_selects_value_and_type() {
 #[test]
 fn array_index_selects_value_and_type() {
     // [1, 2, 3][1] — value 2, type int.  The array type shape [int, 3]
-    // holds the length as data, so the type evaluation runs in the custom
-    // IndexType operator.
+    // holds the length as data, so the type evaluation dispatches on the
+    // kind (a native `Index` subgraph keyed by `IndexTypeDispatch`'s code)
+    // and selects the element type at shape[0].
     let mut ir = IR::new();
     let e1 = int(&mut ir, 1);
     let e2 = int(&mut ir, 2);
@@ -1461,4 +1462,97 @@ fn a_mismatch_against_a_partial_type_is_still_an_error() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
+}
+
+#[test]
+fn shallow_array_is_masked_and_typed_like_a_tuple() {
+    // [1, ~2] — the bare `~` marks position 1 in the value array's mask,
+    // and the type is a tuple (per-element slots), not a homogeneous array
+    // type.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)], None);
+    let mut b = build(arr, ir);
+    assert!(b.ok, "the shallow array should check");
+    let value = b.module.evaluate_node_deep(b.val[arr].unwrap(), None);
+    let HighProgramValue::Array(array) = value else {
+        panic!("expected an array value");
+    };
+    assert_eq!(array.mask(), &[false, true], "position 1 is marked");
+    let ty_val = b.module.evaluate_node_deep(b.ty[arr].unwrap(), None);
+    let HighProgramValue::Array(ty_pair) = ty_val else {
+        panic!("expected a type pair");
+    };
+    let kind_val = b.module.evaluate_node_deep(ty_pair.ids()[1], None);
+    let HighProgramValue::Array(kind) = kind_val else {
+        panic!("expected a kind expression");
+    };
+    assert_eq!(
+        b.module.nodes[kind.ids()[0]].value,
+        Some(HighProgramValue::TypeTuple),
+        "typed like a tuple"
+    );
+}
+
+#[test]
+fn shallow_marked_position_stays_lazy_until_a_read() {
+    // [1, ~(x => x + 1) 5] — the apply sits at the bare-`~` position: the
+    // deep pass must skip it (the apply never runs during the definition
+    // pass).
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let five = int(&mut ir, 5);
+    let x = param(&mut ir);
+    let one2 = int(&mut ir, 1);
+    let add = ir.alloc(
+        ExprKind::BinOp {
+            operator: lichen_highlevel::ir::BinOp::Add,
+            left: x,
+            right: one2,
+        },
+        None,
+    );
+    let lam = lam(&mut ir, x, add);
+    let call = app(&mut ir, lam, five);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)], None);
+    let b = build(arr, ir);
+    assert!(b.ok, "the shallow array should check");
+    let ids = array_ids(&b, b.val[arr].unwrap());
+    assert_eq!(ids.len(), 2);
+    assert!(
+        b.module.nodes[ids[1]].value.is_none(),
+        "the masked apply never ran in the deep pass"
+    );
+}
+
+#[test]
+fn a_read_of_a_shallow_position_forces_the_element() {
+    // [1, ~(x => x + 1) 5][1] — the read runs the apply that the deep pass
+    // deliberately skipped.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let five = int(&mut ir, 5);
+    let x = param(&mut ir);
+    let one2 = int(&mut ir, 1);
+    let add = ir.alloc(
+        ExprKind::BinOp {
+            operator: lichen_highlevel::ir::BinOp::Add,
+            left: x,
+            right: one2,
+        },
+        None,
+    );
+    let lam = lam(&mut ir, x, add);
+    let call = app(&mut ir, lam, five);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)], None);
+    let one_idx = int(&mut ir, 1);
+    let read = index(&mut ir, arr, one_idx);
+    let mut b = build(read, ir);
+    assert!(b.ok, "the read should check");
+    assert_eq!(
+        b.module.evaluate_node_deep(b.val[read].unwrap(), None),
+        HighProgramValue::USize(6),
+        "the read forces the apply at the masked position"
+    );
 }

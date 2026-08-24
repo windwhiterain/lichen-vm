@@ -9,7 +9,7 @@
 //! rules the highlevel layer will sit on.
 
 use lichen_highlevel::program::{HighProgram, HighProgramOperator, HighProgramValue};
-use lichen_lowlevel::{BlockId, Module, NodeId, Operation};
+use lichen_lowlevel::{ArrayRef, BlockId, Module, NodeId, Operation};
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
     m.add_node(block, None, Some(HighProgramValue::USize(n)))
@@ -24,9 +24,8 @@ fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> No
     m.add_node(
         block,
         None,
-        Some(HighProgramValue::Array(std::ptr::slice_from_raw_parts(
-            slice.as_ptr(),
-            slice.len(),
+        Some(HighProgramValue::Array(ArrayRef::new(
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
         ))),
     )
 }
@@ -65,10 +64,10 @@ fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: No
 }
 
 fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
-    let HighProgramValue::Array(ptr) = value else {
+    let HighProgramValue::Array(array) = value else {
         panic!("expected an array value")
     };
-    unsafe { &*ptr }.to_vec()
+    array.ids().to_vec()
 }
 
 #[test]

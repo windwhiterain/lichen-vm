@@ -71,6 +71,10 @@ pub enum TokenKind {
     LAngle,
     /// `>` — closes `<`.
     RAngle,
+    /// A `~` shallow marker on an array position.  `~` with adjacent digits
+    /// folds into `Tilde(n)` (`~2` marks two spine levels); a bare `~` (no
+    /// digits, or a space after) is `Tilde(usize::MAX)` — the whole subtree.
+    Tilde(usize),
     Eof,
 }
 
@@ -105,6 +109,7 @@ impl TokenKind {
             TokenKind::RBrace => "'}'".to_string(),
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
+            TokenKind::Tilde(_) => "'~'".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
         }
     }
@@ -209,6 +214,7 @@ impl Lexer<'_> {
                     self.push(line, col, 2, TokenKind::Eq)
                 }
                 b'=' => self.push(line, col, 1, TokenKind::Equals),
+                b'~' => self.tilde(line, col),
                 _ => {
                     let ch = self.source[self.pos..].chars().next().unwrap();
                     self.errors.push(Diag::new(
@@ -304,6 +310,34 @@ impl Lexer<'_> {
     fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
         let start = self.pos;
         self.step(len);
+        self.tokens.push(Token {
+            kind,
+            span: (line, col),
+            range: (start as u32, self.pos as u32),
+        });
+    }
+
+    /// A `~` shallow marker: `~` with adjacent digits folds into `Tilde(n)`
+    /// (`~2` marks two spine levels); a bare `~` (a space or a non-digit
+    /// follows) is `Tilde(usize::MAX)` — the whole subtree.
+    fn tilde(&mut self, line: u32, col: u32) {
+        let start = self.pos;
+        self.step(1);
+        let mut n: usize = 0;
+        let mut digits = 0;
+        while let Some(&b) = self.bytes.get(self.pos) {
+            if !b.is_ascii_digit() {
+                break;
+            }
+            digits += 1;
+            n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
+            self.step(1);
+        }
+        let kind = if digits == 0 {
+            TokenKind::Tilde(usize::MAX)
+        } else {
+            TokenKind::Tilde(n)
+        };
         self.tokens.push(Token {
             kind,
             span: (line, col),
@@ -556,6 +590,38 @@ mod tests {
         let errors = lex("99999999999999999999999999999999999999").errors;
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].message, "integer literal out of range");
+    }
+
+    #[test]
+    fn a_tilde_is_a_shallow_marker_token() {
+        // `~` folds adjacent digits; a bare `~` is `Tilde(usize::MAX)`.
+        assert_eq!(
+            kinds("[1, ~ f (x + 1), ~2 y]"),
+            vec![
+                TokenKind::LBracket,
+                TokenKind::Int(1),
+                TokenKind::Comma,
+                TokenKind::Tilde(usize::MAX),
+                TokenKind::Name("f".to_string()),
+                TokenKind::LParen,
+                TokenKind::Name("x".to_string()),
+                TokenKind::Plus,
+                TokenKind::Int(1),
+                TokenKind::RParen,
+                TokenKind::Comma,
+                TokenKind::Tilde(2),
+                TokenKind::Name("y".to_string()),
+                TokenKind::RBracket,
+                TokenKind::Eof,
+            ]
+        );
+        // `~0` is the unmarked no-op; a space after `~` separates the
+        // marker from the element.
+        assert_eq!(kinds("~0 x"), vec![TokenKind::Tilde(0), TokenKind::Name("x".to_string()), TokenKind::Eof]);
+        assert_eq!(
+            kinds("~ 1"),
+            vec![TokenKind::Tilde(usize::MAX), TokenKind::Int(1), TokenKind::Eof]
+        );
     }
 
     #[test]

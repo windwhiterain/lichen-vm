@@ -93,6 +93,12 @@ pub enum Expr {
     StructType(Vec<Expr>, Span),
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
+    /// `~n e` — a shallow-marked array position (parsed only inside array
+    /// literals).  `n` is the marker depth: `usize::MAX` = the bare `~` (the
+    /// whole subtree shallow), `0` = unmarked (a no-op), `n` = the value
+    /// slot at each of the first `n` levels of the element's type spine
+    /// shallow.
+    Shallow(Box<Expr>, usize, Span),
     /// `T<e>` — an array type.
     TypeArray {
         element_type: Box<Expr>,
@@ -180,6 +186,7 @@ impl Expr {
             Expr::TypeTuple(_, s) => *s,
             Expr::StructType(_, s) => *s,
             Expr::Array(_, s) => *s,
+            Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
             Expr::Err(s) => *s,

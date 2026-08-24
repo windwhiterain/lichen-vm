@@ -160,6 +160,19 @@ output:
 [1, Int]: <Int, Type>
 ```
 
+### `lazy_infinite.lichen`
+
+```text
+f = x => [x, ~ f (x + 1)]
+inf = f 0
+(inf[1][0], inf[1][1][0], inf[1][1][1][0])
+```
+
+output:
+```text
+[1, 2, 3]: <Int, Int, Int>
+```
+
 ### `let_polymorphism.lichen`
 
 ```text

@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{BlockId, Function, LowValue, Module, NodeId, Operation, UnifyError};
+use lichen_lowlevel::{ArrayRef, BlockId, Function, LowValue, Module, NodeId, Operation, UnifyError};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
@@ -288,9 +288,9 @@ impl<V: ValueType> Checker<V> {
         let slice = self.module.blocks[root]
             .arena
             .alloc_slice_copy(&[self.type_marker, universe]);
-        self.module.nodes[universe].value = Some(V::from(LowValue::Array(
+        self.module.nodes[universe].value = Some(V::from(LowValue::Array(ArrayRef::new(
             std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
-        )));
+        ))));
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
     }
@@ -312,10 +312,36 @@ impl<V: ValueType> Checker<V> {
         self.module.add_node(
             block,
             None,
-            Some(V::from(LowValue::Array(std::ptr::slice_from_raw_parts(
-                slice.as_ptr(),
-                slice.len(),
+            Some(V::from(LowValue::Array(ArrayRef::new(
+                std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
             )))),
+        )
+    }
+
+    /// [`Self::array_node`] with an optional per-position shallow mask — the
+    /// `~` markers of a shallow array.  An all-`false` mask is dropped (the
+    /// canonical unmasked form).
+    fn array_node_masked(
+        &mut self,
+        block: BlockId,
+        ids: &[NodeId],
+        mask: &[bool],
+    ) -> NodeId {
+        let slice = self.module.blocks[block].arena.alloc_slice_copy(ids);
+        let ids_ptr = std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len());
+        let shallow = if mask.iter().any(|&marked| marked) {
+            let slice = self.module.blocks[block].arena.alloc_slice_copy(mask);
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
+        } else {
+            std::ptr::slice_from_raw_parts(std::ptr::null(), 0)
+        };
+        self.module.add_node(
+            block,
+            None,
+            Some(V::from(LowValue::Array(ArrayRef {
+                ids: ids_ptr,
+                shallow,
+            }))),
         )
     }
 
@@ -342,16 +368,27 @@ impl<V: ValueType> Checker<V> {
     }
 
     /// The children of a variadic expression (`Tuple`, `TypeTuple`,
-    /// `Array`, `TypeStruct`).
+    /// `Array`, `TypeStruct`, `ShallowArray`).
     fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
             | ExprKind::Array(range)
-            | ExprKind::TypeStruct(range) => range,
+            | ExprKind::TypeStruct(range)
+            | ExprKind::ShallowArray { range, .. } => range,
             _ => unreachable!("expected a variadic expression kind"),
         };
         self.ir.children[range.start as usize..range.end as usize].to_vec()
+    }
+
+    /// The per-element `~` depths of a shallow array, one per child of
+    /// [`Self::range_children`].
+    fn range_depths(&self, e: ExprId) -> Vec<usize> {
+        let range = match self.ir[e].kind {
+            ExprKind::ShallowArray { depths, .. } => depths,
+            _ => unreachable!("expected a shallow array expression kind"),
+        };
+        self.ir.depths[range.start as usize..range.end as usize].to_vec()
     }
 
     /// The value of an expression: element 0 of its pair.  For expressions
@@ -486,6 +523,7 @@ impl<V: ValueType> Checker<V> {
                     | ExprKind::TypeTuple(_)
                     | ExprKind::TypeStruct(_)
                     | ExprKind::Array(_)
+                    | ExprKind::ShallowArray { .. }
                     | ExprKind::TypeArray { .. }
             ) {
             let vc = self.fresh_cell();
@@ -608,6 +646,7 @@ impl<V: ValueType> Checker<V> {
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),
             ExprKind::TypeStruct(_) => self.check_type_struct(e),
             ExprKind::Array(_) => self.check_array_term(e),
+            ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
             ExprKind::Placeholder => {
                 // `_` — an inferrable type position: two fresh unbound
                 // cells, one for the type's value slot and one for its
@@ -847,10 +886,13 @@ impl<V: ValueType> Checker<V> {
     /// statically-known tuple or struct the type is a structural `Index`
     /// over the element/field-type list — both sides then catch an
     /// out-of-bounds index.  For an array (or a type known only at runtime
-    /// — a parameter, a call result) it is the custom
-    /// [`HighProgramOperator::IndexType`], which checks the index against the
-    /// ArrayType's *length*: the array type's shape `[element_type, length]`
-    /// holds the length as data, so no structural selection can check it.
+    /// — a parameter, a call result) the type is a small dispatch subgraph
+    /// of native operators: the type's kind (its `[marker, K]` type slot —
+    /// free of the shape's possibly-unbound spine) is mapped to a USize
+    /// code by [`HighProgramOperator::IndexTypeDispatch`], and the code
+    /// selects the extraction branch from a native `Index(table, code)`.
+    /// The array type's element type is shape[0] (the value-side `Index`
+    /// bounds-checks real reads, so the type read needs no length check).
     fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
@@ -924,15 +966,81 @@ impl<V: ValueType> Checker<V> {
                 let ty_ops = self.array_node(self.current_block, &[tys, index_value]);
                 self.op_node(self.current_block, HighProgramOperator::Index, Some(ty_ops))
             }
-            // The length lives inside the ArrayType as data: the check
-            // runs in the custom operator, dispatched on the kind the
-            // bound type carries at runtime.
+            // An array type's shape is `[element_type, length]` — not a
+            // positional list — and any type known only at runtime must be
+            // dispatched on its kind once it is bound.  The dispatch is a
+            // native subgraph: extract the shape and the kind (the type
+            // pair's type slot — `[marker, K]`, free of the shape's spine)
+            // with plain `Index`, map the kind's marker to a USize code with
+            // [`HighProgramOperator::IndexTypeDispatch`], and select the
+            // extraction branch from a native `Index(table, code)`.  A bound
+            // type always dispatches — the kind carries no unbound cells —
+            // so a lazy stream's type spine resolves at the level read; an
+            // unbound type defers (every native read yields the marker).
             None => {
-                let ty_ops = self.array_node(self.current_block, &[array_ty, index_value]);
+                let zero = self.module.add_node(
+                    self.current_block,
+                    None,
+                    Some(V::from(LowValue::USize(0))),
+                );
+                let one = self.module.add_node(
+                    self.current_block,
+                    None,
+                    Some(V::from(LowValue::USize(1))),
+                );
+                let shape_ops = self.array_node(self.current_block, &[array_ty, zero]);
+                let shape = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(shape_ops),
+                );
+                let kind_ops = self.array_node(self.current_block, &[array_ty, one]);
+                let kind = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(kind_ops),
+                );
+                let code = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::IndexTypeDispatch,
+                    Some(kind),
+                );
+                // Dispatch codes (see `IndexTypeDispatch`'s run): 0 = tuple,
+                // 1 = struct, 2 = array, 3 = any other kind (defer).
+                let tuple_ops = self.array_node(self.current_block, &[shape, index_value]);
+                let tuple_b = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(tuple_ops),
+                );
+                let fields_ops = self.array_node(self.current_block, &[shape, one]);
+                let fields = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(fields_ops),
+                );
+                let struct_ops = self.array_node(self.current_block, &[fields, index_value]);
+                let struct_b = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(struct_ops),
+                );
+                let array_ops = self.array_node(self.current_block, &[shape, zero]);
+                let array_b = self.op_node(
+                    self.current_block,
+                    HighProgramOperator::Index,
+                    Some(array_ops),
+                );
+                let fallback = self.fresh_cell();
+                let table = self.array_node(
+                    self.current_block,
+                    &[tuple_b, struct_b, array_b, fallback],
+                );
+                let result_ops = self.array_node(self.current_block, &[table, code]);
                 self.op_node(
                     self.current_block,
-                    HighProgramOperator::IndexType,
-                    Some(ty_ops),
+                    HighProgramOperator::Index,
+                    Some(result_ops),
                 )
             }
         };
@@ -1140,6 +1248,109 @@ impl<V: ValueType> Checker<V> {
         pair
     }
 
+    /// A shallow array `[v1, ~ v2, ~2 v3]` — typed like a tuple (per-element
+    /// type slots: a homogeneous `Array` type would reject `[x, ~ f(x+1)]`
+    /// with an `Int` head and a `Stream` tail).  The value array carries the
+    /// per-position mask: a bare-`~` position's whole subtree stays lazy in
+    /// the deep pass (a read forces the single element on demand), and a
+    /// `~n` position is wrapped so the value slot at each of the first `n`
+    /// levels of its type spine stays shallow.
+    fn check_shallow_array_term(&mut self, e: ExprId) -> NodeId {
+        let elements = self.range_children(e);
+        let depths = self.range_depths(e);
+        let mut vals = Vec::new();
+        let mut tys = Vec::new();
+        let mut mask = Vec::new();
+        for (i, &el) in elements.iter().enumerate() {
+            self.check_expr(el);
+            match depths[i] {
+                0 => {
+                    vals.push(self.value_of(el));
+                    tys.push(self.ty[el].unwrap());
+                }
+                usize::MAX => {
+                    vals.push(self.value_of(el));
+                    tys.push(self.ty[el].unwrap());
+                }
+                n => {
+                    // The wrapped term is a lazy region: its value is the
+                    // pair chain `[s, [s, … [s, d]]]`, whose structure does
+                    // not match the element's own type.  Its reads are
+                    // therefore underdetermined — a fresh cell — never a
+                    // concrete type that would silently mismatch the
+                    // wrapped value.
+                    vals.push(self.wrap_shallow(el, n));
+                    tys.push(self.fresh_cell());
+                }
+            }
+            mask.push(depths[i] == usize::MAX);
+        }
+        // `[values, [[element types], [TupleType, Type]]]` — the same shape
+        // as a tuple, so reads dispatch on the tuple kind and select the
+        // per-element type slot.
+        let value = self.array_node_masked(self.current_block, &vals, &mask);
+        let shape = self.array_node(self.current_block, &tys);
+        let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
+        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.pair_of(value, ty_node);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value);
+        self.ty[e] = Some(ty_node);
+        pair
+    }
+
+    /// Wrap `e`'s checked term so the value slot at each of the first
+    /// `depth` levels of its type spine stays shallow.  Each level is a
+    /// fresh pair `[slot0, slot1]` carrying the `shallow=[true, false]`
+    /// mask: slot 0 (the value slot) is marked, slot 1 is the next level
+    /// down the type spine (the pair's own type slot).  The descent follows
+    /// position 1 while the spine is a concrete pair at check time; an
+    /// unbound slot ends the descent (the wraps above the stop still apply).
+    /// The layers are fresh nodes, so a shared subexpression (a kind
+    /// expression reused by every occurrence) is never itself marked.
+    fn wrap_shallow(&mut self, e: ExprId, depth: usize) -> NodeId {
+        // Level 1 is the element's own `[value, type]` pair.  For a static
+        // element that is its stored term; for a call the term is the apply
+        // operation node (its pair is virtual), so level 1 is built from
+        // the extracted value and type.  Each deeper level is the previous
+        // level's type slot's own `[shape, kind]` pair.
+        let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
+        let mut current = self.term[e].unwrap();
+        if self.module.nodes[current].operation.is_some() {
+            levels.push((self.value_of(e), self.ty[e].unwrap()));
+        } else {
+            while levels.len() < depth {
+                let Some(ids) = self.module.array_ids(current) else {
+                    break;
+                };
+                if ids.len() != 2 {
+                    break;
+                }
+                let descend = self
+                    .module
+                    .array_ids(ids[1])
+                    .is_some_and(|next| next.len() == 2);
+                levels.push((ids[0], ids[1]));
+                if !descend {
+                    break;
+                }
+                current = ids[1];
+            }
+        }
+        // Rebuild from the innermost level out: each level is a fresh pair
+        // [value slot, next] with the shallow mask [true, false].
+        let mut wrapped = None;
+        for &(slot0, slot1) in levels.iter().rev() {
+            let next = wrapped.unwrap_or(slot1);
+            wrapped = Some(self.array_node_masked(
+                self.current_block,
+                &[slot0, next],
+                &[true, false],
+            ));
+        }
+        wrapped.unwrap_or(self.term[e].unwrap())
+    }
+
     /// The real array type `{ element_type, length }` — the instance is the
     /// 2-element shape `[element_type, length]` (element 0: the type shared
     /// by all elements, element 1: the length), kinded as an array.  The
@@ -1195,8 +1406,8 @@ fn self_subtree_contains_apply<V: ValueType>(
                 stack.push(operand);
             }
         }
-        if let Some(Some(LowValue::Array(ptr))) = n.value.as_ref().map(|value| value.as_enum()) {
-            stack.extend(unsafe { &*ptr }.iter().copied());
+        if let Some(Some(LowValue::Array(array))) = n.value.as_ref().map(|value| value.as_enum()) {
+            stack.extend(array.ids().iter().copied());
         }
     }
     false

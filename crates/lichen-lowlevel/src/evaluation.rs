@@ -53,8 +53,8 @@ impl<P: Program> Module<P> {
                 // can flag the node.
                 match self.evaluate_node(operands, Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
-                    Some(LowValue::Array(ptr)) => {
-                        let operands = unsafe { &*ptr };
+                    Some(LowValue::Array(array)) => {
+                        let operands = array.ids();
                         match self.evaluate_node(operands[1], Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -64,8 +64,8 @@ impl<P: Program> Module<P> {
                                     Some(LowValue::Parameterized) => {
                                         P::Value::from(LowValue::Parameterized)
                                     }
-                                    Some(LowValue::Array(ptr)) => {
-                                        let array = unsafe { &*ptr };
+                                    Some(LowValue::Array(array)) => {
+                                        let array = array.ids();
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
                                         // and yield no value instead of panicking
@@ -122,8 +122,8 @@ impl<P: Program> Module<P> {
                 // definition pass — stays lazy instead of panicking.
                 match self.evaluate_node(operands, Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
-                    Some(LowValue::Array(ptr)) => {
-                        let operands = unsafe { &*ptr };
+                    Some(LowValue::Array(array)) => {
+                        let operands = array.ids();
                         match self.evaluate_node(operands[0], Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -185,7 +185,13 @@ impl<P: Program> Module<P> {
         if let Some(LowValue::Array(array)) = value.as_enum() {
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
-            for &id in unsafe { &*array } {
+            for (i, &id) in array.ids().iter().enumerate() {
+                // A shallow position is a lazy region: its whole subtree
+                // stays unevaluated (never proven concrete), and a read
+                // forces the single element on demand through `Index`.
+                if array.is_shallow(i) {
+                    continue;
+                }
                 self.evaluate_node_deep(id, Some(block));
             }
             self.nodes[node].visiting = false;
@@ -194,7 +200,11 @@ impl<P: Program> Module<P> {
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Array(array))
-                    if unsafe { &*array }.iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
+                    // An array holding a shallow position can never be
+                    // proven concrete — its marked subtree was deliberately
+                    // not evaluated — so it is never baked in place.
+                    if array.has_shallow()
+                        || array.ids().iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {
