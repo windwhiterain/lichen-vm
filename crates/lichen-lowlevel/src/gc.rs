@@ -42,6 +42,12 @@ impl<P: Program> Module<P> {
         {
             self.garbage_collect_node(operand, source, target);
         }
+        // An assert point's condition is a graph edge like an unevaluated
+        // operation's operand: the assert may be checked after the subtree
+        // vacates, so the condition must move with the point.
+        if let Some(condition) = self.nodes[node].assert {
+            self.garbage_collect_node(condition, source, target);
+        }
         let value = current.map(|value| match value.as_enum() {
             Some(LowValue::Array(array)) => {
                 let ids = array.ids();
@@ -171,6 +177,9 @@ impl<P: Program> Module<P> {
                 self.nodes.remove(node);
             }
         }
+        // Drop the assert points that died with this block: the check pass
+        // walks the registry by id, so a dangling entry would panic there.
+        self.asserts.retain(|&id| self.nodes.contains_key(id));
         self.blocks.remove(block);
     }
 }

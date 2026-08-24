@@ -115,7 +115,7 @@ output:
 
 output:
 ```text
-[1, Int]: <Int, Type>
+(1, Int): <Int, Type>
 ```
 
 ### `index.lichen`
@@ -128,7 +128,7 @@ b = (1, Int)
 
 output:
 ```text
-[1, 2, 1, Int]: <Int, Int, Int, Type>
+(1, 2, 1, Int): <Int, Int, Int, Type>
 ```
 
 ### `closure.lichen`
@@ -157,7 +157,7 @@ a = x => (1, Int)[x]
 
 output:
 ```text
-[1, Int]: <Int, Type>
+(1, Int): <Int, Type>
 ```
 
 ### `lazy_infinite.lichen`
@@ -170,7 +170,7 @@ inf = f 0
 
 output:
 ```text
-[1, 2, 3]: <Int, Int, Int>
+(1, 2, 3): <Int, Int, Int>
 ```
 
 ### `let_polymorphism.lichen`
@@ -182,7 +182,7 @@ f = x => x
 
 output:
 ```text
-[Function, 1, Int]: <?a -> ?a, Int, Type>
+(Function, 1, Int): <?a -> ?a, Int, Type>
 ```
 
 ### `mutual_recursion.lichen`
@@ -195,7 +195,7 @@ is_old = x => [is_even (x - 1), 0][x == 0]
 
 output:
 ```text
-[0, 1]: <Int, Int>
+(0, 1): <Int, Int>
 ```
 
 ### `nested_function.lichen`
@@ -253,7 +253,7 @@ b = B((1,))
 
 output:
 ```text
-[[TypeId(0), Int], [1, Int], 1, Int, [TypeId(1), [Int]], [1], 1]: <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>
+(struct<Int, Type>, (1, Int), 1, Int, struct<Int>, (1,), 1): <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>
 ```
 
 ### `struct_recursion.lichen`
@@ -268,7 +268,7 @@ b = B(Int, a)
 
 output:
 ```text
-[[TypeId(0), [Int, [[TypeId(1), [Type, [[TypeId(0), …], TypeStruct]]], TypeStruct]]], [TypeId(1), [Type, [[TypeId(0), [Int, […, TypeStruct]]], TypeStruct]]], [1, [Int, [1, …]]], [Int, [1, …]]]: <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>
+(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>
 ```
 
 <!-- end: examples -->

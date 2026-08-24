@@ -102,7 +102,9 @@ pub struct Checker<V: ValueType> {
 
 /// The result of building a program: the compiled Module plus the checker's
 /// records.  `ok` is false when any unification failed (`unify_errors` is
-/// non-empty); rendering diagnostics from those is future work.
+/// non-empty), any runtime evaluation failed (`eval_errors`), or any assert
+/// failed (`assert_errors`); rendering diagnostics from those is future
+/// work.
 pub struct Build<V: ValueType = HighProgramValue> {
     pub ir: IR<V>,
     pub module: Module<HighProgram<V>>,
@@ -233,7 +235,20 @@ impl<V: ValueType> Checker<V> {
         if checker.module.unify_errors.is_empty() {
             checker.module.evaluate_node_deep(root_term, None);
         }
-        let ok = checker.module.unify_errors.is_empty() && checker.module.eval_errors.is_empty();
+        // The assert pass: force-evaluate every assert point — the originals
+        // and the clones the definition pass's applies produced — ignoring
+        // laziness, and require `USize(1)`.  An assert whose condition stays
+        // lazy is *not triggered*: an in-body assert whose parameter was
+        // never bound (the function was never applied) stays pending instead
+        // of failing, and the clone re-checks it per call.  Skipped when the
+        // definition pass was (the graph may be broken enough to panic on
+        // the forced evaluation).
+        if checker.module.unify_errors.is_empty() {
+            checker.module.check_asserts();
+        }
+        let ok = checker.module.unify_errors.is_empty()
+            && checker.module.eval_errors.is_empty()
+            && checker.module.assert_errors.is_empty();
         let root_val = checker.value_of(root);
         // The definition pass above evaluates the program's applies; each
         // apply's runtime evaluation syncs its result cell with the return
@@ -516,6 +531,7 @@ impl<V: ValueType> Checker<V> {
                 ExprKind::Apply { .. }
                     | ExprKind::BinOp { .. }
                     | ExprKind::Instantiate { .. }
+                    | ExprKind::Assert { .. }
                     | ExprKind::Index { .. }
                     | ExprKind::Annotation { .. }
                     | ExprKind::TypeFunction { .. }
@@ -619,6 +635,7 @@ impl<V: ValueType> Checker<V> {
             ExprKind::Instantiate { type_expr, value } => {
                 self.check_instantiate(e, type_expr, value)
             }
+            ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
             ExprKind::Annotation {
                 value,
@@ -1130,6 +1147,27 @@ impl<V: ValueType> Checker<V> {
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(type_pair);
+        pair
+    }
+
+    /// `assert(condition)` — an explicit constraint, not a unify: the
+    /// condition's *value* node is registered as an assert point.  The
+    /// lowlevel's [`Module::check_asserts`] then force-evaluates every
+    /// assert (ignoring laziness) after the definition pass and requires
+    /// `USize(1)` — an unbound condition is not bound to `1`, it stays
+    /// untriggered, and the apply clone re-checks the instantiated
+    /// condition per call.  The expression compiles to the condition
+    /// itself: an assert checks its subject, it does not replace it.
+    fn check_assert(&mut self, e: ExprId, condition: ExprId) -> NodeId {
+        self.check_expr(condition);
+        // The checked thing is a `USize`, so the assert names the value
+        // node — element 0 of the pair — not the pair itself.
+        let value = self.value_of(condition);
+        self.module.add_assert(self.current_block, value);
+        let pair = self.term[condition].unwrap();
+        self.term[e] = Some(pair);
+        self.val[e] = self.val[condition];
+        self.ty[e] = self.ty[condition];
         pair
     }
 

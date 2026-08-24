@@ -992,7 +992,7 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
         "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf[1][0], inf[1][1][0], inf[1][1][1][0])",
     )
     .expect("the stream should check and terminate");
-    assert_eq!(out, "[1, 2, 3]: <Int, Int, Int>");
+    assert_eq!(out, "(1, 2, 3): <Int, Int, Int>");
 }
 
 #[test]
@@ -1023,5 +1023,5 @@ fn a_tilde_one_on_a_recursive_tail_terminates() {
         out.ends_with(": <?a, ?b, ?c>"),
         "the reads are underdetermined, got {out:?}"
     );
-    assert!(out.starts_with("["), "a tuple value, got {out:?}");
+    assert!(out.starts_with("("), "a tuple value, got {out:?}");
 }

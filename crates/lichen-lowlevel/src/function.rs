@@ -76,6 +76,21 @@ impl<P: Program> Module<P> {
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
+        // The scope's assert points are side nodes — nothing in the return's
+        // subtree references them, so the return clone cannot carry them.
+        // Clone each one through the shared remap (its condition rewrites to
+        // this call's clones, so a body's assert that could not resolve at
+        // normalize re-checks the instantiated condition against the
+        // argument); the clone registers itself, so the checker's pass sees
+        // it.
+        let scope_asserts: Vec<NodeId> = members
+            .iter()
+            .filter(|&&id| self.nodes[id].assert.is_some())
+            .copied()
+            .collect();
+        for &point in &scope_asserts {
+            self.node_apply(point, &mut ctx);
+        }
         // The parameter is cloned like any parameterized node, and the clone
         // is unified with the argument instead of being replaced by it: the
         // class binding propagates the argument's value to every reference
@@ -256,8 +271,19 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
+        // An assert point clones with its condition remapped like any other
+        // edge: an in-body assert that could not resolve at normalize (its
+        // condition reads the unbound parameter) re-checks the instantiated
+        // condition against this call's argument.
+        let assert = self.nodes[node].assert.map(|condition| self.node_apply(condition, ctx));
         self.nodes[clone].value = value;
         self.nodes[clone].operation = operation;
+        self.nodes[clone].assert = assert;
+        if self.nodes[clone].assert.is_some() {
+            // The clone is a fresh assertion — register it so the check
+            // pass sees the instantiated constraint, not just the template's.
+            self.asserts.push(clone);
+        }
         clone
     }
 

@@ -162,6 +162,34 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+        self.evaluate_node_deep_inner(node, current, true, false)
+    }
+
+    /// Deep-evaluate `id` *ignoring laziness*: unlike
+    /// [`Self::evaluate_node_deep`], every array position is descended into
+    /// (the shallow mask does not hold a subtree back) and an unevaluated
+    /// operation's operand chain is forced before the operation itself runs,
+    /// so the whole reachable subtree — values and operand edges — is
+    /// evaluated.  The assert check ([`Module::check_asserts`]) uses this: an
+    /// asserted condition must be fully evaluated whatever its markers.
+    #[stacksafe]
+    pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+        self.evaluate_node_deep_inner(node, current, false, true)
+    }
+
+    /// Shared core of the deep and forced passes.  `skip_shallow` keeps the
+    /// deep pass's laziness (a marked position's subtree is not descended
+    /// into); `force_operand` runs an unevaluated operation's operand chain
+    /// first, so a forced evaluation resolves the operation against fully
+    /// evaluated operands instead of the parameterized gate keeping it lazy.
+    #[stacksafe]
+    fn evaluate_node_deep_inner(
+        &mut self,
+        node: NodeId,
+        current: Option<BlockId>,
+        skip_shallow: bool,
+        force_operand: bool,
+    ) -> P::Value {
         // A structural cycle (e.g. the `Type : Type` universe `[Type, ↺]`,
         // which every type spine in the recursive-pair encoding reaches) is
         // cut here: the node is being deep-evaluated by an outer frame and
@@ -181,6 +209,19 @@ impl<P: Program> Module<P> {
                 self.evaluate_depth_limit
             );
         }
+        // A forced evaluation forces the operand edge of an unevaluated
+        // operation before the operation itself runs.  The operand is a
+        // static graph edge, not value-reachable, so the deep pass only
+        // propagates flags through it; the forced pass runs the computation
+        // behind it — shallow markers included — so a masked operand
+        // resolves instead of gating the operation lazy.
+        if force_operand
+            && self.nodes[node].value.is_none()
+            && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
+        {
+            let block = self.nodes[node].block;
+            self.evaluate_node_deep_inner(operand, Some(block), false, true);
+        }
         let value = self.evaluate_node(node, current);
         if let Some(LowValue::Array(array)) = value.as_enum() {
             self.nodes[node].visiting = true;
@@ -188,23 +229,35 @@ impl<P: Program> Module<P> {
             for (i, &id) in array.ids().iter().enumerate() {
                 // A shallow position is a lazy region: its whole subtree
                 // stays unevaluated (never proven concrete), and a read
-                // forces the single element on demand through `Index`.
-                if array.is_shallow(i) {
+                // forces the single element on demand through `Index` —
+                // unless the forced pass is running, which descends into it
+                // like any other position.
+                if skip_shallow && array.is_shallow(i) {
                     continue;
                 }
-                self.evaluate_node_deep(id, Some(block));
+                self.evaluate_node_deep_inner(id, Some(block), skip_shallow, force_operand);
             }
             self.nodes[node].visiting = false;
         }
+        // An array is unproven while any position is: a non-shallow position
+        // that resolved to the lazy marker, or a shallow position whose
+        // subtree was never descended into (the deep pass skips it, so it is
+        // deliberately unevaluated and can never be baked in place).  A
+        // *forced* pass has descended into a shallow position, so a proven
+        // concrete one no longer marks the array — only a genuinely
+        // parameterized element does.  A self-loop (the `Type : Type`
+        // universe) is cut by the cycle guard with no flag set, so it is
+        // neither shallow nor flagged and does not mark the array.
         let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Array(array))
-                    // An array holding a shallow position can never be
-                    // proven concrete — its marked subtree was deliberately
-                    // not evaluated — so it is never baked in place.
-                    if array.has_shallow()
-                        || array.ids().iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
+                    if array.ids().iter().enumerate().any(|(i, &id)| {
+                        !array.is_shallow(i)
+                            && self.nodes[id].parameterized_deep == Some(true)
+                            || array.is_shallow(i)
+                                && self.nodes[id].parameterized_deep != Some(false)
+                    })
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {

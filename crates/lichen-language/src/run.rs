@@ -2,10 +2,12 @@
 //!
 //! [`evaluate`] compiles and checks a program, runs it (the deep evaluation
 //! of its root value), and renders the result as text — the program's
-//! output, with its type: `5: Int`, `[1, 2, 3]: Int<3>`.  Diagnostics are
-//! returned unrendered so the caller (the CLI, the example tests) can render
-//! them with carets.  The output rendering itself lives in [`crate::render`]
-//! — the same pretty printer also drives the checker diagnostics' messages.
+//! output, with its type: `5: Int`, `[1, 2, 3]: Int<3>`.  The value renders
+//! *against its type chain* (a struct type value prints `struct<Int, Type>`,
+//! a tuple `(1, Int)`) — see [`crate::render`].  Diagnostics are returned
+//! unrendered so the caller (the CLI, the example tests) can render them
+//! with carets.  The output rendering itself lives in [`crate::render`] —
+//! the same pretty printer also drives the checker diagnostics' messages.
 
 use crate::compile;
 use crate::diag::Diag;
@@ -30,7 +32,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag>> {
     module.evaluate_node_deep(build.root_ty, None);
     Ok(format!(
         "{}: {}",
-        print_value(&module, value),
+        print_value(&module, value, build.root_ty),
         print_type(&module, build.root_ty)
     ))
 }

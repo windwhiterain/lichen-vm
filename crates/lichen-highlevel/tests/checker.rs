@@ -1556,3 +1556,115 @@ fn a_read_of_a_shallow_position_forces_the_element() {
         "the read forces the apply at the masked position"
     );
 }
+
+// --- assert: explicit constraints ---------------------------------------
+
+/// `a == b` as an IR BinOp.
+fn eq_binop(ir: &mut IR, a: ExprId, b: ExprId) -> ExprId {
+    ir.alloc(
+        ExprKind::BinOp {
+            operator: lichen_highlevel::ir::BinOp::Eq,
+            left: a,
+            right: b,
+        },
+        None,
+    )
+}
+
+#[test]
+fn top_level_assert_passes_when_the_condition_is_one() {
+    // assert(1 == 1) — the condition resolves to 1 at check time.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let one2 = int(&mut ir, 1);
+    let cond = eq_binop(&mut ir, one, one2);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let b = build(asserted, ir);
+    assert!(b.ok, "assert(1 == 1) should check");
+    assert!(b.module.assert_errors.is_empty());
+}
+
+#[test]
+fn top_level_assert_fails_when_the_condition_is_not_one() {
+    // assert(1 == 2) — the condition resolves to 0: a failed assert, not a
+    // unification failure.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let cond = eq_binop(&mut ir, one, two);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let b = build(asserted, ir);
+    assert!(!b.ok, "assert(1 == 2) must fail");
+    assert!(b.module.unify_errors.is_empty(), "no unification failed");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+}
+
+#[test]
+fn in_function_assert_passes_for_a_satisfying_argument() {
+    // f = n => assert(n == 1); f 1 — the body's assert cannot resolve at
+    // normalize (n is unbound), so the apply clones it and the clone
+    // re-checks against the argument.
+    let mut ir = IR::new();
+    let n = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let cond = eq_binop(&mut ir, n, one);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let f = lam(&mut ir, n, asserted);
+    let one_arg = int(&mut ir, 1);
+    let root = app(&mut ir, f, one_arg);
+    let b = build(root, ir);
+    assert!(b.ok, "f 1 should check");
+    assert_eq!(
+        b.module.asserts.len(),
+        2,
+        "the template's assert plus the apply's clone"
+    );
+    assert!(b.module.assert_errors.is_empty());
+}
+
+#[test]
+fn in_function_assert_fails_for_a_violating_argument() {
+    // f 2 — the clone's condition resolves to 0.
+    let mut ir = IR::new();
+    let n = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let cond = eq_binop(&mut ir, n, one);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let f = lam(&mut ir, n, asserted);
+    let two_arg = int(&mut ir, 2);
+    let root = app(&mut ir, f, two_arg);
+    let b = build(root, ir);
+    assert!(!b.ok, "f 2 must fail");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+}
+
+#[test]
+fn never_called_function_assert_is_not_triggered() {
+    // f = n => assert(n == 1) — never applied: the condition stays unbound,
+    // so the assert stays pending instead of failing.
+    let mut ir = IR::new();
+    let n = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let cond = eq_binop(&mut ir, n, one);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let f = lam(&mut ir, n, asserted);
+    let b = build(f, ir);
+    assert!(b.ok, "an untriggered assert is no failure");
+    assert_eq!(b.module.asserts.len(), 1);
+    assert!(b.module.assert_errors.is_empty());
+}
+
+#[test]
+fn assert_on_a_literal_checks_the_value_itself() {
+    // assert(3) — the condition is the literal's value: it resolves to 3,
+    // not 1, so the assert fails.
+    let mut ir = IR::new();
+    let three = int(&mut ir, 3);
+    let asserted = ir.alloc(ExprKind::Assert { condition: three }, None);
+    let b = build(asserted, ir);
+    assert!(!b.ok, "assert(3) must fail");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(3));
+}

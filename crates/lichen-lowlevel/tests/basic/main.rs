@@ -7,11 +7,13 @@
 //! - `function` — `Apply` semantics, nested and higher-order functions
 //! - `recursion` — lazy recursion, definition passes, depth guards
 //! - `equality` — `unify` and the DSU equivalence classes it binds through
+//! - `assert` — assert points, forced evaluation, clone-on-apply
 //!
 //! The shared harness (the test `Program`/`Value`/`Operator` and the node
 //! and function builders) lives here; each category module pulls it in with
 //! `use super::*;`.
 
+mod assert;
 mod compaction;
 mod equality;
 mod evaluation;

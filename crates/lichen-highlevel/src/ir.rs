@@ -110,6 +110,14 @@ pub enum ExprKind<V> {
     /// and the expression's type is the struct type itself.  Emitted by the
     /// frontend when an application's callee is a struct type.
     Instantiate { type_expr: ExprId, value: ExprId },
+    /// `assert(condition)` — an explicit constraint, not a unify: the
+    /// condition's value node is registered as an assert point.  The
+    /// checker force-evaluates every assert after the definition pass
+    /// (ignoring laziness) and requires `USize(1)`; a condition that stays
+    /// lazy (an unbound parameter) is not triggered, and the apply clone
+    /// re-checks the instantiated condition per call.  The expression
+    /// compiles to the condition itself — the assert is a side constraint.
+    Assert { condition: ExprId },
     /// `{ array, index }` — element selection; `array` must be a tuple or
     /// array value, `index` a `USize`.
     Index { array: ExprId, index: ExprId },

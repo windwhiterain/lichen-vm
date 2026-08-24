@@ -6,9 +6,11 @@ use std::fmt::Debug;
 use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
 
+pub use crate::assert::AssertError;
 pub use crate::equality::UnifyError;
 pub use crate::evaluation::EvalError;
 
+mod assert;
 mod equality;
 mod evaluation;
 mod function;
@@ -223,6 +225,16 @@ pub struct Function {
 pub struct Node<P: Program> {
     pub value: Option<P::Value>,
     pub operation: Option<Operation<P>>,
+    /// The condition node of an assert, when this node is an assert point —
+    /// an explicit constraint (the checker force-evaluates the condition,
+    /// ignoring laziness, and requires `USize(1)`; see
+    /// [`Module::check_asserts`]).  The point is a cell-shaped side node
+    /// (no operation, the lazy marker as value) — nothing in the value flow
+    /// references it, but it rides the apply clone and garbage collection
+    /// like any scope member, and its condition is remapped through the
+    /// clone so a function body's assert re-checks against each call's
+    /// argument.
+    pub assert: Option<NodeId>,
     /// Owner.
     pub block: BlockId,
     /// Detect circular recursion.
@@ -264,6 +276,17 @@ pub struct Module<P: Program> {
     /// recorded instead of panicking — same append-only, never-cleared
     /// contract as [`Self::unify_errors`].
     pub eval_errors: Vec<EvalError>,
+    /// The module's assert points — the nodes with [`Node::assert`] set,
+    /// originals and apply clones alike (the clone pass appends, so the
+    /// check pass sees every instantiated assert).  Garbage collection
+    /// prunes the entries of dropped blocks.  The checker walks this in
+    /// [`Module::check_asserts`].
+    pub asserts: Vec<NodeId>,
+    /// Failed asserts: a condition that resolved to a concrete value other
+    /// than `USize(1)`.  An assert whose condition stays lazy (an unbound
+    /// parameter) is not triggered and records nothing.  Same append-only,
+    /// never-cleared contract as [`Self::unify_errors`].
+    pub assert_errors: Vec<AssertError<P>>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
@@ -295,6 +318,8 @@ impl<P: Program> Module<P> {
             evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
+            asserts: Vec::new(),
+            assert_errors: Vec::new(),
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             apply_total: 0,
@@ -325,6 +350,7 @@ impl<P: Program> Module<P> {
         let node = self.nodes.insert(Node {
             value,
             operation,
+            assert: None,
             block,
             visiting: false,
             parameterized_deep: None,
@@ -332,6 +358,25 @@ impl<P: Program> Module<P> {
         });
         disjoint::make_set(&mut self.nodes, node);
         self.blocks[block].nodes.push(node);
+        node
+    }
+
+    /// An assert point: a node naming `condition` as an explicit constraint
+    /// — not a unification, so an unbound condition is *not* bound to `1`,
+    /// it stays untriggered until an apply binds it.  The checker
+    /// force-evaluates every registered point's condition (ignoring
+    /// laziness) and requires `USize(1)`, see [`Self::check_asserts`].  The
+    /// point is a cell-shaped side node registered in [`Self::asserts`]; the
+    /// apply clone remaps its condition and re-registers the clone, so a
+    /// function body's assert re-checks against each call's argument.
+    pub fn add_assert(&mut self, block: BlockId, condition: NodeId) -> NodeId {
+        let node = self.add_node(
+            block,
+            None,
+            Some(P::Value::from(LowValue::Parameterized)),
+        );
+        self.nodes[node].assert = Some(condition);
+        self.asserts.push(node);
         node
     }
 
