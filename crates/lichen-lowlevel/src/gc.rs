@@ -135,8 +135,17 @@ impl<P: Program> Module<P> {
         meta.size = size;
     }
 
+    /// Drops `block` and everything homed in it (children, functions,
+    /// nodes, arena) without moving anything. The caller guarantees no
+    /// live node outside the block still references one inside it —
+    /// evaluating a surviving reference to a released block panics.
+    ///
+    /// Public so a host can reap per-run frame blocks (a kernel bridge
+    /// spawns one block per call and drops it once the result is extracted;
+    /// [`Self::garbage_collect`] would hoist the subtree into the parent
+    /// instead, growing it forever).
     #[stacksafe]
-    fn drop_block(&mut self, block: BlockId) {
+    pub fn drop_block(&mut self, block: BlockId) {
         let children = std::mem::take(&mut self.blocks[block].children);
         for child in children {
             if self.blocks.contains_key(child) {

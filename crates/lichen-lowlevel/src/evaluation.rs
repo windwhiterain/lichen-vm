@@ -172,6 +172,12 @@ impl<P: Program> Module<P> {
     /// so the whole reachable subtree — values and operand edges — is
     /// evaluated.  The assert check ([`Module::check_asserts`]) uses this: an
     /// asserted condition must be fully evaluated whatever its markers.
+    ///
+    /// Forcing caches concrete values inside shallow regions but does *not*
+    /// upgrade their concreteness proofs: an array with a shallow mark stays
+    /// flagged unproven by [`Node::parameterized_deep`] and keeps cloning
+    /// per apply, which preserves the deep pass's laziness invariants at the
+    /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
         self.evaluate_node_deep_inner(node, current, false, true)
@@ -239,25 +245,19 @@ impl<P: Program> Module<P> {
             }
             self.nodes[node].visiting = false;
         }
-        // An array is unproven while any position is: a non-shallow position
-        // that resolved to the lazy marker, or a shallow position whose
-        // subtree was never descended into (the deep pass skips it, so it is
-        // deliberately unevaluated and can never be baked in place).  A
-        // *forced* pass has descended into a shallow position, so a proven
-        // concrete one no longer marks the array — only a genuinely
-        // parameterized element does.  A self-loop (the `Type : Type`
-        // universe) is cut by the cycle guard with no flag set, so it is
-        // neither shallow nor flagged and does not mark the array.
+        // An array is unproven while any position resolved to the lazy
+        // marker, or any position at all sits behind a shallow mark.
         let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Array(array))
-                    if array.ids().iter().enumerate().any(|(i, &id)| {
-                        !array.is_shallow(i)
-                            && self.nodes[id].parameterized_deep == Some(true)
-                            || array.is_shallow(i)
-                                && self.nodes[id].parameterized_deep != Some(false)
-                    })
+                    // An array holding a shallow position can never be
+                    // proven concrete — its marked subtree was deliberately
+                    // not evaluated, and even an assert's forced pass that
+                    // cached values in it leaves it unproven by this flag,
+                    // so it is never referenced in place across applies.
+                    if array.has_shallow()
+                        || array.ids().iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {

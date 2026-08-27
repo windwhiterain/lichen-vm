@@ -232,37 +232,24 @@ impl Compiler {
                     .transpose();
                 self.scopes.pop();
                 let body = body?;
-                let function = self.alloc(
+                // `x : T => e` — the annotated type rides the `Function`
+                // itself instead of an outer `(x => e) : (T -> _)`
+                // annotation: the checker compiles it in body scope, so
+                // in-body readers of the parameter see the annotated kind
+                // (an array annotation's length, a function annotation's
+                // arrow) while the parameter's type slot still performs the
+                // argument check at each apply.  An unannotated parameter
+                // is `None`.
+                let parameter_type = parameter_type?;
+                self.alloc(
                     ExprKind::Function {
                         parameter: parameter_id,
+                        parameter_type,
                         r#return: body,
                         depth,
                     },
                     span,
-                );
-                match parameter_type? {
-                    // `x : T => e`  ≡  `(x => e) : (T -> _)` — the parameter
-                    // annotation is an ordinary annotation of the lambda
-                    // with an arrow whose codomain is inferred.
-                    Some(t) => {
-                        let placeholder = self.alloc(ExprKind::Placeholder, span);
-                        let arrow = self.alloc(
-                            ExprKind::TypeFunction {
-                                parameter: t,
-                                r#return: placeholder,
-                            },
-                            span,
-                        );
-                        self.alloc(
-                            ExprKind::Annotation {
-                                value: function,
-                                r#type: arrow,
-                            },
-                            span,
-                        )
-                    }
-                    None => function,
-                }
+                )
             }
             Expr::Apply {
                 function,
@@ -675,36 +662,30 @@ mod tests {
     }
 
     #[test]
-    fn an_annotated_parameter_desugars_to_an_annotation() {
-        // x : Int => x  ≡  (x => x) : (Int -> _).
+    fn an_annotated_parameter_rides_the_function() {
+        // x : Int => x — the annotation is the parameter's in-scope type on
+        // the `Function` itself, not an outer annotation of the lambda.
         let ir = compile_ok("x : Int => x");
-        let ExprKind::Annotation { value, r#type } = kind(&ir, ir.root) else {
-            panic!("expected an annotation")
-        };
         let ExprKind::Function {
             parameter,
+            parameter_type,
             r#return,
             ..
-        } = kind(&ir, value)
+        } = kind(&ir, ir.root)
         else {
-            panic!("expected the function")
+            panic!("expected a function")
         };
         assert_eq!(r#return, parameter, "the identity's body is the parameter");
-        let ExprKind::TypeFunction {
-            parameter: domain,
-            r#return: codomain,
-        } = kind(&ir, r#type)
-        else {
-            panic!("expected an arrow type")
-        };
         assert!(matches!(
-            kind(&ir, domain),
+            kind(&ir, parameter_type.expect("the annotated type")),
             ExprKind::Constant(HighProgramValue::TypeInt)
         ));
-        assert!(matches!(kind(&ir, codomain), ExprKind::Placeholder));
-        // An unannotated lambda desugars to nothing.
+        // An unannotated lambda carries no parameter type.
         let ir = compile_ok("x => x");
-        assert!(matches!(kind(&ir, ir.root), ExprKind::Function { .. }));
+        let ExprKind::Function { parameter_type, .. } = kind(&ir, ir.root) else {
+            panic!("expected a function")
+        };
+        assert!(parameter_type.is_none());
     }
 
     #[test]

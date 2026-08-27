@@ -4,7 +4,7 @@
 //! node: an unbound condition stays untriggered rather than being forced to
 //! `1`, and the apply clone re-checks the instantiated condition per call.
 
-use crate::{is_unbound, LowValue, Module, NodeId, Program};
+use crate::{LowValue, Module, NodeId, Program, is_unbound};
 use lichen_utils::extend::AsEnum;
 
 /// A failed assert: the checked condition resolved to a concrete value
@@ -22,23 +22,32 @@ pub struct AssertError<P: Program> {
 }
 
 impl<P: Program> Module<P> {
-    /// Force-evaluate every registered assert's condition — ignoring
-    /// laziness, so a shallow-marked subtree is fully evaluated — and
-    /// require `USize(1)`.  A condition that stays lazy (an unbound
-    /// parameter, or any computation whose operands cannot resolve) is
-    /// *not triggered*: no error is recorded, and the assert is left
-    /// pending — the apply clone re-registers it against the instantiated
-    /// body, where the parameter is bound, so it is re-checked per call.  A
-    /// condition that resolves to anything other than `USize(1)` records an
-    /// [`AssertError`] in [`Self::assert_errors`].
+    /// The constraint worklist: pop every registered assert point and
+    /// force-evaluate its condition — ignoring laziness, so a shallow-marked
+    /// subtree is fully evaluated — requiring `USize(1)`.
     ///
-    /// Runs after the definition pass, so conditions that resolve through
-    /// the program's own applies are bound.  The registry grows while the
-    /// pass runs (a forced condition may itself apply a function and clone
-    /// more asserts), so the walk reads the length live instead of
-    /// snapshotting it; an entry whose block was garbage-collected is
-    /// skipped.
+    /// Each point is *consumed* once decided: a condition resolving to
+    /// anything other than `USize(1)` records an [`AssertError`] in
+    /// [`Self::assert_errors`] and the entry is dropped either way.  A
+    /// condition that stays lazy (an unbound parameter, or any computation
+    /// whose operands cannot resolve) is *not triggered*: no error is
+    /// recorded, and the point is kept as pending — it is the template an
+    /// apply clone instantiates against each call's argument.
+    ///
+    /// Asserts spawned while the worklist drains (a forced condition may
+    /// itself apply a function, cloning more assert points) join the same
+    /// run via the live-length walk.  One run is a fixpoint: nothing the
+    /// pass evaluates can activate an earlier pending point (the unifications
+    /// the pass triggers bind only private per-apply clones), so a single
+    /// drain decides everything decidable.  On return, [`Self::asserts`]
+    /// holds exactly the pending points — a later call re-checks only those
+    /// plus whatever has been registered since.
     pub fn check_asserts(&mut self) {
+        // In-place two-region drain: `[0..pending)` points judged untriggered,
+        // `[pending..i)` already consumed, `[i..len)` the queue including
+        // fresh registrations landing behind it.  A GC-dropped point is
+        // consumed like a decided one — there is nothing left to check.
+        let mut pending = 0;
         let mut i = 0;
         while i < self.asserts.len() {
             let point = self.asserts[i];
@@ -49,7 +58,9 @@ impl<P: Program> Module<P> {
             let block = self.nodes[point].block;
             let value = self.evaluate_node_forced(condition, Some(block));
             if is_unbound(Some(value)) {
-                continue; // not triggered — deferred to the apply clone
+                self.asserts.swap(pending, i - 1);
+                pending += 1; // not triggered — deferred to the apply clone
+                continue;
             }
             if !matches!(value.as_enum(), Some(LowValue::USize(1))) {
                 self.assert_errors.push(AssertError {
@@ -59,5 +70,6 @@ impl<P: Program> Module<P> {
                 });
             }
         }
+        self.asserts.truncate(pending);
     }
 }

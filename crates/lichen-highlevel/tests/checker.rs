@@ -33,9 +33,14 @@ fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
 /// scopes (0 = top-level).  The checker uses this to absorb a nested closure
 /// into its parent's template while keeping siblings' templates disjoint.
 fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, depth: u32) -> ExprId {
+    lam_at_typed(ir, b, None, body, depth)
+}
+/// A lambda whose parameter carries its annotated type — `x : T => e`.
+fn lam_at_typed(ir: &mut IR, b: ExprId, t: Option<ExprId>, body: ExprId, depth: u32) -> ExprId {
     ir.alloc(
         ExprKind::Function {
             parameter: b,
+            parameter_type: t,
             r#return: body,
             depth,
         },
@@ -1617,8 +1622,8 @@ fn in_function_assert_passes_for_a_satisfying_argument() {
     assert!(b.ok, "f 1 should check");
     assert_eq!(
         b.module.asserts.len(),
-        2,
-        "the template's assert plus the apply's clone"
+        1,
+        "the satisfied clone was consumed; only the untriggered template stays"
     );
     assert!(b.module.assert_errors.is_empty());
 }
@@ -1638,6 +1643,11 @@ fn in_function_assert_fails_for_a_violating_argument() {
     assert!(!b.ok, "f 2 must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(
+        b.module.asserts.len(),
+        1,
+        "the failed clone was consumed too — its error is what stays"
+    );
 }
 
 #[test]
@@ -1667,4 +1677,147 @@ fn assert_on_a_literal_checks_the_value_itself() {
     assert!(!b.ok, "assert(3) must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(3));
+}
+
+// --- generated array-bounds constraints ------------------------------------
+
+#[test]
+fn an_out_of_bounds_array_index_fails_a_generated_assert() {
+    // [1, 2, 3][3] — indexing a statically-array target also registers the
+    // generated `i < len` constraint; the read itself stays in-bounds for
+    // the runtime, so the failure is the assert's and only the assert's.
+    let mut ir = IR::new();
+    let a = int(&mut ir, 1);
+    let b2 = int(&mut ir, 2);
+    let c = int(&mut ir, 3);
+    let arr = array(&mut ir, &[a, b2, c]);
+    let idx = int(&mut ir, 3);
+    let e = index(&mut ir, arr, idx);
+    let b = build(e, ir);
+    assert!(!b.ok, "an out-of-range read must fail");
+    assert!(b.module.unify_errors.is_empty(), "no unification failed");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert!(
+        b.module.asserts.is_empty(),
+        "the decided constraint left the worklist"
+    );
+}
+
+#[test]
+fn an_in_bounds_generated_constraint_is_drained() {
+    // [1, 2][1] — `1 < 2` holds: the generated constraint is consumed like
+    // a passing assert, so the worklist comes out empty.
+    let mut ir = IR::new();
+    let a = int(&mut ir, 1);
+    let b2 = int(&mut ir, 2);
+    let arr = array(&mut ir, &[a, b2]);
+    let idx = int(&mut ir, 1);
+    let e = index(&mut ir, arr, idx);
+    let b = build(e, ir);
+    assert!(b.ok, "an in-range read should check");
+    assert!(b.module.assert_errors.is_empty());
+    assert!(
+        b.module.asserts.is_empty(),
+        "the satisfied constraint was consumed"
+    );
+}
+
+#[test]
+fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
+    // f = i => [7, 8, 9][i] — the body's constraint `i < 3` is generated
+    // (the literal's type is statically an array) but stays pending at
+    // normalize (the index is the unbound parameter).  Each apply clones it
+    // and decides it against the argument: f 2 passes, the template alone
+    // remains on the worklist.
+    let mut ir = IR::new();
+    let i = param(&mut ir);
+    let a = int(&mut ir, 7);
+    let b2 = int(&mut ir, 8);
+    let c = int(&mut ir, 9);
+    let arr = array(&mut ir, &[a, b2, c]);
+    let read = index(&mut ir, arr, i);
+    let f = lam(&mut ir, i, read);
+    let two = int(&mut ir, 2);
+    let good = app(&mut ir, f, two);
+    let b = build(good, ir);
+    assert!(b.ok, "f 2 should check");
+    assert!(b.module.assert_errors.is_empty());
+    assert_eq!(
+        b.module.asserts.len(),
+        1,
+        "only the uninstantiated template stays pending"
+    );
+}
+
+#[test]
+fn a_body_index_fails_at_the_violating_argument() {
+    // f = i => [7, 8, 9][i]; f 5 — the instantiated clone's `5 < 3` fails.
+    let mut ir = IR::new();
+    let i = param(&mut ir);
+    let a = int(&mut ir, 7);
+    let b2 = int(&mut ir, 8);
+    let c = int(&mut ir, 9);
+    let arr = array(&mut ir, &[a, b2, c]);
+    let read = index(&mut ir, arr, i);
+    let f = lam(&mut ir, i, read);
+    let five = int(&mut ir, 5);
+    let bad = app(&mut ir, f, five);
+    let b = build(bad, ir);
+    assert!(!b.ok, "f 5 must fail");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+}
+
+// --- annotated parameters are checked in body scope -------------------------
+
+#[test]
+fn an_annotated_array_parameter_bounds_are_checked_in_body() {
+    // f = xs : Int<3> => xs[5] — the annotation is compiled in body scope,
+    // so the generated `5 < 3` constraint is decided at normalize: the
+    // never-applied function already fails, with no unification involved.
+    let mut ir = IR::new();
+    let xs = param(&mut ir);
+    let elem_t = int_t(&mut ir);
+    let length = int(&mut ir, 3);
+    let arr_ty = type_array(&mut ir, elem_t, length);
+    let five = int(&mut ir, 5);
+    let body = index(&mut ir, xs, five);
+    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, 0);
+    let b = build(f, ir);
+    assert!(!b.ok, "xs[5] against Int<3> must fail");
+    assert!(b.module.unify_errors.is_empty(), "no unification failed");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert!(
+        b.module.asserts.is_empty(),
+        "a decided constraint leaves the worklist"
+    );
+}
+
+#[test]
+fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
+    // f = xs : Int<3> => xs[1]; f [7, 8, 9] — with a literal index the
+    // body's `1 < 3` is fully concrete, so the template's own constraint is
+    // decided at normalize and consumed along with the apply's clone.
+    let mut ir = IR::new();
+    let xs = param(&mut ir);
+    let elem_t = int_t(&mut ir);
+    let length = int(&mut ir, 3);
+    let arr_ty = type_array(&mut ir, elem_t, length);
+    let one = int(&mut ir, 1);
+    let body = index(&mut ir, xs, one);
+    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, 0);
+    let a = int(&mut ir, 7);
+    let b2 = int(&mut ir, 8);
+    let c = int(&mut ir, 9);
+    let arg = array(&mut ir, &[a, b2, c]);
+    let call = app(&mut ir, f, arg);
+    let b = build(call, ir);
+    assert!(b.ok, "f [7, 8, 9] should check");
+    assert!(b.module.assert_errors.is_empty());
+    assert!(
+        b.module.asserts.is_empty(),
+        "the all-concrete constraint was decided and consumed"
+    );
 }

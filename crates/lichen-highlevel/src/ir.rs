@@ -91,6 +91,13 @@ pub enum ExprKind<V> {
     /// closures into their parent's template.
     Function {
         parameter: ExprId,
+        /// The annotated parameter's type (`x : T => e`): compiled *in
+        /// body scope* — so in-body readers of the parameter see the
+        /// annotated kind (an array annotation's length, a function
+        /// annotation's arrow) — while the parameter's type slot still
+        /// performs the argument check at each apply.  `None` for an
+        /// unannotated parameter.
+        parameter_type: Option<ExprId>,
         r#return: ExprId,
         depth: u32,
     },

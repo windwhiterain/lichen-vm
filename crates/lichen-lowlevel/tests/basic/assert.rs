@@ -2,7 +2,10 @@
 //! that `Module::check_asserts` force-evaluates (ignoring laziness) and
 //! requires to be `USize(1)`.  Unlike a unification the constraint does not
 //! bind its node: an unbound condition is not triggered, and the apply
-//! clone re-checks the instantiated condition per call.
+//! clone re-checks the instantiated condition per call.  The registry is a
+//! worklist: a drain consumes every decided point (failures land in
+//! `assert_errors`) and keeps exactly the untriggered ones for the next
+//! call.
 
 use super::*;
 
@@ -30,7 +33,11 @@ fn failing_assert_records_the_value() {
 
     assert_eq!(m.assert_errors.len(), 1);
     let err = m.assert_errors[0];
-    assert_eq!(err.value, TestValue::USize(3), "the resolved value is recorded");
+    assert_eq!(
+        err.value,
+        TestValue::USize(3),
+        "the resolved value is recorded"
+    );
 }
 
 #[test]
@@ -65,7 +72,10 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
 
     m.check_asserts();
 
-    assert!(m.assert_errors.is_empty(), "an untriggered assert is no failure");
+    assert!(
+        m.assert_errors.is_empty(),
+        "an untriggered assert is no failure"
+    );
     assert!(
         matches!(m.nodes[x].value, Some(TestValue::Parameterized)),
         "the unbound cell was not bound by the assert"
@@ -97,19 +107,25 @@ fn applied_equality_assert(arg: usize) -> Module<TestProgram> {
 
 #[test]
 fn apply_clones_the_untriggered_assert_and_checks_the_call() {
-    // f(1): the clone's condition resolves to 1 and passes; the template's
-    // own assert stays untriggered.
+    // f(1): the clone's condition resolves to 1 and passes — consumed by
+    // the drain; the template's own assert stays untriggered and pending.
     let m = applied_equality_assert(1);
-    assert_eq!(m.asserts.len(), 2, "template assert + the apply's clone");
+    assert_eq!(
+        m.asserts.len(),
+        1,
+        "only the untriggered template stays on the worklist"
+    );
     assert!(m.assert_errors.is_empty());
 }
 
 #[test]
 fn apply_clone_fails_when_the_argument_violates_the_assert() {
-    // f(2): the clone's condition resolves to 0 — a failed assert.
+    // f(2): the clone's condition resolves to 0 — a failed assert.  The
+    // failed point is consumed too; its error is what stays.
     let m = applied_equality_assert(2);
     assert_eq!(m.assert_errors.len(), 1);
     assert_eq!(m.assert_errors[0].value, TestValue::USize(0));
+    assert_eq!(m.asserts.len(), 1, "the decided clone left the worklist");
 }
 
 #[test]
@@ -130,7 +146,77 @@ fn never_called_function_assert_stays_pending() {
     m.evaluate_node_deep(func_node, None);
     assert_eq!(m.asserts.len(), 1);
     m.check_asserts();
-    assert!(m.assert_errors.is_empty(), "an untriggered assert is no failure");
+    assert_eq!(
+        m.asserts.len(),
+        1,
+        "the untriggered point stays on the worklist"
+    );
+    assert!(
+        m.assert_errors.is_empty(),
+        "an untriggered assert is no failure"
+    );
+}
+
+#[test]
+fn a_satisfied_assert_is_consumed_from_the_worklist() {
+    // A top-level point whose condition resolves to `USize(1)` leaves the
+    // worklist: a second drain finds nothing to re-check.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let one = usize_node(&mut m, root, 1);
+    m.add_assert(root, one);
+
+    m.check_asserts();
+
+    assert!(m.asserts.is_empty(), "the satisfied point was consumed");
+    assert!(m.assert_errors.is_empty());
+
+    m.check_asserts();
+
+    assert!(m.asserts.is_empty(), "re-draining is a no-op");
+    assert!(m.assert_errors.is_empty());
+}
+
+#[test]
+fn a_failed_assert_is_consumed_but_its_error_stays() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let three = usize_node(&mut m, root, 3);
+    m.add_assert(root, three);
+
+    m.check_asserts();
+
+    assert!(m.asserts.is_empty(), "the decided point left the worklist");
+    assert_eq!(m.assert_errors.len(), 1, "the failure is recorded once");
+}
+
+#[test]
+fn an_untriggered_assert_is_decided_by_a_later_drain() {
+    // The condition reads an unbound cell: the point stays pending across
+    // calls.  Once the cell is bound by a later unification (outside the
+    // drain), the very same point is picked up and decided.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let x = unbound_node(&mut m, root);
+    let one = u128_node(&mut m, root, 1);
+    let operands = array_node(&mut m, root, &[x, one], None);
+    let eq = op_node(&mut m, root, TestOperator::Eq, Some(operands));
+    let point = m.add_assert(root, eq);
+
+    m.check_asserts();
+
+    assert_eq!(m.asserts, vec![point], "still pending");
+    assert!(m.assert_errors.is_empty());
+
+    // Later unification binds through the cell's class (outside the drain;
+    // here we bind directly), so the next drain resolves it.
+    let p = m.blocks[root].arena.alloc(1u128);
+    m.nodes[x].value = Some(TestValue::U128(Handle(p as *const u128)));
+
+    m.check_asserts();
+
+    assert!(m.asserts.is_empty(), "the pending point got decided");
+    assert!(m.assert_errors.is_empty(), "x == 1 now holds");
 }
 
 #[test]
@@ -176,7 +262,10 @@ fn forced_evaluation_keeps_a_genuinely_unbound_condition_lazy() {
 
     m.check_asserts();
 
-    assert!(m.assert_errors.is_empty(), "still untriggered — the cell is unbound");
+    assert!(
+        m.assert_errors.is_empty(),
+        "still untriggered — the cell is unbound"
+    );
 }
 
 #[test]
@@ -229,8 +318,14 @@ fn gc_moves_an_assert_condition_with_its_point() {
 
     assert!(!m.blocks.contains_key(body));
     assert_eq!(m.nodes[point].block, root, "the point moved with the scope");
-    assert_eq!(m.nodes[condition].block, root, "the condition moved with its point");
-    assert!(m.asserts.contains(&point), "the moved point stays registered");
+    assert_eq!(
+        m.nodes[condition].block, root,
+        "the condition moved with its point"
+    );
+    assert!(
+        m.asserts.contains(&point),
+        "the moved point stays registered"
+    );
     m.check_asserts();
     assert!(m.assert_errors.is_empty());
 }

@@ -235,14 +235,15 @@ impl<V: ValueType> Checker<V> {
         if checker.module.unify_errors.is_empty() {
             checker.module.evaluate_node_deep(root_term, None);
         }
-        // The assert pass: force-evaluate every assert point — the originals
-        // and the clones the definition pass's applies produced — ignoring
-        // laziness, and require `USize(1)`.  An assert whose condition stays
-        // lazy is *not triggered*: an in-body assert whose parameter was
-        // never bound (the function was never applied) stays pending instead
-        // of failing, and the clone re-checks it per call.  Skipped when the
-        // definition pass was (the graph may be broken enough to panic on
-        // the forced evaluation).
+        // The assert pass: drain the module's constraint worklist — the
+        // originals and the clones the definition pass's applies produced —
+        // force-evaluating each condition (ignoring laziness) and requiring
+        // `USize(1)`.  Decided points are consumed; an assert whose condition
+        // stays lazy is *not triggered* and stays pending on the worklist:
+        // an in-body assert whose parameter was never bound (the function was
+        // never applied) is deferred instead of failing, and the clone
+        // re-checks it per call.  Skipped when the definition pass was (the
+        // graph may be broken enough to panic on the forced evaluation).
         if checker.module.unify_errors.is_empty() {
             checker.module.check_asserts();
         }
@@ -623,9 +624,10 @@ impl<V: ValueType> Checker<V> {
             }
             ExprKind::Function {
                 parameter,
+                parameter_type,
                 r#return,
                 ..
-            } => self.check_lam(e, parameter, r#return),
+            } => self.check_lam(e, parameter_type, parameter, r#return),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {
                 operator,
@@ -697,7 +699,13 @@ impl<V: ValueType> Checker<V> {
         pair
     }
 
-    fn check_lam(&mut self, e: ExprId, parameter: ExprId, r#return: ExprId) -> NodeId {
+    fn check_lam(
+        &mut self,
+        e: ExprId,
+        parameter_type: Option<ExprId>,
+        parameter: ExprId,
+        r#return: ExprId,
+    ) -> NodeId {
         let depth = match self.ir[e].kind {
             // The frontend records the count of enclosing function scopes;
             // the checker uses it below to absorb into the lexical parent
@@ -742,6 +750,26 @@ impl<V: ValueType> Checker<V> {
                 ty: type_cell,
             },
         )]));
+        // The annotated parameter's type is compiled in scope — it may
+        // reference the parameter itself (`x : x -> Int`) — and unified
+        // against the parameter's type slot *before* the body compiles, so
+        // in-body readers see the annotated kind statically (an array
+        // annotation's length, a function annotation's arrow) and the
+        // generated constraints fire at normalize.  At each apply the
+        // argument still checks against the very same slot — the unify
+        // differs from the outer `(x => e) : (T -> _)` annotation only in
+        // when it happens, not in what it binds.
+        if let Some(parameter_type) = parameter_type {
+            self.check_expr(parameter_type);
+            let type_pair = self.term[parameter_type]
+                .expect("the type expression must compile to a pair");
+            self.check_unify(
+                type_cell,
+                type_pair,
+                self.ir[parameter_type].span,
+                DiagKind::Annotation,
+            );
+        }
         let ret = self.check_expr(r#return);
         self.scopes.pop();
         self.current_block = saved;
@@ -910,6 +938,9 @@ impl<V: ValueType> Checker<V> {
     /// selects the extraction branch from a native `Index(table, code)`.
     /// The array type's element type is shape[0] (the value-side `Index`
     /// bounds-checks real reads, so the type read needs no length check).
+    /// A statically-array target additionally registers a *bounds
+    /// constraint* (`i < shape[1]`) on the module's assert worklist —
+    /// see the comment at the generation site below.
     fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
@@ -1022,6 +1053,48 @@ impl<V: ValueType> Checker<V> {
                     HighProgramOperator::IndexTypeDispatch,
                     Some(kind),
                 );
+                // A *statically-array* target also gets a generated bounds
+                // constraint: the length lives in the type's own shape
+                // (`shape[1]`), so the read asserts `i < len` through the
+                // module's constraint worklist (`i < len` as `len <= i == 0`,
+                // the comparison ops the value language already has).  A
+                // concrete out-of-range index fails the assert pass; a lazy
+                // length (an annotated parameter) keeps the assert pending,
+                // and the apply clone re-checks it against each argument's
+                // actual array.  A target whose kind is still unknown (an
+                // unannotated parameter, a call result) gets no constraint —
+                // the runtime `Index` bounds check remains the guard there.
+                // The gate reads the kind slot *structurally* from the type
+                // pair's cached value (like the tuple/struct match above) —
+                // the dispatch `kind` op below is still unevaluated here.
+                let statically_array = match self.module.array_ids(array_ty) {
+                    Some(ids) if ids.len() == 2 => {
+                        self.kind_marker_is(ids[1], V::array_type_marker())
+                    }
+                    _ => false,
+                };
+                if statically_array {
+                    let length_ops = self.array_node(self.current_block, &[shape, one]);
+                    let length = self.op_node(
+                        self.current_block,
+                        HighProgramOperator::Index,
+                        Some(length_ops),
+                    );
+                    let beyond_ops =
+                        self.array_node(self.current_block, &[length, index_value]);
+                    let beyond = self.op_node(
+                        self.current_block,
+                        HighProgramOperator::Leq,
+                        Some(beyond_ops),
+                    );
+                    let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
+                    let in_range = self.op_node(
+                        self.current_block,
+                        HighProgramOperator::Eq,
+                        Some(in_range_ops),
+                    );
+                    self.module.add_assert(self.current_block, in_range);
+                }
                 // Dispatch codes (see `IndexTypeDispatch`'s run): 0 = tuple,
                 // 1 = struct, 2 = array, 3 = any other kind (defer).
                 let tuple_ops = self.array_node(self.current_block, &[shape, index_value]);

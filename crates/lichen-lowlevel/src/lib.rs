@@ -276,11 +276,11 @@ pub struct Module<P: Program> {
     /// recorded instead of panicking — same append-only, never-cleared
     /// contract as [`Self::unify_errors`].
     pub eval_errors: Vec<EvalError>,
-    /// The module's assert points — the nodes with [`Node::assert`] set,
-    /// originals and apply clones alike (the clone pass appends, so the
-    /// check pass sees every instantiated assert).  Garbage collection
-    /// prunes the entries of dropped blocks.  The checker walks this in
-    /// [`Module::check_asserts`].
+    /// The module's assert-point worklist — the nodes with [`Node::assert`]
+    /// set.  Spawn ([`Self::add_assert`]) and every apply clone register
+    /// here; [`Self::check_asserts`] drains it, consuming decided entries
+    /// and leaving exactly the not-yet-triggered ones.  Garbage collection
+    /// prunes the entries of dropped blocks.
     pub asserts: Vec<NodeId>,
     /// Failed asserts: a condition that resolved to a concrete value other
     /// than `USize(1)`.  An assert whose condition stays lazy (an unbound
@@ -325,6 +325,19 @@ impl<P: Program> Module<P> {
             apply_total: 0,
             deep_depth: 0,
         }
+    }
+
+    /// Resets the per-run evaluation budgets ([`Self::apply_depth`],
+    /// [`Self::apply_total`], [`Self::deep_depth`]) so a host can drive the
+    /// module in a long-running loop (e.g. one kernel call per GUI frame)
+    /// without the cumulative apply count exhausting
+    /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
+    /// resets them per run keeps the guard while shedding lifetime
+    /// accumulation. The limits themselves are unchanged.
+    pub fn reset_apply_budget(&mut self) {
+        self.apply_depth = 0;
+        self.apply_total = 0;
+        self.deep_depth = 0;
     }
 
     pub fn add_block(&mut self, parent: Option<BlockId>) -> BlockId {
