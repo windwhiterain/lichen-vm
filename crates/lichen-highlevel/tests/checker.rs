@@ -1046,7 +1046,7 @@ fn array_index_out_of_bounds_against_a_bound_length() {
 
 #[test]
 fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
-    // struct { Int, Type } — the pair [[TypeId(0), [int, Type]], [TypeStruct, Type]].
+    // struct { Int, Type } — the pair [[int, Type], [TypeId(0), [TypeStruct, Type]]].
     let mut ir = IR::new();
     let t1 = int_t(&mut ir);
     let t2 = ty(&mut ir);
@@ -1054,24 +1054,25 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let b = build(s, ir);
     assert!(b.ok, "struct {{ Int, Type }} should kind");
     assert!(b.module.unify_errors.is_empty());
-    // the shape bundles the nominal id with the field-type list [int, Type]
+    // the shape is just the positional field-type list [int, Type] — the
+    // nominal id no longer rides in the shape
     let shape = b.val[s].unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
-    assert!(matches!(
-        b.module.nodes[shape_ids[0]].value,
-        Some(HighProgramValue::TypeId(0))
-    ));
-    let fields = array_ids(&b, shape_ids[1]);
-    assert_eq!(fields.len(), 2);
-    assert_eq!(fields[0], b.int_type);
-    // the kind slot is [TypeStruct, K]
+    assert_eq!(shape_ids[0], b.int_type);
+    // the kind slot is [type_id, [TypeStruct, K]]
     let kind = b.ty[s].unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
-    assert_eq!(kind_ids[1], b.type_expr);
-    assert_eq!(
+    assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
+        Some(HighProgramValue::TypeId(0))
+    ));
+    let inner = array_ids(&b, kind_ids[1]);
+    assert_eq!(inner.len(), 2);
+    assert_eq!(inner[1], b.type_expr);
+    assert_eq!(
+        b.module.nodes[inner[0]].value,
         Some(HighProgramValue::TypeStruct)
     );
     // one source occurrence consumed exactly one fresh id
@@ -1088,8 +1089,8 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let b = build(pair, ir);
     assert!(b.ok);
     assert_eq!(b.module.global_ext.type_id_counter, 2);
-    let id1 = array_ids(&b, b.val[s1].unwrap())[0];
-    let id2 = array_ids(&b, b.val[s2].unwrap())[0];
+    let id1 = array_ids(&b, b.ty[s1].unwrap())[0];
+    let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
     assert!(matches!(
         b.module.nodes[id1].value,
         Some(HighProgramValue::TypeId(0))
@@ -1130,12 +1131,25 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let mut module = b.module;
     module.unify(b.term[s].unwrap(), b.term[t].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    // The struct shape is [TypeId, field list] (2 elements) while the tuple
-    // shape is the field list itself (1 element) — the arity clash at the
-    // shape level is what keeps a struct from ever unifying with a tuple.
+    // The struct and tuple shapes are both the field-type list (same arity),
+    // so the nominal distinction now lives in the kind slot: the struct
+    // kind's `[TypeId(n), …]` head clashes with the tuple kind's
+    // `[TupleType, …]` head.
     let err = module.unify_errors[0];
-    assert!(matches!(err.value_a, Some(HighProgramValue::Array(_))));
-    assert!(matches!(err.value_b, Some(HighProgramValue::Array(_))));
+    let (a, b) = (err.value_a, err.value_b);
+    assert!(
+        matches!(
+            (a, b),
+            (
+                Some(HighProgramValue::TypeId(_)),
+                Some(HighProgramValue::TypeTuple)
+            ) | (
+                Some(HighProgramValue::TypeTuple),
+                Some(HighProgramValue::TypeId(_))
+            )
+        ),
+        "kind-level nominal clash: got {a:?} vs {b:?}"
+    );
 }
 
 #[test]

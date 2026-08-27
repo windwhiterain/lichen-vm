@@ -585,17 +585,71 @@ fn a_bound_struct_type_is_reusable() {
 
 #[test]
 fn two_struct_type_occurrences_do_not_unify() {
-    // Nominal identity is a *value*-level property now: a struct type's
-    // shape is [TypeId(n), fields], so two occurrences differ in their
-    // values (TypeId(0) vs TypeId(1)) but share one type ([TypeStruct,
-    // Type]) — a bare array of two struct type values is type-homogeneous
-    // and checks.  The nominality surfaces when the occurrences are
-    // *instantiated*: [s1(1, 2), s2(1, 2)] conflicts (covered by
-    // a_struct_instance_with_mismatched_fields_is_rejected).
+    // Nominal identity is a *type*-level property now: a struct type's kind is
+    // `[TypeId(n), [TypeStruct, Type]]`, so two distinct `struct<…>`
+    // occurrences have different ids and therefore different *types*.  An
+    // array of two distinct occurrences is heterogeneous and is rejected —
+    // the nominality surfaces at the type slot, not the value slot.  (The
+    // same occurrence shared across applications stays homogeneous, see
+    // a_struct_type_in_a_function_body_is_shared_across_applications.)
     let report = compile("[struct<Int>, struct<Int>]");
     assert!(
+        !report.ok(),
+        "two distinct struct occurrences are different nominal types: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn a_struct_type_in_a_function_body_is_shared_across_applications() {
+    // `f = t => struct<t>` — the struct occurrence lives in the function
+    // body.  Its `Fresh` node does not read the parameter, so the deep pass
+    // evaluates it to a concrete `TypeId` and the apply clone references the
+    // node in place: every application of `f` shares the one nominal id.
+    // Because the id lives in the type slot now, the shared kind makes
+    // `[f (Int), f (Int)]` homogeneous — the array checks, which is exactly
+    // the sharing proof.
+    let report = compile("f = t => struct<t>; [f (Int), f (Int)]");
+    assert!(
         report.ok(),
-        "two struct types share the type [TypeStruct, Type]: {:?}",
+        "a body-local struct must be one nominal type across applications: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
+    // `Box = t => struct<t>` — a generic struct constructor.  The `Fresh` id
+    // is per *occurrence* and is shared (referenced in place by every apply
+    // clone), so all applications of `Box` resolve to one nominal kind: the
+    // id lives in the kind slot while the field-type list rides in the value
+    // shape.  Same constructor + same fields is homogeneous and checks;
+    // same constructor with different field types is also one nominal kind —
+    // the fields differ only in the shape (the value), not the type.
+    let report = compile("Box = t => struct<t>; [Box (Int), Box (Int)]");
+    assert!(
+        report.ok(),
+        "same constructor, same fields: {:?}",
+        report.diagnostics
+    );
+    let report = compile("Box = t => struct<t>; [Box (Int), Box (Type)]");
+    assert!(
+        report.ok(),
+        "same constructor (one nominal kind), fields differ only in the value: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
+    // Two functions each contain their own struct occurrence — each body's
+    // `Fresh` node is its own, so the nominal ids stay distinct across the
+    // functions.  Distinct ids mean distinct kinds (distinct types), so
+    // `[f (Int), g (Int)]` is heterogeneous and is rejected.
+    let report = compile("f = t => struct<t>; g = t => struct<t>; [f (Int), g (Int)]");
+    assert!(
+        !report.ok(),
+        "distinct body-local structs must keep distinct nominal ids: {:?}",
         report.diagnostics
     );
 }

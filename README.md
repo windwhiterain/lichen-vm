@@ -247,7 +247,7 @@ Function: <Type, Int> -> Int
 A = struct<Int, Type>
 a = A(1, Int)
 B = struct<Int>
-b = B((1,))
+b = B(1)
 (A, a, a[0], a[1], B, b, b[0])
 ```
 
@@ -269,6 +269,24 @@ b = B(Int, a)
 output:
 ```text
 (struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>
+```
+
+### `struct_generic.lichen`
+
+```text
+-- A struct constructor is generic: `Box t` (juxtaposition — a space, not a
+-- parenthesized argument) builds the *same* nominal type for every field
+-- type — the `Fresh` id is per occurrence and shared, so `Box Int` and
+-- `Box Type` differ only in their field lists (the value shape), not in
+-- their type (the shared kind).  They therefore coexist in one homogeneous
+-- tuple.
+Box = t => struct<t>
+(Box Int, Box Type, Box Int)
+```
+
+output:
+```text
+(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>
 ```
 
 <!-- end: examples -->

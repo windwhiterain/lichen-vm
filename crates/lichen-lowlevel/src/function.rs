@@ -76,6 +76,15 @@ impl<P: Program> Module<P> {
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
+        // The parameter is an entry point of the clone walk, not just a node
+        // the return subtree happens to reach: the argument must satisfy the
+        // parameter's type even when the body never references the parameter
+        // (an ignored parameter), and a parameter read whose value a type
+        // annotation pinned is referenced in place and so is invisible from
+        // the return.  Walking it regardless guarantees the parameter unify
+        // below fires.  Idempotent: if the return clone already remapped it,
+        // this returns the same clone.
+        self.node_apply(parameter, &mut ctx);
         // The scope's assert points are side nodes — nothing in the return's
         // subtree references them, so the return clone cannot carry them.
         // Clone each one through the shared remap (its condition rewrites to
@@ -213,32 +222,30 @@ impl<P: Program> Module<P> {
         if !ctx.members.contains(&node) && !ctx.extra.is_some_and(|extra| extra.contains(&node)) {
             return node; // outside the template scope — reference as-is
         }
-        // The body always exists, so only the parts that depend on the
-        // parameter need fresh nodes: unevaluated operation nodes (their
-        // operand edges must be rewritten) and nodes not proven concrete —
-        // flagged parameterized nodes, plus nodes whose dependence was
-        // never resolved (the Index/Apply arms read operands shallowly, so
-        // those flags may still be `None`).  A node whose subtree evaluated
-        // to a concrete value (`Some(false)`) is baked — reference it in
-        // place.  A *function value* is never baked by that proof: its
-        // body's dependence on this call is invisible to the deep pass, so
-        // any function value other than the applied function's own
-        // self-reference (the recursion point) is cloned per call — a
-        // nested closure's captures must rebind to this call's clones.  The
-        // same goes for a proven-concrete structure *containing* such a
-        // function value (a function's pair, a tuple of closures): the
-        // proof cannot see through the function's body either.
+        // The body always exists, so only the parts whose value could
+        // differ per call need fresh nodes: the parameter and nodes the deep
+        // pass could not prove concrete — flagged parameterized nodes, plus
+        // nodes whose dependence was never resolved (the deep pass never ran
+        // on them).  A node the deep pass proved concrete
+        // (`parameterized_deep == Some(false)`) is baked — reference it in
+        // place.  The deep pass evaluates an operation node for real even
+        // when it merely holds a value (a type annotation's pin is a
+        // constraint, not a computation), so a concrete proof on an
+        // operation node covers what the operation actually produces — no
+        // operation node is special-cased here.  A *function value* is never
+        // baked by that proof: its body's dependence on this call is
+        // invisible to the deep pass, so any function value other than the
+        // applied function's own self-reference (the recursion point) is
+        // cloned per call — a nested closure's captures must rebind to this
+        // call's clones.  The same goes for a proven-concrete structure
+        // *containing* such a function value (a function's pair, a tuple of
+        // closures): the proof cannot see through the function's body
+        // either.
         let (value, operation, parameterized_deep) = {
             let source = &self.nodes[node];
             (source.value, source.operation, source.parameterized_deep)
         };
-        // An operation node always clones: its cached value may have been
-        // derived from the parameter (a read of a pinned parameter cell
-        // evaluates to the pinned value, looking concrete), so it must
-        // recompute against the remapped operands instead of being
-        // referenced in place.
         let depends_on_parameter = node == ctx.parameter
-            || operation.is_some()
             || parameterized_deep != Some(false)
             || value.is_some_and(|value| {
                 matches!(

@@ -206,30 +206,19 @@ impl<V: ValueType> Checker<V> {
         // Skipped when the checker-side unifies (annotations,
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
-        // The definition pass: run the program so the apply-time type checks
-        // fire.  Each function body runs once first — its apply-time checks
-        // fire even when the function is never applied, and a body ending in
-        // a call resolves its result cell before the root pass walks the
-        // function's type spine (which would otherwise read the cell while
-        // it is still unbound).  The order against the root pass is
-        // irrelevant: reads alias their target cells (see the lowlevel Index
-        // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations,
-        // guards) already failed — the graph may then hit a non-function
-        // apply, which the runtime panics on.
         if checker.module.unify_errors.is_empty() {
             let functions: Vec<lichen_lowlevel::FunctionId> =
                 checker.module.functions.keys().collect();
             for function in functions {
                 let ret = checker.module.functions[function].r#return;
-                // Only bodies whose apply-time checks can fire need the pass.
-                // A body that is a function value or a plain annotation has
-                // no apply of its own, and deep-evaluating it would prove
-                // the body concrete — the clone rule would then reference it
-                // in place and the parameter check would never run.
-                if self_subtree_contains_apply(&checker.module, ret) {
-                    checker.module.evaluate_node_deep(ret, None);
-                }
+                // Every body runs once: its apply-time checks fire even when
+                // the function is never applied, and the deep pass decides
+                // what the apply clone may reference in place — a body the
+                // pass never computed keeps every operation node unproven
+                // and clones them all, silently re-running per-application
+                // computations like a body-local struct's nominal-id
+                // `Fresh`.
+                checker.module.evaluate_node_deep(ret, None);
             }
         }
         if checker.module.unify_errors.is_empty() {
@@ -491,11 +480,27 @@ impl<V: ValueType> Checker<V> {
         self.kind_marker_is(kind, V::function_type_marker())
     }
 
+    /// Whether `ty` is a struct type: `[shape, [id, [TypeStruct, K]]]`.  A
+    /// struct's nominal id lives in the kind slot's head; the `TypeStruct`
+    /// tag is the inner layer `[TypeStruct, K]` at `kind[1]`.
+    fn is_struct_type(&mut self, ty: NodeId) -> bool {
+        let Some(ids) = self.module.array_ids(ty) else {
+            return false;
+        };
+        if ids.len() != 2 {
+            return false;
+        }
+        let Some(kind_ids) = self.module.array_ids(ids[1]) else {
+            return false;
+        };
+        kind_ids.len() == 2 && self.kind_marker_is(kind_ids[1], V::type_struct_marker())
+    }
+
     /// Whether `ty` is a concrete indexable type expression — a tuple type
     /// (`[shape, [TypeTuple, K]]`), an array type (`[shape, [TypeArray,
-    /// K]]`), or a struct type (`[shape, [TypeStruct, K]]`, whose shape is
-    /// `[TypeId(n), field types]`).  The index-target guard skips these; only
-    /// concretely *non*-indexable types are caught statically.
+    /// K]]`), or a struct type (`[shape, [id, [TypeStruct, K]]]`, whose shape
+    /// is the positional field-type list).  The index-target guard skips
+    /// these; only concretely *non*-indexable types are caught statically.
     fn is_indexable_type(&mut self, ty: NodeId) -> bool {
         let Some(ids) = self.module.array_ids(ty) else {
             return false;
@@ -506,7 +511,7 @@ impl<V: ValueType> Checker<V> {
         let kind = ids[1];
         self.kind_marker_is(kind, V::tuple_type_marker())
             || self.kind_marker_is(kind, V::array_type_marker())
-            || self.kind_marker_is(kind, V::type_struct_marker())
+            || self.is_struct_type(ty)
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -995,12 +1000,10 @@ impl<V: ValueType> Checker<V> {
                 let (shape, kind) = (ids[0], ids[1]);
                 if self.kind_marker_is(kind, V::tuple_type_marker()) {
                     Some(shape)
-                } else if self.kind_marker_is(kind, V::type_struct_marker()) {
-                    // A struct type's shape is [TypeId, field types] — the
-                    // positional list is at shape[1].
-                    self.module.array_ids(shape).and_then(|s| {
-                        (s.len() == 2).then_some(s[1])
-                    })
+                } else if self.is_struct_type(array_ty) {
+                    // A struct type's shape is the positional field-type
+                    // list itself (the nominal id lives in the kind).
+                    Some(shape)
                 } else {
                     None
                 }
@@ -1103,13 +1106,10 @@ impl<V: ValueType> Checker<V> {
                     HighProgramOperator::Index,
                     Some(tuple_ops),
                 );
-                let fields_ops = self.array_node(self.current_block, &[shape, one]);
-                let fields = self.op_node(
-                    self.current_block,
-                    HighProgramOperator::Index,
-                    Some(fields_ops),
-                );
-                let struct_ops = self.array_node(self.current_block, &[fields, index_value]);
+                // A struct type's shape is its positional field-type list
+                // (the nominal id lives in the kind), so a struct reads a
+                // field exactly like a tuple reads an element.
+                let struct_ops = self.array_node(self.current_block, &[shape, index_value]);
                 let struct_b = self.op_node(
                     self.current_block,
                     HighProgramOperator::Index,
@@ -1190,22 +1190,21 @@ impl<V: ValueType> Checker<V> {
             }
             _ => value_ty,
         };
-        // The struct pair's shape is [TypeId, field types] — the positional
-        // field list is at shape[1].  During a recursive struct's own descent
-        // the shape is still an unbound cell (the bindings are mutually
-        // recursive), so defer the field-list check through a probe shape.
+        // The struct pair's shape *is* the positional field-type list (the
+        // nominal id lives in the kind slot).  During a recursive struct's
+        // own descent the shape is still an unbound cell (the bindings are
+        // mutually recursive), so defer the field-list check through a probe
+        // cell.
         let shape = self.module.array_ids(type_pair).unwrap()[0];
         let field_list = match self.module.array_ids(shape) {
-            Some(s) if s.len() == 2 => s[1],
+            Some(_) => shape,
             // The struct's shape cell is not resolved yet (mid-recursion):
-            // bind it to a [TypeId, field-list] probe and check the value
-            // against the field-list slot.  When the descent completes the
-            // cell unifies with the real shape, closing the deferred check.
+            // bind it to a [field-list] probe and check the value against the
+            // probe slot.  When the descent completes the cell unifies with
+            // the real shape, closing the deferred check.
             _ => {
-                let id_cell = self.fresh_cell();
                 let fields_cell = self.fresh_cell();
-                let probe = self.array_node(self.current_block, &[id_cell, fields_cell]);
-                self.module.unify(shape, probe);
+                self.module.unify(shape, fields_cell);
                 fields_cell
             }
         };
@@ -1295,14 +1294,21 @@ impl<V: ValueType> Checker<V> {
         self.term[el].unwrap()
     }
 
-    /// A struct type expression: `[[TypeId(n), field types], [TypeStruct,
-    /// Type]]` — the shape bundles a *fresh nominal* id with the positional
-    /// field-type list (mirroring an array type's `[element type, length]`
-    /// shape), and the kind slot holds the fixed `TypeStruct` marker.  The
-    /// id comes from the [`HighProgramOperator::Fresh`] call at shape[0], so
-    /// each occurrence allocates a new id and two occurrences never unify
-    /// (nominal identity); a struct type is reused by binding it once
-    /// through a parameter.  Fields are positional (no names in v1).
+    /// A struct type expression.  A struct is *polymorphic*: the nominal
+    /// type id identifies its constructor, and instantiating it with field
+    /// types produces a concrete type.  So the id belongs in the kind slot
+    /// (with `TypeStruct` as an inner tag), not in the value shape, which is
+    /// just the field-type list:
+    ///
+    /// ```text
+    /// pair = [ shape, kind ]
+    /// shape = [ field types… ]
+    /// kind  = [ type_id, [ TypeStruct, K ] ]
+    /// ```
+    ///
+    /// The id is a per-compilation [`HighProgramOperator::Fresh`] call, so
+    /// two occurrences keep distinct nominal ids.  Fields are positional
+    /// (no names in v1).
     fn check_type_struct(&mut self, e: ExprId) -> NodeId {
         let elements = self.range_children(e);
         let mut tys = Vec::new();
@@ -1310,9 +1316,9 @@ impl<V: ValueType> Checker<V> {
             tys.push(self.check_type_element(el));
         }
         let id = self.op_node(self.current_block, HighProgramOperator::Fresh, None);
-        let fields = self.array_node(self.current_block, &tys);
-        let shape = self.array_node(self.current_block, &[id, fields]);
-        let kind = self.kind_expr(self.current_block, self.type_struct_marker);
+        let shape = self.array_node(self.current_block, &tys);
+        let inner_kind = self.kind_expr(self.current_block, self.type_struct_marker);
+        let kind = self.array_node(self.current_block, &[id, inner_kind]);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);
@@ -1493,33 +1499,4 @@ impl<V: ValueType> Checker<V> {
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
     }
-}
-
-/// Whether the compiled subtree of `root` contains an [`HighProgramOperator::Apply`]
-/// operation — the criterion for the per-function definition pass (see
-/// [`Checker::build`]).
-fn self_subtree_contains_apply<V: ValueType>(
-    module: &Module<HighProgram<V>>,
-    root: NodeId,
-) -> bool {
-    let mut stack = vec![root];
-    let mut seen = HashSet::new();
-    while let Some(node) = stack.pop() {
-        if !seen.insert(node) {
-            continue;
-        }
-        let n = &module.nodes[node];
-        if let Some(operation) = n.operation {
-            if matches!(operation.operator, HighProgramOperator::Apply) {
-                return true;
-            }
-            if let Some(operand) = operation.operand {
-                stack.push(operand);
-            }
-        }
-        if let Some(Some(LowValue::Array(array))) = n.value.as_ref().map(|value| value.as_enum()) {
-            stack.extend(array.ids().iter().copied());
-        }
-    }
-    false
 }

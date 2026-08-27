@@ -204,6 +204,26 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         if elements.len() == 2 && is_universe(self.module, elements[1]) {
             return self.node(elements[0]);
         }
+        // A bare struct kind `[id, [TypeStruct, K]]` (a struct type pair's
+        // type slot): render its tag `TypeStruct`.
+        if is_struct_kind(self.module, node)
+            && let Some(LowValue::Array(kind)) = self.module.nodes[node].value.and_then(|v| v.as_enum())
+            && let Some(LowValue::Array(inner)) = self.module.nodes.get(kind.ids()[1]).and_then(|n| n.value).and_then(|v| v.as_enum())
+        {
+            return self.node(inner.ids()[0]);
+        }
+        // A struct type: `[shape, [id, [TypeStruct, K]]]` — the nominal id
+        // heads the kind and the `TypeStruct` tag is the inner
+        // `[TypeStruct, K]` layer, so it is detected beside the `[marker, K]`
+        // compound kinds.
+        if elements.len() == 2
+            && let Some(kind) = self.module.nodes[elements[1]].value
+            && let Some(LowValue::Array(kind)) = kind.as_enum()
+            && kind_is_struct(self.module, kind.ids())
+        {
+            let fields = self.fields(elements[0]);
+            return format!("struct<{}>", fields.join(", "));
+        }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
         if elements.len() == 2
@@ -237,18 +257,6 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
                         && s.len() == 2
                     {
                         return format!("{}<{}>", self.node(s[0]), self.node(s[1]));
-                    }
-                }
-                Some(m) if m == V::type_struct_marker() => {
-                    // A struct type: shape = [TypeId, field-type list] —
-                    // render `struct<T1, ..., Tn>` from the list at shape[1].
-                    if let Some(shape) = self.module.nodes[elements[0]].value
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.ids()
-                        && s.len() == 2
-                    {
-                        let fields = self.fields(s[1]);
-                        return format!("struct<{}>", fields.join(", "));
                     }
                 }
                 _ => {}
@@ -339,10 +347,28 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             return self.raw(value);
         };
         let tys = ty_array.ids();
+        // A struct type itself: the value's type is the struct kind
+        // `[id, [TypeStruct, K]]` (not a `[shape, [marker, K]]` pair), and the
+        // value is the field-type list — render `struct<T1, ..., Tn>`.
+        if is_struct_kind(self.module, ty)
+            && let Some(LowValue::Array(shape)) = value.as_enum()
+        {
+            let fields: Vec<String> = shape.ids().iter().map(|&f| self.printer.node(f)).collect();
+            return format!("struct<{}>", fields.join(", "));
+        }
         // A kind `[marker, K]`: the value is a compound type — render its
         // shape in type syntax.
         if tys.len() == 2 && is_universe(self.module, tys[1])
             && let Some(out) = self.compound_type(value, tys[0])
+        {
+            return out;
+        }
+        // A struct instance: the value reads against the struct's
+        // field-type list (the shape); its kind is `[id, [TypeStruct, K]]`,
+        // so it is detected beside the `[marker, K]` kinds.
+        if tys.len() == 2
+            && is_struct_kind(self.module, tys[1])
+            && let Some(out) = self.instance(value, tys[0], V::type_struct_marker())
         {
             return out;
         }
@@ -402,12 +428,10 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                     self.printer.node(shape[1])
                 ));
             }
-        } else if marker == V::type_struct_marker() {
-            if shape.len() == 2 {
-                let fields = self.printer.fields(shape[1]);
-                return Some(format!("struct<{}>", fields.join(", ")));
-            }
         }
+        // A struct type's kind is `[shape, [id, [TypeStruct, K]]]`, not a
+        // `[marker, K]` pair, so it never reaches `compound_type` — it is
+        // handled by the struct branch in `value` / `elements`.
         None
     }
 
@@ -448,18 +472,9 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             return Some(format!("[{}]", out.join(", ")));
         }
         if marker == V::type_struct_marker() {
-            // The shape is [TypeId, field-type list] — the element types are
-            // the fields.
-            if shape.len() != 2 {
-                return None;
-            }
-            let Some(LowValue::Array(fields)) = self.module.nodes[shape[1]]
-                .value
-                .and_then(|v| v.as_enum())
-            else {
-                return None;
-            };
-            let fields = fields.ids();
+            // The shape is the positional field-type list (the nominal id
+            // lives in the kind), so the element types are the fields.
+            let fields = shape;
             if fields.len() != values.len() {
                 return None;
             }
@@ -574,11 +589,50 @@ fn letter_name(i: usize) -> String {
 /// a cell unified into the universe class carries the replicated value, whose
 /// self-referential member is the canonical node — the class check covers
 /// both.
+/// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
+/// to a struct type term `[shape, kind]`, whose kind slot is such a node).
+fn is_struct_kind<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> bool {
+    module
+        .nodes
+        .get(node)
+        .and_then(|n| n.value)
+        .and_then(|v| v.as_enum())
+        .is_some_and(|v| match v {
+            LowValue::Array(kind) => kind_is_struct(module, kind.ids()),
+            _ => false,
+        })
+}
+
 fn is_universe<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> bool {
     let rep = representative(module, node);
     matches!(module.nodes[node].value, Some(value)
         if matches!(value.as_enum(), Some(LowValue::Array(array))
             if array.ids().iter().any(|&m| representative(module, m) == rep)))
+}
+
+/// Whether `kind_ids` (the element ids of a kind value) describe a struct
+/// kind: `[id, [TypeStruct, K]]`.  The nominal id heads the kind and the
+/// `TypeStruct` tag is the inner `[TypeStruct, K]` layer, so it cannot be
+/// detected the way the `[marker, K]` kinds are.
+fn kind_is_struct<V: ValueType>(module: &Module<HighProgram<V>>, kind_ids: &[NodeId]) -> bool {
+    kind_ids.len() == 2
+        && module
+            .nodes
+            .get(kind_ids[1])
+            .and_then(|n| n.value)
+            .and_then(|v| v.as_enum())
+            .is_some_and(|v| match v {
+                LowValue::Array(inner) => {
+                    let ids = inner.ids();
+                    ids.len() == 2
+                        && module
+                            .nodes
+                            .get(ids[0])
+                            .is_some_and(|n| n.value == Some(V::type_struct_marker()))
+                        && is_universe(module, ids[1])
+                }
+                _ => false,
+            })
 }
 
 // --- the caret shell ---------------------------------------------------------
@@ -823,8 +877,10 @@ mod tests {
 
     #[test]
     fn a_single_field_struct_instance_keeps_the_tuple_comma() {
+        // A single field needs no extra comma in the source (`B(1)`); the
+        // rendered value still shows the one-element tuple's comma `(1,)`.
         assert_eq!(
-            output("B = struct<Int>\nb = B((1,))\n(B, b)"),
+            output("B = struct<Int>\nb = B(1)\n(B, b)"),
             "(struct<Int>, (1,)): <TypeStruct, struct<Int>>"
         );
     }

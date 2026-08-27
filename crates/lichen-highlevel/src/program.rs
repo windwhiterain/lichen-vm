@@ -213,12 +213,29 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 let Some(LowValue::Array(kind)) = operand.as_enum() else {
                     unreachable!("IndexTypeDispatch expects a kind expression pair")
                 };
-                let marker = module.nodes[kind.ids()[0]].value;
-                let code = if marker == Some(V::tuple_type_marker()) {
+                let kind_ids = kind.ids();
+                let head = module.nodes[kind_ids[0]].value;
+                // A struct kind is `[id, [TypeStruct, K]]` — the nominal id
+                // sits in the head, so the `TypeStruct` tag is the inner
+                // layer's head, not the kind's own head (unlike tuple/array
+                // kinds, whose tag *is* the head).
+                let struct_tag = module
+                    .nodes
+                    .get(kind_ids[1])
+                    .and_then(|n| n.value)
+                    .and_then(|value| value.as_enum())
+                    .and_then(|value| match value {
+                        LowValue::Array(inner) => module
+                            .nodes
+                            .get(inner.ids()[0])
+                            .and_then(|n| n.value),
+                        _ => None,
+                    });
+                let code = if head == Some(V::tuple_type_marker()) {
                     0
-                } else if marker == Some(V::type_struct_marker()) {
+                } else if struct_tag == Some(V::type_struct_marker()) {
                     1
-                } else if marker == Some(V::array_type_marker()) {
+                } else if head == Some(V::array_type_marker()) {
                     2
                 } else {
                     3

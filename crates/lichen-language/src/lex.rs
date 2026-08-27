@@ -123,6 +123,11 @@ pub struct Token {
     /// The token's byte range in the source, half-open — the offset-based
     /// twin of `span`, for tooling (an LSP) that works in byte offsets.
     pub range: (u32, u32),
+    /// Whether whitespace (or a `--` comment) immediately precedes this
+    /// token.  The parser uses it to apply the *adjacency* rule — a `(` with
+    /// no space before it is struct instantiation, one after a space is a
+    /// function-apply argument (a paren atom).
+    pub space_before: bool,
 }
 
 impl std::fmt::Display for Token {
@@ -149,12 +154,14 @@ pub fn lex(source: &str) -> Lexed {
         col: 1,
         tokens: Vec::new(),
         errors: Vec::new(),
+        space_before: false,
     };
     lexer.run();
     lexer.tokens.push(Token {
         kind: TokenKind::Eof,
         span: (lexer.line, lexer.col),
         range: (lexer.pos as u32, lexer.pos as u32),
+        space_before: lexer.space_before,
     });
     Lexed {
         tokens: lexer.tokens,
@@ -170,9 +177,27 @@ struct Lexer<'a> {
     col: u32,
     tokens: Vec<Token>,
     errors: Vec<Diag>,
+    /// Whether trivia (space/tab/cr, or a `--` comment) preceded the next
+    /// token — set by [`Lexer::skip_trivia`], consumed by every token
+    /// emitter, and reset for the following token.
+    space_before: bool,
 }
 
 impl Lexer<'_> {
+    /// Emit a `Token` at the current position, setting its `space_before`
+    /// from the trivia-skip in the main loop.
+    fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
+        let start = self.pos;
+        self.step(len);
+        let space_before = std::mem::replace(&mut self.space_before, false);
+        self.tokens.push(Token {
+            kind,
+            span: (line, col),
+            range: (start as u32, self.pos as u32),
+            space_before,
+        });
+    }
+
     fn run(&mut self) {
         loop {
             self.skip_trivia();
@@ -229,12 +254,18 @@ impl Lexer<'_> {
     }
 
     /// Whitespace and `--` line comments.  A newline is *not* trivia: it
-    /// lexes as a `Semicolon` (see [`Lexer::run`]).
+    /// lexes as a `Semicolon` (see [`Lexer::run`]).  Sets `space_before` so
+    /// the next token knows whether trivia separated it from the previous
+    /// one.
     fn skip_trivia(&mut self) {
         loop {
             match self.bytes.get(self.pos) {
-                Some(b' ') | Some(b'\t') | Some(b'\r') => self.step(1),
+                Some(b' ') | Some(b'\t') | Some(b'\r') => {
+                    self.space_before = true;
+                    self.step(1);
+                }
                 Some(b'-') if self.bytes.get(self.pos + 1) == Some(&b'-') => {
+                    self.space_before = true;
                     while let Some(&b) = self.bytes.get(self.pos) {
                         if b == b'\n' {
                             break;
@@ -277,6 +308,7 @@ impl Lexer<'_> {
             kind: TokenKind::Int(value),
             span: (line, col),
             range: (start as u32, self.pos as u32),
+            space_before: std::mem::replace(&mut self.space_before, false),
         });
     }
 
@@ -304,16 +336,7 @@ impl Lexer<'_> {
             kind,
             span: (line, col),
             range: (start as u32, self.pos as u32),
-        });
-    }
-
-    fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
-        let start = self.pos;
-        self.step(len);
-        self.tokens.push(Token {
-            kind,
-            span: (line, col),
-            range: (start as u32, self.pos as u32),
+            space_before: std::mem::replace(&mut self.space_before, false),
         });
     }
 
@@ -342,6 +365,7 @@ impl Lexer<'_> {
             kind,
             span: (line, col),
             range: (start as u32, self.pos as u32),
+            space_before: std::mem::replace(&mut self.space_before, false),
         });
     }
 

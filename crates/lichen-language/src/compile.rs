@@ -258,22 +258,24 @@ impl Compiler {
             } => {
                 let function = self.compile_expr(function)?;
                 let argument = self.compile_expr(argument)?;
-                // An application whose callee is a struct type is
-                // instantiation, not function application: `s(1, 2)` with
-                // `s` bound to `struct<Int, Int>` wraps the tuple in the
-                // nominal type.  The callee is recognized by its IR node —
-                // the literal `struct<...>` or a name that resolved to one.
-                if matches!(self.ir[function].kind, ExprKind::TypeStruct(_)) {
-                    self.alloc(
-                        ExprKind::Instantiate {
-                            type_expr: function,
-                            value: argument,
-                        },
-                        span,
-                    )
-                } else {
-                    self.alloc(ExprKind::Apply { function, argument }, span)
-                }
+                self.alloc(ExprKind::Apply { function, argument }, span)
+            }
+            // Struct instantiation is a *syntactic* form now — `C(f1, …, fn)`
+            // with the `(` adjacent to the callee (no space).  It always wraps
+            // the field values in one positional tuple and lowers to
+            // [`ExprKind::Instantiate`]; a spaced `C (…)` is a plain apply
+            // and reaches the Apply arm above.  There is no compile-time
+            // callee-kind dispatch — the checker decides whether the callee
+            // is a struct type, and a callee that is not one fails there.
+            Expr::StructInst {
+                callee,
+                fields,
+                span,
+            } => {
+                let type_expr = self.compile_expr(callee)?;
+                let field_ids = self.compile_all(&fields)?;
+                let value = self.ir.alloc_tuple(&field_ids, Some(*span));
+                self.alloc(ExprKind::Instantiate { type_expr, value }, span)
             }
             Expr::BinOp {
                 operator,

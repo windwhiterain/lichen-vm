@@ -2,6 +2,6 @@
 A = struct<Int, Type>
 a = A(1, Int)
 B = struct<Int>
-b = B((1,))
+b = B(1)
 (A, a, a[0], a[1], B, b, b[0])
 -- output: (struct<Int, Type>, (1, Int), 1, Int, struct<Int>, (1,), 1): <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>

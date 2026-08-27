@@ -44,7 +44,10 @@ pub enum Expr {
         r#return: Box<Expr>,
         span: Span,
     },
-    /// `f x` — application.
+    /// `f x` — application.  A parenthesized argument requires a space
+    /// before the `(` (`f (x)`); a `(` adjacent to the callee is struct
+    /// instantiation (see [`Expr::StructInst`]), so function application
+    /// never uses adjacent parens.
     Apply {
         function: Box<Expr>,
         argument: Box<Expr>,
@@ -91,6 +94,17 @@ pub enum Expr {
     TypeTuple(Vec<Expr>, Span),
     /// `struct<T1, ..., Tn>` — a nominal struct type, positional fields.
     StructType(Vec<Expr>, Span),
+    /// `C(e1, ..., en)` — struct instantiation: a callee (a struct type or a
+    /// generic struct constructor) applied to a positional field list.  The
+    /// callee and the `(` are *adjacent* — no space between them — which is
+    /// the syntactic distinction from function application (see
+    /// [`Expr::Apply`]).  `n` may be zero or one (a single field needs no
+    /// trailing comma).
+    StructInst {
+        callee: Box<Expr>,
+        fields: Vec<Expr>,
+        span: Span,
+    },
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
     /// `~n e` — a shallow-marked array position (parsed only inside array
@@ -185,6 +199,7 @@ impl Expr {
             Expr::Tuple(_, s) => *s,
             Expr::TypeTuple(_, s) => *s,
             Expr::StructType(_, s) => *s,
+            Expr::StructInst { span, .. } => *span,
             Expr::Array(_, s) => *s,
             Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,

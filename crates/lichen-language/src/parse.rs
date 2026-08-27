@@ -25,7 +25,13 @@
 //! rule decides, and an array literal in argument position needs parens:
 //! `f ([1, 2])`.  Precedence (loosest → tightest): `=>` (right) → `:`
 //! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
-//! (left) → postfix `<e>` / `[e]` / atoms.  `name =>` starts a lambda only
+//! (left) → postfix `<e>` / `[e]` / `(…)` / atoms.  A `(` immediately after
+//! an expression — no space between them — is *struct instantiation*
+//! (`C(f1, …, fn)`, zero or more comma-separated fields; a single field
+//! needs no trailing comma, `C()` is a field-less instance), and it lowers
+//! to [`ExprKind::Instantiate`].  A spaced `(` is a paren atom; the same
+//! juxtaposition rule (`apply := atom atom`) makes it the argument, so there
+//! is no distinct spaced-apply form.  `name =>` starts a lambda only
 //! in prefix position, so `f x => e` is a parse error rather than
 //! `f (x => e)`; `name : T => e` (and, parens being transparent for
 //! annotations, `(name : T) => e`) is a lambda whose parameter is annotated
@@ -467,9 +473,12 @@ enum Pre {
     FatArrow(Box<Expr>, Box<Expr>),
 }
 
-/// The atoms, with their postfix forms: `e[i]` (index) and `T<e>` (array
-/// type), chained and with no whitespace rule — a bracket right after an
-/// expression is always the postfix form, application is juxtaposition.
+/// The atoms, with their postfix forms: `e[i]` (index), `T<e>` (array type),
+/// and `C(...)` (struct instantiation — a `(` directly after an expression).
+/// The bracket and angle forms are always postfix, with no whitespace rule;
+/// a paren is postfix *only when adjacent* (no space before it) — a paren
+/// after a space is a paren atom, and the expression's application rule
+/// treats it as an argument.
 fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -493,7 +502,14 @@ fn atom_parser<'a>(
     ))
     .labelled("an expression");
 
-    // The postfix forms, chained left.
+    // The postfix forms, chained left.  A `[` after an expression is always
+    // an index, a `<` always an array type.  A `(` is struct instantiation
+    // only when *adjacent* — the paren comes straight after the expression,
+    // no space between.  A spaced `(` is a paren atom and reaches the
+    // application rule as an argument, never this postfix.
+    let adjacent_paren = any::<In<'a>, E<'a>>()
+        .filter(|t: &Token| t.kind == TokenKind::LParen && !t.space_before)
+        .labelled("struct instantiation '('");
     let postfix = choice((
         token(TokenKind::LBracket)
             .ignore_then(expr.clone())
@@ -503,6 +519,12 @@ fn atom_parser<'a>(
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RAngle))
             .map(Postfix::TypeArray),
+        adjacent_paren
+            .clone()
+            .ignored()
+            .ignore_then(struct_fields(expr.clone()))
+            .then_ignore(token(TokenKind::RParen))
+            .map(Postfix::StructInst),
     ));
 
     primary
@@ -521,6 +543,11 @@ fn atom_parser<'a>(
                         length: Box::new(length),
                         span,
                     },
+                    Postfix::StructInst(fields) => Expr::StructInst {
+                        callee: Box::new(acc),
+                        fields,
+                        span,
+                    },
                 }
             })
         })
@@ -531,6 +558,33 @@ fn atom_parser<'a>(
 enum Postfix {
     Index(Expr),
     TypeArray(Expr),
+    StructInst(Vec<Expr>),
+}
+
+/// The fields of a struct instantiation: `f1, …, fn` — zero, one, or many
+/// expressions, comma-separated, with a trailing comma tolerated.  A single
+/// field needs no extra comma (`C(1)` is a one-field struct, not a grouped
+/// literal), and `C()` is a field-less struct.
+fn struct_fields<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Vec<Expr>, E<'a>> + Clone {
+    let first = expr.clone().or_not();
+    first
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(expr.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Comma).or_not())
+        .map(|((first, mut rest), _trailing)| match first {
+            Some(f0) => {
+                let mut fields = vec![f0];
+                fields.append(&mut rest);
+                fields
+            }
+            None => rest,
+        })
 }
 
 /// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple (a
@@ -790,6 +844,11 @@ fn apply_type_mode(program: Program) -> Program {
                 fields.into_iter().map(|e| expr(e, true)).collect(),
                 span,
             ),
+            Expr::StructInst { callee, fields, span } => Expr::StructInst {
+                callee: Box::new(expr(*callee, type_mode)),
+                fields: fields.into_iter().map(|e| expr(e, type_mode)).collect(),
+                span,
+            },
             Expr::Array(elements, span) => Expr::Array(
                 elements.into_iter().map(|e| expr(e, type_mode)).collect(),
                 span,
@@ -1127,6 +1186,54 @@ mod tests {
             panic!("expected a struct type")
         };
         assert!(matches!(fields[0], Expr::TypeTuple(..)));
+    }
+
+    #[test]
+    fn struct_instantiation_is_adjacent_parens() {
+        // `C(f1, f2)` — the `(` directly after the callee (no space) is
+        // struct instantiation, not a function apply.
+        let Expr::StructInst { callee, fields, .. } = parse_ok("A(1, Int)") else {
+            panic!("expected a struct instance")
+        };
+        assert!(matches!(*callee, Expr::Name(n, _) if n == "A"));
+        assert_eq!(fields.len(), 2);
+        assert!(matches!(fields[0], Expr::Int(1, _)));
+        assert!(matches!(fields[1], Expr::TypeConst(TypeConst::Int, _)));
+        // a single field needs no trailing comma.
+        let Expr::StructInst { fields, .. } = parse_ok("A(1)") else {
+            panic!("expected a struct instance")
+        };
+        assert_eq!(fields.len(), 1);
+        // a field-less struct instance parses too (the checker rejects it
+        // against a struct that has fields).
+        assert!(matches!(
+            parse_ok("A()"),
+            Expr::StructInst { fields, .. } if fields.is_empty()
+        ));
+        // a trailing comma is tolerated.
+        assert!(matches!(
+            parse_ok("A(1,)"),
+            Expr::StructInst { fields, .. } if fields.len() == 1
+        ));
+        // the callee may be an inline struct type.
+        let Expr::StructInst { callee, .. } = parse_ok("struct<Int, Int>(1, 2)") else {
+            panic!("expected a struct instance")
+        };
+        assert!(matches!(*callee, Expr::StructType(..)));
+    }
+
+    #[test]
+    fn spaced_parens_are_apply_not_struct_instantiation() {
+        // `f (1, 2)` — a space before the `(` — is a function apply whose
+        // argument is the tuple.
+        let Expr::Apply { argument, .. } = parse_ok("f (1, 2)") else {
+            panic!("expected an apply")
+        };
+        assert!(matches!(*argument, Expr::Tuple(..)));
+        // juxtaposition stays application too.
+        assert!(matches!(parse_ok("f x"), Expr::Apply { .. }));
+        // a spaced single field is an apply of the grouped value.
+        assert!(matches!(parse_ok("A (1)"), Expr::Apply { .. }));
     }
 
     #[test]
