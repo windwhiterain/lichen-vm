@@ -1,6 +1,6 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program};
+use crate::{BlockId, EvaluatedDeep, LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program};
 use lichen_utils::extend::AsEnum;
 
 /// A runtime evaluation failure — the only one today is an out-of-bounds
@@ -104,7 +104,7 @@ impl<P: Program> Module<P> {
                 let operand = match operation.operand {
                     Some(operand) => {
                         let value = self.evaluate_node_deep(operand, Some(block));
-                        if self.nodes[operand].parameterized_deep.unwrap() {
+                        if self.nodes[operand].evaluated_deep.unwrap().parameterized {
                             P::Value::from(LowValue::Parameterized)
                         } else {
                             value
@@ -175,7 +175,7 @@ impl<P: Program> Module<P> {
     ///
     /// Forcing caches concrete values inside shallow regions but does *not*
     /// upgrade their concreteness proofs: an array with a shallow mark stays
-    /// flagged unproven by [`Node::parameterized_deep`] and keeps cloning
+    /// flagged unproven by [`Node::evaluated_deep`] and keeps cloning
     /// per apply, which preserves the deep pass's laziness invariants at the
     /// cost of redundant clones.
     #[stacksafe]
@@ -257,7 +257,7 @@ impl<P: Program> Module<P> {
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
                     if array.has_shallow()
-                        || array.ids().iter().any(|&id| self.nodes[id].parameterized_deep == Some(true))
+                        || array.ids().iter().any(|&id| self.nodes[id].evaluated_deep.is_some_and(|e| e.parameterized))
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {
@@ -265,10 +265,10 @@ impl<P: Program> Module<P> {
                     // nested block release may have dropped the node by now.
                     self.nodes
                         .get(operand)
-                        .is_some_and(|node| node.parameterized_deep == Some(true))
+                        .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
                 })
             });
-        self.nodes[node].parameterized_deep = Some(parameterized);
+        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
         self.deep_depth -= 1;
         value
     }

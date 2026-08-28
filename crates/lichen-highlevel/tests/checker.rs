@@ -7,7 +7,8 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, ExprKind, IR};
-use lichen_highlevel::program::HighProgramValue;
+use lichen_highlevel::program::{HighGlobal, HighProgramValue};
+use lichen_utils::compose::AsField;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
 
@@ -1078,7 +1079,10 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         Some(HighProgramValue::TypeStruct)
     );
     // one source occurrence consumed exactly one fresh id
-    assert_eq!(b.module.global_ext.type_id_counter, 1);
+    assert_eq!(
+        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
+        1
+    );
 }
 
 #[test]
@@ -1090,7 +1094,10 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let pair = tuple(&mut ir, &[s1, s2]);
     let b = build(pair, ir);
     assert!(b.ok);
-    assert_eq!(b.module.global_ext.type_id_counter, 2);
+    assert_eq!(
+        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
+        2
+    );
     let id1 = array_ids(&b, b.ty[s1].unwrap())[0];
     let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
     assert!(matches!(
@@ -1259,7 +1266,8 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
     assert!(b.ok, "one shared occurrence is one nominal type");
     assert!(b.module.unify_errors.is_empty());
     assert_eq!(
-        b.module.global_ext.type_id_counter, 1,
+        AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
+        1,
         "one expression compiles to exactly one Fresh call"
     );
 }

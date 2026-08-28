@@ -21,4 +21,4 @@ pub mod program;
 // must be re-exported here (a downstream crate calls
 // `lichen_highlevel::extend_HighProgramValue!` to splice its own variants in).
 pub use program::__extend_shape_HighProgramValue;
-pub use program::{HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ValueType};
+pub use program::{HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ValueType};

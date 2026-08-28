@@ -1,5 +1,5 @@
 //! Node evaluation: operator execution, the cycle guard, and the
-//! visiting / parameterized markers left behind by `evaluate_node_deep`.
+//! visiting / `evaluated_deep` markers left behind by `evaluate_node_deep`.
 
 use super::*;
 
@@ -168,7 +168,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
     assert!(m.nodes.values().all(|n| !n.visiting));
 }
 #[test]
-fn parameterized_deep_marks_subtrees_with_parameters() {
+fn evaluated_deep_marks_subtrees_with_parameters() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let p = m.add_node(root, None, Some(TestValue::Parameterized));
@@ -181,14 +181,14 @@ fn parameterized_deep_marks_subtrees_with_parameters() {
 
     // The parameter node itself and everything reachable from it is flagged;
     // plain constants are not.
-    assert_eq!(m.nodes[p].parameterized_deep, Some(true));
-    assert_eq!(m.nodes[arr].parameterized_deep, Some(true));
-    assert_eq!(m.nodes[id_arr].parameterized_deep, Some(true));
-    assert_eq!(m.nodes[x].parameterized_deep, Some(false));
-    assert_eq!(m.nodes[id_p].parameterized_deep, None); // not yet evaluated
+    assert_eq!(m.nodes[p].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(m.nodes[arr].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(m.nodes[id_arr].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(m.nodes[x].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(m.nodes[id_p].evaluated_deep, None); // not yet evaluated
 
     m.evaluate_node_deep(id_p, None);
-    assert_eq!(m.nodes[id_p].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[id_p].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 }
 #[test]
 fn deep_eval_skips_shallow_positions_until_an_index_read() {
@@ -208,11 +208,11 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     assert!(matches!(value, TestValue::Array(_)));
 
     assert!(m.nodes[add].value.is_none(), "shallow position stays lazy");
-    assert_eq!(m.nodes[add].parameterized_deep, None, "never walked");
-    assert_eq!(m.nodes[three].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
+    assert_eq!(m.nodes[three].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
     assert_eq!(
-        m.nodes[arr].parameterized_deep,
-        Some(true),
+        m.nodes[arr].evaluated_deep,
+        Some(EvaluatedDeep { parameterized: true }),
         "a shallow-marked array is never proven concrete"
     );
     // A read forces the single element on demand.

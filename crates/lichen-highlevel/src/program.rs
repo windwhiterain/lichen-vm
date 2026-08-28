@@ -10,20 +10,62 @@
 use std::marker::PhantomData;
 
 use lichen_lowlevel::{
-    ArrayRef, BlockId, FunctionId, LowValue, Module, OperatorExt, Program, ValueExt,
+    ArrayRef, BlockId, FunctionId, GlobalExt, LowValue, Module, OperatorExt, Program, ValueExt,
 };
+use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-/// The highlevel's global extension state, injected into the lowlevel
-/// [`Module`]'s `global_ext` slot and threaded through the extension
-/// operators.
+/// The fresh-nominal-type-id state — one extension component of
+/// [`HighGlobalExt`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct HighGlobalExt {
+pub struct HighGlobal {
     /// The next nominal type id — [`HighProgramOperator::Fresh`] reads and
     /// increments it, so each call yields a distinct
     /// [`HighProgramValue::TypeId`].
     pub type_id_counter: usize,
 }
+impl HighGlobal {
+    /// Consume the next nominal type id: read the counter, increment it, and
+    /// return the previous value.
+    pub fn next_type_id(&mut self) -> usize {
+        let id = self.type_id_counter;
+        self.type_id_counter += 1;
+        id
+    }
+}
+
+lichen_utils::compose_ext! {
+    /// The highlevel's global extension state, injected into the lowlevel
+    /// [`Module`]'s `global_ext` slot and threaded through the extension
+    /// operators.
+    ///
+    /// It is a *tuple* host built by [`lichen_utils::compose_ext!`] over its
+    /// extension components — a downstream composes more components by adding
+    /// their types to this tuple and reads or mutates each one through
+    /// [`lichen_utils::compose::AsField`] and the component's own methods (no
+    /// per-component accessor trait).
+    ///
+    /// ```
+    /// use lichen_highlevel::program::{HighGlobal, HighGlobalExt};
+    /// use lichen_utils::compose::AsField;
+    ///
+    /// let mut ext = HighGlobalExt::default();
+    /// assert_eq!(
+    ///     AsField::<HighGlobal>::get_mut(&mut ext).next_type_id(),
+    ///     0
+    /// );
+    /// assert_eq!(
+    ///     AsField::<HighGlobal>::get_mut(&mut ext).next_type_id(),
+    ///     1
+    /// );
+    /// assert_eq!(AsField::<HighGlobal>::get(&ext).type_id_counter, 2);
+    /// ```
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct HighGlobalExt(
+        HighGlobal,
+    );
+}
+impl GlobalExt for HighGlobalExt {}
 
 // The highlevel program's value vocabulary: the lowlevel structural values
 // (spliced in from the lowlevel `LowValue` enum, so the lowlevel can
@@ -168,7 +210,7 @@ lichen_lowlevel::extend_LowOperator! {
         /// rendered.
         IndexTypeDispatch,
         /// A fresh nominal type id: each call reads and increments
-        /// [`HighGlobalExt::type_id_counter`] and returns
+        /// [`HighGlobal::next_type_id`] and returns
         /// `HighProgramValue::TypeId(n)`.  Nullary — the checker emits it
         /// with no operand, so it fires once per source occurrence and the
         /// cached value is reused wherever the struct type it tags is
@@ -243,8 +285,7 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 V::from(LowValue::USize(code))
             }
             HighProgramOperator::Fresh => {
-                let id = module.global_ext.type_id_counter;
-                module.global_ext.type_id_counter += 1;
+                let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 V::type_id_value(id)
             }
             HighProgramOperator::Add

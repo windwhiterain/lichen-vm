@@ -12,7 +12,7 @@ fn recursive_function_applies_itself_lazily() {
     // parameter), so the clone keeps the self-reference in place instead of
     // copying the function per level.
     m.evaluate_node_deep(f_node, None);
-    assert_eq!(m.nodes[f_node].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[f_node].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
 
     // f(5) = [5, f(5)]: each forced application produces exactly one new
     // level — a fresh, still-unevaluated apply clone referencing the same
@@ -72,11 +72,11 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // With no evaluation at all, the function value node's
-    // parameterized_deep stays None, so the clone rule copies it: each
+    // evaluated_deep stays None, so the clone rule copies it: each
     // recursion level carries its own fresh function clone homed on the
     // calling block.
     let (f_node, f_id) = recursive_function(&mut m);
-    assert_eq!(m.nodes[f_node].parameterized_deep, None);
+    assert_eq!(m.nodes[f_node].evaluated_deep, None);
 
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
@@ -154,15 +154,15 @@ fn fibonacci_recurses_through_index_branches() {
     // The function's own value node is concrete, so the recursion reuses
     // one FunctionId instead of cloning the function per level.
     m.evaluate_node_deep(fib_node, None);
-    assert_eq!(m.nodes[fib_node].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[fib_node].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
 
     // The definition pass terminates: with a marker condition the Index
     // arm stays lazy and never forces the recursive branch, so the body is
     // definable even though it applies itself.
     m.evaluate_node_deep(m.functions[fib_id].r#return, None);
     assert_eq!(
-        m.nodes[m.functions[fib_id].r#return].parameterized_deep,
-        Some(true)
+        m.nodes[m.functions[fib_id].r#return].evaluated_deep,
+        Some(EvaluatedDeep { parameterized: true })
     );
 
     for (n, expected) in [(0, 0), (1, 1), (2, 1), (3, 2), (5, 5), (10, 55)] {
@@ -206,7 +206,7 @@ fn countdown_definition_pass_terminates() {
     let function = finish_function(&mut m, body, ret, param, func_node);
     m.evaluate_node_deep(func_node, None); // self-ref stays in place
     m.evaluate_node_deep(ret, None); // definition pass: completes, flagged
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let zero_arg = u128_node(&mut m, root, 0);
     let call = call_node(&mut m, root, func_node, zero_arg);
@@ -294,8 +294,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     // lazy, so the cross-call is never forced.
     m.evaluate_node_deep(e_ret, None);
     m.evaluate_node_deep(o_ret, None);
-    assert_eq!(m.nodes[e_ret].parameterized_deep, Some(true));
-    assert_eq!(m.nodes[o_ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[e_ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(m.nodes[o_ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let six = u128_node(&mut m, root, 6);
     let call = call_node(&mut m, root, e_func, six);

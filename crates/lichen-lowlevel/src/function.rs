@@ -281,8 +281,8 @@ impl<P: Program> Module<P> {
         // pass could not prove concrete — flagged parameterized nodes, plus
         // nodes whose dependence was never resolved (the deep pass never ran
         // on them).  A node the deep pass proved concrete
-        // (`parameterized_deep == Some(false)`) is baked — reference it in
-        // place.  The deep pass evaluates an operation node for real even
+        // (`evaluated_deep == Some(EvaluatedDeep { parameterized: false })`)
+        // is baked — reference it in place.  The deep pass evaluates an operation node for real even
         // when it merely holds a value (a type annotation's pin is a
         // constraint, not a computation), so a concrete proof on an
         // operation node covers what the operation actually produces — no
@@ -295,19 +295,23 @@ impl<P: Program> Module<P> {
         // *containing* such a function value (a function's pair, a tuple of
         // closures): the proof cannot see through the function's body
         // either.
-        let (value, operation, parameterized_deep) = {
+        let (value, operation, evaluated_deep) = {
             let source = &self.nodes[node];
-            (source.value, source.operation, source.parameterized_deep)
+            (source.value, source.operation, source.evaluated_deep)
         };
+        // A node the deep pass proved concrete can be baked (referenced in
+        // place); one it never ran on (`None`) or flagged parameterized is
+        // cloned.
+        let proven_concrete = evaluated_deep.is_some_and(|e| !e.parameterized);
         let depends_on_parameter = node == ctx.parameter
-            || parameterized_deep != Some(false)
+            || !proven_concrete
             || value.is_some_and(|value| {
                 matches!(
                     value.as_enum(),
                     Some(LowValue::Function(function)) if function != ctx.applied
                 )
             })
-            || (parameterized_deep == Some(false)
+            || (proven_concrete
                 && self.value_contains_foreign_function(value, ctx.applied));
         if !depends_on_parameter {
             return node;
@@ -419,7 +423,7 @@ impl<P: Program> Module<P> {
 
     /// Whether `value`'s array tree contains a function value other than
     /// `applied` — a nested closure whose captures must rebind to this
-    /// call.  A concreteness proof ([`Node::parameterized_deep`]) cannot see
+    /// call.  A concreteness proof ([`Node::evaluated_deep`]) cannot see
     /// a function's body, so a proven-concrete structure that contains one
     /// must still be cloned, never referenced in place.
     fn value_contains_foreign_function(

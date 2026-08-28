@@ -3,7 +3,7 @@
 //! file, so plain `mod` declarations resolve them without `#[path]`:
 //!
 //! - `compaction` — block compaction / GC: relocation, hoisting, release
-//! - `evaluation` — operators, the cycle guard, visiting/parameterized markers
+//! - `evaluation` — operators, the cycle guard, visiting/evaluated_deep markers
 //! - `function` — `Apply` semantics, nested and higher-order functions
 //! - `recursion` — lazy recursion, definition passes, depth guards
 //! - `equality` — `unify` and the DSU equivalence classes it binds through
@@ -21,8 +21,8 @@ mod function;
 mod recursion;
 
 use lichen_lowlevel::{
-    ArrayRef, BlockId, Function, FunctionId, Handle, LowValue, Module, NodeId, Operation,
-    OperatorExt, Program, ValueExt,
+    ArrayRef, BlockId, EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowValue, Module,
+    NodeId, Operation, OperatorExt, Program, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -34,6 +34,8 @@ struct TestProgram;
 /// extension operators here (arithmetic, string ops) keep no state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 struct TestGlobalExt;
+
+impl GlobalExt for TestGlobalExt {}
 
 impl Program for TestProgram {
     type Value = TestValue;

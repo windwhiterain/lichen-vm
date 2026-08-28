@@ -62,7 +62,7 @@ fn function_call_operator_clones_array_body() {
     // The array embeds the parameter, so the definition pass (evaluating
     // the body with the marker parameter) flags it parameterized.
     m.evaluate_node_deep(ret, None);
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let arg = u128_node(&mut m, root, 10);
     let call = call_node(&mut m, root, func_node, arg);
@@ -105,7 +105,7 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     let call = call_node(&mut m, root, func_node, arg);
     let value = m.evaluate_node_deep(call, None);
     assert!(matches!(value, TestValue::Parameterized));
-    assert_eq!(m.nodes[call].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[call].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     // The body is untouched.
     assert!(m.blocks.contains_key(m.nodes[ret].block));
@@ -140,7 +140,7 @@ fn function_call_operator_recomputes_stale_definition_markers() {
         m.nodes[ret].value,
         None | Some(TestValue::Parameterized)
     ));
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     // The call clones the parameterized node unevaluated — the stale
     // marker is recomputed against the concrete argument.
@@ -167,7 +167,7 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
 
     // The definition pass resolves the body to a concrete constant.
     m.evaluate_node_deep(ret, None);
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(false));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, arg);
@@ -439,7 +439,7 @@ fn function_can_index_into_parameterized_array() {
     });
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
     m.evaluate_node_deep(ret, None); // definition pass: index of a marker stays a marker
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, f_node, arg);
@@ -473,15 +473,15 @@ fn manually_partially_evaluated_function_applies_correctly() {
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
 
     // Manually define exactly the constants; the parameter-dependent nodes
-    // keep parameterized_deep = None.
+    // keep evaluated_deep = None.
     m.evaluate_node_deep(one, None);
     m.evaluate_node_deep(two, None);
-    assert_eq!(m.nodes[one].parameterized_deep, Some(false));
-    assert_eq!(m.nodes[two].parameterized_deep, Some(false));
-    assert_eq!(m.nodes[ret].parameterized_deep, None);
-    assert_eq!(m.nodes[inner].parameterized_deep, None);
-    assert_eq!(m.nodes[inner_ops].parameterized_deep, None);
-    assert_eq!(m.nodes[ret_ops].parameterized_deep, None);
+    assert_eq!(m.nodes[one].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(m.nodes[two].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(m.nodes[ret].evaluated_deep, None);
+    assert_eq!(m.nodes[inner].evaluated_deep, None);
+    assert_eq!(m.nodes[inner_ops].evaluated_deep, None);
+    assert_eq!(m.nodes[ret_ops].evaluated_deep, None);
 
     // The apply reuses the proven constants in place and clones + remaps
     // the unevaluated chain: f(5) = (5 + 1) + 2 = 8, f(9) = 12.
@@ -518,7 +518,7 @@ fn unevaluated_function_applies_correctly() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // f(x) = Add(x, 1), with no evaluate_node / evaluate_node_deep call
-    // before applying: every body node keeps parameterized_deep = None.
+    // before applying: every body node keeps evaluated_deep = None.
     let (f_node, ret, param) = function(&mut m, |m, ret, param| {
         let one = u128_node(m, m.nodes[ret].block, 1);
         let operands = array_node(m, m.nodes[ret].block, &[param, one], None);
@@ -527,8 +527,8 @@ fn unevaluated_function_applies_correctly() {
             operand: Some(operands),
         });
     });
-    assert_eq!(m.nodes[ret].parameterized_deep, None);
-    assert_eq!(m.nodes[param].parameterized_deep, None);
+    assert_eq!(m.nodes[ret].evaluated_deep, None);
+    assert_eq!(m.nodes[param].evaluated_deep, None);
 
     // The apply clones the whole unevaluated body and resolves it against
     // the argument: f(5) = 6, f(9) = 10.
@@ -596,7 +596,7 @@ fn call_return_is_shallow_for_container_bodies() {
     )));
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
     m.evaluate_node_deep(ret, None); // definition pass flags the array parameterized
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, arg);
@@ -666,7 +666,7 @@ fn apply_clone_preserves_the_shallow_mask() {
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
     m.evaluate_node_deep(ret, None); // definition pass
-    assert_eq!(m.nodes[ret].parameterized_deep, Some(true));
+    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
 
     let arg = u128_node(&mut m, root, 10);
     let call = call_node(&mut m, root, func_node, arg);
@@ -714,7 +714,7 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
         "the shallow pattern position is not forced by the apply"
     );
     assert_eq!(
-        m.nodes[ids[1]].parameterized_deep,
+        m.nodes[ids[1]].evaluated_deep,
         None,
         "the masked position is never walked"
     );

@@ -32,9 +32,27 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     type Operator: OperatorExt<Self> + From<LowOperator> + AsEnum<LowOperator>;
     /// Program-global extension state, stored on [`Module`] and read or
     /// mutated by extension operators — the highlevel's fresh-type-id
-    /// counter, for example.
-    type GlobalExt: Debug + Copy + PartialEq + Default;
+    /// counter, for example.  A concrete `GlobalExt` is a host struct
+    /// composed of component states via [`lichen_utils::compose_ext!`], each
+    /// component reached through [`lichen_utils::compose::AsField`] and its
+    /// own inherent methods; the lowlevel only requires the marker
+    /// [`GlobalExt`] trait.
+    type GlobalExt: GlobalExt;
 }
+
+/// Program-global extension state — the marker trait that stances the
+/// `Program::GlobalExt` bound.
+///
+/// The lowlevel only ever *initialises* this state ([`Module::new`] calls
+/// `P::GlobalExt::default()`); it never copies, compares, or formats it, so a
+/// `GlobalExt` needs nothing beyond [`Default`] — `Debug`/`Copy`/`PartialEq`
+/// are not required, so the concrete state's components need not be.  The
+/// concrete state explicitly implements this marker (opt-in, no blanket impl):
+/// it is composed downstream from component states with
+/// [`lichen_utils::compose_ext!`] (which generates
+/// [`lichen_utils::compose::AsField`] accessors per component; a component's
+/// behaviour lives as its own inherent methods), then `impl GlobalExt for ..`.
+pub trait GlobalExt: Default {}
 
 /// The structural values the lowlevel itself produces and consumes — the
 /// non-extension subset of the former `Value<P>`.  A program's value type is
@@ -222,6 +240,18 @@ pub struct Function {
     pub block: BlockId,
 }
 
+/// The outcome of the deep pass ([`Module::evaluate_node_deep`],
+/// [`Module::evaluate_node_forced`]) on one node.  The deep pass records,
+/// per node, whether it ran at all and, when it ran, whether the subtree it
+/// covers is parameterized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EvaluatedDeep {
+    /// `true` when any node in self's reachable subtree has a
+    /// [`LowValue::Parameterized`] — i.e. the deep pass could not prove the
+    /// subtree concrete.
+    pub parameterized: bool,
+}
+
 #[derive(Debug)]
 pub struct Node<P: Program> {
     pub value: Option<P::Value>,
@@ -240,9 +270,13 @@ pub struct Node<P: Program> {
     pub block: BlockId,
     /// Detect circular recursion.
     pub visiting: bool,
-    /// Any node in self's reachable subtree has a [`LowValue::Parameterized`].
-    /// Is [`Some`] only if having run by [`Module::evaluate_node_deep`].   
-    pub parameterized_deep: Option<bool>,
+    /// Whether the deep pass ([`Module::evaluate_node_deep`],
+    /// [`Module::evaluate_node_forced`]) has run on this node, and what it
+    /// proved.  [`Some`] means the deep pass ran and
+    /// [`EvaluatedDeep::parameterized`] records whether any node in self's
+    /// reachable subtree has a [`LowValue::Parameterized`].  [`None`] means
+    /// it never ran, so the node's concreteness is unknown.
+    pub evaluated_deep: Option<EvaluatedDeep>,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
     pub equality: disjoint::Meta<NodeId>,
@@ -375,7 +409,7 @@ impl<P: Program> Module<P> {
             assert: None,
             block,
             visiting: false,
-            parameterized_deep: None,
+            evaluated_deep: None,
             equality: disjoint::Meta::default(),
         });
         disjoint::make_set(&mut self.nodes, node);
