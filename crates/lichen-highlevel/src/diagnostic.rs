@@ -19,7 +19,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{EvalError, LowValue, NodeId, UnifyError, is_unbound};
+use lichen_lowlevel::{ApplyError, EvalError, LowValue, NodeId, UnifyError, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
@@ -204,6 +204,19 @@ impl<'a, V: ValueType> Report<'a, V> {
     }
 
     fn error(&mut self, i: usize, err: &UnifyError<HighProgram<V>>) -> Diag<V> {
+        // An apply-time parameter-check failure: the raw unify error dropped
+        // the two top-level sides, but the apply context kept them — attribute
+        // this error to the call site with the declared parameter type and the
+        // argument's type instead of the deep conflict leaves.
+        if let Some(apply) = self
+            .build
+            .module
+            .apply_errors
+            .iter()
+            .find(|a| a.error_index == i)
+        {
+            return self.apply_error(i, apply, err);
+        }
         // The owning diary entry: the last one whose error_index <= i (one
         // unify may own a whole run of errors, e.g. elementwise).
         let entry = self.build.diary.iter().rev().find(|e| e.error_index <= i);
@@ -222,6 +235,38 @@ impl<'a, V: ValueType> Report<'a, V> {
             kind: entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime),
             a: err.a,
             b: err.b,
+            value_a: err.value_a,
+            value_b: err.value_b,
+            error_index: Some(i),
+            message,
+        }
+    }
+
+    /// An apply-time parameter-check failure, attributed to the offending
+    /// argument: the declared parameter type is the expected side, the
+    /// argument's type the found side.  The message (and the structured `a`/
+    /// `b`) are the two top-level nodes — the `Span` comes from the argument
+    /// node's side table so it points at the argument being rejected, not at
+    /// the call or the definition.  The highlevel message is debug-only (the
+    /// language crate re-renders from these fields).
+    fn apply_error(
+        &mut self,
+        i: usize,
+        apply: &ApplyError,
+        err: &UnifyError<HighProgram<V>>,
+    ) -> Diag<V> {
+        let span = self.node_spans.get(&apply.argument).copied();
+        let kind = DiagKind::Runtime;
+        let message = format!(
+            "expected {}, found {}",
+            self.print_type(apply.parameter_type),
+            self.print_type(apply.argument_type)
+        );
+        Diag {
+            span,
+            kind,
+            a: apply.parameter_type,
+            b: apply.argument_type,
             value_a: err.value_a,
             value_b: err.value_b,
             error_index: Some(i),
@@ -327,20 +372,25 @@ impl<'a, V: ValueType> Report<'a, V> {
         &mut self,
         root: NodeId,
         name: &str,
-        seen: &mut HashSet<Span>,
+        seen: &mut HashSet<String>,
         out: &mut Vec<String>,
     ) {
         for member in disjoint::members(&self.build.module.nodes, self.rep(root)) {
             if let Some(span) = self.node_spans.get(&member).copied()
                 && let Some(value) = self.build.module.nodes[member].value
                 && !is_unbound(Some(value))
-                && seen.insert(span)
             {
-                out.push(format!(
+                // Dedup by the rendered text, not the span: a class often has
+                // several members on one source line rendering the same type,
+                // and reporting each repeats the same "?a is fixed to … at N".
+                let line = format!(
                     "{name} is fixed to {} at line {}",
                     self.print_type(member),
                     span.0
-                ));
+                );
+                if seen.insert(line.clone()) {
+                    out.push(line);
+                }
             }
         }
     }

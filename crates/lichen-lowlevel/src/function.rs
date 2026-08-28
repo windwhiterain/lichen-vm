@@ -6,6 +6,25 @@ use crate::{ArrayRef, BlockId, Function, FunctionId, LowValue, Module, NodeId, O
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
+/// The context of a failed apply-time parameter check: the declaration the
+/// argument had to satisfy.  `parameter_type` is the applied function's
+/// declared (template) parameter-type node, `argument_type` the argument's
+/// own type node — the two top-level sides of the failing `unify`, which the
+/// raw [`UnifyError`] (deep conflict leaves) discards.  `argument` is the
+/// argument's pair node, whose source span places the diagnostic on the
+/// offending argument (not the whole call, not the definition).  `error_index`
+/// is the index into [`Module::unify_errors`] of the first error this
+/// parameter check produced — the key back to it for the diagnostics,
+/// mirroring the highlevel diary.
+#[derive(Debug, Clone, Copy)]
+pub struct ApplyError {
+    pub function: FunctionId,
+    pub parameter_type: NodeId,
+    pub argument_type: NodeId,
+    pub argument: NodeId,
+    pub error_index: usize,
+}
+
 /// The fixed context of one clone pass: where the clones land, the
 /// template's membership set, and the running node-id remap (template node
 /// to its clone).
@@ -132,7 +151,38 @@ impl<P: Program> Module<P> {
             // instead of unbound slots; positions the pattern treats as
             // opaque stay lazy.
             self.evaluate_pattern_argument(cloned_param, argument, block);
+            let pre_unify_errors = self.unify_errors.len();
             self.unify(cloned_param, argument);
+            // A failed parameter check: the argument does not fit the applied
+            // function's declared parameter type.  Record the apply context
+            // for attribution (the raw UnifyError leaves drop the two
+            // top-level sides), then stop — evaluating the body under a
+            // mismatched argument is meaningless and may well panic (e.g. an
+            // `Index` over a non-array value).  The entries the unify just
+            // produced stay in `unify_errors`; the caller reports them with
+            // this context.  Deduplicated by apply node, so a later re-read
+            // of the same apply does not re-record it.
+            if self.unify_errors.len() > pre_unify_errors {
+                let parameter_type = self
+                    .array_ids(parameter)
+                    .and_then(|ids| ids.get(1).copied())
+                    .unwrap_or(parameter);
+                let argument_type = self
+                    .array_ids(argument)
+                    .and_then(|ids| ids.get(1).copied())
+                    .unwrap_or(argument);
+                if !self.apply_errors.iter().any(|e| e.argument == argument) {
+                    self.apply_errors.push(ApplyError {
+                        function,
+                        parameter_type,
+                        argument_type,
+                        argument,
+                        error_index: pre_unify_errors,
+                    });
+                }
+                self.apply_depth -= 1;
+                return P::Value::from(LowValue::Parameterized);
+            }
         }
         let result = self.evaluate_node(applied, Some(block));
         self.apply_depth -= 1;

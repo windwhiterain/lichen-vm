@@ -848,6 +848,26 @@ fn applying_a_non_function_is_a_guard_error() {
 }
 
 #[test]
+fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
+    // g (5) where g declares a tuple parameter: the lowlevel apply rejects
+    // the argument at the parameter check (no longer panicking on the body's
+    // `Index` over a non-array), and the diagnostic points at the argument,
+    // the declared parameter type as the expected side.  The highlevel
+    // `check.message` is raw ([[TypeInt, TypeInt], TypeTuple]); the language
+    // layer renders the pretty `<Int, Int>` spellings.
+    let d = diags("g = (x : <Int, Int>) => x[0]\ng (5)");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].span, Some((2, 4)), "the caret is on the argument `5`");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Runtime);
+    assert!(
+        d[0].message.contains("expected <Int, Int>, found Int"),
+        "{}",
+        d[0].message
+    );
+}
+
+#[test]
 fn indexing_a_function_is_an_index_target_error() {
     // `a[0]` where `a` is a bound function — a dependent selector over the
     // heterogeneous tuple `(1, Int)` — is not an index of the function

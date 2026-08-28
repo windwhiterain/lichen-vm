@@ -766,20 +766,21 @@ fn flow_side(
     printer: &mut TypePrinter,
     root: NodeId,
     name: &str,
-    seen: &mut HashSet<Span>,
+    seen: &mut HashSet<String>,
     out: &mut Vec<String>,
 ) {
     for member in disjoint::members(&build.module.nodes, representative(&build.module, root)) {
         if let Some(span) = node_spans.get(&member).copied()
             && let Some(value) = build.module.nodes[member].value
             && !is_unbound(Some(value))
-            && seen.insert(span)
         {
-            out.push(format!(
-                "{name} is fixed to {} at line {}",
-                printer.node(member),
-                span.0
-            ));
+            // Dedup by the rendered text, not the span: a class often has
+            // several members on one source line rendering the same type, and
+            // reporting each would repeat the same "?a is fixed to … at line N".
+            let line = format!("{name} is fixed to {} at line {}", printer.node(member), span.0);
+            if seen.insert(line.clone()) {
+                out.push(line);
+            }
         }
     }
 }
@@ -831,13 +832,13 @@ mod tests {
     #[test]
     fn an_array_element_conflict_renders_unbound_arrow_cells() {
         // [1, x => x] — the found side is the lambda's arrow shape with its
-        // two unbound cells sharing one name.  (The `?c` line appears twice,
-        // exactly as in the raw highlevel rendering: two members of the Int
-        // class at different columns both render the same line.)
+        // two unbound cells sharing one name.  (The `?c` line appears once:
+        // two members of the Int class on one line render the same text, and
+        // the flow dedups by rendered text rather than by span.)
         let report = crate::compile("[1, x => x]");
         assert_eq!(
             report.diagnostics[0].message,
-            "expected Int, found ?a -> ?a\n  ?b is fixed to ?a -> ?a at line 1\n  ?c is fixed to Int at line 1\n  ?c is fixed to Int at line 1"
+            "expected Int, found ?a -> ?a\n  ?b is fixed to ?a -> ?a at line 1\n  ?c is fixed to Int at line 1"
         );
     }
 

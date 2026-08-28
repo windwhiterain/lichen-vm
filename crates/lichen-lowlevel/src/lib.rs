@@ -9,6 +9,7 @@ use lichen_utils::extend::AsEnum;
 pub use crate::assert::AssertError;
 pub use crate::equality::UnifyError;
 pub use crate::evaluation::EvalError;
+pub use crate::function::ApplyError;
 
 mod assert;
 mod equality;
@@ -287,6 +288,13 @@ pub struct Module<P: Program> {
     /// parameter) is not triggered and records nothing.  Same append-only,
     /// never-cleared contract as [`Self::unify_errors`].
     pub assert_errors: Vec<AssertError<P>>,
+    /// Failed apply-time parameter checks: the context of each one (the
+    /// declared parameter type, the argument type, and the apply node) so the
+    /// highlevel can attribute the matching [`Self::unify_errors`] entries to
+    /// the call site instead of the deep conflict leaves.  One entry per
+    /// failed `function_apply`; the raw [`UnifyError`] entries it produced
+    /// stay in [`Self::unify_errors`] alongside it.
+    pub apply_errors: Vec<ApplyError>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
@@ -320,6 +328,7 @@ impl<P: Program> Module<P> {
             eval_errors: Vec::new(),
             asserts: Vec::new(),
             assert_errors: Vec::new(),
+            apply_errors: Vec::new(),
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             apply_total: 0,
