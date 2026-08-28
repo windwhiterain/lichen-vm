@@ -29,11 +29,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_highlevel::checker::Build;
-use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind, DiaryEntry};
-use lichen_highlevel::ir::Span;
+use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, HighProgramValue, ValueType};
-use lichen_lowlevel::{LowValue, Module, NodeId, is_unbound};
+use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 
 use crate::diag::Diag;
@@ -87,6 +85,11 @@ pub struct TypePrinter<'a, V: ValueType = HighProgramValue> {
     /// vocabulary does not know renders.  `None` (the base vocabulary) or a
     /// hook returning `None` for a value leaves it `?`.
     render_ext: Option<&'a dyn Fn(&V) -> Option<String>>,
+    /// Render a struct type's nominal id as `struct<…>#n` — on for the
+    /// diagnostic printer (two structs with the same field shape are
+    /// distinguishable), off for the value/type output path (a single value's
+    /// type needs no id noise).
+    show_struct_id: bool,
 }
 
 impl<'a, V: ValueType> TypePrinter<'a, V> {
@@ -125,7 +128,14 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             next: 0,
             path: Vec::new(),
             render_ext,
+            show_struct_id: false,
         }
+    }
+
+    /// Turn the nominal-id suffix on — the diagnostic printer needs it so two
+    /// structs with the same field shape stay distinguishable.
+    pub fn show_struct_ids(&mut self) {
+        self.show_struct_id = true;
     }
 
     /// Render a type node; an unbound cell renders as its class name.
@@ -215,14 +225,21 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         // A struct type: `[shape, [id, [TypeStruct, K]]]` — the nominal id
         // heads the kind and the `TypeStruct` tag is the inner
         // `[TypeStruct, K]` layer, so it is detected beside the `[marker, K]`
-        // compound kinds.
+        // compound kinds.  The id renders as `#n` so two structs with the
+        // same field shape stay distinguishable (their nominal types differ).
         if elements.len() == 2
             && let Some(kind) = self.module.nodes[elements[1]].value
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             && kind_is_struct(self.module, kind.ids())
         {
             let fields = self.fields(elements[0]);
-            return format!("struct<{}>", fields.join(", "));
+            let id = self.module.nodes[kind.ids()[0]]
+                .value
+                .and_then(|v| v.type_id());
+            return match (self.show_struct_id, id) {
+                (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
+                _ => format!("struct<{}>", fields.join(", ")),
+            };
         }
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
@@ -668,29 +685,17 @@ pub fn render_all(source: &str, diags: &[Diag]) -> String {
 
 // --- the pretty checker message ----------------------------------------------
 // Re-renders the highlevel's raw facts in the CLI's vocabulary: the wording
-// per kind, then the `?a` flow lines.  One TypePrinter drives the whole
-// message, so a class keeps a single `?a` name across the main line and the
-// flow.
+// per kind.  One TypePrinter drives the whole message (and a whole report),
+// so a class keeps a single `?a` name; it must carry the checker's arrow
+// registry.  The `?a` journey is gone — every expression's type is queryable,
+// so the user inspects an expr's type instead of reading a source trace.
 
 /// Re-render a checker diagnostic's message with the shared pretty printer,
 /// mirroring the highlevel's raw rendering ([`liche_highlevel::diagnostic`])
-/// line for line but in the language's own type syntax.  `printer` is shared
-/// across a whole report, so a class keeps a single `?a` name across
-/// diagnostics; it must carry the checker's arrow registry.  `node_spans` is
-/// the raw node → span table (`Build::node_spans`), needed for the flow
-/// lines' line numbers.
-pub fn checker_message(
-    build: &Build,
-    node_spans: &HashMap<NodeId, Span>,
-    printer: &mut TypePrinter,
-    d: &CheckerDiag,
-) -> String {
-    // The owning diary entry: the last one whose error_index <= ours (one
-    // unify may own a whole run of errors, e.g. elementwise).
-    let entry = d
-        .error_index
-        .and_then(|i| build.diary.iter().rev().find(|e| e.error_index <= i));
-    let mut message = match d.kind {
+/// but in the language's own type syntax.  `printer` is shared across a whole
+/// report, so a class keeps a single `?a` name across diagnostics.
+pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag) -> String {
+    match d.kind {
         DiagKind::Annotation | DiagKind::ArrayElement => format!(
             "expected {}, found {}",
             printer.node(d.b),
@@ -717,70 +722,7 @@ pub fn checker_message(
             else {
                 return "index out of bounds".to_string();
             };
-            return format!("index {index} out of bounds (array length {length})");
-        }
-    };
-    let flow = flow(build, node_spans, printer, entry, d);
-    if !flow.is_empty() {
-        message.push_str("\n  ");
-        message.push_str(&flow.join("\n  "));
-    }
-    message
-}
-
-/// The `?a`-journey: which members fixed either side of the conflict, and to
-/// what.  The conflicting classes (the markers where the merge failed) are
-/// walked first; the diary-attributed top-level unified nodes are hunted too
-/// — e.g. the expected side of `5 : Type` is the universe `K` itself.
-fn flow(
-    build: &Build,
-    node_spans: &HashMap<NodeId, Span>,
-    printer: &mut TypePrinter,
-    entry: Option<&DiaryEntry>,
-    d: &CheckerDiag,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut seen = HashSet::new();
-    let name_a = printer.class_name(d.a);
-    let name_b = printer.class_name(d.b);
-    flow_side(
-        build, node_spans, printer, d.a, &name_a, &mut seen, &mut out,
-    );
-    flow_side(
-        build, node_spans, printer, d.b, &name_b, &mut seen, &mut out,
-    );
-    if let Some(entry) = entry {
-        flow_side(
-            build, node_spans, printer, entry.a, &name_a, &mut seen, &mut out,
-        );
-        flow_side(
-            build, node_spans, printer, entry.b, &name_b, &mut seen, &mut out,
-        );
-    }
-    out
-}
-
-fn flow_side(
-    build: &Build,
-    node_spans: &HashMap<NodeId, Span>,
-    printer: &mut TypePrinter,
-    root: NodeId,
-    name: &str,
-    seen: &mut HashSet<String>,
-    out: &mut Vec<String>,
-) {
-    for member in disjoint::members(&build.module.nodes, representative(&build.module, root)) {
-        if let Some(span) = node_spans.get(&member).copied()
-            && let Some(value) = build.module.nodes[member].value
-            && !is_unbound(Some(value))
-        {
-            // Dedup by the rendered text, not the span: a class often has
-            // several members on one source line rendering the same type, and
-            // reporting each would repeat the same "?a is fixed to … at line N".
-            let line = format!("{name} is fixed to {} at line {}", printer.node(member), span.0);
-            if seen.insert(line.clone()) {
-                out.push(line);
-            }
+            format!("index {index} out of bounds (array length {length})")
         }
     }
 }
@@ -821,36 +763,36 @@ mod tests {
     fn a_checker_message_uses_the_cli_type_syntax() {
         // 5 : Int -> Int — the found type is Int, the expected the arrow
         // type: the same spellings the CLI prints for a program's output,
-        // not the raw `TypeInt → TypeInt`.
+        // not the raw `TypeInt → TypeInt`.  No `?a` journey line — the user
+        // inspects the expression's type directly.
         let report = crate::compile("5 : Int -> Int");
         assert_eq!(
             report.diagnostics[0].message,
-            "expected Int -> Int, found Int\n  ?a is fixed to Int at line 1\n  ?b is fixed to Int -> Int at line 1"
+            "expected Int -> Int, found Int"
         );
     }
 
     #[test]
     fn an_array_element_conflict_renders_unbound_arrow_cells() {
         // [1, x => x] — the found side is the lambda's arrow shape with its
-        // two unbound cells sharing one name.  (The `?c` line appears once:
-        // two members of the Int class on one line render the same text, and
-        // the flow dedups by rendered text rather than by span.)
+        // two unbound cells sharing one name.  No `?a` journey line.
         let report = crate::compile("[1, x => x]");
         assert_eq!(
             report.diagnostics[0].message,
-            "expected Int, found ?a -> ?a\n  ?b is fixed to ?a -> ?a at line 1\n  ?c is fixed to Int at line 1"
+            "expected Int, found ?a -> ?a"
         );
     }
 
     #[test]
     fn a_struct_conflict_keeps_the_nominal_ids() {
-        // Two source occurrences are different nominal types, and the ids
-        // stay visible even in the pretty rendering.
+        // Two source occurrences are different nominal types.  The message
+        // renders each side's full struct type *with its nominal id*
+        // (`struct<Int, Int>#0` vs `#1`), so the two structs stay
+        // distinguishable even though their field shapes match.
         let report =
             crate::compile("s1 = struct<Int, Int>; s2 = struct<Int, Int>; [s1(1, 2), s2(1, 2)]");
         let message = &report.diagnostics[0].message;
-        assert!(message.contains("TypeId("), "{}", message);
-        assert!(message.contains("struct<Int, Int>"), "{}", message);
+        assert!(message.contains("struct<Int, Int>#"), "{}", message);
     }
 
     // --- the type-chain-driven value rendering ------------------------------

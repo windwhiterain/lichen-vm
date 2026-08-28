@@ -221,20 +221,29 @@ impl<'a, V: ValueType> Report<'a, V> {
         // unify may own a whole run of errors, e.g. elementwise).
         let entry = self.build.diary.iter().rev().find(|e| e.error_index <= i);
         let span = entry.and_then(|e| e.span).or_else(|| self.best_span(err));
-        let mut message = match entry {
-            Some(entry) => self.checker_error(entry, err),
+        // `a`/`b` are the *source-meaningful* sides — a diary-attributed
+        // check's top-level operands (an expression's type, an annotation's
+        // type), so the message reads through the source expr's type chain
+        // (the full `struct<…>` shape) rather than from the deep conflict
+        // leaves the unify recorded.  A nominal-id mismatch (`TypeId(0)` vs
+        // `TypeId(1)`) is a lowlevel symptom; it surfaces here as the two
+        // `struct<…>` types whose chains led to it.  `value_a`/`value_b` stay
+        // the raw conflict-class snapshots (`err.*`), for tooling that wants
+        // the actual mismatching leaves.  For an unattributed runtime error
+        // (no diary entry) both fall back to `err.*`.
+        let (a, b) = match entry {
+            Some(entry) => (entry.a, entry.b),
+            None => (err.a, err.b),
+        };
+        let message = match entry {
+            Some(entry) => self.checker_error(entry, a, b),
             None => self.runtime_error(err),
         };
-        let flow = self.flow(entry, err);
-        if !flow.is_empty() {
-            message.push_str("\n  ");
-            message.push_str(&flow.join("\n  "));
-        }
         Diag {
             span,
             kind: entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime),
-            a: err.a,
-            b: err.b,
+            a,
+            b,
             value_a: err.value_a,
             value_b: err.value_b,
             error_index: Some(i),
@@ -245,17 +254,25 @@ impl<'a, V: ValueType> Report<'a, V> {
     /// An apply-time parameter-check failure, attributed to the offending
     /// argument: the declared parameter type is the expected side, the
     /// argument's type the found side.  The message (and the structured `a`/
-    /// `b`) are the two top-level nodes — the `Span` comes from the argument
-    /// node's side table so it points at the argument being rejected, not at
-    /// the call or the definition.  The highlevel message is debug-only (the
-    /// language crate re-renders from these fields).
+    /// `b`) are the two top-level nodes.  The `Span` comes from the argument
+    /// *edge* (`Build::apply_edges`), not from a node lookup — so it points at
+    /// the argument being rejected even when the argument node is shared (e.g.
+    /// a type constant whose term is reused).  Falls back to the argument
+    /// node's span for a hand-built or cloned apply with no recorded edge.
+    /// The highlevel message is debug-only (the language crate re-renders
+    /// from these fields).
     fn apply_error(
         &mut self,
         i: usize,
         apply: &ApplyError,
         err: &UnifyError<HighProgram<V>>,
     ) -> Diag<V> {
-        let span = self.node_spans.get(&apply.argument).copied();
+        let span = self
+            .build
+            .apply_edges
+            .get(&apply.apply_node)
+            .and_then(|edge| edge.argument_span)
+            .or_else(|| self.node_spans.get(&apply.argument).copied());
         let kind = DiagKind::Runtime;
         let message = format!(
             "expected {}, found {}",
@@ -274,28 +291,28 @@ impl<'a, V: ValueType> Report<'a, V> {
         }
     }
 
-    fn checker_error(&mut self, entry: &DiaryEntry, err: &UnifyError<HighProgram<V>>) -> String {
-        // The message renders the *conflicting* classes (err.a/err.b — for an
-        // elementwise failure these are the elements that clashed, not the
-        // top-level unified nodes); the diary entry supplies the wording and
-        // direction.  a is always the found side, b the expected side.
+    fn checker_error(&mut self, entry: &DiaryEntry, a: NodeId, b: NodeId) -> String {
+        // The message renders the diary's top-level sides — `a` is the found
+        // side, `b` the expected — so it reads through the source expr's type
+        // chain (the full `struct<…>` shape, an arrow's `_ -> _`), not the raw
+        // deep conflict leaves.  The wording and direction come from the kind.
         match entry.kind {
             DiagKind::Annotation => format!(
                 "expected {}, found {}",
-                self.print_type(err.b),
-                self.print_type(err.a)
+                self.print_type(b),
+                self.print_type(a)
             ),
-            DiagKind::Guard => format!("expected a function, found {}", self.print_type(err.a)),
+            DiagKind::Guard => format!("expected a function, found {}", self.print_type(a)),
             DiagKind::IndexTarget => format!(
                 "expected a tuple, array, or struct type, found {}",
-                self.print_type(err.a)
+                self.print_type(a)
             ),
             DiagKind::ArrayElement => format!(
                 "expected {}, found {}",
-                self.print_type(err.b),
-                self.print_type(err.a)
+                self.print_type(b),
+                self.print_type(a)
             ),
-            DiagKind::BinOp => format!("expected Int, found {}", self.print_type(err.a)),
+            DiagKind::BinOp => format!("expected Int, found {}", self.print_type(a)),
             // Diary entries are checker-issued unifies only — runtime
             // failures are rendered elsewhere.
             DiagKind::Runtime | DiagKind::IndexOutOfBounds => {
@@ -342,56 +359,6 @@ impl<'a, V: ValueType> Report<'a, V> {
                 err.index_value, err.length
             ),
             error_index: None,
-        }
-    }
-
-    /// The HM-loc-style journey: which checker-known members fixed either
-    /// side of the conflict, and to what.  The conflicting classes (the
-    /// markers where the merge failed) are walked first; for a
-    /// diary-attributed check the top-level unified nodes are hunted too —
-    /// e.g. the expected side of `5 : Type` is the universe `K` itself.
-    fn flow(
-        &mut self,
-        entry: Option<&DiaryEntry>,
-        err: &UnifyError<HighProgram<V>>,
-    ) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut seen = HashSet::new();
-        let name_a = self.name_of(self.rep(err.a));
-        let name_b = self.name_of(self.rep(err.b));
-        self.flow_side(err.a, &name_a, &mut seen, &mut out);
-        self.flow_side(err.b, &name_b, &mut seen, &mut out);
-        if let Some(entry) = entry {
-            self.flow_side(entry.a, &name_a, &mut seen, &mut out);
-            self.flow_side(entry.b, &name_b, &mut seen, &mut out);
-        }
-        out
-    }
-
-    fn flow_side(
-        &mut self,
-        root: NodeId,
-        name: &str,
-        seen: &mut HashSet<String>,
-        out: &mut Vec<String>,
-    ) {
-        for member in disjoint::members(&self.build.module.nodes, self.rep(root)) {
-            if let Some(span) = self.node_spans.get(&member).copied()
-                && let Some(value) = self.build.module.nodes[member].value
-                && !is_unbound(Some(value))
-            {
-                // Dedup by the rendered text, not the span: a class often has
-                // several members on one source line rendering the same type,
-                // and reporting each repeats the same "?a is fixed to … at N".
-                let line = format!(
-                    "{name} is fixed to {} at line {}",
-                    self.print_type(member),
-                    span.0
-                );
-                if seen.insert(line.clone()) {
-                    out.push(line);
-                }
-            }
         }
     }
 

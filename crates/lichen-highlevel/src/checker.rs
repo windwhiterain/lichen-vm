@@ -83,6 +83,10 @@ pub struct Checker<V: ValueType> {
     /// The arrow nodes built by [`Checker::check_lam`] — the type printer
     /// renders these `[param, body]` shapes as `param → body`.
     arrows: HashSet<NodeId>,
+    /// The apply edges, keyed by apply op node — the argument structure the
+    /// diagnostics use to attribute a runtime parameter-check failure to the
+    /// argument's source span (see [`ApplyEdge`]).
+    apply_edges: HashMap<NodeId, ApplyEdge>,
     /// The value nodes of recursive bindings' functions, collected by
     /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates them before
     /// the definition pass (proving them concrete), so a recursive reference
@@ -98,6 +102,20 @@ pub struct Checker<V: ValueType> {
     int_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
     type_expr: NodeId,
+}
+
+/// The highlevel structure of one application's argument edge, recorded by
+/// [`Checker::check_app`] when it wires the apply.  A runtime parameter-check
+/// failure is attributed to the *edge* between the function's parameter and
+/// the argument — keyed by the apply op node in [`Build::apply_edges`] — not
+/// to a shared node, so the argument's own source span stays reachable even
+/// when the argument node is reused (`Int`'s term is the shared int type).
+#[derive(Clone, Copy, Debug)]
+pub struct ApplyEdge {
+    /// The source span of the argument expression — the caret target.
+    pub argument_span: Option<Span>,
+    /// The source span of the whole apply (the call site) — context.
+    pub apply_span: Option<Span>,
 }
 
 /// The result of building a program: the compiled Module plus the checker's
@@ -124,6 +142,9 @@ pub struct Build<V: ValueType = HighProgramValue> {
     pub diary: Vec<DiaryEntry>,
     /// Arrow nodes; read by the diagnostics.
     pub arrows: HashSet<NodeId>,
+    /// The apply edges keyed by apply op node (see [`ApplyEdge`]) — the
+    /// argument structure for attributing a runtime parameter-check failure.
+    pub apply_edges: HashMap<NodeId, ApplyEdge>,
     pub ok: bool,
 }
 
@@ -162,6 +183,7 @@ impl<V: ValueType> Checker<V> {
             ty: vec![None; n],
             diary: Vec::new(),
             arrows: HashSet::new(),
+            apply_edges: HashMap::new(),
             recursive_func_nodes: Vec::new(),
             int_marker: NodeId::default(),
             type_marker: NodeId::default(),
@@ -261,6 +283,7 @@ impl<V: ValueType> Checker<V> {
             type_expr: checker.type_expr,
             diary: checker.diary,
             arrows: checker.arrows,
+            apply_edges: checker.apply_edges,
             ok,
         }
     }
@@ -889,6 +912,20 @@ impl<V: ValueType> Checker<V> {
             self.current_block,
             HighProgramOperator::Apply,
             Some(operands),
+        );
+        // Record the argument edge: the checker is the only place that knows
+        // this application's argument structure (its expression's source
+        // span), and the *edge* (this apply op node -> the argument) is unique
+        // per application even when the argument node itself is shared — so a
+        // runtime parameter-check failure can be attributed to the argument's
+        // span regardless of node sharing.  The lowlevel records only the
+        // apply node on failure; the diagnostics read this edge.
+        self.apply_edges.insert(
+            node,
+            ApplyEdge {
+                argument_span: self.ir[argument].span,
+                apply_span: self.ir[e].span,
+            },
         );
         self.term[e] = Some(node);
         self.val[e] = None;

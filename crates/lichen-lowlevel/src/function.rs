@@ -11,17 +11,20 @@ use lichen_utils::extend::AsEnum;
 /// declared (template) parameter-type node, `argument_type` the argument's
 /// own type node — the two top-level sides of the failing `unify`, which the
 /// raw [`UnifyError`] (deep conflict leaves) discards.  `argument` is the
-/// argument's pair node, whose source span places the diagnostic on the
-/// offending argument (not the whole call, not the definition).  `error_index`
-/// is the index into [`Module::unify_errors`] of the first error this
-/// parameter check produced — the key back to it for the diagnostics,
-/// mirroring the highlevel diary.
+/// argument's pair node (fallback span source), `apply_node` the apply
+/// operation node — the identity of the *edge* whose highlevel structure the
+/// checker recorded (`Build::apply_edges`), keyed by it, so a diagnosis can
+/// reach the argument's source span even when the argument node is shared.
+/// `error_index` is the index into [`Module::unify_errors`] of the first
+/// error this parameter check produced — the key back to it for the
+/// diagnostics, mirroring the highlevel diary.
 #[derive(Debug, Clone, Copy)]
 pub struct ApplyError {
     pub function: FunctionId,
     pub parameter_type: NodeId,
     pub argument_type: NodeId,
     pub argument: NodeId,
+    pub apply_node: NodeId,
     pub error_index: usize,
 }
 
@@ -171,12 +174,13 @@ impl<P: Program> Module<P> {
                     .array_ids(argument)
                     .and_then(|ids| ids.get(1).copied())
                     .unwrap_or(argument);
-                if !self.apply_errors.iter().any(|e| e.argument == argument) {
+                if !self.apply_errors.iter().any(|e| e.apply_node == node) {
                     self.apply_errors.push(ApplyError {
                         function,
                         parameter_type,
                         argument_type,
                         argument,
+                        apply_node: node,
                         error_index: pre_unify_errors,
                     });
                 }

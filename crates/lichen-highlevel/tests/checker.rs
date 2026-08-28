@@ -350,15 +350,14 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
     );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(3)));
-    // the found side is the int type expression `[int, Type]`, unified into
-    // the shared parameter cell of the identity lambda
+    // The found side is the arrow pair `[shape, [FunctionType, K]]`; its
+    // inner shape is the arrow the checker registered.
     let found = array_ids(&b, diags[0].a);
     assert_eq!(found.len(), 2);
-    assert!(matches!(
-        b.module.nodes[found[0]].value,
-        Some(HighProgramValue::TypeInt)
-    ));
-    assert_eq!(found[1], b.type_expr);
+    assert!(
+        b.arrows.contains(&found[0]),
+        "the found side is the arrow shape"
+    );
 }
 
 #[test]
@@ -732,8 +731,11 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeType));
+    // The found side is the arrow *pair* (`[shape, [FunctionType, K]]`); its
+    // inner shape is the arrow the checker registered.
+    let found_shape = array_ids(&b, diags[0].a)[0];
     assert!(
-        b.arrows.contains(&diags[0].a),
+        b.arrows.contains(&found_shape),
         "the found side is the arrow shape"
     );
     assert!(matches!(diags[0].value_a, Some(HighProgramValue::Array(_))));
@@ -813,10 +815,10 @@ fn tuple_length_mismatch_reports_both_sides() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    // the length mismatch: the found tuple type has two elements, the
-    // expected one
-    assert_eq!(array_ids(&b, diags[0].a).len(), 2);
-    assert_eq!(array_ids(&b, diags[0].b).len(), 1);
+    // The length mismatch: `a`/`b` are the full type pairs — their *shapes*
+    // (element 0) are the positional element-type lists, two elements vs one.
+    assert_eq!(array_ids(&b, array_ids(&b, diags[0].a)[0]).len(), 2);
+    assert_eq!(array_ids(&b, array_ids(&b, diags[0].b)[0]).len(), 1);
 }
 
 // --- call result annotations are lazy --------------------------------------

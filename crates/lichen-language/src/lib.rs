@@ -61,19 +61,22 @@ pub fn compile(source: &str) -> Report {
         };
     };
     let build = Checker::build(ir);
-    // The pretty rendering is shared across the whole report: the
-    // raw node → span table (the flow lines' line numbers) and one
-    // type printer, so a class keeps one `?a` name across
-    // diagnostics.
-    let node_spans = build.node_spans();
+    // The pretty rendering is shared across the whole report: one type
+    // printer, so a class keeps one `?a` name across diagnostics.  The
+    // message carries no `?a` journey — the user inspects an expression's
+    // type directly rather than reading a source trace.
     let mut printer = crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
+    // The diagnostic printer shows a struct's nominal id (`struct<…>#n`) so
+    // two structs with the same field shape stay distinguishable in a
+    // conflict; the value/type output printer leaves it off.
+    printer.show_struct_ids();
     diagnostics.extend(
         build
             .diagnostics()
             .into_iter()
             .map(|d| Diag {
                 span: d.span,
-                message: crate::render::checker_message(&build, &node_spans, &mut printer, &d),
+                message: crate::render::checker_message(&mut printer, &d),
                 stage: Stage::Check,
                 check: Some(Box::new(d)),
             })
