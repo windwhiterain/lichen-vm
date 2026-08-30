@@ -19,13 +19,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{ApplyError, EvalError, LowValue, NodeId, UnifyError, is_unbound};
+use lichen_lowlevel::{ApplyError, EvalError, LowOperator, LowValue, NodeId, UnifyError, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    program::{HighProgram, HighProgramOperator, HighProgramValue, ValueType},
+    program::{HighProgram, HighProgramOperator, HighProgramValue, TypeOperator, ValueType},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
@@ -163,9 +163,9 @@ impl<V: ValueType> Build<V> {
         if node == self.type_expr {
             return; // the shared universe — do not leak its span to its elements
         }
-        if let Some(ids) = self.module.array_ids(node) {
-            for &id in ids {
-                self.record_span(id, span, map, visited);
+        if let Some(items) = self.module.array_items(node) {
+            for item in items {
+                self.record_span(item.node, span, map, visited);
             }
         }
     }
@@ -402,56 +402,58 @@ impl<'a, V: ValueType> Report<'a, V> {
                 Some(LowValue::Function(_)) => "Function".to_string(),
                 Some(LowValue::Parameterized) => unreachable!("handled above"),
                 Some(LowValue::Array(_)) => {
-                    let ids = self
+                    let items = self
                         .build
                         .module
-                        .array_ids(rep)
+                        .array_items(rep)
                         .expect("the value just matched as an array");
-                    if ids.len() == 2 {
-                        let kind = ids[1];
+                    if items.len() == 2 {
+                        let kind = items[1].node;
                         // `[shape, K]`: an atomic type expression — render the
                         // shape's marker (`int`, `Type`, …).
                         if self.rep(kind) == self.univ {
-                            return self.print_inner(ids[0], visiting);
+                            return self.print_inner(items[0].node, visiting);
                         }
                         // `[shape, [Kind, K]]`: a compound type expression —
                         // the kind decides the shape's rendering.
-                        if let Some(k) = self.build.module.array_ids(self.rep(kind))
+                        if let Some(k) = self.build.module.array_items(self.rep(kind))
                             && k.len() == 2
-                            && self.rep(k[1]) == self.univ
+                            && self.rep(k[1].node) == self.univ
                         {
-                            let kind_node = self.rep(k[0]);
+                            let kind_node = self.rep(k[0].node);
                             let kind_value = self.build.module.nodes[kind_node].value;
                             if kind_value == Some(V::function_type_marker()) {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
-                                if let Some(s) = self.build.module.array_ids(self.rep(ids[0]))
+                                if let Some(s) =
+                                    self.build.module.array_items(self.rep(items[0].node))
                                     && s.len() == 2
                                 {
                                     return format!(
                                         "{} → {}",
-                                        self.print_inner(s[0], visiting),
-                                        self.print_inner(s[1], visiting)
+                                        self.print_inner(s[0].node, visiting),
+                                        self.print_inner(s[1].node, visiting)
                                     );
                                 }
                             } else if kind_value == Some(V::tuple_type_marker()) {
-                                let elements: Vec<String> = ids
+                                let elements: Vec<String> = items
                                     .iter()
-                                    .map(|&id| self.print_inner(id, visiting))
+                                    .map(|item| self.print_inner(item.node, visiting))
                                     .collect();
                                 return format!("[{}]", elements.join(", "));
                             } else if kind_value == Some(V::array_type_marker()) {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
-                                if let Some(s) = self.build.module.array_ids(self.rep(ids[0]))
+                                if let Some(s) =
+                                    self.build.module.array_items(self.rep(items[0].node))
                                     && s.len() == 2
                                 {
                                     return format!(
                                         "{}[{}]",
-                                        self.print_inner(s[0], visiting),
-                                        self.print_inner(s[1], visiting)
+                                        self.print_inner(s[0].node, visiting),
+                                        self.print_inner(s[1].node, visiting)
                                     );
                                 }
                             } else if kind_value == Some(V::type_struct_marker()) {
@@ -460,22 +462,22 @@ impl<'a, V: ValueType> Report<'a, V> {
                                 // `struct#n { f1, f2 }`, the id from shape[0]
                                 // and the field list from shape[1].
                                 let mut n = 0;
-                                let mut list = ids[0];
+                                let mut list = items[0].node;
                                 if let Some(s) =
-                                    self.build.module.array_ids(self.rep(ids[0]))
+                                    self.build.module.array_items(self.rep(items[0].node))
                                     && s.len() == 2
                                 {
-                                    n = self.build.module.nodes[s[0]]
+                                    n = self.build.module.nodes[s[0].node]
                                         .value
                                         .and_then(|v| v.type_id())
                                         .unwrap_or(0);
-                                    list = s[1];
+                                    list = s[1].node;
                                 }
                                 let field_ids: Vec<NodeId> = self
                                     .build
                                     .module
-                                    .array_ids(self.rep(list))
-                                    .map(|fs| fs.to_vec())
+                                    .array_items(self.rep(list))
+                                    .map(|fs| fs.iter().map(|item| item.node).collect())
                                     .unwrap_or_else(|| vec![list]);
                                 let fields: Vec<String> = field_ids
                                     .iter()
@@ -487,14 +489,14 @@ impl<'a, V: ValueType> Report<'a, V> {
                         if self.class_is_arrow(rep) {
                             return format!(
                                 "{} → {}",
-                                self.print_inner(ids[0], visiting),
-                                self.print_inner(ids[1], visiting)
+                                self.print_inner(items[0].node, visiting),
+                                self.print_inner(items[1].node, visiting)
                             );
                         }
                     }
-                    let elements: Vec<String> = ids
+                    let elements: Vec<String> = items
                         .iter()
-                        .map(|&id| self.print_inner(id, visiting))
+                        .map(|item| self.print_inner(item.node, visiting))
                         .collect();
                     format!("[{}]", elements.join(", "))
                 }
@@ -521,16 +523,17 @@ impl<'a, V: ValueType> Report<'a, V> {
             .find_map(|m| self.build.module.nodes[m].operation)
             .map(|op| op.operator)
         {
-            Some(HighProgramOperator::Index | HighProgramOperator::IndexTypeDispatch) => {
-                "Index".to_string()
-            }
-            Some(HighProgramOperator::Apply) => "Apply".to_string(),
-            Some(HighProgramOperator::Fresh) => "Fresh".to_string(),
             Some(
-                HighProgramOperator::Add
-                | HighProgramOperator::Sub
-                | HighProgramOperator::Leq
-                | HighProgramOperator::Eq,
+                HighProgramOperator::LowOperator(LowOperator::Index)
+                | HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch),
+            ) => "Index".to_string(),
+            Some(HighProgramOperator::LowOperator(LowOperator::Apply)) => "Apply".to_string(),
+            Some(HighProgramOperator::TypeOperator(TypeOperator::Fresh)) => "Fresh".to_string(),
+            Some(
+                HighProgramOperator::TypeOperator(TypeOperator::Add)
+                | HighProgramOperator::TypeOperator(TypeOperator::Sub)
+                | HighProgramOperator::TypeOperator(TypeOperator::Leq)
+                | HighProgramOperator::TypeOperator(TypeOperator::Eq),
             ) => "op".to_string(),
             None => "op".to_string(),
         }

@@ -7,22 +7,23 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, ExprKind, IR};
-use lichen_highlevel::program::{HighGlobal, HighProgramValue};
+use lichen_highlevel::program::{HighGlobal, HighProgramValue, TypeValue};
+use lichen_lowlevel::{LowOperator, LowValue};
 use lichen_utils::compose::AsField;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
 
 fn int(ir: &mut IR, n: u64) -> ExprId {
     ir.alloc(
-        ExprKind::Constant(HighProgramValue::USize(n as usize)),
+        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(n as usize))),
         None,
     )
 }
 fn ty(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Constant(HighProgramValue::TypeType), None)
+    ir.alloc(ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeType)), None)
 }
 fn int_t(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Constant(HighProgramValue::TypeInt), None)
+    ir.alloc(ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt)), None)
 }
 fn param(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Parameter, None)
@@ -120,9 +121,27 @@ fn array_ids(
     node: lichen_lowlevel::NodeId,
 ) -> Vec<lichen_lowlevel::NodeId> {
     b.module
-        .array_ids(node)
+        .array_items(node)
         .expect("expected an array value")
-        .to_vec()
+        .iter()
+        .map(|item| item.node)
+        .collect()
+}
+
+/// The ids inside an evaluated array value.
+fn array_ids_from(value: HighProgramValue) -> Vec<lichen_lowlevel::NodeId> {
+    let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
+        panic!("expected an array value, got {value:?}");
+    };
+    array.items().iter().map(|item| item.node).collect()
+}
+
+/// The shallow flags inside an evaluated array value.
+fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
+    let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
+        panic!("expected an array value, got {value:?}");
+    };
+    array.items().iter().map(|item| item.shallow).collect()
 }
 
 // --- checking -------------------------------------------------------------
@@ -139,7 +158,7 @@ fn int_literal_checks() {
     assert_eq!(ids.len(), 2);
     assert!(matches!(
         b.module.nodes[ids[0]].value,
-        Some(HighProgramValue::TypeInt)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     ));
     assert_eq!(
         ids[1], b.type_expr,
@@ -173,7 +192,7 @@ fn the_type_universe_is_self_referential() {
     assert_eq!(ids.len(), 2);
     assert!(matches!(
         b.module.nodes[ids[0]].value,
-        Some(HighProgramValue::TypeType)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeType))
     ));
     assert_eq!(
         ids[1], b.type_expr,
@@ -209,7 +228,7 @@ fn lambda_has_arrow_type() {
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeFunction)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeFunction))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
 }
@@ -268,7 +287,7 @@ fn typed_tuple_is_a_kinded_tuple() {
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeTuple)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
 }
@@ -289,7 +308,7 @@ fn real_array_type_is_type_and_length() {
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeArray)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
     // The value is the instance [type, length].
@@ -300,7 +319,7 @@ fn real_array_type_is_type_and_length() {
     assert!(
         matches!(
             b.module.nodes[shape_ids[1]].value,
-            Some(HighProgramValue::USize(3))
+            Some(HighProgramValue::LowValue(LowValue::USize(3)))
         ),
         "instance[1] is the length"
     );
@@ -326,8 +345,8 @@ fn the_array_type_has_a_kind_not_a_type() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeArray));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeType));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeArray)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
 }
 
 #[test]
@@ -350,7 +369,7 @@ fn lambda_against_an_array_type_conflicts_on_the_length() {
         "the array kind passes; only the shape clashes"
     );
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(3)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::LowValue(LowValue::USize(3))));
     // The found side is the arrow pair `[shape, [FunctionType, K]]`; its
     // inner shape is the arrow the checker registered.
     let found = array_ids(&b, diags[0].a);
@@ -384,7 +403,7 @@ fn array_literal_is_homogeneous() {
     assert!(
         matches!(
             b.module.nodes[shape_ids[1]].value,
-            Some(HighProgramValue::USize(2))
+            Some(HighProgramValue::LowValue(LowValue::USize(2)))
         ),
         "instance[1] is the element count"
     );
@@ -392,7 +411,7 @@ fn array_literal_is_homogeneous() {
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeArray)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
     // The value holds the element values.
@@ -432,8 +451,8 @@ fn array_literal_length_mismatch_fails() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::USize(2)));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(3)));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::LowValue(LowValue::USize(2))));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::LowValue(LowValue::USize(3))));
 }
 
 #[test]
@@ -452,8 +471,8 @@ fn heterogeneous_array_literal_fails() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::ArrayElement);
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeType));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeInt));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
 }
 
 #[test]
@@ -557,7 +576,7 @@ fn built_program_runs_to_a_value() {
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None);
-    assert!(matches!(value, HighProgramValue::USize(5)));
+    assert!(matches!(value, HighProgramValue::LowValue(LowValue::USize(5))));
 }
 
 #[test]
@@ -573,7 +592,7 @@ fn inline_lambda_applies() {
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None);
-    assert!(matches!(value, HighProgramValue::USize(5)));
+    assert!(matches!(value, HighProgramValue::LowValue(LowValue::USize(5))));
 }
 
 #[test]
@@ -592,7 +611,7 @@ fn nested_polymorphic_applies_run() {
     assert!(b.ok);
     let mut module = b.module;
     let value = module.evaluate_node_deep(b.root_val, None);
-    assert!(matches!(value, HighProgramValue::USize(5)));
+    assert!(matches!(value, HighProgramValue::LowValue(LowValue::USize(5))));
 }
 
 // --- diagnostics ----------------------------------------------------------
@@ -611,8 +630,8 @@ fn annotation_mismatch_reports_expected_found() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
     assert_eq!(diags[0].span, Some((3, 7)));
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeInt));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeType));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
 }
 
 #[test]
@@ -631,9 +650,9 @@ fn applying_a_non_function_reports_expected_function() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
     assert_eq!(diags[0].span, Some((2, 3)));
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
     // the expected side is the synthesized function type the guard built
-    assert!(matches!(diags[0].value_b, Some(HighProgramValue::Array(_))));
+    assert!(matches!(diags[0].value_b, Some(HighProgramValue::LowValue(LowValue::Array(_)))));
 }
 
 #[test]
@@ -690,8 +709,8 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     assert_eq!(diags[0].span, Some((5, 17)));
     // runtime direction is reversed: a = the parameter's expected type,
     // b = the argument's found type
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeType));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeInt));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
 }
 
 #[test]
@@ -712,8 +731,8 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeType));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeInt));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
 }
 
 #[test]
@@ -731,7 +750,7 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeType));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeType)));
     // The found side is the arrow *pair* (`[shape, [FunctionType, K]]`); its
     // inner shape is the arrow the checker registered.
     let found_shape = array_ids(&b, diags[0].a)[0];
@@ -739,7 +758,7 @@ fn an_unannotated_lambda_has_an_unbound_arrow_type() {
         b.arrows.contains(&found_shape),
         "the found side is the arrow shape"
     );
-    assert!(matches!(diags[0].value_a, Some(HighProgramValue::Array(_))));
+    assert!(matches!(diags[0].value_a, Some(HighProgramValue::LowValue(LowValue::Array(_)))));
 }
 
 #[test]
@@ -899,16 +918,13 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let mut b = build(whole, ir);
     assert!(b.ok, "the closure program must check");
     let value = b.module.evaluate_node_deep(b.root_val, None);
-    let HighProgramValue::Array(array) = value else {
-        panic!("expected an array result, got {value:?}");
-    };
-    let ids = array.ids();
+    let ids = array_ids_from(value);
     let expected = [1usize, 2, 3, 4];
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
             b.module.nodes[id].value,
-            Some(HighProgramValue::USize(n)),
+            Some(HighProgramValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );
     }
@@ -931,7 +947,7 @@ fn tuple_index_selects_value_and_type() {
     assert!(
         matches!(
             b.module.evaluate_node_deep(b.val[idx].unwrap(), None),
-            HighProgramValue::USize(1)
+            HighProgramValue::LowValue(LowValue::USize(1))
         ),
         "the value is the selected element"
     );
@@ -961,7 +977,7 @@ fn array_index_selects_value_and_type() {
     assert!(
         matches!(
             b.module.evaluate_node_deep(b.val[idx].unwrap(), None),
-            HighProgramValue::USize(2)
+            HighProgramValue::LowValue(LowValue::USize(2))
         ),
         "the value is the selected element"
     );
@@ -990,8 +1006,8 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
     assert_eq!(diags[0].message, "index 5 out of bounds (array length 2)");
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::USize(5)));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(2)));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::LowValue(LowValue::USize(5))));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::LowValue(LowValue::USize(2))));
     assert_eq!(diags[0].span, Some((3, 9)));
 }
 
@@ -1013,8 +1029,8 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
     assert_eq!(diags[0].message, "index 5 out of bounds (array length 3)");
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::USize(5)));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::USize(3)));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::LowValue(LowValue::USize(5))));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::LowValue(LowValue::USize(3))));
     assert_eq!(diags[0].span, Some((4, 11)));
 }
 
@@ -1069,14 +1085,14 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
         b.module.nodes[kind_ids[0]].value,
-        Some(HighProgramValue::TypeId(0))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     let inner = array_ids(&b, kind_ids[1]);
     assert_eq!(inner.len(), 2);
     assert_eq!(inner[1], b.type_expr);
     assert_eq!(
         b.module.nodes[inner[0]].value,
-        Some(HighProgramValue::TypeStruct)
+        Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
     );
     // one source occurrence consumed exactly one fresh id
     assert_eq!(
@@ -1102,11 +1118,11 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
     assert!(matches!(
         b.module.nodes[id1].value,
-        Some(HighProgramValue::TypeId(0))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     assert!(matches!(
         b.module.nodes[id2].value,
-        Some(HighProgramValue::TypeId(1))
+        Some(HighProgramValue::TypeValue(TypeValue::TypeId(1)))
     ));
 }
 
@@ -1124,8 +1140,8 @@ fn two_struct_type_occurrences_do_not_unify() {
     module.unify(b.term[s1].unwrap(), b.term[s2].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
     let err = module.unify_errors[0];
-    assert!(matches!(err.value_a, Some(HighProgramValue::TypeId(0))));
-    assert!(matches!(err.value_b, Some(HighProgramValue::TypeId(1))));
+    assert!(matches!(err.value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))));
+    assert!(matches!(err.value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeId(1)))));
 }
 
 #[test]
@@ -1150,11 +1166,11 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
         matches!(
             (a, b),
             (
-                Some(HighProgramValue::TypeId(_)),
-                Some(HighProgramValue::TypeTuple)
+                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_))),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
             ) | (
-                Some(HighProgramValue::TypeTuple),
-                Some(HighProgramValue::TypeId(_))
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_)))
             )
         ),
         "kind-level nominal clash: got {a:?} vs {b:?}"
@@ -1192,7 +1208,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(diags[0].value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
     assert!(
         diags[0].message.starts_with("expected ["),
         "the struct's shape renders as the expected side: {}",
@@ -1246,8 +1262,8 @@ fn an_annotation_with_a_struct_type_rejects_a_literal_at_apply_time() {
     assert_eq!(diags[0].kind, DiagKind::Runtime);
     // reversed direction: a = the parameter's expected type (the struct's
     // field list), b = the argument's found type (int)
-    assert!(matches!(diags[0].value_a, Some(HighProgramValue::Array(_))));
-    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeInt));
+    assert!(matches!(diags[0].value_a, Some(HighProgramValue::LowValue(LowValue::Array(_)))));
+    assert_eq!(diags[0].value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
 }
 
 #[test]
@@ -1467,7 +1483,7 @@ fn an_underscore_in_the_array_length_position() {
     let len3 = array_ids(&b, arr_shape)[1];
     assert!(matches!(
         b.module.nodes[len3].value,
-        Some(HighProgramValue::USize(3))
+        Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert_eq!(
         b.module.equality_representative(length_slot),
@@ -1505,21 +1521,20 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
     let mut b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
     let value = b.module.evaluate_node_deep(b.val[arr].unwrap(), None);
-    let HighProgramValue::Array(array) = value else {
-        panic!("expected an array value");
-    };
-    assert_eq!(array.mask(), &[false, true], "position 1 is marked");
+    assert_eq!(array_mask_from(value), [false, true], "position 1 is marked");
     let ty_val = b.module.evaluate_node_deep(b.ty[arr].unwrap(), None);
-    let HighProgramValue::Array(ty_pair) = ty_val else {
+    let HighProgramValue::LowValue(LowValue::Array(ty_pair)) = ty_val else {
         panic!("expected a type pair");
     };
-    let kind_val = b.module.evaluate_node_deep(ty_pair.ids()[1], None);
-    let HighProgramValue::Array(kind) = kind_val else {
+    let kind_val = b
+        .module
+        .evaluate_node_deep(ty_pair.items()[1].node, None);
+    let HighProgramValue::LowValue(LowValue::Array(kind)) = kind_val else {
         panic!("expected a kind expression");
     };
     assert_eq!(
-        b.module.nodes[kind.ids()[0]].value,
-        Some(HighProgramValue::TypeTuple),
+        b.module.nodes[kind.items()[0].node].value,
+        Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
         "typed like a tuple"
     );
 }
@@ -1581,7 +1596,7 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     assert!(b.ok, "the read should check");
     assert_eq!(
         b.module.evaluate_node_deep(b.val[read].unwrap(), None),
-        HighProgramValue::USize(6),
+        HighProgramValue::LowValue(LowValue::USize(6)),
         "the read forces the apply at the masked position"
     );
 }
@@ -1626,7 +1641,7 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
     assert!(!b.ok, "assert(1 == 2) must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
 }
 
 #[test]
@@ -1666,7 +1681,7 @@ fn in_function_assert_fails_for_a_violating_argument() {
     let b = build(root, ir);
     assert!(!b.ok, "f 2 must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
     assert_eq!(
         b.module.asserts.len(),
         1,
@@ -1700,7 +1715,7 @@ fn assert_on_a_literal_checks_the_value_itself() {
     let b = build(asserted, ir);
     assert!(!b.ok, "assert(3) must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(3));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(3)));
 }
 
 // --- generated array-bounds constraints ------------------------------------
@@ -1721,7 +1736,7 @@ fn an_out_of_bounds_array_index_fails_a_generated_assert() {
     assert!(!b.ok, "an out-of-range read must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
     assert!(
         b.module.asserts.is_empty(),
         "the decided constraint left the worklist"
@@ -1790,7 +1805,7 @@ fn a_body_index_fails_at_the_violating_argument() {
     let b = build(bad, ir);
     assert!(!b.ok, "f 5 must fail");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
 }
 
 // --- annotated parameters are checked in body scope -------------------------
@@ -1812,7 +1827,7 @@ fn an_annotated_array_parameter_bounds_are_checked_in_body() {
     assert!(!b.ok, "xs[5] against Int<3> must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
-    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::USize(0));
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
     assert!(
         b.module.asserts.is_empty(),
         "a decided constraint leaves the worklist"

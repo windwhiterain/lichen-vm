@@ -54,18 +54,18 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(operands, Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.ids();
-                        match self.evaluate_node(operands[1], Some(block)).as_enum() {
+                        let operands = array.items();
+                        match self.evaluate_node(operands[1].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
                             }
                             Some(LowValue::USize(index)) => {
-                                match self.evaluate_node(operands[0], Some(block)).as_enum() {
+                                match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                                     Some(LowValue::Parameterized) => {
                                         P::Value::from(LowValue::Parameterized)
                                     }
                                     Some(LowValue::Array(array)) => {
-                                        let array = array.ids();
+                                        let array = array.items();
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
                                         // and yield no value instead of panicking
@@ -80,11 +80,12 @@ impl<P: Program> Module<P> {
                                             // order.  A non-cell element
                                             // (a concrete value, another
                                             // computation) reads as before.
-                                            self.alias_read(node, array[index]);
-                                            self.evaluate_node(array[index], Some(block))
+                                            let element = array[index].node;
+                                            self.alias_read(node, element);
+                                            self.evaluate_node(element, Some(block))
                                         } else {
                                             self.eval_errors.push(EvalError {
-                                                index: operands[1],
+                                                index: operands[1].node,
                                                 index_value: index,
                                                 length: array.len(),
                                             });
@@ -123,8 +124,8 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(operands, Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.ids();
-                        match self.evaluate_node(operands[0], Some(block)).as_enum() {
+                        let operands = array.items();
+                        match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
                             }
@@ -134,10 +135,10 @@ impl<P: Program> Module<P> {
                                 // build bare 2-element operands.
                                 self.function_apply(
                                     function,
-                                    operands[1],
+                                    operands[1].node,
                                     block,
                                     node,
-                                    operands.get(2).copied(),
+                                    operands.get(2).map(|item| item.node),
                                 )
                             }
                             _ => unreachable!("Apply target must be a function value"),
@@ -232,16 +233,16 @@ impl<P: Program> Module<P> {
         if let Some(LowValue::Array(array)) = value.as_enum() {
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
-            for (i, &id) in array.ids().iter().enumerate() {
+            for item in array.items() {
                 // A shallow position is a lazy region: its whole subtree
                 // stays unevaluated (never proven concrete), and a read
                 // forces the single element on demand through `Index` —
                 // unless the forced pass is running, which descends into it
                 // like any other position.
-                if skip_shallow && array.is_shallow(i) {
+                if skip_shallow && item.shallow {
                     continue;
                 }
-                self.evaluate_node_deep_inner(id, Some(block), skip_shallow, force_operand);
+                self.evaluate_node_deep_inner(item.node, Some(block), skip_shallow, force_operand);
             }
             self.nodes[node].visiting = false;
         }
@@ -256,8 +257,8 @@ impl<P: Program> Module<P> {
                     // not evaluated, and even an assert's forced pass that
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
-                    if array.has_shallow()
-                        || array.ids().iter().any(|&id| self.nodes[id].evaluated_deep.is_some_and(|e| e.parameterized))
+                    if array.items().iter().any(|item| item.shallow)
+                        || array.items().iter().any(|item| self.nodes[item.node].evaluated_deep.is_some_and(|e| e.parameterized))
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {

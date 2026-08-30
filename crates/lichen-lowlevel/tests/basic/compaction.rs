@@ -123,20 +123,19 @@ fn compact_preserves_the_shallow_mask() {
     let ret = array_node(&mut m, child, &[seven, add], Some(&[false, true]));
 
     let value = m.evaluate_node_deep(ret, None);
-    let TestValue::Array(array) = value else {
-        panic!("expected an array result")
-    };
-    assert_eq!(array.mask(), &[false, true]);
+    assert_eq!(array_mask(value), [false, true]);
 
     m.garbage_collect(ret);
-    let TestValue::Array(array) = m.nodes[ret].value.unwrap() else {
-        panic!("expected an array after compaction")
-    };
-    assert_eq!(array.mask(), &[false, true], "the mask survives compaction");
-    assert_eq!(array.ids().len(), 2);
+    let value = m.nodes[ret].value.unwrap();
+    assert_eq!(
+        array_mask(value),
+        [false, true],
+        "the mask survives compaction"
+    );
+    assert_eq!(array_ids(value).len(), 2);
     assert_eq!(m.nodes[ret].block, root, "compacted into the parent");
     assert!(
-        m.nodes[array.ids()[1]].value.is_none(),
+        m.nodes[array_ids(value)[1]].value.is_none(),
         "shallow element stays lazy"
     );
 }
@@ -280,7 +279,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let grandchild = m.add_block(Some(child));
     // f(x) = Id(x), homed in the un-compacted grandchild block.
     let ret_f = m.add_node(grandchild, None, None);
-    let param_f = m.add_node(grandchild, None, Some(TestValue::Parameterized));
+    let param_f = m.add_node(grandchild, None, Some(TestValue::LowValue(LowValue::Parameterized)));
     m.nodes[ret_f].operation = Some(Operation {
         operator: TestOperator::Id,
         operand: Some(param_f),

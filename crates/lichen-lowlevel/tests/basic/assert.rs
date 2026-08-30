@@ -35,7 +35,7 @@ fn failing_assert_records_the_value() {
     let err = m.assert_errors[0];
     assert_eq!(
         err.value,
-        TestValue::USize(3),
+        TestValue::LowValue(LowValue::USize(3)),
         "the resolved value is recorded"
     );
 }
@@ -77,7 +77,7 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
         "an untriggered assert is no failure"
     );
     assert!(
-        matches!(m.nodes[x].value, Some(TestValue::Parameterized)),
+        matches!(m.nodes[x].value, Some(TestValue::LowValue(LowValue::Parameterized))),
         "the unbound cell was not bound by the assert"
     );
 }
@@ -124,7 +124,7 @@ fn apply_clone_fails_when_the_argument_violates_the_assert() {
     // failed point is consumed too; its error is what stays.
     let m = applied_equality_assert(2);
     assert_eq!(m.assert_errors.len(), 1);
-    assert_eq!(m.assert_errors[0].value, TestValue::USize(0));
+    assert_eq!(m.assert_errors[0].value, TestValue::LowValue(LowValue::USize(0)));
     assert_eq!(m.asserts.len(), 1, "the decided clone left the worklist");
 }
 
@@ -311,7 +311,7 @@ fn gc_moves_an_assert_condition_with_its_point() {
         block: body,
     });
     m.blocks[body].functions.push(function);
-    m.nodes[func_placeholder].value = Some(TestValue::Function(function));
+    m.nodes[func_placeholder].value = Some(TestValue::LowValue(LowValue::Function(function)));
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(func_placeholder));
 
     m.evaluate_node_deep(root_node, None);

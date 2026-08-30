@@ -100,7 +100,7 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
 // `Module::unify_errors` without merging.
 
 fn is_unbound_value(value: Option<TestValue>) -> bool {
-    matches!(value, None | Some(TestValue::Parameterized))
+    matches!(value, None | Some(TestValue::LowValue(LowValue::Parameterized)))
 }
 
 #[test]
@@ -111,7 +111,7 @@ fn unbound_binds_to_the_other_side() {
     let one = usize_node(&mut m, block, 1);
     let rep = m.unify(x, one);
     assert!(m.unify_errors.is_empty());
-    assert!(matches!(m.nodes[rep].value, Some(TestValue::USize(1))));
+    assert!(matches!(m.nodes[rep].value, Some(TestValue::LowValue(LowValue::USize(1)))));
     assert_eq!(m.equality_representative(x), m.equality_representative(one));
 }
 
@@ -146,7 +146,7 @@ fn binding_one_member_binds_the_whole_class() {
     m.unify(t, int);
     assert!(m.unify_errors.is_empty());
     let rep = m.equality_representative(b);
-    assert!(matches!(m.nodes[rep].value, Some(TestValue::USize(1))));
+    assert!(matches!(m.nodes[rep].value, Some(TestValue::LowValue(LowValue::USize(1)))));
     // ...so the second field's instantiation with float conflicts
     let float = str_node(&mut m, block, &['f']);
     m.unify(b, float);
@@ -208,8 +208,8 @@ fn conflicting_kinds_record_an_error_and_stay_separate() {
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(m.equality_representative(a), m.equality_representative(b));
     let error = m.unify_errors[0];
-    assert!(matches!(error.value_a, Some(TestValue::USize(1))));
-    assert!(matches!(error.value_b, Some(TestValue::Array(_))));
+    assert!(matches!(error.value_a, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(error.value_b, Some(TestValue::LowValue(LowValue::Array(_)))));
 }
 
 #[test]
@@ -251,8 +251,8 @@ fn arrays_unify_elementwise() {
     assert!(m.unify_errors.is_empty());
     let rep_x = m.equality_representative(x);
     let rep_y = m.equality_representative(y);
-    assert!(matches!(m.nodes[rep_x].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[rep_y].value, Some(TestValue::USize(2))));
+    assert!(matches!(m.nodes[rep_x].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[rep_y].value, Some(TestValue::LowValue(LowValue::USize(2)))));
     assert_eq!(
         m.equality_representative(left),
         m.equality_representative(right)
@@ -294,7 +294,7 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
     );
     // the non-conflicting element still bound
     let rep_x = m.equality_representative(x);
-    assert!(matches!(m.nodes[rep_x].value, Some(TestValue::USize(2))));
+    assert!(matches!(m.nodes[rep_x].value, Some(TestValue::LowValue(LowValue::USize(2)))));
 }
 
 #[test]
@@ -305,10 +305,10 @@ fn same_function_value_merges() {
     let ret = usize_node(&mut m, block, 1);
     let f = m.add_function(block, ret, param, [ret, param]);
     let fid = match m.nodes[f].value.unwrap() {
-        TestValue::Function(fid) => fid,
+        TestValue::LowValue(LowValue::Function(fid)) => fid,
         _ => unreachable!("function value node"),
     };
-    let alias = m.add_node(block, None, Some(TestValue::Function(fid)));
+    let alias = m.add_node(block, None, Some(TestValue::LowValue(LowValue::Function(fid))));
     m.unify(f, alias);
     assert!(m.unify_errors.is_empty());
     assert_eq!(
@@ -389,10 +389,10 @@ fn binding_reaches_every_member_of_the_class() {
     m.unify(t, int);
     assert!(m.unify_errors.is_empty());
     // every member's own slot carries the binding, not just the rep's
-    assert!(matches!(m.nodes[a].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[b].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[t].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[int].value, Some(TestValue::USize(1))));
+    assert!(matches!(m.nodes[a].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[b].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[t].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[int].value, Some(TestValue::LowValue(LowValue::USize(1)))));
 }
 
 #[test]
@@ -406,9 +406,9 @@ fn a_newcomer_joining_a_bound_class_carries_the_value() {
     let b = unbound_node(&mut m, block);
     m.unify(a, b); // an unbound node joins the bound class
     assert!(m.unify_errors.is_empty());
-    assert!(matches!(m.nodes[a].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[b].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[int].value, Some(TestValue::USize(1))));
+    assert!(matches!(m.nodes[a].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[b].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[int].value, Some(TestValue::LowValue(LowValue::USize(1)))));
 }
 
 // --- garbage collection interplay --------------------------------------
@@ -428,14 +428,14 @@ fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     let int = usize_node(&mut m, root, 7);
     m.unify(x, int);
     assert!(m.unify_errors.is_empty());
-    assert!(matches!(m.nodes[y].value, Some(TestValue::USize(7))));
+    assert!(matches!(m.nodes[y].value, Some(TestValue::LowValue(LowValue::USize(7)))));
 
     m.garbage_collect(child_root);
 
     assert!(!m.blocks.contains_key(child));
     let rep = m.equality_representative(x);
     assert_eq!(m.equality_representative(int), rep);
-    assert!(matches!(m.nodes[rep].value, Some(TestValue::USize(7))));
+    assert!(matches!(m.nodes[rep].value, Some(TestValue::LowValue(LowValue::USize(7)))));
     // the member list holds exactly the two survivors, in join order
     let members: Vec<_> = disjoint::members(&m.nodes, rep).collect();
     assert_eq!(members.len(), 2);
@@ -467,7 +467,7 @@ fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
     let rep = m.equality_representative(x);
     assert_eq!(m.equality_representative(int), rep);
     assert_ne!(rep, y1);
-    assert!(matches!(m.nodes[rep].value, Some(TestValue::USize(7))));
+    assert!(matches!(m.nodes[rep].value, Some(TestValue::LowValue(LowValue::USize(7)))));
     let members: Vec<_> = disjoint::members(&m.nodes, rep).collect();
     assert_eq!(members.len(), 2);
     assert!(members.contains(&x) && members.contains(&int));
@@ -503,7 +503,7 @@ fn apply_with_an_unbound_argument_stays_lazy() {
     let call = call_node(&mut m, root, f, arg);
     assert!(matches!(
         m.evaluate_node_deep(call, None),
-        TestValue::Parameterized
+        TestValue::LowValue(LowValue::Parameterized)
     ));
     assert!(m.unify_errors.is_empty());
     // two unbound nodes unify into one class, still unbound
@@ -530,8 +530,8 @@ fn apply_unifies_array_parameters_elementwise() {
     // the cloned pattern's elements are bound to the argument's elements
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2);
-    assert!(matches!(m.nodes[ids[0]].value, Some(TestValue::USize(1))));
-    assert!(matches!(m.nodes[ids[1]].value, Some(TestValue::USize(2))));
+    assert!(matches!(m.nodes[ids[0]].value, Some(TestValue::LowValue(LowValue::USize(1)))));
+    assert!(matches!(m.nodes[ids[1]].value, Some(TestValue::LowValue(LowValue::USize(2)))));
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn apply_time_conflict_records_an_error() {
         m.equality_representative(float)
     );
     let error = m.unify_errors[0];
-    assert!(matches!(error.value_a, Some(TestValue::USize(1))));
+    assert!(matches!(error.value_a, Some(TestValue::LowValue(LowValue::USize(1)))));
     assert!(matches!(error.value_b, Some(TestValue::String(_))));
 }
 
@@ -572,11 +572,11 @@ fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
     let call = call_node(&mut m, root, f, unbound);
     assert!(matches!(
         m.evaluate_node_deep(call, None),
-        TestValue::USize(1)
+        TestValue::LowValue(LowValue::USize(1))
     ));
     assert!(m.unify_errors.is_empty());
     // the argument node itself now carries the parameter's value
-    assert!(matches!(m.nodes[unbound].value, Some(TestValue::USize(1))));
+    assert!(matches!(m.nodes[unbound].value, Some(TestValue::LowValue(LowValue::USize(1)))));
 }
 
 #[test]

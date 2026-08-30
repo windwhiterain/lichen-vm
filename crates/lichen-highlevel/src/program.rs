@@ -1,16 +1,20 @@
 //! The highlevel's concrete lowlevel program.
 //!
-//! The value universe is the lowlevel structural values (spliced in from
-//! the lowlevel `LowValue` enum) together with the type values below — the
-//! union [`HighProgramValue`] — and the operator universe is the lowlevel
-//! `LowOperator` enum together with the type-level operators below — the
-//! union [`HighProgramOperator`] — so the checker builds and inspects every
-//! value and emits every operator without an `Ext` wrapper.
+//! Each layer provides a plain enum of its own variants: the lowlevel's
+//! [`LowValue`]/[`LowOperator`], the highlevel's type values
+//! ([`TypeValue`]) and type-level operators ([`TypeOperator`]).  The
+//! composed vocabularies [`HighProgramValue`] and [`HighProgramOperator`]
+//! are flat unions — one `lichen_utils::enum_ext!` invocation carrying each
+//! extension whole as one sibling variant — so the checker builds and
+//! inspects every value and emits every operator without an `Ext` wrapper:
+//! a structural value sits one carry variant down
+//! (`HighProgramValue::LowValue(..)`), the highlevel's type values sit in
+//! theirs, and nothing nests.
 
 use std::marker::PhantomData;
 
 use lichen_lowlevel::{
-    ArrayRef, BlockId, FunctionId, GlobalExt, LowValue, Module, OperatorExt, Program, ValueExt,
+    BlockId, GlobalExt, LowOperator, LowValue, Module, OperatorExt, Program, ValueExt,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -67,42 +71,54 @@ lichen_utils::compose_ext! {
 }
 impl GlobalExt for HighGlobalExt {}
 
-// The highlevel program's value vocabulary: the lowlevel structural values
-// (spliced in from the lowlevel `LowValue` enum, so the lowlevel can
-// inspect them through `AsEnum`) plus the type values below.  The
-// `#[enum_ext]` makes this union itself an extension point: an extended
-// vocabulary (a crate that adds variants) calls the generated
-// `extend_HighProgramValue!` carrier, which re-splices these variants into
-// its own flat union.
-lichen_lowlevel::extend_LowValue! {
-    /// The highlevel program's value vocabulary.
+/// The highlevel's own value extension — a plain enum of the type constants,
+/// provided whole for the compositions below (and for a language crate
+/// composing its own vocabulary from [`LowValue`] + this).
+///
+/// Every variant is a *type constant*: its own type is the canonical
+/// universe (`Type : Type`), which makes the composed vocabulary's
+/// `ValueType::type_of` a one-arm answer for this whole branch.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypeValue {
+    /// The `int` type constant.
+    TypeInt,
+    /// The `Type` constant — the canonical universe node itself
+    /// (`Type : Type`).
+    TypeType,
+    /// The kind marker of function type expressions — the pair's second
+    /// element is a `Function` value.
+    TypeFunction,
+    /// The kind marker of tuple type expressions — the shape is the
+    /// element-type list.
+    TypeTuple,
+    /// The kind marker of array type expressions — the shape is
+    /// `[element type, length]`.
+    TypeArray,
+    /// The kind marker of struct type expressions — the shape is
+    /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
+    /// the positional field-type list.
+    TypeStruct,
+    /// A nominal type id — a struct type's identity marker, living at
+    /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
+    /// different ids don't (nominal identity), and an id never unifies
+    /// with the structural markers above.
+    TypeId(usize),
+}
+
+// The highlevel program's value vocabulary: a flat union of the lowlevel
+// structural values and the highlevel type values, each carried whole as
+// one sibling variant — one `lichen_utils::enum_ext!` invocation listing
+// every layer's enum.  A language crate composes its own vocabulary the
+// same way: `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
+// own variants.
+lichen_utils::enum_ext! {
+    /// The highlevel program's value vocabulary: the lowlevel structural
+    /// values and the highlevel type values, as sibling carry variants.
     #[derive(Debug, Clone, Copy, PartialEq)]
-    #[lichen_extend::enum_ext]
     pub enum HighProgramValue {
-        /// The `int` type constant.
-        TypeInt,
-        /// The `Type` constant — the canonical universe node itself
-        /// (`Type : Type`).
-        TypeType,
-        /// The kind marker of function type expressions — the pair's second
-        /// element is a `Function` value.
-        TypeFunction,
-        /// The kind marker of tuple type expressions — the shape is the
-        /// element-type list.
-        TypeTuple,
-        /// The kind marker of array type expressions — the shape is
-        /// `[element type, length]`.
-        TypeArray,
-        /// The kind marker of struct type expressions — the shape is
-        /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
-        /// the positional field-type list.
-        TypeStruct,
-        /// A nominal type id — a struct type's identity marker, living at
-        /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
-        /// different ids don't (nominal identity), and an id never unifies
-        /// with the structural markers above.
-        TypeId(usize),
     }
+    + LowValue as LowValue;
+    + TypeValue as TypeValue;
 }
 
 impl ValueExt for HighProgramValue {
@@ -144,93 +160,103 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
 
 impl ValueType for HighProgramValue {
     fn int_marker() -> Self {
-        HighProgramValue::TypeInt
+        Self::TypeValue(TypeValue::TypeInt)
     }
     fn type_marker() -> Self {
-        HighProgramValue::TypeType
+        Self::TypeValue(TypeValue::TypeType)
     }
     fn function_type_marker() -> Self {
-        HighProgramValue::TypeFunction
+        Self::TypeValue(TypeValue::TypeFunction)
     }
     fn tuple_type_marker() -> Self {
-        HighProgramValue::TypeTuple
+        Self::TypeValue(TypeValue::TypeTuple)
     }
     fn array_type_marker() -> Self {
-        HighProgramValue::TypeArray
+        Self::TypeValue(TypeValue::TypeArray)
     }
     fn type_struct_marker() -> Self {
-        HighProgramValue::TypeStruct
+        Self::TypeValue(TypeValue::TypeStruct)
     }
     fn type_of(&self) -> Self {
         match self {
-            HighProgramValue::USize(_) => HighProgramValue::TypeInt,
-            HighProgramValue::TypeInt
-            | HighProgramValue::TypeType
-            | HighProgramValue::TypeFunction
-            | HighProgramValue::TypeTuple
-            | HighProgramValue::TypeArray
-            | HighProgramValue::TypeStruct
-            | HighProgramValue::TypeId(_) => HighProgramValue::TypeType,
+            // Every type constant — the whole TypeValue branch — has the
+            // canonical universe as its type.
+            Self::TypeValue(_) => Self::type_marker(),
+            // Int literals are structural values.
+            Self::LowValue(LowValue::USize(_)) => Self::int_marker(),
             // Array, Function, None, Parameterized are built by other
             // expression kinds — the checker never asks their type.
-            _ => unreachable!("a structural non-USize value is not a constant"),
+            Self::LowValue(_) => {
+                unreachable!("a structural non-USize value is not a constant")
+            }
         }
     }
     fn type_id(&self) -> Option<usize> {
         match self {
-            HighProgramValue::TypeId(n) => Some(*n),
+            Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
             _ => None,
         }
     }
     fn type_id_value(n: usize) -> Self {
-        HighProgramValue::TypeId(n)
+        Self::TypeValue(TypeValue::TypeId(n))
     }
 }
 
-// The extension operators the checker emits — the type-level computations
-// that have no structural operator form.
-lichen_lowlevel::extend_LowOperator! {
-    /// The highlevel program's operator vocabulary: the structural
-    /// [`LowOperator::Index`]/[`LowOperator::Apply`] spliced in from the
-    /// lowlevel, plus the type-level operators below.
+// The highlevel's own operator extension — a plain enum of the type-level
+// computations that have no structural operator form, provided whole for the
+// composition below.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypeOperator {
+    /// The dispatch code of a type's kind — the one step a native
+    /// `Index` table cannot express.
+    ///
+    /// Operand: a type value's *kind* — its `[marker, K]` type slot
+    /// (position 1 of the `[shape, kind]` pair).  The kind holds only
+    /// the marker and the universe, never the shape, so the deep pass
+    /// never marks it parameterized for a bound type and this operator
+    /// runs even when the shape's spine still holds unbound cells (a
+    /// lazy stream).  Yields `USize(code)`: 0 = tuple, 1 = struct,
+    /// 2 = array, 3 = any other kind.  The checker feeds the code to a
+    /// native `Index(table, code)` branch table — the code is an
+    /// internal dispatch value, never stored in a type value or
+    /// rendered.
+    IndexTypeDispatch,
+    /// A fresh nominal type id: each call reads and increments
+    /// [`HighGlobal::next_type_id`] and returns a `TypeId(n)` type value.
+    /// Nullary — the checker emits it with no operand, so it fires once per
+    /// source occurrence and the cached value is reused wherever the struct
+    /// type it tags is referenced.
+    Fresh,
+    /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare
+    /// and yield `USize(0/1)` — no `Bool` value exists, the comparison
+    /// result drives the lazy `Index` branch of an `if` directly.
+    ///
+    /// Operand: `[left, right]`.  The lowlevel deep-evaluates the operand
+    /// and gates on its parameterized subtree before calling `run`, so an
+    /// unbound operand (a template parameter during the definition pass)
+    /// is already the lazy marker; the checker pins both operand types to
+    /// `Int`, so a wrong-shape operand here is an invariant violation, not
+    /// a user error.
+    Add,
+    Sub,
+    Leq,
+    Eq,
+}
+
+// The highlevel program's operator vocabulary: a flat union of the
+// structural [`LowOperator`] and the highlevel type-level
+// [`TypeOperator`], each carried whole as one sibling variant.  There is
+// deliberately no downstream composition of this union — the operator
+// vocabulary stays the highlevel's own unless and until a downstream needs
+// more.
+lichen_utils::enum_ext! {
+    /// The highlevel program's operator vocabulary: the structural and
+    /// type-level operators, as sibling carry variants.
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramOperator {
-        /// The dispatch code of a type's kind — the one step a native
-        /// `Index` table cannot express.
-        ///
-        /// Operand: a type value's *kind* — its `[marker, K]` type slot
-        /// (position 1 of the `[shape, kind]` pair).  The kind holds only
-        /// the marker and the universe, never the shape, so the deep pass
-        /// never marks it parameterized for a bound type and this operator
-        /// runs even when the shape's spine still holds unbound cells (a
-        /// lazy stream).  Yields `USize(code)`: 0 = tuple, 1 = struct,
-        /// 2 = array, 3 = any other kind.  The checker feeds the code to a
-        /// native `Index(table, code)` branch table — the code is an
-        /// internal dispatch value, never stored in a type value or
-        /// rendered.
-        IndexTypeDispatch,
-        /// A fresh nominal type id: each call reads and increments
-        /// [`HighGlobal::next_type_id`] and returns
-        /// `HighProgramValue::TypeId(n)`.  Nullary — the checker emits it
-        /// with no operand, so it fires once per source occurrence and the
-        /// cached value is reused wherever the struct type it tags is
-        /// referenced.
-        Fresh,
-        /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare
-        /// and yield `USize(0/1)` — no `Bool` value exists, the comparison
-        /// result drives the lazy `Index` branch of an `if` directly.
-        ///
-        /// Operand: `[left, right]`.  The lowlevel deep-evaluates the operand
-        /// and gates on its parameterized subtree before calling `run`, so an
-        /// unbound operand (a template parameter during the definition pass)
-        /// is already the lazy marker; the checker pins both operand types to
-        /// `Int`, so a wrong-shape operand here is an invariant violation, not
-        /// a user error.
-        Add,
-        Sub,
-        Leq,
-        Eq,
     }
+    + LowOperator as LowOperator;
+    + TypeOperator as TypeOperator;
 }
 
 impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
@@ -238,10 +264,10 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
-            HighProgramOperator::Index | HighProgramOperator::Apply => {
+            HighProgramOperator::LowOperator(_) => {
                 unreachable!("structural operators are dispatched by the VM")
             }
-            HighProgramOperator::IndexTypeDispatch => {
+            HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch) => {
                 // The kind expression `[marker, K]` carries no shape, so a
                 // bound type's kind is never marked parameterized and this
                 // operator runs even when the type's shape spine still
@@ -255,21 +281,21 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 let Some(LowValue::Array(kind)) = operand.as_enum() else {
                     unreachable!("IndexTypeDispatch expects a kind expression pair")
                 };
-                let kind_ids = kind.ids();
-                let head = module.nodes[kind_ids[0]].value;
+                let kind_items = kind.items();
+                let head = module.nodes[kind_items[0].node].value;
                 // A struct kind is `[id, [TypeStruct, K]]` — the nominal id
                 // sits in the head, so the `TypeStruct` tag is the inner
                 // layer's head, not the kind's own head (unlike tuple/array
                 // kinds, whose tag *is* the head).
                 let struct_tag = module
                     .nodes
-                    .get(kind_ids[1])
+                    .get(kind_items[1].node)
                     .and_then(|n| n.value)
                     .and_then(|value| value.as_enum())
                     .and_then(|value| match value {
                         LowValue::Array(inner) => module
                             .nodes
-                            .get(inner.ids()[0])
+                            .get(inner.items()[0].node)
                             .and_then(|n| n.value),
                         _ => None,
                     });
@@ -284,14 +310,16 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 };
                 V::from(LowValue::USize(code))
             }
-            HighProgramOperator::Fresh => {
+            HighProgramOperator::TypeOperator(TypeOperator::Fresh) => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 V::type_id_value(id)
             }
-            HighProgramOperator::Add
-            | HighProgramOperator::Sub
-            | HighProgramOperator::Leq
-            | HighProgramOperator::Eq => {
+            HighProgramOperator::TypeOperator(
+                TypeOperator::Add
+                | TypeOperator::Sub
+                | TypeOperator::Leq
+                | TypeOperator::Eq,
+            ) => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
@@ -301,20 +329,20 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
-                let operands = operands.ids();
+                let operands = operands.items();
                 // A non-USize operand is a *reported* type error, not an
                 // invariant violation: the checker pins both operands to
                 // `Int`, so a wrong shape only arrives here through an
                 // argument unify that already failed (recording the
                 // diagnostic) — stay lazy instead of panicking.
-                let Some(LowValue::USize(left)) = module.nodes[operands[0]]
+                let Some(LowValue::USize(left)) = module.nodes[operands[0].node]
                     .value
                     .as_ref()
                     .and_then(|value| value.as_enum())
                 else {
                     return V::from(LowValue::Parameterized);
                 };
-                let Some(LowValue::USize(right)) = module.nodes[operands[1]]
+                let Some(LowValue::USize(right)) = module.nodes[operands[1].node]
                     .value
                     .as_ref()
                     .and_then(|value| value.as_enum())
@@ -322,10 +350,18 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                     return V::from(LowValue::Parameterized);
                 };
                 match self {
-                    HighProgramOperator::Add => V::from(LowValue::USize(left.wrapping_add(right))),
-                    HighProgramOperator::Sub => V::from(LowValue::USize(left.wrapping_sub(right))),
-                    HighProgramOperator::Leq => V::from(LowValue::USize((left <= right) as usize)),
-                    HighProgramOperator::Eq => V::from(LowValue::USize((left == right) as usize)),
+                    HighProgramOperator::TypeOperator(TypeOperator::Add) => {
+                        V::from(LowValue::USize(left.wrapping_add(right)))
+                    }
+                    HighProgramOperator::TypeOperator(TypeOperator::Sub) => {
+                        V::from(LowValue::USize(left.wrapping_sub(right)))
+                    }
+                    HighProgramOperator::TypeOperator(TypeOperator::Leq) => {
+                        V::from(LowValue::USize((left <= right) as usize))
+                    }
+                    HighProgramOperator::TypeOperator(TypeOperator::Eq) => {
+                        V::from(LowValue::USize((left == right) as usize))
+                    }
                     _ => unreachable!("all binary operators are handled above"),
                 }
             }

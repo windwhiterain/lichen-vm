@@ -1,6 +1,6 @@
 use stacksafe::stacksafe;
 
-use crate::{ArrayRef, BlockId, LowValue, Module, NodeId, Program};
+use crate::{BlockId, LowValue, Module, NodeId, Program};
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
@@ -50,17 +50,13 @@ impl<P: Program> Module<P> {
         }
         let value = current.map(|value| match value.as_enum() {
             Some(LowValue::Array(array)) => {
-                let ids = array.ids();
-                for &node in ids {
-                    self.garbage_collect_node(node, source, target);
+                for item in array.items() {
+                    self.garbage_collect_node(item.node, source, target);
                 }
-                // The mask moves with the ids into the target arena, so a
-                // compacted array keeps its markers.
-                let mask: Vec<bool> = array.mask().to_vec();
-                P::Value::from(LowValue::Array(ArrayRef {
-                    ids: self.copy_nodes(ids, target),
-                    shallow: self.copy_mask(&mask, target),
-                }))
+                // The whole payload — element nodes and their shallow flags
+                // together — moves into the target arena, so a compacted
+                // array keeps its markers.
+                P::Value::from(LowValue::Array(self.alloc_array(array.items(), target)))
             }
             Some(LowValue::Function(function)) => {
                 // The template's nodes must outlive the closing block, so

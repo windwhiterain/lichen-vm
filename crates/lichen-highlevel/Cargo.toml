@@ -8,4 +8,3 @@ slotmap = "1.1.1"
 stacksafe = "1"
 lichen-utils = { path = "../lichen-utils" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
-lichen-extend = { path = "../lichen-extend" }

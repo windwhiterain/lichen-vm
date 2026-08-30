@@ -2,6 +2,7 @@ use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::marker::PhantomData;
 
 use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
@@ -19,14 +20,16 @@ mod gc;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
-    /// The program's full value vocabulary: the structural [`LowValue`]
-    /// spliced together with the program's own value variants.  The
+    /// The program's full value vocabulary: the program's own value union
+    /// with the structural [`LowValue`] carried whole as one variant
+    /// (composed by [`lichen_utils::enum_ext!`] — see [`LowValue`]).  The
     /// lowlevel reads and builds structural values through
     /// [`AsEnum::as_enum`] and [`From<LowValue>`]; the program's own
     /// variants are opaque to it.
     type Value: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone;
-    /// The program's full operator vocabulary: the structural [`LowOperator`]
-    /// spliced together with the program's own operator variants.  The
+    /// The program's full operator vocabulary: the program's own operator
+    /// union with the structural [`LowOperator`] carried whole as one
+    /// variant (composed the same way — see [`LowOperator`]).  The
     /// lowlevel dispatches structural operators through [`AsEnum::as_enum`];
     /// everything else falls through to [`OperatorExt::run`].
     type Operator: OperatorExt<Self> + From<LowOperator> + AsEnum<LowOperator>;
@@ -38,6 +41,27 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// own inherent methods; the lowlevel only requires the marker
     /// [`GlobalExt`] trait.
     type GlobalExt: GlobalExt;
+}
+
+/// One element of a structural array value: the element's node plus its
+/// shallow marker.  `shallow` is inert metadata — structure and unification
+/// ignore it — but it travels with the node through GC and apply clones, and
+/// [`Module::evaluate_node_deep`] skips the subtree of a marked position, so
+/// the element stays lazy until a read forces it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrayItem {
+    pub node: NodeId,
+    pub shallow: bool,
+}
+
+impl ArrayItem {
+    /// An unmarked element (`shallow` is false).
+    pub fn new(node: NodeId) -> Self {
+        ArrayItem {
+            node,
+            shallow: false,
+        }
+    }
 }
 
 /// Program-global extension state — the marker trait that stances the
@@ -55,80 +79,50 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
 pub trait GlobalExt: Default {}
 
 /// The structural values the lowlevel itself produces and consumes — the
-/// non-extension subset of the former `Value<P>`.  A program's value type is
-/// this enum extended with the program's own variants via the generated
-/// `extend_LowValue!` carrier (see the `lichen-extend` crate), so the
-/// lowlevel can always inspect a value through [`AsEnum::as_enum`] and
-/// build one through [`From<LowValue>`] without naming the extension part.
-/// A structural array value: the element ids plus an optional per-position
-/// shallow mask.  `shallow` is null when no position is marked, otherwise a
-/// `[bool]` in the same arena as `ids` — one entry per position, `true` =
-/// the position's whole subtree is shallow.  The mask is inert metadata:
-/// structure and unification ignore it, but it travels with the ids through
-/// GC and apply clones, and [`Module::evaluate_node_deep`] skips the subtree
-/// of a marked position, so the element stays lazy until a read forces it.
+/// non-extension subset of the former `Value<P>`.  A program's value type
+/// composes this enum with [`lichen_utils::enum_ext!`] — `+ LowValue;`
+/// carries it whole as one variant named `LowValue` and bakes the
+/// `From<LowValue>`/`AsEnum<LowValue>` pair the [`Program::Value`] contract
+/// requires — so the lowlevel can always inspect a value through
+/// [`AsEnum::as_enum`] and build one through [`From<LowValue>`] without
+/// naming the program's part.  A chain layer further up (the highlevel's
+/// vocabulary, a language crate's) lists its whole ancestry in one
+/// invocation: `+ HighProgramValue as HighProgramValue; + LowValue;` — the
+/// root glue generates through the carried layer.
+///
+/// A structural array value: the element [`ArrayItem`]s behind a
+/// [`Handle`] into the array's home block's arena.  An element's `shallow`
+/// flag is inert metadata: structure and unification ignore it, but it
+/// travels with the element through GC and apply clones, and
+/// [`Module::evaluate_node_deep`] skips the subtree of a marked element, so
+/// the element stays lazy until a read forces it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArrayRef {
-    pub ids: *const [NodeId],
-    pub shallow: *const [bool],
-}
-
-impl ArrayRef {
-    /// An unmasked array (`shallow` is null).
-    pub fn new(ids: *const [NodeId]) -> Self {
-        ArrayRef {
-            ids,
-            shallow: null_mask(),
-        }
-    }
-    /// The element ids — valid for as long as the array's home block is
-    /// alive (the caller's existing safety contract for arena payloads).
-    pub fn ids(&self) -> &'static [NodeId] {
-        unsafe { &*self.ids }
-    }
-    /// The shallow mask — empty when the array is unmasked.
-    pub fn mask(&self) -> &'static [bool] {
-        if self.shallow.is_null() {
-            &[]
-        } else {
-            unsafe { &*self.shallow }
-        }
-    }
-    /// Whether position `index` is marked shallow.
-    pub fn is_shallow(&self, index: usize) -> bool {
-        self.mask().get(index).copied() == Some(true)
-    }
-    /// Whether any position is marked shallow.
-    pub fn has_shallow(&self) -> bool {
-        self.mask().iter().any(|&marked| marked)
-    }
-}
-
-/// The null form of a `*const [bool]` mask (a fat pointer — `ptr::null`
-/// itself requires a thin type).
-fn null_mask() -> *const [bool] {
-    std::ptr::slice_from_raw_parts(std::ptr::null(), 0)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-#[lichen_extend::enum_ext]
 pub enum LowValue {
     USize(usize),
-    Array(ArrayRef),
+    Array(Handle<[ArrayItem]>),
     Function(FunctionId),
     None,
     Parameterized,
 }
 
+impl Handle<[ArrayItem]> {
+    /// The array's items — valid for as long as the array's home block is
+    /// alive (the caller's existing safety contract for arena payloads).
+    pub fn items(&self) -> &'static [ArrayItem] {
+        unsafe { &*self.0 }
+    }
+}
+
 /// The structural operators the lowlevel itself dispatches — the
 /// non-extension subset of the former `Operator<P>`.  A program's operator
-/// type is this enum extended with the program's own variants via the
-/// generated `extend_LowOperator!` carrier, so the lowlevel can always pick
+/// type composes this enum with [`lichen_utils::enum_ext!`] —
+/// `+ LowOperator;` carries it whole as one variant named `LowOperator` and
+/// bakes the `From<LowOperator>`/`AsEnum<LowOperator>` pair the
+/// [`Program::Operator`] contract requires — so the lowlevel can always pick
 /// its own operators out of a value through [`AsEnum::as_enum`]; everything
 /// `as_enum` doesn't recognise is a program operator and runs through
 /// [`OperatorExt::run`].
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[lichen_extend::enum_ext]
 pub enum LowOperator {
     /// - `operand[0]`: array.
     /// - `operand[1]`: index.
@@ -138,7 +132,13 @@ pub enum LowOperator {
     Apply,
 }
 
-/// [`PartialEq`] is what decides whether two of them unify.
+/// The cheap, structural equality a value vocabulary must provide —
+/// marker/`USize` variants compare by their fields, handle payloads compare
+/// by pointer identity ([`Handle`]'s [`PartialEq`]).  It decides the fast
+/// checks (`is_unbound`, kind-marker lookups); the *full* equality
+/// unification merges on is [`ValueExt::value_eq`], which compares handle
+/// payloads by content.  Equality *through* arrays is not any `==`'s job —
+/// unification recurses into them elementwise.
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
     /// Available if [`Self::is_handle()`].
@@ -152,6 +152,29 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// Available if [`Self::is_handle()`].
     fn alignment() -> usize {
         unreachable!()
+    }
+    /// Full equality of two values: handle payloads compare by content
+    /// (same variant, byte-wise against the pointed-to allocation), every
+    /// other pair is the derived [`PartialEq`].  This is the equality
+    /// unification merges two concrete values on — [`PartialEq`] itself is
+    /// only the cheap pointer-level form.  Not deep: an array is one
+    /// allocation, so two arrays compare equal only when they share it;
+    /// structural equality through arrays is unification's elementwise
+    /// recursion.
+    fn value_eq(&self, other: &Self) -> bool {
+        if self.is_handle()
+            && other.is_handle()
+            && std::mem::discriminant(self) == std::mem::discriminant(other)
+        {
+            let (a, b) = (self.handle(), other.handle());
+            return a.len() == b.len()
+                && (std::ptr::eq(a.0, b.0)
+                    || unsafe {
+                        std::slice::from_raw_parts(a.0 as *const u8, a.len())
+                            == std::slice::from_raw_parts(b.0 as *const u8, b.len())
+                    });
+        }
+        self == other
     }
 }
 
@@ -171,27 +194,41 @@ pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
 
-/// Pointer into a [`Block::arena`].  
-/// `PartialEq` compares pointing value if not `UNIQUE`.
+/// Pointer into a [`Block::arena`].
+/// `PartialEq` is pointer identity: two handles are equal iff they point at
+/// the same allocation (same address and length) — never a dereference.
+/// Content equality of two handle payloads is a value-level question,
+/// answered by [`Module::value_eq`].
 #[derive(Debug)]
-pub struct Handle<T: ?Sized, const UNIQUE: bool = false>(pub *const T);
+pub struct Handle<T: ?Sized>(pub *const T);
+pub struct StaticHandle<T: ?Sized> {
+    pub module: usize,
+    pub offset: usize,
+    _p: PhantomData<T>,
+}
+
 impl<T: ?Sized> Clone for Handle<T> {
     fn clone(&self) -> Self {
         *self
     }
 }
+impl<T: ?Sized> Clone for StaticHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 impl<T: ?Sized> Copy for Handle<T> {}
+impl<T: ?Sized> Copy for StaticHandle<T> {}
 
-impl<T: PartialEq + ?Sized, const UNIQUE: bool> PartialEq for Handle<T, UNIQUE> {
+impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
-        if std::ptr::eq(self.0, other.0) {
-            return true;
-        }
-        if !UNIQUE {
-            unsafe { *self.0 == *other.0 }
-        } else {
-            false
-        }
+        std::ptr::eq(self.0, other.0)
+    }
+}
+
+impl<T: ?Sized> PartialEq for StaticHandle<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.module == other.module && self.offset == other.offset
     }
 }
 
@@ -206,8 +243,16 @@ impl Handle<[u8]> {
 }
 
 new_key_type! {pub struct NodeId;}
+pub struct StaticNodeId {
+    pub module: usize,
+    pub index: usize,
+}
 new_key_type! {pub struct BlockId;}
 new_key_type! {pub struct FunctionId;}
+pub struct StaticFunctionId {
+    pub module: usize,
+    pub index: usize,
+}
 
 /// Garbage collection unit.
 /// # Contract
@@ -238,6 +283,11 @@ pub struct Function {
     pub parameter: NodeId,
     /// Owner.
     pub block: BlockId,
+}
+
+pub struct StaticFunction {
+    pub parameter: StaticNodeId,
+    pub r#return: StaticNodeId,
 }
 
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`],
@@ -279,6 +329,13 @@ pub struct Node<P: Program> {
     pub evaluated_deep: Option<EvaluatedDeep>,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
+    pub equality: disjoint::Meta<NodeId>,
+}
+
+pub struct StaticNode<P: Program> {
+    pub value: Option<P::Value>,
+    pub operation: Option<Operation<P>>,
+    pub assert: Option<NodeId>,
     pub equality: disjoint::Meta<NodeId>,
 }
 
@@ -426,11 +483,7 @@ impl<P: Program> Module<P> {
     /// apply clone remaps its condition and re-registers the clone, so a
     /// function body's assert re-checks against each call's argument.
     pub fn add_assert(&mut self, block: BlockId, condition: NodeId) -> NodeId {
-        let node = self.add_node(
-            block,
-            None,
-            Some(P::Value::from(LowValue::Parameterized)),
-        );
+        let node = self.add_node(block, None, Some(P::Value::from(LowValue::Parameterized)));
         self.nodes[node].assert = Some(condition);
         self.asserts.push(node);
         node

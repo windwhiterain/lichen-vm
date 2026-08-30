@@ -9,24 +9,22 @@
 //! rules the highlevel layer will sit on.
 
 use lichen_highlevel::program::{HighProgram, HighProgramOperator, HighProgramValue};
-use lichen_lowlevel::{ArrayRef, BlockId, Module, NodeId, Operation};
+use lichen_lowlevel::{ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId, Operation};
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
-    m.add_node(block, None, Some(HighProgramValue::USize(n)))
+    m.add_node(block, None, Some(HighProgramValue::LowValue(LowValue::USize(n))))
 }
 
 fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
-    m.add_node(block, None, Some(HighProgramValue::Parameterized))
+    m.add_node(block, None, Some(HighProgramValue::LowValue(LowValue::Parameterized)))
 }
 
 fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
-    let slice = m.blocks[block].arena.alloc_slice_copy(ids);
+    let items: Vec<ArrayItem> = ids.iter().map(|&node| ArrayItem::new(node)).collect();
     m.add_node(
         block,
         None,
-        Some(HighProgramValue::Array(ArrayRef::new(
-            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
-        ))),
+        Some(HighProgramValue::LowValue(LowValue::Array(m.alloc_array(&items, block)))),
     )
 }
 
@@ -43,7 +41,7 @@ fn index_node(
     m.add_node(
         block,
         Some(Operation {
-            operator: HighProgramOperator::Index,
+            operator: HighProgramOperator::LowOperator(LowOperator::Index),
             operand: Some(operands),
         }),
         None,
@@ -56,7 +54,7 @@ fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: No
     m.add_node(
         block,
         Some(Operation {
-            operator: HighProgramOperator::Apply,
+            operator: HighProgramOperator::LowOperator(LowOperator::Apply),
             operand: Some(operands),
         }),
         None,
@@ -64,10 +62,10 @@ fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: No
 }
 
 fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
-    let HighProgramValue::Array(array) = value else {
+    let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value")
     };
-    array.ids().to_vec()
+    array.items().iter().map(|item| item.node).collect()
 }
 
 #[test]
@@ -87,7 +85,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let codomain = m.add_node(
         root,
         Some(Operation {
-            operator: HighProgramOperator::Index,
+            operator: HighProgramOperator::LowOperator(LowOperator::Index),
             operand: Some(codomain_operands),
         }),
         None,
@@ -109,7 +107,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let ids = array_ids(value);
     assert!(matches!(
         m.nodes[ids[1]].value,
-        Some(HighProgramValue::USize(1))
+        Some(HighProgramValue::LowValue(LowValue::USize(1)))
     ));
 
     // applied to 0: the same template picks the `float` branch
@@ -120,7 +118,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     let ids = array_ids(value);
     assert!(matches!(
         m.nodes[ids[1]].value,
-        Some(HighProgramValue::USize(0))
+        Some(HighProgramValue::LowValue(LowValue::USize(0)))
     ));
 }
 
@@ -205,7 +203,7 @@ fn a_resolvable_computation_is_forced_and_compared() {
     );
     assert!(matches!(
         m.nodes[pick_five].value,
-        Some(HighProgramValue::USize(5))
+        Some(HighProgramValue::LowValue(LowValue::USize(5)))
     ));
 }
 
@@ -234,7 +232,7 @@ fn a_resolvable_index_read_pins_its_element() {
     );
     assert!(matches!(
         m.nodes[read].value,
-        Some(HighProgramValue::USize(3))
+        Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert!(
         m.nodes[read].operation.is_some(),
@@ -273,11 +271,11 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     // each kept its own computed value — neither was erased onto the other
     assert!(matches!(
         m.nodes[pick5].value,
-        Some(HighProgramValue::USize(5))
+        Some(HighProgramValue::LowValue(LowValue::USize(5)))
     ));
     assert!(matches!(
         m.nodes[pick4].value,
-        Some(HighProgramValue::USize(4))
+        Some(HighProgramValue::LowValue(LowValue::USize(4)))
     ));
 
     // equal computations merge

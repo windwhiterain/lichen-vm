@@ -15,10 +15,11 @@ pub mod diagnostic;
 pub mod ir;
 pub mod program;
 
-// The value vocabulary is itself an extension point: `#[enum_ext]` on the
-// union generates a carrier macro whose body resolves `$crate::HighProgramValue`
-// and `$crate::__extend_shape_HighProgramValue` at this crate's root, so both
-// must be re-exported here (a downstream crate calls
-// `lichen_highlevel::extend_HighProgramValue!` to splice its own variants in).
-pub use program::__extend_shape_HighProgramValue;
-pub use program::{HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ValueType};
+// The vocabularies are themselves extension points: a downstream composes
+// its own union with `lichen_utils::enum_ext!`, listing every layer's enum
+// directly — `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
+// own variants.  Each layer provides a plain enum; nothing nests.
+pub use program::{
+    HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, TypeOperator,
+    TypeValue, ValueType,
+};

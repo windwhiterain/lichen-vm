@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use stacksafe::stacksafe;
 
-use crate::{LowOperator, LowValue, Module, Node, NodeId, Operation, Program, is_unbound};
+use crate::{LowOperator, LowValue, Module, Node, NodeId, Operation, Program, ValueExt as _, is_unbound};
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
@@ -45,8 +45,9 @@ impl<P: Program> Module<P> {
     /// except against an all-unbound skeleton (cells and arrays of cells),
     /// which merges with the computation: nothing is erased, and the
     /// computation's eventual value replicates onto the skeleton.  Two
-    /// concrete values merge iff they are equal ([`PartialEq`]), except
-    /// arrays, which unify elementwise (their structure is the value).  A
+    /// concrete values merge iff they are fully equal
+    /// ([`ValueExt::value_eq`]), except arrays, which unify elementwise
+    /// (their structure is the value).  A
     /// conflict records a [`UnifyError`] in [`Self::unify_errors`] and
     /// leaves the two classes unmerged.
     ///
@@ -134,12 +135,13 @@ impl<P: Program> Module<P> {
         let rb = disjoint::find(&mut self.nodes, rb);
         let va = self.nodes[ra].value;
         let vb = self.nodes[rb].value;
-        match (
-            va.map(|value| value.as_enum()),
-            vb.map(|value| value.as_enum()),
-        ) {
-            (Some(Some(LowValue::Array(pa))), Some(Some(LowValue::Array(pb)))) => {
-                let (left, right) = (pa.ids(), pb.ids());
+        let pair = (
+            va.as_ref().and_then(|value| value.as_enum()),
+            vb.as_ref().and_then(|value| value.as_enum()),
+        );
+        match pair {
+            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
+                let (left, right) = (pa.items(), pb.items());
                 if left.len() != right.len() {
                     self.record_error(ra, rb);
                     return false;
@@ -148,14 +150,24 @@ impl<P: Program> Module<P> {
                 let ok = left
                     .iter()
                     .zip(right.iter())
-                    .all(|(&na, &nb)| self.unify_inner(na, nb, path));
+                    .all(|(na, nb)| self.unify_inner(na.node, nb.node, path));
                 path.pop();
                 if ok {
                     self.add_equality(ra, rb);
                 }
                 ok
             }
-            _ if va == vb => {
+            // Two concrete values merge iff they are *fully* equal
+            // ([`ValueExt::value_eq`] — handle payloads by content, which
+            // the cheap [`PartialEq`] deliberately does not see); two
+            // classes holding no value at all merge too, which nothing
+            // above could bind.
+            _ if match (&va, &vb) {
+                (Some(a), Some(b)) => a.value_eq(b),
+                (None, None) => true,
+                _ => false,
+            } =>
+            {
                 self.add_equality(ra, rb);
                 true
             }
@@ -242,9 +254,9 @@ impl<P: Program> Module<P> {
                 None => {}
                 Some(LowValue::Parameterized) => {}
                 Some(LowValue::Array(array)) => {
-                    let ids = array.ids();
+                    let items = array.items();
                     let mut seen = HashSet::new();
-                    if ids.iter().any(|&id| !self.value_is_skeleton(id, &mut seen)) {
+                    if items.iter().any(|item| !self.value_is_skeleton(item.node, &mut seen)) {
                         return false;
                     }
                 }
@@ -270,9 +282,9 @@ impl<P: Program> Module<P> {
                 Some(LowValue::Parameterized) => true,
                 Some(LowValue::Array(array)) => {
                     array
-                        .ids()
+                        .items()
                         .iter()
-                        .all(|&id| self.value_is_skeleton(id, seen))
+                        .all(|item| self.value_is_skeleton(item.node, seen))
                 }
                 _ => false,
             };
@@ -307,20 +319,19 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = operands.as_enum() else {
             return None;
         };
-        let operands = array.ids();
+        let operands = array.items();
         if operands.len() != 2 {
             return None;
         }
-        let index_value = self.nodes[operands[1]].value?;
+        let index_value = self.nodes[operands[1].node].value?;
         let Some(LowValue::USize(index)) = index_value.as_enum() else {
             return None;
         };
-        let container_value = self.nodes[operands[0]].value?;
+        let container_value = self.nodes[operands[0].node].value?;
         let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
-        let container = container_ptr.ids();
-        container.get(index).copied()
+        container_ptr.items().get(index).map(|item| item.node)
     }
 
     /// The first pending operation node in `rep`'s class, if any.

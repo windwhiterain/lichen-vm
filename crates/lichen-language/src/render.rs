@@ -31,7 +31,7 @@ use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, HighProgramValue, ValueType};
-use lichen_lowlevel::{LowValue, Module, NodeId};
+use lichen_lowlevel::{ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 
 use crate::diag::Diag;
@@ -173,7 +173,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
-                LowValue::Array(array) => self.elements(node, array.ids()),
+                LowValue::Array(array) => self.elements(node, array.items()),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::None | LowValue::Parameterized => {
                     unreachable!("handled by node()")
@@ -208,19 +208,19 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         }
     }
 
-    fn elements(&mut self, node: NodeId, elements: &[NodeId]) -> String {
+    fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
         // `[head, K]` — an atomic type: the kind slot is the self-looping
         // universe, so render the head (`int`, `Type`, …).
-        if elements.len() == 2 && is_universe(self.module, elements[1]) {
-            return self.node(elements[0]);
+        if elements.len() == 2 && is_universe(self.module, elements[1].node) {
+            return self.node(elements[0].node);
         }
         // A bare struct kind `[id, [TypeStruct, K]]` (a struct type pair's
         // type slot): render its tag `TypeStruct`.
         if is_struct_kind(self.module, node)
             && let Some(LowValue::Array(kind)) = self.module.nodes[node].value.and_then(|v| v.as_enum())
-            && let Some(LowValue::Array(inner)) = self.module.nodes.get(kind.ids()[1]).and_then(|n| n.value).and_then(|v| v.as_enum())
+            && let Some(LowValue::Array(inner)) = self.module.nodes.get(kind.items()[1].node).and_then(|n| n.value).and_then(|v| v.as_enum())
         {
-            return self.node(inner.ids()[0]);
+            return self.node(inner.items()[0].node);
         }
         // A struct type: `[shape, [id, [TypeStruct, K]]]` — the nominal id
         // heads the kind and the `TypeStruct` tag is the inner
@@ -228,12 +228,12 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         // compound kinds.  The id renders as `#n` so two structs with the
         // same field shape stay distinguishable (their nominal types differ).
         if elements.len() == 2
-            && let Some(kind) = self.module.nodes[elements[1]].value
+            && let Some(kind) = self.module.nodes[elements[1].node].value
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && kind_is_struct(self.module, kind.ids())
+            && kind_is_struct(self.module, kind.items())
         {
-            let fields = self.fields(elements[0]);
-            let id = self.module.nodes[kind.ids()[0]]
+            let fields = self.fields(elements[0].node);
+            let id = self.module.nodes[kind.items()[0].node]
                 .value
                 .and_then(|v| v.type_id());
             return match (self.show_struct_id, id) {
@@ -244,36 +244,36 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         // `[shape, [marker, K]]` — a compound type: the kind's marker decides
         // how the shape reads.
         if elements.len() == 2
-            && let Some(kind) = self.module.nodes[elements[1]].value
+            && let Some(kind) = self.module.nodes[elements[1].node].value
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.ids()
+            && let kind = kind.items()
             && kind.len() == 2
-            && is_universe(self.module, kind[1])
+            && is_universe(self.module, kind[1].node)
         {
-            match self.module.nodes[kind[0]].value {
+            match self.module.nodes[kind[0].node].value {
                 Some(m) if m == V::function_type_marker() => {
                     // shape = [in, out] — render `in -> out`.
-                    if let Some(shape) = self.module.nodes[elements[0]].value
+                    if let Some(shape) = self.module.nodes[elements[0].node].value
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.ids()
+                        && let s = shape.items()
                         && s.len() == 2
                     {
-                        return format!("{} -> {}", self.node(s[0]), self.node(s[1]));
+                        return format!("{} -> {}", self.node(s[0].node), self.node(s[1].node));
                     }
                 }
                 Some(m) if m == V::tuple_type_marker() => {
                     // shape = the field-type list — render `<T1, ..., Tn>`.
-                    let fields = self.fields(elements[0]);
+                    let fields = self.fields(elements[0].node);
                     return format!("<{}>", fields.join(", "));
                 }
                 Some(m) if m == V::array_type_marker() => {
                     // shape = [element type, length] — render `T<len>`.
-                    if let Some(shape) = self.module.nodes[elements[0]].value
+                    if let Some(shape) = self.module.nodes[elements[0].node].value
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.ids()
+                        && let s = shape.items()
                         && s.len() == 2
                     {
-                        return format!("{}<{}>", self.node(s[0]), self.node(s[1]));
+                        return format!("{}<{}>", self.node(s[0].node), self.node(s[1].node));
                     }
                 }
                 _ => {}
@@ -283,10 +283,14 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         // the checker registered the shape (the diagnostic path); otherwise
         // it falls through to the raw pair.
         if elements.len() == 2 && self.is_arrow(node) {
-            return format!("{} -> {}", self.node(elements[0]), self.node(elements[1]));
+            return format!(
+                "{} -> {}",
+                self.node(elements[0].node),
+                self.node(elements[1].node)
+            );
         }
         // Fallback: render the raw elements.
-        let parts: Vec<String> = elements.iter().map(|&e| self.node(e)).collect();
+        let parts: Vec<String> = elements.iter().map(|item| self.node(item.node)).collect();
         format!("[{}]", parts.join(", "))
     }
 
@@ -307,7 +311,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             .value
             .and_then(|v| v.as_enum())
         {
-            array.ids().iter().map(|&f| self.node(f)).collect()
+            array.items().iter().map(|item| self.node(item.node)).collect()
         } else {
             vec![self.node(shape)]
         }
@@ -363,20 +367,20 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
         else {
             return self.raw(value);
         };
-        let tys = ty_array.ids();
+        let tys = ty_array.items();
         // A struct type itself: the value's type is the struct kind
         // `[id, [TypeStruct, K]]` (not a `[shape, [marker, K]]` pair), and the
         // value is the field-type list — render `struct<T1, ..., Tn>`.
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
-            let fields: Vec<String> = shape.ids().iter().map(|&f| self.printer.node(f)).collect();
+            let fields: Vec<String> = shape.items().iter().map(|item| self.printer.node(item.node)).collect();
             return format!("struct<{}>", fields.join(", "));
         }
         // A kind `[marker, K]`: the value is a compound type — render its
         // shape in type syntax.
-        if tys.len() == 2 && is_universe(self.module, tys[1])
-            && let Some(out) = self.compound_type(value, tys[0])
+        if tys.len() == 2 && is_universe(self.module, tys[1].node)
+            && let Some(out) = self.compound_type(value, tys[0].node)
         {
             return out;
         }
@@ -384,21 +388,21 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
         // field-type list (the shape); its kind is `[id, [TypeStruct, K]]`,
         // so it is detected beside the `[marker, K]` kinds.
         if tys.len() == 2
-            && is_struct_kind(self.module, tys[1])
-            && let Some(out) = self.instance(value, tys[0], V::type_struct_marker())
+            && is_struct_kind(self.module, tys[1].node)
+            && let Some(out) = self.instance(value, tys[0].node, V::type_struct_marker())
         {
             return out;
         }
         // A term of a tuple/array/struct type `[shape, [marker, K]]`: the
         // value's elements read against the shape.
         if tys.len() == 2
-            && let Some(kind) = self.module.nodes[tys[1]].value
+            && let Some(kind) = self.module.nodes[tys[1].node].value
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.ids()
+            && let kind = kind.items()
             && kind.len() == 2
-            && is_universe(self.module, kind[1])
-            && let Some(marker) = self.module.nodes[kind[0]].value
-            && let Some(out) = self.instance(value, tys[0], marker)
+            && is_universe(self.module, kind[1].node)
+            && let Some(marker) = self.module.nodes[kind[0].node].value
+            && let Some(out) = self.instance(value, tys[0].node, marker)
         {
             return out;
         }
@@ -425,24 +429,27 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
         let Some(LowValue::Array(shape)) = value.as_enum() else {
             return None;
         };
-        let shape = shape.ids();
+        let shape = shape.items();
         if marker == V::function_type_marker() {
             if shape.len() == 2 {
                 return Some(format!(
                     "{} -> {}",
-                    self.printer.node(shape[0]),
-                    self.printer.node(shape[1])
+                    self.printer.node(shape[0].node),
+                    self.printer.node(shape[1].node)
                 ));
             }
         } else if marker == V::tuple_type_marker() {
-            let fields: Vec<String> = shape.iter().map(|&s| self.printer.node(s)).collect();
+            let fields: Vec<String> = shape
+                .iter()
+                .map(|item| self.printer.node(item.node))
+                .collect();
             return Some(format!("<{}>", fields.join(", ")));
         } else if marker == V::array_type_marker() {
             if shape.len() == 2 {
                 return Some(format!(
                     "{}<{}>",
-                    self.printer.node(shape[0]),
-                    self.printer.node(shape[1])
+                    self.printer.node(shape[0].node),
+                    self.printer.node(shape[1].node)
                 ));
             }
         }
@@ -460,21 +467,21 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
         let Some(LowValue::Array(values)) = value.as_enum() else {
             return None;
         };
-        let values = values.ids();
+        let values = values.items();
         let shape = self.module.nodes[shape_node]
             .value
             .and_then(|v| v.as_enum());
         let Some(LowValue::Array(shape)) = shape else {
             return None;
         };
-        let shape = shape.ids();
+        let shape = shape.items();
         if marker == V::tuple_type_marker() {
             if shape.len() != values.len() {
                 return None;
             }
             let mut out = Vec::with_capacity(values.len());
-            for (i, &v) in values.iter().enumerate() {
-                out.push(self.element(v, shape[i]));
+            for (i, v) in values.iter().enumerate() {
+                out.push(self.element(v.node, shape[i].node));
             }
             return Some(self.parens(&out));
         }
@@ -483,8 +490,8 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                 return None;
             }
             let mut out = Vec::with_capacity(values.len());
-            for &v in values {
-                out.push(self.element(v, shape[0]));
+            for v in values {
+                out.push(self.element(v.node, shape[0].node));
             }
             return Some(format!("[{}]", out.join(", ")));
         }
@@ -496,8 +503,8 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                 return None;
             }
             let mut out = Vec::with_capacity(values.len());
-            for (i, &v) in values.iter().enumerate() {
-                out.push(self.element(v, fields[i]));
+            for (i, v) in values.iter().enumerate() {
+                out.push(self.element(v.node, fields[i].node));
             }
             return Some(self.parens(&out));
         }
@@ -545,18 +552,19 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                 LowValue::None => "none".to_string(),
                 LowValue::Parameterized => "parameterized".to_string(),
                 LowValue::Array(array) => {
-                    let elements = array.ids();
+                    let elements = array.items();
                     // A type pair `[head, K]`: the kind slot is the
                     // self-looping universe, so render just the head (and cut
                     // the cycle).
-                    if elements.len() == 2 && is_universe(self.module, elements[1]) {
-                        let head = self.module.nodes[elements[0]]
+                    if elements.len() == 2 && is_universe(self.module, elements[1].node) {
+                        let head = self.module.nodes[elements[0].node]
                             .value
                             .unwrap_or_else(|| V::from(LowValue::None));
                         return self.raw(head);
                     }
                     let mut out = Vec::new();
-                    for &id in elements {
+                    for item in elements {
+                        let id = item.node;
                         if self.path.contains(&id) {
                             out.push("…".to_string());
                         } else {
@@ -615,7 +623,7 @@ fn is_struct_kind<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -
         .and_then(|n| n.value)
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
-            LowValue::Array(kind) => kind_is_struct(module, kind.ids()),
+            LowValue::Array(kind) => kind_is_struct(module, kind.items()),
             _ => false,
         })
 }
@@ -624,29 +632,29 @@ fn is_universe<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> b
     let rep = representative(module, node);
     matches!(module.nodes[node].value, Some(value)
         if matches!(value.as_enum(), Some(LowValue::Array(array))
-            if array.ids().iter().any(|&m| representative(module, m) == rep)))
+            if array.items().iter().any(|item| representative(module, item.node) == rep)))
 }
 
-/// Whether `kind_ids` (the element ids of a kind value) describe a struct
+/// Whether `kind_items` (the element items of a kind value) describe a struct
 /// kind: `[id, [TypeStruct, K]]`.  The nominal id heads the kind and the
 /// `TypeStruct` tag is the inner `[TypeStruct, K]` layer, so it cannot be
 /// detected the way the `[marker, K]` kinds are.
-fn kind_is_struct<V: ValueType>(module: &Module<HighProgram<V>>, kind_ids: &[NodeId]) -> bool {
-    kind_ids.len() == 2
+fn kind_is_struct<V: ValueType>(module: &Module<HighProgram<V>>, kind_items: &[ArrayItem]) -> bool {
+    kind_items.len() == 2
         && module
             .nodes
-            .get(kind_ids[1])
+            .get(kind_items[1].node)
             .and_then(|n| n.value)
             .and_then(|v| v.as_enum())
             .is_some_and(|v| match v {
                 LowValue::Array(inner) => {
-                    let ids = inner.ids();
-                    ids.len() == 2
+                    let items = inner.items();
+                    items.len() == 2
                         && module
                             .nodes
-                            .get(ids[0])
+                            .get(items[0].node)
                             .is_some_and(|n| n.value == Some(V::type_struct_marker()))
-                        && is_universe(module, ids[1])
+                        && is_universe(module, items[1].node)
                 }
                 _ => false,
             })
@@ -717,8 +725,10 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag) -> String {
             printer.node(d.b)
         ),
         DiagKind::IndexOutOfBounds => {
-            let (Some(HighProgramValue::USize(index)), Some(HighProgramValue::USize(length))) =
-                (d.value_a, d.value_b)
+            let (
+                Some(HighProgramValue::LowValue(LowValue::USize(index))),
+                Some(HighProgramValue::LowValue(LowValue::USize(length))),
+            ) = (d.value_a, d.value_b)
             else {
                 return "index out of bounds".to_string();
             };
@@ -733,8 +743,9 @@ mod tests {
     use crate::diag::Stage;
 
     use lichen_highlevel::checker::Checker;
+    use lichen_highlevel::program::TypeValue;
     use lichen_highlevel::ir::{ExprKind, IR};
-    use lichen_lowlevel::{ArrayRef, FunctionId, ValueExt};
+    use lichen_lowlevel::{ArrayItem, Handle, FunctionId, ValueExt};
     use lichen_utils::extend::AsEnum;
 
     #[test]
@@ -867,27 +878,17 @@ mod tests {
     // --- the extended vocabulary --------------------------------------------
 
     // A probe extension: a type constant beyond the highlevel's vocabulary,
-    // spliced into a flat union with `extend_HighProgramValue!` — the path a
-    // language crate takes to add its own value variants.  The renderers are
-    // generic over the vocabulary; the extension's own variant renders
-    // through the hook both printers carry.
-    lichen_highlevel::extend_HighProgramValue! {
+    // composed in one `enum_ext!` invocation that lists every layer's enum
+    // directly — the path a language crate takes to add its own value
+    // variants.  The renderers are generic over the vocabulary; the
+    // extension's own variant renders through the hook both printers carry.
+    lichen_utils::enum_ext! {
         #[derive(Debug, Clone, Copy, PartialEq)]
         pub enum ProbeValue {
             FloatType,
         }
-    }
-
-    impl From<LowValue> for ProbeValue {
-        fn from(value: LowValue) -> Self {
-            HighProgramValue::from(value).into()
-        }
-    }
-
-    impl AsEnum<LowValue> for ProbeValue {
-        fn as_enum(&self) -> Option<LowValue> {
-            AsEnum::<HighProgramValue>::as_enum(self).and_then(|value| value.as_enum())
-        }
+        + LowValue as LowValue;
+        + TypeValue as TypeValue;
     }
 
     impl ValueExt for ProbeValue {
@@ -898,45 +899,40 @@ mod tests {
 
     impl ValueType for ProbeValue {
         fn int_marker() -> Self {
-            Self::TypeInt
+            Self::TypeValue(TypeValue::TypeInt)
         }
         fn type_marker() -> Self {
-            Self::TypeType
+            Self::TypeValue(TypeValue::TypeType)
         }
         fn function_type_marker() -> Self {
-            Self::TypeFunction
+            Self::TypeValue(TypeValue::TypeFunction)
         }
         fn tuple_type_marker() -> Self {
-            Self::TypeTuple
+            Self::TypeValue(TypeValue::TypeTuple)
         }
         fn array_type_marker() -> Self {
-            Self::TypeArray
+            Self::TypeValue(TypeValue::TypeArray)
         }
         fn type_struct_marker() -> Self {
-            Self::TypeStruct
+            Self::TypeValue(TypeValue::TypeStruct)
         }
         fn type_of(&self) -> Self {
             match self {
-                ProbeValue::USize(_) => Self::TypeInt,
-                ProbeValue::FloatType
-                | ProbeValue::TypeInt
-                | ProbeValue::TypeType
-                | ProbeValue::TypeFunction
-                | ProbeValue::TypeTuple
-                | ProbeValue::TypeArray
-                | ProbeValue::TypeStruct
-                | ProbeValue::TypeId(_) => Self::TypeType,
-                _ => unreachable!("a structural non-USize value is not a constant"),
+                ProbeValue::FloatType | ProbeValue::TypeValue(_) => Self::type_marker(),
+                ProbeValue::LowValue(LowValue::USize(_)) => Self::int_marker(),
+                ProbeValue::LowValue(_) => {
+                    unreachable!("a structural non-USize value is not a constant")
+                }
             }
         }
         fn type_id(&self) -> Option<usize> {
             match self {
-                Self::TypeId(n) => Some(*n),
+                Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
                 _ => None,
             }
         }
         fn type_id_value(n: usize) -> Self {
-            Self::TypeId(n)
+            Self::TypeValue(TypeValue::TypeId(n))
         }
     }
 

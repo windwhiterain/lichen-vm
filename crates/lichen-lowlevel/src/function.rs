@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::{ArrayRef, BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program};
+use crate::{
+    ArrayItem, BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program,
+};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
@@ -167,12 +169,14 @@ impl<P: Program> Module<P> {
             // of the same apply does not re-record it.
             if self.unify_errors.len() > pre_unify_errors {
                 let parameter_type = self
-                    .array_ids(parameter)
-                    .and_then(|ids| ids.get(1).copied())
+                    .array_items(parameter)
+                    .and_then(|items| items.get(1))
+                    .map(|item| item.node)
                     .unwrap_or(parameter);
                 let argument_type = self
-                    .array_ids(argument)
-                    .and_then(|ids| ids.get(1).copied())
+                    .array_items(argument)
+                    .and_then(|items| items.get(1))
+                    .map(|item| item.node)
                     .unwrap_or(argument);
                 if !self.apply_errors.iter().any(|e| e.apply_node == node) {
                     self.apply_errors.push(ApplyError {
@@ -201,8 +205,8 @@ impl<P: Program> Module<P> {
         // reads as unbound until the deep pass resolves it.  An apply
         // without a wired cell (a hand-built lowlevel graph) is unchanged.
         match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(array))) if array.ids().len() == 2 => {
-                let ids = array.ids();
+            (Some(cell), Some(LowValue::Array(array))) if array.items().len() == 2 => {
+                let items = array.items();
                 self.nodes[node].value = Some(result);
                 self.unify(node, applied);
                 // Resolve the return type before binding the cell: the deep
@@ -213,8 +217,8 @@ impl<P: Program> Module<P> {
                 // evaluation time (see the Index arm), so this unify joins
                 // the cell into that class and the binding propagates
                 // regardless of when the nested apply runs.
-                self.evaluate_node(ids[1], Some(block));
-                self.unify(cell, ids[1]);
+                self.evaluate_node(items[1].node, Some(block));
+                self.unify(cell, items[1].node);
                 result
             }
             _ => result,
@@ -252,19 +256,19 @@ impl<P: Program> Module<P> {
         ) else {
             return;
         };
-        for (i, (&pattern_id, &argument_id)) in pattern
-            .ids()
-            .iter()
-            .zip(argument.ids().iter())
-            .enumerate()
-        {
+        for (pattern_item, argument_item) in pattern.items().iter().zip(argument.items().iter()) {
             // A shallow position on either side is opaque — its subtree
             // stays lazy, so the apply's argument evaluation does not force
             // what the marker deliberately left unevaluated.
-            if pattern.is_shallow(i) || argument.is_shallow(i) {
+            if pattern_item.shallow || argument_item.shallow {
                 continue;
             }
-            self.evaluate_pattern_argument_inner(pattern_id, argument_id, block, seen);
+            self.evaluate_pattern_argument_inner(
+                pattern_item.node,
+                argument_item.node,
+                block,
+                seen,
+            );
         }
     }
 
@@ -356,18 +360,18 @@ impl<P: Program> Module<P> {
     fn value_apply(&mut self, value: P::Value, ctx: &mut ApplyCtx<'_>) -> P::Value {
         match value.as_enum() {
             Some(LowValue::Array(array)) => {
-                // The mask travels with the ids: each call's clone honors
-                // its own markers.
-                let nodes: Vec<NodeId> = array
-                    .ids()
+                // Each element rides with its shallow flag: the flag travels
+                // with the remapped node, so each call's clone honors its
+                // own markers.
+                let items: Vec<ArrayItem> = array
+                    .items()
                     .iter()
-                    .map(|&id| self.node_apply(id, ctx))
+                    .map(|&item| ArrayItem {
+                        node: self.node_apply(item.node, ctx),
+                        ..item
+                    })
                     .collect();
-                let mask: Vec<bool> = array.mask().to_vec();
-                P::Value::from(LowValue::Array(ArrayRef {
-                    ids: self.copy_nodes(&nodes, ctx.target),
-                    shallow: self.copy_mask(&mask, ctx.target),
-                }))
+                P::Value::from(LowValue::Array(self.alloc_array(&items, ctx.target)))
             }
             Some(LowValue::Function(function)) => {
                 // A cloned function's scope is mapped like an array: every
@@ -437,7 +441,7 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = value.as_enum() else {
             return false;
         };
-        let mut stack: Vec<NodeId> = array.ids().to_vec();
+        let mut stack: Vec<NodeId> = array.items().iter().map(|item| item.node).collect();
         let mut seen = HashSet::new();
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
@@ -445,7 +449,9 @@ impl<P: Program> Module<P> {
             }
             match self.nodes[node].value.and_then(|value| value.as_enum()) {
                 Some(LowValue::Function(function)) if function != applied => return true,
-                Some(LowValue::Array(array)) => stack.extend(array.ids().iter().copied()),
+                Some(LowValue::Array(array)) => {
+                    stack.extend(array.items().iter().map(|item| item.node))
+                }
                 _ => {}
             }
         }

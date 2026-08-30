@@ -10,6 +10,42 @@
 //! is then read or mutated per extension by pulling that extension out through
 //! `AsField` and calling the extension's own methods; the macro wires no
 //! per-extension accessor trait.
+//!
+//! # Extending an upstream host
+//!
+//! A downstream that extends a host composes its own by listing the
+//! upstream's components *flat* (by symbol) alongside its own — one macro,
+//! no per-upstream wrapper:
+//!
+//! ```
+//! use lichen_utils::compose::AsField;
+//! use lichen_utils::compose_ext;
+//!
+//! #[derive(Debug, Default)]
+//! struct Shared {
+//!     n: usize,
+//! }
+//!
+//! #[derive(Debug, Default)]
+//! struct Mine {
+//!     m: i32,
+//! }
+//!
+//! compose_ext! {
+//!     #[derive(Debug, Default)]
+//!     struct Host(Shared, Mine,);
+//! }
+//!
+//! let mut host = Host::default();
+//! assert_eq!(AsField::<Shared>::get(&host).n, 0);
+//! AsField::<Mine>::get_mut(&mut host).m = 3;
+//! assert_eq!(AsField::<Mine>::get(&host).m, 3);
+//! ```
+//!
+//! Flat is load-bearing: never nest the upstream host itself as a component.
+//! Per-type `AsField` access resolves only against a flat tuple, so a nested
+//! host breaks every operator reading a component through `AsField` — and
+//! such an operator's code lives upstream, out of the downstream's reach.
 
 /// View a composed (tuple) struct as one of its extension component types.
 ///

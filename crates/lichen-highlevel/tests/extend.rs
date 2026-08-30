@@ -1,43 +1,31 @@
-//! The value union is an extension point: `extend_HighProgramValue!`
-//! re-splices the highlevel vocabulary (the lowlevel structural values plus
-//! the type values) into a new **flat** union with extra variants, and the
-//! checker runs on it generically.  This proves the path a language crate
-//! would take to add its own value variants — the union stays one flat enum,
-//! no wrapper variant, and the extended vocabulary supplies the value→type
-//! mapping through [`ValueType`].
+//! The value vocabulary is an extension point: one `enum_ext!` invocation
+//! lists every layer's enum directly — the lowlevel structural values, the
+//! highlevel type values, and the downstream's own variants — composing them
+//! as sibling carry variants of one flat union, and the checker runs on it
+//! generically.  This proves the path a language crate would take to add its
+//! own value variants: the `From`/`AsEnum` glue for every layer is generated
+//! by the macro, and the extended vocabulary supplies the value→type mapping
+//! through [`ValueType`].
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
-use lichen_highlevel::program::{HighProgramValue, ValueType};
-use lichen_lowlevel::{ArrayRef, FunctionId, LowValue, ValueExt};
+use lichen_highlevel::program::{HighProgramValue, TypeValue, ValueType};
+use lichen_lowlevel::{LowValue, ValueExt};
 use lichen_utils::extend::AsEnum;
 
 // A probe extension: a type constant beyond the highlevel's vocabulary.
-// The carrier re-splices all of `HighProgramValue`'s variants (including
-// the lowlevel structural values) into this flat union — no nesting.
-lichen_highlevel::extend_HighProgramValue! {
+// The composed union carries the lowlevel and highlevel layers as sibling
+// variants — flat, no nesting — and gains its own `FloatType`.
+lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProbeValue {
         /// A type constant the highlevel doesn't know — a first-class type
         /// that pairs with `Type`, exactly like `Int` or `Type` itself.
         FloatType,
     }
-}
-
-// The extended vocabulary must also satisfy the lowlevel value contract.
-// Both impls delegate through `HighProgramValue`, which already implements
-// them — the union's shape is flat, only the impls are chained.
-impl From<LowValue> for ProbeValue {
-    fn from(value: LowValue) -> Self {
-        HighProgramValue::from(value).into()
-    }
-}
-
-impl AsEnum<LowValue> for ProbeValue {
-    fn as_enum(&self) -> Option<LowValue> {
-        AsEnum::<HighProgramValue>::as_enum(self).and_then(|value| value.as_enum())
-    }
+    + LowValue as LowValue;
+    + TypeValue as TypeValue;
 }
 
 impl ValueExt for ProbeValue {
@@ -48,62 +36,55 @@ impl ValueExt for ProbeValue {
 
 impl ValueType for ProbeValue {
     fn int_marker() -> Self {
-        Self::TypeInt
+        Self::TypeValue(TypeValue::TypeInt)
     }
     fn type_marker() -> Self {
-        Self::TypeType
+        Self::TypeValue(TypeValue::TypeType)
     }
     fn function_type_marker() -> Self {
-        Self::TypeFunction
+        Self::TypeValue(TypeValue::TypeFunction)
     }
     fn tuple_type_marker() -> Self {
-        Self::TypeTuple
+        Self::TypeValue(TypeValue::TypeTuple)
     }
     fn array_type_marker() -> Self {
-        Self::TypeArray
+        Self::TypeValue(TypeValue::TypeArray)
     }
     fn type_struct_marker() -> Self {
-        Self::TypeStruct
+        Self::TypeValue(TypeValue::TypeStruct)
     }
     fn type_of(&self) -> Self {
         match self {
-            ProbeValue::USize(_) => Self::TypeInt,
-            ProbeValue::FloatType
-            | ProbeValue::TypeInt
-            | ProbeValue::TypeType
-            | ProbeValue::TypeFunction
-            | ProbeValue::TypeTuple
-            | ProbeValue::TypeArray
-            | ProbeValue::TypeStruct
-            | ProbeValue::TypeId(_) => Self::TypeType,
-            _ => unreachable!("a structural non-USize value is not a constant"),
+            // Both type-constant branches — the extension's own and the
+            // highlevel's — have the canonical universe as their type.
+            ProbeValue::FloatType | ProbeValue::TypeValue(_) => Self::type_marker(),
+            ProbeValue::LowValue(LowValue::USize(_)) => Self::int_marker(),
+            ProbeValue::LowValue(_) => {
+                unreachable!("a structural non-USize value is not a constant")
+            }
         }
     }
     fn type_id(&self) -> Option<usize> {
         match self {
-            Self::TypeId(n) => Some(*n),
+            Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
             _ => None,
         }
     }
     fn type_id_value(n: usize) -> Self {
-        Self::TypeId(n)
+        Self::TypeValue(TypeValue::TypeId(n))
     }
 }
 
 #[test]
-fn the_nested_carrier_splices_flat_and_delegates() {
-    // The extension splices HighProgramValue's variants into a flat enum —
-    // `From<HighProgramValue>` moves them in, `AsEnum` reads them back.
-    let v: ProbeValue = HighProgramValue::TypeInt.into();
-    assert_eq!(v, ProbeValue::TypeInt);
-    assert_eq!(
-        AsEnum::<HighProgramValue>::as_enum(&v),
-        Some(HighProgramValue::TypeInt)
-    );
-    // The lowlevel view delegates through HighProgramValue: structural
-    // values read back, type values and the extension's own variant read as
-    // None.
-    let n: ProbeValue = HighProgramValue::USize(3).into();
+fn the_carry_variants_wrap_and_view() {
+    // Each layer's From wraps into its own branch; AsEnum reads it back.
+    let v: ProbeValue = TypeValue::TypeInt.into();
+    assert_eq!(v, ProbeValue::TypeValue(TypeValue::TypeInt));
+    assert_eq!(AsEnum::<TypeValue>::as_enum(&v), Some(TypeValue::TypeInt));
+    // The lowlevel view reads only the LowValue branch: structural values
+    // round-trip, every other branch reads as None.
+    let n: ProbeValue = LowValue::USize(3).into();
+    assert_eq!(n, ProbeValue::LowValue(LowValue::USize(3)));
     assert_eq!(AsEnum::<LowValue>::as_enum(&n), Some(LowValue::USize(3)));
     assert_eq!(AsEnum::<LowValue>::as_enum(&v), None);
     assert_eq!(AsEnum::<LowValue>::as_enum(&ProbeValue::FloatType), None);
@@ -116,8 +97,8 @@ fn the_checker_runs_on_an_extended_union() {
     // type slot.  And `5 : Int` checks as usual on the extended vocabulary.
     let mut ir: IR<ProbeValue> = IR::new();
     let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
-    let five = ir.alloc(ExprKind::Constant(ProbeValue::USize(5)), None);
-    let int_t = ir.alloc(ExprKind::Constant(ProbeValue::TypeInt), None);
+    let five = ir.alloc(ExprKind::Constant(LowValue::USize(5).into()), None);
+    let int_t = ir.alloc(ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeInt)), None);
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,
@@ -140,8 +121,11 @@ fn the_checker_runs_on_an_extended_union() {
     assert_eq!(build.ty[float_ty.0 as usize], Some(build.type_expr));
     let ids = build
         .module
-        .array_ids(float_pair)
-        .expect("the pair is an array");
+        .array_items(float_pair)
+        .expect("the pair is an array")
+        .iter()
+        .map(|item| item.node)
+        .collect::<Vec<_>>();
     assert_eq!(ids, &[float_value, build.type_expr]);
 }
 
@@ -150,8 +134,8 @@ fn an_extended_union_reports_type_conflicts() {
     // `5 : Type` is an annotation conflict even on the extended union — the
     // generic checker's diagnostics carry the extended value type.
     let mut ir: IR<ProbeValue> = IR::new();
-    let five = ir.alloc(ExprKind::Constant(ProbeValue::USize(5)), None);
-    let ty = ir.alloc(ExprKind::Constant(ProbeValue::TypeType), None);
+    let five = ir.alloc(ExprKind::Constant(LowValue::USize(5).into()), None);
+    let ty = ir.alloc(ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeType)), None);
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,

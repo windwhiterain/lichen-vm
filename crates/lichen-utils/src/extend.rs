@@ -1,155 +1,164 @@
-//! Extend one enum with the variants of one or more other enums.
+//! Compose one enum out of a base definition and a set of extension enums —
+//! the vocabulary-extension primitive behind the
+//! `LowValue` + `TypeValue` → `HighProgramValue` composition.
 //!
-//! The [`enum_ext!`] macro is the single shaping site: the base enum's own
-//! definition is followed by a chain of `+ enum ...` extension definitions
-//! written as literal tokens — the only form Rust accepts in a variant list.
-//! For every extension the macro generates:
+//! Every layer provides its own enum: the lowlevel's structural values, the
+//! highlevel's type values, a language crate's own variants — each a plain
+//! enum of just that layer's variants.  [`enum_ext!`] is the ONE macro, and
+//! the composition site lists every extension it wants:
 //!
-//! - the base enum with the extension's variants spliced in;
-//! - the extension enum as its own type;
-//! - `From<Ext> for Base`, so an extension value constructs a base value;
-//! - `impl AsEnum<Ext> for Base`, so a base value can be viewed as the
-//!   extension value it was built from.
-//!
-//! # Example
+//! - the base enum keeps its own variants (if any) and gains one *carry
+//!   variant* per extension, holding that extension enum whole
+//!   (`Base::Ext(Ext)`) — variants are never spliced, so every extension
+//!   enum stays the single source of truth for its own variants, and a value
+//!   has exactly one representation (the extension enums are disjoint);
+//! - `From<Ext> for Base` and `impl AsEnum<Ext> for Base` per extension —
+//!   the view is `None` on everything that is not that extension's branch.
 //!
 //! ```
-//! use lichen_utils::extend::AsEnum;
 //! use lichen_utils::enum_ext;
+//! use lichen_utils::extend::AsEnum;
+//!
+//! // Each layer provides a plain enum of its own variants.
+//! #[derive(Debug, Clone, PartialEq)]
+//! pub enum Extra {
+//!     Added(usize),
+//! }
 //!
 //! enum_ext!(
 //!     #[derive(Debug, Clone, PartialEq)]
 //!     pub enum Base {
 //!         Own,
 //!     }
-//!     + #[derive(Debug, Clone, PartialEq)]
-//!     pub enum Extra {
-//!         Added(usize),
-//!     }
+//!     + Extra as Extra;
 //! );
 //!
-//! let b = Base::from(Extra::Added(3));
-//! assert_eq!(b, Base::Added(3));
-//! assert_eq!(AsEnum::<Extra>::as_enum(&b), Some(Extra::Added(3)));
+//! let base = Base::from(Extra::Added(3));
+//! assert_eq!(base, Base::Extra(Extra::Added(3)));
+//! assert_eq!(AsEnum::<Extra>::as_enum(&base), Some(Extra::Added(3)));
 //! assert_eq!(AsEnum::<Extra>::as_enum(&Base::Own), None);
 //! ```
 //!
-//! # Limitations
+//! # Chains and merges are the same operation
 //!
-//! - Same crate only: the base enum is fixed at the invocation site, so an
-//!   existing enum in another crate cannot be extended here. For a base and
-//!   extension in different crates, use the companion proc-macro crate
-//!   `lichen-extend` instead (`#[lichen_extend::enum_ext]` on the extension
-//!   enum, then its generated carrier at the base enum's call site).
-//! - Extension variants must be unit, tuple, or carry a discriminant. A
-//!   struct variant in an extension is a compile error, because the `From`
-//!   and `AsEnum` impls cannot be generated for it. The base enum's own
-//!   variants may have any shape.
-//! - Extension payloads must be [`Clone`]: `as_enum` clones the payload out
-//!   of the borrowed base value.
-//! - Extension variant names must not collide with the base's own variants
-//!   or with each other; Rust reports the duplicate.
-//! - With several extensions, a plain `a.as_enum()` call is ambiguous; use
-//!   `AsEnum::<B>::as_enum(&a)`.
-//! - No generics on the enums, and no attributes on individual variants.
+//! A downstream vocabulary lists every ancestor layer's enum plus its own —
+//! one invocation, all extensions as siblings.  Two vocabularies over the
+//! same ancestors merge by listing both extensions.  There is no nesting and
+//! no delegation: every extension enum is flat, so no value is ever
+//! representable under two branches, and `PartialEq` stays exact.
+//!
+//! ```
+//! use lichen_utils::enum_ext;
+//! use lichen_utils::extend::AsEnum;
+//!
+//! #[derive(Debug, Clone, PartialEq)]
+//! pub enum Low {
+//!     N(usize),
+//! }
+//!
+//! #[derive(Debug, Clone, PartialEq)]
+//! pub enum High {
+//!     Marker,
+//! }
+//!
+//! // The top of the chain names every layer directly.
+//! enum_ext!(
+//!     #[derive(Debug, Clone, PartialEq)]
+//!     pub enum Probe {
+//!         Added,
+//!     }
+//!     + Low as Low;
+//!     + High as High;
+//! );
+//!
+//! let probe = Probe::from(Low::N(3));
+//! assert_eq!(probe, Probe::Low(Low::N(3)));
+//! assert_eq!(AsEnum::<Low>::as_enum(&probe), Some(Low::N(3)));
+//! assert_eq!(AsEnum::<High>::as_enum(&probe), None);
+//! assert_eq!(AsEnum::<Low>::as_enum(&Probe::High(High::Marker)), None);
+//! ```
+//!
+//! # Notes
+//!
+//! - The base's own variants must each end with a comma.
+//! - Every extension is `path as Variant` — the carry variant's name; a bare
+//!   `+ Ext;` is shorthand for a single `+ Ext as Ext;`.
+//! - Extensions should be *plain* per-layer enums.  Composing an already
+//!   composed enum is legal but nests it (a carry variant holding a union),
+//!   which defeats the one-representation property — compose the leaf
+//!   layers directly instead.
+//! - A carry variant colliding with one of the base's own variant names is
+//!   reported by rustc as a duplicate.
+//! - `as_enum` clones the extension value out of the borrowed base value, so
+//!   every extension enum must be `Clone` (a `Copy` enum is).
 
 /// View a value as the extension enum it was built from.
 ///
-/// [`enum_ext!`] implements this trait for the base enum against each
-/// extension enum in the chain. `Some(ext)` means `self` is one of `B`'s
-/// variants and `ext` is the corresponding value of `B`.
+/// [`enum_ext!`] implements this trait for the base enum against every
+/// extension in the composition; each view reads only that extension's carry
+/// variant.
 pub trait AsEnum<B> {
     fn as_enum(&self) -> Option<B>;
 }
 
-/// Shape one enum from a base definition plus a chain of extension enums.
+/// Compose a base enum with one carry variant per extension enum.
 ///
 /// See the [module documentation](self) for the generated items and the
-/// limitations.
+/// chain/merge story.
 #[macro_export]
 macro_rules! enum_ext {
-    // ── entry ──
+    // `+ Ext;` — bare-ident shorthand for a single `+ Ext as Ext;`.
     (
-        $(#[$base_attr:meta])*
-        $base_vis:vis enum $base:ident {
-            $($bv:ident $(($($bpt:tt)*))? $({$($bft:tt)*})? $(= $bdisc:expr)?),* $(,)?
-        }
-        $(
-            + $(#[$ext_attr:meta])* $ext_vis:vis enum $ext:ident {
-                $($ev:ident $(($($ept:tt)*))? $({$($eft:tt)*})? $(= $edisc:expr)?),* $(,)?
-            }
-        )*
+        $(#[$attr:meta])* $vis:vis enum $name:ident { $($own:tt)* }
+        + $ext:ident;
     ) => {
-        $(#[$base_attr])*
-        $base_vis enum $base {
-            $($bv $(($($bpt)*))? $({$($bft)*})? $(= $bdisc)?,)*
-            $($($ev $(($($ept)*))? $({$($eft)*})? $(= $edisc)?,)*)*
+        $crate::__enum_ext_emit!(
+            $(#[$attr])* $vis enum $name { $($own)* }
+            extensions = [ $ext as $ext; ],
+        );
+    };
+    // `+ path as Variant; …` — one carry variant per extension.
+    (
+        $(#[$attr:meta])* $vis:vis enum $name:ident { $($own:tt)* }
+        $(+ $ext:path as $variant:ident;)+
+    ) => {
+        $crate::__enum_ext_emit!(
+            $(#[$attr])* $vis enum $name { $($own)* }
+            extensions = [ $($ext as $variant;)* ],
+        );
+    };
+}
+
+/// The single emission site for [`enum_ext!`]. Internal — callers use
+/// [`enum_ext!`].
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __enum_ext_emit {
+    (
+        $(#[$attr:meta])* $vis:vis enum $name:ident { $($own:tt)* }
+        extensions = [ $( $ext:path as $variant:ident; )* ],
+    ) => {
+        $(#[$attr])*
+        $vis enum $name {
+            $($own)*
+            $( $variant($ext), )*
         }
         $(
-            $(#[$ext_attr])*
-            $ext_vis enum $ext {
-                $($ev $(($($ept)*))? $({$($eft)*})? $(= $edisc)?,)*
-            }
-            impl From<$ext> for $base {
-                fn from(__value: $ext) -> $base {
-                    match __value {
-                        $(
-                            $crate::enum_ext!(@pat_from $ext $ev __v $(($($ept)*))? $({$($eft)*})?)
-                            => $crate::enum_ext!(@body_from $base $ev __v $(($($ept)*))? $({$($eft)*})?),
-                        )*
-                    }
+            impl ::core::convert::From<$ext> for $name {
+                fn from(value: $ext) -> Self {
+                    Self::$variant(value)
                 }
             }
-            impl $crate::extend::AsEnum<$ext> for $base {
-                fn as_enum(&self) -> Option<$ext> {
+            impl $crate::extend::AsEnum<$ext> for $name {
+                fn as_enum(&self) -> ::core::option::Option<$ext> {
                     match self {
-                        $(
-                            $crate::enum_ext!(@pat_as $base $ev __v $(($($ept)*))? $({$($eft)*})?)
-                            => $crate::enum_ext!(@body_as $ext $ev __v $(($($ept)*))? $({$($eft)*})?),
-                        )*
-                        _ => None,
+                        Self::$variant(value) => {
+                            ::core::option::Option::Some(::core::clone::Clone::clone(value))
+                        }
+                        _ => ::core::option::Option::None,
                     }
                 }
             }
         )*
-    };
-    // ── pattern/body pieces for the `From` impl (payload moves) ──
-    (@pat_from $ext:ident $tag:ident $v:ident ( $($pt:tt)* ) ) => {
-        $ext::$tag($v)
-    };
-    (@pat_from $ext:ident $tag:ident $v:ident) => {
-        $ext::$tag
-    };
-    (@body_from $base:ident $tag:ident $v:ident ( $($pt:tt)* ) ) => {
-        $base::$tag($v)
-    };
-    (@body_from $base:ident $tag:ident $v:ident) => {
-        $base::$tag
-    };
-    // ── pattern/body pieces for the `AsEnum` impl (payload clones) ──
-    (@pat_as $base:ident $tag:ident $v:ident ( $($pt:tt)* ) ) => {
-        $base::$tag($v)
-    };
-    (@pat_as $base:ident $tag:ident $v:ident) => {
-        $base::$tag
-    };
-    (@body_as $ext:ident $tag:ident $v:ident ( $($pt:tt)* ) ) => {
-        Some($ext::$tag(Clone::clone($v)))
-    };
-    (@body_as $ext:ident $tag:ident $v:ident) => {
-        Some($ext::$tag)
-    };
-    // ── struct variants in an extension: the impls cannot be generated ──
-    (@pat_from $ext:ident $tag:ident $v:ident { $($ft:tt)* } ) => {
-        compile_error!("enum_ext: struct variants are not supported in extension enums");
-    };
-    (@body_from $base:ident $tag:ident $v:ident { $($ft:tt)* } ) => {
-        compile_error!("enum_ext: struct variants are not supported in extension enums");
-    };
-    (@pat_as $base:ident $tag:ident $v:ident { $($ft:tt)* } ) => {
-        compile_error!("enum_ext: struct variants are not supported in extension enums");
-    };
-    (@body_as $ext:ident $tag:ident $v:ident { $($ft:tt)* } ) => {
-        compile_error!("enum_ext: struct variants are not supported in extension enums");
     };
 }

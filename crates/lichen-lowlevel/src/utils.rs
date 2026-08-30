@@ -1,10 +1,12 @@
 use std::{alloc::Layout, ptr};
 
-use crate::{BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _};
+use crate::{
+    ArrayItem, BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _,
+};
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
-    /// The ids of `node`'s array value, if it has one.
+    /// The items of `node`'s array value, if it has one.
     ///
     /// # Safety
     /// The returned slice points into the arena of the node's home block.
@@ -12,28 +14,19 @@ impl<P: Program> Module<P> {
     /// block removes its nodes, and indexing a removed `NodeId` panics — so
     /// a reachable node always has its arena alive, and the slice is valid
     /// for the lifetime of `&self`.
-    pub fn array_ids(&self, node: NodeId) -> Option<&[NodeId]> {
+    pub fn array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
         let value = self.nodes[node].value?;
         let LowValue::Array(array) = value.as_enum()? else {
             return None;
         };
-        Some(array.ids())
+        Some(array.items())
     }
 
-    /// Copy `nodes` into `block.arena` and return the new `nodes`.
-    pub(super) fn copy_nodes(&self, nodes: &[NodeId], block: BlockId) -> *const [NodeId] {
-        let slice = self.blocks[block].arena.alloc_slice_copy(nodes);
-        ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
-    }
-
-    /// Copy `mask` into `block.arena` and return the new `mask` — null when
-    /// no position is marked (the canonical unmasked form).
-    pub(super) fn copy_mask(&self, mask: &[bool], block: BlockId) -> *const [bool] {
-        if mask.iter().all(|&marked| !marked) {
-            return std::ptr::slice_from_raw_parts(std::ptr::null(), 0);
-        }
-        let slice = self.blocks[block].arena.alloc_slice_copy(mask);
-        ptr::slice_from_raw_parts(slice.as_ptr(), slice.len())
+    /// Copy `items` into `block.arena` and return the array handle pointing
+    /// at the copy — the payload every [`LowValue::Array`] carries.
+    pub fn alloc_array(&self, items: &[ArrayItem], block: BlockId) -> Handle<[ArrayItem]> {
+        let slice = self.blocks[block].arena.alloc_slice_copy(items);
+        Handle(ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()))
     }
 
     /// Copy `value` into `block.arena` and return the new `value`.  Only a

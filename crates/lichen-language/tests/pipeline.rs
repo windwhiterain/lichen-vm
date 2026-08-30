@@ -2,8 +2,8 @@
 //! evaluation, and the diagnostics (frontend + checker) with their spans.
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::program::{HighProgram, HighProgramValue};
-use lichen_lowlevel::{Module, NodeId};
+use lichen_highlevel::program::{HighProgram, HighProgramValue, TypeValue};
+use lichen_lowlevel::{LowValue, Module, NodeId};
 
 use lichen_language::diag::Stage;
 use lichen_language::{compile, frontend};
@@ -29,14 +29,14 @@ fn evaluate(source: &str) -> HighProgramValue {
 
 /// The node ids of an array value.
 fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
-    let HighProgramValue::Array(array) = value else {
+    let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array.ids().to_vec()
+    array.items().iter().map(|item| item.node).collect()
 }
 
 fn usize_of(value: &HighProgramValue) -> usize {
-    let HighProgramValue::USize(n) = value else {
+    let HighProgramValue::LowValue(LowValue::USize(n)) = value else {
         panic!("expected a usize value, got {value:?}");
     };
     *n
@@ -87,7 +87,7 @@ fn the_polymorphic_identity_checks() {
     assert_eq!(ids.len(), 2, "the tuple has two elements");
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeValue(TypeValue::TypeType))),
         "the second element is the Type constant"
     );
 }
@@ -104,7 +104,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
             module.nodes[id].value,
-            Some(HighProgramValue::USize(n)),
+            Some(HighProgramValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );
     }
@@ -188,7 +188,7 @@ fn an_annotated_parameter_checks() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
-    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
     // An annotated parameter in a bound function.
     assert_eq!(usize_of(&evaluate("f = x : Int => x; (f 5 : Int)")), 5);
     let d = diags("f = x : Int => x; f Type");
@@ -236,7 +236,7 @@ fn a_bound_lambda_is_still_polymorphic() {
     assert_eq!(ids.len(), 2);
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeValue(TypeValue::TypeType))),
         "the second element is the Type constant"
     );
 }
@@ -254,10 +254,10 @@ fn a_statement_program_with_an_out_of_bounds_index_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(check.value_a, Some(HighProgramValue::LowValue(LowValue::USize(5))), "the index");
     assert_eq!(
         check.value_b,
-        Some(HighProgramValue::USize(2)),
+        Some(HighProgramValue::LowValue(LowValue::USize(2))),
         "the length"
     );
 }
@@ -315,7 +315,7 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     assert_eq!(ids.len(), 2);
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
     assert!(
-        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeType)),
+        matches!(module.nodes[ids[1]].value, Some(HighProgramValue::TypeValue(TypeValue::TypeType))),
         "the second element is the Type constant"
     );
 }
@@ -578,7 +578,7 @@ fn a_bound_struct_type_is_reusable() {
     for id in ids {
         assert!(matches!(
             module.nodes[id].value,
-            Some(HighProgramValue::Array(_))
+            Some(HighProgramValue::LowValue(LowValue::Array(_)))
         ));
     }
 }
@@ -713,7 +713,7 @@ fn a_struct_instance_indexes_its_fields() {
     assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 1);
     assert_eq!(
         module.nodes[ids[1]].value,
-        Some(HighProgramValue::TypeInt),
+        Some(HighProgramValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
     // indexing the instance through a parameter works too — the runtime
@@ -732,10 +732,10 @@ fn a_struct_instance_index_out_of_bounds_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(check.value_a, Some(HighProgramValue::LowValue(LowValue::USize(5))), "the index");
     assert_eq!(
         check.value_b,
-        Some(HighProgramValue::USize(2)),
+        Some(HighProgramValue::LowValue(LowValue::USize(2))),
         "the field count"
     );
 }
@@ -796,12 +796,12 @@ fn a_dependent_array_length_rejects_other_lengths() {
     assert_eq!(check.kind, DiagKind::Runtime);
     assert_eq!(
         check.value_a,
-        Some(HighProgramValue::USize(3)),
+        Some(HighProgramValue::LowValue(LowValue::USize(3))),
         "the pinned length"
     );
     assert_eq!(
         check.value_b,
-        Some(HighProgramValue::USize(5)),
+        Some(HighProgramValue::LowValue(LowValue::USize(5))),
         "the argument"
     );
 }
@@ -829,7 +829,7 @@ fn an_annotation_mismatch_reports_expected_and_found() {
     assert_eq!(d[0].span, Some((1, 1)));
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
-    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
     // the expected side is the arrow type — an array of two elements
     assert_eq!(
         array_ids(check.value_b.expect("the expected arrow type")).len(),
@@ -844,7 +844,7 @@ fn applying_a_non_function_is_a_guard_error() {
     assert_eq!(d[0].span, Some((1, 2)), "the apply starts at the `5`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
-    assert_eq!(check.value_a, Some(HighProgramValue::TypeInt));
+    assert_eq!(check.value_a, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
 }
 
 #[test]
@@ -897,7 +897,7 @@ fn indexing_a_function_is_an_index_target_error() {
     let mut module = module;
     assert_eq!(
         module.evaluate_node_deep(root, None),
-        HighProgramValue::TypeInt,
+        HighProgramValue::TypeValue(TypeValue::TypeInt),
         "applied to 1 it reads the type constant"
     );
 }
@@ -923,7 +923,7 @@ fn a_heterogeneous_array_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
-    assert_eq!(check.value_b, Some(HighProgramValue::TypeInt));
+    assert_eq!(check.value_b, Some(HighProgramValue::TypeValue(TypeValue::TypeInt)));
     // the found side is the lambda's arrow shape — an array of two cells
     assert_eq!(
         array_ids(check.value_a.expect("the found arrow shape")).len(),
@@ -937,8 +937,8 @@ fn an_array_of_the_wrong_length_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
-    assert_eq!(check.value_a, Some(HighProgramValue::USize(2)));
-    assert_eq!(check.value_b, Some(HighProgramValue::USize(3)));
+    assert_eq!(check.value_a, Some(HighProgramValue::LowValue(LowValue::USize(2))));
+    assert_eq!(check.value_b, Some(HighProgramValue::LowValue(LowValue::USize(3))));
 }
 
 #[test]
@@ -950,10 +950,10 @@ fn an_out_of_bounds_index_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(check.value_a, Some(HighProgramValue::USize(5)), "the index");
+    assert_eq!(check.value_a, Some(HighProgramValue::LowValue(LowValue::USize(5))), "the index");
     assert_eq!(
         check.value_b,
-        Some(HighProgramValue::USize(3)),
+        Some(HighProgramValue::LowValue(LowValue::USize(3))),
         "the length"
     );
     assert_eq!(d[0].span, Some((1, 13)), "the index's span");
