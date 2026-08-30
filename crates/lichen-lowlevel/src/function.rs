@@ -31,17 +31,34 @@ pub struct ApplyError {
 }
 
 /// The fixed context of one clone pass: where the clones land, the
-/// template's membership set, and the running node-id remap (template node
-/// to its clone).
+/// membership anchor, the running node-id remap (template node to its
+/// clone), and the owner tag assigned to the clones this pass creates.
 struct ApplyCtx<'a> {
     target: BlockId,
-    members: &'a HashSet<NodeId>,
-    /// The scope of a nested function value being cloned (see
-    /// [`Module::value_apply`]): its own nodes join the membership, so
-    /// references to the outer members inside the closure — a captured
-    /// parameter — are rewritten to the fresh clones instead of pointing at
-    /// the never-bound template cells.
-    extra: Option<&'a HashSet<NodeId>>,
+    /// The template membership anchor: the applied function.  A node
+    /// belongs to the template iff its [`Node::function`] chain (through
+    /// [`Function::parent`]) reaches it — a nested closure's nodes are
+    /// members of the enclosing function's template, while a sibling's are
+    /// not (the mutual-recursion invariant).
+    anchor: FunctionId,
+    /// The branch stack top: the id a freshly cloned closure hangs under
+    /// ([`Function::parent`]).  The applied function at the top of an
+    /// apply; each closure clone re-anchors it at its own fresh id, so
+    /// every fresh template's chain runs back through the enclosing
+    /// instances to the anchor.  Distinct from [`Self::tag`], which is the
+    /// apply node's owner at the top of a direct apply (so an apply's
+    /// results read as members of the *enclosing* template).
+    branch_top: FunctionId,
+    /// The scope of the closure being cloned, when inside a closure
+    /// branch.  The chain test alone does not cover it: a closure whose
+    /// value flowed in through a unification (a parameter bound to a
+    /// function value) is walked under the *enclosing* anchor, and its own
+    /// nodes' chains — rooted at the original id, whose parent chain need
+    /// not reach that anchor (a top-level closure) — would read as outside
+    /// the template, leaving the fresh closure's scope shared across
+    /// calls.  The closure's own scope is always in its own template, so
+    /// membership is the chain test or a scope hit.
+    closure_scope: Option<&'a [NodeId]>,
     /// The function being applied: its own value node is the recursion
     /// self-reference (referenced in place when proven concrete), while any
     /// *other* function value in the scope is a nested closure and must be
@@ -52,6 +69,13 @@ struct ApplyCtx<'a> {
     /// check runs against the fresh clone, and every call must bind its own
     /// cells (recursion re-applies the template per level).
     parameter: NodeId,
+    /// The owner tag stamped on the clones this pass creates: the apply
+    /// node's owning function (so an apply's results read as members of the
+    /// enclosing template and are re-instantiated per call), or the fresh
+    /// id of a closure being cloned (so its own template reads as members
+    /// of that id, not of the original).  Runtime-created nodes with no
+    /// template role carry [`None`].
+    tag: Option<FunctionId>,
     remap: &'a mut HashMap<NodeId, NodeId>,
 }
 
@@ -83,20 +107,34 @@ impl<P: Program> Module<P> {
                 self.apply_total_limit
             );
         }
-        let (r#return, parameter) = {
+        let (r#return, parameter, asserts) = {
             let function = &self.functions[function];
-            (function.r#return, function.parameter)
+            (
+                function.r#return,
+                function.parameter,
+                function.asserts.clone(),
+            )
         };
-        debug_assert!(self.functions[function].nodes.contains(&r#return));
+        debug_assert!(
+            self.functions[function].nodes.contains(&r#return),
+            "function {function:?} (block {:?}, parent {:?}) return {return:?} not in scope {:?}",
+            self.functions[function].block,
+            self.functions[function].parent,
+            self.functions[function].nodes
+        );
         debug_assert!(self.functions[function].nodes.contains(&parameter));
-        let members = self.functions[function].nodes.clone();
         let mut remap = HashMap::new();
         let mut ctx = ApplyCtx {
             target: block,
-            members: &members,
-            extra: None,
+            // Membership is the chain test, not a scope snapshot: the clones
+            // this pass creates are stamped with the apply node's owner, so
+            // the enclosing template re-instantiates them per call.
+            anchor: function,
+            branch_top: function,
+            closure_scope: None,
             applied: function,
             parameter,
+            tag: self.nodes[node].function,
             remap: &mut remap,
         };
         let applied = self.node_apply(r#return, &mut ctx);
@@ -109,20 +147,19 @@ impl<P: Program> Module<P> {
         // below fires.  Idempotent: if the return clone already remapped it,
         // this returns the same clone.
         self.node_apply(parameter, &mut ctx);
-        // The scope's assert points are side nodes — nothing in the return's
-        // subtree references them, so the return clone cannot carry them.
-        // Clone each one through the shared remap (its condition rewrites to
-        // this call's clones, so a body's assert that could not resolve at
-        // normalize re-checks the instantiated condition against the
-        // argument); the clone registers itself, so the checker's pass sees
-        // it.
-        let scope_asserts: Vec<NodeId> = members
-            .iter()
-            .filter(|&&id| self.nodes[id].assert.is_some())
-            .copied()
-            .collect();
-        for &point in &scope_asserts {
-            self.node_apply(point, &mut ctx);
+        // The body's asserts are the function's own registry entries (see
+        // `Function::asserts`): the return clone cannot reach a condition
+        // that no value references, so each one is instantiated through the
+        // shared remap — a condition the deep pass proved concrete is
+        // per-call invariant and is referenced in place (decided at
+        // normalize), while an unbound one rewrites to this call's clones,
+        // so the body's assert re-checks against the argument.  Only actual
+        // clones register: a fresh entry is a constraint on this call.
+        for &condition in &asserts {
+            let instantiated = self.node_apply(condition, &mut ctx);
+            if instantiated != condition {
+                self.asserts.push(instantiated);
+            }
         }
         // The parameter is cloned like any parameterized node, and the clone
         // is unified with the argument instead of being replaced by it: the
@@ -277,7 +314,17 @@ impl<P: Program> Module<P> {
         if let Some(&clone) = ctx.remap.get(&node) {
             return clone;
         }
-        if !ctx.members.contains(&node) && !ctx.extra.is_some_and(|extra| extra.contains(&node)) {
+        // The chain membership test: a node belongs to the template iff its
+        // owner's chain of lexical parents reaches the anchor — or it is one
+        // of the closure's own scope nodes, when a closure is being cloned
+        // (see [`ApplyCtx::closure_scope`]).  A node whose owner is outside
+        // the applied function's nesting (a top-level value, a sibling's
+        // body) is referenced as-is.
+        let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
+            || ctx
+                .closure_scope
+                .is_some_and(|scope| scope.contains(&node));
+        if !member {
             return node; // outside the template scope — reference as-is
         }
         // The body always exists, so only the parts whose value could
@@ -323,6 +370,23 @@ impl<P: Program> Module<P> {
         // Reserve the clone id before recursing so diamonds resolve to one
         // clone and value cycles to the clone's own (still evaluating) id.
         let clone = self.add_node(ctx.target, None, None);
+        // The owner tag: a node of the closure's own scope joins the fresh
+        // id (its template reads as members of that id, re-instantiated per
+        // call), while a capture — a member of the *enclosing* template
+        // cloned through the closure's edges — keeps the source's own
+        // owner.  It is then a member of the enclosing template (the
+        // instance this closure references in place), not of the fresh
+        // closure: re-cloning it under the fresh id would re-instantiate
+        // the captured value on every nested apply, tearing it out of the
+        // enclosing instance the walk already built.
+        self.nodes[clone].function = if ctx
+            .closure_scope
+            .is_some_and(|scope| scope.contains(&node))
+        {
+            ctx.tag
+        } else {
+            self.nodes[node].function
+        };
         ctx.remap.insert(node, clone);
         // A cached value on an operation node was computed against the
         // body's parameter and is stale once the argument is mapped in, so
@@ -340,19 +404,8 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        // An assert point clones with its condition remapped like any other
-        // edge: an in-body assert that could not resolve at normalize (its
-        // condition reads the unbound parameter) re-checks the instantiated
-        // condition against this call's argument.
-        let assert = self.nodes[node].assert.map(|condition| self.node_apply(condition, ctx));
         self.nodes[clone].value = value;
         self.nodes[clone].operation = operation;
-        self.nodes[clone].assert = assert;
-        if self.nodes[clone].assert.is_some() {
-            // The clone is a fresh assertion — register it so the check
-            // pass sees the instantiated constraint, not just the template's.
-            self.asserts.push(clone);
-        }
         clone
     }
 
@@ -378,14 +431,30 @@ impl<P: Program> Module<P> {
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
                 // block, so it is dropped with it.
-                let (scope, r#return, parameter) = {
+                let (scope, r#return, parameter, asserts) = {
                     let function = &self.functions[function];
                     (
                         function.nodes.clone(),
                         function.r#return,
                         function.parameter,
+                        function.asserts.clone(),
                     )
                 };
+                // The fresh closure's id is reserved before the walk so the
+                // clones it creates are stamped with it — its own template
+                // must read as members of the fresh id (re-instantiated per
+                // call), never of the original.  It hangs under the branch
+                // stack top — the enclosing instance, or the applied
+                // function itself for the outermost closure of an apply —
+                // so its chain runs back to the membership anchor.
+                let fresh = self.functions.insert(Function {
+                    nodes: Vec::new(),
+                    r#return,
+                    parameter,
+                    asserts: Vec::new(),
+                    parent: Some(ctx.branch_top),
+                    block: ctx.target,
+                });
                 // The nested function's own scope joins the clone's
                 // template: its body may capture the applied function's
                 // members (an outer parameter), and those references must
@@ -397,32 +466,85 @@ impl<P: Program> Module<P> {
                 let target = ctx.target;
                 let mut inner = ApplyCtx {
                     target,
-                    members: ctx.members,
-                    extra: Some(&scope),
+                    anchor: ctx.anchor,
+                    branch_top: fresh,
+                    closure_scope: Some(&scope),
                     applied: function,
-                    parameter: self.functions[function].parameter,
+                    parameter,
+                    tag: Some(fresh),
                     remap: ctx.remap,
                 };
-                let nodes: HashSet<NodeId> = scope
+                let nodes: Vec<NodeId> = scope
                     .iter()
                     .map(|&id| self.node_apply(id, &mut inner))
                     .collect();
                 let r#return = self.node_apply(r#return, &mut inner);
                 let parameter = self.node_apply(parameter, &mut inner);
-                let function = self.functions.insert(Function {
-                    nodes,
-                    r#return,
-                    parameter,
-                    block: target,
-                });
-                self.blocks[target].functions.push(function);
-                P::Value::from(LowValue::Function(function))
+                // The fresh closure's asserts instantiate with its scope: a
+                // condition reading the closure's captures rewrites to this
+                // call's clones and re-registers, while one proven concrete
+                // at build is per-call invariant and stays referenced in
+                // place.
+                let mut fresh_asserts = Vec::with_capacity(asserts.len());
+                for &condition in &asserts {
+                    let instantiated = self.node_apply(condition, &mut inner);
+                    if instantiated != condition {
+                        self.asserts.push(instantiated);
+                    }
+                    fresh_asserts.push(instantiated);
+                }
+                // The shared remap may have handed the branch nodes the
+                // enclosing walk already cloned — a self-reference: the
+                // function's own value node sits in its return subtree, so
+                // the outer walk reaches and clones it (with the outer tag)
+                // before the closure branch runs, and every other scope node
+                // follows through the shared remap.  The fresh template must
+                // read as members of the fresh id — re-instantiated per call
+                // — so re-stamp its nodes.  Runs after the entry-point walks
+                // so they resolve through the original tags.  Only nodes
+                // actually cloned into the target are re-stamped: a node the
+                // walk referenced in place (the self-reference, proven
+                // concrete) lives in its home block and keeps its original
+                // owner.  Nodes reached only through the template's edges
+                // (captures) keep the enclosing tag: they are already the
+                // instance and read as members of the enclosing template,
+                // referenced in place by this closure.
+                for &id in &nodes {
+                    if self.nodes[id].block == ctx.target {
+                        self.nodes[id].function = Some(fresh);
+                    }
+                }
+                let fresh_function = &mut self.functions[fresh];
+                fresh_function.nodes = nodes;
+                fresh_function.r#return = r#return;
+                fresh_function.parameter = parameter;
+                fresh_function.asserts = fresh_asserts;
+                self.blocks[target].functions.push(fresh);
+                P::Value::from(LowValue::Function(fresh))
             }
             // A program-specific value may carry a handle into an arena —
             // relocate it into the target block like any other payload.
             None => Self::copy_ext(self, value, ctx.target),
             _ => value,
         }
+    }
+
+    /// Whether `function`'s chain of lexical parents ([`Function::parent`])
+    /// reaches `anchor` — the template membership test.  A node whose owner
+    /// is the applied function, or a closure nested inside it, belongs to
+    /// the template; a node owned by an enclosing function (a capture that
+    /// was already instantiated by the enclosing apply) does not.  Walks
+    /// with [`SlotMap::get`] so a dangling parent — a function dropped with
+    /// its home block — reads as non-membership instead of panicking.
+    fn function_descends_from(&self, function: Option<FunctionId>, anchor: FunctionId) -> bool {
+        let mut current = function;
+        while let Some(f) = current {
+            if f == anchor {
+                return true;
+            }
+            current = self.functions.get(f).and_then(|f| f.parent);
+        }
+        false
     }
 
     /// Whether `value`'s array tree contains a function value other than

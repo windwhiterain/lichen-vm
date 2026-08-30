@@ -298,7 +298,14 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     assert!(m.blocks[root].functions.contains(&f));
     assert_eq!(m.nodes[ret_f].block, root); // scope mapped along with it
     assert_eq!(m.nodes[param_f].block, root);
-    assert_eq!(m.functions[f].nodes, HashSet::from([ret_f, param_f]));
+    assert_eq!(
+        m.functions[f]
+            .nodes
+            .iter()
+            .copied()
+            .collect::<HashSet<_>>(),
+        HashSet::from([ret_f, param_f])
+    );
 
     // The vacated subtree is gone, but the function is still callable.
     assert!(!m.blocks.contains_key(child));

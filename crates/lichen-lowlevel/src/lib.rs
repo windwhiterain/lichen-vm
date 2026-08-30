@@ -1,6 +1,5 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::marker::PhantomData;
 
@@ -203,7 +202,7 @@ pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
 pub struct Handle<T: ?Sized>(pub *const T);
 pub struct StaticHandle<T: ?Sized> {
     pub module: usize,
-    pub offset: usize,
+    pub offset: *const T,
     _p: PhantomData<T>,
 }
 
@@ -228,13 +227,23 @@ impl<T: ?Sized> PartialEq for Handle<T> {
 
 impl<T: ?Sized> PartialEq for StaticHandle<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.module == other.module && self.offset == other.offset
+        self.module == other.module && std::ptr::eq(self.offset, other.offset)
     }
 }
 
 impl Handle<[u8]> {
     pub fn len(&self) -> usize {
         let slice = unsafe { &*self.0 };
+        slice.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl StaticHandle<[u8]> {
+    pub fn len(&self) -> usize {
+        let slice = unsafe { &*self.offset };
         slice.len()
     }
     pub fn is_empty(&self) -> bool {
@@ -274,13 +283,33 @@ pub struct Block {
 /// Only [`Self::nodes`] can reference [`Self::parameter`].
 #[derive(Debug, Clone)]
 pub struct Function {
-    /// A membership set — the template scope — including the `r#return`
-    /// and [`Self::parameter`] entry points.  Stored as a set because the
-    /// clone pass only asks "is this node part of the scope"; no code reads
-    /// the members positionally.
-    pub nodes: HashSet<NodeId>,
+    /// The template scope — the nodes owned by this function's body
+    /// (including the `r#return` and [`Self::parameter`] entry points),
+    /// registered as they are compiled.  The clone pass's membership test
+    /// does not consult this list directly: a node belongs to the template
+    /// iff its [`Node::function`] chain (through [`Self::parent`]) reaches
+    /// the applied function.  The list is the *starting set* of a closure
+    /// clone and the garbage-collection root set, so it is iterated, never
+    /// queried.
+    pub nodes: Vec<NodeId>,
     pub r#return: NodeId,
     pub parameter: NodeId,
+    /// The lexical parent — the function in whose body this function is
+    /// nested (or [`None`] at top level).  The chain of these links makes
+    /// the template membership test: a nested closure's nodes belong to an
+    /// enclosing function's template because their owner's chain reaches
+    /// it.  The link is *not* a keep-alive edge: garbage collection drops
+    /// functions with their home block, never through this field.
+    pub parent: Option<FunctionId>,
+    /// The body's assert conditions — the function's own entries in
+    /// [`Module::asserts`].  An apply clones every condition the deep pass
+    /// did not prove concrete and registers the clones, so a body's assert
+    /// that could not resolve at normalize re-checks the instantiated
+    /// condition against each call's argument; a proven-concrete condition
+    /// is per-call invariant (decided at normalize), so it is referenced in
+    /// place and not re-registered.  Garbage collection moves the listed
+    /// conditions with the function like any other edge.
+    pub asserts: Vec<NodeId>,
     /// Owner.
     pub block: BlockId,
 }
@@ -306,16 +335,12 @@ pub struct EvaluatedDeep {
 pub struct Node<P: Program> {
     pub value: Option<P::Value>,
     pub operation: Option<Operation<P>>,
-    /// The condition node of an assert, when this node is an assert point —
-    /// an explicit constraint (the checker force-evaluates the condition,
-    /// ignoring laziness, and requires `USize(1)`; see
-    /// [`Module::check_asserts`]).  The point is a cell-shaped side node
-    /// (no operation, the lazy marker as value) — nothing in the value flow
-    /// references it, but it rides the apply clone and garbage collection
-    /// like any scope member, and its condition is remapped through the
-    /// clone so a function body's assert re-checks against each call's
-    /// argument.
-    pub assert: Option<NodeId>,
+    /// The function whose body owns this node — the template membership
+    /// back-pointer ([`None`] for top-level and runtime-created nodes whose
+    /// owner is not a template).  The apply clone walk tests membership by
+    /// walking this chain through [`Function::parent`]; clones carry the
+    /// tag of the context that created them.
+    pub function: Option<FunctionId>,
     /// Owner.
     pub block: BlockId,
     /// Detect circular recursion.
@@ -335,7 +360,6 @@ pub struct Node<P: Program> {
 pub struct StaticNode<P: Program> {
     pub value: Option<P::Value>,
     pub operation: Option<Operation<P>>,
-    pub assert: Option<NodeId>,
     pub equality: disjoint::Meta<NodeId>,
 }
 
@@ -368,10 +392,10 @@ pub struct Module<P: Program> {
     /// recorded instead of panicking — same append-only, never-cleared
     /// contract as [`Self::unify_errors`].
     pub eval_errors: Vec<EvalError>,
-    /// The module's assert-point worklist — the nodes with [`Node::assert`]
-    /// set.  Spawn ([`Self::add_assert`]) and every apply clone register
-    /// here; [`Self::check_asserts`] drains it, consuming decided entries
-    /// and leaving exactly the not-yet-triggered ones.  Garbage collection
+    /// The module's assert worklist — the condition nodes registered by
+    /// [`Self::add_assert`].  Spawn and every apply clone register here;
+    /// [`Self::check_asserts`] drains it, consuming decided entries and
+    /// leaving exactly the not-yet-triggered ones.  Garbage collection
     /// prunes the entries of dropped blocks.
     pub asserts: Vec<NodeId>,
     /// Failed asserts: a condition that resolved to a concrete value other
@@ -463,7 +487,7 @@ impl<P: Program> Module<P> {
         let node = self.nodes.insert(Node {
             value,
             operation,
-            assert: None,
+            function: None,
             block,
             visiting: false,
             evaluated_deep: None,
@@ -474,19 +498,17 @@ impl<P: Program> Module<P> {
         node
     }
 
-    /// An assert point: a node naming `condition` as an explicit constraint
-    /// — not a unification, so an unbound condition is *not* bound to `1`,
-    /// it stays untriggered until an apply binds it.  The checker
-    /// force-evaluates every registered point's condition (ignoring
-    /// laziness) and requires `USize(1)`, see [`Self::check_asserts`].  The
-    /// point is a cell-shaped side node registered in [`Self::asserts`]; the
-    /// apply clone remaps its condition and re-registers the clone, so a
-    /// function body's assert re-checks against each call's argument.
-    pub fn add_assert(&mut self, block: BlockId, condition: NodeId) -> NodeId {
-        let node = self.add_node(block, None, Some(P::Value::from(LowValue::Parameterized)));
-        self.nodes[node].assert = Some(condition);
-        self.asserts.push(node);
-        node
+    /// Registers `condition` as an assert — an explicit constraint, not a
+    /// unification, so an unbound condition is *not* bound to `1`, it stays
+    /// untriggered until an apply binds it.  [`Self::check_asserts`]
+    /// force-evaluates every registered condition (ignoring laziness) and
+    /// requires `USize(1)`, see there.  The registry is a worklist; a
+    /// condition owned by a function body ([`Function::asserts`]) is cloned
+    /// and re-registered per apply, so a body's assert re-checks against
+    /// each call's argument.
+    pub fn add_assert(&mut self, condition: NodeId) -> NodeId {
+        self.asserts.push(condition);
+        condition
     }
 
     pub fn add_function(
@@ -495,18 +517,35 @@ impl<P: Program> Module<P> {
         ret: NodeId,
         param: NodeId,
         nodes: impl IntoIterator<Item = NodeId>,
+        asserts: impl IntoIterator<Item = NodeId>,
     ) -> NodeId {
+        let nodes: Vec<NodeId> = nodes.into_iter().collect();
         let function = self.functions.insert(Function {
-            nodes: nodes.into_iter().collect(),
+            nodes: Vec::new(),
             r#return: ret,
             parameter: param,
+            parent: None,
+            asserts: asserts.into_iter().collect(),
             block,
         });
+        // The passed nodes are this function's template: tag each with its
+        // owner, so the apply clone walk's chain membership test recognizes
+        // them.  The function id must exist before the tags point at it.
+        for &node in &nodes {
+            self.nodes[node].function = Some(function);
+        }
+        self.functions[function].nodes = nodes;
         self.blocks[block].functions.push(function);
-        self.add_node(
+        // The value node is the function's own too — tagged with it, so an
+        // enclosing template (a nested function's parent link) clones it and
+        // instantiates a fresh closure per call instead of referencing the
+        // template's function value in place.
+        let func_node = self.add_node(
             block,
             None,
             Some(P::Value::from(LowValue::Function(function))),
-        )
+        );
+        self.nodes[func_node].function = Some(function);
+        func_node
     }
 }

@@ -241,7 +241,17 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     let e_index_ops = array_node(&mut m, body, &[e_branch, e_cond], None);
     let e_ret = op_node(&mut m, body, TestOperator::LowOperator(LowOperator::Index), Some(e_index_ops));
     let even = m.functions.insert(Function {
-        nodes: HashSet::from([
+        nodes: Vec::new(),
+        r#return: e_ret,
+        parameter: e_param,
+        asserts: Vec::new(),
+        parent: None,
+        block: body,
+    });
+    tag_scope(
+        &mut m,
+        even,
+        vec![
             e_param,
             e_func,
             e_cond_ops,
@@ -253,11 +263,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
             e_branch,
             e_index_ops,
             e_ret,
-        ]),
-        r#return: e_ret,
-        parameter: e_param,
-        block: body,
-    });
+        ],
+    );
     // odd: if x == 0 then 0 else even(x-1)
     let o_cond_ops = array_node(&mut m, body, &[o_param, zero], None);
     let o_cond = op_node(&mut m, body, TestOperator::Eq, Some(o_cond_ops));
@@ -269,7 +276,17 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     let o_index_ops = array_node(&mut m, body, &[o_branch, o_cond], None);
     let o_ret = op_node(&mut m, body, TestOperator::LowOperator(LowOperator::Index), Some(o_index_ops));
     let odd = m.functions.insert(Function {
-        nodes: HashSet::from([
+        nodes: Vec::new(),
+        r#return: o_ret,
+        parameter: o_param,
+        asserts: Vec::new(),
+        parent: None,
+        block: body,
+    });
+    tag_scope(
+        &mut m,
+        odd,
+        vec![
             o_param,
             o_func,
             o_cond_ops,
@@ -281,11 +298,8 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
             o_branch,
             o_index_ops,
             o_ret,
-        ]),
-        r#return: o_ret,
-        parameter: o_param,
-        block: body,
-    });
+        ],
+    );
     m.blocks[body].functions.extend([even, odd]);
     m.nodes[e_func].value = Some(TestValue::LowValue(LowValue::Function(even)));
     m.nodes[o_func].value = Some(TestValue::LowValue(LowValue::Function(odd)));

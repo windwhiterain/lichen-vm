@@ -1790,6 +1790,34 @@ fn a_body_index_on_a_literal_stays_pending_and_rechecks_per_call() {
 }
 
 #[test]
+fn an_in_function_bounds_constraint_fails_for_a_violating_argument() {
+    // f = i => [7, 8, 9][i]; f 3 — the body's generated `i < 3` constraint
+    // is not reachable from the return (the return is the index result), so
+    // only the function's own assert list carries it; the apply clones it
+    // and the clone fails for the out-of-range argument.
+    let mut ir = IR::new();
+    let i = param(&mut ir);
+    let a = int(&mut ir, 7);
+    let b2 = int(&mut ir, 8);
+    let c = int(&mut ir, 9);
+    let arr = array(&mut ir, &[a, b2, c]);
+    let read = index(&mut ir, arr, i);
+    let f = lam(&mut ir, i, read);
+    let three = int(&mut ir, 3);
+    let bad = app(&mut ir, f, three);
+    let b = build(bad, ir);
+    assert!(!b.ok, "f 3 must fail");
+    assert!(b.module.unify_errors.is_empty(), "no unification failed");
+    assert_eq!(b.module.assert_errors.len(), 1);
+    assert_eq!(b.module.assert_errors[0].value, HighProgramValue::LowValue(LowValue::USize(0)));
+    assert_eq!(
+        b.module.asserts.len(),
+        1,
+        "the failed clone was consumed — only the untriggered template stays"
+    );
+}
+
+#[test]
 fn a_body_index_fails_at_the_violating_argument() {
     // f = i => [7, 8, 9][i]; f 5 — the instantiated clone's `5 < 3` fails.
     let mut ir = IR::new();

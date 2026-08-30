@@ -286,19 +286,43 @@ fn wrap_function(
     ret: NodeId,
     param: NodeId,
 ) -> (NodeId, FunctionId) {
+    wrap_function_asserts(m, block, ret, param, [])
+}
+
+/// [`wrap_function`] with the function's own assert conditions (`Function::asserts`).
+fn wrap_function_asserts(
+    m: &mut Module<TestProgram>,
+    block: BlockId,
+    ret: NodeId,
+    param: NodeId,
+    asserts: impl IntoIterator<Item = NodeId>,
+) -> (NodeId, FunctionId) {
     let nodes = m.blocks[block].nodes.clone();
-    let func_node = m.add_function(block, ret, param, nodes);
+    let func_node = m.add_function(block, ret, param, nodes, asserts);
     let TestValue::LowValue(LowValue::Function(func)) = m.nodes[func_node].value.unwrap() else {
         unreachable!("add_function always wraps a function value")
     };
     (func_node, func)
 }
 
+/// The manual-insert mirror of [`Module::add_function`]'s tagging: stamp
+/// `nodes` as owned by `function` and record them as its scope.  A function
+/// built by hand (the placeholder-value helpers below) must tag its body,
+/// or the apply clone walk's chain membership test reads the body as
+/// outside the template and references it in place.
+fn tag_scope(m: &mut Module<TestProgram>, function: FunctionId, nodes: Vec<NodeId>) {
+    for &node in &nodes {
+        m.nodes[node].function = Some(function);
+    }
+    m.functions[function].nodes = nodes;
+}
+
 /// Create a function value in a fresh body block: the return node at
 /// `Block::RETURN_IDX` and the parameter at index 1 of the scope, wrapped
 /// by [`Module::add_function`]. `wire` fills in the return node given the
-/// parameter id.  Returns the function value node plus the return and
-/// parameter node ids.
+/// parameter id.  Asserts registered during `wire` become the function's
+/// own (`Function::asserts`), so an apply re-checks them per call.  Returns
+/// the function value node plus the return and parameter node ids.
 fn function(
     m: &mut Module<TestProgram>,
     wire: impl FnOnce(&mut Module<TestProgram>, NodeId, NodeId),
@@ -306,8 +330,10 @@ fn function(
     let block = m.add_block(None);
     let ret = m.add_node(block, None, None);
     let param = m.add_node(block, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let asserts_before = m.asserts.len();
     wire(m, ret, param);
-    let (func_node, _) = wrap_function(m, block, ret, param);
+    let asserts = m.asserts[asserts_before..].to_vec();
+    let (func_node, _) = wrap_function_asserts(m, block, ret, param, asserts);
     (func_node, ret, param)
 }
 
@@ -333,13 +359,16 @@ fn finish_function(
     param: NodeId,
     func_node: NodeId,
 ) -> FunctionId {
-    let nodes: std::collections::HashSet<NodeId> = m.blocks[block].nodes.iter().copied().collect();
+    let nodes: Vec<NodeId> = m.blocks[block].nodes.iter().copied().collect();
     let function = m.functions.insert(Function {
-        nodes,
+        nodes: Vec::new(),
         r#return: ret,
         parameter: param,
+        asserts: Vec::new(),
+        parent: None,
         block,
     });
+    tag_scope(m, function, nodes);
     m.blocks[block].functions.push(function);
     m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(function)));
     function
@@ -360,11 +389,14 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let apply = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(operands));
     let ret = array_node(m, body, &[param, apply], None);
     let function = m.functions.insert(Function {
-        nodes: HashSet::from([param, func_node, operands, apply, ret]),
+        nodes: Vec::new(),
         r#return: ret,
         parameter: param,
+        asserts: Vec::new(),
+        parent: None,
         block: body,
     });
+    tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
     m.blocks[body].functions.push(function);
     m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(function)));
     (func_node, function)
@@ -390,17 +422,23 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     let g_apply = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(g_ops));
     let g_ret = array_node(m, body, &[g_param, g_apply], None);
     let f = m.functions.insert(Function {
-        nodes: HashSet::from([f_param, f_func, f_ops, f_apply, f_ret]),
+        nodes: Vec::new(),
         r#return: f_ret,
         parameter: f_param,
+        asserts: Vec::new(),
+        parent: None,
         block: body,
     });
+    tag_scope(m, f, vec![f_param, f_func, f_ops, f_apply, f_ret]);
     let g = m.functions.insert(Function {
-        nodes: HashSet::from([g_param, g_func, g_ops, g_apply, g_ret]),
+        nodes: Vec::new(),
         r#return: g_ret,
         parameter: g_param,
+        asserts: Vec::new(),
+        parent: None,
         block: body,
     });
+    tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
     m.blocks[body].functions.extend([f, g]);
     m.nodes[f_func].value = Some(TestValue::LowValue(LowValue::Function(f)));
     m.nodes[g_func].value = Some(TestValue::LowValue(LowValue::Function(g)));

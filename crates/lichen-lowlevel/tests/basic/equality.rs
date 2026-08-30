@@ -303,7 +303,7 @@ fn same_function_value_merges() {
     let block = m.add_block(None);
     let param = unbound_node(&mut m, block);
     let ret = usize_node(&mut m, block, 1);
-    let f = m.add_function(block, ret, param, [ret, param]);
+    let f = m.add_function(block, ret, param, [ret, param], []);
     let fid = match m.nodes[f].value.unwrap() {
         TestValue::LowValue(LowValue::Function(fid)) => fid,
         _ => unreachable!("function value node"),
@@ -323,10 +323,10 @@ fn different_function_values_record_an_error() {
     let block = m.add_block(None);
     let p1 = usize_node(&mut m, block, 1);
     let r1 = unbound_node(&mut m, block);
-    let f1 = m.add_function(block, r1, p1, [r1, p1]);
+    let f1 = m.add_function(block, r1, p1, [r1, p1], []);
     let p2 = usize_node(&mut m, block, 2);
     let r2 = unbound_node(&mut m, block);
-    let f2 = m.add_function(block, r2, p2, [r2, p2]);
+    let f2 = m.add_function(block, r2, p2, [r2, p2], []);
     m.unify(f1, f2);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(m.equality_representative(f1), m.equality_representative(f2));
@@ -483,7 +483,7 @@ fn apply_unifies_the_cloned_parameter_with_the_argument() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let param = unbound_node(&mut m, root);
-    let f = m.add_function(root, param, param, [param]);
+    let f = m.add_function(root, param, param, [param], []);
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, f, arg);
     assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
@@ -498,7 +498,7 @@ fn apply_with_an_unbound_argument_stays_lazy() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let param = unbound_node(&mut m, root);
-    let f = m.add_function(root, param, param, [param]);
+    let f = m.add_function(root, param, param, [param], []);
     let arg = unbound_node(&mut m, root);
     let call = call_node(&mut m, root, f, arg);
     assert!(matches!(
@@ -520,7 +520,7 @@ fn apply_unifies_array_parameters_elementwise() {
     let x0 = unbound_node(&mut m, root);
     let x1 = unbound_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);
-    let f = m.add_function(root, param, param, [param, x0, x1]);
+    let f = m.add_function(root, param, param, [param, x0, x1], []);
     let one = usize_node(&mut m, root, 1);
     let two = usize_node(&mut m, root, 2);
     let arg = array_node(&mut m, root, &[one, two], None);
@@ -542,7 +542,7 @@ fn apply_time_conflict_records_an_error() {
     // signature like `x: int`.  Applying a conflicting argument is a
     // runtime type error at the application site.
     let param = unbound_node(&mut m, root);
-    let f = m.add_function(root, param, param, [param]);
+    let f = m.add_function(root, param, param, [param], []);
     let one = usize_node(&mut m, root, 1);
     m.unify(param, one);
     assert!(m.unify_errors.is_empty());
@@ -564,7 +564,7 @@ fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let param = unbound_node(&mut m, root);
-    let f = m.add_function(root, param, param, [param]);
+    let f = m.add_function(root, param, param, [param], []);
     let one = usize_node(&mut m, root, 1);
     m.unify(param, one);
     assert!(m.unify_errors.is_empty());
@@ -590,7 +590,7 @@ fn apply_reestablishes_the_parameter_patterns_internal_classes() {
     let x0 = unbound_node(&mut m, root);
     let x1 = unbound_node(&mut m, root);
     let param = array_node(&mut m, root, &[x0, x1], None);
-    let f = m.add_function(root, param, param, [param, x0, x1]);
+    let f = m.add_function(root, param, param, [param, x0, x1], []);
     m.unify(x0, x1);
     assert!(m.unify_errors.is_empty());
 

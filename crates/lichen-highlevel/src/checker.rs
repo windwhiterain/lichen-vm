@@ -26,7 +26,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{ArrayItem, BlockId, Function, LowOperator, LowValue, Module, NodeId, Operation, UnifyError};
+use lichen_lowlevel::{ArrayItem, BlockId, Function, FunctionId, LowOperator, LowValue, Module, NodeId, Operation, UnifyError};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
@@ -50,31 +50,26 @@ struct Binding {
     ty: NodeId,
 }
 
-/// One frame per [`Checker::check_lam`] on the stack: the function's lexical
-/// depth and the blocks created while compiling its body (its own return
-/// block plus any absorbed nested-closure blocks).  See
-/// [`Checker::body_blocks`].
-struct BodyFrame {
-    depth: u32,
-    blocks: Vec<BlockId>,
-}
-
 pub struct Checker<V: ValueType> {
     ir: IR<V>,
     module: Module<HighProgram<V>>,
     current_block: BlockId,
     scopes: Vec<HashMap<ExprId, Binding>>,
-    /// The blocks created while compiling each enclosing function's body —
-    /// one frame per [`Checker::check_lam`] on the stack, innermost last.
-    /// A function absorbs its blocks into its *lexical parent* — the
-    /// innermost enclosing frame with `depth - 1` — so a genuinely-nested
-    /// closure's scope joins the parent's template (the apply's clone then
-    /// instantiates the nested function value per call, rebinding its
-    /// captures), while a sibling at the same depth stays disjoint (its value
-    /// node is outside the template, so the clone references it in place —
-    /// the mutual-recursion invariant).  Each frame's own `nodes` are built
-    /// from its `blocks` regardless of whether it absorbed upward.
-    body_blocks: Vec<BodyFrame>,
+    /// The lexical function stack: one `(id, depth)` entry per enclosing
+    /// lambda whose body is being compiled, innermost last — `depth` is the
+    /// frontend's lexical depth ([`ExprKind::Function::depth`], the value
+    /// at the lambda's definition point).  The innermost entry is the
+    /// current function ([`Checker::current_function`]): every node the
+    /// checker allocates is tagged with it (its template membership
+    /// back-pointer) and registered in its scope ([`Function::nodes`]), and
+    /// asserts registered in it join [`Function::asserts`].  [`Checker::check_lam`]
+    /// pushes its shell while the body compiles and pops on exit — the old
+    /// per-frame block bookkeeping is gone, the lexical nesting lives in
+    /// [`Function::parent`], and the depth keeps *sibling* bindings
+    /// disjoint: a lambda compiled while another lambda's body is being
+    /// checked may be a same-depth sibling (mutual recursion), which hangs
+    /// under nothing, never under the lambda being checked.
+    function_stack: Vec<(FunctionId, u32)>,
     /// The compiled pair node `[value, type]` per expression.
     term: Vec<Option<NodeId>>,
     /// Element 0 of the pair (the value).  `None` for call results, whose
@@ -184,7 +179,7 @@ impl<V: ValueType> Checker<V> {
             module,
             current_block: root_block,
             scopes: Vec::new(),
-            body_blocks: Vec::new(),
+            function_stack: Vec::new(),
             term: vec![None; n],
             val: vec![None; n],
             ty: vec![None; n],
@@ -239,7 +234,10 @@ impl<V: ValueType> Checker<V> {
             let functions: Vec<lichen_lowlevel::FunctionId> =
                 checker.module.functions.keys().collect();
             for function in functions {
-                let ret = checker.module.functions[function].r#return;
+                let (ret, asserts) = {
+                    let function = &checker.module.functions[function];
+                    (function.r#return, function.asserts.clone())
+                };
                 // Every body runs once: its apply-time checks fire even when
                 // the function is never applied, and the deep pass decides
                 // what the apply clone may reference in place — a body the
@@ -248,6 +246,14 @@ impl<V: ValueType> Checker<V> {
                 // computations like a body-local struct's nominal-id
                 // `Fresh`.
                 checker.module.evaluate_node_deep(ret, None);
+                // The body's asserts are reachability entry points like the
+                // return: each condition gets its own concreteness proof, so
+                // an apply references a per-call-invariant condition in
+                // place instead of cloning and re-registering it, while a
+                // condition reading the parameter stays unproven and clones.
+                for &condition in &asserts {
+                    checker.module.evaluate_node_deep(condition, None);
+                }
             }
         }
         if checker.module.unify_errors.is_empty() {
@@ -302,24 +308,20 @@ impl<V: ValueType> Checker<V> {
     /// type expression `[int, K]` every literal's pair carries.
     fn install_constants(&mut self) {
         let root = self.current_block;
-        self.int_marker = self.module.add_node(root, None, Some(V::int_marker()));
-        self.type_marker = self.module.add_node(root, None, Some(V::type_marker()));
+        self.int_marker = self.alloc_node(root, None, Some(V::int_marker()));
+        self.type_marker = self.alloc_node(root, None, Some(V::type_marker()));
         self.function_type_marker =
-            self.module
-                .add_node(root, None, Some(V::function_type_marker()));
+            self.alloc_node(root, None, Some(V::function_type_marker()));
         self.tuple_type_marker = self
-            .module
-            .add_node(root, None, Some(V::tuple_type_marker()));
+            .alloc_node(root, None, Some(V::tuple_type_marker()));
         self.array_type_marker = self
-            .module
-            .add_node(root, None, Some(V::array_type_marker()));
+            .alloc_node(root, None, Some(V::array_type_marker()));
         self.type_struct_marker = self
-            .module
-            .add_node(root, None, Some(V::type_struct_marker()));
+            .alloc_node(root, None, Some(V::type_struct_marker()));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
-        let universe = self.module.add_node(root, None, None);
+        let universe = self.alloc_node(root, None, None);
         let items = [ArrayItem::new(self.type_marker), ArrayItem::new(universe)];
         self.module.nodes[universe].value =
             Some(V::from(LowValue::Array(self.module.alloc_array(&items, root))));
@@ -329,10 +331,36 @@ impl<V: ValueType> Checker<V> {
 
     // --- allocation ------------------------------------------------------
 
+    /// The innermost function whose body is being compiled — [`None`] at
+    /// top level.
+    fn current_function(&self) -> Option<FunctionId> {
+        self.function_stack.last().map(|&(function, _)| function)
+    }
+
+    /// A node owned by the current function — the checker's only node
+    /// creation point.  The node is tagged with [`Checker::current_function`]
+    /// and registered in its scope ([`Function::nodes`]), so the apply clone
+    /// walk's chain membership test recognizes it as part of the template.
+    /// Top-level nodes (no current function) are untagged and belong to no
+    /// template, exactly like the lowlevel's raw [`Module::add_node`].
+    fn alloc_node(
+        &mut self,
+        block: BlockId,
+        operation: Option<Operation<HighProgram<V>>>,
+        value: Option<V>,
+    ) -> NodeId {
+        let node = self.module.add_node(block, operation, value);
+        if let Some(function) = self.current_function() {
+            self.module.nodes[node].function = Some(function);
+            self.module.functions[function].nodes.push(node);
+        }
+        node
+    }
+
     /// A fresh, unbound type cell (a parameterized node — evaluating it
     /// yields the lazy marker, never a panic).
     fn fresh_cell(&mut self) -> NodeId {
-        self.module.add_node(
+        self.alloc_node(
             self.current_block,
             None,
             Some(V::from(LowValue::Parameterized)),
@@ -341,7 +369,7 @@ impl<V: ValueType> Checker<V> {
 
     fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
         let items: Vec<ArrayItem> = ids.iter().map(|&node| ArrayItem::new(node)).collect();
-        self.module.add_node(
+        self.alloc_node(
             block,
             None,
             Some(V::from(LowValue::Array(self.module.alloc_array(&items, block)))),
@@ -362,7 +390,7 @@ impl<V: ValueType> Checker<V> {
             .zip(mask.iter())
             .map(|(&node, &shallow)| ArrayItem { node, shallow })
             .collect();
-        self.module.add_node(
+        self.alloc_node(
             block,
             None,
             Some(V::from(LowValue::Array(self.module.alloc_array(&items, block)))),
@@ -375,8 +403,7 @@ impl<V: ValueType> Checker<V> {
         operator: HighProgramOperator,
         operand: Option<NodeId>,
     ) -> NodeId {
-        self.module
-            .add_node(block, Some(Operation { operator, operand }), None)
+        self.alloc_node(block, Some(Operation { operator, operand }), None)
     }
 
     /// A pair node `[value, type]` built around two already-compiled nodes.
@@ -600,7 +627,7 @@ impl<V: ValueType> Checker<V> {
                     // shared type expressions are reached in place.
                     let value_node = match value.as_enum() {
                         Some(LowValue::USize(_)) => {
-                            self.module.add_node(self.current_block, None, Some(value))
+                            self.alloc_node(self.current_block, None, Some(value))
                         }
                         None => {
                             if value == V::function_type_marker() {
@@ -610,7 +637,7 @@ impl<V: ValueType> Checker<V> {
                             } else if value == V::array_type_marker() {
                                 self.array_type_marker
                             } else {
-                                self.module.add_node(self.current_block, None, Some(value))
+                                self.alloc_node(self.current_block, None, Some(value))
                             }
                         }
                         _ => unreachable!("only literals and type constants can be constants"),
@@ -649,8 +676,8 @@ impl<V: ValueType> Checker<V> {
                 parameter,
                 parameter_type,
                 r#return,
-                ..
-            } => self.check_lam(e, parameter_type, parameter, r#return),
+                depth,
+            } => self.check_lam(e, depth, parameter_type, parameter, r#return),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {
                 operator,
@@ -725,22 +752,12 @@ impl<V: ValueType> Checker<V> {
     fn check_lam(
         &mut self,
         e: ExprId,
+        depth: u32,
         parameter_type: Option<ExprId>,
         parameter: ExprId,
         r#return: ExprId,
     ) -> NodeId {
-        let depth = match self.ir[e].kind {
-            // The frontend records the count of enclosing function scopes;
-            // the checker uses it below to absorb into the lexical parent
-            // only, keeping siblings' templates disjoint.
-            ExprKind::Function { depth, .. } => depth,
-            _ => unreachable!("check_lam is only entered for a Function expression"),
-        };
         let return_block = self.module.add_block(None);
-        self.body_blocks.push(BodyFrame {
-            depth,
-            blocks: vec![return_block],
-        });
         let saved = self.current_block;
         self.current_block = return_block;
         let value_cell = self.fresh_cell();
@@ -749,6 +766,49 @@ impl<V: ValueType> Checker<V> {
         // function's scope so the apply's clone yields fresh cells per call
         // (that is what makes a polymorphic value usable at several types).
         let param = self.array_node(return_block, &[value_cell, type_cell]);
+        // The function shell: its id exists from the start of the body, so
+        // every node compiled below is tagged with it and registered in its
+        // scope — the template the apply clone walk recognizes by chain
+        // membership.  `parent` is the enclosing function: a nested
+        // closure's nodes then read as members of the enclosing template
+        // too, while a sibling's do not (the mutual-recursion invariant).
+        // The return and parameter slots are placeholders, filled once the
+        // body is checked.
+        let function = self.module.functions.insert(Function {
+            nodes: Vec::new(),
+            r#return: param,
+            parameter: param,
+            asserts: Vec::new(),
+            // The lexical parent is the innermost enclosing function whose
+            // definition depth is one less: a genuinely-nested closure joins
+            // the enclosing template, while a same-depth sibling binding
+            // (mutual recursion — compiled here because the body references
+            // it) hangs under nothing.  Its closure then stays outside this
+            // template, referenced in place, so the recursion re-applies the
+            // sibling's never-bound template instead of a bound instance.
+            parent: self
+                .function_stack
+                .iter()
+                .rposition(|&(_, d)| d + 1 == depth)
+                .map(|i| self.function_stack[i].0),
+            block: return_block,
+        });
+        self.module.blocks[return_block].functions.push(function);
+        // The three nodes above predate the shell: the allocation helper
+        // tagged them with (and registered them in) the *enclosing*
+        // function's scope.  They are this function's own — move them into
+        // its scope and retag them, exactly where the helper would have put
+        // them had the shell existed first.
+        if let Some(enclosing) = self.current_function() {
+            self.module.functions[enclosing]
+                .nodes
+                .retain(|&n| n != value_cell && n != type_cell && n != param);
+        }
+        for &node in &[value_cell, type_cell, param] {
+            self.module.nodes[node].function = Some(function);
+        }
+        self.module.functions[function].nodes = vec![value_cell, type_cell, param];
+        self.function_stack.push((function, depth));
         self.term[parameter] = Some(param);
         self.ty[parameter] = Some(type_cell);
         // A self- or mutually-recursive binding (`fib = n => e`): the IR is a
@@ -759,13 +819,12 @@ impl<V: ValueType> Checker<V> {
         // takes this path (a non-referencing lambda's pre-registration is
         // overwritten identically below); the pair's type slot is a cell,
         // bound to the arrow below once the return type is known.
-        let func_node = self.module.add_node(return_block, None, None);
+        let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
         let pair = self.array_node(return_block, &[func_node, ty_cell]);
         self.term[e] = Some(pair);
         self.val[e] = Some(func_node);
         self.ty[e] = Some(ty_cell);
-        let self_ref = Some((func_node, ty_cell));
         self.scopes.push(HashMap::from([(
             parameter,
             Binding {
@@ -796,69 +855,36 @@ impl<V: ValueType> Checker<V> {
         let ret = self.check_expr(r#return);
         self.scopes.pop();
         self.current_block = saved;
-        // The scope is the closure the body can reach: every block created
-        // while compiling it, nested lambdas' blocks included, plus the
-        // return even when it lives in a deeper block.  The apply's clone
-        // then instantiates a nested function value as a fresh closure — its
-        // references to this function's members are rewritten to the clones
-        // the argument unify binds (a captured parameter), and its own cells
-        // are fresh per call.
-        let frame = self.body_blocks.pop().expect("a function's body blocks");
-        let depth = frame.depth;
-        let blocks = frame.blocks;
-        let mut nodes: HashSet<NodeId> = blocks
-            .iter()
-            .flat_map(|&block| self.module.blocks[block].nodes.iter().copied())
-            .collect();
-        nodes.insert(ret);
-        // Absorb this function's blocks into its *lexical parent* — the
-        // innermost enclosing frame with `depth - 1`.  A genuinely-nested
-        // closure's scope then joins the parent's template (the apply's clone
-        // instantiates the nested function value per call, rebinding its
-        // capture), while a sibling at the same depth stays disjoint — its
-        // value node is outside the template, so the clone references it in
-        // place, which is the mutual-recursion invariant.  A depth-0 function
-        // is top-level: no parent.
-        if depth > 0 {
-            let parent_depth = depth - 1;
-            if let Some(idx) = self
-                .body_blocks
-                .iter()
-                .rposition(|frame| frame.depth == parent_depth)
-            {
-                self.body_blocks[idx].blocks.extend(blocks.iter().copied());
-            }
+        // The shell fills in: the return and parameter entry points.  The
+        // body's asserts were registered into [`Function::asserts`] as they
+        // were compiled, and the scope grew node by node.  The value node
+        // pre-exists (the self-reference applied it during the body); it
+        // fills in now with the function id.
+        self.module.functions[function].r#return = ret;
+        self.module.functions[function].parameter = param;
+        // The return may live in another function's scope — a body ending
+        // in a variable reference to a nested closure's pair (owned by that
+        // closure, its chain reaching here through the parent link).  The
+        // entry point still belongs to this function's scope: the apply
+        // walk starts from it.
+        if !self.module.functions[function].nodes.contains(&ret) {
+            self.module.functions[function].nodes.push(ret);
         }
-        // A recursive binding's value node pre-exists (the self-reference
-        // applied it during the body); it fills in now with the function id.
-        // `add_function` creates its own value node, so the manual insert
-        // mirrors it for the pre-registered node.
-        let func_node = if let Some((func_node, _)) = self_ref {
-            let function = self.module.functions.insert(Function {
-                nodes,
-                r#return: ret,
-                parameter: param,
-                block: return_block,
-            });
-            self.module.blocks[return_block].functions.push(function);
-            self.module.nodes[func_node].value = Some(V::from(LowValue::Function(function)));
-            self.recursive_func_nodes.push(func_node);
-            func_node
-        } else {
-            self.module.add_function(return_block, ret, param, nodes)
-        };
+        self.module.nodes[func_node].value = Some(V::from(LowValue::Function(function)));
+        self.recursive_func_nodes.push(func_node);
         // The function's own type: the arrow shape `[parameter type, return
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
+        // Built while the current function is still the shell, so these
+        // nodes join its scope like the rest of the body.
         let shape = self.array_node(return_block, &[type_cell, self.ty[r#return].unwrap()]);
         self.arrows.insert(shape);
         let kind = self.kind_expr(return_block, self.function_type_marker);
         let arrow = self.array_node(return_block, &[shape, kind]);
-        if let Some((_, ty_cell)) = self_ref {
-            // The self-reference's type cell now carries the arrow, so the
-            // in-body applications see the function's real type.
-            self.module.unify(ty_cell, arrow);
-        }
+        // The self-reference's type cell now carries the arrow, so the
+        // in-body applications see the function's real type.
+        self.module.unify(ty_cell, arrow);
         let pair = self.array_node(return_block, &[func_node, arrow]);
+        self.function_stack.pop();
         self.term[e] = Some(pair);
         self.val[e] = Some(func_node);
         self.ty[e] = Some(arrow);
@@ -1061,12 +1087,12 @@ impl<V: ValueType> Checker<V> {
             // so a lazy stream's type spine resolves at the level read; an
             // unbound type defers (every native read yields the marker).
             None => {
-                let zero = self.module.add_node(
+                let zero = self.alloc_node(
                     self.current_block,
                     None,
                     Some(V::from(LowValue::USize(0))),
                 );
-                let one = self.module.add_node(
+                let one = self.alloc_node(
                     self.current_block,
                     None,
                     Some(V::from(LowValue::USize(1))),
@@ -1128,7 +1154,7 @@ impl<V: ValueType> Checker<V> {
                         HighProgramOperator::TypeOperator(TypeOperator::Eq),
                         Some(in_range_ops),
                     );
-                    self.module.add_assert(self.current_block, in_range);
+                    self.register_assert(in_range);
                 }
                 // Dispatch codes (see `IndexTypeDispatch`'s run): 0 = tuple,
                 // 1 = struct, 2 = array, 3 = any other kind (defer).
@@ -1255,7 +1281,7 @@ impl<V: ValueType> Checker<V> {
     }
 
     /// `assert(condition)` — an explicit constraint, not a unify: the
-    /// condition's *value* node is registered as an assert point.  The
+    /// condition's *value* node is registered as an assert.  The
     /// lowlevel's [`Module::check_asserts`] then force-evaluates every
     /// assert (ignoring laziness) after the definition pass and requires
     /// `USize(1)` — an unbound condition is not bound to `1`, it stays
@@ -1267,12 +1293,23 @@ impl<V: ValueType> Checker<V> {
         // The checked thing is a `USize`, so the assert names the value
         // node — element 0 of the pair — not the pair itself.
         let value = self.value_of(condition);
-        self.module.add_assert(self.current_block, value);
+        self.register_assert(value);
         let pair = self.term[condition].unwrap();
         self.term[e] = Some(pair);
         self.val[e] = self.val[condition];
         self.ty[e] = self.ty[condition];
         pair
+    }
+
+    /// Registers an assert condition: the module worklist entry plus, when
+    /// a function body is being compiled, the current function's own list —
+    /// the function owns it, so an apply clones it and re-checks the
+    /// instantiated condition against each call's argument.
+    fn register_assert(&mut self, condition: NodeId) {
+        self.module.add_assert(condition);
+        if let Some(function) = self.current_function() {
+            self.module.functions[function].asserts.push(condition);
+        }
     }
 
     fn check_tuple_term(&mut self, e: ExprId) -> NodeId {
@@ -1382,7 +1419,7 @@ impl<V: ValueType> Checker<V> {
             );
         }
         let value = self.array_node(self.current_block, &vals);
-        let length = self.module.add_node(
+        let length = self.alloc_node(
             self.current_block,
             None,
             Some(V::from(LowValue::USize(vals.len()))),

@@ -42,12 +42,6 @@ impl<P: Program> Module<P> {
         {
             self.garbage_collect_node(operand, source, target);
         }
-        // An assert point's condition is a graph edge like an unevaluated
-        // operation's operand: the assert may be checked after the subtree
-        // vacates, so the condition must move with the point.
-        if let Some(condition) = self.nodes[node].assert {
-            self.garbage_collect_node(condition, source, target);
-        }
         let value = current.map(|value| match value.as_enum() {
             Some(LowValue::Array(array)) => {
                 for item in array.items() {
@@ -65,9 +59,15 @@ impl<P: Program> Module<P> {
                 // function itself is homed like a node — if it lives in
                 // the vacated subtree it is re-pointed to the target and
                 // registered there, so release skips it and it stays
-                // callable.
+                // callable.  The body's asserts are edges like the scope:
+                // a condition the check pass may still force-evaluate must
+                // move with the function.
                 let ids = self.functions[function].nodes.clone();
                 for &id in &ids {
+                    self.garbage_collect_node(id, source, target);
+                }
+                let assert_ids = self.functions[function].asserts.clone();
+                for &id in &assert_ids {
                     self.garbage_collect_node(id, source, target);
                 }
                 if self.descends_from(self.functions[function].block, source) {

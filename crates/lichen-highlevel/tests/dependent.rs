@@ -96,6 +96,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
         ret,
         x,
         [x, codomain, codomain_operands, ret, branches, float, int],
+        [],
     );
 
     // applied to 1: the cloned condition binds, and forcing the codomain
