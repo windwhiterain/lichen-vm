@@ -731,10 +731,10 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
 
 #[test]
 fn a_struct_instance_indexes_its_fields() {
-    // s = struct<Int, Type>; a = s(1, Int); (a[0], a[1]) — indexing an
-    // instance reads the wrapped tuple's elements, and each element's type
-    // is the corresponding field type (Int and Type).
-    let (module, root) = run("s = struct<Int, Type>; a = s(1, Int); (a[0], a[1])");
+    // s = struct<Int, Type>; a = s(1, Int); (a(0), a(1)) — a slot read
+    // over an instance reads the wrapped tuple's elements, and each
+    // element's type is the corresponding field type (Int and Type).
+    let (module, root) = run("s = struct<Int, Type>; a = s(1, Int); (a(0), a(1))");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
@@ -744,19 +744,20 @@ fn a_struct_instance_indexes_its_fields() {
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );
-    // indexing the instance through a parameter works too — the runtime
-    // dispatch sees the struct kind and selects its field list (the
-    // argument is parenthesized: `f s(1, Int)` would parse as `(f s)(1, Int)`)
-    let (module, root) = run("f = a => a[0]; s = struct<Int, Type>; f (s(1, Int)) : Int");
+    // a slot read through a parameter works too — the read's type is
+    // `Index(shape, k)` over the container type's shape, which resolves
+    // when the call binds the parameter (the argument is parenthesized:
+    // `f s(1, Int)` would parse as `(f s)(1, Int)`)
+    let (module, root) = run("f = a => a(0); s = struct<Int, Type>; f (s(1, Int)) : Int");
     let mut module = module;
     assert_eq!(usize_of(&module.evaluate_node_deep(root, None)), 1);
 }
 
 #[test]
 fn a_struct_instance_index_out_of_bounds_is_rejected() {
-    // a[5] — the field list is structural like a tuple's, so the bounds
+    // a(5) — the field list is structural like a tuple's, so the bounds
     // check fires at check time.
-    let d = diags("s = struct<Int, Type>; a = s(1, Int); a[5]");
+    let d = diags("s = struct<Int, Type>; a = s(1, Int); a(5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::IndexOutOfBounds);
@@ -893,7 +894,7 @@ fn an_apply_argument_mismatch_reports_expected_and_found_at_the_argument() {
     // the declared parameter type as the expected side.  The highlevel
     // `check.message` is raw ([[TypeInt, TypeInt], TypeTuple]); the language
     // layer renders the pretty `<Int, Int>` spellings.
-    let d = diags("g = (x : <Int, Int>) => x[0]\ng (5)");
+    let d = diags("g = (x : <Int, Int>) => x(0)\ng (5)");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].span, Some((2, 4)), "the caret is on the argument `5`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
@@ -911,27 +912,25 @@ fn indexing_a_function_is_an_index_target_error() {
     // heterogeneous tuple `(1, Int)` — is not an index of the function
     // itself: the checker reports it statically instead of the runtime
     // panicking on a non-array target.  The call is written `a 0`.
-    let d = diags("a = x => (1, Int)[x]; a[0]");
+    let d = diags("a = x => (1, Int)(x); a[0]");
     assert_eq!(d.len(), 1);
     assert_eq!(d[0].span, Some((1, 23)), "the index starts at `a`");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
-    assert_eq!(check.kind, DiagKind::IndexTarget);
+    assert_eq!(check.kind, DiagKind::Guard);
     assert!(
-        check
-            .message
-            .contains("expected a tuple, array, or struct type"),
-        "{}",
+        check.message.contains("found"),
+        "the message renders both sides: {}",
         check.message
     );
     // the corrected program applies the selector instead of indexing it
-    let (module, root) = run("a = x => (1, Int)[x]; a 0 : Int");
+    let (module, root) = run("a = x => (1, Int)(x); a 0 : Int");
     let mut module = module;
     assert_eq!(
         usize_of(&module.evaluate_node_deep(root, None)),
         1,
         "the dependent selector applied to 0 reads the value"
     );
-    let (module, root) = run("a = x => (1, Int)[x]; a 1 : Type");
+    let (module, root) = run("a = x => (1, Int)(x); a 1 : Type");
     let mut module = module;
     assert_eq!(
         module.evaluate_node_deep(root, None),
@@ -1114,7 +1113,7 @@ fn a_shallow_marked_recursive_tail_stays_lazy() {
     // tail, so the definition pass terminates; each index read forces the
     // next apply on demand, and the stream's type resolves level by level.
     let out = lichen_language::run::evaluate(
-        "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf[1][0], inf[1][1][0], inf[1][1][1][0])",
+        "f = x => [x, ~ f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     )
     .expect("the stream should check and terminate");
     assert_eq!(out, "(1, 2, 3): <Int, Int, Int>");
@@ -1126,7 +1125,7 @@ fn a_tilde_n_wrap_marks_value_slots_shallow() {
     // are skipped), and the read gives the element's value with an
     // underdetermined type — the wrapped term is a lazy region, so its
     // reads never claim a concrete type that would silently mismatch it.
-    let out = lichen_language::run::evaluate("([1, ~2 [2, 3]])[1][0]")
+    let out = lichen_language::run::evaluate("([1, ~2 [2, 3]])(1)(0)")
         .expect("the marked array should check");
     assert!(
         out.starts_with("[2, 3]: ?"),
@@ -1141,7 +1140,7 @@ fn a_tilde_one_on_a_recursive_tail_terminates() {
     // the definition pass terminates and the reads stay underdetermined
     // (sound), never a guard panic.
     let out = lichen_language::run::evaluate(
-        "f = x => [x, ~1 f (x + 1)]; inf = f 0; (inf[1][0], inf[1][1][0], inf[1][1][1][0])",
+        "f = x => [x, ~1 f (x + 1)]; inf = f 0; (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))",
     )
     .expect("the marked stream should terminate");
     assert!(

@@ -6,17 +6,30 @@ use crate::{
 };
 use lichen_utils::extend::AsEnum;
 
-/// A runtime evaluation failure — the only one today is an out-of-bounds
-/// [`LowOperator::Index`].  Structured facts (the index node, the index value,
-/// the container length) so the highlevel layer can attribute a span and
-/// render a message without walking the module graph.  The index node is an
-/// [`AnyNodeId`]: a static index (a solved constant) has no importer span.
+/// A runtime evaluation failure — an out-of-bounds [`LowOperator::Index`], a
+/// table read that misses or whose key is not concrete.  Structured facts
+/// (the offending nodes and values) so the highlevel layer can attribute a
+/// span and render a message without walking the module graph.  The nodes
+/// are [`AnyNodeId`]s: a static one (a solved constant of a plugged
+/// dependency) has no importer span.
 #[derive(Debug, Clone, Copy)]
-pub struct EvalError {
-    /// The index operand node — its source span attributes the diagnostic.
-    pub index: AnyNodeId,
-    pub index_value: usize,
-    pub length: usize,
+pub enum EvalError {
+    /// An out-of-bounds array read.  `index` is the index operand node —
+    /// its source span attributes the diagnostic.
+    Index {
+        index: AnyNodeId,
+        index_value: usize,
+        length: usize,
+    },
+    /// A [`LowOperator::TableGet`] that found no entry for the key, or
+    /// whose key is still unbound (a not-yet-concrete key can match nothing
+    /// — the table's stored keys are all concrete).  `table` is the
+    /// container operand node, `key` the key node.
+    TableMiss { table: AnyNodeId, key: AnyNodeId },
+    /// A table build dropped an entry whose key could not be forced to a
+    /// concrete value (its subtree holds an unbound cell or a parameterized
+    /// computation) — hashing needs the key's decided content.
+    TableKeyUnbound { key: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -107,7 +120,7 @@ impl<P: Program> Module<P> {
                                                 AnyNodeId::Static(sref) => self.static_read(sref),
                                             }
                                         } else {
-                                            self.eval_errors.push(EvalError {
+                                            self.eval_errors.push(EvalError::Index {
                                                 index: operands[1].node,
                                                 index_value: index,
                                                 length: array.len(),
@@ -175,6 +188,73 @@ impl<P: Program> Module<P> {
                         }
                     }
                     _ => unreachable!("Apply operand must be an array of [function, argument]"),
+                }
+            }
+            Some(LowOperator::TableGet) => {
+                let Some(operands) = operation.operand else {
+                    unreachable!("TableGet expects an operand array node")
+                };
+                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
+                    Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
+                    Some(LowValue::Array(array)) => {
+                        let operands = array.items();
+                        let table = operands[0].node;
+                        let key = operands[1].node;
+                        match self.evaluate_node(table, Some(block)).as_enum() {
+                            Some(LowValue::Parameterized) => {
+                                P::Value::from(LowValue::Parameterized)
+                            }
+                            Some(LowValue::Table(payload)) => {
+                                // The key is force-evaluated and
+                                // deep-content-hashed; an unforceable key
+                                // can match nothing (the stored keys are
+                                // all concrete) and misses like any other
+                                // absent key.
+                                let Some(hash) = self.key_hash(key) else {
+                                    self.eval_errors.push(EvalError::TableMiss { table, key });
+                                    return P::Value::from(LowValue::None);
+                                };
+                                let items = payload.items();
+                                let start = items.partition_point(|item| item.hash < hash);
+                                let mut path = Vec::new();
+                                let mut found = None;
+                                for item in &items[start..] {
+                                    if item.hash != hash {
+                                        break;
+                                    }
+                                    if self.key_eq(key, item.key, &mut path) {
+                                        found = Some(item.value);
+                                        break;
+                                    }
+                                }
+                                match found {
+                                    // A read of a pure cell is a reference,
+                                    // not a snapshot — joining the reader
+                                    // to the cell's class lets a later bind
+                                    // reach it through replication, like an
+                                    // array `Index` read.
+                                    Some(element) => match element {
+                                        Dyn(element) => {
+                                            self.alias_read(node, element);
+                                            self.evaluate_node(Dyn(element), Some(block))
+                                        }
+                                        // A static element is immutable —
+                                        // no class to join — and its value
+                                        // is absolute, so the read result
+                                        // caches into this node like any
+                                        // other.
+                                        AnyNodeId::Static(sref) => self.static_read(sref),
+                                    },
+                                    None => {
+                                        self.eval_errors.push(EvalError::TableMiss { table, key });
+                                        P::Value::from(LowValue::None)
+                                    }
+                                }
+                            }
+                            _ => unreachable!("TableGet target must be a table"),
+                        }
+                    }
+                    _ => unreachable!("TableGet operand must be an array of [table, key]"),
                 }
             }
         };
@@ -287,6 +367,18 @@ impl<P: Program> Module<P> {
             }
             self.nodes[node].visiting = false;
         }
+        // A table's entries are edges like array items: its keys were
+        // already forced concrete at build, but its values are lazy refs —
+        // both must be proven (or disproven) concrete by the descent.
+        if let Some(LowValue::Table(table)) = value.as_enum() {
+            self.nodes[node].visiting = true;
+            let block = self.nodes[node].block;
+            for item in table.items() {
+                self.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, force_operand);
+                self.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, force_operand);
+            }
+            self.nodes[node].visiting = false;
+        }
         // An array is unproven while any position resolved to the lazy
         // marker, or any position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
@@ -309,6 +401,25 @@ impl<P: Program> Module<P> {
                                 [sref.index.index]
                                 .parameterized,
                         })
+            )
+            || matches!(
+                value.as_enum(),
+                Some(LowValue::Table(table))
+                    if table.items().iter().any(|item| match item.key {
+                        Dyn(node) => self.nodes[node]
+                            .evaluated_deep
+                            .is_some_and(|e| e.parameterized),
+                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
+                            [sref.index.index]
+                            .parameterized,
+                    }) || table.items().iter().any(|item| match item.value {
+                        Dyn(node) => self.nodes[node]
+                            .evaluated_deep
+                            .is_some_and(|e| e.parameterized),
+                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
+                            [sref.index.index]
+                            .parameterized,
+                    })
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {

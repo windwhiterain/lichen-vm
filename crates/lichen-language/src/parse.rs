@@ -451,12 +451,12 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         },
                         value => {
                             emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
-                            Expr::Err(value.span())
+                            value
                         }
                     },
                     other => {
                         emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
-                        Expr::Err(other.span())
+                        other
                     }
                 },
             })
@@ -486,12 +486,14 @@ enum Pre {
     FatArrow(Box<Expr>, Box<Expr>),
 }
 
-/// The atoms, with their postfix forms: `e[i]` (index), `T<e>` (array type),
-/// and `C(...)` (struct instantiation — a `(` directly after an expression).
-/// The bracket and angle forms are always postfix, with no whitespace rule;
-/// a paren is postfix *only when adjacent* (no space before it) — a paren
-/// after a space is a paren atom, and the expression's application rule
-/// treats it as an argument.
+/// The atoms, with their postfix forms: `e[i]` (array index), `a(k)` (the
+/// positional slot read — an adjacent single-expression paren), `t{k}`
+/// (table lookup), `T<e>` (array type), and `C(...)` (struct instantiation
+/// — any other adjacent paren content).  The bracket and angle forms are
+/// always postfix, with no whitespace rule; a paren or a brace is postfix
+/// *only when adjacent* (no space before it) — a spaced `(` is a paren
+/// atom, and a spaced `{` is a block: the application rule treats either
+/// as an argument, never this postfix.
 fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -508,6 +510,7 @@ fn atom_parser<'a>(
         name().map(|(n, span)| Expr::Name(n, span)),
         paren(tokens, expr.clone()),
         array_literal(tokens, expr.clone()),
+        table_literal(tokens, expr.clone()),
         block(tokens, expr.clone()),
         angle_tuple(tokens, expr.clone()),
         struct_type(tokens, expr.clone()),
@@ -516,13 +519,19 @@ fn atom_parser<'a>(
     .labelled("an expression");
 
     // The postfix forms, chained left.  A `[` after an expression is always
-    // an index, a `<` always an array type.  A `(` is struct instantiation
-    // only when *adjacent* — the paren comes straight after the expression,
-    // no space between.  A spaced `(` is a paren atom and reaches the
-    // application rule as an argument, never this postfix.
+    // an index, a `<` always an array type.  A `(` or a `{` is postfix only
+    // when *adjacent* — the bracket comes straight after the expression, no
+    // space between: a `(` holding a single comma-free expression is the
+    // positional slot read `a(k)`, any other adjacent `(` is struct
+    // instantiation, an adjacent `{` is a table lookup.  A spaced `(` is a
+    // paren atom and a spaced `{` a block; the application rule treats
+    // either as an argument, never this postfix.
     let adjacent_paren = any::<In<'a>, E<'a>>()
         .filter(|t: &Token| t.kind == TokenKind::LParen && !t.space_before)
-        .labelled("struct instantiation '('");
+        .labelled("a slot read or struct instantiation '('");
+    let adjacent_brace = any::<In<'a>, E<'a>>()
+        .filter(|t: &Token| t.kind == TokenKind::LBrace && !t.space_before)
+        .labelled("table lookup '{'");
     let postfix = choice((
         token(TokenKind::LBracket)
             .ignore_then(expr.clone())
@@ -532,11 +541,14 @@ fn atom_parser<'a>(
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RAngle))
             .map(Postfix::TypeArray),
+        adjacent_brace
+            .ignore_then(expr.clone())
+            .then_ignore(token(TokenKind::RBrace))
+            .map(Postfix::TableFind),
         adjacent_paren
-            .ignored()
-            .ignore_then(struct_fields(expr.clone()))
+            .ignore_then(paren_fields(expr.clone()))
             .then_ignore(token(TokenKind::RParen))
-            .map(Postfix::StructInst),
+            .map(Postfix::Paren),
     ));
 
     primary
@@ -550,16 +562,36 @@ fn atom_parser<'a>(
                         index: Box::new(index),
                         span,
                     },
+                    Postfix::TableFind(key) => Expr::TableFind {
+                        container: Box::new(acc),
+                        key: Box::new(key),
+                        span,
+                    },
                     Postfix::TypeArray(length) => Expr::TypeArray {
                         element_type: Box::new(acc),
                         length: Box::new(length),
                         span,
                     },
-                    Postfix::StructInst(fields) => Expr::StructInst {
-                        callee: Box::new(acc),
-                        fields,
-                        span,
-                    },
+                    Postfix::Paren((fields, saw_comma)) => {
+                        // The single comma-free expression `a(e)` is the
+                        // positional slot read; every empty or comma-bearing
+                        // form instantiates (`a()`, `a(,)`, `a(e,)`,
+                        // `a(e1, e2)`), mirroring the tuple grammar's `()`
+                        // unit vs `(,)` empty tuple.
+                        if fields.len() == 1 && !saw_comma {
+                            Expr::FieldRead {
+                                container: Box::new(acc),
+                                key: Box::new(fields.into_iter().next().unwrap()),
+                                span,
+                            }
+                        } else {
+                            Expr::StructInst {
+                                callee: Box::new(acc),
+                                fields,
+                                span,
+                            }
+                        }
+                    }
                 }
             })
         })
@@ -569,17 +601,22 @@ fn atom_parser<'a>(
 #[derive(Clone, Debug)]
 enum Postfix {
     Index(Expr),
+    TableFind(Expr),
     TypeArray(Expr),
-    StructInst(Vec<Expr>),
+    Paren((Vec<Expr>, bool)),
 }
 
-/// The fields of a struct instantiation: `f1, …, fn` — zero, one, or many
-/// expressions, comma-separated, with a trailing comma tolerated.  A single
-/// field needs no extra comma (`C(1)` is a one-field struct, not a grouped
-/// literal), and `C()` is a field-less struct.
-fn struct_fields<'a>(
+/// The content of an adjacent `(`: zero or more expressions separated by
+/// commas, a trailing comma tolerated — plus *whether any comma appeared*.
+/// The caller splits the two single-expression shapes: `a(e)` (one
+/// expression, no comma) is the positional slot read, while every
+/// comma-bearing or empty form instantiates.  `a(,)` parses as the empty
+/// field list (the trailing comma is the whole content) — the instantiation
+/// spelling of the tuple grammar's `(,)` empty tuple, against the future
+/// `()` unit.
+fn paren_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Vec<Expr>, E<'a>> + Clone {
+) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), E<'a>> + Clone {
     let first = expr.clone().or_not();
     first
         .then(
@@ -589,13 +626,14 @@ fn struct_fields<'a>(
                 .collect::<Vec<_>>(),
         )
         .then(token(TokenKind::Comma).or_not())
-        .map(|((first, mut rest), _trailing)| match first {
-            Some(f0) => {
-                let mut fields = vec![f0];
-                fields.append(&mut rest);
-                fields
+        .map(|((first, rest), trailing)| {
+            let saw_comma = !rest.is_empty() || trailing.is_some();
+            let mut fields = Vec::new();
+            if let Some(f0) = first {
+                fields.push(f0);
             }
-            None => rest,
+            fields.extend(rest);
+            (fields, saw_comma)
         })
 }
 
@@ -650,6 +688,56 @@ fn array_literal<'a>(
                 std::iter::once(first).chain(rest).collect(),
                 span_at(tokens, me.span().start),
             )
+        })
+}
+
+/// `table { k1 :: v1, k2 :: v2, … }` — a constant table literal.  Each
+/// entry is a key/value pair separated by `::`.  Keys and values are full
+/// expressions; the double colon is not part of the expression grammar, so
+/// it unambiguously separates the pair.  Anything else recovers as a parse
+/// error.  Entries are comma-separated with a tolerated trailing comma;
+/// `table {}` is the empty table.
+fn table_literal<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    let entry = expr
+        .clone()
+        .then(
+            token(TokenKind::DoubleColon)
+                .ignore_then(operand(tokens, expr.clone()))
+                .or_not(),
+        )
+        .validate(|(key, value), me, emit| match value {
+            Some(value) => (key, value),
+            None => {
+                emit.emit(Rich::custom(
+                    me.span(),
+                    "a table entry must be a `key :: value` pair",
+                ));
+                // Recover like any parse error: the entry's key compiles,
+                // its value is a compile-time leaf.
+                (key, Expr::Err(span_at(tokens, me.span().start)))
+            }
+        });
+    token(TokenKind::KwTable)
+        .ignore_then(token(TokenKind::LBrace))
+        .ignore_then(entry.clone().or_not())
+        .then(
+            token(TokenKind::Comma)
+                .ignore_then(entry.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Comma).or_not())
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|((first, mut rest), _trailing), me| {
+            let mut entries = Vec::new();
+            if let Some(first) = first {
+                entries.push(first);
+            }
+            entries.append(&mut rest);
+            Expr::Table(entries, span_at(tokens, me.span().start))
         })
 }
 
@@ -826,6 +914,24 @@ fn apply_type_mode(program: Program) -> Program {
                 index: Box::new(expr(*index, type_mode)),
                 span,
             },
+            Expr::TableFind {
+                container,
+                key,
+                span,
+            } => Expr::TableFind {
+                container: Box::new(expr(*container, type_mode)),
+                key: Box::new(expr(*key, type_mode)),
+                span,
+            },
+            Expr::FieldRead {
+                container,
+                key,
+                span,
+            } => Expr::FieldRead {
+                container: Box::new(expr(*container, type_mode)),
+                key: Box::new(expr(*key, type_mode)),
+                span,
+            },
             Expr::Annotation {
                 value,
                 r#type,
@@ -868,6 +974,13 @@ fn apply_type_mode(program: Program) -> Program {
             },
             Expr::Array(elements, span) => Expr::Array(
                 elements.into_iter().map(|e| expr(e, type_mode)).collect(),
+                span,
+            ),
+            Expr::Table(entries, span) => Expr::Table(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (expr(key, false), expr(value, false)))
+                    .collect(),
                 span,
             ),
             Expr::Shallow(inner, depth, span) => {
@@ -1216,22 +1329,30 @@ mod tests {
         assert_eq!(fields.len(), 2);
         assert!(matches!(fields[0], Expr::Int(1, _)));
         assert!(matches!(fields[1], Expr::TypeConst(TypeConst::Int, _)));
-        // a single field needs no trailing comma.
-        let Expr::StructInst { fields, .. } = parse_ok("A(1)") else {
-            panic!("expected a struct instance")
-        };
-        assert_eq!(fields.len(), 1);
-        // a field-less struct instance parses too (the checker rejects it
-        // against a struct that has fields).
-        assert!(matches!(
-            parse_ok("A()"),
-            Expr::StructInst { fields, .. } if fields.is_empty()
-        ));
-        // a trailing comma is tolerated.
+        // a single field carries a trailing comma — the bare `A(1)` is the
+        // positional slot read.
         assert!(matches!(
             parse_ok("A(1,)"),
             Expr::StructInst { fields, .. } if fields.len() == 1
         ));
+        // a field-less struct instance parses in both spellings — `A()` and
+        // the empty-tuple form `A(,)` (the instantiation mirror of the
+        // tuple grammar's `(,)` empty tuple vs the future `()` unit).
+        assert!(matches!(
+            parse_ok("A()"),
+            Expr::StructInst { fields, .. } if fields.is_empty()
+        ));
+        assert!(matches!(
+            parse_ok("A(,)"),
+            Expr::StructInst { fields, .. } if fields.is_empty()
+        ));
+        // the bare single-expression paren is the slot read, not an
+        // instantiation.
+        let Expr::FieldRead { container, key, .. } = parse_ok("A(1)") else {
+            panic!("expected a slot read")
+        };
+        assert!(matches!(*container, Expr::Name(n, _) if n == "A"));
+        assert!(matches!(*key, Expr::Int(1, _)));
         // the callee may be an inline struct type.
         let Expr::StructInst { callee, .. } = parse_ok("struct<Int, Int>(1, 2)") else {
             panic!("expected a struct instance")

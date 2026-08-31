@@ -72,9 +72,13 @@ fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
         None,
     )
 }
-/// `a[i]` — element selection.
+/// `a[i]` — an array-element read (the container is pinned to an array).
 fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
     ir.alloc(ExprKind::Index { array: a, index: i }, None)
+}
+/// `a(k)` — a positional slot read over a tuple element or struct field.
+fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
+    ir.alloc(ExprKind::Field { container: c, key: k }, None)
 }
 fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
     ir.alloc(
@@ -730,7 +734,7 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::IndexTarget);
+    assert_eq!(diags[0].kind, DiagKind::Guard);
     assert_eq!(diags[0].span, Some((3, 7)));
     assert_eq!(diags[0].a, b.ty[l].unwrap());
 }
@@ -746,7 +750,7 @@ fn indexing_an_int_reports_expected_tuple_or_array() {
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert_eq!(diags[0].kind, DiagKind::IndexTarget);
+    assert_eq!(diags[0].kind, DiagKind::Guard);
 }
 
 #[test]
@@ -874,7 +878,7 @@ fn a_tuples_unbound_element_types_sync_from_the_return_types() {
     let one = int(&mut ir, 1);
     let tval = ty(&mut ir);
     let tup = tuple(&mut ir, &[one, tval]);
-    let idx = index(&mut ir, tup, x);
+    let idx = field(&mut ir, tup, x);
     let a = lam(&mut ir, x, idx);
     let zero = int(&mut ir, 0);
     let c0 = app(&mut ir, a, zero);
@@ -1019,7 +1023,7 @@ fn tuple_index_selects_value_and_type() {
     let two = int(&mut ir, 2);
     let tup = tuple(&mut ir, &[one, two]);
     let zero = int(&mut ir, 0);
-    let idx = index(&mut ir, tup, zero);
+    let idx = field(&mut ir, tup, zero);
     let mut b = build(idx, ir);
     assert!(b.ok, "(1, 2)[0] should check");
     assert!(
@@ -1076,7 +1080,7 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     let two = int(&mut ir, 2);
     let tup = tuple(&mut ir, &[one, two]);
     let five = int(&mut ir, 5);
-    let idx = index(&mut ir, tup, five);
+    let idx = field(&mut ir, tup, five);
     ir.expr[five.0 as usize].span = Some((3, 9));
     let b = build(idx, ir);
     assert!(!b.ok, "(1, 2)[5] must fail");
@@ -1700,7 +1704,7 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     let call = app(&mut ir, lam, five);
     let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)], None);
     let one_idx = int(&mut ir, 1);
-    let read = index(&mut ir, arr, one_idx);
+    let read = field(&mut ir, arr, one_idx);
     let mut b = build(read, ir);
     assert!(b.ok, "the read should check");
     assert_eq!(

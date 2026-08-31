@@ -72,6 +72,12 @@ pub enum DiagKind {
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,
+    /// A table literal's keys must share one type — expected = the shared
+    /// key type, found = this key's type.
+    TableKey,
+    /// A table literal's values must share one type — expected = the shared
+    /// value type, found = this value's type.
+    TableValue,
     /// A binary operator's operand must be an `Int` (it is unified against
     /// the int type expression, pinning an unbound operand) — expected =
     /// `Int`, found = the operand's type.
@@ -84,6 +90,14 @@ pub enum DiagKind {
     /// `a` is the index node; `value_a` the index value, `value_b` the
     /// container's length.
     IndexOutOfBounds,
+    /// A table read that missed — no entry for the key (or the key is not
+    /// concrete yet, which can match nothing).  A runtime evaluation
+    /// failure, not a unify; `a` is the key node.
+    TableMiss,
+    /// A table build dropped an entry whose key could not be forced
+    /// concrete.  A runtime evaluation failure, not a unify; `a` is the key
+    /// node.
+    TableKeyUnbound,
 }
 
 /// One checker-issued unification, attributed with where it came from.
@@ -115,12 +129,20 @@ impl<V: ValueType> Build<V> {
         for (i, err) in self.module.unify_errors.iter().enumerate() {
             out.push(report.error(i, err));
         }
-        // Runtime evaluation failures (an out-of-bounds index).  The value
-        // and type evaluation of the same expression each record one, so
-        // identical facts collapse to a single diagnostic.
+        // Runtime evaluation failures (an out-of-bounds index, a table
+        // read).  The value and type evaluation of the same expression each
+        // record one, so identical facts collapse to a single diagnostic.
         let mut seen = HashSet::new();
         for err in &self.module.eval_errors {
-            if seen.insert((err.index, err.index_value, err.length)) {
+            let key = match err {
+                EvalError::Index {
+                    index,
+                    index_value,
+                    length,
+                } => (Some(*index), Some(*index_value), Some(*length)),
+                _ => (None, None, None),
+            };
+            if seen.insert(key) {
                 out.push(report.eval_error(err));
             }
         }
@@ -310,7 +332,11 @@ impl<'a, V: ValueType> Report<'a, V> {
                 self.print_type(b),
                 self.print_type(a)
             ),
-            DiagKind::Guard => format!("expected a function, found {}", self.print_type(a)),
+            DiagKind::Guard => format!(
+                "expected {}, found {}",
+                self.print_type(b),
+                self.print_type(a)
+            ),
             DiagKind::IndexTarget => format!(
                 "expected a tuple, array, or struct type, found {}",
                 self.print_type(a)
@@ -320,10 +346,23 @@ impl<'a, V: ValueType> Report<'a, V> {
                 self.print_type(b),
                 self.print_type(a)
             ),
+            DiagKind::TableKey => format!(
+                "expected key {}, found {}",
+                self.print_type(b),
+                self.print_type(a)
+            ),
+            DiagKind::TableValue => format!(
+                "expected value {}, found {}",
+                self.print_type(b),
+                self.print_type(a)
+            ),
             DiagKind::BinOp => format!("expected Int, found {}", self.print_type(a)),
             // Diary entries are checker-issued unifies only — runtime
             // failures are rendered elsewhere.
-            DiagKind::Runtime | DiagKind::IndexOutOfBounds => {
+            DiagKind::Runtime
+            | DiagKind::IndexOutOfBounds
+            | DiagKind::TableMiss
+            | DiagKind::TableKeyUnbound => {
                 unreachable!("the diary never attributes runtime diagnostics")
             }
         }
@@ -352,23 +391,82 @@ impl<'a, V: ValueType> Report<'a, V> {
         None
     }
 
-    /// A runtime evaluation failure — an out-of-bounds index.  The index
-    /// literal's span attributes it; there are no conflict classes to walk.
+    /// A runtime evaluation failure — an out-of-bounds index or a table
+    /// read.  The offending literal's span attributes it; there are no
+    /// conflict classes to walk.
     fn eval_error(&mut self, err: &EvalError) -> Diag<V> {
-        // A static index (a solved constant of a plugged dependency) has no
-        // importer node or span — report the facts without attribution.
-        let AnyNodeId::Dynamic(index) = err.index else {
+        match err {
+            // A static index (a solved constant of a plugged dependency) has
+            // no importer node or span — report the facts without
+            // attribution.
+            EvalError::Index {
+                index,
+                index_value,
+                length,
+            } => self.index_error(*index, *index_value, *length),
+            // A table read that missed (or whose key is still unbound).
+            // The key literal's span attributes it.
+            EvalError::TableMiss { table: _, key } => {
+                let AnyNodeId::Dynamic(key) = *key else {
+                    return Diag {
+                        span: None,
+                        kind: DiagKind::TableMiss,
+                        a: NodeId::default(),
+                        b: NodeId::default(),
+                        value_a: None,
+                        value_b: None,
+                        message: "table lookup missed — no entry for this key".into(),
+                        error_index: None,
+                    };
+                };
+                Diag {
+                    span: self.node_spans.get(&key).copied(),
+                    kind: DiagKind::TableMiss,
+                    a: key,
+                    b: key,
+                    value_a: None,
+                    value_b: None,
+                    message: "table lookup missed — no entry for this key".into(),
+                    error_index: None,
+                }
+            }
+            EvalError::TableKeyUnbound { key } => {
+                let AnyNodeId::Dynamic(key) = *key else {
+                    return Diag {
+                        span: None,
+                        kind: DiagKind::TableKeyUnbound,
+                        a: NodeId::default(),
+                        b: NodeId::default(),
+                        value_a: None,
+                        value_b: None,
+                        message: "table key is not concrete (it depends on an unbound value) — the entry is dropped".into(),
+                        error_index: None,
+                    };
+                };
+                Diag {
+                    span: self.node_spans.get(&key).copied(),
+                    kind: DiagKind::TableKeyUnbound,
+                    a: key,
+                    b: key,
+                    value_a: None,
+                    value_b: None,
+                    message: "table key is not concrete (it depends on an unbound value) — the entry is dropped".into(),
+                    error_index: None,
+                }
+            }
+        }
+    }
+
+    fn index_error(&mut self, index: AnyNodeId, index_value: usize, length: usize) -> Diag<V> {
+        let AnyNodeId::Dynamic(index) = index else {
             return Diag {
                 span: None,
                 kind: DiagKind::IndexOutOfBounds,
                 a: NodeId::default(),
                 b: NodeId::default(),
-                value_a: Some(V::from(LowValue::USize(err.index_value))),
-                value_b: Some(V::from(LowValue::USize(err.length))),
-                message: format!(
-                    "index {} out of bounds (array length {})",
-                    err.index_value, err.length
-                ),
+                value_a: Some(V::from(LowValue::USize(index_value))),
+                value_b: Some(V::from(LowValue::USize(length))),
+                message: format!("index {index_value} out of bounds (array length {length})"),
                 error_index: None,
             };
         };
@@ -377,12 +475,9 @@ impl<'a, V: ValueType> Report<'a, V> {
             kind: DiagKind::IndexOutOfBounds,
             a: index,
             b: index,
-            value_a: Some(V::from(LowValue::USize(err.index_value))),
-            value_b: Some(V::from(LowValue::USize(err.length))),
-            message: format!(
-                "index {} out of bounds (array length {})",
-                err.index_value, err.length
-            ),
+            value_a: Some(V::from(LowValue::USize(index_value))),
+            value_b: Some(V::from(LowValue::USize(length))),
+            message: format!("index {index_value} out of bounds (array length {length})"),
             error_index: None,
         }
     }
@@ -448,6 +543,7 @@ impl<'a, V: ValueType> Report<'a, V> {
             Some(LowValue::None) => "none".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Parameterized) | None => "?".to_string(),
+            Some(LowValue::Table(_)) => "Table".to_string(),
             Some(LowValue::Array(array)) => {
                 let items = array.items();
                 if items.len() == 2 && self.is_universe_any(AnyNodeId::Static(sref)) {
@@ -502,6 +598,7 @@ impl<'a, V: ValueType> Report<'a, V> {
                 Some(LowValue::None) => "none".to_string(),
                 Some(LowValue::Function(_)) => "Function".to_string(),
                 Some(LowValue::Parameterized) => unreachable!("handled above"),
+                Some(LowValue::Table(_)) => "Table".to_string(),
                 Some(LowValue::Array(_)) => {
                     let items = self
                         .build
@@ -618,11 +715,9 @@ impl<'a, V: ValueType> Report<'a, V> {
             .find_map(|m| self.build.module.nodes[m].operation)
             .map(|op| op.operator)
         {
-            Some(
-                HighProgramOperator::LowOperator(LowOperator::Index)
-                | HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch),
-            ) => "Index".to_string(),
+            Some(HighProgramOperator::LowOperator(LowOperator::Index)) => "Index".to_string(),
             Some(HighProgramOperator::LowOperator(LowOperator::Apply)) => "Apply".to_string(),
+            Some(HighProgramOperator::LowOperator(LowOperator::TableGet)) => "TableGet".to_string(),
             Some(HighProgramOperator::TypeOperator(TypeOperator::Fresh)) => "Fresh".to_string(),
             Some(
                 HighProgramOperator::TypeOperator(TypeOperator::Add)

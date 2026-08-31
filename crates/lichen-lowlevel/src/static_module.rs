@@ -14,8 +14,8 @@
 //!   value, residual nodes keep their operations with remapped
 //!   operands so the parameter-dependent spine re-runs against the argument;
 //!   static function values are always baked (frozen templates).  The apply
-//!   tail (parameter unify, `ApplyError`, cell wiring) mirrors
-//!   [`Module::function_apply`].
+//!   tail (parameter unify, `ApplyError`, cell wiring) is shared with
+//!   [`Module::function_apply`] in `apply.rs`.
 
 use std::collections::{HashMap, HashSet};
 use std::ptr;
@@ -24,10 +24,10 @@ use std::sync::{Arc, PoisonError};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ApplyError, ArrayItem, BlockId,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId,
     FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation, Program,
     StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
-    StaticNodeId, StaticOperation, ValueExt as _,
+    StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -86,8 +86,7 @@ impl<P: Program> Module<P> {
 
     /// Apply a static function: materialize its graph into fresh dynamic
     /// clones in `block`, then run the standard apply tail (parameter unify,
-    /// `ApplyError`, cell wiring) — the static mirror of
-    /// [`Module::function_apply`].
+    /// `ApplyError`, cell wiring) shared with [`Module::function_apply`].
     #[stacksafe]
     pub fn static_function_apply(
         &mut self,
@@ -97,111 +96,66 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> P::Value {
-        self.apply_depth += 1;
-        self.apply_total += 1;
-        if self.apply_depth > self.apply_depth_limit {
-            panic!(
-                "recursion depth exceeded in static function application (limit {}) — non-terminating recursion?",
-                self.apply_depth_limit
-            );
-        }
-        if self.apply_total > self.apply_total_limit {
-            panic!(
-                "too many function applications (limit {}) — non-terminating recursion?",
-                self.apply_total_limit
-            );
-        }
-        let module = self.static_module(function.module);
-        let (r#return, parameter, asserts) = {
-            let f = &module.functions[function.index.0];
-            (f.r#return, f.parameter, f.asserts.clone())
-        };
-        let mut ctx = StaticApplyCtx {
-            target: block,
-            module,
-            remap: HashMap::new(),
-        };
-        let applied = self.static_node_apply(r#return, &mut ctx);
-        // The parameter is an entry point of the walk, not just a node the
-        // return subtree happens to reach: an ignored parameter still must
-        // be satisfied, and a parameter read a type annotation pinned is
-        // invisible from the return.
-        self.static_node_apply(parameter, &mut ctx);
-        // The body's asserts are the function's own registry entries: each
-        // condition instantiates through the shared remap.  A baked
-        // condition is per-call invariant (decided at solve time) and is not
-        // re-registered; a cloned one re-checks against the argument.
-        for &condition in &asserts {
-            let baked = !ctx.module.nodes[condition.index].parameterized;
-            let instantiated = self.static_node_apply(condition, &mut ctx);
-            if !baked {
-                self.asserts.push(instantiated);
-            }
-        }
-        // The parameter unify: same shape as `function_apply` — re-establish
-        // the template's internal class topology among the clones (grouped
-        // by the solved static reps), evaluate the argument to the pattern's
-        // depth, unify, and record an `ApplyError` on failure.
-        if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-            if ctx.remap.len() > 1 {
-                let mut groups: HashMap<LocalNodeId, Vec<NodeId>> = HashMap::new();
-                for (&template, &clone) in ctx.remap.iter() {
-                    groups
-                        .entry(static_find(&ctx.module.nodes, template))
-                        .or_default()
-                        .push(clone);
+        self.with_apply_frame(|module| {
+            let static_module = module.static_module(function.module);
+            let (r#return, parameter, asserts) = {
+                let f = &static_module.functions[function.index.0];
+                (f.r#return, f.parameter, f.asserts.clone())
+            };
+            let mut ctx = StaticApplyCtx {
+                target: block,
+                module: static_module,
+                remap: HashMap::new(),
+            };
+            let applied = module.static_node_apply(r#return, &mut ctx);
+            // The parameter is an entry point of the walk, not just a node the
+            // return subtree happens to reach: an ignored parameter still must
+            // be satisfied, and a parameter read a type annotation pinned is
+            // invisible from the return.
+            module.static_node_apply(parameter, &mut ctx);
+            // The body's asserts are the function's own registry entries: each
+            // condition instantiates through the shared remap.  A baked
+            // condition is per-call invariant (decided at solve time) and is not
+            // re-registered; a cloned one re-checks against the argument.
+            for &condition in &asserts {
+                let baked = !ctx.module.nodes[condition.index].parameterized;
+                let instantiated = module.static_node_apply(condition, &mut ctx);
+                if !baked {
+                    module.asserts.push(instantiated);
                 }
-                for clones in groups.values() {
-                    let first = clones[0];
-                    for &clone in &clones[1..] {
-                        self.unify(first, clone);
+            }
+            // The parameter unify: same shape as `function_apply` — re-establish
+            // the template's internal class topology among the clones (grouped
+            // by the solved static reps), evaluate the argument to the pattern's
+            // depth, unify, and record an `ApplyError` on failure.
+            if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+                if ctx.remap.len() > 1 {
+                    for clones in crate::apply::regroup_clones(
+                        ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
+                        |template| static_find(&ctx.module.nodes, template),
+                    )
+                    .values()
+                    {
+                        let first = clones[0];
+                        for &clone in &clones[1..] {
+                            module.unify(first, clone);
+                        }
                     }
                 }
-            }
-            self.evaluate_pattern_argument(cloned_param, argument, block);
-            let pre_unify_errors = self.unify_errors.len();
-            self.unify(cloned_param, argument);
-            if self.unify_errors.len() > pre_unify_errors {
-                let parameter_type = self
-                    .array_items(cloned_param)
-                    .and_then(|items| items.get(1))
-                    .map(|item| self.as_dynamic(item.node, block))
-                    .unwrap_or(cloned_param);
-                let argument_type = self
-                    .array_items(argument)
-                    .and_then(|items| items.get(1))
-                    .map(|item| self.as_dynamic(item.node, block))
-                    .unwrap_or(argument);
-                if !self.apply_errors.iter().any(|e| e.apply_node == node) {
-                    self.apply_errors.push(ApplyError {
-                        function: AnyFunctionId::Static(function),
-                        parameter_type,
-                        argument_type,
-                        argument,
-                        apply_node: node,
-                        error_index: pre_unify_errors,
-                    });
+                if module.apply_parameter_check(
+                    cloned_param,
+                    argument,
+                    block,
+                    node,
+                    AnyFunctionId::Static(function),
+                    cloned_param,
+                ) {
+                    return P::Value::from(LowValue::Parameterized);
                 }
-                self.apply_depth -= 1;
-                return P::Value::from(LowValue::Parameterized);
             }
-        }
-        let result = self.evaluate_node(Dyn(applied), Some(block));
-        self.apply_depth -= 1;
-        // The apply's result is the function's return pair; the cell wiring
-        // mirrors `function_apply` exactly.
-        match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(array))) if array.items().len() == 2 => {
-                let items = array.items();
-                self.nodes[node].value = Some(result);
-                self.unify(node, applied);
-                let item = self.as_dynamic(items[1].node, block);
-                self.evaluate_node(Dyn(item), Some(block));
-                self.unify(cell, item);
-                result
-            }
-            _ => result,
-        }
+            let result = module.evaluate_node(Dyn(applied), Some(block));
+            module.wire_apply_result(node, cell, result, applied, block)
+        })
     }
 
     /// Clone one static node into the dynamic world (see the module docs).
@@ -410,6 +364,13 @@ impl<P: Program> StaticModule<P> {
                 if seen.insert(key) {
                     unique.push((key.0, key.1, std::mem::align_of::<ArrayItem>()));
                 }
+            } else if let Some(LowValue::Table(AnyHandle::Dynamic(handle))) = value.as_enum() {
+                let items = unsafe { &*handle.0 };
+                let bytes = std::mem::size_of_val(items);
+                let key = (handle.0 as *const u8 as usize, bytes);
+                if seen.insert(key) {
+                    unique.push((key.0, key.1, std::mem::align_of::<TableItem>()));
+                }
             } else if value.is_handle()
                 && matches!(value.handle(), AnyHandle::Dynamic(_))
             {
@@ -491,6 +452,29 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
                     }
                 }
             }
+            Some(LowValue::Table(AnyHandle::Static(handle))) => {
+                keys.insert(handle.module);
+                // Safe: the payload lives in the dependency's shared arena,
+                // pinned by the registry the artifact is filed into.
+                for item in unsafe { &*handle.offset } {
+                    if let AnyNodeId::Static(sref) = item.key {
+                        keys.insert(sref.module);
+                    }
+                    if let AnyNodeId::Static(sref) = item.value {
+                        keys.insert(sref.module);
+                    }
+                }
+            }
+            Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+                for item in unsafe { &*handle.0 } {
+                    if let AnyNodeId::Static(sref) = item.key {
+                        keys.insert(sref.module);
+                    }
+                    if let AnyNodeId::Static(sref) = item.value {
+                        keys.insert(sref.module);
+                    }
+                }
+            }
             Some(LowValue::Function(AnyFunctionId::Static(function))) => {
                 keys.insert(function.module);
             }
@@ -557,7 +541,46 @@ fn rewrite_value<P: Program>(
         // A static payload is the dependency's shared arena, keyed by the
         // dependency's final key — verbatim, never re-keyed or copied.
         Some(LowValue::Array(AnyHandle::Static(_)))
+        | Some(LowValue::Table(AnyHandle::Static(_)))
         | Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
+        Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+            let items = unsafe { &*handle.0 };
+            let bytes = std::mem::size_of_val(items);
+            let offset = offsets[&(handle.0 as *const u8 as usize, bytes)];
+            unsafe { ptr::copy_nonoverlapping(handle.0 as *const u8, base.add(offset), bytes) };
+            let copied = unsafe {
+                std::slice::from_raw_parts_mut(base.add(offset) as *mut TableItem, items.len())
+            };
+            for item in copied.iter_mut() {
+                item.key = match item.key {
+                    AnyNodeId::Dynamic(node) => AnyNodeId::Static(StaticNodeId {
+                        module: key,
+                        index: node_map[&node],
+                    }),
+                    // A static ref the source carries names a frozen
+                    // dependency — absolute from birth, so it is filed
+                    // verbatim and keeps pointing into the dependency.
+                    static_ref @ AnyNodeId::Static(_) => static_ref,
+                };
+                item.value = match item.value {
+                    AnyNodeId::Dynamic(node) => AnyNodeId::Static(StaticNodeId {
+                        module: key,
+                        index: node_map[&node],
+                    }),
+                    static_ref @ AnyNodeId::Static(_) => static_ref,
+                };
+                // The stored hash travels verbatim: a static key reads the
+                // same solved content a dynamic one did, so the hash stays
+                // the artifact's own.
+            }
+            P::Value::from(LowValue::Table(AnyHandle::Static(StaticHandle {
+                module: key,
+                offset: ptr::slice_from_raw_parts(
+                    unsafe { base.add(offset) } as *const TableItem,
+                    items.len(),
+                ),
+            })))
+        }
         Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => P::Value::from(
             LowValue::Function(AnyFunctionId::Static(StaticFunctionRef {
                 module: key,

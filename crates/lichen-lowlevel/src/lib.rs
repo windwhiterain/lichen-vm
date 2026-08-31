@@ -14,12 +14,14 @@ pub use crate::equality::UnifyError;
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
 
+mod apply;
 mod assert;
 mod equality;
 mod evaluation;
 mod function;
 mod gc;
 mod static_module;
+mod table;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
@@ -88,6 +90,14 @@ pub trait GlobalExt: Default {}
 pub enum LowValue {
     USize(usize),
     Array(AnyHandle<[ArrayItem]>),
+    /// A constant table value: the entries behind a [`Handle`] into the
+    /// table's home block's arena (or a static module's shared arena), each
+    /// carrying its key node, value node, and the key's precomputed deep
+    /// content hash.  The items are stored sorted by that hash — the
+    /// table's "hashtable" — so a read binary-searches and verifies the
+    /// equal-hash run with [`Module::key_eq`] (see `table.rs`).  Like an
+    /// array, a table is immutable and built once; there is no set/remove.
+    Table(AnyHandle<[TableItem]>),
     Function(AnyFunctionId),
     None,
     Parameterized,
@@ -114,12 +124,36 @@ impl ArrayItem {
     }
 }
 
+/// One entry of a structural table value: the entry's key node, its value
+/// node, and the key's precomputed deep-content hash.  `hash` is derived
+/// from the key's forced content when the table is built ([`Module::build_table`]),
+/// so it is stable for the table's whole life — a stored key is fully
+/// concrete by construction.  `key`/`value` are plain node refs: a value is
+/// a lazy reference, read (and forced) on demand by `TableGet`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TableItem {
+    pub key: AnyNodeId,
+    pub value: AnyNodeId,
+    pub hash: u64,
+}
+
 impl AnyHandle<[ArrayItem]> {
     /// The array's items — valid for as long as the handle's home storage is
     /// alive: the array's home block arena for a dynamic payload, or the
     /// static arena (pinned by every importer's [`Dependency`]) for a static
     /// payload — the caller's existing safety contract for arena payloads.
     pub fn items(&self) -> &'static [ArrayItem] {
+        match self {
+            AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            AnyHandle::Static(handle) => unsafe { &*handle.offset },
+        }
+    }
+}
+
+impl AnyHandle<[TableItem]> {
+    /// The table's entries — same arena-lifetime contract as
+    /// [`AnyHandle<[ArrayItem]>::items`].
+    pub fn items(&self) -> &'static [TableItem] {
         match self {
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
@@ -144,6 +178,12 @@ pub enum LowOperator {
     /// - `operand[0]`: function.
     /// - `operand[1]`: argument.
     Apply,
+    /// - `operand[0]`: table.
+    /// - `operand[1]`: key.
+    /// A table read: the key is force-evaluated, deep-content-hashed, and
+    /// matched against the table's sorted entries; a miss (or a key that is
+    /// still unbound) records a [`EvalError`] and yields [`LowValue::None`].
+    TableGet,
 }
 
 /// The cheap, structural equality a value vocabulary must provide —
@@ -227,6 +267,7 @@ pub struct StaticHandle<T: ?Sized> {
     /// position-independent, so the handle reads identically from any
     /// importer that plugged the module and identity is shared across them.
     pub module: ModuleKey,
+    /// Not really pointing to anything, just offset encoded with possible slice length.
     pub offset: *const T,
 }
 

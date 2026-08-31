@@ -198,6 +198,10 @@ impl Compiler {
             return final_id;
         }
         statements.push(final_id);
+        // The statements ride in a *tuple* (per-element type slots — the
+        // statements may be heterogeneous), and the wrapper reads the final
+        // one with the positional slot form, whose type extraction indexes
+        // the shape list at the key.
         let tuple = self.ir.alloc_tuple(&statements, Some(*span));
         let index = self.ir.alloc(
             ExprKind::Constant(HighProgramValue::from(LowValue::USize(
@@ -206,9 +210,9 @@ impl Compiler {
             Some(*span),
         );
         self.ir.alloc(
-            ExprKind::Index {
-                array: tuple,
-                index,
+            ExprKind::Field {
+                container: tuple,
+                key: index,
             },
             Some(*span),
         )
@@ -368,6 +372,24 @@ impl Compiler {
                 let index = self.compile_expr(index)?;
                 self.alloc(ExprKind::Index { array, index }, span)
             }
+            Expr::TableFind {
+                container,
+                key,
+                span,
+            } => {
+                let container = self.compile_expr(container)?;
+                let key = self.compile_expr(key)?;
+                self.alloc(ExprKind::Find { container, key }, span)
+            }
+            Expr::FieldRead {
+                container,
+                key,
+                span,
+            } => {
+                let container = self.compile_expr(container)?;
+                let key = self.compile_expr(key)?;
+                self.alloc(ExprKind::Field { container, key }, span)
+            }
             Expr::Arrow {
                 parameter,
                 r#return,
@@ -420,6 +442,16 @@ impl Compiler {
                 } else {
                     self.ir.alloc_array(&ids, Some(*span))
                 }
+            }
+            Expr::Table(entries, span) => {
+                // Each entry compiles to its key's and value's own nodes
+                // (graph-shared like every expression); the pair list feeds
+                // the dedicated `ExprKind::Table`.
+                let mut pairs = Vec::with_capacity(entries.len());
+                for (key, value) in entries {
+                    pairs.push((self.compile_expr(key)?, self.compile_expr(value)?));
+                }
+                self.ir.alloc_table(&pairs, Some(*span))
             }
             Expr::Shallow(inner, _, _) => {
                 // Unreachable through the parser (`~` is accepted only as an
@@ -502,11 +534,11 @@ mod tests {
     }
 
     /// The node the statement wrapper selects: the root is either the final
-    /// expression's own node (no wrap) or `Index(Tuple([…, final]), n)`,
+    /// expression's own node (no wrap) or `Field(Tuple([…, final]), n)`,
     /// which unwraps to the final expression.
     fn wrapped(ir: &IR) -> ExprId {
         match ir[ir.root].kind {
-            ExprKind::Index { array, index } => {
+            ExprKind::Field { container: array, key: index } => {
                 let ExprKind::Tuple(range) = ir[array].kind else {
                     panic!("expected the wrapped tuple")
                 };
@@ -657,7 +689,7 @@ mod tests {
         // 5; 7 — the bare statement and the final expression ride in a
         // tuple; the root selects the final one.
         let ir = compile_ok("5; 7");
-        let ExprKind::Index { array, index } = kind(&ir, ir.root) else {
+        let ExprKind::Field { container: array, key: index } = kind(&ir, ir.root) else {
             panic!("expected the statement wrapper")
         };
         assert!(matches!(
@@ -684,7 +716,7 @@ mod tests {
         let ExprKind::Tuple(range) = kind(
             &ir,
             match kind(&ir, ir.root) {
-                ExprKind::Index { array, .. } => array,
+                ExprKind::Field { container, .. } => container,
                 _ => panic!("expected the statement wrapper"),
             },
         ) else {

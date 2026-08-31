@@ -393,6 +393,7 @@ mod tests {
                 "struct.lichen",
                 "struct_recursion.lichen",
                 "struct_generic.lichen",
+                "table.lichen",
             ]
             .into_iter()
             .map(|name| (3, name.to_owned()))

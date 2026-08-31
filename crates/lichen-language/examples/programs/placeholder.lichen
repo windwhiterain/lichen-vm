@@ -2,7 +2,7 @@
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>
-    f1 x[1]
+    f1 x(1)
 }
 f2
 -- output: Function: <Type, Int> -> Int

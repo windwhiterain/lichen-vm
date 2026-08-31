@@ -63,12 +63,6 @@ fn structural_operators_round_trip_through_from_and_as_enum() {
 #[test]
 fn extension_operators_read_as_none() {
     assert_eq!(
-        AsEnum::<LowOperator>::as_enum(&HighProgramOperator::TypeOperator(
-            TypeOperator::IndexTypeDispatch
-        )),
-        None
-    );
-    assert_eq!(
         AsEnum::<LowOperator>::as_enum(&HighProgramOperator::TypeOperator(TypeOperator::Fresh)),
         None
     );

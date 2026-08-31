@@ -49,7 +49,7 @@ pub struct IR<V = HighProgramValue> {
     pub expr: Vec<Expr<V>>,
     /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
-    /// [`ExprKind::ShallowArray`]).
+    /// [`ExprKind::ShallowArray`], [`ExprKind::Table`]).
     pub children: Vec<ExprId>,
     /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
     /// — one `usize` per element: 0 = unmarked, `usize::MAX` = the bare `~`
@@ -125,9 +125,28 @@ pub enum ExprKind<V> {
     /// re-checks the instantiated condition per call.  The expression
     /// compiles to the condition itself — the assert is a side constraint.
     Assert { condition: ExprId },
-    /// `{ array, index }` — element selection; `array` must be a tuple or
-    /// array value, `index` a `USize`.
+    /// `{ array, index }` — an element read `a[i]`; the container is *pinned*
+    /// to an array type (its element type is the pinned shape's element cell
+    /// and the read registers an `i < length` bounds assert), so this form
+    /// never kind-dispatches.
     Index { array: ExprId, index: ExprId },
+    /// `{ container, key }` — a positional slot read `a(k)` over a tuple
+    /// element or struct field (both shapes are positional type lists; the
+    /// nominal struct id lives in the kind, so the extraction is the same
+    /// for both).  The value is the structural `Index` over the container's
+    /// value; the type is `Index(shape, k)` over the container type's shape,
+    /// evaluated lazily so an untyped parameter resolves at the call.  The
+    /// frontend emits it for the *adjacent* single-expression paren form —
+    /// `a(1)` — the syntactic distinction from struct instantiation
+    /// (`a(1,)`, `a(1,1)`, `a()`, `a(,)`) and from function application
+    /// (a spaced paren).
+    Field { container: ExprId, key: ExprId },
+    /// `{ container, key }` — a table lookup `t{k}`: the entry whose stored
+    /// key is deep-content-equal to `k`.  The frontend emits it for the
+    /// *adjacent* brace form — the syntactic distinction from positional
+    /// [`Self::Index`] — so the checker compiles the read to the dedicated
+    /// lowlevel `TableGet` directly, never a kind dispatch.
+    Find { container: ExprId, key: ExprId },
     /// `{ value, type }` — the value's type must unify with the type expression.
     Annotation { value: ExprId, r#type: ExprId },
     /// `{ parameter, return }` — a function type, compiled to the kinded
@@ -154,6 +173,15 @@ pub enum ExprKind<V> {
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`ExprTable::children`].
     Array(ChildRange),
+    /// A constant table instance `table { k1 :: v1, k2 :: v2, … }` — every
+    /// key shares one key type and every value one value type (checked
+    /// against two shared cells, like an array's single element cell).  The
+    /// entries are stored interleaved in [`ExprTable::children`]:
+    /// `[k1, v1, k2, v2, …]`.  The checker builds the lowlevel table value
+    /// eagerly — keys must be force-evaluated to hash them — and drops an
+    /// entry whose key is not concrete (recording the error), per the table
+    /// contract.
+    Table(ChildRange),
     /// An array instance with `~`-marked positions — `[v1, ~ v2, ~2 v3]`.
     /// Typed like a tuple (per-element type slots — a homogeneous
     /// [`Self::Array`] type would reject `[x, ~ f(x+1)]` with an `Int` head
@@ -226,6 +254,22 @@ impl<V> IR<V> {
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
         self.alloc_variadic(elements, ExprKind::Array, span)
+    }
+
+    /// Allocate a constant table literal: each `(key, value)` pair is
+    /// flattened into the children arena (interleaved, entry by entry), and
+    /// the expression is an [`ExprKind::Table`] over that range.
+    pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: Option<Span>) -> ExprId {
+        let start = self.children.len() as u32;
+        for &(key, value) in entries {
+            self.children.push(key);
+            self.children.push(value);
+        }
+        let range = ChildRange {
+            start,
+            end: self.children.len() as u32,
+        };
+        self.alloc(ExprKind::Table(range), span)
     }
 
     /// Allocate a shallow-marked array: each `(element, depth)` pair carries

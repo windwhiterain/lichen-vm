@@ -179,6 +179,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
                 LowValue::Array(array) => self.elements(node, array.items()),
+                LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::None | LowValue::Parameterized => {
                     unreachable!("handled by node()")
@@ -372,6 +373,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             Some(LowValue::USize(n)) => n.to_string(),
             Some(LowValue::None | LowValue::Parameterized) => "?".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
+            Some(LowValue::Table(_)) => "Table".to_string(),
             Some(LowValue::Array(array)) => self.static_elements(sref, array.items(), visiting),
             None => self
                 .type_constant(&value)
@@ -792,6 +794,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
                 LowValue::Function(_) => "Function".to_string(),
+                LowValue::Table(_) => "Table".to_string(),
                 LowValue::None => "none".to_string(),
                 LowValue::Parameterized => "parameterized".to_string(),
                 LowValue::Array(array) => {
@@ -960,12 +963,19 @@ pub fn render_all(source: &str, diags: &[Diag]) -> String {
 /// report, so a class keeps a single `?a` name across diagnostics.
 pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag) -> String {
     match d.kind {
-        DiagKind::Annotation | DiagKind::ArrayElement => format!(
+        DiagKind::Annotation
+        | DiagKind::ArrayElement
+        | DiagKind::TableKey
+        | DiagKind::TableValue => format!(
             "expected {}, found {}",
             printer.node(d.b),
             printer.node(d.a)
         ),
-        DiagKind::Guard => format!("expected a function, found {}", printer.node(d.a)),
+        DiagKind::Guard => format!(
+            "expected {}, found {}",
+            printer.node(d.b),
+            printer.node(d.a)
+        ),
         DiagKind::IndexTarget => {
             format!(
                 "expected a tuple, array, or struct type, found {}",
@@ -989,6 +999,11 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag) -> String {
                 return "index out of bounds".to_string();
             };
             format!("index {index} out of bounds (array length {length})")
+        }
+        DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
+        DiagKind::TableKeyUnbound => {
+            "table key is not concrete (it depends on an unbound value) — the entry is dropped"
+                .to_string()
         }
     }
 }
@@ -1082,7 +1097,7 @@ mod tests {
     #[test]
     fn a_struct_instance_renders_its_field_tuple() {
         assert_eq!(
-            output("A = struct<Int, Type>\na = A(1, Int)\n(A, a, a[0], a[1])"),
+            output("A = struct<Int, Type>\na = A(1, Int)\n(A, a, a(0), a(1))"),
             "(struct<Int, Type>, (1, Int), 1, Int): <TypeStruct, struct<Int, Type>, Int, Type>"
         );
     }
@@ -1092,7 +1107,7 @@ mod tests {
         // A single field needs no extra comma in the source (`B(1)`); the
         // rendered value still shows the one-element tuple's comma `(1,)`.
         assert_eq!(
-            output("B = struct<Int>\nb = B(1)\n(B, b)"),
+            output("B = struct<Int>\nb = B(1,)\n(B, b)"),
             "(struct<Int>, (1,)): <TypeStruct, struct<Int>>"
         );
     }
@@ -1173,6 +1188,9 @@ mod tests {
         }
         fn type_struct_marker() -> Self {
             Self::TypeValue(TypeValue::TypeStruct)
+        }
+        fn table_type_marker() -> Self {
+            Self::TypeValue(TypeValue::TypeTable)
         }
         fn type_of(&self) -> Self {
             match self {

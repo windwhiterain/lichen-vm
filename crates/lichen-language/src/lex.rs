@@ -7,9 +7,10 @@
 //! `)` stay value-level; `{` `}` delimit a block — scoped bindings followed
 //! by the block's value.  `;` separates statements, and so does a newline —
 //! both lex as the same `Semicolon` token.  `=` binds a name (`a = [1, 2]`);
-//! `=>` is still the lambda; `==` compares, `<=` compares, `+` and `-` add
-//! and subtract (and `->` is the function-type arrow).  `--` starts a line
-//! comment.  Any other character is a lex error — errors accumulate (the
+//! `=>` is still the lambda; `::` separates a table literal's key/value
+//! pairs (`table{ k :: v, … }`); `==` compares, `<=` compares, `+` and `-`
+//! add and subtract (and `->` is the function-type arrow).  `--` starts a
+//! line comment.  Any other character is a lex error — errors accumulate (the
 //! bad character is skipped and lexing continues), so a single stray
 //! character does not hide the rest of the program's errors.
 
@@ -21,8 +22,8 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
-    /// An identifier, never `Int`/`Type`/`struct`/`let`/`if`/`then`/`else`
-    /// (those are keywords).
+    /// An identifier, never `Int`/`Type`/`struct`/`table`/`let`/`if`/`then`/
+    /// `else` (those are keywords).
     Name(String),
     /// The `Int` type constant.
     KwInt,
@@ -30,6 +31,8 @@ pub enum TokenKind {
     KwType,
     /// The `struct` keyword — a nominal struct type.
     KwStruct,
+    /// The `table` keyword — a constant table literal (`table{ k :: v, … }`).
+    KwTable,
     /// The `let` keyword — a restrictive binding (`let a = e`): the name is
     /// visible only to later bindings, never to itself.
     KwLet,
@@ -45,6 +48,8 @@ pub enum TokenKind {
     FatArrow,
     /// `:` — an annotation.
     Colon,
+    /// `::` — the table literal's key/value separator (`table{ k :: v, … }`).
+    DoubleColon,
     /// `=` — a statement binding.
     Equals,
     /// `==` — equality (yields `USize(0/1)`).
@@ -87,6 +92,7 @@ impl TokenKind {
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
+            TokenKind::KwTable => "'table'".to_string(),
             TokenKind::KwLet => "'let'".to_string(),
             TokenKind::KwIf => "'if'".to_string(),
             TokenKind::KwThen => "'then'".to_string(),
@@ -94,6 +100,7 @@ impl TokenKind {
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
+            TokenKind::DoubleColon => "'::'".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::Eq => "'=='".to_string(),
             TokenKind::Leq => "'<='".to_string(),
@@ -220,6 +227,9 @@ impl Lexer<'_> {
                 b'<' => self.push(line, col, 1, TokenKind::LAngle),
                 b'>' => self.push(line, col, 1, TokenKind::RAngle),
                 b',' => self.push(line, col, 1, TokenKind::Comma),
+                b':' if self.bytes.get(self.pos + 1) == Some(&b':') => {
+                    self.push(line, col, 2, TokenKind::DoubleColon)
+                }
                 b':' => self.push(line, col, 1, TokenKind::Colon),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),
                 b'+' => self.push(line, col, 1, TokenKind::Plus),
@@ -326,6 +336,7 @@ impl Lexer<'_> {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
+            "table" => TokenKind::KwTable,
             "let" => TokenKind::KwLet,
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,
@@ -401,6 +412,22 @@ mod tests {
                 TokenKind::Int(5),
                 TokenKind::Colon,
                 TokenKind::KwInt,
+                TokenKind::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_double_colon_is_one_table_separator() {
+        assert_eq!(
+            kinds("table{ 1 :: 2 }"),
+            vec![
+                TokenKind::KwTable,
+                TokenKind::LBrace,
+                TokenKind::Int(1),
+                TokenKind::DoubleColon,
+                TokenKind::Int(2),
+                TokenKind::RBrace,
                 TokenKind::Eof,
             ]
         );

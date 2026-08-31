@@ -51,7 +51,7 @@ fn imports_and_applies_a_function_package() {
 fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
     write(&dir, "s.lichen", "struct<Int>\n");
-    let main = "@import \"s.lichen\" as s;\ns(5)\n";
+    let main = "@import \"s.lichen\" as s;\ns(5,)\n";
     let mut store = PackageStore::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "(5,): struct<Int>");
@@ -82,8 +82,8 @@ fn transitive_struct_types_flow_through_packages() {
     // type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
     write(&dir, "inner.lichen", "struct<Int>\n");
-    write(&dir, "middle.lichen", "@import \"inner.lichen\" as S\nS(41)\n");
-    let main = "@import \"middle.lichen\" as v\nv[0]\n";
+    write(&dir, "middle.lichen", "@import \"inner.lichen\" as S\nS(41,)\n");
+    let main = "@import \"middle.lichen\" as v\nv(0)\n";
     let mut store = PackageStore::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "41: Int");
@@ -178,7 +178,7 @@ fn imported_type_error_is_reported_without_panicking() {
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
         err.iter()
-            .any(|d| d.message.contains("expected a function")),
+            .any(|d| d.message.contains("found Int")),
         "diagnostics should render the imported non-function type error: {err:?}"
     );
 }

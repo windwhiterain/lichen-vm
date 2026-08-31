@@ -61,6 +61,9 @@ impl ValueType for ProbeValue {
     fn type_struct_marker() -> Self {
         Self::TypeValue(TypeValue::TypeStruct)
     }
+    fn table_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeTable)
+    }
     fn type_of(&self) -> Self {
         match self {
             // Both type-constant branches — the extension's own and the
