@@ -29,7 +29,7 @@ use std::time::{Duration, Instant};
 
 use lichen_highlevel::program::{HighProgram, HighProgramValue, TypeOperator, TypeValue};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, StaticFunction,
+    AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, Program, StaticFunction,
     StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode, StaticOperation,
     TableItem,
 };
@@ -87,6 +87,40 @@ pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
 /// highlevel vocabulary that maximum is `align_of::<ArrayItem>()`.
 const ARENA_ALIGN: usize = std::mem::align_of::<ArrayItem>();
 
+/// The vocabulary-specific half of the artifact format.
+///
+/// The artifact header, node/function frames, arena layout and equality data
+/// are generic.  The only vocabulary-dependent parts are the value encoding
+/// and the operator encoding; this trait isolates them so a downstream
+/// program with extra value/operator variants can reuse the same artifact
+/// container by implementing a codec.
+pub trait ArtifactCodec<P: Program> {
+    /// Write one node value.
+    fn write_value(
+        w: &mut Writer,
+        value: P::Value,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    );
+
+    /// Read one node value.
+    fn read_value(
+        r: &mut Reader<'_>,
+        self_key: ModuleKey,
+        self_arena: &[u8],
+        self_base: *const u8,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) -> Result<P::Value, String>;
+
+    /// Write one operation's operator tag.
+    fn write_operator(w: &mut Writer, operator: P::Operator);
+
+    /// Read one operation's operator tag.
+    fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
+}
+
+/// The codec for the shipped highlevel language vocabulary.
+pub struct HighProgramCodec;
+
 /// The aligned base of a module's arena — the same formula
 /// `StaticModule::from_module` used to lay the payloads out, so offsets
 /// round-trip exactly.
@@ -97,10 +131,7 @@ fn arena_base(arena: &[u8]) -> *const u8 {
 }
 
 /// The base-relative offset of a handle's payload pointer.
-fn handle_offset(
-    module: &StaticModule<HighProgram<HighProgramValue>>,
-    offset: *const u8,
-) -> usize {
+fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) -> usize {
     let base = arena_base(&module.arena) as usize;
     let relative = offset as usize - base;
     assert!(
@@ -119,6 +150,22 @@ pub fn serialize_artifact(
     hash: Hash,
     export: LocalNodeId,
 ) -> Vec<u8> {
+    serialize_artifact_with(module, modules, hash, export, HighProgramCodec)
+}
+
+/// [`Self::serialize_artifact`] with an explicit [`ArtifactCodec`], for
+/// downstream vocabularies that need custom value/operator tags.
+pub fn serialize_artifact_with<P, C>(
+    module: &StaticModule<P>,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    hash: Hash,
+    export: LocalNodeId,
+    _codec: C,
+) -> Vec<u8>
+where
+    P: Program,
+    C: ArtifactCodec<P>,
+{
     let mut w = Writer::new();
     w.bytes(b"LCHN");
     w.u32(2); // format version
@@ -134,14 +181,14 @@ pub fn serialize_artifact(
             None => w.u8(0),
             Some(value) => {
                 w.u8(1);
-                write_value(&mut w, value, modules);
+                C::write_value(&mut w, value, modules);
             }
         }
         match node.operation {
             None => w.u8(0),
             Some(operation) => {
                 w.u8(1);
-                write_operator(&mut w, operation.operator);
+                C::write_operator(&mut w, operation.operator);
                 match operation.operand {
                     None => w.u8(0),
                     Some(operand) => {
@@ -184,7 +231,35 @@ pub fn serialize_artifact(
             w.u64(assert.index as u64);
         }
     }
-    w.buf
+    w.into_bytes()
+}
+
+impl ArtifactCodec<HighProgram<HighProgramValue>> for HighProgramCodec {
+    fn write_value(
+        w: &mut Writer,
+        value: HighProgramValue,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+    ) {
+        write_value(w, value, modules);
+    }
+
+    fn read_value(
+        r: &mut Reader<'_>,
+        self_key: ModuleKey,
+        self_arena: &[u8],
+        self_base: *const u8,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+    ) -> Result<HighProgramValue, String> {
+        read_value(r, self_key, self_arena, self_base, modules)
+    }
+
+    fn write_operator(w: &mut Writer, operator: lichen_highlevel::program::HighProgramOperator) {
+        write_operator(w, operator);
+    }
+
+    fn read_operator(r: &mut Reader<'_>) -> Result<lichen_highlevel::program::HighProgramOperator, String> {
+        read_operator(r)
+    }
 }
 
 fn write_value(
@@ -269,6 +344,22 @@ pub fn deserialize_artifact(
     hash: Hash,
     modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
 ) -> Result<(StaticModule<HighProgram<HighProgramValue>>, LocalNodeId), String> {
+    deserialize_artifact_with(bytes, key, hash, modules, HighProgramCodec)
+}
+
+/// [`Self::deserialize_artifact`] with an explicit [`ArtifactCodec`], for
+/// downstream vocabularies that need custom value/operator tags.
+pub fn deserialize_artifact_with<P, C>(
+    bytes: &[u8],
+    key: ModuleKey,
+    hash: Hash,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    _codec: C,
+) -> Result<(StaticModule<P>, LocalNodeId), String>
+where
+    P: Program,
+    C: ArtifactCodec<P>,
+{
     let mut r = Reader::new(bytes);
     if r.take(4)? != b"LCHN" {
         return Err("bad artifact magic".into());
@@ -294,16 +385,15 @@ pub fn deserialize_artifact(
     let base = arena_base(&arena);
 
     let node_count = r.u64()? as usize;
-    let mut nodes: Vec<StaticNode<HighProgram<HighProgramValue>>> =
-        Vec::with_capacity(node_count);
+    let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_count);
     for _ in 0..node_count {
         let value = if r.u8()? != 0 {
-            Some(read_value(&mut r, key, &arena, base, modules)?)
+            Some(C::read_value(&mut r, key, &arena, base, modules)?)
         } else {
             None
         };
         let operation = if r.u8()? != 0 {
-            let operator = read_operator(&mut r)?;
+            let operator = C::read_operator(&mut r)?;
             let operand = if r.u8()? != 0 {
                 Some(LocalNodeId {
                     index: r.u64()? as usize,
@@ -980,56 +1070,59 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
 // Reader / writer
 // ---------------------------------------------------------------------------
 
-struct Writer {
+pub struct Writer {
     buf: Vec<u8>,
 }
 
 impl Writer {
-    fn new() -> Writer {
+    pub fn new() -> Writer {
         Writer { buf: Vec::new() }
     }
-    fn u8(&mut self, value: u8) {
+    pub fn u8(&mut self, value: u8) {
         self.buf.push(value);
     }
-    fn u32(&mut self, value: u32) {
+    pub fn u32(&mut self, value: u32) {
         self.buf.extend_from_slice(&value.to_le_bytes());
     }
-    fn u64(&mut self, value: u64) {
+    pub fn u64(&mut self, value: u64) {
         self.buf.extend_from_slice(&value.to_le_bytes());
     }
-    fn bytes(&mut self, bytes: &[u8]) {
+    pub fn bytes(&mut self, bytes: &[u8]) {
         self.buf.extend_from_slice(bytes);
     }
-    fn path(&mut self, path: &Path) {
+    pub fn path(&mut self, path: &Path) {
         let bytes = path.to_string_lossy();
         self.u32(bytes.len() as u32);
         self.buf.extend_from_slice(bytes.as_bytes());
     }
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.buf
+    }
 }
 
-struct Reader<'a> {
+pub struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn new(buf: &'a [u8]) -> Reader<'a> {
+    pub fn new(buf: &'a [u8]) -> Reader<'a> {
         Reader { buf, pos: 0 }
     }
-    fn u8(&mut self) -> Result<u8, String> {
+    pub fn u8(&mut self) -> Result<u8, String> {
         let byte = *self.buf.get(self.pos).ok_or("truncated artifact")?;
         self.pos += 1;
         Ok(byte)
     }
-    fn u32(&mut self) -> Result<u32, String> {
+    pub fn u32(&mut self) -> Result<u32, String> {
         let bytes = self.take(4)?;
         Ok(u32::from_le_bytes(bytes.try_into().expect("4 bytes")))
     }
-    fn u64(&mut self) -> Result<u64, String> {
+    pub fn u64(&mut self) -> Result<u64, String> {
         let bytes = self.take(8)?;
         Ok(u64::from_le_bytes(bytes.try_into().expect("8 bytes")))
     }
-    fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
+    pub fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
         if self.pos + len > self.buf.len() {
             return Err("truncated artifact".into());
         }
@@ -1037,12 +1130,12 @@ impl<'a> Reader<'a> {
         self.pos += len;
         Ok(bytes)
     }
-    fn path(&mut self) -> Result<PathBuf, String> {
+    pub fn path(&mut self) -> Result<PathBuf, String> {
         let len = self.u32()? as usize;
         let bytes = self.take(len)?;
         Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
     }
-    fn done(&self) -> bool {
+    pub fn done(&self) -> bool {
         self.pos == self.buf.len()
     }
 }
