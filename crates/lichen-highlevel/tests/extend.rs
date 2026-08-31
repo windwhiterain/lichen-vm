@@ -10,8 +10,8 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
-use lichen_highlevel::program::{HighProgramValue, TypeValue, ValueType};
-use lichen_lowlevel::{LowValue, ValueExt};
+use lichen_highlevel::program::{TypeValue, ValueType};
+use lichen_lowlevel::{AnyNodeId, LowValue, NodeId, ValueExt};
 use lichen_utils::extend::AsEnum;
 
 // A probe extension: a type constant beyond the highlevel's vocabulary.
@@ -26,6 +26,14 @@ lichen_utils::enum_ext! {
     }
     + LowValue as LowValue;
     + TypeValue as TypeValue;
+}
+
+/// The dynamic node behind an item ref — the checker builds only dynamic graphs.
+fn dyn_node(id: AnyNodeId) -> NodeId {
+    match id {
+        AnyNodeId::Dynamic(node) => node,
+        AnyNodeId::Static(_) => unreachable!("checker graphs are dynamic"),
+    }
 }
 
 impl ValueExt for ProbeValue {
@@ -98,7 +106,10 @@ fn the_checker_runs_on_an_extended_union() {
     let mut ir: IR<ProbeValue> = IR::new();
     let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
     let five = ir.alloc(ExprKind::Constant(LowValue::USize(5).into()), None);
-    let int_t = ir.alloc(ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeInt)), None);
+    let int_t = ir.alloc(
+        ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeInt)),
+        None,
+    );
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,
@@ -124,7 +135,7 @@ fn the_checker_runs_on_an_extended_union() {
         .array_items(float_pair)
         .expect("the pair is an array")
         .iter()
-        .map(|item| item.node)
+        .map(|item| dyn_node(item.node))
         .collect::<Vec<_>>();
     assert_eq!(ids, &[float_value, build.type_expr]);
 }
@@ -135,7 +146,10 @@ fn an_extended_union_reports_type_conflicts() {
     // generic checker's diagnostics carry the extended value type.
     let mut ir: IR<ProbeValue> = IR::new();
     let five = ir.alloc(ExprKind::Constant(LowValue::USize(5).into()), None);
-    let ty = ir.alloc(ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeType)), None);
+    let ty = ir.alloc(
+        ExprKind::Constant(ProbeValue::TypeValue(TypeValue::TypeType)),
+        None,
+    );
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,

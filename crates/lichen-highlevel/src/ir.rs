@@ -177,6 +177,13 @@ pub enum ExprKind<V> {
         element_type: ExprId,
         length: ExprId,
     },
+    /// A value imported from a package in the shared registry.  The IR only
+    /// carries the exported pair node ref; the checker materializes it and
+    /// extracts the value/type leaves (the payload itself stays in the
+    /// package's static arena).
+    Static {
+        export: lichen_lowlevel::StaticNodeId,
+    },
 }
 
 impl<V> IR<V> {

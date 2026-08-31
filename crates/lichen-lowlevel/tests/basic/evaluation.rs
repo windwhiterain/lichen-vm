@@ -38,7 +38,12 @@ fn index_selects_array_element() {
     let arr = array_node(&mut m, root, &[a, b], None);
     let idx = usize_node(&mut m, root, 1);
     let operands = array_node(&mut m, root, &[arr, idx], None);
-    let index = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(operands));
+    let index = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
 
     let value = m.evaluate_node_deep(index, None);
 
@@ -53,7 +58,12 @@ fn index_out_of_bounds_records_an_eval_error() {
     let arr = array_node(&mut m, root, &[a, b], None);
     let idx = usize_node(&mut m, root, 5);
     let operands = array_node(&mut m, root, &[arr, idx], None);
-    let index = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(operands));
+    let index = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
 
     let value = m.evaluate_node_deep(index, None);
 
@@ -61,7 +71,7 @@ fn index_out_of_bounds_records_an_eval_error() {
     assert!(matches!(value, TestValue::LowValue(LowValue::None)));
     assert_eq!(m.eval_errors.len(), 1);
     let err = m.eval_errors[0];
-    assert_eq!(err.index, idx);
+    assert_eq!(err.index, lichen_lowlevel::AnyNodeId::Dynamic(idx));
     assert_eq!(err.index_value, 5);
     assert_eq!(err.length, 2);
     assert!(m.unify_errors.is_empty());
@@ -76,9 +86,17 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     // One past the end: the bound is exclusive.
     let idx = usize_node(&mut m, root, 2);
     let operands = array_node(&mut m, root, &[arr, idx], None);
-    let index = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(operands));
+    let index = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
 
-    assert!(matches!(m.evaluate_node_deep(index, None), TestValue::LowValue(LowValue::None)));
+    assert!(matches!(
+        m.evaluate_node_deep(index, None),
+        TestValue::LowValue(LowValue::None)
+    ));
     assert_eq!(m.eval_errors.len(), 1);
     // Re-evaluating the same node reads the cached error result — no
     // duplicate record.
@@ -88,7 +106,12 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     // The last element is still selectable.
     let idx = usize_node(&mut m, root, 1);
     let last_ops = array_node(&mut m, root, &[arr, idx], None);
-    let last = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(last_ops));
+    let last = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(last_ops),
+    );
     assert_eq!(u128_of(m.evaluate_node_deep(last, None)), 20);
     assert_eq!(m.eval_errors.len(), 1);
 }
@@ -96,7 +119,11 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
 fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let param = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     // f(x) = [x, [10, 20][5]]: the OOB index sits in the return pair, so a
     // deep evaluation of the return (the definition pass) hits it.
     let a = u128_node(&mut m, root, 10);
@@ -104,14 +131,22 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     let arr = array_node(&mut m, root, &[a, b], None);
     let idx = usize_node(&mut m, root, 5);
     let ops = array_node(&mut m, root, &[arr, idx], None);
-    let oob = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(ops));
+    let oob = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(ops),
+    );
     let ret = array_node(&mut m, root, &[param, oob], None);
     wrap_function(&mut m, root, ret, param);
 
     m.evaluate_node_deep(ret, None);
 
     assert_eq!(m.eval_errors.len(), 1);
-    assert!(matches!(m.nodes[oob].value, Some(TestValue::LowValue(LowValue::None))));
+    assert!(matches!(
+        m.nodes[oob].value,
+        Some(TestValue::LowValue(LowValue::None))
+    ));
     assert!(matches!(
         m.nodes[param].value,
         Some(TestValue::LowValue(LowValue::Parameterized))
@@ -144,8 +179,13 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
     let root = m.add_block(None);
     let marker = u128_node(&mut m, root, 7);
     let k = m.add_node(root, None, None);
-    let items = [ArrayItem::new(marker), ArrayItem::new(k)];
-    m.nodes[k].value = Some(TestValue::LowValue(LowValue::Array(m.alloc_array(&items, root))));
+    let items = [
+        ArrayItem::new(AnyNodeId::Dynamic(marker)),
+        ArrayItem::new(AnyNodeId::Dynamic(k)),
+    ];
+    m.nodes[k].value = Some(TestValue::LowValue(LowValue::Array(
+        m.alloc_array(&items, root),
+    )));
 
     let value = m.evaluate_node_deep(k, None);
 
@@ -169,7 +209,11 @@ fn visiting_markers_are_cleared_after_evaluation() {
 fn evaluated_deep_marks_subtrees_with_parameters() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let p = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let p = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let x = u128_node(&mut m, root, 5);
     let arr = array_node(&mut m, root, &[x, p], None);
     let id_arr = op_node(&mut m, root, TestOperator::Id, Some(arr));
@@ -179,14 +223,39 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
 
     // The parameter node itself and everything reachable from it is flagged;
     // plain constants are not.
-    assert_eq!(m.nodes[p].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
-    assert_eq!(m.nodes[arr].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
-    assert_eq!(m.nodes[id_arr].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
-    assert_eq!(m.nodes[x].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(
+        m.nodes[p].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
+    assert_eq!(
+        m.nodes[arr].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
+    assert_eq!(
+        m.nodes[id_arr].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
+    assert_eq!(
+        m.nodes[x].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: false
+        })
+    );
     assert_eq!(m.nodes[id_p].evaluated_deep, None); // not yet evaluated
 
     m.evaluate_node_deep(id_p, None);
-    assert_eq!(m.nodes[id_p].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[id_p].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 }
 #[test]
 fn deep_eval_skips_shallow_positions_until_an_index_read() {
@@ -207,16 +276,28 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
 
     assert!(m.nodes[add].value.is_none(), "shallow position stays lazy");
     assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
-    assert_eq!(m.nodes[three].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(
+        m.nodes[three].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: false
+        })
+    );
     assert_eq!(
         m.nodes[arr].evaluated_deep,
-        Some(EvaluatedDeep { parameterized: true }),
+        Some(EvaluatedDeep {
+            parameterized: true
+        }),
         "a shallow-marked array is never proven concrete"
     );
     // A read forces the single element on demand.
     let idx = usize_node(&mut m, root, 1);
     let ops = array_node(&mut m, root, &[arr, idx], None);
-    let read = op_node(&mut m, root, TestOperator::LowOperator(LowOperator::Index), Some(ops));
+    let read = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(ops),
+    );
     assert_eq!(u128_of(m.evaluate_node_deep(read, None)), 9);
 }
 #[test]

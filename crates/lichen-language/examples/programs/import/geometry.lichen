@@ -1,0 +1,5 @@
+-- order: 1
+@import "math.lichen" as math
+double = x => math x + math x
+double
+-- output: Function: Int -> Int

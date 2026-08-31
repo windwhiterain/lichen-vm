@@ -19,7 +19,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use lichen_lowlevel::{ApplyError, EvalError, LowOperator, LowValue, NodeId, UnifyError, is_unbound};
+use lichen_lowlevel::{
+    AnyNodeId, ApplyError, ArrayItem, EvalError, LowOperator, LowValue, NodeId, UnifyError,
+    is_unbound,
+};
 use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
@@ -165,7 +168,12 @@ impl<V: ValueType> Build<V> {
         }
         if let Some(items) = self.module.array_items(node) {
             for item in items {
-                self.record_span(item.node, span, map, visited);
+                // A static ref has no importer span: the imported value was
+                // not written in this source file.  Only dynamic nodes get
+                // spans recorded.
+                if let AnyNodeId::Dynamic(node) = item.node {
+                    self.record_span(node, span, map, visited);
+                }
             }
         }
     }
@@ -347,11 +355,28 @@ impl<'a, V: ValueType> Report<'a, V> {
     /// A runtime evaluation failure — an out-of-bounds index.  The index
     /// literal's span attributes it; there are no conflict classes to walk.
     fn eval_error(&mut self, err: &EvalError) -> Diag<V> {
+        // A static index (a solved constant of a plugged dependency) has no
+        // importer node or span — report the facts without attribution.
+        let AnyNodeId::Dynamic(index) = err.index else {
+            return Diag {
+                span: None,
+                kind: DiagKind::IndexOutOfBounds,
+                a: NodeId::default(),
+                b: NodeId::default(),
+                value_a: Some(V::from(LowValue::USize(err.index_value))),
+                value_b: Some(V::from(LowValue::USize(err.length))),
+                message: format!(
+                    "index {} out of bounds (array length {})",
+                    err.index_value, err.length
+                ),
+                error_index: None,
+            };
+        };
         Diag {
-            span: self.node_spans.get(&err.index).copied(),
+            span: self.node_spans.get(&index).copied(),
             kind: DiagKind::IndexOutOfBounds,
-            a: err.index,
-            b: err.index,
+            a: index,
+            b: index,
             value_a: Some(V::from(LowValue::USize(err.index_value))),
             value_b: Some(V::from(LowValue::USize(err.length))),
             message: format!(
@@ -369,6 +394,82 @@ impl<'a, V: ValueType> Report<'a, V> {
     /// symbolically; cycles are cut at the class name.
     fn print_type(&mut self, node: NodeId) -> String {
         self.print_inner(node, &mut HashSet::new())
+    }
+
+    /// Read the array items behind either a dynamic node or a static ref.
+    fn any_items(&self, id: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        let value = self.build.module.node_value(id)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        Some(array.items())
+    }
+
+    /// Universe test that accepts static refs.
+    fn is_universe_any(&mut self, id: AnyNodeId) -> bool {
+        match id {
+            AnyNodeId::Dynamic(node) => self.rep(node) == self.univ,
+            AnyNodeId::Static(sref) => {
+                let Some(items) = self.any_items(id) else {
+                    return false;
+                };
+                items.len() == 2
+                    && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
+            }
+        }
+    }
+
+    /// Render a dynamic node or a static ref.  Static nodes have no
+    /// importer spans or class names, so they render through a small
+    /// structural printer that cuts static cycles.
+    fn any_node(&mut self, id: AnyNodeId, visiting: &mut HashSet<NodeId>) -> String {
+        match id {
+            AnyNodeId::Dynamic(node) => self.print_inner(node, visiting),
+            AnyNodeId::Static(sref) => self.print_static(sref),
+        }
+    }
+
+    fn print_static(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
+        let mut visiting = HashSet::new();
+        self.print_static_inner(sref, &mut visiting)
+    }
+
+    fn print_static_inner(
+        &mut self,
+        sref: lichen_lowlevel::StaticNodeId,
+        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
+    ) -> String {
+        if !visiting.insert(sref) {
+            return "…".to_string();
+        }
+        let value = self.build.module.node_value(AnyNodeId::Static(sref));
+        let out = match value.as_ref().and_then(|v| v.as_enum()) {
+            Some(LowValue::USize(n)) => n.to_string(),
+            Some(LowValue::None) => "none".to_string(),
+            Some(LowValue::Function(_)) => "Function".to_string(),
+            Some(LowValue::Parameterized) | None => "?".to_string(),
+            Some(LowValue::Array(array)) => {
+                let items = array.items();
+                if items.len() == 2 && self.is_universe_any(AnyNodeId::Static(sref)) {
+                    let mut dummy = HashSet::new();
+                    self.any_node(items[0].node, &mut dummy)
+                } else {
+                    let parts: Vec<String> = items
+                        .iter()
+                        .map(|item| match item.node {
+                            AnyNodeId::Dynamic(node) => {
+                                let mut dummy = HashSet::new();
+                                self.print_inner(node, &mut dummy)
+                            }
+                            AnyNodeId::Static(ref next) => self.print_static_inner(*next, visiting),
+                        })
+                        .collect();
+                    format!("[{}]", parts.join(", "))
+                }
+            }
+        };
+        visiting.remove(&sref);
+        out
     }
 
     fn print_inner(&mut self, node: NodeId, visiting: &mut HashSet<NodeId>) -> String {
@@ -408,52 +509,48 @@ impl<'a, V: ValueType> Report<'a, V> {
                         .array_items(rep)
                         .expect("the value just matched as an array");
                     if items.len() == 2 {
-                        let kind = items[1].node;
                         // `[shape, K]`: an atomic type expression — render the
                         // shape's marker (`int`, `Type`, …).
-                        if self.rep(kind) == self.univ {
-                            return self.print_inner(items[0].node, visiting);
+                        if self.is_universe_any(items[1].node) {
+                            return self.any_node(items[0].node, visiting);
                         }
                         // `[shape, [Kind, K]]`: a compound type expression —
                         // the kind decides the shape's rendering.
-                        if let Some(k) = self.build.module.array_items(self.rep(kind))
+                        if let Some(k) = self.any_items(items[1].node)
                             && k.len() == 2
-                            && self.rep(k[1].node) == self.univ
+                            && self.is_universe_any(k[1].node)
                         {
-                            let kind_node = self.rep(k[0].node);
-                            let kind_value = self.build.module.nodes[kind_node].value;
+                            let kind_value = self.build.module.node_value(k[0].node);
                             if kind_value == Some(V::function_type_marker()) {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
-                                if let Some(s) =
-                                    self.build.module.array_items(self.rep(items[0].node))
+                                if let Some(s) = self.any_items(items[0].node)
                                     && s.len() == 2
                                 {
                                     return format!(
                                         "{} → {}",
-                                        self.print_inner(s[0].node, visiting),
-                                        self.print_inner(s[1].node, visiting)
+                                        self.any_node(s[0].node, visiting),
+                                        self.any_node(s[1].node, visiting)
                                     );
                                 }
                             } else if kind_value == Some(V::tuple_type_marker()) {
                                 let elements: Vec<String> = items
                                     .iter()
-                                    .map(|item| self.print_inner(item.node, visiting))
+                                    .map(|item| self.any_node(item.node, visiting))
                                     .collect();
                                 return format!("[{}]", elements.join(", "));
                             } else if kind_value == Some(V::array_type_marker()) {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
-                                if let Some(s) =
-                                    self.build.module.array_items(self.rep(items[0].node))
+                                if let Some(s) = self.any_items(items[0].node)
                                     && s.len() == 2
                                 {
                                     return format!(
                                         "{}[{}]",
-                                        self.print_inner(s[0].node, visiting),
-                                        self.print_inner(s[1].node, visiting)
+                                        self.any_node(s[0].node, visiting),
+                                        self.any_node(s[1].node, visiting)
                                     );
                                 }
                             } else if kind_value == Some(V::type_struct_marker()) {
@@ -463,40 +560,38 @@ impl<'a, V: ValueType> Report<'a, V> {
                                 // and the field list from shape[1].
                                 let mut n = 0;
                                 let mut list = items[0].node;
-                                if let Some(s) =
-                                    self.build.module.array_items(self.rep(items[0].node))
+                                if let Some(s) = self.any_items(items[0].node)
                                     && s.len() == 2
                                 {
-                                    n = self.build.module.nodes[s[0].node]
-                                        .value
+                                    n = self
+                                        .build
+                                        .module
+                                        .node_value(s[0].node)
                                         .and_then(|v| v.type_id())
                                         .unwrap_or(0);
                                     list = s[1].node;
                                 }
-                                let field_ids: Vec<NodeId> = self
-                                    .build
-                                    .module
-                                    .array_items(self.rep(list))
-                                    .map(|fs| fs.iter().map(|item| item.node).collect())
-                                    .unwrap_or_else(|| vec![list]);
-                                let fields: Vec<String> = field_ids
-                                    .iter()
-                                    .map(|&id| self.print_inner(id, visiting))
-                                    .collect();
+                                let fields: Vec<String> = match self.any_items(list) {
+                                    Some(fs) => fs
+                                        .iter()
+                                        .map(|item| self.any_node(item.node, visiting))
+                                        .collect(),
+                                    None => vec![self.any_node(list, visiting)],
+                                };
                                 return format!("struct#{n} {{ {} }}", fields.join(", "));
                             }
                         }
                         if self.class_is_arrow(rep) {
                             return format!(
                                 "{} → {}",
-                                self.print_inner(items[0].node, visiting),
-                                self.print_inner(items[1].node, visiting)
+                                self.any_node(items[0].node, visiting),
+                                self.any_node(items[1].node, visiting)
                             );
                         }
                     }
                     let elements: Vec<String> = items
                         .iter()
-                        .map(|item| self.print_inner(item.node, visiting))
+                        .map(|item| self.any_node(item.node, visiting))
                         .collect();
                     format!("[{}]", elements.join(", "))
                 }

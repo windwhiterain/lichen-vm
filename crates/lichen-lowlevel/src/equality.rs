@@ -1,8 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use stacksafe::stacksafe;
 
-use crate::{LowOperator, LowValue, Module, Node, NodeId, Operation, Program, ValueExt as _, is_unbound};
+use crate::{
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, LowOperator, LowValue, Module, Node, NodeId, Operation,
+    Program, StaticNodeId, ValueExt as _, is_unbound,
+};
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
@@ -55,15 +58,110 @@ impl<P: Program> Module<P> {
     /// `a`'s class when unification fails.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = Vec::new();
-        self.unify_inner(a, b, &mut path);
+        let mut materialized = HashMap::new();
+        self.unify_inner(Dyn(a), Dyn(b), &mut path, &mut materialized);
         disjoint::find(&mut self.nodes, a)
+    }
+
+    /// A static side of a unification has no class to join: materialize it
+    /// into a fresh leaf node holding its value (homed in the other
+    /// side's block — or the module's first block when both sides are static,
+    /// which the apply path cannot produce), then unify that.  This is the
+    /// only place a static value enters the class machinery; refs are
+    /// absolute, so the value needs no conversion to be storable there.
+    ///
+    /// A static ref is materialized at most once per [`Self::unify`]
+    /// traversal (the cache is threaded through [`Self::unify_inner`]).  This
+    /// matters for static self-referential structures: without the cache,
+    /// each recursive encounter of a static universe ref would mint a fresh
+    /// leaf and the path guard could never see a repeated class pair.
+    fn unify_side(
+        &mut self,
+        id: AnyNodeId,
+        other: AnyNodeId,
+        materialized: &mut HashMap<StaticNodeId, NodeId>,
+    ) -> NodeId {
+        match id {
+            Dyn(node) => node,
+            AnyNodeId::Static(sref) => {
+                if let Some(&node) = materialized.get(&sref) {
+                    return node;
+                }
+                let block = match other {
+                    Dyn(node) => self.nodes[node].block,
+                    AnyNodeId::Static(_) => self
+                        .blocks
+                        .iter()
+                        .next()
+                        .map(|(block, _)| block)
+                        .expect("module has at least one block"),
+                };
+                let node = self.materialize_leaf(sref, block);
+                materialized.insert(sref, node);
+                node
+            }
+        }
+    }
+
+    /// Whether an `AnyNodeId` names a self-referential universe: an array
+    /// whose item points back to itself (dynamically through its class, or
+    /// statically through the frozen self-loop).  Both sides of a universe
+    /// unification are equal by construction — the raw `path` guard would
+    /// otherwise treat the cycle as a conflict.
+    fn is_universe_id(&mut self, id: AnyNodeId) -> bool {
+        match id {
+            Dyn(node) => {
+                let rep = self.equality_representative(node);
+                let Some(LowValue::Array(array)) =
+                    self.nodes[node].value.and_then(|value| value.as_enum())
+                else {
+                    return false;
+                };
+                if array.items().len() != 2 {
+                    return false;
+                }
+                for item in array.items() {
+                    match item.node {
+                        Dyn(item) => {
+                            if self.equality_representative(item) == rep {
+                                return true;
+                            }
+                        }
+                        AnyNodeId::Static(_) => {
+                            if self.is_universe_id(item.node) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            AnyNodeId::Static(sref) => self.is_static_universe_id(sref),
+        }
+    }
+
+    fn is_static_universe_id(&self, sref: StaticNodeId) -> bool {
+        let Some(LowValue::Array(array)) = self.static_read(sref).as_enum() else {
+            return false;
+        };
+        let items = array.items();
+        items.len() == 2
+            && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
     /// Recursive core of [`Self::unify`]; `path` holds the class pairs on
     /// the current recursion, so a mutually recursive structure (an array
     /// unified with itself) records an error instead of looping.
     #[stacksafe]
-    fn unify_inner(&mut self, a: NodeId, b: NodeId, path: &mut Vec<(NodeId, NodeId)>) -> bool {
+    fn unify_inner(
+        &mut self,
+        a: AnyNodeId,
+        b: AnyNodeId,
+        path: &mut Vec<(NodeId, NodeId)>,
+        materialized: &mut HashMap<StaticNodeId, NodeId>,
+    ) -> bool {
+        let a = self.unify_side(a, b, materialized);
+        let b = self.unify_side(b, Dyn(a), materialized);
         let ra = disjoint::find(&mut self.nodes, a);
         let rb = disjoint::find(&mut self.nodes, b);
         if ra == rb {
@@ -146,11 +244,18 @@ impl<P: Program> Module<P> {
                     self.record_error(ra, rb);
                     return false;
                 }
+                // Two self-referential universes are the same structural
+                // value even when one is materialized from a static module;
+                // unifying their cycles should be a success, not a conflict.
+                if self.is_universe_id(Dyn(ra)) && self.is_universe_id(Dyn(rb)) {
+                    self.add_equality(ra, rb);
+                    return true;
+                }
                 path.push((ra, rb));
                 let ok = left
                     .iter()
                     .zip(right.iter())
-                    .all(|(na, nb)| self.unify_inner(na.node, nb.node, path));
+                    .all(|(na, nb)| self.unify_inner(na.node, nb.node, path, materialized));
                 path.pop();
                 if ok {
                     self.add_equality(ra, rb);
@@ -256,7 +361,10 @@ impl<P: Program> Module<P> {
                 Some(LowValue::Array(array)) => {
                     let items = array.items();
                     let mut seen = HashSet::new();
-                    if items.iter().any(|item| !self.value_is_skeleton(item.node, &mut seen)) {
+                    if items
+                        .iter()
+                        .any(|item| !self.value_is_skeleton(item.node, &mut seen))
+                    {
                         return false;
                     }
                 }
@@ -271,23 +379,30 @@ impl<P: Program> Module<P> {
 
     /// Whether the subtree of array values rooted at `node` is all
     /// skeletons; `seen` cuts the cycle of a self-referential structure
-    /// (which is a skeleton only if its own elements are).
-    fn value_is_skeleton(&self, node: NodeId, seen: &mut HashSet<NodeId>) -> bool {
+    /// (which is a skeleton only if its own elements are).  A static ref is
+    /// a decided leaf: its solved flag says whether it reads `Parameterized`
+    /// (a skeleton position) or concrete (not).
+    fn value_is_skeleton(&self, node: AnyNodeId, seen: &mut HashSet<AnyNodeId>) -> bool {
         if !seen.insert(node) {
             return true;
         }
-        let ok = self.nodes[node].operation.is_none()
-            && match self.nodes[node].value.and_then(|value| value.as_enum()) {
-                None => true,
-                Some(LowValue::Parameterized) => true,
-                Some(LowValue::Array(array)) => {
-                    array
-                        .items()
-                        .iter()
-                        .all(|item| self.value_is_skeleton(item.node, seen))
-                }
-                _ => false,
-            };
+        let ok = match node {
+            AnyNodeId::Static(sref) => {
+                self.static_module(sref.module).nodes[sref.index.index].parameterized
+            }
+            Dyn(node) => {
+                self.nodes[node].operation.is_none()
+                    && match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                        None => true,
+                        Some(LowValue::Parameterized) => true,
+                        Some(LowValue::Array(array)) => array
+                            .items()
+                            .iter()
+                            .all(|item| self.value_is_skeleton(item.node, seen)),
+                        _ => false,
+                    }
+            }
+        };
         seen.remove(&node);
         ok
     }
@@ -300,6 +415,10 @@ impl<P: Program> Module<P> {
         let Some(target) = self.index_target(op) else {
             return false;
         };
+        // A static target is not a class member — never a self-read.
+        let AnyNodeId::Dynamic(target) = target else {
+            return false;
+        };
         let mut n = target;
         while let Some(parent) = self.nodes[n].equality.parent {
             n = parent;
@@ -308,8 +427,10 @@ impl<P: Program> Module<P> {
     }
 
     /// The element an `Index` operation reads, when the operand array, the
-    /// index, and the container are all concrete.
-    fn index_target(&self, op: NodeId) -> Option<NodeId> {
+    /// index, and the container are all concrete.  The element is an
+    /// [`AnyNodeId`]: a static container yields a static element, which the
+    /// alias machinery refuses (no class behind it).
+    fn index_target(&self, op: NodeId) -> Option<AnyNodeId> {
         let Operation { operator, operand } = self.nodes[op].operation?;
         if !matches!(operator.as_enum(), Some(LowOperator::Index)) {
             return None;
@@ -323,11 +444,11 @@ impl<P: Program> Module<P> {
         if operands.len() != 2 {
             return None;
         }
-        let index_value = self.nodes[operands[1].node].value?;
+        let index_value = self.node_value(operands[1].node)?;
         let Some(LowValue::USize(index)) = index_value.as_enum() else {
             return None;
         };
-        let container_value = self.nodes[operands[0].node].value?;
+        let container_value = self.node_value(operands[0].node)?;
         let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
@@ -362,6 +483,12 @@ impl<P: Program> Module<P> {
             return false;
         };
         let Some(indexed) = self.index_target(op) else {
+            return false;
+        };
+        // A static element is immutable — there is no class to alias onto,
+        // and the read's value is decided by the static module.  (Such a
+        // read resolves through `force_pending`'s Index arm instead.)
+        let AnyNodeId::Dynamic(indexed) = indexed else {
             return false;
         };
         // Only alias onto a pure cell — the read must be a plain reference,
@@ -430,7 +557,7 @@ impl<P: Program> Module<P> {
             member = self.nodes[member].meta().next?;
         }
         let block = self.nodes[member].block;
-        let value = self.evaluate_node(member, Some(block));
+        let value = self.evaluate_node(Dyn(member), Some(block));
         if is_unbound(Some(value)) {
             return None;
         }

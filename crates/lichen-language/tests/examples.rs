@@ -1,21 +1,24 @@
-//! The example programs in `examples/programs/` are the living spec: each
-//! must compile and run.  The top-level README embeds each program and its
-//! *actual* output — computed by the same runner used here (see
-//! `src/readme.rs`) — so the `-- output:` comments in the files are
-//! documentation, not the source of truth.
+//! The example programs in `examples/programs/` — at any depth, including
+//! each directory's `_.lichen` — are the living spec: each must compile and
+//! run.  The top-level README embeds each program and its *actual* output —
+//! computed by the same runner used here (see `src/readme.rs`) — so the
+//! `-- output:` comments in the files are documentation, not the source of
+//! truth.  Programs run through a package store with their own path as the
+//! base, so `@import` lines resolve relative to the file.
 
 use std::fs;
 use std::path::PathBuf;
 
+use lichen_language::package::PackageStore;
+use lichen_language::readme;
+use lichen_language::run::evaluate_raw;
+
 #[test]
 fn every_example_runs() {
-    let mut files: Vec<PathBuf> = fs::read_dir("examples/programs")
-        .expect("examples/programs")
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
+    let files: Vec<PathBuf> = readme::example_files()
+        .into_iter()
+        .map(|(_, file)| file)
         .collect();
-    files.sort();
     // A sanity floor, not an exact count: examples may be merged (e.g.
     // struct_instance.lichen folded into structs.lichen) as long as the
     // set stays a reasonable living spec.
@@ -26,7 +29,8 @@ fn every_example_runs() {
     );
     for file in files {
         let source = fs::read_to_string(&file).unwrap();
-        lichen_language::run::evaluate(&source)
+        let mut store = PackageStore::new();
+        evaluate_raw(&source, Some(&file), &mut store)
             .unwrap_or_else(|diags| panic!("{} failed: {diags:?}", file.display()));
     }
 }

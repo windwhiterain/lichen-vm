@@ -19,10 +19,12 @@ mod equality;
 mod evaluation;
 mod function;
 mod recursion;
+mod static_module;
 
 use lichen_lowlevel::{
-    ArrayItem, BlockId, EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator,
-    LowValue, Module, NodeId, Operation, OperatorExt, Program, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, EvaluatedDeep, Function, FunctionId,
+    GlobalExt, Handle, LowOperator, LowValue, Module, NodeId, Operation, OperatorExt, Program,
+    StaticHandle, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -41,6 +43,7 @@ impl Program for TestProgram {
     type Value = TestValue;
     type Operator = TestOperator;
     type GlobalExt = TestGlobalExt;
+    type PackageMeta = ();
 }
 
 // The test value vocabulary: the handle-carrying extension values below,
@@ -51,11 +54,17 @@ lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum TestValue {
         /// A `u128` payload (16 bytes).
-        U128(Handle<u128>),
+        U128(AnyHandle<u128>),
         /// A `char` payload, four bytes per char.
-        String(Handle<[char]>),
+        String(AnyHandle<[char]>),
     }
     + LowValue;
+}
+
+/// A dynamic (block-arena) handle — the kind every hand-built test value
+/// uses; static payloads appear only inside `StaticModule`s.
+fn dyn_handle<T: ?Sized>(ptr: *const T) -> AnyHandle<T> {
+    AnyHandle::Dynamic(Handle(ptr))
 }
 
 impl ValueExt for TestValue {
@@ -67,24 +76,63 @@ impl ValueExt for TestValue {
     fn alignment() -> usize {
         16
     }
-    fn handle(&self) -> Handle<[u8]> {
+    fn handle(&self) -> AnyHandle<[u8]> {
         match self {
-            TestValue::U128(p) => Handle(std::ptr::slice_from_raw_parts(p.0 as *const u8, 16)),
-            TestValue::String(p) => {
-                let chars = unsafe { &*p.0 };
-                Handle(std::ptr::slice_from_raw_parts(
-                    chars.as_ptr() as *const u8,
-                    chars.len() * 4,
-                ))
-            }
+            TestValue::U128(p) => match p {
+                AnyHandle::Dynamic(h) => {
+                    AnyHandle::Dynamic(Handle(std::ptr::slice_from_raw_parts(h.0 as *const u8, 16)))
+                }
+                AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
+                    module: h.module,
+                    offset: std::ptr::slice_from_raw_parts(h.offset as *const u8, 16),
+                }),
+            },
+            TestValue::String(p) => match p {
+                AnyHandle::Dynamic(h) => {
+                    let chars = unsafe { &*h.0 };
+                    AnyHandle::Dynamic(Handle(std::ptr::slice_from_raw_parts(
+                        chars.as_ptr() as *const u8,
+                        chars.len() * 4,
+                    )))
+                }
+                AnyHandle::Static(h) => {
+                    let chars = unsafe { &*h.offset };
+                    AnyHandle::Static(StaticHandle {
+                        module: h.module,
+                        offset: std::ptr::slice_from_raw_parts(
+                            chars.as_ptr() as *const u8,
+                            chars.len() * 4,
+                        ),
+                    })
+                }
+            },
             _ => unreachable!("only the handle variants carry a payload"),
         }
     }
-    fn set_handle(&mut self, payload: Handle<[u8]>) {
+    fn set_handle(&mut self, payload: AnyHandle<[u8]>) {
         match self {
-            TestValue::U128(p) => p.0 = payload.0 as *const u128,
+            TestValue::U128(p) => {
+                *p = match payload {
+                    AnyHandle::Dynamic(h) => AnyHandle::Dynamic(Handle(h.0 as *const u128)),
+                    AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
+                        module: h.module,
+                        offset: h.offset as *const u128,
+                    }),
+                }
+            }
             TestValue::String(p) => {
-                p.0 = std::ptr::slice_from_raw_parts(payload.0 as *const char, payload.len() / 4)
+                *p = match payload {
+                    AnyHandle::Dynamic(h) => AnyHandle::Dynamic(Handle(
+                        std::ptr::slice_from_raw_parts(h.0 as *const char, h.len() / 4),
+                    )),
+                    AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
+                        module: h.module,
+                        offset: std::ptr::slice_from_raw_parts(
+                            h.offset as *const char,
+                            h.len() / 4,
+                        ),
+                    }),
+                }
             }
             _ => unreachable!("only the handle variants carry a payload"),
         }
@@ -119,7 +167,8 @@ impl OperatorExt<TestProgram> for TestOperator {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
-            TestOperator::LowOperator(LowOperator::Index) | TestOperator::LowOperator(LowOperator::Apply) => {
+            TestOperator::LowOperator(LowOperator::Index)
+            | TestOperator::LowOperator(LowOperator::Apply) => {
                 unreachable!("structural operators are dispatched by the VM")
             }
             TestOperator::Id => operand,
@@ -139,28 +188,34 @@ impl OperatorExt<TestProgram> for TestOperator {
                     unreachable!("binary ops expect an array of two node ids")
                 };
                 let operands = operands.items();
-                let left = module.nodes[operands[0].node].value.unwrap();
-                let right = module.nodes[operands[1].node].value.unwrap();
+                // Operands may be baked static refs (a constant operand of a
+                // materialized static function) — resolve through the module
+                // API, which reads a dynamic node's value or a static node's
+                // solved value.
+                let left = module.node_value(operands[0].node).unwrap();
+                let right = module.node_value(operands[1].node).unwrap();
                 match self {
                     TestOperator::Add => {
                         let sum = u128_of(left).wrapping_add(u128_of(right));
                         let p = module.blocks[block].arena.alloc(sum);
-                        TestValue::U128(Handle(p as *const u128))
+                        TestValue::U128(dyn_handle(p as *const u128))
                     }
                     TestOperator::Sub => {
                         let difference = u128_of(left).wrapping_sub(u128_of(right));
                         let p = module.blocks[block].arena.alloc(difference);
-                        TestValue::U128(Handle(p as *const u128))
+                        TestValue::U128(dyn_handle(p as *const u128))
                     }
-                    TestOperator::Eq => {
-                        TestValue::LowValue(LowValue::USize((u128_of(left) == u128_of(right)) as usize))
-                    }
-                    TestOperator::Lt => TestValue::LowValue(LowValue::USize((u128_of(left) < u128_of(right)) as usize)),
+                    TestOperator::Eq => TestValue::LowValue(LowValue::USize(
+                        (u128_of(left) == u128_of(right)) as usize,
+                    )),
+                    TestOperator::Lt => TestValue::LowValue(LowValue::USize(
+                        (u128_of(left) < u128_of(right)) as usize,
+                    )),
                     TestOperator::Concat => {
                         let mut result = string_of(left);
                         result.extend(string_of(right));
                         let slice = module.blocks[block].arena.alloc_slice_copy(&result);
-                        TestValue::String(Handle(std::ptr::slice_from_raw_parts(
+                        TestValue::String(dyn_handle(std::ptr::slice_from_raw_parts(
                             slice.as_ptr(),
                             slice.len(),
                         )))
@@ -176,8 +231,12 @@ fn u128_of(value: TestValue) -> u128 {
     let TestValue::U128(payload) = value else {
         panic!("expected U128")
     };
+    let ptr = match payload {
+        AnyHandle::Dynamic(h) => h.0 as *const u8,
+        AnyHandle::Static(h) => h.offset as *const u8,
+    };
     u128::from_ne_bytes(
-        unsafe { std::slice::from_raw_parts(payload.0 as *const u8, 16) }
+        unsafe { std::slice::from_raw_parts(ptr, 16) }
             .try_into()
             .unwrap(),
     )
@@ -187,14 +246,37 @@ fn string_of(value: TestValue) -> Vec<char> {
     let TestValue::String(payload) = value else {
         panic!("expected String")
     };
-    unsafe { &*payload.0 }.to_vec()
+    match payload {
+        AnyHandle::Dynamic(h) => unsafe { &*h.0 }.to_vec(),
+        AnyHandle::Static(h) => unsafe { &*h.offset }.to_vec(),
+    }
 }
 
 // --- builders ---------------------------------------------------------
 
+/// Unwrap a function value known to be dynamic (all test-built values).
+fn dyn_function(value: TestValue) -> FunctionId {
+    let TestValue::LowValue(LowValue::Function(func)) = value else {
+        panic!("expected a function value")
+    };
+    let AnyFunctionId::Dynamic(func) = func else {
+        panic!("expected a dynamic function")
+    };
+    func
+}
+
+/// An unmarked array item referencing a dynamic node.
+fn item(node: NodeId) -> ArrayItem {
+    ArrayItem::new(AnyNodeId::Dynamic(node))
+}
+
 fn u128_node(m: &mut Module<TestProgram>, block: BlockId, n: u128) -> NodeId {
     let p = m.blocks[block].arena.alloc(n);
-    m.add_node(block, None, Some(TestValue::U128(Handle(p as *const u128))))
+    m.add_node(
+        block,
+        None,
+        Some(TestValue::U128(dyn_handle(p as *const u128))),
+    )
 }
 
 fn str_node(m: &mut Module<TestProgram>, block: BlockId, chars: &[char]) -> NodeId {
@@ -202,10 +284,9 @@ fn str_node(m: &mut Module<TestProgram>, block: BlockId, chars: &[char]) -> Node
     m.add_node(
         block,
         None,
-        Some(TestValue::String(Handle(std::ptr::slice_from_raw_parts(
-            slice.as_ptr(),
-            slice.len(),
-        )))),
+        Some(TestValue::String(dyn_handle(
+            std::ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()),
+        ))),
     )
 }
 
@@ -219,14 +300,16 @@ fn array_node(
         .iter()
         .enumerate()
         .map(|(i, &node)| ArrayItem {
-            node,
+            node: lichen_lowlevel::AnyNodeId::Dynamic(node),
             shallow: mask.is_some_and(|mask| mask[i]),
         })
         .collect();
     m.add_node(
         block,
         None,
-        Some(TestValue::LowValue(LowValue::Array(m.alloc_array(&items, block)))),
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, block),
+        ))),
     )
 }
 
@@ -237,7 +320,11 @@ fn usize_node(m: &mut Module<TestProgram>, block: BlockId, n: usize) -> NodeId {
 /// An unbound cell — `TestValue::LowValue(LowValue::Parameterized)`, so deep evaluation stays
 /// lazy instead of panicking on a missing operation.
 fn unbound_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
-    m.add_node(block, None, Some(TestValue::LowValue(LowValue::Parameterized)))
+    m.add_node(
+        block,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    )
 }
 
 fn unit_node(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
@@ -253,12 +340,19 @@ fn op_node(
     m.add_node(block, Some(Operation { operator, operand }), None)
 }
 
-/// The node ids inside `value` if it's an array.
+/// The node ids inside `value` if it's an array (test arrays are dynamic).
 fn array_ids(value: TestValue) -> Vec<NodeId> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected array")
     };
-    array.items().iter().map(|item| item.node).collect()
+    array
+        .items()
+        .iter()
+        .map(|item| match item.node {
+            AnyNodeId::Dynamic(node) => node,
+            AnyNodeId::Static(_) => panic!("expected a dynamic element"),
+        })
+        .collect()
 }
 
 /// The shallow flags inside `value` if it's an array.
@@ -302,6 +396,9 @@ fn wrap_function_asserts(
     let TestValue::LowValue(LowValue::Function(func)) = m.nodes[func_node].value.unwrap() else {
         unreachable!("add_function always wraps a function value")
     };
+    let AnyFunctionId::Dynamic(func) = func else {
+        unreachable!("add_function always wraps a dynamic function")
+    };
     (func_node, func)
 }
 
@@ -329,7 +426,11 @@ fn function(
 ) -> (NodeId, NodeId, NodeId) {
     let block = m.add_block(None);
     let ret = m.add_node(block, None, None);
-    let param = m.add_node(block, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        block,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let asserts_before = m.asserts.len();
     wire(m, ret, param);
     let asserts = m.asserts[asserts_before..].to_vec();
@@ -346,7 +447,12 @@ fn call_node(
     arg: NodeId,
 ) -> NodeId {
     let operands = array_node(m, block, &[func_node, arg], None);
-    op_node(m, block, TestOperator::LowOperator(LowOperator::Apply), Some(operands))
+    op_node(
+        m,
+        block,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(operands),
+    )
 }
 
 /// Register a function whose body lives in `block`: insert the `Function`
@@ -370,7 +476,9 @@ fn finish_function(
     });
     tag_scope(m, function, nodes);
     m.blocks[block].functions.push(function);
-    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(function)));
+    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(
+        AnyFunctionId::Dynamic(function),
+    )));
     function
 }
 
@@ -380,13 +488,22 @@ fn finish_function(
 /// function value node and id.
 fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     // Placeholder for the function's own value node: the operand array must
     // reference it before the function exists, so `add_function` (which
     // creates the value node last) cannot be used here.
     let func_node = m.add_node(body, None, None);
     let operands = array_node(m, body, &[func_node, param], None);
-    let apply = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(operands));
+    let apply = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(operands),
+    );
     let ret = array_node(m, body, &[param, apply], None);
     let function = m.functions.insert(Function {
         nodes: Vec::new(),
@@ -398,7 +515,9 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     });
     tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
     m.blocks[body].functions.push(function);
-    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(function)));
+    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(
+        AnyFunctionId::Dynamic(function),
+    )));
     (func_node, function)
 }
 
@@ -407,19 +526,37 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
 /// value nodes.
 fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId) {
     let body = m.add_block(None);
-    let f_param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
-    let g_param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let f_param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let g_param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     // Both value nodes are placeholders: f's body references g before g
     // exists, and vice versa.
     let f_func = m.add_node(body, None, None);
     let g_func = m.add_node(body, None, None);
     // f(x) = [x, g(x)]
     let f_ops = array_node(m, body, &[g_func, f_param], None);
-    let f_apply = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(f_ops));
+    let f_apply = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(f_ops),
+    );
     let f_ret = array_node(m, body, &[f_param, f_apply], None);
     // g(x) = [x, f(x)]
     let g_ops = array_node(m, body, &[f_func, g_param], None);
-    let g_apply = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(g_ops));
+    let g_apply = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(g_ops),
+    );
     let g_ret = array_node(m, body, &[g_param, g_apply], None);
     let f = m.functions.insert(Function {
         nodes: Vec::new(),
@@ -440,8 +577,12 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     });
     tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
     m.blocks[body].functions.extend([f, g]);
-    m.nodes[f_func].value = Some(TestValue::LowValue(LowValue::Function(f)));
-    m.nodes[g_func].value = Some(TestValue::LowValue(LowValue::Function(g)));
+    m.nodes[f_func].value = Some(TestValue::LowValue(LowValue::Function(
+        AnyFunctionId::Dynamic(f),
+    )));
+    m.nodes[g_func].value = Some(TestValue::LowValue(LowValue::Function(
+        AnyFunctionId::Dynamic(g),
+    )));
     (f_func, g_func)
 }
 
@@ -452,7 +593,11 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
 /// forced.  Returns the function value node and id.
 fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     // Placeholder for the function's own value node (the operand arrays
     // reference it before the function exists).
     let fib_func = m.add_node(body, None, None);
@@ -462,12 +607,22 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let sub1_ops = array_node(m, body, &[param, one], None);
     let sub1 = op_node(m, body, TestOperator::Sub, Some(sub1_ops));
     let fib1_ops = array_node(m, body, &[fib_func, sub1], None);
-    let fib1 = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(fib1_ops));
+    let fib1 = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(fib1_ops),
+    );
     // fib(x-2)
     let sub2_ops = array_node(m, body, &[param, two], None);
     let sub2 = op_node(m, body, TestOperator::Sub, Some(sub2_ops));
     let fib2_ops = array_node(m, body, &[fib_func, sub2], None);
-    let fib2 = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(fib2_ops));
+    let fib2 = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(fib2_ops),
+    );
     // rec = fib(x-1) + fib(x-2)
     let rec_ops = array_node(m, body, &[fib1, fib2], None);
     let rec = op_node(m, body, TestOperator::Add, Some(rec_ops));
@@ -476,7 +631,12 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let lt = op_node(m, body, TestOperator::Lt, Some(lt_ops));
     let branch = array_node(m, body, &[rec, param], None);
     let index_ops = array_node(m, body, &[branch, lt], None);
-    let ret = op_node(m, body, TestOperator::LowOperator(LowOperator::Index), Some(index_ops));
+    let ret = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(index_ops),
+    );
     let function = finish_function(m, body, ret, param, fib_func);
     (fib_func, function)
 }
@@ -485,10 +645,19 @@ fn fibonacci(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
 /// base case, so any evaluation of a call never returns.
 fn unconditional_self_apply(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     let body = m.add_block(None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let func_node = m.add_node(body, None, None); // placeholder self-ref
     let operands = array_node(m, body, &[func_node, param], None);
-    let ret = op_node(m, body, TestOperator::LowOperator(LowOperator::Apply), Some(operands));
+    let ret = op_node(
+        m,
+        body,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(operands),
+    );
     let function = finish_function(m, body, ret, param, func_node);
     (func_node, function)
 }

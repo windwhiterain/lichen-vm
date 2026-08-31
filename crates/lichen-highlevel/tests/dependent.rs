@@ -9,22 +9,45 @@
 //! rules the highlevel layer will sit on.
 
 use lichen_highlevel::program::{HighProgram, HighProgramOperator, HighProgramValue};
-use lichen_lowlevel::{ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId, Operation};
+use lichen_lowlevel::{
+    AnyNodeId, ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId, Operation,
+};
+
+/// The dynamic node behind an item ref — the checker builds only dynamic graphs.
+fn dyn_node(id: AnyNodeId) -> NodeId {
+    match id {
+        AnyNodeId::Dynamic(node) => node,
+        AnyNodeId::Static(_) => unreachable!("checker graphs are dynamic"),
+    }
+}
 
 fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
-    m.add_node(block, None, Some(HighProgramValue::LowValue(LowValue::USize(n))))
-}
-
-fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
-    m.add_node(block, None, Some(HighProgramValue::LowValue(LowValue::Parameterized)))
-}
-
-fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
-    let items: Vec<ArrayItem> = ids.iter().map(|&node| ArrayItem::new(node)).collect();
     m.add_node(
         block,
         None,
-        Some(HighProgramValue::LowValue(LowValue::Array(m.alloc_array(&items, block)))),
+        Some(HighProgramValue::LowValue(LowValue::USize(n))),
+    )
+}
+
+fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
+    m.add_node(
+        block,
+        None,
+        Some(HighProgramValue::LowValue(LowValue::Parameterized)),
+    )
+}
+
+fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
+    let items: Vec<ArrayItem> = ids
+        .iter()
+        .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
+        .collect();
+    m.add_node(
+        block,
+        None,
+        Some(HighProgramValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, block),
+        ))),
     )
 }
 
@@ -65,7 +88,11 @@ fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value")
     };
-    array.items().iter().map(|item| item.node).collect()
+    array
+        .items()
+        .iter()
+        .map(|item| dyn_node(item.node))
+        .collect()
 }
 
 #[test]

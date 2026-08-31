@@ -15,9 +15,7 @@ fn function_call_operator_clones_body_and_maps_parameter() {
     });
 
     // The template scope is exactly the body nodes, return and parameter.
-    let TestValue::LowValue(LowValue::Function(func)) = m.nodes[func_node].value.unwrap() else {
-        unreachable!("expected a function value")
-    };
+    let func = dyn_function(m.nodes[func_node].value.unwrap());
     assert_eq!(
         m.functions[func]
             .nodes
@@ -60,14 +58,21 @@ fn function_call_operator_clones_array_body() {
     let ret = m.add_node(f, None, None); // RETURN_IDX
     let param = m.add_node(f, None, Some(TestValue::LowValue(LowValue::Parameterized))); // PARAMETER_IDX
     let seven = u128_node(&mut m, f, 7);
-    let items = [ArrayItem::new(param), ArrayItem::new(seven)];
-    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(m.alloc_array(&items, f))));
+    let items = [item(param), item(seven)];
+    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
+        m.alloc_array(&items, f),
+    )));
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
     // The array embeds the parameter, so the definition pass (evaluating
     // the body with the marker parameter) flags it parameterized.
     m.evaluate_node_deep(ret, None);
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     let arg = u128_node(&mut m, root, 10);
     let call = call_node(&mut m, root, func_node, arg);
@@ -106,11 +111,23 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
 
     // The argument is itself parameterized, so the call result stays a
     // marker until the argument resolves.
-    let arg = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let arg = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let call = call_node(&mut m, root, func_node, arg);
     let value = m.evaluate_node_deep(call, None);
-    assert!(matches!(value, TestValue::LowValue(LowValue::Parameterized)));
-    assert_eq!(m.nodes[call].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert!(matches!(
+        value,
+        TestValue::LowValue(LowValue::Parameterized)
+    ));
+    assert_eq!(
+        m.nodes[call].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     // The body is untouched.
     assert!(m.blocks.contains_key(m.nodes[ret].block));
@@ -120,7 +137,11 @@ fn function_call_operator_preserves_parameterized_operand_chain() {
     // resolves through it.  The binding goes through `unify` so the whole
     // class — the parameter clone included — carries the value.
     let p = m.blocks[root].arena.alloc(99u128);
-    let ninety_nine = m.add_node(root, None, Some(TestValue::U128(Handle(p as *const u128))));
+    let ninety_nine = m.add_node(
+        root,
+        None,
+        Some(TestValue::U128(dyn_handle(p as *const u128))),
+    );
     m.unify(arg, ninety_nine);
     m.nodes[call].value = None; // drop the cached marker
     assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 99);
@@ -145,7 +166,12 @@ fn function_call_operator_recomputes_stale_definition_markers() {
         m.nodes[ret].value,
         None | Some(TestValue::LowValue(LowValue::Parameterized))
     ));
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     // The call clones the parameterized node unevaluated — the stale
     // marker is recomputed against the concrete argument.
@@ -172,7 +198,12 @@ fn function_call_operator_references_concrete_body_nodes_in_place() {
 
     // The definition pass resolves the body to a concrete constant.
     m.evaluate_node_deep(ret, None);
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: false
+        })
+    );
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, arg);
@@ -189,7 +220,11 @@ fn function_in_local_block_survives_compaction() {
     let child = m.add_block(Some(root));
     // f(x) = Id(x), built inside a local block that is compacted away.
     let ret = m.add_node(child, None, None); // RETURN_IDX
-    let param = m.add_node(child, None, Some(TestValue::LowValue(LowValue::Parameterized))); // PARAMETER_IDX
+    let param = m.add_node(
+        child,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    ); // PARAMETER_IDX
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Id,
         operand: Some(param),
@@ -204,9 +239,7 @@ fn function_in_local_block_survives_compaction() {
     // Running the block compacts the function value into the root and maps
     // the template nodes along with it.
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(func_node));
-    let TestValue::LowValue(LowValue::Function(mapped)) = m.evaluate_node_deep(root_node, None) else {
-        panic!("expected function")
-    };
+    let mapped = dyn_function(m.evaluate_node_deep(root_node, None));
     assert!(!m.blocks.contains_key(child));
     assert_eq!(m.nodes[ret].block, root); // template mapped into the root
     assert_eq!(m.nodes[param].block, root);
@@ -233,7 +266,11 @@ fn function_scope_is_dropped_with_its_block() {
     // f(x) = Id(x), homed in the child but not reachable from the block's
     // return, so it must not survive the compaction.
     let ret = m.add_node(child, None, None);
-    let param = m.add_node(child, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        child,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     m.nodes[ret].operation = Some(Operation {
         operator: TestOperator::Id,
         operand: Some(param),
@@ -319,16 +356,20 @@ fn outer_call_returns_a_nested_function_value() {
 
     let one = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, f_node, one);
-    let TestValue::LowValue(LowValue::Function(got)) = m.evaluate_node_deep(call, None) else {
-        panic!("expected the nested function value");
-    };
+    let got = dyn_function(m.evaluate_node_deep(call, None));
     // A fresh closure per call: the concreteness proof of the value node
     // cannot see a nested function's body, so it must never be referenced
     // in place — its captures (if any) bind to this call's clones.
     assert_ne!(got, g_id);
 
     // The returned function is callable from the outer block.
-    let got_node = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Function(got))));
+    let got_node = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(got),
+        ))),
+    );
     let arg = u128_node(&mut m, root, 7);
     let call2 = call_node(&mut m, root, got_node, arg);
     assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 7);
@@ -365,12 +406,16 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
 
     let forty_two = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, forty_two);
-    let TestValue::LowValue(LowValue::Function(got)) = m.evaluate_node_deep(call, None) else {
-        panic!("expected the nested function value");
-    };
+    let got = dyn_function(m.evaluate_node_deep(call, None));
 
     // The returned closure reads the applied parameter: g'(7) is Id(42).
-    let got_node = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Function(got))));
+    let got_node = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(got),
+        ))),
+    );
     let seven = u128_node(&mut m, root, 7);
     let call2 = call_node(&mut m, root, got_node, seven);
     assert_eq!(u128_of(m.evaluate_node_deep(call2, None)), 42);
@@ -396,14 +441,10 @@ fn higher_order_function_passes_a_function_argument_through() {
             operand: Some(param),
         });
     });
-    let TestValue::LowValue(LowValue::Function(g_id)) = m.nodes[g_node].value.unwrap() else {
-        unreachable!("expected a function value")
-    };
+    let g_id = dyn_function(m.nodes[g_node].value.unwrap());
 
     let call = call_node(&mut m, root, apply_node, g_node);
-    let TestValue::LowValue(LowValue::Function(got)) = m.evaluate_node_deep(call, None) else {
-        panic!("expected the function argument back");
-    };
+    let got = dyn_function(m.evaluate_node_deep(call, None));
     assert_eq!(got, g_id);
 
     // The passed-through function is still callable.
@@ -418,7 +459,11 @@ fn higher_order_function_calls_its_function_argument() {
     // apply(f) = f(42): the parameter is the target of an Apply node.
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let forty_two = u128_node(&mut m, body, 42);
     let operands = array_node(&mut m, body, &[param, forty_two], None);
     m.nodes[ret].operation = Some(Operation {
@@ -446,7 +491,11 @@ fn function_can_index_into_parameterized_array() {
     // sees a marker element and stays lazy during the definition pass.
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let seven = u128_node(&mut m, body, 7);
     let array = array_node(&mut m, body, &[param, seven], None);
     let zero = usize_node(&mut m, body, 0);
@@ -457,7 +506,12 @@ fn function_can_index_into_parameterized_array() {
     });
     let (f_node, _) = wrap_function(&mut m, body, ret, param);
     m.evaluate_node_deep(ret, None); // definition pass: index of a marker stays a marker
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, f_node, arg);
@@ -478,7 +532,11 @@ fn manually_partially_evaluated_function_applies_correctly() {
     // nothing else — the parameter-dependent chain stays unevaluated.
     let body = m.add_block(None);
     let ret = m.add_node(body, None, None);
-    let param = m.add_node(body, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        body,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let one = u128_node(&mut m, body, 1);
     let inner_ops = array_node(&mut m, body, &[param, one], None);
     let inner = op_node(&mut m, body, TestOperator::Add, Some(inner_ops));
@@ -494,8 +552,18 @@ fn manually_partially_evaluated_function_applies_correctly() {
     // keep evaluated_deep = None.
     m.evaluate_node_deep(one, None);
     m.evaluate_node_deep(two, None);
-    assert_eq!(m.nodes[one].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
-    assert_eq!(m.nodes[two].evaluated_deep, Some(EvaluatedDeep { parameterized: false }));
+    assert_eq!(
+        m.nodes[one].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: false
+        })
+    );
+    assert_eq!(
+        m.nodes[two].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: false
+        })
+    );
     assert_eq!(m.nodes[ret].evaluated_deep, None);
     assert_eq!(m.nodes[inner].evaluated_deep, None);
     assert_eq!(m.nodes[inner_ops].evaluated_deep, None);
@@ -514,7 +582,12 @@ fn manually_partially_evaluated_function_applies_correctly() {
         .nodes
         .iter()
         .copied()
-        .filter(|&id| matches!(m.nodes[id].value, Some(TestValue::LowValue(LowValue::Array(_)))))
+        .filter(|&id| {
+            matches!(
+                m.nodes[id].value,
+                Some(TestValue::LowValue(LowValue::Array(_)))
+            )
+        })
         .collect();
     let cloned_inner_ops = candidates
         .into_iter()
@@ -566,7 +639,11 @@ fn mixed_blocks_and_functions_survive_compaction() {
     // g(x) = Add(x, 7) is built inside the child block; the constant 7
     // lives in the child and is part of g's scope.
     let ret = m.add_node(child, None, None);
-    let param = m.add_node(child, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param = m.add_node(
+        child,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let seven = u128_node(&mut m, child, 7);
     let operands = array_node(&mut m, child, &[param, seven], None);
     m.nodes[ret].operation = Some(Operation {
@@ -584,9 +661,7 @@ fn mixed_blocks_and_functions_survive_compaction() {
     // The root pulls g out of the child: compaction re-homes the function
     // and moves its whole scope, then releases the rest of the block.
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(g_node));
-    let TestValue::LowValue(LowValue::Function(mapped)) = m.evaluate_node_deep(root_node, None) else {
-        panic!("expected function")
-    };
+    let mapped = dyn_function(m.evaluate_node_deep(root_node, None));
     assert_eq!(mapped, g_id);
     assert_eq!(m.functions[g_id].block, root); // re-homed to the root
     assert_eq!(m.nodes[seven].block, root); // scope constant moved too
@@ -608,18 +683,25 @@ fn call_return_is_shallow_for_container_bodies() {
     let ret = m.add_node(f, None, None); // RETURN_IDX
     let param = m.add_node(f, None, Some(TestValue::LowValue(LowValue::Parameterized))); // PARAMETER_IDX
     let id2 = op_node(&mut m, f, TestOperator::Id, Some(param));
-    let items = [ArrayItem::new(param), ArrayItem::new(id2)];
-    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(m.alloc_array(&items, f))));
+    let items = [item(param), item(id2)];
+    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
+        m.alloc_array(&items, f),
+    )));
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
     m.evaluate_node_deep(ret, None); // definition pass flags the array parameterized
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     let arg = u128_node(&mut m, root, 42);
     let call = call_node(&mut m, root, func_node, arg);
 
     // Shallow evaluation of the call node returns the array without
     // forcing the elements: the Id(x) clone stays unevaluated.
-    let value = m.evaluate_node(call, None);
+    let value = m.evaluate_node(AnyNodeId::Dynamic(call), None);
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2);
     assert_eq!(
@@ -640,10 +722,24 @@ fn apply_evaluates_argument_elements_to_match_the_parameter_pattern() {
     // argument's elements are unevaluated operations — the apply must
     // evaluate them (to the pattern's depth) before the elementwise unify,
     // or they would read as unbound and bind nothing.
-    let x0 = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
-    let x1 = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
-    let items = [ArrayItem::new(x0), ArrayItem::new(x1)];
-    let param = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Array(m.alloc_array(&items, root)))));
+    let x0 = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let x1 = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let items = [item(x0), item(x1)];
+    let param = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, root),
+        ))),
+    );
     let f = m.add_function(root, param, param, [param, x0, x1], []);
     // argument: [Add(1, 2), Sub(5, 3)] = [3, 2]
     let one = u128_node(&mut m, root, 1);
@@ -676,7 +772,12 @@ fn apply_clone_preserves_the_shallow_mask() {
     let (func_node, _) = wrap_function(&mut m, f, ret, param);
 
     m.evaluate_node_deep(ret, None); // definition pass
-    assert_eq!(m.nodes[ret].evaluated_deep, Some(EvaluatedDeep { parameterized: true }));
+    assert_eq!(
+        m.nodes[ret].evaluated_deep,
+        Some(EvaluatedDeep {
+            parameterized: true
+        })
+    );
 
     let arg = u128_node(&mut m, root, 10);
     let call = call_node(&mut m, root, func_node, arg);
@@ -700,8 +801,16 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
     let root = m.add_block(None);
     // f(x) = x with x = [x0, x1]: the pattern's position 1 is shallow, so
     // the apply must not force the argument's element there.
-    let x0 = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
-    let x1 = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let x0 = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let x1 = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let param = array_node(&mut m, root, &[x0, x1], Some(&[false, true]));
     let f = m.add_function(root, param, param, [param, x0, x1], []);
     // argument: [7, Add(1, 2)] — the Add is at the masked position.
@@ -726,8 +835,7 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
         "the shallow pattern position is not forced by the apply"
     );
     assert_eq!(
-        m.nodes[ids[1]].evaluated_deep,
-        None,
+        m.nodes[ids[1]].evaluated_deep, None,
         "the masked position is never walked"
     );
 }

@@ -11,6 +11,7 @@ use lichen_highlevel::ir::Span;
 /// Which stage of the pipeline produced a diagnostic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
+    Preprocess,
     Lex,
     Parse,
     Resolve,

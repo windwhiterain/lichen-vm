@@ -40,7 +40,11 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     assert_eq!(u128_of(value), 42);
     // Relocated into root's arena: the copy was made after the marker,
     // so it sits below it in the same chunk.
-    assert!(ptr.0 as *const u8 as usize + 16 <= marker_start);
+    let ptr = match ptr {
+        AnyHandle::Dynamic(h) => h.0 as *const u8,
+        AnyHandle::Static(h) => h.offset as *const u8,
+    };
+    assert!(ptr as usize + 16 <= marker_start);
 
     // The child block was released: gone from the block table, yet the
     // value still points into root's arena.
@@ -279,7 +283,11 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let grandchild = m.add_block(Some(child));
     // f(x) = Id(x), homed in the un-compacted grandchild block.
     let ret_f = m.add_node(grandchild, None, None);
-    let param_f = m.add_node(grandchild, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let param_f = m.add_node(
+        grandchild,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     m.nodes[ret_f].operation = Some(Operation {
         operator: TestOperator::Id,
         operand: Some(param_f),
@@ -299,11 +307,7 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     assert_eq!(m.nodes[ret_f].block, root); // scope mapped along with it
     assert_eq!(m.nodes[param_f].block, root);
     assert_eq!(
-        m.functions[f]
-            .nodes
-            .iter()
-            .copied()
-            .collect::<HashSet<_>>(),
+        m.functions[f].nodes.iter().copied().collect::<HashSet<_>>(),
         HashSet::from([ret_f, param_f])
     );
 

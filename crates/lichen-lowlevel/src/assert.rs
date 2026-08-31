@@ -63,10 +63,7 @@ impl<P: Program> Module<P> {
                 continue;
             }
             if !matches!(value.as_enum(), Some(LowValue::USize(1))) {
-                self.assert_errors.push(AssertError {
-                    condition,
-                    value,
-                });
+                self.assert_errors.push(AssertError { condition, value });
             }
         }
         self.asserts.truncate(pending);

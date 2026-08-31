@@ -88,7 +88,12 @@ pub fn parse(tokens: &[Token]) -> Parsed {
             // worker's stripped form is exactly reconstructible.
             errors: errors
                 .into_iter()
-                .map(|(span, message, stage)| Diag { span, message, stage, check: None })
+                .map(|(span, message, stage)| Diag {
+                    span,
+                    message,
+                    stage,
+                    check: None,
+                })
                 .collect(),
         }
     })
@@ -188,7 +193,10 @@ fn statement_list<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr), E<'a>> + Clone {
-    let seps = token(TokenKind::Semicolon).ignored().repeated().collect::<Vec<_>>();
+    let seps = token(TokenKind::Semicolon)
+        .ignored()
+        .repeated()
+        .collect::<Vec<_>>();
     let seps1 = token(TokenKind::Semicolon)
         .ignored()
         .repeated()
@@ -213,7 +221,11 @@ fn statement_list<'a>(
 
     seps.clone()
         .then(elem.clone())
-        .then((seps1.clone().then(elem.clone())).repeated().collect::<Vec<_>>())
+        .then(
+            (seps1.clone().then(elem.clone()))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
         .then(seps)
         .map(|(((leading, first), rest), _trailing)| {
             let _ = leading;
@@ -265,7 +277,9 @@ fn binding<'a>(
             .ignore_then(name())
             .then_ignore(token(TokenKind::Equals))
             .map(|n| (n, true)),
-        name().then_ignore(token(TokenKind::Equals)).map(|n| (n, false)),
+        name()
+            .then_ignore(token(TokenKind::Equals))
+            .map(|n| (n, false)),
     ));
     // A broken binding value is recovered, not fatal: skip the offending
     // tokens (stopping before the next separator, which the statement list
@@ -278,12 +292,13 @@ fn binding<'a>(
             .repeated()
             .map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
     ));
-    head.then(value).map(|(((name, span), restrictive), value)| Binding {
-        name,
-        span,
-        value,
-        restrictive,
-    })
+    head.then(value)
+        .map(|(((name, span), restrictive), value)| Binding {
+            name,
+            span,
+            value,
+            restrictive,
+        })
 }
 
 /// A full expression in an operator's operand position — or, when the
@@ -309,19 +324,19 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
 
         // Application: juxtaposition, left-associative, binds tighter than
         // every operator.
-        let application = atom
-            .clone()
-            .then(atom.repeated().collect::<Vec<_>>())
-            .map(|(f, args)| {
-                args.into_iter().fold(f, |acc, arg| {
-                    let span = acc.span();
-                    Expr::Apply {
-                        function: Box::new(acc),
-                        argument: Box::new(arg),
-                        span,
-                    }
-                })
-            });
+        let application =
+            atom.clone()
+                .then(atom.repeated().collect::<Vec<_>>())
+                .map(|(f, args)| {
+                    args.into_iter().fold(f, |acc, arg| {
+                        let span = acc.span();
+                        Expr::Apply {
+                            function: Box::new(acc),
+                            argument: Box::new(arg),
+                            span,
+                        }
+                    })
+                });
 
         // `+` / `-`, left-associative.
         let arith = choice((
@@ -411,7 +426,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 Some(rhs) => Pre::FatArrow(Box::new(first), Box::new(rhs)),
                 None => Pre::E(first),
             })
-            .map(|pre| { pre })
+            .map(|pre| pre)
             .validate(|pre, me, emit| match pre {
                 Pre::E(e) => e,
                 Pre::FatArrow(lhs, rhs) => match *lhs {
@@ -422,7 +437,11 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         r#return: rhs,
                         span,
                     },
-                    Expr::Annotation { value, r#type, span } => match *value {
+                    Expr::Annotation {
+                        value,
+                        r#type,
+                        span,
+                    } => match *value {
                         Expr::Name(parameter, parameter_span) => Expr::Lambda {
                             parameter,
                             parameter_span,
@@ -431,18 +450,12 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                             span,
                         },
                         value => {
-                            emit.emit(Rich::custom(
-                                me.span(),
-                                "expected a name before '=>'",
-                            ));
+                            emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
                             Expr::Err(value.span())
                         }
                     },
                     other => {
-                        emit.emit(Rich::custom(
-                            me.span(),
-                            "expected a name before '=>'",
-                        ));
+                        emit.emit(Rich::custom(me.span(), "expected a name before '=>'"));
                         Expr::Err(other.span())
                     }
                 },
@@ -520,7 +533,6 @@ fn atom_parser<'a>(
             .then_ignore(token(TokenKind::RAngle))
             .map(Postfix::TypeArray),
         adjacent_paren
-            .clone()
             .ignored()
             .ignore_then(struct_fields(expr.clone()))
             .then_ignore(token(TokenKind::RParen))
@@ -814,7 +826,11 @@ fn apply_type_mode(program: Program) -> Program {
                 index: Box::new(expr(*index, type_mode)),
                 span,
             },
-            Expr::Annotation { value, r#type, span } => Expr::Annotation {
+            Expr::Annotation {
+                value,
+                r#type,
+                span,
+            } => Expr::Annotation {
                 value: Box::new(expr(*value, type_mode)),
                 r#type: Box::new(expr(*r#type, true)),
                 span,
@@ -828,23 +844,24 @@ fn apply_type_mode(program: Program) -> Program {
                 r#return: Box::new(expr(*r#return, type_mode)),
                 span,
             },
-            Expr::Tuple(elements, span) if type_mode => Expr::TypeTuple(
-                elements.into_iter().map(|e| expr(e, true)).collect(),
-                span,
-            ),
-            Expr::Tuple(elements, span) => Expr::Tuple(
-                elements.into_iter().map(|e| expr(e, false)).collect(),
-                span,
-            ),
+            Expr::Tuple(elements, span) if type_mode => {
+                Expr::TypeTuple(elements.into_iter().map(|e| expr(e, true)).collect(), span)
+            }
+            Expr::Tuple(elements, span) => {
+                Expr::Tuple(elements.into_iter().map(|e| expr(e, false)).collect(), span)
+            }
             Expr::TypeTuple(elements, span) => Expr::TypeTuple(
                 elements.into_iter().map(|e| expr(e, type_mode)).collect(),
                 span,
             ),
-            Expr::StructType(fields, span) => Expr::StructType(
-                fields.into_iter().map(|e| expr(e, true)).collect(),
+            Expr::StructType(fields, span) => {
+                Expr::StructType(fields.into_iter().map(|e| expr(e, true)).collect(), span)
+            }
+            Expr::StructInst {
+                callee,
+                fields,
                 span,
-            ),
-            Expr::StructInst { callee, fields, span } => Expr::StructInst {
+            } => Expr::StructInst {
                 callee: Box::new(expr(*callee, type_mode)),
                 fields: fields.into_iter().map(|e| expr(e, type_mode)).collect(),
                 span,
@@ -1495,7 +1512,11 @@ mod tests {
             let tokens = lex(source).tokens;
             let Parsed { program, errors } = parse(&tokens);
             assert_eq!(errors.len(), 1, "{source}: one precise error");
-            assert_eq!(errors[0].span, Some(*span), "{source}: at the missing operand");
+            assert_eq!(
+                errors[0].span,
+                Some(*span),
+                "{source}: at the missing operand"
+            );
             assert_eq!(program.statements.len(), 2, "{source}: both statements");
             assert!(matches!(program.expr, Expr::Name(name, _) if name == "b"));
             let Stmt::Binding(binding) = &program.statements[0] else {

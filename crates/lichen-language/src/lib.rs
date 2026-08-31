@@ -20,15 +20,22 @@ pub mod ast;
 pub mod compile;
 pub mod diag;
 pub mod lex;
+pub mod package;
 pub mod parse;
+pub mod preprocess;
 pub mod readme;
 pub mod render;
 pub mod run;
 
+use std::sync::{Arc, RwLock};
+
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
+use lichen_highlevel::program::{HighProgram, HighProgramValue};
+use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
+use preprocess::ResolvedImport;
 
 /// The result of compiling and checking a source program.
 ///
@@ -53,35 +60,63 @@ impl Report {
 
 /// Compile and check a source program: the full pipeline.
 pub fn compile(source: &str) -> Report {
-    let Frontend { ir, mut diagnostics } = frontend(source);
+    compile_with_imports(source, &[])
+}
+
+/// Compile and check a source program with resolved package imports.
+pub fn compile_with_imports(source: &str, imports: &[ResolvedImport]) -> Report {
+    compile_with_imports_in(source, imports, None)
+}
+
+/// [`compile_with_imports`] with an optional shared registry.  `None` uses a
+/// fresh private registry; `Some` binds the importer module to the package
+/// store's registry so `ExprKind::Static` refs resolve in place.
+pub fn compile_with_imports_in(
+    source: &str,
+    imports: &[ResolvedImport],
+    registry: Option<Arc<RwLock<Registry<HighProgram<HighProgramValue>>>>>,
+) -> Report {
+    let Frontend {
+        ir,
+        mut diagnostics,
+    } = frontend_with_imports(source, imports);
     let Some(ir) = ir else {
         return Report {
             build: None,
             diagnostics,
         };
     };
-    let build = Checker::build(ir);
+    let build = match registry {
+        Some(registry) => Checker::build_in(ir, registry),
+        None => Checker::build(ir),
+    };
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
     // message carries no `?a` journey — the user inspects an expression's
     // type directly rather than reading a source trace.
-    let mut printer = crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
-    // The diagnostic printer shows a struct's nominal id (`struct<…>#n`) so
-    // two structs with the same field shape stay distinguishable in a
-    // conflict; the value/type output printer leaves it off.
-    printer.show_struct_ids();
-    diagnostics.extend(
-        build
-            .diagnostics()
-            .into_iter()
-            .map(|d| Diag {
-                span: d.span,
-                message: crate::render::checker_message(&mut printer, &d),
-                stage: Stage::Check,
-                check: Some(Box::new(d)),
-            })
-            .collect::<Vec<_>>(),
-    );
+    // Only render diagnostics when the build actually failed.  For a clean
+    // build this is empty; skipping it also avoids descending into static
+    // refs that a successful import may contain.
+    if !build.ok {
+        let mut printer =
+            crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
+        // The diagnostic printer shows a struct's nominal id (`struct<…>#n`) so
+        // two structs with the same field shape stay distinguishable in a
+        // conflict; the value/type output printer leaves it off.
+        printer.show_struct_ids();
+        diagnostics.extend(
+            build
+                .diagnostics()
+                .into_iter()
+                .map(|d| Diag {
+                    span: d.span,
+                    message: crate::render::checker_message(&mut printer, &d),
+                    stage: Stage::Check,
+                    check: Some(Box::new(d)),
+                })
+                .collect::<Vec<_>>(),
+        );
+    }
     Report {
         build: Some(build),
         diagnostics,
@@ -99,6 +134,11 @@ pub struct Frontend {
 
 /// The frontend: text → IR.  See [`Frontend`].
 pub fn frontend(source: &str) -> Frontend {
+    frontend_with_imports(source, &[])
+}
+
+/// [`frontend`] with resolved imports seeded into the compiler's first frame.
+pub fn frontend_with_imports(source: &str, imports: &[ResolvedImport]) -> Frontend {
     let lex::Lexed {
         tokens,
         errors: mut diagnostics,
@@ -108,7 +148,7 @@ pub fn frontend(source: &str) -> Frontend {
         errors: parse_errors,
     } = parse::parse(&tokens);
     diagnostics.extend(parse_errors);
-    match compile::compile(&program) {
+    match compile::compile_with_imports(&program, imports) {
         Ok(ir) => Frontend {
             ir: Some(ir),
             diagnostics,

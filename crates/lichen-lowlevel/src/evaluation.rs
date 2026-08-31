@@ -1,16 +1,20 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, EvaluatedDeep, LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program};
+use crate::{
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvaluatedDeep, LowOperator,
+    LowValue, Module, NodeId, OperatorExt as _, Program,
+};
 use lichen_utils::extend::AsEnum;
 
 /// A runtime evaluation failure — the only one today is an out-of-bounds
 /// [`LowOperator::Index`].  Structured facts (the index node, the index value,
 /// the container length) so the highlevel layer can attribute a span and
-/// render a message without walking the module graph.
+/// render a message without walking the module graph.  The index node is an
+/// [`AnyNodeId`]: a static index (a solved constant) has no importer span.
 #[derive(Debug, Clone, Copy)]
 pub struct EvalError {
     /// The index operand node — its source span attributes the diagnostic.
-    pub index: NodeId,
+    pub index: AnyNodeId,
     pub index_value: usize,
     pub length: usize,
 }
@@ -23,7 +27,15 @@ impl<P: Program> Module<P> {
     /// otherwise a deep recursion overflows the native stack before the
     /// guard panics.
     #[stacksafe]
-    pub fn evaluate_node(&mut self, node: NodeId, referer: Option<BlockId>) -> P::Value {
+    pub fn evaluate_node(&mut self, node: AnyNodeId, referer: Option<BlockId>) -> P::Value {
+        // A static ref is a decided leaf: read its solved value (absolute
+        // refs, shared arena) and return.  Nothing is evaluated, cached
+        // into importer nodes, or marked — the static module already solved
+        // it.
+        let node = match node {
+            Dyn(node) => node,
+            AnyNodeId::Static(sref) => return self.static_read(sref),
+        };
         let block = self.nodes[node].block;
         debug_assert!(
             self.blocks.contains_key(block),
@@ -51,7 +63,7 @@ impl<P: Program> Module<P> {
                 // A marker anywhere in the operand chain means the index
                 // can't be resolved yet — stay lazy so the definition pass
                 // can flag the node.
-                match self.evaluate_node(operands, Some(block)).as_enum() {
+                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
                         let operands = array.items();
@@ -81,8 +93,19 @@ impl<P: Program> Module<P> {
                                             // (a concrete value, another
                                             // computation) reads as before.
                                             let element = array[index].node;
-                                            self.alias_read(node, element);
-                                            self.evaluate_node(element, Some(block))
+                                            match element {
+                                                Dyn(element) => {
+                                                    self.alias_read(node, element);
+                                                    self.evaluate_node(Dyn(element), Some(block))
+                                                }
+                                                // A static element is
+                                                // immutable — no class to
+                                                // join — and its value is
+                                                // absolute, so the read
+                                                // result caches into
+                                                // this node like any other.
+                                                AnyNodeId::Static(sref) => self.static_read(sref),
+                                            }
                                         } else {
                                             self.eval_errors.push(EvalError {
                                                 index: operands[1].node,
@@ -121,7 +144,7 @@ impl<P: Program> Module<P> {
                 };
                 // A marker target — the body's own parameter during the
                 // definition pass — stays lazy instead of panicking.
-                match self.evaluate_node(operands, Some(block)).as_enum() {
+                match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
                         let operands = array.items();
@@ -132,14 +155,21 @@ impl<P: Program> Module<P> {
                             Some(LowValue::Function(function)) => {
                                 // Element 2 is the checker-wired result
                                 // cell, when present — the lowlevel tests
-                                // build bare 2-element operands.
-                                self.function_apply(
-                                    function,
-                                    operands[1].node,
-                                    block,
-                                    node,
-                                    operands.get(2).map(|item| item.node),
-                                )
+                                // build bare 2-element operands.  A static
+                                // argument or cell ref is materialized into
+                                // a leaf node first: the apply tail (unify,
+                                // pattern walk) operates on dynamic nodes.
+                                let argument = self.as_dynamic(operands[1].node, block);
+                                let cell = operands
+                                    .get(2)
+                                    .map(|item| self.as_dynamic(item.node, block));
+                                match function {
+                                    AnyFunctionId::Dynamic(function) => {
+                                        self.function_apply(function, argument, block, node, cell)
+                                    }
+                                    AnyFunctionId::Static(sref) => self
+                                        .static_function_apply(sref, argument, block, node, cell),
+                                }
                             }
                             _ => unreachable!("Apply target must be a function value"),
                         }
@@ -163,7 +193,7 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(node, current, true, false)
+        self.evaluate_node_deep_inner(Dyn(node), current, true, false)
     }
 
     /// Deep-evaluate `id` *ignoring laziness*: unlike
@@ -181,7 +211,7 @@ impl<P: Program> Module<P> {
     /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(node, current, false, true)
+        self.evaluate_node_deep_inner(Dyn(node), current, false, true)
     }
 
     /// Shared core of the deep and forced passes.  `skip_shallow` keeps the
@@ -192,11 +222,22 @@ impl<P: Program> Module<P> {
     #[stacksafe]
     fn evaluate_node_deep_inner(
         &mut self,
-        node: NodeId,
+        node: AnyNodeId,
         current: Option<BlockId>,
         skip_shallow: bool,
         force_operand: bool,
     ) -> P::Value {
+        // A static ref is a decided leaf: the module solved it, so there is
+        // nothing to evaluate, descend, or mark — read its value.
+        // Even a forced pass gains nothing from a solved subtree (residuals
+        // never re-run), so the leaf rule is unconditional.
+        if let AnyNodeId::Static(sref) = node {
+            return self.static_read(sref);
+        }
+        let node = match node {
+            Dyn(node) => node,
+            AnyNodeId::Static(_) => unreachable!(),
+        };
         // A structural cycle (e.g. the `Type : Type` universe `[Type, ↺]`,
         // which every type spine in the recursive-pair encoding reaches) is
         // cut here: the node is being deep-evaluated by an outer frame and
@@ -227,9 +268,9 @@ impl<P: Program> Module<P> {
             && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
         {
             let block = self.nodes[node].block;
-            self.evaluate_node_deep_inner(operand, Some(block), false, true);
+            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true);
         }
-        let value = self.evaluate_node(node, current);
+        let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.as_enum() {
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
@@ -247,7 +288,9 @@ impl<P: Program> Module<P> {
             self.nodes[node].visiting = false;
         }
         // An array is unproven while any position resolved to the lazy
-        // marker, or any position at all sits behind a shallow mark.
+        // marker, or any position at all sits behind a shallow mark.  A
+        // static position's concreteness is the module's solved flag — it
+        // was already decided by the deep pass that solved the module.
         let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
             || matches!(
                 value.as_enum(),
@@ -258,7 +301,14 @@ impl<P: Program> Module<P> {
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
                     if array.items().iter().any(|item| item.shallow)
-                        || array.items().iter().any(|item| self.nodes[item.node].evaluated_deep.is_some_and(|e| e.parameterized))
+                        || array.items().iter().any(|item| match item.node {
+                            Dyn(node) => self.nodes[node]
+                                .evaluated_deep
+                                .is_some_and(|e| e.parameterized),
+                            AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
+                                [sref.index.index]
+                                .parameterized,
+                        })
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {

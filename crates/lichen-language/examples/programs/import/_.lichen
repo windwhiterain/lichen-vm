@@ -1,0 +1,5 @@
+-- order: 5
+@import "math.lichen" as math
+@import "geometry.lichen" as geo
+(math 41, geo 5)
+-- output: (42, 12): <Int, Int>

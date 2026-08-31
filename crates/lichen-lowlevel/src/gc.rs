@@ -1,6 +1,8 @@
 use stacksafe::stacksafe;
 
-use crate::{BlockId, LowValue, Module, NodeId, Program};
+use crate::{
+    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId, Program,
+};
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
@@ -43,16 +45,32 @@ impl<P: Program> Module<P> {
             self.garbage_collect_node(operand, source, target);
         }
         let value = current.map(|value| match value.as_enum() {
+            Some(LowValue::Array(AnyHandle::Static(_))) => {
+                // A static payload lives in the plugged module's shared
+                // arena — no block to vacate, nothing to move.  The value is
+                // kept verbatim; its item refs are all static (nothing to
+                // trace), and identity with every other reader of the
+                // payload is preserved.
+                value
+            }
             Some(LowValue::Array(array)) => {
                 for item in array.items() {
-                    self.garbage_collect_node(item.node, source, target);
+                    // A static item lives in the static module — nothing to
+                    // move (its value stays, referenced in place).
+                    if let Dyn(node) = item.node {
+                        self.garbage_collect_node(node, source, target);
+                    }
                 }
                 // The whole payload — element nodes and their shallow flags
                 // together — moves into the target arena, so a compacted
-                // array keeps its markers.
+                // array keeps its markers (static item refs are absolute and
+                // copy verbatim).
                 P::Value::from(LowValue::Array(self.alloc_array(array.items(), target)))
             }
-            Some(LowValue::Function(function)) => {
+            // A static function value is frozen in the static module — no
+            // scope to walk, no home block to re-point.
+            Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
                 // The template's nodes must outlive the closing block, so
                 // the scope is mapped like an array slice: each member
                 // homed in the vacated subtree moves into the target.  The
@@ -74,7 +92,7 @@ impl<P: Program> Module<P> {
                     self.functions[function].block = target;
                     self.blocks[target].functions.push(function);
                 }
-                P::Value::from(LowValue::Function(function))
+                P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
             // A program-specific value may carry a handle into an arena —
             // relocate it into the target block like any other payload.

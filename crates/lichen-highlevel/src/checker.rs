@@ -25,8 +25,12 @@
 //! is the checker's error channel.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, RwLock};
 
-use lichen_lowlevel::{ArrayItem, BlockId, Function, FunctionId, LowOperator, LowValue, Module, NodeId, Operation, UnifyError};
+use lichen_lowlevel::{
+    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, Function, FunctionId, LowOperator, LowValue,
+    Module, NodeId, Operation, Registry, UnifyError,
+};
 
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
@@ -151,8 +155,20 @@ pub struct Build<V: ValueType = HighProgramValue> {
 }
 
 impl<V: ValueType> Checker<V> {
+    /// Compile an IR with a fresh private registry.
     pub fn build(ir: IR<V>) -> Build<V> {
-        let mut module = Module::new();
+        Self::build_with(ir, Module::new())
+    }
+
+    /// Compile an IR whose module is bound to a caller-provided shared
+    /// registry — the entry point for importers that resolve [`ExprKind::Static`]
+    /// leaves through a `PackageStore`.
+    pub fn build_in(ir: IR<V>, registry: Arc<RwLock<Registry<HighProgram<V>>>>) -> Build<V> {
+        let module = Registry::new_module(&registry);
+        Self::build_with(ir, module)
+    }
+
+    fn build_with(ir: IR<V>, mut module: Module<HighProgram<V>>) -> Build<V> {
         // The lowlevel's default application guard (10k nested calls) sits
         // below what a thread stack survives once the checker's per-call
         // machinery (clone, unify, deep pass) is on the stack — a
@@ -310,21 +326,21 @@ impl<V: ValueType> Checker<V> {
         let root = self.current_block;
         self.int_marker = self.alloc_node(root, None, Some(V::int_marker()));
         self.type_marker = self.alloc_node(root, None, Some(V::type_marker()));
-        self.function_type_marker =
-            self.alloc_node(root, None, Some(V::function_type_marker()));
-        self.tuple_type_marker = self
-            .alloc_node(root, None, Some(V::tuple_type_marker()));
-        self.array_type_marker = self
-            .alloc_node(root, None, Some(V::array_type_marker()));
-        self.type_struct_marker = self
-            .alloc_node(root, None, Some(V::type_struct_marker()));
+        self.function_type_marker = self.alloc_node(root, None, Some(V::function_type_marker()));
+        self.tuple_type_marker = self.alloc_node(root, None, Some(V::tuple_type_marker()));
+        self.array_type_marker = self.alloc_node(root, None, Some(V::array_type_marker()));
+        self.type_struct_marker = self.alloc_node(root, None, Some(V::type_struct_marker()));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
         let universe = self.alloc_node(root, None, None);
-        let items = [ArrayItem::new(self.type_marker), ArrayItem::new(universe)];
-        self.module.nodes[universe].value =
-            Some(V::from(LowValue::Array(self.module.alloc_array(&items, root))));
+        let items = [
+            ArrayItem::new(AnyNodeId::Dynamic(self.type_marker)),
+            ArrayItem::new(AnyNodeId::Dynamic(universe)),
+        ];
+        self.module.nodes[universe].value = Some(V::from(LowValue::Array(
+            self.module.alloc_array(&items, root),
+        )));
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
     }
@@ -368,32 +384,37 @@ impl<V: ValueType> Checker<V> {
     }
 
     fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
-        let items: Vec<ArrayItem> = ids.iter().map(|&node| ArrayItem::new(node)).collect();
+        let items: Vec<ArrayItem> = ids
+            .iter()
+            .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
+            .collect();
         self.alloc_node(
             block,
             None,
-            Some(V::from(LowValue::Array(self.module.alloc_array(&items, block)))),
+            Some(V::from(LowValue::Array(
+                self.module.alloc_array(&items, block),
+            ))),
         )
     }
 
     /// [`Self::array_node`] with per-position shallow flags — the `~`
     /// markers of a shallow array.  An all-`false` flag set is the plain
     /// unmarked form.
-    fn array_node_masked(
-        &mut self,
-        block: BlockId,
-        ids: &[NodeId],
-        mask: &[bool],
-    ) -> NodeId {
+    fn array_node_masked(&mut self, block: BlockId, ids: &[NodeId], mask: &[bool]) -> NodeId {
         let items: Vec<ArrayItem> = ids
             .iter()
             .zip(mask.iter())
-            .map(|(&node, &shallow)| ArrayItem { node, shallow })
+            .map(|(&node, &shallow)| ArrayItem {
+                node: AnyNodeId::Dynamic(node),
+                shallow,
+            })
             .collect();
         self.alloc_node(
             block,
             None,
-            Some(V::from(LowValue::Array(self.module.alloc_array(&items, block)))),
+            Some(V::from(LowValue::Array(
+                self.module.alloc_array(&items, block),
+            ))),
         )
     }
 
@@ -492,53 +513,84 @@ impl<V: ValueType> Checker<V> {
         self.check_term(e)
     }
 
+    /// The array items behind either a dynamic node or a static ref.
+    fn any_items(&self, id: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        let value = self.module.node_value(id)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        Some(array.items())
+    }
 
-    /// Whether the class of `node` is the canonical universe `K`.
-    fn is_universe(&mut self, node: NodeId) -> bool {
-        self.module.equality_representative(node)
-            == self.module.equality_representative(self.type_expr)
+    /// Whether a static ref names the canonical universe.  A frozen universe
+    /// is a 2-item self-referential array (`[Type, itself]`), so it is
+    /// recognized by content instead of equality classes.
+    fn is_static_universe(&self, sref: lichen_lowlevel::StaticNodeId) -> bool {
+        let Some(items) = self.any_items(AnyNodeId::Static(sref)) else {
+            return false;
+        };
+        items.len() == 2
+            && self.module.node_value(items[0].node) == Some(V::type_marker())
+            && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
+    }
+
+    fn is_universe_any(&mut self, id: AnyNodeId) -> bool {
+        match id {
+            AnyNodeId::Dynamic(node) => {
+                self.module.equality_representative(node)
+                    == self.module.equality_representative(self.type_expr)
+            }
+            AnyNodeId::Static(sref) => self.is_static_universe(sref),
+        }
     }
 
     /// Whether `kind` is the kind expression `[marker, K]`.
-    fn kind_marker_is(&mut self, kind: NodeId, marker: V) -> bool {
-        let Some(items) = self.module.array_items(kind) else {
+    fn kind_marker_is_any(&mut self, kind: AnyNodeId, marker: V) -> bool {
+        let Some(items) = self.any_items(kind) else {
             return false;
         };
-        if items.len() != 2 {
-            return false;
-        }
-        let (head, tail) = (items[0].node, items[1].node);
-        self.module.nodes[head].value == Some(marker) && self.is_universe(tail)
+        items.len() == 2
+            && self.module.node_value(items[0].node) == Some(marker)
+            && self.is_universe_any(items[1].node)
+    }
+
+    fn kind_marker_is(&mut self, kind: NodeId, marker: V) -> bool {
+        self.kind_marker_is_any(AnyNodeId::Dynamic(kind), marker)
     }
 
     /// Whether `ty` is a concrete function type expression:
     /// `[shape, [FunctionType, K]]`.  The function-ness guard skips these —
     /// only concretely *non*-function types are caught statically.
-    fn is_function_type(&mut self, ty: NodeId) -> bool {
-        let Some(items) = self.module.array_items(ty) else {
+    fn is_function_type_any(&mut self, ty: AnyNodeId) -> bool {
+        let Some(items) = self.any_items(ty) else {
             return false;
         };
-        if items.len() != 2 {
-            return false;
-        }
-        let kind = items[1].node;
-        self.kind_marker_is(kind, V::function_type_marker())
+        items.len() == 2 && self.kind_marker_is_any(items[1].node, V::function_type_marker())
+    }
+
+    fn is_function_type(&mut self, ty: NodeId) -> bool {
+        self.is_function_type_any(AnyNodeId::Dynamic(ty))
     }
 
     /// Whether `ty` is a struct type: `[shape, [id, [TypeStruct, K]]]`.  A
     /// struct's nominal id lives in the kind slot's head; the `TypeStruct`
     /// tag is the inner layer `[TypeStruct, K]` at `kind[1]`.
-    fn is_struct_type(&mut self, ty: NodeId) -> bool {
-        let Some(items) = self.module.array_items(ty) else {
+    fn is_struct_type_any(&mut self, ty: AnyNodeId) -> bool {
+        let Some(items) = self.any_items(ty) else {
             return false;
         };
         if items.len() != 2 {
             return false;
         }
-        let Some(kind_items) = self.module.array_items(items[1].node) else {
+        let Some(kind_items) = self.any_items(items[1].node) else {
             return false;
         };
-        kind_items.len() == 2 && self.kind_marker_is(kind_items[1].node, V::type_struct_marker())
+        kind_items.len() == 2
+            && self.kind_marker_is_any(kind_items[1].node, V::type_struct_marker())
+    }
+
+    fn is_struct_type(&mut self, ty: NodeId) -> bool {
+        self.is_struct_type_any(AnyNodeId::Dynamic(ty))
     }
 
     /// Whether `ty` is a concrete indexable type expression — a tuple type
@@ -546,17 +598,20 @@ impl<V: ValueType> Checker<V> {
     /// K]]`), or a struct type (`[shape, [id, [TypeStruct, K]]]`, whose shape
     /// is the positional field-type list).  The index-target guard skips
     /// these; only concretely *non*-indexable types are caught statically.
-    fn is_indexable_type(&mut self, ty: NodeId) -> bool {
-        let Some(items) = self.module.array_items(ty) else {
+    fn is_indexable_type_any(&mut self, ty: AnyNodeId) -> bool {
+        let Some(items) = self.any_items(ty) else {
             return false;
         };
         if items.len() != 2 {
             return false;
         }
-        let kind = items[1].node;
-        self.kind_marker_is(kind, V::tuple_type_marker())
-            || self.kind_marker_is(kind, V::array_type_marker())
-            || self.is_struct_type(ty)
+        self.kind_marker_is_any(items[1].node, V::tuple_type_marker())
+            || self.kind_marker_is_any(items[1].node, V::array_type_marker())
+            || self.is_struct_type_any(ty)
+    }
+
+    fn is_indexable_type(&mut self, ty: NodeId) -> bool {
+        self.is_indexable_type_any(AnyNodeId::Dynamic(ty))
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -699,10 +754,7 @@ impl<V: ValueType> Checker<V> {
             } => {
                 let parameter_ty = self.check_type_element(parameter);
                 let return_ty = self.check_type_element(r#return);
-                let shape = self.array_node(
-                    self.current_block,
-                    &[parameter_ty, return_ty],
-                );
+                let shape = self.array_node(self.current_block, &[parameter_ty, return_ty]);
                 self.arrows.insert(shape);
                 let kind = self.kind_expr(self.current_block, self.function_type_marker);
                 let pair = self.array_node(self.current_block, &[shape, kind]);
@@ -736,6 +788,23 @@ impl<V: ValueType> Checker<V> {
                 element_type,
                 length,
             } => self.check_array_type(e, element_type, length),
+            ExprKind::Static { export } => {
+                // Imported package export: the static ref names the package's
+                // final `[value, type]` pair.  Materialize that pair leaf,
+                // then extract dynamic value/type leaves from its static
+                // items; the payloads stay in the package's static arena.
+                let pair = self.module.materialize_leaf(export, self.current_block);
+                let items = self
+                    .module
+                    .array_items(pair)
+                    .expect("a package export must be the final [value, type] pair");
+                let value_node = self.module.as_dynamic(items[0].node, self.current_block);
+                let ty_node = self.module.as_dynamic(items[1].node, self.current_block);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(value_node);
+                self.ty[e] = Some(ty_node);
+                pair
+            }
         };
         // Bind the skeleton's cells to the real value and type, so every
         // reference that resolved to the skeleton during the descent now
@@ -843,8 +912,8 @@ impl<V: ValueType> Checker<V> {
         // when it happens, not in what it binds.
         if let Some(parameter_type) = parameter_type {
             self.check_expr(parameter_type);
-            let type_pair = self.term[parameter_type]
-                .expect("the type expression must compile to a pair");
+            let type_pair =
+                self.term[parameter_type].expect("the type expression must compile to a pair");
             self.check_unify(
                 type_cell,
                 type_pair,
@@ -870,7 +939,9 @@ impl<V: ValueType> Checker<V> {
         if !self.module.functions[function].nodes.contains(&ret) {
             self.module.functions[function].nodes.push(ret);
         }
-        self.module.nodes[func_node].value = Some(V::from(LowValue::Function(function)));
+        self.module.nodes[func_node].value = Some(V::from(LowValue::Function(
+            AnyFunctionId::Dynamic(function),
+        )));
         self.recursive_func_nodes.push(func_node);
         // The function's own type: the arrow shape `[parameter type, return
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
@@ -1053,9 +1124,10 @@ impl<V: ValueType> Checker<V> {
         // to the IndexType operator below.
         let field_shape = match self.module.array_items(array_ty) {
             Some(items) if items.len() == 2 => {
-                // Copy the ids out of the slice borrow: kind_marker_is
-                // needs `&mut self` while `array_items` borrows the module.
-                let (shape, kind) = (items[0].node, items[1].node);
+                // Materialize static item refs into fresh dynamic nodes so
+                // the shape/kind can be used by the native `Index` machinery.
+                let shape = self.module.as_dynamic(items[0].node, self.current_block);
+                let kind = self.module.as_dynamic(items[1].node, self.current_block);
                 if self.kind_marker_is(kind, V::tuple_type_marker()) {
                     Some(shape)
                 } else if self.is_struct_type(array_ty) {
@@ -1073,7 +1145,11 @@ impl<V: ValueType> Checker<V> {
             // index is caught by the lowlevel `Index` bounds check.
             Some(tys) => {
                 let ty_ops = self.array_node(self.current_block, &[tys, index_value]);
-                self.op_node(self.current_block, structural(LowOperator::Index), Some(ty_ops))
+                self.op_node(
+                    self.current_block,
+                    structural(LowOperator::Index),
+                    Some(ty_ops),
+                )
             }
             // An array type's shape is `[element_type, length]` — not a
             // positional list — and any type known only at runtime must be
@@ -1087,16 +1163,10 @@ impl<V: ValueType> Checker<V> {
             // so a lazy stream's type spine resolves at the level read; an
             // unbound type defers (every native read yields the marker).
             None => {
-                let zero = self.alloc_node(
-                    self.current_block,
-                    None,
-                    Some(V::from(LowValue::USize(0))),
-                );
-                let one = self.alloc_node(
-                    self.current_block,
-                    None,
-                    Some(V::from(LowValue::USize(1))),
-                );
+                let zero =
+                    self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+                let one =
+                    self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(1))));
                 let shape_ops = self.array_node(self.current_block, &[array_ty, zero]);
                 let shape = self.op_node(
                     self.current_block,
@@ -1130,7 +1200,7 @@ impl<V: ValueType> Checker<V> {
                 // the dispatch `kind` op below is still unevaluated here.
                 let statically_array = match self.module.array_items(array_ty) {
                     Some(items) if items.len() == 2 => {
-                        self.kind_marker_is(items[1].node, V::array_type_marker())
+                        self.kind_marker_is_any(items[1].node, V::array_type_marker())
                     }
                     _ => false,
                 };
@@ -1141,8 +1211,7 @@ impl<V: ValueType> Checker<V> {
                         structural(LowOperator::Index),
                         Some(length_ops),
                     );
-                    let beyond_ops =
-                        self.array_node(self.current_block, &[length, index_value]);
+                    let beyond_ops = self.array_node(self.current_block, &[length, index_value]);
                     let beyond = self.op_node(
                         self.current_block,
                         HighProgramOperator::TypeOperator(TypeOperator::Leq),
@@ -1180,10 +1249,8 @@ impl<V: ValueType> Checker<V> {
                     Some(array_ops),
                 );
                 let fallback = self.fresh_cell();
-                let table = self.array_node(
-                    self.current_block,
-                    &[tuple_b, struct_b, array_b, fallback],
-                );
+                let table =
+                    self.array_node(self.current_block, &[tuple_b, struct_b, array_b, fallback]);
                 let result_ops = self.array_node(self.current_block, &[table, code]);
                 self.op_node(
                     self.current_block,
@@ -1237,9 +1304,10 @@ impl<V: ValueType> Checker<V> {
         // type itself for anything else (which then fails the list check).
         let value_shape = match self.module.array_items(value_ty) {
             Some(items) if items.len() == 2 => {
-                // Copy the ids out of the slice borrow: kind_marker_is needs
-                // `&mut self` while `array_items` borrows the module.
-                let (shape, kind) = (items[0].node, items[1].node);
+                // Materialize static refs so the shape can participate in
+                // dynamic array construction below.
+                let shape = self.module.as_dynamic(items[0].node, self.current_block);
+                let kind = self.module.as_dynamic(items[1].node, self.current_block);
                 if self.kind_marker_is(kind, V::tuple_type_marker()) {
                     shape
                 } else {
@@ -1253,7 +1321,10 @@ impl<V: ValueType> Checker<V> {
         // own descent the shape is still an unbound cell (the bindings are
         // mutually recursive), so defer the field-list check through a probe
         // cell.
-        let shape = self.module.array_items(type_pair).unwrap()[0].node;
+        let shape = self.module.as_dynamic(
+            self.module.array_items(type_pair).unwrap()[0].node,
+            self.current_block,
+        );
         let field_list = match self.module.array_items(shape) {
             Some(_) => shape,
             // The struct's shape cell is not resolved yet (mid-recursion):
@@ -1384,7 +1455,11 @@ impl<V: ValueType> Checker<V> {
         for &el in &elements {
             tys.push(self.check_type_element(el));
         }
-        let id = self.op_node(self.current_block, HighProgramOperator::TypeOperator(TypeOperator::Fresh), None);
+        let id = self.op_node(
+            self.current_block,
+            HighProgramOperator::TypeOperator(TypeOperator::Fresh),
+            None,
+        );
         let shape = self.array_node(self.current_block, &tys);
         let inner_kind = self.kind_expr(self.current_block, self.type_struct_marker);
         let kind = self.array_node(self.current_block, &[id, inner_kind]);
@@ -1512,7 +1587,8 @@ impl<V: ValueType> Checker<V> {
                 if items.len() != 2 {
                     break;
                 }
-                let (slot0, slot1) = (items[0].node, items[1].node);
+                let slot0 = self.module.as_dynamic(items[0].node, self.current_block);
+                let slot1 = self.module.as_dynamic(items[1].node, self.current_block);
                 let descend = self
                     .module
                     .array_items(slot1)
@@ -1529,11 +1605,8 @@ impl<V: ValueType> Checker<V> {
         let mut wrapped = None;
         for &(slot0, slot1) in levels.iter().rev() {
             let next = wrapped.unwrap_or(slot1);
-            wrapped = Some(self.array_node_masked(
-                self.current_block,
-                &[slot0, next],
-                &[true, false],
-            ));
+            wrapped =
+                Some(self.array_node_masked(self.current_block, &[slot0, next], &[true, false]));
         }
         wrapped.unwrap_or(self.term[e].unwrap())
     }

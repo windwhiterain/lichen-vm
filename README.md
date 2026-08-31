@@ -289,4 +289,43 @@ output:
 (struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>
 ```
 
+### `import`
+
+```text
+@import "math.lichen" as math
+@import "geometry.lichen" as geo
+(math 41, geo 5)
+```
+
+output:
+```text
+(42, 12): <Int, Int>
+```
+
+#### `import/math.lichen`
+
+```text
+succ = x => x + 1
+add = x => y => x + y
+succ
+```
+
+output:
+```text
+Function: Int -> Int
+```
+
+#### `import/geometry.lichen`
+
+```text
+@import "math.lichen" as math
+double = x => math x + math x
+double
+```
+
+output:
+```text
+Function: Int -> Int
+```
+
 <!-- end: examples -->

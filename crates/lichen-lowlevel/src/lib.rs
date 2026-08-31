@@ -1,7 +1,10 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::marker::PhantomData;
+use std::sync::Arc;
+use std::sync::PoisonError;
+use std::sync::RwLock;
 
 use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
@@ -16,6 +19,7 @@ mod equality;
 mod evaluation;
 mod function;
 mod gc;
+mod static_module;
 mod utils;
 
 pub trait Program: Sized + Copy + Debug + PartialEq {
@@ -40,27 +44,12 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// own inherent methods; the lowlevel only requires the marker
     /// [`GlobalExt`] trait.
     type GlobalExt: GlobalExt;
-}
-
-/// One element of a structural array value: the element's node plus its
-/// shallow marker.  `shallow` is inert metadata — structure and unification
-/// ignore it — but it travels with the node through GC and apply clones, and
-/// [`Module::evaluate_node_deep`] skips the subtree of a marked position, so
-/// the element stays lazy until a read forces it.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct ArrayItem {
-    pub node: NodeId,
-    pub shallow: bool,
-}
-
-impl ArrayItem {
-    /// An unmarked element (`shallow` is false).
-    pub fn new(node: NodeId) -> Self {
-        ArrayItem {
-            node,
-            shallow: false,
-        }
-    }
+    /// Per-registered-package metadata.  The lowlevel treats this as an
+    /// opaque default-constructible slot, just like [`Self::GlobalExt`] is an
+    /// opaque marker on modules.  Higher layers extend it with their own
+    /// per-package state (for example highlevel package export refs) without
+    /// putting that concept into the lowlevel.
+    type PackageMeta: Default;
 }
 
 /// Program-global extension state — the marker trait that stances the
@@ -98,17 +87,43 @@ pub trait GlobalExt: Default {}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LowValue {
     USize(usize),
-    Array(Handle<[ArrayItem]>),
-    Function(FunctionId),
+    Array(AnyHandle<[ArrayItem]>),
+    Function(AnyFunctionId),
     None,
     Parameterized,
 }
 
-impl Handle<[ArrayItem]> {
-    /// The array's items — valid for as long as the array's home block is
-    /// alive (the caller's existing safety contract for arena payloads).
+/// One element of a structural array value: the element's node plus its
+/// shallow marker.  `shallow` is inert metadata — structure and unification
+/// ignore it — but it travels with the node through GC and apply clones, and
+/// [`Module::evaluate_node_deep`] skips the subtree of a marked position, so
+/// the element stays lazy until a read forces it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ArrayItem {
+    pub node: AnyNodeId,
+    pub shallow: bool,
+}
+
+impl ArrayItem {
+    /// An unmarked element (`shallow` is false).
+    pub fn new(node: AnyNodeId) -> Self {
+        ArrayItem {
+            node,
+            shallow: false,
+        }
+    }
+}
+
+impl AnyHandle<[ArrayItem]> {
+    /// The array's items — valid for as long as the handle's home storage is
+    /// alive: the array's home block arena for a dynamic payload, or the
+    /// static arena (pinned by every importer's [`Dependency`]) for a static
+    /// payload — the caller's existing safety contract for arena payloads.
     pub fn items(&self) -> &'static [ArrayItem] {
-        unsafe { &*self.0 }
+        match self {
+            AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            AnyHandle::Static(handle) => unsafe { &*handle.offset },
+        }
     }
 }
 
@@ -141,11 +156,11 @@ pub enum LowOperator {
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
     /// Available if [`Self::is_handle()`].
-    fn handle(&self) -> Handle<[u8]> {
+    fn handle(&self) -> AnyHandle<[u8]> {
         unreachable!()
     }
     /// Available if [`Self::is_handle()`].
-    fn set_handle(&mut self, _payload: Handle<[u8]>) {
+    fn set_handle(&mut self, _payload: AnyHandle<[u8]>) {
         unreachable!()
     }
     /// Available if [`Self::is_handle()`].
@@ -167,10 +182,10 @@ pub trait ValueExt: Debug + Copy + PartialEq {
         {
             let (a, b) = (self.handle(), other.handle());
             return a.len() == b.len()
-                && (std::ptr::eq(a.0, b.0)
+                && (std::ptr::eq(a.as_ptr(), b.as_ptr())
                     || unsafe {
-                        std::slice::from_raw_parts(a.0 as *const u8, a.len())
-                            == std::slice::from_raw_parts(b.0 as *const u8, b.len())
+                        std::slice::from_raw_parts(a.as_ptr(), a.len())
+                            == std::slice::from_raw_parts(b.as_ptr(), b.len())
                     });
         }
         self == other
@@ -187,6 +202,12 @@ pub struct Operation<P: Program> {
     pub operand: Option<NodeId>,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct StaticOperation<P: Program> {
+    pub operator: P::Operator,
+    pub operand: Option<LocalNodeId>,
+}
+
 /// A class is unbound while it carries no value or only the lazy marker.
 /// The highlevel checker uses the same rule for its diagnostics.
 pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
@@ -200,10 +221,19 @@ pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
 /// answered by [`Module::value_eq`].
 #[derive(Debug)]
 pub struct Handle<T: ?Sized>(pub *const T);
+#[derive(Debug)]
 pub struct StaticHandle<T: ?Sized> {
-    pub module: usize,
+    /// The payload's home module — [`StaticModule::key`], global and
+    /// position-independent, so the handle reads identically from any
+    /// importer that plugged the module and identity is shared across them.
+    pub module: ModuleKey,
     pub offset: *const T,
-    _p: PhantomData<T>,
+}
+
+#[derive(Debug)]
+pub enum AnyHandle<T: ?Sized> {
+    Dynamic(Handle<T>),
+    Static(StaticHandle<T>),
 }
 
 impl<T: ?Sized> Clone for Handle<T> {
@@ -216,8 +246,14 @@ impl<T: ?Sized> Clone for StaticHandle<T> {
         *self
     }
 }
+impl<T: ?Sized> Clone for AnyHandle<T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
 impl<T: ?Sized> Copy for Handle<T> {}
 impl<T: ?Sized> Copy for StaticHandle<T> {}
+impl<T: ?Sized> Copy for AnyHandle<T> {}
 
 impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -228,6 +264,20 @@ impl<T: ?Sized> PartialEq for Handle<T> {
 impl<T: ?Sized> PartialEq for StaticHandle<T> {
     fn eq(&self, other: &Self) -> bool {
         self.module == other.module && std::ptr::eq(self.offset, other.offset)
+    }
+}
+
+impl<T: ?Sized> PartialEq for AnyHandle<T> {
+    /// Identity: both handles must name the same storage — the same kind,
+    /// and (for static payloads) the same module key and offset.  Two
+    /// importers of the same module therefore share identity: the payload
+    /// is the same bytes of the same shared arena.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (AnyHandle::Dynamic(a), AnyHandle::Dynamic(b)) => a == b,
+            (AnyHandle::Static(a), AnyHandle::Static(b)) => a == b,
+            _ => false,
+        }
     }
 }
 
@@ -251,16 +301,73 @@ impl StaticHandle<[u8]> {
     }
 }
 
+impl AnyHandle<[u8]> {
+    pub fn len(&self) -> usize {
+        match self {
+            AnyHandle::Dynamic(handle) => handle.len(),
+            AnyHandle::Static(handle) => handle.len(),
+        }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    /// The payload's data pointer (thin).
+    pub fn as_ptr(&self) -> *const u8 {
+        match self {
+            AnyHandle::Dynamic(handle) => handle.0 as *const u8,
+            AnyHandle::Static(handle) => handle.offset as *const u8,
+        }
+    }
+}
+
 new_key_type! {pub struct NodeId;}
+new_key_type! {pub struct ModuleKey;}
+/// The device key of a static module — the module's name in the device's
+/// [`Registry`].  A slotmap key: allocated by the registry when the module
+/// is registered, versioned so a removed slot is never confused with its
+/// successor.  Refs (node, function, handle) carry the key of their home
+/// module, so refs are absolute from birth: an importer stores them
+/// verbatim and resolves the key through the shared registry — no
+/// per-importer retarget, no re-based copies, and the same payload is
+/// shared by every importer.
+///
+/// The key is an *in-process* identity, by design: a distributed artifact
+/// carries its own stable identity, and the future `DistributeModule` load
+/// path assigns a device key and re-keys the artifact's refs once, at load
+/// — the registry is the translation point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaticNodeId {
-    pub module: usize,
+    /// The target module — [`StaticModule::key`].  Refs are absolute from
+    /// birth (the key is global), so the same ref reads identically from
+    /// the module itself, an importer, or any static payload it was frozen
+    /// into.
+    pub module: ModuleKey,
+    pub index: LocalNodeId,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LocalNodeId {
     pub index: usize,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnyNodeId {
+    Dynamic(NodeId),
+    Static(StaticNodeId),
 }
 new_key_type! {pub struct BlockId;}
 new_key_type! {pub struct FunctionId;}
-pub struct StaticFunctionId {
-    pub module: usize,
-    pub index: usize,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaticFunctionId(pub usize);
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StaticFunctionRef {
+    /// The target module — [`StaticModule::key`], same rule as
+    /// [`StaticNodeId::module`].
+    pub module: ModuleKey,
+    pub index: StaticFunctionId,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AnyFunctionId {
+    Dynamic(FunctionId),
+    Static(StaticFunctionRef),
 }
 
 /// Garbage collection unit.
@@ -315,8 +422,9 @@ pub struct Function {
 }
 
 pub struct StaticFunction {
-    pub parameter: StaticNodeId,
-    pub r#return: StaticNodeId,
+    pub parameter: LocalNodeId,
+    pub r#return: LocalNodeId,
+    pub asserts: Vec<LocalNodeId>,
 }
 
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`],
@@ -359,11 +467,22 @@ pub struct Node<P: Program> {
 
 pub struct StaticNode<P: Program> {
     pub value: Option<P::Value>,
-    pub operation: Option<Operation<P>>,
-    pub equality: disjoint::Meta<NodeId>,
+    pub operation: Option<StaticOperation<P>>,
+    pub equality: disjoint::Meta<LocalNodeId>,
+    /// The solved concreteness flag, copied from the source's
+    /// `evaluated_deep` by `StaticModule::from_module` (`true` when never
+    /// deep-passed — conservative).  Not derivable from the root value: an
+    /// array whose cached value is the array while an element is unresolved
+    /// is parameterized.  The importer's deep pass reads this instead of
+    /// descending — a static ref is a decided leaf.
+    pub parameterized: bool,
 }
 
 pub struct Module<P: Program> {
+    /// The device's registry — shared with every module executing in the
+    /// process.  All static refs resolve through it; the module itself is
+    /// never shared (`Arc<Module>` does not exist).
+    pub registry: Arc<RwLock<Registry<P>>>,
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
@@ -417,6 +536,155 @@ pub struct Module<P: Program> {
     deep_depth: usize,
 }
 
+/// One entry of the [`Registry`]: a registered static module plus the home
+/// of any future per-key access state (user directive).  Since the registry
+/// is shared by every module executing in the process, the entry is shared
+/// too — it is per-*key* state, not per-importer.
+pub struct Package<P: Program> {
+    pub module: Arc<StaticModule<P>>,
+    /// Opaque per-package metadata; see [`Program::PackageMeta`].
+    pub meta: P::PackageMeta,
+}
+
+/// A fully-solved module frozen into an immutable, shareable form.  Every
+/// node holds its final answer (`Parameterized` for a residual computation —
+/// never re-run in place); values carry refs keyed by [`Self::key`] —
+/// absolute from birth, so an importer reads and stores them verbatim.
+pub struct StaticModule<P: Program> {
+    /// The module's global name — allocated once at freeze, carried by
+    /// every ref into this module, resolved by each importer through its
+    /// own [`Module::dependencies`].
+    pub key: ModuleKey,
+    pub nodes: Vec<StaticNode<P>>,
+    pub functions: Vec<StaticFunction>,
+    /// The flattened, hand-laid-out payload arena: array item slices and
+    /// ext-value payload bytes, deduped by `(ptr, len)` so aliased handles
+    /// keep identity equality.  Filled by the two-phase build in
+    /// `StaticModule::from_module`; never mutated afterwards, and shared by
+    /// every importer — values are used in place, never copied out.
+    pub arena: Vec<u8>,
+}
+
+/// The result of freezing a dynamic module into the registry: the allocated
+/// device key plus the source→statics node map, so callers can turn
+/// dynamic node ids into [`StaticNodeId`]s for exported roots.
+pub struct Freeze {
+    /// The freshly allocated device key.
+    pub key: ModuleKey,
+    /// Source `NodeId` → home-module local node index.
+    pub node_map: HashMap<NodeId, LocalNodeId>,
+}
+
+/// The device's module registry — the virtual file system of the device's
+/// compiled modules, and the process-wide singleton shared by every
+/// [`Module`] executing (in threads) as `Arc<RwLock<Registry>>`.  It
+/// handles **registering** (compiling a dynamic module into a static
+/// artifact and filing it under a freshly allocated device key),
+/// **storage** (the resident map — the memory-backed store a real file
+/// system will replace; a cross-process file lock is future work), and
+/// resolution **during evaluating** (every static ref an executing module
+/// touches is fetched through [`Self::get`]).
+///
+/// The resident map is keyed by [`ModuleKey`] — the device key.  A future
+/// `DistributeModule` load path will assign a device key to a serialized
+/// artifact and re-key its refs once at load; the device keys themselves
+/// never leave the process.
+pub struct Registry<P: Program> {
+    entries: SlotMap<ModuleKey, Package<P>>,
+}
+impl<P: Program> Default for Registry<P> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<P: Program> Registry<P> {
+    pub fn new() -> Self {
+        Registry {
+            entries: SlotMap::with_key(),
+        }
+    }
+
+    /// An executing module bound to this registry: every static ref it
+    /// touches resolves through `self`.  Modules executing in threads share
+    /// the one registry `Arc` — a `Module` itself is never shared
+    /// (`Arc<Module>` does not exist; it is a per-thread owned value).
+    pub fn new_module(registry: &Arc<RwLock<Registry<P>>>) -> Module<P> {
+        Module::with_registry(registry.clone())
+    }
+
+    /// Compile a dynamic module into a static artifact and file it under a
+    /// freshly allocated device key.  The key is allocated first
+    /// ([`SlotMap::try_insert_with_key`] hands it to the build), so the
+    /// artifact's refs are baked with their final key; a failed build leaves
+    /// the registry untouched.
+    pub fn freeze(&mut self, module: &Module<P>) -> ModuleKey {
+        self.freeze_mapped(module).key
+    }
+
+    /// Like [`Self::freeze`], but also returns the source→statics node map
+    /// so a caller can construct exported [`StaticNodeId`]s for root nodes.
+    ///
+    /// The source may itself carry static refs — its frozen dependencies
+    /// (a package importing packages).  They are absolute from birth, so the
+    /// artifact keeps them verbatim; this method checks the soundness
+    /// precondition the verbatim refs imply: every module key the source's
+    /// values reference must already be registered *here*, so the frozen
+    /// artifact resolves from any importer through this registry.  Freeze
+    /// dependencies first.
+    pub fn freeze_mapped(&mut self, module: &Module<P>) -> Freeze {
+        for dep in crate::static_module::referenced_keys(module) {
+            assert!(
+                self.entries.contains_key(dep),
+                "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
+            );
+        }
+        let mut node_map = None;
+        let key = self
+            .entries
+            .try_insert_with_key(|key| {
+                let (static_module, map) = StaticModule::from_module_mapped(module, key);
+                node_map = Some(map);
+                Ok::<_, std::convert::Infallible>(Package {
+                    module: Arc::new(static_module),
+                    meta: Default::default(),
+                })
+            })
+            .unwrap();
+        Freeze {
+            key,
+            node_map: node_map.expect("freeze_mapped always builds a node map"),
+        }
+    }
+
+    /// Set the opaque per-package metadata for an existing registered
+    /// package.  Higher layers use this to store export markers, source
+    /// paths, or any future package-level state without the lowlevel
+    /// knowing what that state means.
+    pub fn set_package_meta(&mut self, key: ModuleKey, meta: P::PackageMeta) {
+        self.entries
+            .get_mut(key)
+            .expect("set_package_meta on an unregistered module key")
+            .meta = meta;
+    }
+
+    /// The registered module behind a device key — the file-system `get`.
+    /// `None` is the "no such key" answer; a static ref naming an
+    /// unregistered key is a broken module graph and panics at its
+    /// resolution site.
+    pub fn get(&self, key: ModuleKey) -> Option<&Package<P>> {
+        self.entries.get(key)
+    }
+
+    /// Whether the registry holds no registered modules.  (Sources with
+    /// static refs — packages importing packages — may only be frozen into
+    /// a registry that holds their dependencies; see
+    /// [`Self::freeze_mapped`].)
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
 impl<P: Program> Default for Module<P> {
     fn default() -> Self {
         Self::new()
@@ -432,7 +700,16 @@ impl<P: Program> Module<P> {
     pub const MAX_DEEP_DEPTH: usize = 300_000;
 
     pub fn new() -> Self {
+        Self::with_registry(Arc::new(RwLock::new(Registry::new())))
+    }
+
+    /// A module bound to the given registry — every static ref it touches
+    /// resolves through it.  Modules executing in threads share the one
+    /// registry `Arc` ([`Registry::new_module`]); a standalone module owns
+    /// a private registry, which is the same thing at one-module scale.
+    fn with_registry(registry: Arc<RwLock<Registry<P>>>) -> Self {
         Module {
+            registry,
             nodes: SlotMap::with_key(),
             blocks: SlotMap::with_key(),
             functions: SlotMap::with_key(),
@@ -449,6 +726,28 @@ impl<P: Program> Module<P> {
             apply_total: 0,
             deep_depth: 0,
         }
+    }
+
+    /// Compile `source` into a static artifact and register it with this
+    /// module's registry; returns the artifact's device key.  Convenience
+    /// over [`Registry::freeze`].  `source` must be a different module —
+    /// freezing a module into itself would deadlock its own registry lock.
+    pub fn freeze(&mut self, source: &Module<P>) -> ModuleKey {
+        self.freeze_mapped(source).key
+    }
+
+    /// Compile `source` into a static artifact and register it with this
+    /// module's registry, returning both the device key and the
+    /// source→statics node map.  Convenience over [`Registry::freeze_mapped`].
+    pub fn freeze_mapped(&mut self, source: &Module<P>) -> Freeze {
+        debug_assert!(
+            !std::ptr::eq(self, source),
+            "freezing a module into itself would deadlock its registry lock"
+        );
+        self.registry
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .freeze_mapped(source)
     }
 
     /// Resets the per-run evaluation budgets ([`Self::apply_depth`],
@@ -543,7 +842,9 @@ impl<P: Program> Module<P> {
         let func_node = self.add_node(
             block,
             None,
-            Some(P::Value::from(LowValue::Function(function))),
+            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
+                function,
+            )))),
         );
         self.nodes[func_node].function = Some(function);
         func_node

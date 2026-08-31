@@ -1,16 +1,23 @@
 //! Keeping the README example section in sync with `examples/programs/`.
 //!
 //! The example programs are the single source of truth for the top-level
-//! README's example section: [`render_examples`] renders each file (its `--`
-//! comment header and code) into a markdown blob and appends the program's
+//! README's example section: [`render_examples`] walks `examples/programs/`
+//! as a tree, and every directory under it renders as one unit — opened by
+//! the directory's `_.lichen` program, followed by the files it contains,
+//! with nested directories rendering the same way to any depth, one heading
+//! level deeper each time.  Every program is rendered with its code and its
 //! *actual* output, computed by running it — the README never relies on a
-//! hand-written promise in the file.  Each file may declare its place in the
-//! section with a `-- order: N` comment; entries sort by that number, with a
-//! file without one sorting last and then by name.  [`sync_output_comments`]
-//! rewrites each file's `-- output:` comment to that same actual output
-//! (appending it when the file has none), so the file and the README agree.
-//! [`replace_examples`] splices the rendered blob into the region between the
-//! `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
+//! hand-written promise in the file.  Placement is declared with a
+//! `-- order: N` comment: a file's own orders it among its siblings, and a
+//! directory's is the one in its `_.lichen`, whose program also always
+//! shows first inside the directory; undeclared entries sort last, ties by
+//! name.  Programs run standalone wherever they sit — `@import` lines
+//! resolve relative to their own file, so a directory of packages is just a
+//! group of ordinary programs.  [`sync_output_comments`] rewrites each
+//! file's `-- output:` comment to that same actual output (appending it
+//! when the file has none), so the file and the README agree.
+//! [`replace_examples`] splices the rendered blob into the region between
+//! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
 //! `tests/readme.rs` resyncs the README and the output comments in place
 //! whenever they drift, so they cannot go stale — `cargo test` self-heals a
@@ -25,6 +32,10 @@ pub const BEGIN_MARKER: &str = "<!-- begin: examples -->";
 /// The marker that closes the generated region in the READMEs.
 pub const END_MARKER: &str = "<!-- end: examples -->";
 
+/// A directory's own program: its `-- order:` places the whole directory
+/// among its siblings, and its code and output open the directory's section.
+const DIR_FACE: &str = "_.lichen";
+
 /// The crate directory, embedded at compile time so it is independent of the
 /// current working directory (tests run from the crate dir, the sync binary
 /// from wherever the user invokes it).
@@ -32,7 +43,8 @@ pub fn crate_dir() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
 
-/// The directory holding the example programs.
+/// The directory holding the example programs — a tree of files and
+/// directories, where each directory renders as one unit.
 pub fn example_dir() -> PathBuf {
     crate_dir().join("examples").join("programs")
 }
@@ -50,7 +62,30 @@ pub fn read_normalized(path: &Path) -> String {
         .replace("\r\n", "\n")
 }
 
-/// The order an unnumbered file sorts after — after every numbered file.
+/// Every example program: every `.lichen` file anywhere under the example
+/// directory, including each directory's `_.lichen` face.  Order within the
+/// list is irrelevant — [`render_examples`] re-sorts the tree.
+pub fn example_files() -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, prefix: &str, files: &mut Vec<(String, PathBuf)>) {
+        for entry in fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+            .flatten()
+        {
+            let path = entry.path();
+            let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
+            if path.is_dir() {
+                walk(&path, &format!("{name}/"), files);
+            } else if path.extension().is_some_and(|e| e == "lichen") {
+                files.push((name, path));
+            }
+        }
+    }
+    let mut files = Vec::new();
+    walk(&example_dir(), "", &mut files);
+    files
+}
+
+/// The order an unnumbered entry sorts after — after every numbered entry.
 const DEFAULT_ORDER: usize = usize::MAX;
 
 /// Read the `-- order: N` comment from a program's source, if it has one.
@@ -69,10 +104,45 @@ fn declared_order(file: &Path, source: &str) -> Option<usize> {
     }))
 }
 
+/// One entry of a directory: a `.lichen` program file, or a subdirectory
+/// (which renders as one unit, opened by its `_.lichen`).
+struct Entry {
+    /// The path relative to the example directory, `/`-separated — the name
+    /// the entry shows under in the README.
+    name: String,
+    path: PathBuf,
+    is_dir: bool,
+}
+
+impl Entry {
+    /// The `-- order:` the entry sorts by: a file's own directive, or a
+    /// directory's the one in its `_.lichen`.  Undeclared sorts last either
+    /// way — including a directory without an `_.lichen` at all.
+    fn order(&self) -> usize {
+        let path = if self.is_dir {
+            self.path.join(DIR_FACE)
+        } else {
+            self.path.clone()
+        };
+        let source = if self.is_dir {
+            fs::read_to_string(&path).ok()
+        } else {
+            Some(read_normalized(&path))
+        };
+        source
+            .and_then(|source| declared_order(&path, &source))
+            .unwrap_or(DEFAULT_ORDER)
+    }
+}
+
 /// The program's actual output, or a panic naming the file and showing its
 /// diagnostics — the same rendering the CLI prints for a failing file.
+/// Programs run through a package store with their own path as the base, so
+/// `@import` lines resolve relative to the file (import-free programs are
+/// unaffected).
 fn program_output(file: &Path, source: &str) -> String {
-    crate::run::evaluate(source).unwrap_or_else(|diags| {
+    let mut store = crate::package::PackageStore::new();
+    crate::run::evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!(
             "{}: failed\n{}",
             file.display(),
@@ -81,46 +151,98 @@ fn program_output(file: &Path, source: &str) -> String {
     })
 }
 
-/// Render every example program as the markdown section between the markers.
-///
-/// Each program becomes a `### \`name.lichen\`` heading, a `text` code block
-/// with the file's own comments and code, and the program's actual output —
-/// computed by running it with the language runner — in a second `text`
-/// block.  The entries are ordered by each file's `-- order: N` comment
-/// (ties, and files without one, sort by name).  Any `-- output:` promise or
-/// `-- order:` directive in the file is dropped, so the section shows what
-/// the language really prints, not what the file claims; a program that
-/// fails to run panics with its diagnostics.
-pub fn render_examples() -> String {
-    let mut programs: Vec<(String, PathBuf, String)> = fs::read_dir(example_dir())
-        .expect("examples/programs")
+/// One program's markdown body: its code — with the `-- output:` and
+/// `-- order:` directives dropped, so the section shows what the language
+/// really prints, not what the file claims — and its actual output,
+/// computed by running it.
+fn render_program_body(path: &Path) -> String {
+    let source = read_normalized(path);
+    let text = source
+        .lines()
+        .filter(|line| !line.starts_with("-- output:") && !line.starts_with("-- order:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let output = program_output(path, &source);
+    format!("```text\n{text}\n```\n\noutput:\n```text\n{output}\n```")
+}
+
+/// Render one directory's entries — its `.lichen` files and subdirectories,
+/// each already ordered by [`Entry::order`] (ties by name) — as markdown
+/// blocks at the given heading level.  The `_.lichen` face is not an entry:
+/// [`render_entry`] opens the directory with it.
+fn render_dir(dir: &Path, prefix: &str, level: usize) -> Vec<String> {
+    let mut entries: Vec<(usize, Entry)> = fs::read_dir(dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
-        .map(|file| {
-            let source = read_normalized(&file);
-            let name = file.file_name().unwrap().to_string_lossy().into_owned();
-            (name, file, source)
+        .filter_map(|item| {
+            let path = item.path();
+            let is_dir = path.is_dir();
+            if !is_dir
+                && (!path.extension().is_some_and(|e| e == "lichen")
+                    || path.file_name().is_some_and(|f| f == DIR_FACE))
+            {
+                return None;
+            }
+            let name = format!("{prefix}{}", path.file_name().unwrap().to_string_lossy());
+            let entry = Entry { name, path, is_dir };
+            Some((entry.order(), entry))
         })
         .collect();
-    programs.sort_by(|(name_a, file_a, source_a), (name_b, file_b, source_b)| {
-        let order_a = declared_order(file_a, source_a).unwrap_or(DEFAULT_ORDER);
-        let order_b = declared_order(file_b, source_b).unwrap_or(DEFAULT_ORDER);
-        (order_a, name_a).cmp(&(order_b, name_b))
+    entries.sort_by(|(order_a, entry_a), (order_b, entry_b)| {
+        (*order_a, &entry_a.name).cmp(&(*order_b, &entry_b.name))
     });
-    programs
+    entries
         .into_iter()
-        .map(|(name, file, source)| {
-            let text = source
-                .lines()
-                .filter(|line| !line.starts_with("-- output:") && !line.starts_with("-- order:"))
-                .collect::<Vec<_>>()
-                .join("\n");
-            let output = program_output(&file, &source);
-            format!("### `{name}`\n\n```text\n{text}\n```\n\noutput:\n```text\n{output}\n```")
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n")
+        .map(|(_, entry)| render_entry(&entry, level))
+        .collect()
+}
+
+/// Render one entry at the given heading level: a program file becomes a
+/// heading over its code and output; a directory becomes a heading — opened
+/// by its `_.lichen` when it has one — over its entries, one level deeper.
+/// Headings start at `###` for the top level and deepen per directory,
+/// capped at `######`, so nesting of any depth still renders as markdown.
+fn render_entry(entry: &Entry, level: usize) -> String {
+    let hashes = "#".repeat(level.min(6));
+    if !entry.is_dir {
+        return format!(
+            "{hashes} `{}`\n\n{}",
+            entry.name,
+            render_program_body(&entry.path)
+        );
+    }
+    let mut blocks = vec![format!("{hashes} `{}`", entry.name)];
+    let face = entry.path.join(DIR_FACE);
+    if face.is_file() {
+        blocks.push(render_program_body(&face));
+    }
+    blocks.extend(render_dir(&entry.path, &format!("{}/", entry.name), level + 1));
+    blocks.join("\n\n")
+}
+
+/// Render every example program as the markdown section between the markers.
+///
+/// `examples/programs/` is walked as a tree: each directory renders as one
+/// unit — a heading named by its path relative to the example directory,
+/// opened by its `_.lichen` program when it has one, then its files and
+/// nested directories, ordered by their `-- order:` comments (a directory's
+/// is its `_.lichen`'s), undeclared last, ties by name.  A program that
+/// fails to run panics with its diagnostics.
+pub fn render_examples() -> String {
+    let root = example_dir();
+    let mut blocks = Vec::new();
+    // A `_.lichen` directly in the example directory has no directory to
+    // introduce (the section itself is the root's unit) — it renders as an
+    // ordinary program.
+    let face = root.join(DIR_FACE);
+    if face.is_file() {
+        blocks.push(format!(
+            "### `{DIR_FACE}`\n\n{}",
+            render_program_body(&face)
+        ));
+    }
+    blocks.extend(render_dir(&root, "", 3));
+    blocks.join("\n\n")
 }
 
 /// Rewrite every example program's `-- output:` comment to its actual
@@ -131,14 +253,7 @@ pub fn render_examples() -> String {
 /// any file was rewritten.
 pub fn sync_output_comments() -> bool {
     let mut changed = false;
-    for entry in fs::read_dir(example_dir())
-        .expect("examples/programs")
-        .flatten()
-    {
-        let file = entry.path();
-        if file.extension().is_none_or(|e| e != "lichen") {
-            continue;
-        }
+    for (_, file) in example_files() {
         let source = read_normalized(&file);
         let output = program_output(&file, &source);
         let comment = output
@@ -247,51 +362,66 @@ mod tests {
     }
 
     #[test]
-    fn renders_every_program_ordered_by_its_comment() {
+    fn renders_the_tree_grouped_and_ordered() {
         let blob = render_examples();
-        let headings: Vec<String> = blob
+        let headings: Vec<(usize, String)> = blob
             .lines()
             .filter_map(|line| {
-                line.strip_prefix("### `")
-                    .and_then(|rest| rest.strip_suffix('`'))
-            })
-            .map(str::to_owned)
-            .collect();
-        let mut expected: Vec<(usize, String)> = fs::read_dir(example_dir())
-            .expect("examples/programs")
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
-            .map(|file| {
-                let source = read_normalized(&file);
-                let order = declared_order(&file, &source).unwrap_or(DEFAULT_ORDER);
-                (
-                    order,
-                    file.file_name().unwrap().to_string_lossy().into_owned(),
-                )
+                let level = line.chars().take_while(|&c| c == '#').count();
+                if level < 3 {
+                    return None;
+                }
+                let rest = &line[level..];
+                let name = rest.strip_prefix(" `")?.strip_suffix('`')?;
+                (rest.len() == name.len() + 3).then(|| (level, name.to_owned()))
             })
             .collect();
-        expected.sort();
         assert_eq!(
             headings,
-            expected
-                .into_iter()
-                .map(|(_, name)| name)
-                .collect::<Vec<_>>(),
-            "entries follow the `-- order:` comments"
+            [
+                "array.lichen",
+                "tuple.lichen",
+                "index.lichen",
+                "closure.lichen",
+                "dependent_type.lichen",
+                "lazy_infinite.lichen",
+                "let_polymorphism.lichen",
+                "mutual_recursion.lichen",
+                "nested_function.lichen",
+                "recursion.lichen",
+                "placeholder.lichen",
+                "struct.lichen",
+                "struct_recursion.lichen",
+                "struct_generic.lichen",
+            ]
+            .into_iter()
+            .map(|name| (3, name.to_owned()))
+            .chain([
+                // The `import` directory is one unit: `_.lichen`'s order (7)
+                // places it after every top-level file, the face opens the
+                // group, and its files follow by their own orders.
+                (3, "import".to_owned()),
+                (4, "import/math.lichen".to_owned()),
+                (4, "import/geometry.lichen".to_owned()),
+            ])
+            .collect::<Vec<_>>(),
+            "directories render as units ordered by their `_.lichen`, files by their `-- order:`"
+        );
+        // The face opens the directory: `_.lichen`'s program sits directly
+        // under the directory heading.
+        assert!(
+            blob.contains("### `import`\n\n```text\n@import \"math.lichen\" as math"),
+            "the directory's `_.lichen` is shown first inside the directory"
         );
         // The output is computed by running the program, not read from the
         // file: `array.lichen` runs to `[1, 2, 3]: Int<3>`, and no promise
-        // remains.
+        // or directive remains.
         assert!(
             blob.contains("output:\n```text\n[1, 2, 3]: Int<3>\n```"),
             "the runner's output is embedded"
         );
         assert!(!blob.contains("-- output:"), "file promises are not shown");
-        assert!(
-            !blob.contains("-- order:"),
-            "order directives are not shown"
-        );
+        assert!(!blob.contains("-- order:"), "order directives are not shown");
     }
 
     #[test]

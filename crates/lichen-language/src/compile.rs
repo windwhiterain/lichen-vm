@@ -44,13 +44,34 @@ use lichen_lowlevel::LowValue;
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
+use crate::preprocess::ResolvedImport;
 
 pub fn compile(program: &Program) -> Result<IR, Diag> {
+    compile_with_imports(program, &[])
+}
+
+/// Compile a parsed program with resolved imports pre-seeded in the first
+/// scope frame.  Local bindings may shadow an imported name because the
+/// import frame is below the block-wide binding frames.
+pub fn compile_with_imports(program: &Program, imports: &[ResolvedImport]) -> Result<IR, Diag> {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
         fn_depth: 0,
     };
+    if !imports.is_empty() {
+        let mut frame = HashMap::new();
+        for import in imports {
+            let id = compiler.alloc(
+                ExprKind::Static {
+                    export: import.export,
+                },
+                &import.span,
+            );
+            frame.insert(import.name.clone(), id);
+        }
+        compiler.scopes.push(frame);
+    }
     // The whole program is one scope: block-wide bindings are entered before
     // any value compiles, restrictive `let` bindings are entered as they're
     // seen; the scope is never popped, so later statements (and the final
@@ -198,12 +219,14 @@ impl Compiler {
                 ExprKind::Constant(HighProgramValue::from(LowValue::USize(*n))),
                 span,
             ),
-            Expr::TypeConst(TypeConst::Int, span) => {
-                self.alloc(ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt)), span)
-            }
-            Expr::TypeConst(TypeConst::Type, span) => {
-                self.alloc(ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeType)), span)
-            }
+            Expr::TypeConst(TypeConst::Int, span) => self.alloc(
+                ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt)),
+                span,
+            ),
+            Expr::TypeConst(TypeConst::Type, span) => self.alloc(
+                ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeType)),
+                span,
+            ),
             Expr::Name(name, span) => self.lookup(name).ok_or_else(|| {
                 Diag::new(Stage::Resolve, *span, format!("unresolved name '{name}'"))
             })?,
@@ -279,7 +302,7 @@ impl Compiler {
                 span,
             } => {
                 let type_expr = self.compile_expr(callee)?;
-                let field_ids = self.compile_all(&fields)?;
+                let field_ids = self.compile_all(fields)?;
                 let value = self.ir.alloc_tuple(&field_ids, Some(*span));
                 self.alloc(ExprKind::Instantiate { type_expr, value }, span)
             }
@@ -386,14 +409,13 @@ impl Compiler {
                             depths.push(*depth);
                         }
                         _ => {
-                            ids.push(self.compile_expr(&element)?);
+                            ids.push(self.compile_expr(element)?);
                             depths.push(0);
                         }
                     }
                 }
                 if depths.iter().any(|&d| d != 0) {
-                    let elements: Vec<(ExprId, usize)> =
-                        ids.into_iter().zip(depths).collect();
+                    let elements: Vec<(ExprId, usize)> = ids.into_iter().zip(depths).collect();
                     self.ir.alloc_shallow_array(&elements, Some(*span))
                 } else {
                     self.ir.alloc_array(&ids, Some(*span))
@@ -488,7 +510,9 @@ mod tests {
                 let ExprKind::Tuple(range) = ir[array].kind else {
                     panic!("expected the wrapped tuple")
                 };
-                let ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(n))) = ir[index].kind else {
+                let ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(n))) =
+                    ir[index].kind
+                else {
                     panic!("expected a constant index")
                 };
                 ir.children[range.start as usize + n]

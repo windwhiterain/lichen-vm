@@ -9,8 +9,12 @@
 //! with carets.  The output rendering itself lives in [`crate::render`] —
 //! the same pretty printer also drives the checker diagnostics' messages.
 
+use std::path::Path;
+
 use crate::compile;
 use crate::diag::Diag;
+use crate::package::PackageStore;
+use crate::preprocess::preprocess;
 pub use crate::render::print_type;
 pub use crate::render::print_value;
 
@@ -23,6 +27,36 @@ pub use crate::render::print_value;
 /// core (an upper limit on nested applications), not a diagnostic.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag>> {
     let report = compile(source);
+    if !report.diagnostics.is_empty() {
+        return Err(report.diagnostics);
+    }
+    let build = report.build.unwrap();
+    let mut module = build.module;
+    let value = module.evaluate_node_deep(build.root_val, None);
+    module.evaluate_node_deep(build.root_ty, None);
+    Ok(format!(
+        "{}: {}",
+        print_value(&module, value, build.root_ty),
+        print_type(&module, build.root_ty)
+    ))
+}
+
+/// Compile, check, and run a raw source file after preprocessing imports.
+/// The package store is caller-owned so multiple files can share a registry.
+pub fn evaluate_raw(
+    source: &str,
+    base: Option<&Path>,
+    store: &mut PackageStore,
+) -> Result<String, Vec<Diag>> {
+    let (preprocessed, diags) = preprocess(source, base, store);
+    if !diags.is_empty() {
+        return Err(diags);
+    }
+    let report = crate::compile_with_imports_in(
+        &preprocessed.source,
+        &preprocessed.imports,
+        Some(store.registry()),
+    );
     if !report.diagnostics.is_empty() {
         return Err(report.diagnostics);
     }

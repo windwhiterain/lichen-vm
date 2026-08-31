@@ -147,12 +147,7 @@ fn base_gains_carry_variant() {
     ];
     assert_eq!(
         values,
-        [
-            "Own",
-            "Payload(3)",
-            "Extra(Alpha)",
-            "Extra(Wrap(1))",
-        ]
+        ["Own", "Payload(3)", "Extra(Alpha)", "Extra(Wrap(1))",]
     );
 }
 
@@ -179,7 +174,10 @@ fn as_enum_views_carry_variant() {
 
 #[test]
 fn path_form_names_carry_variant() {
-    assert_eq!(ViaPath::from(hidden::Secret::S), ViaPath::Hidden(hidden::Secret::S));
+    assert_eq!(
+        ViaPath::from(hidden::Secret::S),
+        ViaPath::Hidden(hidden::Secret::S)
+    );
     assert_eq!(
         AsEnum::<hidden::Secret>::as_enum(&ViaPath::Hidden(hidden::Secret::S)),
         Some(hidden::Secret::S)
@@ -217,10 +215,7 @@ fn empty_extension_compiles() {
 fn as_enum_clones_heap_payloads() {
     let a = WithString::from(Text::S("hi".into()));
     assert_eq!(a, WithString::Text(Text::S("hi".into())));
-    assert_eq!(
-        AsEnum::<Text>::as_enum(&a),
-        Some(Text::S("hi".into()))
-    );
+    assert_eq!(AsEnum::<Text>::as_enum(&a), Some(Text::S("hi".into())));
     assert_eq!(AsEnum::<Text>::as_enum(&WithString::Empty), None);
 }
 

@@ -28,6 +28,7 @@ pub struct HighGlobal {
     /// [`HighProgramValue::TypeId`].
     pub type_id_counter: usize,
 }
+
 impl HighGlobal {
     /// Consume the next nominal type id: read the counter, increment it, and
     /// return the previous value.
@@ -70,6 +71,17 @@ lichen_utils::compose_ext! {
     );
 }
 impl GlobalExt for HighGlobalExt {}
+
+/// Per-package metadata for the highlevel `Program`.  The package layer
+/// stores the single exported `[value, type]` pair ref here; the lowlevel's
+/// [`Package`] only carries this as an opaque `Default` slot, keeping
+/// highlevel concepts out of the lowlevel registry machinery.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HighPackageMeta {
+    /// The package's exported final-expression pair, filled by the language
+    /// package store after freezing.  `None` until a higher layer records it.
+    pub export: Option<lichen_lowlevel::StaticNodeId>,
+}
 
 /// The highlevel's own value extension — a plain enum of the type constants,
 /// provided whole for the compositions below (and for a language crate
@@ -282,21 +294,16 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                     unreachable!("IndexTypeDispatch expects a kind expression pair")
                 };
                 let kind_items = kind.items();
-                let head = module.nodes[kind_items[0].node].value;
+                let head = module.node_value(kind_items[0].node);
                 // A struct kind is `[id, [TypeStruct, K]]` — the nominal id
                 // sits in the head, so the `TypeStruct` tag is the inner
                 // layer's head, not the kind's own head (unlike tuple/array
                 // kinds, whose tag *is* the head).
                 let struct_tag = module
-                    .nodes
-                    .get(kind_items[1].node)
-                    .and_then(|n| n.value)
+                    .node_value(kind_items[1].node)
                     .and_then(|value| value.as_enum())
                     .and_then(|value| match value {
-                        LowValue::Array(inner) => module
-                            .nodes
-                            .get(inner.items()[0].node)
-                            .and_then(|n| n.value),
+                        LowValue::Array(inner) => module.node_value(inner.items()[0].node),
                         _ => None,
                     });
                 let code = if head == Some(V::tuple_type_marker()) {
@@ -315,10 +322,7 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 V::type_id_value(id)
             }
             HighProgramOperator::TypeOperator(
-                TypeOperator::Add
-                | TypeOperator::Sub
-                | TypeOperator::Leq
-                | TypeOperator::Eq,
+                TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq,
             ) => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
@@ -335,17 +339,23 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
                 // `Int`, so a wrong shape only arrives here through an
                 // argument unify that already failed (recording the
                 // diagnostic) — stay lazy instead of panicking.
-                let Some(LowValue::USize(left)) = module.nodes[operands[0].node]
-                    .value
-                    .as_ref()
+                let Some(left) = module
+                    .node_value(operands[0].node)
                     .and_then(|value| value.as_enum())
+                    .and_then(|value| match value {
+                        LowValue::USize(n) => Some(n),
+                        _ => None,
+                    })
                 else {
                     return V::from(LowValue::Parameterized);
                 };
-                let Some(LowValue::USize(right)) = module.nodes[operands[1].node]
-                    .value
-                    .as_ref()
+                let Some(right) = module
+                    .node_value(operands[1].node)
                     .and_then(|value| value.as_enum())
+                    .and_then(|value| match value {
+                        LowValue::USize(n) => Some(n),
+                        _ => None,
+                    })
                 else {
                     return V::from(LowValue::Parameterized);
                 };
@@ -380,4 +390,5 @@ impl<V: ValueType> Program for HighProgram<V> {
     type Value = V;
     type Operator = HighProgramOperator;
     type GlobalExt = HighGlobalExt;
+    type PackageMeta = HighPackageMeta;
 }

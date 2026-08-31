@@ -1,7 +1,7 @@
 use std::{alloc::Layout, ptr};
 
 use crate::{
-    ArrayItem, BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _,
+    AnyHandle, ArrayItem, BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -24,9 +24,12 @@ impl<P: Program> Module<P> {
 
     /// Copy `items` into `block.arena` and return the array handle pointing
     /// at the copy — the payload every [`LowValue::Array`] carries.
-    pub fn alloc_array(&self, items: &[ArrayItem], block: BlockId) -> Handle<[ArrayItem]> {
+    pub fn alloc_array(&self, items: &[ArrayItem], block: BlockId) -> AnyHandle<[ArrayItem]> {
         let slice = self.blocks[block].arena.alloc_slice_copy(items);
-        Handle(ptr::slice_from_raw_parts(slice.as_ptr(), slice.len()))
+        AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
+            slice.as_ptr(),
+            slice.len(),
+        )))
     }
 
     /// Copy `value` into `block.arena` and return the new `value`.  Only a
@@ -40,8 +43,11 @@ impl<P: Program> Module<P> {
         let old = value.handle();
         let layout = Layout::from_size_align(old.len(), P::Value::alignment()).unwrap();
         let dst = arena.alloc_layout(layout);
-        unsafe { ptr::copy_nonoverlapping(old.0 as *const u8, dst.as_ptr(), old.len()) };
-        value.set_handle(Handle(ptr::slice_from_raw_parts(dst.as_ptr(), old.len())));
+        unsafe { ptr::copy_nonoverlapping(old.as_ptr(), dst.as_ptr(), old.len()) };
+        value.set_handle(AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
+            dst.as_ptr(),
+            old.len(),
+        ))));
         value
     }
 

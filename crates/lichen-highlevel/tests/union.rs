@@ -50,7 +50,10 @@ fn markers_read_as_their_structural_self() {
 fn structural_operators_round_trip_through_from_and_as_enum() {
     let op: HighProgramOperator = LowOperator::Index.into();
     assert_eq!(op, HighProgramOperator::LowOperator(LowOperator::Index));
-    assert_eq!(AsEnum::<LowOperator>::as_enum(&op), Some(LowOperator::Index));
+    assert_eq!(
+        AsEnum::<LowOperator>::as_enum(&op),
+        Some(LowOperator::Index)
+    );
     assert_eq!(
         AsEnum::<LowOperator>::as_enum(&HighProgramOperator::LowOperator(LowOperator::Apply)),
         Some(LowOperator::Apply)

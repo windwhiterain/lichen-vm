@@ -77,7 +77,10 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
         "an untriggered assert is no failure"
     );
     assert!(
-        matches!(m.nodes[x].value, Some(TestValue::LowValue(LowValue::Parameterized))),
+        matches!(
+            m.nodes[x].value,
+            Some(TestValue::LowValue(LowValue::Parameterized))
+        ),
         "the unbound cell was not bound by the assert"
     );
 }
@@ -124,7 +127,10 @@ fn apply_clone_fails_when_the_argument_violates_the_assert() {
     // failed entry is consumed too; its error is what stays.
     let m = applied_equality_assert(2);
     assert_eq!(m.assert_errors.len(), 1);
-    assert_eq!(m.assert_errors[0].value, TestValue::LowValue(LowValue::USize(0)));
+    assert_eq!(
+        m.assert_errors[0].value,
+        TestValue::LowValue(LowValue::USize(0))
+    );
     assert_eq!(m.asserts.len(), 1, "the decided clone left the worklist");
 }
 
@@ -211,7 +217,7 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
     // Later unification binds through the cell's class (outside the drain;
     // here we bind directly), so the next drain resolves it.
     let p = m.blocks[root].arena.alloc(1u128);
-    m.nodes[x].value = Some(TestValue::U128(Handle(p as *const u128)));
+    m.nodes[x].value = Some(TestValue::U128(dyn_handle(p as *const u128)));
 
     m.check_asserts();
 
@@ -328,7 +334,9 @@ fn gc_moves_an_assert_condition_with_its_function() {
     });
     tag_scope(&mut m, function, nodes);
     m.blocks[body].functions.push(function);
-    m.nodes[func_placeholder].value = Some(TestValue::LowValue(LowValue::Function(function)));
+    m.nodes[func_placeholder].value = Some(TestValue::LowValue(LowValue::Function(
+        AnyFunctionId::Dynamic(function),
+    )));
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(func_placeholder));
 
     m.evaluate_node_deep(root_node, None);

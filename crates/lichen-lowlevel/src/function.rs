@@ -3,7 +3,8 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    ArrayItem, BlockId, Function, FunctionId, LowValue, Module, NodeId, Operation, Program,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
+    LowValue, Module, NodeId, Operation, Program,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -22,7 +23,9 @@ use lichen_utils::extend::AsEnum;
 /// diagnostics, mirroring the highlevel diary.
 #[derive(Debug, Clone, Copy)]
 pub struct ApplyError {
-    pub function: FunctionId,
+    /// The applied function — a static function ref when the apply
+    /// materialized a static dependency (no importer span behind it).
+    pub function: AnyFunctionId,
     pub parameter_type: NodeId,
     pub argument_type: NodeId,
     pub argument: NodeId,
@@ -208,16 +211,16 @@ impl<P: Program> Module<P> {
                 let parameter_type = self
                     .array_items(parameter)
                     .and_then(|items| items.get(1))
-                    .map(|item| item.node)
+                    .map(|item| self.as_dynamic(item.node, block))
                     .unwrap_or(parameter);
                 let argument_type = self
                     .array_items(argument)
                     .and_then(|items| items.get(1))
-                    .map(|item| item.node)
+                    .map(|item| self.as_dynamic(item.node, block))
                     .unwrap_or(argument);
                 if !self.apply_errors.iter().any(|e| e.apply_node == node) {
                     self.apply_errors.push(ApplyError {
-                        function,
+                        function: AnyFunctionId::Dynamic(function),
                         parameter_type,
                         argument_type,
                         argument,
@@ -229,7 +232,7 @@ impl<P: Program> Module<P> {
                 return P::Value::from(LowValue::Parameterized);
             }
         }
-        let result = self.evaluate_node(applied, Some(block));
+        let result = self.evaluate_node(Dyn(applied), Some(block));
         self.apply_depth -= 1;
         // The apply's result is the function's return pair `[value, type]`
         // (the checker encodes every expression as such a pair).  The apply
@@ -254,8 +257,9 @@ impl<P: Program> Module<P> {
                 // evaluation time (see the Index arm), so this unify joins
                 // the cell into that class and the binding propagates
                 // regardless of when the nested apply runs.
-                self.evaluate_node(items[1].node, Some(block));
-                self.unify(cell, items[1].node);
+                let item = self.as_dynamic(items[1].node, block);
+                self.evaluate_node(Dyn(item), Some(block));
+                self.unify(cell, item);
                 result
             }
             _ => result,
@@ -271,25 +275,43 @@ impl<P: Program> Module<P> {
     /// which a typed pattern's spine reaches twice) is walked once instead
     /// of looping.
     #[stacksafe]
-    fn evaluate_pattern_argument(&mut self, pattern: NodeId, argument: NodeId, block: BlockId) {
-        self.evaluate_pattern_argument_inner(pattern, argument, block, &mut HashSet::new());
+    pub(crate) fn evaluate_pattern_argument(
+        &mut self,
+        pattern: NodeId,
+        argument: NodeId,
+        block: BlockId,
+    ) {
+        self.evaluate_pattern_argument_inner(
+            Dyn(pattern),
+            Dyn(argument),
+            block,
+            &mut HashSet::new(),
+        );
     }
 
     #[stacksafe]
     fn evaluate_pattern_argument_inner(
         &mut self,
-        pattern: NodeId,
-        argument: NodeId,
+        pattern: AnyNodeId,
+        argument: AnyNodeId,
         block: BlockId,
-        seen: &mut HashSet<(NodeId, NodeId)>,
+        seen: &mut HashSet<(AnyNodeId, AnyNodeId)>,
     ) {
         if !seen.insert((pattern, argument)) {
             return;
         }
+        // The argument side is evaluated through `evaluate_node` so a static
+        // ref resolves to its solved value (absolute refs — the recursion
+        // below can walk them); the pattern side is always a dynamic clone,
+        // read raw.
         self.evaluate_node(argument, Some(block));
-        let (Some(Some(LowValue::Array(pattern))), Some(Some(LowValue::Array(argument)))) = (
-            self.nodes[pattern].value.map(|value| value.as_enum()),
-            self.nodes[argument].value.map(|value| value.as_enum()),
+        let pattern_value = match pattern {
+            Dyn(pattern) => self.nodes[pattern].value.and_then(|value| value.as_enum()),
+            AnyNodeId::Static(pattern) => self.static_read(pattern).as_enum(),
+        };
+        let (Some(LowValue::Array(pattern)), Some(LowValue::Array(argument))) = (
+            pattern_value,
+            self.evaluate_node(argument, Some(block)).as_enum(),
         ) else {
             return;
         };
@@ -321,9 +343,7 @@ impl<P: Program> Module<P> {
         // the applied function's nesting (a top-level value, a sibling's
         // body) is referenced as-is.
         let member = self.function_descends_from(self.nodes[node].function, ctx.anchor)
-            || ctx
-                .closure_scope
-                .is_some_and(|scope| scope.contains(&node));
+            || ctx.closure_scope.is_some_and(|scope| scope.contains(&node));
         if !member {
             return node; // outside the template scope — reference as-is
         }
@@ -359,11 +379,11 @@ impl<P: Program> Module<P> {
             || value.is_some_and(|value| {
                 matches!(
                     value.as_enum(),
-                    Some(LowValue::Function(function)) if function != ctx.applied
+                    Some(LowValue::Function(AnyFunctionId::Dynamic(function)))
+                        if function != ctx.applied
                 )
             })
-            || (proven_concrete
-                && self.value_contains_foreign_function(value, ctx.applied));
+            || (proven_concrete && self.value_contains_foreign_function(value, ctx.applied));
         if !depends_on_parameter {
             return node;
         }
@@ -379,9 +399,7 @@ impl<P: Program> Module<P> {
         // closure: re-cloning it under the fresh id would re-instantiate
         // the captured value on every nested apply, tearing it out of the
         // enclosing instance the walk already built.
-        self.nodes[clone].function = if ctx
-            .closure_scope
-            .is_some_and(|scope| scope.contains(&node))
+        self.nodes[clone].function = if ctx.closure_scope.is_some_and(|scope| scope.contains(&node))
         {
             ctx.tag
         } else {
@@ -415,18 +433,26 @@ impl<P: Program> Module<P> {
             Some(LowValue::Array(array)) => {
                 // Each element rides with its shallow flag: the flag travels
                 // with the remapped node, so each call's clone honors its
-                // own markers.
+                // own markers.  A baked static reference is absolute and
+                // per-call invariant — referenced in place.
                 let items: Vec<ArrayItem> = array
                     .items()
                     .iter()
                     .map(|&item| ArrayItem {
-                        node: self.node_apply(item.node, ctx),
+                        node: match item.node {
+                            AnyNodeId::Static(_) => item.node,
+                            Dyn(node) => Dyn(self.node_apply(node, ctx)),
+                        },
                         ..item
                     })
                     .collect();
                 P::Value::from(LowValue::Array(self.alloc_array(&items, ctx.target)))
             }
-            Some(LowValue::Function(function)) => {
+            // A static function value is a frozen template — its captures are
+            // static, so nothing needs rebinding per call; it is referenced
+            // in place (its apply materializes per call).
+            Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
                 // A cloned function's scope is mapped like an array: every
                 // member and both entry points are cloned into the target,
                 // and the result is a fresh function homed on the target
@@ -520,7 +546,7 @@ impl<P: Program> Module<P> {
                 fresh_function.parameter = parameter;
                 fresh_function.asserts = fresh_asserts;
                 self.blocks[target].functions.push(fresh);
-                P::Value::from(LowValue::Function(fresh))
+                P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
             }
             // A program-specific value may carry a handle into an arena —
             // relocate it into the target block like any other payload.
@@ -551,7 +577,8 @@ impl<P: Program> Module<P> {
     /// `applied` — a nested closure whose captures must rebind to this
     /// call.  A concreteness proof ([`Node::evaluated_deep`]) cannot see
     /// a function's body, so a proven-concrete structure that contains one
-    /// must still be cloned, never referenced in place.
+    /// must still be cloned, never referenced in place.  A *static* function
+    /// value is frozen — no dynamic captures — and is never foreign.
     fn value_contains_foreign_function(
         &self,
         value: Option<P::Value>,
@@ -563,18 +590,25 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = value.as_enum() else {
             return false;
         };
-        let mut stack: Vec<NodeId> = array.items().iter().map(|item| item.node).collect();
+        let mut stack: Vec<AnyNodeId> = array.items().iter().map(|item| item.node).collect();
         let mut seen = HashSet::new();
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
                 continue;
             }
-            match self.nodes[node].value.and_then(|value| value.as_enum()) {
-                Some(LowValue::Function(function)) if function != applied => return true,
-                Some(LowValue::Array(array)) => {
-                    stack.extend(array.items().iter().map(|item| item.node))
-                }
-                _ => {}
+            match node {
+                AnyNodeId::Static(_) => {}
+                Dyn(node) => match self.nodes[node].value.and_then(|value| value.as_enum()) {
+                    Some(LowValue::Function(AnyFunctionId::Dynamic(function)))
+                        if function != applied =>
+                    {
+                        return true;
+                    }
+                    Some(LowValue::Array(array)) => {
+                        stack.extend(array.items().iter().map(|item| item.node))
+                    }
+                    _ => {}
+                },
             }
         }
         false

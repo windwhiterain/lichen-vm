@@ -5,7 +5,7 @@
 //! operators reading `HighGlobal`, like `Fresh`) resolves only against a
 //! flat tuple, so nesting the upstream host would break them.
 
-use lichen_highlevel::program::{HighGlobal, HighProgramValue, TypeOperator};
+use lichen_highlevel::program::{HighGlobal, HighProgramValue};
 use lichen_lowlevel::{BlockId, GlobalExt, Module, NodeId, Operation, OperatorExt, Program};
 use lichen_utils::compose::AsField;
 
@@ -23,9 +23,9 @@ impl MyState {
     }
 }
 
-/// The composed host: the upstream's `HighGlobal` listed flat, then the
-/// downstream's own.  The downstream opts into the lowlevel contract with
-/// the explicit `GlobalExt` impl.
+// The composed host: the upstream's `HighGlobal` listed flat, then the
+// downstream's own.  The downstream opts into the lowlevel contract with
+// the explicit `GlobalExt` impl.
 lichen_utils::compose_ext! {
     #[derive(Debug, Default)]
     struct MyGlobalExt(
@@ -42,10 +42,11 @@ impl Program for MyProgram {
     type Value = HighProgramValue;
     type Operator = MyOperator;
     type GlobalExt = MyGlobalExt;
+    type PackageMeta = ();
 }
 
-/// The downstream's own operator vocabulary: composed the same way as the
-/// values — its own variant plus the structural operators carried flat.
+// The downstream's own operator vocabulary: composed the same way as the
+// values — its own variant plus the structural operators carried flat.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     enum MyOperator {
@@ -79,7 +80,14 @@ impl OperatorExt<MyProgram> for MyOperator {
 }
 
 fn op_node(m: &mut Module<MyProgram>, block: BlockId, operator: MyOperator) -> NodeId {
-    m.add_node(block, Some(Operation { operator, operand: None }), None)
+    m.add_node(
+        block,
+        Some(Operation {
+            operator,
+            operand: None,
+        }),
+        None,
+    )
 }
 
 #[test]

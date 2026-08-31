@@ -641,10 +641,21 @@ mod tests {
         );
         // `~0` is the unmarked no-op; a space after `~` separates the
         // marker from the element.
-        assert_eq!(kinds("~0 x"), vec![TokenKind::Tilde(0), TokenKind::Name("x".to_string()), TokenKind::Eof]);
+        assert_eq!(
+            kinds("~0 x"),
+            vec![
+                TokenKind::Tilde(0),
+                TokenKind::Name("x".to_string()),
+                TokenKind::Eof
+            ]
+        );
         assert_eq!(
             kinds("~ 1"),
-            vec![TokenKind::Tilde(usize::MAX), TokenKind::Int(1), TokenKind::Eof]
+            vec![
+                TokenKind::Tilde(usize::MAX),
+                TokenKind::Int(1),
+                TokenKind::Eof
+            ]
         );
     }
 
