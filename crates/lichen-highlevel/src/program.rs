@@ -257,10 +257,10 @@ pub enum TypeOperator {
 
 // The highlevel program's operator vocabulary: a flat union of the
 // structural [`LowOperator`] and the highlevel type-level
-// [`TypeOperator`], each carried whole as one sibling variant.  There is
-// deliberately no downstream composition of this union — the operator
-// vocabulary stays the highlevel's own unless and until a downstream needs
-// more.
+// [`TypeOperator`], each carried whole as one sibling variant.
+// [`HighProgram`]'s second type parameter lets a downstream that needs more
+// operators compose its own union over these same leaves and still reuse the
+// lowlevel runtime/registry machinery.
 lichen_utils::enum_ext! {
     /// The highlevel program's operator vocabulary: the structural and
     /// type-level operators, as sibling carry variants.
@@ -271,8 +271,8 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
-    fn run(&self, operand: V, _block: BlockId, module: &mut Module<HighProgram<V>>) -> V {
+impl<V: ValueType> OperatorExt<HighProgram<V, HighProgramOperator>> for HighProgramOperator {
+    fn run(&self, operand: V, _block: BlockId, module: &mut Module<HighProgram<V, HighProgramOperator>>) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
@@ -380,15 +380,33 @@ impl<V: ValueType> OperatorExt<HighProgram<V>> for HighProgramOperator {
 }
 
 /// The highlevel's concrete lowlevel program: a marker generic over the
-/// value vocabulary (defaults to [`HighProgramValue`]), so the checker runs
-/// on any union that implements [`ValueType`] — the operators and the global
-/// extension state are the highlevel's own regardless of the value type.
+/// value vocabulary and the operator vocabulary.
+///
+/// The default [`HighProgramOperator`] is what the checked highlevel builder
+/// emits.  A downstream that needs additional lowlevel operators can compose
+/// its own operator enum with `lichen_utils::enum_ext!` (carrying
+/// [`LowOperator`] and [`TypeOperator`] as siblings) and use
+/// `Module<HighProgram<V, MyOperator>>`; the checker itself is still tied to
+/// [`HighProgramOperator`], but the runtime/static-module/registry machinery
+/// is now reusable with the extended operator set.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HighProgram<V: ValueType = HighProgramValue>(PhantomData<V>);
+pub struct HighProgram<
+    V: ValueType = HighProgramValue,
+    O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
+>(PhantomData<(V, O)>);
 
-impl<V: ValueType> Program for HighProgram<V> {
+impl<V, O> Program for HighProgram<V, O>
+where
+    V: ValueType,
+    O: lichen_lowlevel::OperatorExt<HighProgram<V, O>>
+        + From<LowOperator>
+        + lichen_utils::extend::AsEnum<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+{
     type Value = V;
-    type Operator = HighProgramOperator;
+    type Operator = O;
     type GlobalExt = HighGlobalExt;
     type PackageMeta = HighPackageMeta;
 }

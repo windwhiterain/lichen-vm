@@ -10,8 +10,12 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
-use lichen_highlevel::program::{TypeValue, ValueType};
-use lichen_lowlevel::{AnyNodeId, LowValue, NodeId, ValueExt};
+use lichen_highlevel::program::{
+    HighProgram, HighProgramOperator, TypeOperator, TypeValue, ValueType,
+};
+use lichen_lowlevel::{
+    AnyNodeId, BlockId, LowOperator, LowValue, Module, NodeId, OperatorExt, ValueExt,
+};
 use lichen_utils::extend::AsEnum;
 
 // A probe extension: a type constant beyond the highlevel's vocabulary.
@@ -163,7 +167,38 @@ fn an_extended_union_reports_type_conflicts() {
     assert!(
         build
             .diagnostics()
+
             .iter()
             .any(|d| d.kind == DiagKind::Annotation)
     );
+}
+// A probe operator vocabulary: the same extension shape a downstream language
+// would use when it needs operators beyond the highlevel's own set.
+lichen_utils::enum_ext! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum ProbeOperator {
+    }
+    + LowOperator as LowOperator;
+    + TypeOperator as TypeOperator;
+}
+
+impl<V: ValueType> OperatorExt<HighProgram<V, ProbeOperator>> for ProbeOperator {
+    fn run(
+        &self,
+        _operand: V,
+        _block: BlockId,
+        _module: &mut Module<HighProgram<V, ProbeOperator>>,
+    ) -> V {
+        unreachable!("the probe operator is only used to prove the type composes")
+    }
+}
+
+#[test]
+fn the_program_marker_accepts_a_composed_operator_vocabulary() {
+    // A `Module` can be bound to the highlevel value vocabulary with a
+    // downstream operator union; the lowlevel runtime machinery no longer
+    // requires the operator set to be exactly `HighProgramOperator`.
+    let _module = Module::<HighProgram<ProbeValue, ProbeOperator>>::new();
+    assert!(HighProgramOperator::LowOperator(LowOperator::Apply)
+        == HighProgramOperator::LowOperator(LowOperator::Apply));
 }

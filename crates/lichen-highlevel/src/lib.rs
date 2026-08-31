@@ -13,6 +13,7 @@
 pub mod checker;
 pub mod diagnostic;
 pub mod ir;
+pub mod print;
 pub mod program;
 
 // The vocabularies are themselves extension points: a downstream composes

@@ -1309,7 +1309,7 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
     assert!(
-        diags[0].message.starts_with("expected ["),
+        diags[0].message.starts_with("expected struct<"),
         "the struct's shape renders as the expected side: {}",
         diags[0].message
     );
@@ -1335,7 +1335,7 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
     assert!(
-        diags[0].message.contains("TypeId("),
+        diags[0].message.contains("struct<"),
         "the nominal ids render: {}",
         diags[0].message
     );
@@ -1487,7 +1487,11 @@ fn instances_of_different_struct_occurrences_conflict() {
     );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert!(diags[0].message.contains("TypeId("), "{}", diags[0].message);
+    assert!(
+        diags[0].message.contains("struct<") && diags[0].message.contains("#"),
+        "{}",
+        diags[0].message
+    );
 }
 
 // --- the `_` placeholder ----------------------------------------------------
