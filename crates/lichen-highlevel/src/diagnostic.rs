@@ -20,15 +20,15 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_lowlevel::{
-    AnyNodeId, ApplyError, EvalError, LowValue, NodeId, UnifyError,
+    AnyNodeId, ApplyError, ArrayItem, EvalError, LowOperator, LowValue, NodeId, UnifyError,
+    is_unbound,
 };
-use lichen_utils::disjoint;
+use lichen_utils::disjoint::{self, Node as _};
 
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    print::TypePrinter,
-    program::{HighProgram, HighProgramValue, ValueType},
+    program::{HighProgram, HighProgramOperator, HighProgramValue, TypeOperator, ValueType},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
@@ -103,13 +103,14 @@ impl<V: ValueType> Build<V> {
     /// Render the unification failures as diagnostics — one per entry in
     /// [`lichen_lowlevel::Module::unify_errors`], in order.
     pub fn diagnostics(&self) -> Vec<Diag<V>> {
-        let mut printer = TypePrinter::new_with_arrows(&self.module, Some(&self.arrows));
-        printer.show_struct_ids();
         let mut report = Report {
             build: self,
-            printer,
+            names: HashMap::new(),
+            next: 0,
             node_spans: self.node_spans(),
+            univ: NodeId::default(),
         };
+        report.univ = report.rep(self.type_expr);
         let mut out = Vec::new();
         for (i, err) in self.module.unify_errors.iter().enumerate() {
             out.push(report.error(i, err));
@@ -180,11 +181,36 @@ impl<V: ValueType> Build<V> {
 
 struct Report<'a, V: ValueType> {
     build: &'a Build<V>,
-    printer: TypePrinter<'a, V>,
+    /// Stable class names: representative → `?a`, `?b`, … within one
+    /// diagnostic.
+    names: HashMap<NodeId, String>,
+    next: usize,
     node_spans: HashMap<NodeId, Span>,
+    /// The class representative of the canonical universe `[Type, ↺]`.
+    univ: NodeId,
 }
 
 impl<'a, V: ValueType> Report<'a, V> {
+    /// The class representative of `node`, via a read-only `parent` walk (the
+    /// printer never mutates the module).
+    fn rep(&self, node: NodeId) -> NodeId {
+        let mut n = node;
+        while let Some(parent) = self.build.module.nodes[n].meta().parent {
+            n = parent;
+        }
+        n
+    }
+
+    fn name_of(&mut self, rep: NodeId) -> String {
+        if let Some(name) = self.names.get(&rep) {
+            return name.clone();
+        }
+        let name = letter_name(self.next);
+        self.next += 1;
+        self.names.insert(rep, name.clone());
+        name
+    }
+
     fn error(&mut self, i: usize, err: &UnifyError<HighProgram<V>>) -> Diag<V> {
         // An apply-time parameter-check failure: the raw unify error dropped
         // the two top-level sides, but the apply context kept them — attribute
@@ -363,9 +389,259 @@ impl<'a, V: ValueType> Report<'a, V> {
 
     // --- the type printer -------------------------------------------------
 
-    /// Render a nodes class as a type using the shared pretty printer.
+    /// Render a node's class as a type.  Unbound cells get stable `?a`
+    /// names; pending computations (dependent codomains) render
+    /// symbolically; cycles are cut at the class name.
     fn print_type(&mut self, node: NodeId) -> String {
-        self.printer.node(node)
+        self.print_inner(node, &mut HashSet::new())
+    }
+
+    /// Read the array items behind either a dynamic node or a static ref.
+    fn any_items(&self, id: AnyNodeId) -> Option<&'static [ArrayItem]> {
+        let value = self.build.module.node_value(id)?;
+        let LowValue::Array(array) = value.as_enum()? else {
+            return None;
+        };
+        Some(array.items())
+    }
+
+    /// Universe test that accepts static refs.
+    fn is_universe_any(&mut self, id: AnyNodeId) -> bool {
+        match id {
+            AnyNodeId::Dynamic(node) => self.rep(node) == self.univ,
+            AnyNodeId::Static(sref) => {
+                let Some(items) = self.any_items(id) else {
+                    return false;
+                };
+                items.len() == 2
+                    && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
+            }
+        }
+    }
+
+    /// Render a dynamic node or a static ref.  Static nodes have no
+    /// importer spans or class names, so they render through a small
+    /// structural printer that cuts static cycles.
+    fn any_node(&mut self, id: AnyNodeId, visiting: &mut HashSet<NodeId>) -> String {
+        match id {
+            AnyNodeId::Dynamic(node) => self.print_inner(node, visiting),
+            AnyNodeId::Static(sref) => self.print_static(sref),
+        }
+    }
+
+    fn print_static(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
+        let mut visiting = HashSet::new();
+        self.print_static_inner(sref, &mut visiting)
+    }
+
+    fn print_static_inner(
+        &mut self,
+        sref: lichen_lowlevel::StaticNodeId,
+        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
+    ) -> String {
+        if !visiting.insert(sref) {
+            return "…".to_string();
+        }
+        let value = self.build.module.node_value(AnyNodeId::Static(sref));
+        let out = match value.as_ref().and_then(|v| v.as_enum()) {
+            Some(LowValue::USize(n)) => n.to_string(),
+            Some(LowValue::None) => "none".to_string(),
+            Some(LowValue::Function(_)) => "Function".to_string(),
+            Some(LowValue::Parameterized) | None => "?".to_string(),
+            Some(LowValue::Array(array)) => {
+                let items = array.items();
+                if items.len() == 2 && self.is_universe_any(AnyNodeId::Static(sref)) {
+                    let mut dummy = HashSet::new();
+                    self.any_node(items[0].node, &mut dummy)
+                } else {
+                    let parts: Vec<String> = items
+                        .iter()
+                        .map(|item| match item.node {
+                            AnyNodeId::Dynamic(node) => {
+                                let mut dummy = HashSet::new();
+                                self.print_inner(node, &mut dummy)
+                            }
+                            AnyNodeId::Static(ref next) => self.print_static_inner(*next, visiting),
+                        })
+                        .collect();
+                    format!("[{}]", parts.join(", "))
+                }
+            }
+        };
+        visiting.remove(&sref);
+        out
+    }
+
+    fn print_inner(&mut self, node: NodeId, visiting: &mut HashSet<NodeId>) -> String {
+        let rep = self.rep(node);
+        if !visiting.insert(rep) {
+            return self.name_of(rep);
+        }
+        let out = self.render(rep, visiting);
+        visiting.remove(&rep);
+        out
+    }
+
+    fn render(&mut self, rep: NodeId, visiting: &mut HashSet<NodeId>) -> String {
+        let value = self.build.module.nodes[rep].value;
+        // An unbound cell (no value, or the lazy marker) renders as a stable
+        // class name — or symbolically when a pending computation (a
+        // dependent codomain) is behind it.
+        let pending = value.is_none()
+            || value.is_some_and(|v| matches!(v.as_enum(), Some(LowValue::Parameterized)));
+        if pending {
+            if self.class_has_pending_op(rep) {
+                format!("⟨{}⟩", self.op_name(rep))
+            } else {
+                self.name_of(rep)
+            }
+        } else {
+            let value = value.expect("a non-pending cell carries a concrete value");
+            match value.as_enum() {
+                Some(LowValue::USize(n)) => n.to_string(),
+                Some(LowValue::None) => "none".to_string(),
+                Some(LowValue::Function(_)) => "Function".to_string(),
+                Some(LowValue::Parameterized) => unreachable!("handled above"),
+                Some(LowValue::Array(_)) => {
+                    let items = self
+                        .build
+                        .module
+                        .array_items(rep)
+                        .expect("the value just matched as an array");
+                    if items.len() == 2 {
+                        // `[shape, K]`: an atomic type expression — render the
+                        // shape's marker (`int`, `Type`, …).
+                        if self.is_universe_any(items[1].node) {
+                            return self.any_node(items[0].node, visiting);
+                        }
+                        // `[shape, [Kind, K]]`: a compound type expression —
+                        // the kind decides the shape's rendering.
+                        if let Some(k) = self.any_items(items[1].node)
+                            && k.len() == 2
+                            && self.is_universe_any(k[1].node)
+                        {
+                            let kind_value = self.build.module.node_value(k[0].node);
+                            if kind_value == Some(V::function_type_marker()) {
+                                // The pair is `[shape, [FunctionType, K]]`
+                                // where shape = [in, out] — render the
+                                // arrow `in → out`, not `shape → kind`.
+                                if let Some(s) = self.any_items(items[0].node)
+                                    && s.len() == 2
+                                {
+                                    return format!(
+                                        "{} → {}",
+                                        self.any_node(s[0].node, visiting),
+                                        self.any_node(s[1].node, visiting)
+                                    );
+                                }
+                            } else if kind_value == Some(V::tuple_type_marker()) {
+                                let elements: Vec<String> = items
+                                    .iter()
+                                    .map(|item| self.any_node(item.node, visiting))
+                                    .collect();
+                                return format!("[{}]", elements.join(", "));
+                            } else if kind_value == Some(V::array_type_marker()) {
+                                // The array type's pair is [shape, kind]
+                                // where shape = [type, length] — render
+                                // `int[3]`, not `[int, 3]`.
+                                if let Some(s) = self.any_items(items[0].node)
+                                    && s.len() == 2
+                                {
+                                    return format!(
+                                        "{}[{}]",
+                                        self.any_node(s[0].node, visiting),
+                                        self.any_node(s[1].node, visiting)
+                                    );
+                                }
+                            } else if kind_value == Some(V::type_struct_marker()) {
+                                // A struct type: `[[TypeId(n), fields],
+                                // [TypeStruct, Type]]` — render
+                                // `struct#n { f1, f2 }`, the id from shape[0]
+                                // and the field list from shape[1].
+                                let mut n = 0;
+                                let mut list = items[0].node;
+                                if let Some(s) = self.any_items(items[0].node)
+                                    && s.len() == 2
+                                {
+                                    n = self
+                                        .build
+                                        .module
+                                        .node_value(s[0].node)
+                                        .and_then(|v| v.type_id())
+                                        .unwrap_or(0);
+                                    list = s[1].node;
+                                }
+                                let fields: Vec<String> = match self.any_items(list) {
+                                    Some(fs) => fs
+                                        .iter()
+                                        .map(|item| self.any_node(item.node, visiting))
+                                        .collect(),
+                                    None => vec![self.any_node(list, visiting)],
+                                };
+                                return format!("struct#{n} {{ {} }}", fields.join(", "));
+                            }
+                        }
+                        if self.class_is_arrow(rep) {
+                            return format!(
+                                "{} → {}",
+                                self.any_node(items[0].node, visiting),
+                                self.any_node(items[1].node, visiting)
+                            );
+                        }
+                    }
+                    let elements: Vec<String> = items
+                        .iter()
+                        .map(|item| self.any_node(item.node, visiting))
+                        .collect();
+                    format!("[{}]", elements.join(", "))
+                }
+                // Extension values (the type constants, a nominal id) render
+                // via Debug — the raw `TypeInt` / `TypeId(3)` names.
+                None => format!("{value:?}"),
+            }
+        }
+    }
+
+    fn class_is_arrow(&self, rep: NodeId) -> bool {
+        disjoint::members(&self.build.module.nodes, rep).any(|m| self.build.arrows.contains(&m))
+    }
+
+    fn class_has_pending_op(&self, rep: NodeId) -> bool {
+        disjoint::members(&self.build.module.nodes, rep).any(|m| {
+            self.build.module.nodes[m].operation.is_some()
+                && is_unbound(self.build.module.nodes[m].value)
+        })
+    }
+
+    fn op_name(&self, rep: NodeId) -> String {
+        match disjoint::members(&self.build.module.nodes, rep)
+            .find_map(|m| self.build.module.nodes[m].operation)
+            .map(|op| op.operator)
+        {
+            Some(
+                HighProgramOperator::LowOperator(LowOperator::Index)
+                | HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch),
+            ) => "Index".to_string(),
+            Some(HighProgramOperator::LowOperator(LowOperator::Apply)) => "Apply".to_string(),
+            Some(HighProgramOperator::TypeOperator(TypeOperator::Fresh)) => "Fresh".to_string(),
+            Some(
+                HighProgramOperator::TypeOperator(TypeOperator::Add)
+                | HighProgramOperator::TypeOperator(TypeOperator::Sub)
+                | HighProgramOperator::TypeOperator(TypeOperator::Leq)
+                | HighProgramOperator::TypeOperator(TypeOperator::Eq),
+            ) => "op".to_string(),
+            None => "op".to_string(),
+        }
     }
 }
 
+/// `0 → "?a"`, `1 → "?b"`, …, `26 → "?a1"`, `27 → "?b1"`, …
+fn letter_name(i: usize) -> String {
+    let letter = (b'a' + (i % 26) as u8) as char;
+    let round = i / 26;
+    if round == 0 {
+        format!("?{letter}")
+    } else {
+        format!("?{letter}{round}")
+    }
+}

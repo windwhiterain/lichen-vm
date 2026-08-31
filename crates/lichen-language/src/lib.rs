@@ -99,13 +99,19 @@ pub fn compile_with_imports_in(
     // build this is empty; skipping it also avoids descending into static
     // refs that a successful import may contain.
     if !build.ok {
+        let mut printer =
+            crate::render::TypePrinter::new_with_arrows(&build.module, Some(&build.arrows));
+        // The diagnostic printer shows a struct's nominal id (`struct<…>#n`) so
+        // two structs with the same field shape stay distinguishable in a
+        // conflict; the value/type output printer leaves it off.
+        printer.show_struct_ids();
         diagnostics.extend(
             build
                 .diagnostics()
                 .into_iter()
                 .map(|d| Diag {
                     span: d.span,
-                    message: d.message.clone(),
+                    message: crate::render::checker_message(&mut printer, &d),
                     stage: Stage::Check,
                     check: Some(Box::new(d)),
                 })
