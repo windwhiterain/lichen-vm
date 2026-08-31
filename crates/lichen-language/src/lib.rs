@@ -22,6 +22,7 @@ pub mod diag;
 pub mod lex;
 pub mod package;
 pub mod parse;
+pub mod persist;
 pub mod preprocess;
 pub mod readme;
 pub mod render;

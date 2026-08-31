@@ -321,20 +321,38 @@ impl AnyHandle<[u8]> {
 }
 
 new_key_type! {pub struct NodeId;}
-new_key_type! {pub struct ModuleKey;}
-/// The device key of a static module — the module's name in the device's
-/// [`Registry`].  A slotmap key: allocated by the registry when the module
-/// is registered, versioned so a removed slot is never confused with its
-/// successor.  Refs (node, function, handle) carry the key of their home
-/// module, so refs are absolute from birth: an importer stores them
-/// verbatim and resolves the key through the shared registry — no
-/// per-importer retarget, no re-based copies, and the same payload is
+
+/// The device key of a static module — the module's compact index in the
+/// device's [`Registry`].  A monotonically increasing index allocated by
+/// the device registry (the persistent store that maps keys to artifact
+/// content hashes), so the same module has the same key in every process
+/// sharing the registry — keys are stable across processes and are
+/// reclaimed (reused) when a module is removed from the registry, so the
+/// key space stays bounded.  Refs (node, function, handle) carry the key
+/// of their home module, so refs are absolute from birth: an importer
+/// stores them verbatim and resolves the key through the shared registry —
+/// no per-importer retarget, no re-based copies, and the same payload is
 /// shared by every importer.
-///
-/// The key is an *in-process* identity, by design: a distributed artifact
-/// carries its own stable identity, and the future `DistributeModule` load
-/// path assigns a device key and re-keys the artifact's refs once, at load
-/// — the registry is the translation point.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct ModuleKey(u64);
+
+impl ModuleKey {
+    /// The key's compact index value.
+    pub const fn as_raw(self) -> u64 {
+        self.0
+    }
+    /// Build a key from its compact index value — the device registry's
+    /// allocation unit.
+    pub const fn from_raw(index: u64) -> Self {
+        ModuleKey(index)
+    }
+}
+
+impl std::fmt::Debug for ModuleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ModuleKey({})", self.0)
+    }
+}
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaticNodeId {
     /// The target module — [`StaticModule::key`].  Refs are absolute from
@@ -544,6 +562,11 @@ pub struct Package<P: Program> {
     pub module: Arc<StaticModule<P>>,
     /// Opaque per-package metadata; see [`Program::PackageMeta`].
     pub meta: P::PackageMeta,
+    /// The artifact's content hash — the module's stable identity on the
+    /// device.  The registry maps device keys to these hashes and back, so
+    /// a key reinserted after reclamation is recognized as a different
+    /// artifact (a loaded module is never silently shadowed).
+    pub hash: [u8; 32],
 }
 
 /// A fully-solved module frozen into an immutable, shareable form.  Every
@@ -576,21 +599,23 @@ pub struct Freeze {
 }
 
 /// The device's module registry — the virtual file system of the device's
-/// compiled modules, and the process-wide singleton shared by every
-/// [`Module`] executing (in threads) as `Arc<RwLock<Registry>>`.  It
-/// handles **registering** (compiling a dynamic module into a static
-/// artifact and filing it under a freshly allocated device key),
-/// **storage** (the resident map — the memory-backed store a real file
-/// system will replace; a cross-process file lock is future work), and
-/// resolution **during evaluating** (every static ref an executing module
-/// touches is fetched through [`Self::get`]).
+/// compiled modules, shared by every [`Module`] executing (in threads) as
+/// `Arc<RwLock<Registry>>`.  It handles **registering** (compiling a
+/// dynamic module into a static artifact and filing it under its device
+/// key), **storage** (the resident map of loaded modules), and resolution
+/// **during evaluating** (every static ref an executing module touches is
+/// fetched through [`Self::get`]).
 ///
-/// The resident map is keyed by [`ModuleKey`] — the device key.  A future
-/// `DistributeModule` load path will assign a device key to a serialized
-/// artifact and re-key its refs once at load; the device keys themselves
-/// never leave the process.
+/// The resident map is keyed by [`ModuleKey`] — the device key.  The key
+/// itself is allocated by the *device registry* (the persistent store
+/// living outside the lowlevel — see `crates/lichen-language/src/package.rs`
+/// and `persist.rs`), which maps keys to artifact content hashes and back;
+/// the lowlevel only files a built artifact under the caller-provided key
+/// ([`Self::freeze_mapped`], [`Self::insert_module`]).  Keys are compact
+/// indices, stable across processes and reclaimed when a module is removed
+/// from the device registry.
 pub struct Registry<P: Program> {
-    entries: SlotMap<ModuleKey, Package<P>>,
+    entries: HashMap<ModuleKey, Package<P>>,
 }
 impl<P: Program> Default for Registry<P> {
     fn default() -> Self {
@@ -601,7 +626,7 @@ impl<P: Program> Default for Registry<P> {
 impl<P: Program> Registry<P> {
     pub fn new() -> Self {
         Registry {
-            entries: SlotMap::with_key(),
+            entries: HashMap::new(),
         }
     }
 
@@ -613,13 +638,13 @@ impl<P: Program> Registry<P> {
         Module::with_registry(registry.clone())
     }
 
-    /// Compile a dynamic module into a static artifact and file it under a
-    /// freshly allocated device key.  The key is allocated first
-    /// ([`SlotMap::try_insert_with_key`] hands it to the build), so the
-    /// artifact's refs are baked with their final key; a failed build leaves
-    /// the registry untouched.
-    pub fn freeze(&mut self, module: &Module<P>) -> ModuleKey {
-        self.freeze_mapped(module).key
+    /// Compile a dynamic module into a static artifact and file it under
+    /// `key` — the device key allocated by the device registry (the caller
+    /// provides it so the artifact's refs are baked with their final key;
+    /// the key must not already be registered — same content must not be
+    /// compiled twice).  A failed build leaves the registry untouched.
+    pub fn freeze(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> ModuleKey {
+        self.freeze_mapped(module, key, hash).key
     }
 
     /// Like [`Self::freeze`], but also returns the source→statics node map
@@ -632,29 +657,54 @@ impl<P: Program> Registry<P> {
     /// values reference must already be registered *here*, so the frozen
     /// artifact resolves from any importer through this registry.  Freeze
     /// dependencies first.
-    pub fn freeze_mapped(&mut self, module: &Module<P>) -> Freeze {
+    pub fn freeze_mapped(
+        &mut self,
+        module: &Module<P>,
+        key: ModuleKey,
+        hash: [u8; 32],
+    ) -> Freeze {
         for dep in crate::static_module::referenced_keys(module) {
             assert!(
-                self.entries.contains_key(dep),
+                self.entries.contains_key(&dep),
                 "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
             );
         }
-        let mut node_map = None;
-        let key = self
-            .entries
-            .try_insert_with_key(|key| {
-                let (static_module, map) = StaticModule::from_module_mapped(module, key);
-                node_map = Some(map);
-                Ok::<_, std::convert::Infallible>(Package {
-                    module: Arc::new(static_module),
-                    meta: Default::default(),
-                })
-            })
-            .unwrap();
-        Freeze {
+        assert!(
+            !self.entries.contains_key(&key),
+            "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
+        );
+        let (static_module, node_map) = StaticModule::from_module_mapped(module, key);
+        self.entries.insert(
             key,
-            node_map: node_map.expect("freeze_mapped always builds a node map"),
-        }
+            Package {
+                module: Arc::new(static_module),
+                meta: Default::default(),
+                hash,
+            },
+        );
+        Freeze { key, node_map }
+    }
+
+    /// File an already-built artifact (a module loaded from the device's
+    /// persistent store) under its device `key` — the load-time mirror of
+    /// [`Self::freeze_mapped`]: the artifact's refs are already baked with
+    /// `key`, nothing is rebuilt or re-keyed.  The key must not already be
+    /// registered — a registered key is a loaded module, and re-inserting
+    /// it would shadow the resident one; the caller checks first
+    /// ([`Self::get`], comparing [`Package::hash`] to recognize a key
+    /// reallocated after reclamation).
+    pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
+        assert!(
+            self.entries.insert(
+                key,
+                Package {
+                    module: Arc::new(module),
+                    meta: Default::default(),
+                    hash,
+                }
+            ).is_none(),
+            "inserting a module under device key {key:?}, which is already registered — a loaded module is never shadowed"
+        );
     }
 
     /// Set the opaque per-package metadata for an existing registered
@@ -663,7 +713,7 @@ impl<P: Program> Registry<P> {
     /// knowing what that state means.
     pub fn set_package_meta(&mut self, key: ModuleKey, meta: P::PackageMeta) {
         self.entries
-            .get_mut(key)
+            .get_mut(&key)
             .expect("set_package_meta on an unregistered module key")
             .meta = meta;
     }
@@ -673,7 +723,14 @@ impl<P: Program> Registry<P> {
     /// unregistered key is a broken module graph and panics at its
     /// resolution site.
     pub fn get(&self, key: ModuleKey) -> Option<&Package<P>> {
-        self.entries.get(key)
+        self.entries.get(&key)
+    }
+
+    /// Iterate the registered modules — the device's directory listing.
+    /// (The persistent store uses it to collect the arenas a serialized
+    /// artifact's payload refs point into.)
+    pub fn iter(&self) -> impl Iterator<Item = (ModuleKey, &Package<P>)> {
+        self.entries.iter().map(|(&key, package)| (key, package))
     }
 
     /// Whether the registry holds no registered modules.  (Sources with
@@ -729,17 +786,25 @@ impl<P: Program> Module<P> {
     }
 
     /// Compile `source` into a static artifact and register it with this
-    /// module's registry; returns the artifact's device key.  Convenience
-    /// over [`Registry::freeze`].  `source` must be a different module —
-    /// freezing a module into itself would deadlock its own registry lock.
-    pub fn freeze(&mut self, source: &Module<P>) -> ModuleKey {
-        self.freeze_mapped(source).key
+    /// module's registry under `key` — the device key allocated by the
+    /// device registry (the caller provides it so the artifact's refs are
+    /// baked with their final key).  Convenience over [`Registry::freeze`].
+    /// `source` must be a different module — freezing a module into itself
+    /// would deadlock its own registry lock.
+    pub fn freeze(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> ModuleKey {
+        self.freeze_mapped(source, key, hash).key
     }
 
     /// Compile `source` into a static artifact and register it with this
-    /// module's registry, returning both the device key and the
-    /// source→statics node map.  Convenience over [`Registry::freeze_mapped`].
-    pub fn freeze_mapped(&mut self, source: &Module<P>) -> Freeze {
+    /// module's registry under `key`, returning both the device key and the
+    /// source→statics node map.  Convenience over
+    /// [`Registry::freeze_mapped`].
+    pub fn freeze_mapped(
+        &mut self,
+        source: &Module<P>,
+        key: ModuleKey,
+        hash: [u8; 32],
+    ) -> Freeze {
         debug_assert!(
             !std::ptr::eq(self, source),
             "freezing a module into itself would deadlock its registry lock"
@@ -747,7 +812,7 @@ impl<P: Program> Module<P> {
         self.registry
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .freeze_mapped(source)
+            .freeze_mapped(source, key, hash)
     }
 
     /// Resets the per-run evaluation budgets ([`Self::apply_depth`],

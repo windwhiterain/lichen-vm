@@ -28,6 +28,13 @@ fn main() -> ExitCode {
             println!("lichen {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
+        "cache" => {
+            if args.next().as_deref() != Some("gc") || args.next().is_some() {
+                eprintln!("usage: lichen cache gc");
+                return ExitCode::FAILURE;
+            }
+            cache_gc()
+        }
         "run" => {
             let Some(path) = args.next() else {
                 eprintln!("{USAGE}");
@@ -68,6 +75,19 @@ fn run_path(path: &Path) -> ExitCode {
     }
 }
 
+/// `lichen cache gc`: explicitly reclaim every artifact in the device cache
+/// that no live source chain references.
+fn cache_gc() -> ExitCode {
+    let dir = lichen_language::persist::lichendir();
+    let mut store = lichen_language::package::PackageStore::with_cache_dir(dir.clone());
+    let removed = store.gc();
+    println!(
+        "reclaimed {removed} cached artifact(s) from {}",
+        dir.display()
+    );
+    ExitCode::SUCCESS
+}
+
 fn run_file(path: &Path) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
@@ -76,7 +96,9 @@ fn run_file(path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let mut store = lichen_language::package::PackageStore::new();
+    let mut store = lichen_language::package::PackageStore::with_cache_dir(
+        lichen_language::persist::lichendir(),
+    );
     match lichen_language::run::evaluate_raw(&source, Some(path), &mut store) {
         Ok(output) => {
             println!("{output}");
@@ -112,7 +134,9 @@ fn run_directory(dir: &Path) -> ExitCode {
                 continue;
             }
         };
-        let mut store = lichen_language::package::PackageStore::new();
+        let mut store = lichen_language::package::PackageStore::with_cache_dir(
+            lichen_language::persist::lichendir(),
+        );
         match lichen_language::run::evaluate_raw(&source, Some(&file), &mut store) {
             Ok(output) => {
                 println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
@@ -132,7 +156,9 @@ fn run_directory(dir: &Path) -> ExitCode {
 }
 
 fn build_file(path: &Path) -> ExitCode {
-    let mut store = lichen_language::package::PackageStore::new();
+    let mut store = lichen_language::package::PackageStore::with_cache_dir(
+        lichen_language::persist::lichendir(),
+    );
     match store.load_package(path) {
         Ok(handle) => {
             println!("built {}", handle.path.display());

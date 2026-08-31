@@ -11,6 +11,13 @@ use lichen_lowlevel::{
 };
 use std::sync::{Arc, RwLock};
 
+/// Freeze `source` into `m`'s registry under a device key — the tests pick
+/// distinct compact indices (the device registry allocates them in
+/// production; the lowlevel only files under the caller-provided key).
+fn freeze(m: &mut Module<TestProgram>, source: &Module<TestProgram>, key: u64) -> ModuleKey {
+    m.freeze(source, ModuleKey::from_raw(key), [0; 32])
+}
+
 /// A static function value ref — absolute, as the walk emits it.
 fn static_func_value(
     m: &mut Module<TestProgram>,
@@ -58,7 +65,7 @@ fn static_apply_reruns_the_residual_spine_against_the_argument() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let _ = func_node;
     let arg = u128_node(&mut imp, root, 41);
@@ -92,7 +99,7 @@ fn static_apply_bakes_constants_in_place() {
     m.evaluate_node_deep(ret, None);
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 7);
     let call = call_node(&mut imp, root, f, arg);
@@ -162,7 +169,7 @@ fn nested_index_over_a_static_array_reads_shared_values() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 0);
     let call = call_node(&mut imp, root, f, arg);
@@ -220,9 +227,9 @@ fn registry_resolves_artifacts_by_device_key() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let k1 = imp.freeze(&m);
-    let k2 = imp.freeze(&m);
-    assert_ne!(k1, k2, "a re-compilation is a new artifact with a new key");
+    let k1 = freeze(&mut imp, &m, 1);
+    let k2 = freeze(&mut imp, &m, 2);
+    assert_ne!(k1, k2, "a distinct key files a distinct artifact");
     for k in [k1, k2] {
         let f = static_func_value(&mut imp, root, k, 0);
         let arg = u128_node(&mut imp, root, 0);
@@ -282,7 +289,7 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let root = imp.add_block(None);
     imp.apply_depth_limit = 200;
     imp.apply_total_limit = 10_000;
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 3);
     let call = call_node(&mut imp, root, f, arg);
@@ -312,7 +319,7 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let root = imp.add_block(None);
     imp.apply_depth_limit = 20;
     imp.apply_total_limit = 1_000;
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let g = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 0);
     let call = call_node(&mut imp, root, g, arg);
@@ -358,7 +365,7 @@ fn static_parameter_topology_is_reestablished_among_clones() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
 
     // Equal elements: the pattern is satisfied.
@@ -406,7 +413,7 @@ fn static_assert_rechecks_per_call() {
     m.evaluate_node_deep(ret, None);
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
 
     // A satisfying argument: the per-call clone checks out.
@@ -447,7 +454,7 @@ fn materialized_clones_survive_block_release() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
 
     // Apply inside a child block: compaction moves the materialized clones
@@ -506,7 +513,7 @@ fn static_closure_value_applies_from_dynamic_context() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     // g was inserted first (function 0), f second (function 1).
     let f = static_func_value(&mut imp, root, key, 1);
     let arg = u128_node(&mut imp, root, 5);
@@ -537,7 +544,7 @@ fn from_module_dedupes_shared_payloads() {
     m.nodes[b].value = m.nodes[a].value; // the same handle
     let mut imp = Module::new();
     let _root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let sm = imp
         .registry
         .read()
@@ -577,7 +584,7 @@ fn static_array_cache_survives_block_release_verbatim() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let key = imp.freeze(&m);
+    let key = freeze(&mut imp, &m, 1);
     let f = static_func_value(&mut imp, root, key, 0);
     let child = imp.add_block(Some(root));
     let arg = u128_node(&mut imp, child, 0);
@@ -632,7 +639,7 @@ fn freeze_mapped_returns_consistent_node_indices() {
 
     let mut imp = Module::new();
     let root = imp.add_block(None);
-    let freeze = imp.freeze_mapped(&m);
+    let freeze = imp.freeze_mapped(&m, ModuleKey::from_raw(1), [0; 32]);
     let node_map = &freeze.node_map;
 
     assert_eq!(node_map.len(), m.nodes.len());
@@ -663,7 +670,7 @@ fn frozen_dependency() -> (
     let n20 = u128_node(&mut a, block, 20);
     let arr = array_node(&mut a, block, &[n10, n20], None);
     a.evaluate_node_deep(arr, None);
-    let freeze = registry.write().unwrap().freeze_mapped(&a);
+    let freeze = registry.write().unwrap().freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
     (
         registry,
         freeze.key,
@@ -701,7 +708,7 @@ fn freezing_keeps_dependency_refs_verbatim() {
     );
     b.evaluate_node_deep(holder, None);
 
-    let freeze_b = registry.write().unwrap().freeze_mapped(&b);
+    let freeze_b = registry.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
     assert_ne!(freeze_b.key, key_a, "B is a distinct artifact");
 
     // The frozen array's middle item still names module A, verbatim.
@@ -772,7 +779,7 @@ fn freeze_rejects_an_unregistered_dependency_key() {
     b.evaluate_node_deep(holder, None);
 
     let elsewhere = Arc::new(RwLock::new(Registry::new()));
-    let _ = elsewhere.write().unwrap().freeze_mapped(&b);
+    let _ = elsewhere.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(1), [0; 32]);
 }
 
 #[test]
@@ -793,7 +800,7 @@ fn static_apply_keeps_foreign_items_in_place() {
     let n20 = u128_node(&mut a, ablock, 20);
     let arr = array_node(&mut a, ablock, &[n10, n20], None);
     a.evaluate_node_deep(arr, None);
-    let freeze_a = registry.write().unwrap().freeze_mapped(&a);
+    let freeze_a = registry.write().unwrap().freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
     let arr_sref = StaticNodeId {
         module: freeze_a.key,
         index: freeze_a.node_map[&arr],
@@ -815,7 +822,7 @@ fn static_apply_keeps_foreign_items_in_place() {
     )));
     let (func_node, _) = wrap_function(&mut b, body, ret, param);
     b.evaluate_node_deep(ret, None);
-    let freeze_b = registry.write().unwrap().freeze_mapped(&b);
+    let freeze_b = registry.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
 
     let mut imp = Registry::new_module(&registry);
     let root = imp.add_block(None);

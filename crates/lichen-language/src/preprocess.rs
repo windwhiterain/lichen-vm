@@ -8,7 +8,7 @@
 //! loads each dependency recursively before the importer compiles, which is
 //! how transitive dependencies work.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use lichen_highlevel::ir::Span;
 use lichen_lowlevel::StaticNodeId;
@@ -25,6 +25,9 @@ pub struct ResolvedImport {
     /// The package's exported final `[value, type]` pair node (static ref in
     /// the shared registry).
     pub export: StaticNodeId,
+    /// The canonical path of the imported package — the device registry's
+    /// dependency-graph edge records it alongside the dependency's key.
+    pub path: PathBuf,
 }
 
 /// The preprocessor output: cleaned lichen source plus resolved imports.
@@ -67,6 +70,7 @@ pub fn preprocess(
                     name: parsed.name,
                     span: (line_no, (leading_len + 1) as u32),
                     export: handle.export,
+                    path: handle.path,
                 }),
                 Err(mut diag) => {
                     // A failed load (missing path, cycle, or diagnostics from

@@ -20,11 +20,14 @@ future artifact may name another module's key).
 
 ## References (key-carrying, absolute from birth)
 
-- `ModuleKey` — the **device key** of a static module: a slotmap key
-  (`new_key_type!`) allocated by the device's [`Registry`] when the module is
-  registered, versioned so a removed slot is never confused with its
-  successor.  Every static ref — node, function, or handle — carries its
-  home module's key.
+- `ModuleKey` — the **device key** of a static module: a compact index
+  (`ModuleKey(u64)`) allocated by the device's persistent registry when the
+  module is registered, monotonically increasing and **reclaimed** through a
+  free list when a module is removed, so the key space stays bounded.  Keys
+  are stable across processes: every process sharing the device's persistent
+  store ([`~/.lichen`](#persistent-device-store-2026-08-31)) sees the same
+  keys for the same content.  Every static ref — node, function, or handle —
+  carries its home module's key.
 - `StaticNodeId { module: ModuleKey, index: LocalNodeId }`, `AnyNodeId = Dynamic(NodeId) |
   Static(StaticNodeId)`; `AnyFunctionId = Dynamic(FunctionId) | Static(StaticFunctionRef)`,
   `StaticFunctionRef { module: ModuleKey, index: StaticFunctionId }`;
@@ -38,11 +41,12 @@ future artifact may name another module's key).
 - **Identity** (`AnyHandle`/`StaticHandle` `PartialEq` = variant + key + offset): two importers
   of the same module share identity — the payload is the same bytes of the same shared arena,
   so `value_eq`'s pointer fast-path hits across importers.
-- **Distribution layering (user decision, 2026-08-30):** the key is an *in-process* identity;
-  distribution does not use it. A future `DistributeModule` format plus a per-device local
-  registry will map the distributed artifact identity onto device keys — assigned at load,
-  with the artifact's refs re-keyed once at load (linker-style relocation). The registry is
-  the translation point; a cross-process file lock for the backing store is also future work.
+- **Distribution layering (superseded 2026-08-31 by the persistent device
+  store):** keys were originally an *in-process* identity that a future
+  `DistributeModule` load path would re-key.  The persistent store
+  (below) made keys stable across processes instead: the artifact file
+  records its key, and any process loading it registers the module under
+  that same key — the serialized form needs no relocation at all.
 
 ## Registry (the device's virtual module file system)
 
@@ -53,33 +57,69 @@ substrate is the registry.
 
 ```rust
 pub struct Registry<P: Program> {
-    entries: SlotMap<ModuleKey, Dependency<P>>,   // resident store
+    entries: HashMap<ModuleKey, Package<P>>,   // resident store
 }
 impl<P: Program> Registry<P> {
     pub fn new() -> Self;
     /// An executing module bound to this registry.
     pub fn new_module(registry: &Arc<RwLock<Registry<P>>>) -> Module<P>;
-    /// Compile a dynamic module into a static artifact and file it under a
-    /// freshly allocated device key (`SlotMap::try_insert_with_key` hands
-    /// the key to the build, so refs are baked with their final key).
-    pub fn freeze(&mut self, module: &Module<P>) -> ModuleKey;
+    /// Compile a dynamic module into a static artifact and file it under
+    /// `key` — the device key allocated by the persistent device store
+    /// (caller-provided, so the artifact's refs are baked with their final
+    /// key; re-registering a key panics).
+    pub fn freeze_mapped(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze;
+    /// File an already-built artifact (loaded from the persistent store)
+    /// under its device key.
+    pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>);
     /// The module behind a device key — the file-system `get` (`None` =
     /// "no such key"; a ref naming an unregistered key is a broken graph
     /// and panics at its resolution site).
-    pub fn get(&self, key: ModuleKey) -> Option<&Dependency<P>>;
+    pub fn get(&self, key: ModuleKey) -> Option<&Package<P>>;
 }
 ```
 
 - **Module::new() keeps a private registry** (zero ripple for dependency-free modules — a
   standalone module's registry is its device registry at one-module scale); modules that share
-  the device registry are created through `Registry::new_module`.  `Module::freeze(&source)` is
-  the Module-facing convenience.
+  the device registry are created through `Registry::new_module`.  `Module::freeze(&source,
+  key, hash)` is the Module-facing convenience.
 - **Locks:** resolution takes a read guard and clones the `Arc<StaticModule>` out before any
   work (no guard held across evaluation); guards recover from poisoning (`PoisonError::
   into_inner`) because tests `catch_unwind` panics mid-evaluation.  Nothing takes a second
   registry lock while holding one, and `freeze` never evaluates — no deadlock path.
-- **Dependency** is the per-key entry (`{ module: Arc<StaticModule> }`) — the home of future
-  per-key access state (user directive).  Shared across importers, since the registry is.
+- **Dependency** is the per-key entry (`{ module: Arc<StaticModule>, meta, hash }`) — the home
+  of future per-key access state (user directive).  `hash` is the artifact's content hash, so
+  a key reinserted after reclamation is recognized as a different artifact (a loaded module is
+  never silently shadowed).  Shared across importers, since the registry is.
+
+## Persistent device store (2026-08-31)
+
+The device's compiled modules persist under `~/.lichen` (`$LICHEN_HOME` overrides): a registry
+file plus content-addressed artifact files, owned by the language crate
+(`crates/lichen-language/src/persist.rs` — `DeviceRegistry`).  The lowlevel registry stays the
+in-memory runtime map; the device registry owns the keys.
+
+- **Key allocation** (`ModuleKey` = compact index): the registry file records `next_key` and a
+  free list; allocation pops the smallest freed index (or bumps `next_key`).  Keys are
+  **reclaimed** — explicit `remove(path)`, and the CLI's `lichen cache gc`, which
+  mark-sweeps the recorded dependency graph (roots = path aliases whose source still exists;
+  edges = recorded dependency keys) and deletes every unreachable entry, its artifact file,
+  and its key.
+- **Artifact identity**: `hash = SHA-256(raw source ‖ dependency keys in source order)` —
+  transitive, deterministic, content-addressed (`artifacts/<hash>.module`).  The registry
+  file maps `hash → { key, source_hash, deps: [(path, key)] }` and `path → hash`.
+- **Incremental loading**: a load verifies the *recorded* dependency graph — one source-file
+  hash per node plus index lookups, never a parse or transitive re-hash — and only the chain
+  that changed recompiles.  A hit loads the artifact (deserialize + `insert_module`) and
+  skips the compile.
+- **Serialization**: refs are written as their device keys (stable across processes — no
+  relocation on load); a handle writes `(module key, base-relative arena offset, length)` —
+  the `offset` raw pointer is serialized as the plain number it is, and rebuilt against the
+  freshly laid-out arena with the freeze's own alignment formula.
+- **Concurrency**: registry mutations are serialized by a `mkdir` lock with stale-timeout
+  recovery; saves are atomic renames; allocation writes back a pending record immediately
+  (a crash between allocation and publish reads as a miss and recompiles under the same key).
+  Two processes compiling the same content race harmlessly — same hash, same key, identical
+  artifact bytes.
 
 ## Dependency (per-key state)
 
@@ -245,7 +285,7 @@ shared, the *class* is per-materialize (a static node has no class of its own to
 
 1. Lowlevel compiles (mechanical: `AnyHandle` eq/len/as_ptr/items, `value_eq`, value_apply /
    node_apply kind split, utils `AnyHandle::Dynamic` wrapping, test helpers).
-2. Keyed refs + `ModuleKey` (slotmap device key) + `Registry` (freeze/get, `Arc<RwLock>`
+2. Keyed refs + `ModuleKey` (compact device index) + `Registry` (freeze/get, `Arc<RwLock>`
    singleton) + `from_module(module, key)` + slim `Dependency`.
 3. Read path (verbatim `static_read`, `evaluate_node` AnyNodeId arm, Index arm, deep-pass leaf
    rule + static `parameterized` reads).
