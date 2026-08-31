@@ -496,7 +496,7 @@ enum Pre {
 /// as an argument, never this postfix.
 fn atom_parser<'a>(
     tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     let primary = choice((
         any::<In<'a>, E<'a>>()
@@ -595,6 +595,7 @@ fn atom_parser<'a>(
                 }
             })
         })
+        .boxed()
 }
 
 /// A postfix form's payload, folded left over the atom.
