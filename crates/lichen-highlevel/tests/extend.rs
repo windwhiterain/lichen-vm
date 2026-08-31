@@ -167,12 +167,13 @@ fn an_extended_union_reports_type_conflicts() {
     assert!(
         build
             .diagnostics()
-
             .iter()
             .any(|d| d.kind == DiagKind::Annotation)
     );
 }
 // A probe operator vocabulary: the same extension shape a downstream language
+
+
 // would use when it needs operators beyond the highlevel's own set.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
