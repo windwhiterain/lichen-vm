@@ -34,13 +34,17 @@ pub enum Expr {
     /// the type from context).  In term position `_` parses as a
     /// [`Expr::Name`] and stays an ordinary (possibly discard) name.
     Placeholder(Span),
-    /// `x => e`, or `x : T => e` — a lambda whose parameter is annotated.
-    /// The annotation is desugared by [`crate::compile`] to
-    /// `(x => e) : (T -> _)`.
+    /// `x => e`, `x : T => e`, `x # n => e`, or `x : T # n => e` — a
+    /// lambda whose parameter is annotated.  The annotation(s) are desugared
+    /// by [`crate::compile`] into the `Function`'s `parameter_type` /
+    /// `parameter_perspective` fields, compiled in body scope (the §4.2
+    /// optimization over the `x => { x : T; e }` / `x # n` body-statement
+    /// desugar).
     Lambda {
         parameter: String,
         parameter_span: Span,
         parameter_type: Option<Box<Expr>>,
+        parameter_perspective: Option<Box<Expr>>,
         r#return: Box<Expr>,
         span: Span,
     },
@@ -97,10 +101,13 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `e : T` — an annotation.
+    /// `e : T` and/or `e # p` — a type and/or perspective annotation.
+    /// `: T` fills `r#type`, `# p` fills `perspective`.  Either may be absent
+    /// (`e # p`, `e : T`); at most one of each.
     Annotation {
         value: Box<Expr>,
-        r#type: Box<Expr>,
+        r#type: Option<Box<Expr>>,
+        perspective: Option<Box<Expr>>,
         span: Span,
     },
     /// `T1 -> T2` — a function type.

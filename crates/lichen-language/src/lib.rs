@@ -24,6 +24,7 @@ pub mod package;
 pub mod parse;
 pub mod persist;
 pub mod preprocess;
+pub mod program;
 pub mod readme;
 pub mod render;
 pub mod run;
@@ -32,11 +33,12 @@ use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
-use lichen_highlevel::program::{HighProgram, HighProgramValue};
+use lichen_highlevel::program::HighProgramValue;
 use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
+use program::{LangProgram, persp_attr_ext};
 
 /// The result of compiling and checking a source program.
 ///
@@ -47,7 +49,7 @@ use preprocess::ResolvedImport;
 /// errors (which may be many — lex errors accumulate and parse errors are
 /// recovered) and the checker's rendered failures.
 pub struct Report {
-    pub build: Option<Build>,
+    pub build: Option<Build<LangProgram>>,
     pub diagnostics: Vec<Diag>,
 }
 
@@ -75,7 +77,7 @@ pub fn compile_with_imports(source: &str, imports: &[ResolvedImport]) -> Report 
 pub fn compile_with_imports_in(
     source: &str,
     imports: &[ResolvedImport],
-    registry: Option<Arc<RwLock<Registry<HighProgram<HighProgramValue>>>>>,
+    registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
 ) -> Report {
     let Frontend {
         ir,
@@ -87,10 +89,8 @@ pub fn compile_with_imports_in(
             diagnostics,
         };
     };
-    let build = match registry {
-        Some(registry) => Checker::build_in(ir, registry),
-        None => Checker::build(ir),
-    };
+    let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
+    let build = Checker::<LangProgram>::build_in_attr(ir, registry, persp_attr_ext());
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
     // message carries no `?a` journey — the user inspects an expression's
@@ -129,7 +129,7 @@ pub fn compile_with_imports_in(
 /// failed (an unresolved name); `diagnostics` holds every lex and parse
 /// error encountered.
 pub struct Frontend {
-    pub ir: Option<IR>,
+    pub ir: Option<IR<HighProgramValue, program::Perspective>>,
     pub diagnostics: Vec<Diag>,
 }
 

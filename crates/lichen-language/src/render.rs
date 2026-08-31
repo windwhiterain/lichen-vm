@@ -33,8 +33,10 @@ use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, HighProgramValue, ValueType};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
+use lichen_utils::extend::AsEnum;
 
 use crate::diag::Diag;
+use crate::program::LangProgram;
 
 // A rendering hook for extension vocabularies: an extension value → its
 // spelling, or `None` when the value is not the extension’s to name.  The
@@ -52,7 +54,10 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// type as its field tuple.  When the type chain is opaque (an unbound cell,
 /// an extension type), the value falls back to its raw layout — the old
 /// `[head, K]` reading of a recursive pair.
-pub fn print_value<V: ValueType>(module: &Module<HighProgram<V>>, value: V, ty: NodeId) -> String {
+pub fn print_value<P: HighProgram>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
+where
+    P::Value: ValueType,
+{
     ValuePrinter::new(module).print(value, ty)
 }
 
@@ -61,7 +66,10 @@ pub fn print_value<V: ValueType>(module: &Module<HighProgram<V>>, value: V, ty: 
 /// `T<len>`, `struct<T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
 /// names — cells in the same unification class share a name — so the type
 /// shows which parts are linked.  Cycles are cut at `…`.
-pub fn print_type<V: ValueType>(module: &Module<HighProgram<V>>, root: NodeId) -> String {
+pub fn print_type<P: HighProgram>(module: &Module<P>, root: NodeId) -> String
+where
+    P::Value: ValueType,
+{
     TypePrinter::new(module).node(root)
 }
 
@@ -70,8 +78,11 @@ pub fn print_type<V: ValueType>(module: &Module<HighProgram<V>>, root: NodeId) -
 /// names.  Generic over the value vocabulary: the lowlevel structural values
 /// render through [`AsEnum`], the type constants through [`ValueType`], and
 /// an extension's own variants through the render hook.
-pub struct TypePrinter<'a, V: ValueType = HighProgramValue> {
-    module: &'a Module<HighProgram<V>>,
+pub struct TypePrinter<'a, P: HighProgram = LangProgram>
+where
+    P::Value: ValueType,
+{
+    module: &'a Module<P>,
     /// The checker's arrow-shape registry, when rendering diagnostics: a
     /// class whose representative is a bare `[in, out]` shape (no kind
     /// wrapper) renders as an arrow only if a member is registered here.
@@ -86,7 +97,7 @@ pub struct TypePrinter<'a, V: ValueType = HighProgramValue> {
     /// The extension's own value variants — how a variant the base
     /// vocabulary does not know renders.  `None` (the base vocabulary) or a
     /// hook returning `None` for a value leaves it `?`.
-    render_ext: Option<RenderExt<'a, V>>,
+    render_ext: Option<RenderExt<'a, P::Value>>,
     /// Render a struct type's nominal id as `struct<…>#n` — on for the
     /// diagnostic printer (two structs with the same field shape are
     /// distinguishable), off for the value/type output path (a single value's
@@ -94,15 +105,18 @@ pub struct TypePrinter<'a, V: ValueType = HighProgramValue> {
     show_struct_id: bool,
 }
 
-impl<'a, V: ValueType> TypePrinter<'a, V> {
-    pub fn new(module: &'a Module<HighProgram<V>>) -> Self {
+impl<'a, P: HighProgram> TypePrinter<'a, P>
+where
+    P::Value: ValueType,
+{
+    pub fn new(module: &'a Module<P>) -> Self {
         Self::new_with(module, None, None)
     }
 
     /// A printer that also knows the checker's arrow shapes, so bare
     /// `[in, out]` shapes render as `in -> out`.
     pub fn new_with_arrows(
-        module: &'a Module<HighProgram<V>>,
+        module: &'a Module<P>,
         arrows: Option<&'a HashSet<NodeId>>,
     ) -> Self {
         Self::new_with(module, arrows, None)
@@ -112,16 +126,16 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
     /// `render_ext` — a hook the base renderer cannot know, returning the
     /// variant's spelling (or `None` for a value it does not recognize).
     pub fn new_with_ext(
-        module: &'a Module<HighProgram<V>>,
-        render_ext: Option<RenderExt<'a, V>>,
+        module: &'a Module<P>,
+        render_ext: Option<RenderExt<'a, P::Value>>,
     ) -> Self {
         Self::new_with(module, None, render_ext)
     }
 
     fn new_with(
-        module: &'a Module<HighProgram<V>>,
+        module: &'a Module<P>,
         arrows: Option<&'a HashSet<NodeId>>,
-        render_ext: Option<RenderExt<'a, V>>,
+        render_ext: Option<RenderExt<'a, P::Value>>,
     ) -> Self {
         TypePrinter {
             module,
@@ -147,7 +161,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         }
         let value = self.module.nodes[node]
             .value
-            .unwrap_or_else(|| V::from(LowValue::None));
+            .unwrap_or_else(|| P::Value::from(LowValue::None));
         if matches!(
             value.as_enum(),
             Some(LowValue::None | LowValue::Parameterized)
@@ -174,7 +188,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
     }
 
     /// Render a type value, descending into arrays.
-    fn value(&mut self, node: NodeId, value: V) -> String {
+    fn value(&mut self, node: NodeId, value: P::Value) -> String {
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
@@ -193,18 +207,18 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
     /// The spelling of a type constant — or of an extension's own variant:
     /// the lowlevel structural values return `None`, they are rendered by
     /// [`Self::value`]'s structural branch.
-    pub(crate) fn type_constant(&self, value: &V) -> Option<String> {
-        if value == &V::int_marker() {
+    pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
+        if value == &P::Value::int_marker() {
             Some("Int".to_string())
-        } else if value == &V::type_marker() {
+        } else if value == &P::Value::type_marker() {
             Some("Type".to_string())
-        } else if value == &V::function_type_marker() {
+        } else if value == &P::Value::function_type_marker() {
             Some("TypeFunction".to_string())
-        } else if value == &V::tuple_type_marker() {
+        } else if value == &P::Value::tuple_type_marker() {
             Some("TypeTuple".to_string())
-        } else if value == &V::array_type_marker() {
+        } else if value == &P::Value::array_type_marker() {
             Some("TypeArray".to_string())
-        } else if value == &V::type_struct_marker() {
+        } else if value == &P::Value::type_struct_marker() {
             Some("TypeStruct".to_string())
         } else if let Some(n) = value.type_id() {
             Some(format!("TypeId({n})"))
@@ -263,7 +277,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             && self.is_universe_any(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
-                Some(m) if m == V::function_type_marker() => {
+                Some(m) if m == P::Value::function_type_marker() => {
                     // shape = [in, out] — render `in -> out`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
@@ -277,12 +291,12 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
                         );
                     }
                 }
-                Some(m) if m == V::tuple_type_marker() => {
+                Some(m) if m == P::Value::tuple_type_marker() => {
                     // shape = the field-type list — render `<T1, ..., Tn>`.
                     let fields = self.fields_any(elements[0].node);
                     return format!("<{}>", fields.join(", "));
                 }
-                Some(m) if m == V::array_type_marker() => {
+                Some(m) if m == P::Value::array_type_marker() => {
                     // shape = [element type, length] — render `T<len>`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
@@ -422,7 +436,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
             && self.is_static_universe(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
-                Some(m) if m == V::function_type_marker() => {
+                Some(m) if m == P::Value::function_type_marker() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         && let s = shape.items()
@@ -435,11 +449,11 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
                         );
                     }
                 }
-                Some(m) if m == V::tuple_type_marker() => {
+                Some(m) if m == P::Value::tuple_type_marker() => {
                     let fields = self.static_fields(elements[0].node, visiting);
                     return format!("<{}>", fields.join(", "));
                 }
-                Some(m) if m == V::array_type_marker() => {
+                Some(m) if m == P::Value::array_type_marker() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         && let s = shape.items()
@@ -501,7 +515,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
         {
             let items = array.items();
             return items.len() == 2
-                && self.module.node_value(items[0].node) == Some(V::type_marker())
+                && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
                 && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index);
         }
         false
@@ -525,7 +539,7 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
                         let items = inner.items();
                         items.len() == 2
                             && self.module.node_value(items[0].node)
-                                == Some(V::type_struct_marker())
+                                == Some(P::Value::type_struct_marker())
                             && self.is_universe_any(items[1].node)
                     }
                     _ => false,
@@ -537,25 +551,31 @@ impl<'a, V: ValueType> TypePrinter<'a, V> {
 /// so a value reads like the code that produced it.  Generic over the value
 /// vocabulary, like [`TypePrinter`]; an extension's own variants render
 /// through the same render hook.
-pub struct ValuePrinter<'a, V: ValueType = HighProgramValue> {
-    module: &'a Module<HighProgram<V>>,
-    printer: TypePrinter<'a, V>,
+pub struct ValuePrinter<'a, P: HighProgram = LangProgram>
+where
+    P::Value: ValueType,
+{
+    module: &'a Module<P>,
+    printer: TypePrinter<'a, P>,
     /// Value nodes on the current recursion; a cycle renders as `…`.
     path: Vec<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
     tpath: Vec<NodeId>,
 }
 
-impl<'a, V: ValueType> ValuePrinter<'a, V> {
-    pub fn new(module: &'a Module<HighProgram<V>>) -> Self {
+impl<'a, P: HighProgram> ValuePrinter<'a, P>
+where
+    P::Value: ValueType,
+{
+    pub fn new(module: &'a Module<P>) -> Self {
         Self::new_with_ext(module, None)
     }
 
     /// A printer that renders an extension vocabulary's own variants through
     /// `render_ext` — see [`TypePrinter::new_with_ext`].
     pub fn new_with_ext(
-        module: &'a Module<HighProgram<V>>,
-        render_ext: Option<RenderExt<'a, V>>,
+        module: &'a Module<P>,
+        render_ext: Option<RenderExt<'a, P::Value>>,
     ) -> Self {
         ValuePrinter {
             module,
@@ -566,13 +586,13 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
     }
 
     /// Render the runtime value `value`, whose type is `ty`.
-    pub fn print(&mut self, value: V, ty: NodeId) -> String {
+    pub fn print(&mut self, value: P::Value, ty: NodeId) -> String {
         self.value(value, ty)
     }
 
     /// Render a value against its type: the type chain decides how the value
     /// reads.  When the type chain is opaque, fall back to the raw layout.
-    fn value(&mut self, value: V, ty: NodeId) -> String {
+    fn value(&mut self, value: P::Value, ty: NodeId) -> String {
         // The universe as the type: the value is an atomic type constant —
         // `Int`, `Type`, or an extension's own type constant.
         if self.printer.is_universe_any(AnyNodeId::Dynamic(ty)) {
@@ -612,7 +632,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
         // so it is detected beside the `[marker, K]` kinds.
         if tys.len() == 2
             && self.is_struct_kind_any(tys[1].node)
-            && let Some(out) = self.instance(value, tys[0].node, V::type_struct_marker())
+            && let Some(out) = self.instance(value, tys[0].node, P::Value::type_struct_marker())
         {
             return out;
         }
@@ -635,7 +655,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
     /// An atomic type constant: the value of a type expression whose type is
     /// the universe.  A structural value typed by the universe (the universe
     /// node itself) falls back to the raw layout.
-    fn atomic(&mut self, value: V) -> String {
+    fn atomic(&mut self, value: P::Value) -> String {
         if let Some(spelling) = self.printer.type_constant(&value) {
             spelling
         } else {
@@ -647,13 +667,13 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
     /// element list / `[element, length]` / `[TypeId, fields]`, and the
     /// marker decides how the shape reads.  `None` when the value or the
     /// marker does not fit a compound type.
-    fn compound_type(&mut self, value: V, marker_node: AnyNodeId) -> Option<String> {
+    fn compound_type(&mut self, value: P::Value, marker_node: AnyNodeId) -> Option<String> {
         let marker = self.module.node_value(marker_node)?;
         let Some(LowValue::Array(shape)) = value.as_enum() else {
             return None;
         };
         let shape = shape.items();
-        if marker == V::function_type_marker() {
+        if marker == P::Value::function_type_marker() {
             if shape.len() == 2 {
                 return Some(format!(
                     "{} -> {}",
@@ -661,13 +681,13 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                     self.printer.any_node(shape[1].node)
                 ));
             }
-        } else if marker == V::tuple_type_marker() {
+        } else if marker == P::Value::tuple_type_marker() {
             let fields: Vec<String> = shape
                 .iter()
                 .map(|item| self.printer.any_node(item.node))
                 .collect();
             return Some(format!("<{}>", fields.join(", ")));
-        } else if marker == V::array_type_marker() && shape.len() == 2 {
+        } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
             return Some(format!(
                 "{}<{}>",
                 self.printer.any_node(shape[0].node),
@@ -684,7 +704,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
     /// against the shape — a tuple reads `(v1, ..., vn)` (a single element
     /// `(v1,)`), an array `[v1, ..., vn]`, a struct instance its field tuple
     /// `(v1, ..., vn)`.  `None` when the value or the shape does not fit.
-    fn instance(&mut self, value: V, shape_node: AnyNodeId, marker: V) -> Option<String> {
+    fn instance(&mut self, value: P::Value, shape_node: AnyNodeId, marker: P::Value) -> Option<String> {
         let Some(LowValue::Array(values)) = value.as_enum() else {
             return None;
         };
@@ -694,7 +714,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             return None;
         };
         let shape = shape.items();
-        if marker == V::tuple_type_marker() {
+        if marker == P::Value::tuple_type_marker() {
             if shape.len() != values.len() {
                 return None;
             }
@@ -704,7 +724,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             }
             return Some(self.parens(&out));
         }
-        if marker == V::array_type_marker() {
+        if marker == P::Value::array_type_marker() {
             if shape.len() != 2 {
                 return None;
             }
@@ -714,7 +734,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
             }
             return Some(format!("[{}]", out.join(", ")));
         }
-        if marker == V::type_struct_marker() {
+        if marker == P::Value::type_struct_marker() {
             // The shape is the positional field-type list (the nominal id
             // lives in the kind), so the element types are the fields.
             let fields = shape;
@@ -753,7 +773,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                 self.tpath.push(ty);
                 let value = self.module.nodes[id]
                     .value
-                    .unwrap_or_else(|| V::from(LowValue::None));
+                    .unwrap_or_else(|| P::Value::from(LowValue::None));
                 let out = self.value(value, ty);
                 self.tpath.pop();
                 self.path.pop();
@@ -763,7 +783,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                 let value = self
                     .module
                     .node_value(id)
-                    .unwrap_or_else(|| V::from(LowValue::None));
+                    .unwrap_or_else(|| P::Value::from(LowValue::None));
                 self.raw_any(value)
             }
         }
@@ -784,12 +804,12 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
     /// the reading: a type pair `[head, [Type, ↺]]` renders as its head
     /// (`[TypeInt, K]` → `Int`), arrays `[ ]`, functions `Function`, and the
     /// type constants by their spellings `Int` / `Type`.
-    fn raw(&mut self, value: V) -> String {
+    fn raw(&mut self, value: P::Value) -> String {
         self.raw_any(value)
     }
 
     /// [`Self::raw`] for a value whose array items may be static refs.
-    fn raw_any(&mut self, value: V) -> String {
+    fn raw_any(&mut self, value: P::Value) -> String {
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
@@ -806,7 +826,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                         let head = self
                             .module
                             .node_value(elements[0].node)
-                            .unwrap_or_else(|| V::from(LowValue::None));
+                            .unwrap_or_else(|| P::Value::from(LowValue::None));
                         return self.raw_any(head);
                     }
                     let mut out = Vec::new();
@@ -814,7 +834,7 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
                         let value = self
                             .module
                             .node_value(item.node)
-                            .unwrap_or_else(|| V::from(LowValue::None));
+                            .unwrap_or_else(|| P::Value::from(LowValue::None));
                         let text = self.raw_any(value);
                         out.push(text);
                     }
@@ -830,7 +850,10 @@ impl<'a, V: ValueType> ValuePrinter<'a, V> {
 
 /// The class representative of `node`, via a read-only `parent` walk (the
 /// printers never mutate the module).
-fn representative<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> NodeId {
+fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> NodeId
+where
+    P::Value: ValueType,
+{
     let mut n = node;
     while let Some(parent) = module.nodes[n].equality.parent {
         n = parent;
@@ -857,7 +880,10 @@ fn letter_name(i: usize) -> String {
 /// both.
 /// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
 /// to a struct type term `[shape, kind]`, whose kind slot is such a node).
-fn is_struct_kind<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> bool {
+fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
+where
+    P::Value: ValueType,
+{
     module
         .nodes
         .get(node)
@@ -869,7 +895,10 @@ fn is_struct_kind<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -
         })
 }
 
-fn is_universe<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> bool {
+fn is_universe<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
+where
+    P::Value: ValueType,
+{
     let rep = representative(module, node);
     matches!(module.nodes[node].value, Some(value)
     if matches!(value.as_enum(), Some(LowValue::Array(array))
@@ -881,7 +910,10 @@ fn is_universe<V: ValueType>(module: &Module<HighProgram<V>>, node: NodeId) -> b
 
 /// The read-only, static-aware universe test shared by the free printer
 /// helpers: a static universe is the self-referential `[Type, itself]`.
-fn is_universe_any<V: ValueType>(module: &Module<HighProgram<V>>, id: AnyNodeId) -> bool {
+fn is_universe_any<P: HighProgram>(module: &Module<P>, id: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
     match id {
         AnyNodeId::Dynamic(node) => is_universe(module, node),
         AnyNodeId::Static(sref) => module
@@ -891,7 +923,7 @@ fn is_universe_any<V: ValueType>(module: &Module<HighProgram<V>>, id: AnyNodeId)
                 LowValue::Array(array) => {
                     let items = array.items();
                     items.len() == 2
-                        && module.node_value(items[0].node) == Some(V::type_marker())
+                        && module.node_value(items[0].node) == Some(P::Value::type_marker())
                         && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
                 }
                 _ => false,
@@ -903,7 +935,10 @@ fn is_universe_any<V: ValueType>(module: &Module<HighProgram<V>>, id: AnyNodeId)
 /// kind: `[id, [TypeStruct, K]]`.  The nominal id heads the kind and the
 /// `TypeStruct` tag is the inner `[TypeStruct, K]` layer, so it cannot be
 /// detected the way the `[marker, K]` kinds are.
-fn kind_is_struct<V: ValueType>(module: &Module<HighProgram<V>>, kind_items: &[ArrayItem]) -> bool {
+fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
+where
+    P::Value: ValueType,
+{
     kind_items.len() == 2
         && module
             .node_value(kind_items[1].node)
@@ -912,7 +947,7 @@ fn kind_is_struct<V: ValueType>(module: &Module<HighProgram<V>>, kind_items: &[A
                 LowValue::Array(inner) => {
                     let items = inner.items();
                     items.len() == 2
-                        && module.node_value(items[0].node) == Some(V::type_struct_marker())
+                        && module.node_value(items[0].node) == Some(P::Value::type_struct_marker())
                         && is_universe_any(module, items[1].node)
                 }
                 _ => false,
@@ -961,9 +996,10 @@ pub fn render_all(source: &str, diags: &[Diag]) -> String {
 /// mirroring the highlevel's raw rendering ([`liche_highlevel::diagnostic`])
 /// but in the language's own type syntax.  `printer` is shared across a whole
 /// report, so a class keeps a single `?a` name across diagnostics.
-pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag) -> String {
+pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) -> String {
     match d.kind {
         DiagKind::Annotation
+        | DiagKind::Attribute
         | DiagKind::ArrayElement
         | DiagKind::TableKey
         | DiagKind::TableValue => format!(
@@ -1013,9 +1049,10 @@ mod tests {
     use super::*;
     use crate::diag::Stage;
 
+    use lichen_highlevel::attr::NoAttr;
     use lichen_highlevel::checker::Checker;
     use lichen_highlevel::ir::{ExprKind, IR};
-    use lichen_highlevel::program::TypeValue;
+    use lichen_highlevel::program::{HighProgramOperator, ProgramImpl, TypeValue};
     use lichen_lowlevel::ValueExt;
 
     #[test]
@@ -1221,7 +1258,7 @@ mod tests {
         let mut ir: IR<ProbeValue> = IR::new();
         let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
         ir.set_root(float_ty);
-        let build = Checker::build(ir);
+        let build = Checker::<ProgramImpl<ProbeValue, HighProgramOperator, NoAttr>>::build(ir);
         assert!(build.ok);
         let mut module = build.module;
         let value = module.evaluate_node_deep(build.root_val, None);
@@ -1242,7 +1279,7 @@ mod tests {
         let mut ir: IR<ProbeValue> = IR::new();
         let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
         ir.set_root(float_ty);
-        let build = Checker::build(ir);
+        let build = Checker::<ProgramImpl<ProbeValue, HighProgramOperator, NoAttr>>::build(ir);
         let mut module = build.module;
         let value = module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);

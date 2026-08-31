@@ -38,22 +38,26 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR, Span};
+use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR, Schema, Span};
 use lichen_highlevel::program::{HighProgramValue, TypeValue};
 use lichen_lowlevel::LowValue;
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
+use crate::program::Perspective;
 
-pub fn compile(program: &Program) -> Result<IR, Diag> {
+pub fn compile(program: &Program) -> Result<IR<HighProgramValue, Perspective>, Diag> {
     compile_with_imports(program, &[])
 }
 
 /// Compile a parsed program with resolved imports pre-seeded in the first
 /// scope frame.  Local bindings may shadow an imported name because the
 /// import frame is below the block-wide binding frames.
-pub fn compile_with_imports(program: &Program, imports: &[ResolvedImport]) -> Result<IR, Diag> {
+pub fn compile_with_imports(
+    program: &Program,
+    imports: &[ResolvedImport],
+) -> Result<IR<HighProgramValue, Perspective>, Diag> {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
@@ -84,7 +88,7 @@ pub fn compile_with_imports(program: &Program, imports: &[ResolvedImport]) -> Re
 }
 
 struct Compiler {
-    ir: IR,
+    ir: IR<HighProgramValue, Perspective>,
     /// The in-scope binders, innermost last.
     scopes: Vec<HashMap<String, ExprId>>,
     /// The count of enclosing function scopes at the current compilation
@@ -244,40 +248,47 @@ impl Compiler {
                 parameter,
                 parameter_span,
                 parameter_type,
+                parameter_perspective,
                 r#return,
                 span,
             } => {
                 let depth = self.fn_depth as u32;
                 let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
+                // A `x # n` parameter carries the perspective tail in its
+                // static schema — the checker reads `schema(parameter).tail[0]`
+                // to dispatch the apply's attribute equality check.
+                if parameter_perspective.is_some() {
+                    self.ir
+                        .set_schema(parameter_id, Schema { tail: vec![Perspective] });
+                }
                 self.scopes
                     .push(HashMap::from([(parameter.clone(), parameter_id)]));
-                // The annotated parameter's type is compiled in scope too —
-                // a type may reference the parameter (`x : x -> Int`).
+                // The annotated parameter's type and attribute are compiled
+                // in scope too — either may reference the parameter
+                // (`x : x -> Int`).
+                let parameter_type = parameter_type
+                    .as_ref()
+                    .map(|t| self.compile_expr(t))
+                    .transpose();
+                let parameter_attribute = parameter_perspective
+                    .as_ref()
+                    .map(|p| self.compile_expr(p))
+                    .transpose();
                 let body = {
                     self.fn_depth += 1;
                     let body = self.compile_expr(r#return);
                     self.fn_depth -= 1;
                     body
                 };
-                let parameter_type = parameter_type
-                    .as_ref()
-                    .map(|t| self.compile_expr(t))
-                    .transpose();
                 self.scopes.pop();
                 let body = body?;
-                // `x : T => e` — the annotated type rides the `Function`
-                // itself instead of an outer `(x => e) : (T -> _)`
-                // annotation: the checker compiles it in body scope, so
-                // in-body readers of the parameter see the annotated kind
-                // (an array annotation's length, a function annotation's
-                // arrow) while the parameter's type slot still performs the
-                // argument check at each apply.  An unannotated parameter
-                // is `None`.
                 let parameter_type = parameter_type?;
+                let parameter_attribute = parameter_attribute?;
                 self.alloc(
                     ExprKind::Function {
                         parameter: parameter_id,
                         parameter_type,
+                        parameter_attribute,
                         r#return: body,
                         depth,
                     },
@@ -361,11 +372,30 @@ impl Compiler {
             Expr::Annotation {
                 value,
                 r#type,
+                perspective,
                 span,
             } => {
                 let value = self.compile_expr(value)?;
-                let r#type = self.compile_expr(r#type)?;
-                self.alloc(ExprKind::Annotation { value, r#type }, span)
+                let r#type = r#type.as_ref().map(|t| self.compile_expr(t)).transpose()?;
+                let attribute = perspective
+                    .as_ref()
+                    .map(|p| self.compile_expr(p))
+                    .transpose()?;
+                let id = self.alloc(
+                    ExprKind::Annotation {
+                        value,
+                        r#type,
+                        attribute,
+                    },
+                    span,
+                );
+                // `# p` stamps the annotated node's static schema with the
+                // `Perspective` tail — the one asymmetry with `:` (the slot
+                // comes into existence by being annotated).
+                if attribute.is_some() {
+                    self.ir.set_schema(id, Schema { tail: vec![Perspective] });
+                }
+                id
             }
             Expr::Index { array, index, span } => {
                 let array = self.compile_expr(array)?;
@@ -517,7 +547,7 @@ mod tests {
     use crate::lex::lex;
     use crate::parse::parse;
 
-    fn compile_ok(source: &str) -> IR {
+    fn compile_ok(source: &str) -> IR<HighProgramValue, Perspective> {
         let tokens = lex(source).tokens;
         let ast = parse(&tokens).program;
         compile(&ast).unwrap()
@@ -529,14 +559,14 @@ mod tests {
         compile(&ast).unwrap_err()
     }
 
-    fn kind(ir: &IR, id: ExprId) -> ExprKind<HighProgramValue> {
+    fn kind(ir: &IR<HighProgramValue, Perspective>, id: ExprId) -> ExprKind<HighProgramValue> {
         ir[id].kind
     }
 
     /// The node the statement wrapper selects: the root is either the final
     /// expression's own node (no wrap) or `Field(Tuple([…, final]), n)`,
     /// which unwraps to the final expression.
-    fn wrapped(ir: &IR) -> ExprId {
+    fn wrapped(ir: &IR<HighProgramValue, Perspective>) -> ExprId {
         match ir[ir.root].kind {
             ExprKind::Field { container: array, key: index } => {
                 let ExprKind::Tuple(range) = ir[array].kind else {
@@ -631,7 +661,10 @@ mod tests {
         let ExprKind::Annotation { r#type, .. } = kind(&ir, r#return) else {
             panic!("expected an annotation")
         };
-        assert!(matches!(kind(&ir, r#type), ExprKind::Placeholder));
+        assert!(matches!(
+            kind(&ir, r#type.expect("the annotated type")),
+            ExprKind::Placeholder
+        ));
     }
 
     #[test]

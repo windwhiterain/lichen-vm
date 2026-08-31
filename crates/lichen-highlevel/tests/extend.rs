@@ -10,8 +10,9 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
+use lichen_highlevel::NoAttr;
 use lichen_highlevel::program::{
-    HighProgram, HighProgramOperator, TypeOperator, TypeValue, ValueType,
+    HighProgramOperator, ProgramImpl, TypeOperator, TypeValue, ValueType,
 };
 use lichen_lowlevel::{
     AnyNodeId, BlockId, LowOperator, LowValue, Module, NodeId, OperatorExt, ValueExt,
@@ -120,7 +121,8 @@ fn the_checker_runs_on_an_extended_union() {
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,
-            r#type: int_t,
+            r#type: Some(int_t),
+            attribute: None,
         },
         None,
     );
@@ -128,7 +130,7 @@ fn the_checker_runs_on_an_extended_union() {
     // checker only compiles what the root references).
     let tuple = ir.alloc_tuple(&[float_ty, ann], None);
     ir.set_root(tuple);
-    let build = Checker::build(ir);
+    let build = Checker::<ProgramImpl<ProbeValue, ProbeOperator, NoAttr>>::build(ir);
     assert!(build.ok, "the extended-union program must check");
     let float_pair = build.term[float_ty.0 as usize].unwrap();
     let float_value = build.val[float_ty.0 as usize].unwrap();
@@ -160,12 +162,13 @@ fn an_extended_union_reports_type_conflicts() {
     let ann = ir.alloc(
         ExprKind::Annotation {
             value: five,
-            r#type: ty,
+            r#type: Some(ty),
+            attribute: None,
         },
         None,
     );
     ir.set_root(ann);
-    let build = Checker::build(ir);
+    let build = Checker::<ProgramImpl<ProbeValue, ProbeOperator, NoAttr>>::build(ir);
     assert!(!build.ok);
     assert!(
         build
@@ -186,12 +189,12 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType> OperatorExt<HighProgram<V, ProbeOperator>> for ProbeOperator {
+impl<V: ValueType> OperatorExt<ProgramImpl<V, ProbeOperator, NoAttr>> for ProbeOperator {
     fn run(
         &self,
         _operand: V,
         _block: BlockId,
-        _module: &mut Module<HighProgram<V, ProbeOperator>>,
+        _module: &mut Module<ProgramImpl<V, ProbeOperator, NoAttr>>,
     ) -> V {
         unreachable!("the probe operator is only used to prove the type composes")
     }
@@ -202,7 +205,7 @@ fn the_program_marker_accepts_a_composed_operator_vocabulary() {
     // A `Module` can be bound to the highlevel value vocabulary with a
     // downstream operator union; the lowlevel runtime machinery no longer
     // requires the operator set to be exactly `HighProgramOperator`.
-    let _module = Module::<HighProgram<ProbeValue, ProbeOperator>>::new();
+    let _module = Module::<ProgramImpl<ProbeValue, ProbeOperator, NoAttr>>::new();
     assert!(HighProgramOperator::LowOperator(LowOperator::Apply)
         == HighProgramOperator::LowOperator(LowOperator::Apply));
 }

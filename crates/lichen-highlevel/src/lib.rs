@@ -10,6 +10,7 @@
 //! The IR is dense and id-referenced (no `Box`, no name strings): a use of a
 //! parameter is the parameter's own pre-resolved `ExprId`.
 
+pub mod attr;
 pub mod checker;
 pub mod diagnostic;
 pub mod ir;
@@ -19,7 +20,8 @@ pub mod program;
 // its own union with `lichen_utils::enum_ext!`, listing every layer's enum
 // directly — `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
 // own variants.  Each layer provides a plain enum; nothing nests.
+pub use attr::{AttrExt, AttrSpec, NoAttr};
 pub use program::{
-    HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, TypeOperator,
-    TypeValue, ValueType,
+    HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ProgramImpl,
+    TypeOperator, TypeValue, ValueType,
 };

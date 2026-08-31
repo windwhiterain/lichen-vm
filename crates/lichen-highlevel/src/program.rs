@@ -19,6 +19,8 @@ use lichen_lowlevel::{
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
+use crate::attr::{AttrSpec, NoAttr};
+
 /// The fresh-nominal-type-id state — one extension component of
 /// [`HighGlobalExt`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -266,8 +268,8 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType> OperatorExt<HighProgram<V, HighProgramOperator>> for HighProgramOperator {
-    fn run(&self, operand: V, _block: BlockId, module: &mut Module<HighProgram<V, HighProgramOperator>>) -> V {
+impl<V: ValueType> OperatorExt<ProgramImpl<V, HighProgramOperator, NoAttr>> for HighProgramOperator {
+    fn run(&self, operand: V, _block: BlockId, module: &mut Module<ProgramImpl<V, HighProgramOperator, NoAttr>>) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
@@ -336,26 +338,44 @@ impl<V: ValueType> OperatorExt<HighProgram<V, HighProgramOperator>> for HighProg
     }
 }
 
-/// The highlevel's concrete lowlevel program: a marker generic over the
-/// value vocabulary and the operator vocabulary.
+/// The highlevel's associated-type collector: what the checker is generic
+/// over.  It extends the lowlevel [`Program`] (which carries `Value`,
+/// `Operator`, `GlobalExt`, `PackageMeta`) with the one thing the highlevel
+/// needs on top — the attribute type carried by an expression's schema
+/// ([`Schema`](crate::ir::Schema)).  A language frontend implements this for
+/// its own compiled program, plugging in a concrete attribute (e.g.
+/// `Perspective`); the checker never names a concrete attribute, only
+/// `Self::Attr`.
+pub trait HighProgram: Program {
+    /// The compile-time attribute type an expression's schema may carry.
+    /// `NoAttr` (highlevel's empty attribute) is the default — a program with
+    /// no attribute extension — while a language plugs in its own (e.g.
+    /// `Perspective`).
+    type Attr: AttrSpec;
+}
+
+/// The highlevel's concrete lowlevel program: a marker generic over the value
+/// vocabulary, the operator vocabulary, *and* the attribute type.
 ///
 /// The default [`HighProgramOperator`] is what the checked highlevel builder
 /// emits.  A downstream that needs additional lowlevel operators can compose
 /// its own operator enum with `lichen_utils::enum_ext!` (carrying
-/// [`LowOperator`] and [`TypeOperator`] as siblings) and use
-/// `Module<HighProgram<V, MyOperator>>`; the checker itself is still tied to
-/// [`HighProgramOperator`], but the runtime/static-module/registry machinery
-/// is now reusable with the extended operator set.
+/// [`LowOperator`] and [`TypeOperator`] as siblings, plus its own attribute
+/// operators) and use `Module<ProgramImpl<V, MyOperator, MyAttr>>`; the
+/// runtime/static-module/registry machinery is then reusable with the extended
+/// operator set.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct HighProgram<
+pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
->(PhantomData<(V, O)>);
+    A: AttrSpec = NoAttr,
+>(PhantomData<(V, O, A)>);
 
-impl<V, O> Program for HighProgram<V, O>
+impl<V, O, A> Program for ProgramImpl<V, O, A>
 where
     V: ValueType,
-    O: lichen_lowlevel::OperatorExt<HighProgram<V, O>>
+    A: AttrSpec,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A>>
         + From<LowOperator>
         + lichen_utils::extend::AsEnum<LowOperator>
         + std::fmt::Debug
@@ -366,4 +386,18 @@ where
     type Operator = O;
     type GlobalExt = HighGlobalExt;
     type PackageMeta = HighPackageMeta;
+}
+
+impl<V, O, A> HighProgram for ProgramImpl<V, O, A>
+where
+    V: ValueType,
+    A: AttrSpec,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A>>
+        + From<LowOperator>
+        + lichen_utils::extend::AsEnum<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+{
+    type Attr = A;
 }

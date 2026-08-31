@@ -11,7 +11,44 @@
 
 use std::collections::HashSet;
 
+use crate::attr::{AttrSpec, NoAttr};
 use crate::program::HighProgramValue;
+
+/// The static schema of an expression: which compile-time attributes ride on
+/// its runtime pair and in which order.  `tail` is index-aligned with the
+/// slots below the `[value, type]` head — an empty `tail` is the ordinary
+/// 2-wide pair, a `[Perspective]` tail a 3-wide pair `[value, type, attr]`.
+///
+/// The ordinary "type" is a *runtime* value (the `[value, type]` pair); a
+/// schema is lichen's first *static* thing — it describes the *shape* of an
+/// expression's runtime pair (its arity and which attribute sits in which
+/// slot) and is known at lowering.  It is never a runtime node, never unified,
+/// never cloned: the checker consumes it to decide how to build the runtime
+/// pair, then it is gone.  It is generic over the attribute type `A` (the
+/// `HighProgram::Attr`), so a language plugs in its own attribute marker and
+/// the highlevel stays attribute-agnostic.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Schema<A> {
+    pub tail: Vec<A>,
+}
+
+impl<A> Default for Schema<A> {
+    fn default() -> Self {
+        Schema { tail: Vec::new() }
+    }
+}
+
+impl<A> Schema<A> {
+    /// The runtime pair's arity: 2 (value, type) + one slot per attribute.
+    pub fn arity(&self) -> usize {
+        self.tail.len() + 2
+    }
+}
+
+/// An interned index into [`IR::schema_table`].  `0` is always the default
+/// (empty-`tail`) schema, so a fresh [`IR::alloc`] needs no write.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SchemaId(pub u32);
 
 /// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`) yield
 /// their result; the comparisons (`Leq`, `Eq`) yield `USize(0/1)` so the
@@ -45,7 +82,7 @@ pub type Span = (u32, u32);
 /// The highlevel program: a pure expression tree, generic over the value
 /// vocabulary it embeds (defaults to the highlevel's own [`HighProgramValue`]).
 #[derive(Clone, Debug)]
-pub struct IR<V = HighProgramValue> {
+pub struct IR<V = HighProgramValue, A = NoAttr> {
     pub expr: Vec<Expr<V>>,
     /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
@@ -64,6 +101,11 @@ pub struct IR<V = HighProgramValue> {
     /// poison the apply-time unify (a placeholder reached through an
     /// index-typed apply would stay an unbound `?a`).
     pub block_roots: HashSet<ExprId>,
+    /// The per-expression static schema, index-aligned with [`IR::expr`] — one
+    /// [`SchemaId`] each.  `alloc` stamps the default (empty-`tail`) schema.
+    pub schemas: Vec<SchemaId>,
+    /// The interned schema table (see [`Schema`]); [`SchemaId`]s index it.
+    pub schema_table: Vec<Schema<A>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -98,6 +140,13 @@ pub enum ExprKind<V> {
         /// performs the argument check at each apply.  `None` for an
         /// unannotated parameter.
         parameter_type: Option<ExprId>,
+        /// The annotated parameter's attribute (`x # n => e`), compiled in
+        /// body scope like `parameter_type`.  `None` for an unannotated
+        /// parameter.  This is the optimization for the `x # n => e` →
+        /// `x => { x # n; e }` desugar (an unannotated body statement would
+        /// otherwise materialize a block; the field rides the `Function`
+        /// and the checker compiles it in body scope).
+        parameter_attribute: Option<ExprId>,
         r#return: ExprId,
         depth: u32,
     },
@@ -147,8 +196,17 @@ pub enum ExprKind<V> {
     /// [`Self::Index`] — so the checker compiles the read to the dedicated
     /// lowlevel `TableGet` directly, never a kind dispatch.
     Find { container: ExprId, key: ExprId },
-    /// `{ value, type }` — the value's type must unify with the type expression.
-    Annotation { value: ExprId, r#type: ExprId },
+    /// `{ value, type?, attribute? }` — a type and/or attribute annotation.
+    /// `: T` fills `r#type` (existing), `# p` fills `attribute` (new).  Either
+    /// may be absent (`e # p`, `e : T`); at most one each.  A `# p` on a term
+    /// also stamps the annotated node's schema with the attribute tail — the
+    /// one asymmetry with `:` (the slot comes into existence by being
+    /// annotated).
+    Annotation {
+        value: ExprId,
+        r#type: Option<ExprId>,
+        attribute: Option<ExprId>,
+    },
     /// `{ parameter, return }` — a function type, compiled to the kinded
     /// arrow `[[in, out], [FunctionType, Type]]`.
     TypeFunction { parameter: ExprId, r#return: ExprId },
@@ -214,7 +272,7 @@ pub enum ExprKind<V> {
     },
 }
 
-impl<V> IR<V> {
+impl<V, A: AttrSpec> IR<V, A> {
     pub fn new() -> Self {
         IR {
             expr: Vec::new(),
@@ -222,13 +280,40 @@ impl<V> IR<V> {
             depths: Vec::new(),
             root: ExprId(0),
             block_roots: HashSet::new(),
+            schemas: Vec::new(),
+            // Slot 0 is always the default (empty-tail) schema, so a fresh
+            // `alloc` (which stamps `SchemaId(0)`) needs no write.
+            schema_table: vec![Schema::default()],
         }
     }
 
     pub fn alloc(&mut self, kind: ExprKind<V>, span: Option<Span>) -> ExprId {
         let id = ExprId(self.expr.len() as u32);
         self.expr.push(Expr { kind, span });
+        self.schemas.push(SchemaId(0));
         id
+    }
+
+    /// Intern a schema into the table (deduped) and return its id.
+    pub fn intern_schema(&mut self, schema: Schema<A>) -> SchemaId {
+        if let Some(pos) = self.schema_table.iter().position(|s| *s == schema) {
+            SchemaId(pos as u32)
+        } else {
+            let id = self.schema_table.len();
+            self.schema_table.push(schema);
+            SchemaId(id as u32)
+        }
+    }
+
+    /// Stamp an already-allocated node with a schema (interned).
+    pub fn set_schema(&mut self, e: ExprId, schema: Schema<A>) {
+        let id = self.intern_schema(schema);
+        self.schemas[e.0 as usize] = id;
+    }
+
+    /// The schema of an expression.
+    pub fn schema(&self, e: ExprId) -> &Schema<A> {
+        &self.schema_table[self.schemas[e.0 as usize].0 as usize]
     }
 
     pub fn alloc_tuple(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
@@ -316,13 +401,13 @@ impl<V> IR<V> {
     }
 }
 
-impl<V> Default for IR<V> {
+impl<V, A: AttrSpec> Default for IR<V, A> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<V> std::ops::Index<ExprId> for IR<V> {
+impl<V, A: AttrSpec> std::ops::Index<ExprId> for IR<V, A> {
     type Output = Expr<V>;
     fn index(&self, id: ExprId) -> &Expr<V> {
         &self.expr[id.0 as usize]

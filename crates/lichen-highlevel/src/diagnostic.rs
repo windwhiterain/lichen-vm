@@ -25,17 +25,19 @@ use lichen_lowlevel::{
 };
 use lichen_utils::disjoint::{self, Node as _};
 
+use lichen_utils::extend::AsEnum;
+
 use crate::{
     checker::Build,
     ir::{ExprId, Span},
-    program::{HighProgram, HighProgramOperator, HighProgramValue, TypeOperator, ValueType},
+    program::{HighProgram, ValueType},
 };
 
 /// A diagnostic: the structured facts of a unification failure, plus the
 /// rendered message for display.  Tests and tooling match on the structured
 /// fields; `message` is derived for display/debug only.
 #[derive(Clone, Debug)]
-pub struct Diag<V: ValueType = HighProgramValue> {
+pub struct Diag<P: lichen_lowlevel::Program> {
     pub span: Option<Span>,
     /// What kind of check failed — see [`DiagKind`] for the expected/found
     /// direction of `a`/`b`.
@@ -46,8 +48,8 @@ pub struct Diag<V: ValueType = HighProgramValue> {
     pub b: NodeId,
     /// The conflicting classes' values at error time — snapshots, not
     /// re-reads (a failed unify never merges the classes, so they are stable).
-    pub value_a: Option<V>,
-    pub value_b: Option<V>,
+    pub value_a: Option<P::Value>,
+    pub value_b: Option<P::Value>,
     /// Which `Module::unify_errors` entry this diagnostic came from — the
     /// key back to its diary entry, for callers (the language crate) that
     /// re-render the message.  `None` for runtime evaluation failures.
@@ -82,6 +84,10 @@ pub enum DiagKind {
     /// the int type expression, pinning an unbound operand) — expected =
     /// `Int`, found = the operand's type.
     BinOp,
+    /// An attribute (perspective) check: an expression's attribute slot must
+    /// equal the expected one — expected = the declared/derived attribute,
+    /// found = the argument's attribute.
+    Attribute,
     /// A runtime apply-time failure (the parameter type check, executed by
     /// the VM) — no diary entry.  Reversed direction: `a` = the parameter's
     /// expected type, `b` = the argument's found type.
@@ -113,10 +119,10 @@ pub struct DiaryEntry {
     pub kind: DiagKind,
 }
 
-impl<V: ValueType> Build<V> {
+impl<P: HighProgram> Build<P> where P::Value: ValueType {
     /// Render the unification failures as diagnostics — one per entry in
     /// [`lichen_lowlevel::Module::unify_errors`], in order.
-    pub fn diagnostics(&self) -> Vec<Diag<V>> {
+    pub fn diagnostics(&self) -> Vec<Diag<P>> {
         let mut report = Report {
             build: self,
             names: HashMap::new(),
@@ -201,8 +207,8 @@ impl<V: ValueType> Build<V> {
     }
 }
 
-struct Report<'a, V: ValueType> {
-    build: &'a Build<V>,
+struct Report<'a, P: HighProgram> where P::Value: ValueType {
+    build: &'a Build<P>,
     /// Stable class names: representative → `?a`, `?b`, … within one
     /// diagnostic.
     names: HashMap<NodeId, String>,
@@ -212,7 +218,7 @@ struct Report<'a, V: ValueType> {
     univ: NodeId,
 }
 
-impl<'a, V: ValueType> Report<'a, V> {
+impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
     /// The class representative of `node`, via a read-only `parent` walk (the
     /// printer never mutates the module).
     fn rep(&self, node: NodeId) -> NodeId {
@@ -233,7 +239,7 @@ impl<'a, V: ValueType> Report<'a, V> {
         name
     }
 
-    fn error(&mut self, i: usize, err: &UnifyError<HighProgram<V>>) -> Diag<V> {
+    fn error(&mut self, i: usize, err: &UnifyError<P>) -> Diag<P> {
         // An apply-time parameter-check failure: the raw unify error dropped
         // the two top-level sides, but the apply context kept them — attribute
         // this error to the call site with the declared parameter type and the
@@ -295,8 +301,8 @@ impl<'a, V: ValueType> Report<'a, V> {
         &mut self,
         i: usize,
         apply: &ApplyError,
-        err: &UnifyError<HighProgram<V>>,
-    ) -> Diag<V> {
+        err: &UnifyError<P>,
+    ) -> Diag<P> {
         let span = self
             .build
             .apply_edges
@@ -328,6 +334,11 @@ impl<'a, V: ValueType> Report<'a, V> {
         // deep conflict leaves.  The wording and direction come from the kind.
         match entry.kind {
             DiagKind::Annotation => format!(
+                "expected {}, found {}",
+                self.print_type(b),
+                self.print_type(a)
+            ),
+            DiagKind::Attribute => format!(
                 "expected {}, found {}",
                 self.print_type(b),
                 self.print_type(a)
@@ -370,7 +381,7 @@ impl<'a, V: ValueType> Report<'a, V> {
 
     /// A runtime apply-time failure: the parameter is the expected side, the
     /// argument the found side.
-    fn runtime_error(&mut self, err: &UnifyError<HighProgram<V>>) -> String {
+    fn runtime_error(&mut self, err: &UnifyError<P>) -> String {
         format!(
             "expected {}, found {}",
             self.print_type(err.a),
@@ -380,7 +391,7 @@ impl<'a, V: ValueType> Report<'a, V> {
 
     /// Attribution for runtime failures: walk both conflict classes for
     /// checker-built nodes; the first known span wins.
-    fn best_span(&self, err: &UnifyError<HighProgram<V>>) -> Option<Span> {
+    fn best_span(&self, err: &UnifyError<P>) -> Option<Span> {
         for rep in [err.a, err.b] {
             for member in disjoint::members(&self.build.module.nodes, rep) {
                 if let Some(span) = self.node_spans.get(&member) {
@@ -394,7 +405,7 @@ impl<'a, V: ValueType> Report<'a, V> {
     /// A runtime evaluation failure — an out-of-bounds index or a table
     /// read.  The offending literal's span attributes it; there are no
     /// conflict classes to walk.
-    fn eval_error(&mut self, err: &EvalError) -> Diag<V> {
+    fn eval_error(&mut self, err: &EvalError) -> Diag<P> {
         match err {
             // A static index (a solved constant of a plugged dependency) has
             // no importer node or span — report the facts without
@@ -457,15 +468,15 @@ impl<'a, V: ValueType> Report<'a, V> {
         }
     }
 
-    fn index_error(&mut self, index: AnyNodeId, index_value: usize, length: usize) -> Diag<V> {
+    fn index_error(&mut self, index: AnyNodeId, index_value: usize, length: usize) -> Diag<P> {
         let AnyNodeId::Dynamic(index) = index else {
             return Diag {
                 span: None,
                 kind: DiagKind::IndexOutOfBounds,
                 a: NodeId::default(),
                 b: NodeId::default(),
-                value_a: Some(V::from(LowValue::USize(index_value))),
-                value_b: Some(V::from(LowValue::USize(length))),
+                value_a: Some(P::Value::from(LowValue::USize(index_value))),
+                value_b: Some(P::Value::from(LowValue::USize(length))),
                 message: format!("index {index_value} out of bounds (array length {length})"),
                 error_index: None,
             };
@@ -475,8 +486,8 @@ impl<'a, V: ValueType> Report<'a, V> {
             kind: DiagKind::IndexOutOfBounds,
             a: index,
             b: index,
-            value_a: Some(V::from(LowValue::USize(index_value))),
-            value_b: Some(V::from(LowValue::USize(length))),
+            value_a: Some(P::Value::from(LowValue::USize(index_value))),
+            value_b: Some(P::Value::from(LowValue::USize(length))),
             message: format!("index {index_value} out of bounds (array length {length})"),
             error_index: None,
         }
@@ -618,7 +629,7 @@ impl<'a, V: ValueType> Report<'a, V> {
                             && self.is_universe_any(k[1].node)
                         {
                             let kind_value = self.build.module.node_value(k[0].node);
-                            if kind_value == Some(V::function_type_marker()) {
+                            if kind_value == Some(P::Value::function_type_marker()) {
                                 // The pair is `[shape, [FunctionType, K]]`
                                 // where shape = [in, out] — render the
                                 // arrow `in → out`, not `shape → kind`.
@@ -631,13 +642,13 @@ impl<'a, V: ValueType> Report<'a, V> {
                                         self.any_node(s[1].node, visiting)
                                     );
                                 }
-                            } else if kind_value == Some(V::tuple_type_marker()) {
+                            } else if kind_value == Some(P::Value::tuple_type_marker()) {
                                 let elements: Vec<String> = items
                                     .iter()
                                     .map(|item| self.any_node(item.node, visiting))
                                     .collect();
                                 return format!("[{}]", elements.join(", "));
-                            } else if kind_value == Some(V::array_type_marker()) {
+                            } else if kind_value == Some(P::Value::array_type_marker()) {
                                 // The array type's pair is [shape, kind]
                                 // where shape = [type, length] — render
                                 // `int[3]`, not `[int, 3]`.
@@ -650,7 +661,7 @@ impl<'a, V: ValueType> Report<'a, V> {
                                         self.any_node(s[1].node, visiting)
                                     );
                                 }
-                            } else if kind_value == Some(V::type_struct_marker()) {
+                            } else if kind_value == Some(P::Value::type_struct_marker()) {
                                 // A struct type: `[[TypeId(n), fields],
                                 // [TypeStruct, Type]]` — render
                                 // `struct#n { f1, f2 }`, the id from shape[0]
@@ -711,21 +722,17 @@ impl<'a, V: ValueType> Report<'a, V> {
     }
 
     fn op_name(&self, rep: NodeId) -> String {
+        // The operator is `P::Operator` (generic), so name only the
+        // structural operators (which reach the VM through `AsEnum`); the
+        // type-level operators are internal and render as a generic "op".
         match disjoint::members(&self.build.module.nodes, rep)
             .find_map(|m| self.build.module.nodes[m].operation)
-            .map(|op| op.operator)
+            .and_then(|op| AsEnum::<LowOperator>::as_enum(&op.operator))
         {
-            Some(HighProgramOperator::LowOperator(LowOperator::Index)) => "Index".to_string(),
-            Some(HighProgramOperator::LowOperator(LowOperator::Apply)) => "Apply".to_string(),
-            Some(HighProgramOperator::LowOperator(LowOperator::TableGet)) => "TableGet".to_string(),
-            Some(HighProgramOperator::TypeOperator(TypeOperator::Fresh)) => "Fresh".to_string(),
-            Some(
-                HighProgramOperator::TypeOperator(TypeOperator::Add)
-                | HighProgramOperator::TypeOperator(TypeOperator::Sub)
-                | HighProgramOperator::TypeOperator(TypeOperator::Leq)
-                | HighProgramOperator::TypeOperator(TypeOperator::Eq),
-            ) => "op".to_string(),
-            None => "op".to_string(),
+            Some(LowOperator::Index) => "Index".to_string(),
+            Some(LowOperator::Apply) => "Apply".to_string(),
+            Some(LowOperator::TableGet) => "TableGet".to_string(),
+            _ => "op".to_string(),
         }
     }
 }

@@ -394,26 +394,26 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 })
             });
 
-        // `:` — the annotation, right-associative; its right side is a type
-        // expression (applied by the mode post-pass).
+        // `:` (the type annotation) and `#` (the perspective annotation) at the
+        // same precedence, right-associative.  Either may appear alone; the two
+        // fold into a single `Annotation` carrying whichever are present (at
+        // most one of each).  Both right sides are parsed at the `->` level:
+        // `e : Int -> Int` annotates with the arrow type, `e # n` with `n`.
         let term4 = term3
             .clone()
             .then(
-                token(TokenKind::Colon)
-                    .ignore_then(operand(tokens, term3.clone()))
-                    .repeated()
-                    .collect::<Vec<_>>(),
+                choice((
+                    token(TokenKind::Colon)
+                        .ignore_then(operand(tokens, term3.clone()))
+                        .map(AnnPiece::Type),
+                    token(TokenKind::Hash)
+                        .ignore_then(operand(tokens, term3.clone()))
+                        .map(AnnPiece::Perspective),
+                ))
+                .repeated()
+                .collect::<Vec<_>>(),
             )
-            .map(|(first, rest)| {
-                fold_right(first, rest, |lhs, rhs| {
-                    let span = lhs.span();
-                    Expr::Annotation {
-                        value: Box::new(lhs),
-                        r#type: Box::new(rhs),
-                        span,
-                    }
-                })
-            });
+            .map(|(first, rest)| fold_annotations(first, rest));
 
         term4
             .then(
@@ -434,18 +434,21 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         parameter,
                         parameter_span: span,
                         parameter_type: None,
+                        parameter_perspective: None,
                         r#return: rhs,
                         span,
                     },
                     Expr::Annotation {
                         value,
                         r#type,
+                        perspective,
                         span,
                     } => match *value {
                         Expr::Name(parameter, parameter_span) => Expr::Lambda {
                             parameter,
                             parameter_span,
-                            parameter_type: Some(r#type),
+                            parameter_type: r#type,
+                            parameter_perspective: perspective,
                             r#return: rhs,
                             span,
                         },
@@ -477,6 +480,41 @@ where
         acc = combine(rhs, acc);
     }
     combine(first, acc)
+}
+
+/// One `: T` or `# p` partner of an annotation chain.
+#[derive(Clone, Debug)]
+enum AnnPiece {
+    Type(Expr),
+    Perspective(Expr),
+}
+
+/// Accumulate a `: T` / `# p` chain into one [`Expr::Annotation`], carrying
+/// whichever of the two annotations are present (at most one of each — a
+/// later one of the same kind overwrites, matching the `expr [: expr] [# expr]`
+/// grammar).  `e : A : B` keeps `B` (rightmost wins), as before.  An
+/// expression with no annotation (`rest` empty) is returned unchanged — it is
+/// not wrapped in a no-op `Annotation`, so the grammar stays faithful.
+fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
+    if rest.is_empty() {
+        return first;
+    }
+    let span = first.span();
+    let value = Box::new(first);
+    let mut r#type = None;
+    let mut perspective = None;
+    for piece in rest {
+        match piece {
+            AnnPiece::Type(t) => r#type = Some(Box::new(t)),
+            AnnPiece::Perspective(p) => perspective = Some(Box::new(p)),
+        }
+    }
+    Expr::Annotation {
+        value,
+        r#type,
+        perspective,
+        span,
+    }
 }
 
 /// A `=>` chain before it is validated into a lambda.
@@ -870,12 +908,14 @@ fn apply_type_mode(program: Program) -> Program {
                 parameter,
                 parameter_span,
                 parameter_type,
+                parameter_perspective,
                 r#return,
                 span,
             } => Expr::Lambda {
                 parameter,
                 parameter_span,
                 parameter_type: parameter_type.map(|t| Box::new(expr(*t, true))),
+                parameter_perspective: parameter_perspective.map(|p| Box::new(expr(*p, false))),
                 r#return: Box::new(expr(*r#return, type_mode)),
                 span,
             },
@@ -936,10 +976,12 @@ fn apply_type_mode(program: Program) -> Program {
             Expr::Annotation {
                 value,
                 r#type,
+                perspective,
                 span,
             } => Expr::Annotation {
                 value: Box::new(expr(*value, type_mode)),
-                r#type: Box::new(expr(*r#type, true)),
+                r#type: r#type.map(|t| Box::new(expr(*t, true))),
+                perspective: perspective.map(|p| Box::new(expr(*p, false))),
                 span,
             },
             Expr::Arrow {
@@ -1201,7 +1243,7 @@ mod tests {
             panic!("expected an annotation")
         };
         assert!(matches!(*value, Expr::Int(5, _)));
-        assert!(matches!(*r#type, Expr::Arrow { .. }));
+        assert!(matches!(*r#type.as_deref().unwrap(), Expr::Arrow { .. }));
         let Expr::Annotation { value, .. } = parse_ok("x y : Int") else {
             panic!("expected an annotation")
         };
@@ -1269,7 +1311,7 @@ mod tests {
         let Expr::Annotation { r#type, .. } = parse_ok("x : (Int, Int)") else {
             panic!("expected an annotation")
         };
-        assert!(matches!(*r#type, Expr::TypeTuple(..)));
+        assert!(matches!(*r#type.as_deref().unwrap(), Expr::TypeTuple(..)));
         let Expr::Apply { argument, .. } = parse_ok("f (Int, Int)") else {
             panic!("expected an apply")
         };
@@ -1281,7 +1323,7 @@ mod tests {
         let Expr::Annotation { r#type, .. } = parse_ok("x : <Int, Type>") else {
             panic!("expected an annotation")
         };
-        assert!(matches!(*r#type, Expr::TypeTuple(..)));
+        assert!(matches!(*r#type.as_deref().unwrap(), Expr::TypeTuple(..)));
         let Expr::TypeTuple(elements, _) = parse_ok("<Int, Type>") else {
             panic!("expected a type tuple")
         };
@@ -1486,12 +1528,12 @@ mod tests {
         let Expr::Annotation { r#type, .. } = parse_ok("x : _") else {
             panic!("expected an annotation")
         };
-        assert!(matches!(*r#type, Expr::Placeholder(_)));
+        assert!(matches!(*r#type.as_deref().unwrap(), Expr::Placeholder(_)));
         // Nested: `x : Int -> _` — the arrow's return is a placeholder.
         let Expr::Annotation { r#type, .. } = parse_ok("x : Int -> _") else {
             panic!("expected an annotation")
         };
-        let Expr::Arrow { r#return, .. } = *r#type else {
+        let Expr::Arrow { r#return, .. } = *r#type.expect("an arrow type") else {
             panic!("expected an arrow type")
         };
         assert!(matches!(*r#return, Expr::Placeholder(_)));
@@ -1658,7 +1700,7 @@ mod tests {
             ) || matches!(
                 &binding.value,
                 Expr::Annotation { r#type, .. }
-                    if matches!(**r#type, Expr::Err(_) | Expr::Placeholder(_))
+                    if matches!(*r#type.as_deref().unwrap(), Expr::Err(_) | Expr::Placeholder(_))
             ) || matches!(
                 &binding.value,
                 Expr::Lambda { r#return, .. }

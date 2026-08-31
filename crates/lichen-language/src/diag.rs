@@ -8,6 +8,8 @@
 
 use lichen_highlevel::ir::Span;
 
+use crate::program::LangProgram;
+
 /// Which stage of the pipeline produced a diagnostic.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Stage {
@@ -30,7 +32,7 @@ pub struct Diag {
     /// so a diagnostic stays small (these are the `Err` payload of the
     /// frontend functions).  `message` is the pretty rendering for display;
     /// tests and tooling match on this instead of the message.
-    pub check: Option<Box<lichen_highlevel::diagnostic::Diag>>,
+    pub check: Option<Box<lichen_highlevel::diagnostic::Diag<LangProgram>>>,
 }
 
 impl Diag {

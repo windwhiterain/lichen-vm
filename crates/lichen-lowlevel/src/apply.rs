@@ -120,7 +120,7 @@ impl<P: Program> Module<P> {
         block: BlockId,
     ) -> P::Value {
         match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(array))) if array.items().len() == 2 => {
+            (Some(cell), Some(LowValue::Array(array))) if array.items().len() >= 2 => {
                 let items = array.items();
                 self.nodes[node].value = Some(result);
                 self.unify(node, applied);
@@ -131,7 +131,9 @@ impl<P: Program> Module<P> {
                 // is an Index read, which already aliased its target cell at
                 // evaluation time (see the Index arm), so this unify joins
                 // the cell into that class and the binding propagates
-                // regardless of when the nested apply runs.
+                // regardless of when the nested apply runs.  Element 1 is
+                // the type slot for a 2-wide pair and for a 3-wide
+                // `[value, type, perspective]` pair alike.
                 let item = self.as_dynamic(items[1].node, block);
                 self.evaluate_node(crate::AnyNodeId::Dynamic(item), Some(block));
                 self.unify(cell, item);

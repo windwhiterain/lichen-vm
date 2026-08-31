@@ -8,7 +8,7 @@
 //! build lowlevel graphs directly and exercise the laziness + unification
 //! rules the highlevel layer will sit on.
 
-use lichen_highlevel::program::{HighProgram, HighProgramOperator, HighProgramValue};
+use lichen_highlevel::program::{HighProgramOperator, HighProgramValue, ProgramImpl};
 use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId, Operation,
 };
@@ -21,7 +21,7 @@ fn dyn_node(id: AnyNodeId) -> NodeId {
     }
 }
 
-fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
+fn usize_node(m: &mut Module<ProgramImpl>, block: BlockId, n: usize) -> NodeId {
     m.add_node(
         block,
         None,
@@ -29,7 +29,7 @@ fn usize_node(m: &mut Module<HighProgram>, block: BlockId, n: usize) -> NodeId {
     )
 }
 
-fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
+fn unbound_node(m: &mut Module<ProgramImpl>, block: BlockId) -> NodeId {
     m.add_node(
         block,
         None,
@@ -37,7 +37,7 @@ fn unbound_node(m: &mut Module<HighProgram>, block: BlockId) -> NodeId {
     )
 }
 
-fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
+fn array_node(m: &mut Module<ProgramImpl>, block: BlockId, ids: &[NodeId]) -> NodeId {
     let items: Vec<ArrayItem> = ids
         .iter()
         .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
@@ -55,7 +55,7 @@ fn array_node(m: &mut Module<HighProgram>, block: BlockId, ids: &[NodeId]) -> No
 /// stand-in.  Like `if cond then a else b`, it stays lazy until its
 /// condition is bound and then selects one branch.
 fn index_node(
-    m: &mut Module<HighProgram>,
+    m: &mut Module<ProgramImpl>,
     block: BlockId,
     branches: NodeId,
     cond: NodeId,
@@ -72,7 +72,7 @@ fn index_node(
 }
 
 /// An `Apply` node with operand array `[function, argument]`.
-fn apply_node(m: &mut Module<HighProgram>, block: BlockId, func: NodeId, arg: NodeId) -> NodeId {
+fn apply_node(m: &mut Module<ProgramImpl>, block: BlockId, func: NodeId, arg: NodeId) -> NodeId {
     let operands = array_node(m, block, &[func, arg]);
     m.add_node(
         block,

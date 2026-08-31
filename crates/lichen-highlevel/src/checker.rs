@@ -32,16 +32,13 @@ use lichen_lowlevel::{
     Module, NodeId, Operation, Registry, UnifyError,
 };
 
+use lichen_utils::disjoint::Node as _;
+use lichen_utils::extend::AsEnum;
+
+use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
-use crate::program::{HighProgram, HighProgramOperator, HighProgramValue, TypeOperator, ValueType};
-
-/// A structural operator, one carry variant down from the highlevel
-/// operator union — the checker's only way to reach the VM's own
-/// `Index`/`Apply`.
-fn structural(op: LowOperator) -> HighProgramOperator {
-    HighProgramOperator::LowOperator(op)
-}
+use crate::program::{HighProgram, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -54,10 +51,18 @@ struct Binding {
     ty: NodeId,
 }
 
-pub struct Checker<V: ValueType> {
-    ir: IR<V>,
-    module: Module<HighProgram<V>>,
-    current_block: BlockId,
+pub struct Checker<P: HighProgram + 'static>
+where
+    P::Value: ValueType,
+{
+    ir: IR<P::Value, P::Attr>,
+    module: Module<P>,
+    pub current_block: BlockId,
+    /// The attribute extension registry: maps an attribute marker
+    /// (`P::Attr`) to its lowering behaviour.  The checker never names a
+    /// concrete attribute — it asks this registry for the `AttrExt` and
+    /// calls through it.
+    attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     scopes: Vec<HashMap<ExprId, Binding>>,
     /// The lexical function stack: one `(id, depth)` entry per enclosing
     /// lambda whose body is being compiled, innermost last — `depth` is the
@@ -82,6 +87,17 @@ pub struct Checker<V: ValueType> {
     val: Vec<Option<NodeId>>,
     /// Element 1 of the pair (the type).
     ty: Vec<Option<NodeId>>,
+    /// Element 2+ of the pair — the static-schema attributes' slots.  Indexed
+    /// like [`Checker::ty`]: `None` for an expression whose schema is the
+    /// ordinary `[value, type]` pair; the attribute slot for one carrying
+    /// the `Perspective` tail (a `# p` annotation or a `x # n` parameter).
+    attr: Vec<Option<NodeId>>,
+    /// The parameter-attribute slot of each function whose parameter is
+    /// annotated `x # n` — keyed by the `Function` expression id, carrying the
+    /// attribute marker (the parameter's schema tail) and the fresh attribute
+    /// cell.  The apply uses it (or `missing` for an unannotated parameter) to
+    /// run the attribute equality check.
+    function_param_attr: HashMap<ExprId, (P::Attr, NodeId)>,
     /// The checker's own unification sequence, attributed for diagnostics:
     /// each entry records which `unify_errors` entry (if any) the unify
     /// produced, plus its span and check kind.
@@ -105,6 +121,10 @@ pub struct Checker<V: ValueType> {
     array_type_marker: NodeId,
     type_struct_marker: NodeId,
     table_type_marker: NodeId,
+    /// The shared `USize(0)` constant — the attribute attribute's
+    /// `missing()` value, read for any expression whose schema has no
+    /// attribute slot.  Reused so `attr_or_missing` adds no node per use.
+    zero_marker: NodeId,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
@@ -130,12 +150,16 @@ pub struct ApplyEdge {
 /// non-empty), any runtime evaluation failed (`eval_errors`), or any assert
 /// failed (`assert_errors`); rendering diagnostics from those is future
 /// work.
-pub struct Build<V: ValueType = HighProgramValue> {
-    pub ir: IR<V>,
-    pub module: Module<HighProgram<V>>,
+pub struct Build<P: HighProgram>
+where
+    P::Value: ValueType,
+{
+    pub ir: IR<P::Value, P::Attr>,
+    pub module: Module<P>,
     pub term: Vec<Option<NodeId>>,
     pub val: Vec<Option<NodeId>>,
     pub ty: Vec<Option<NodeId>>,
+    pub attr: Vec<Option<NodeId>>,
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
@@ -155,21 +179,51 @@ pub struct Build<V: ValueType = HighProgramValue> {
     pub ok: bool,
 }
 
-impl<V: ValueType> Checker<V> {
-    /// Compile an IR with a fresh private registry.
-    pub fn build(ir: IR<V>) -> Build<V> {
-        Self::build_with(ir, Module::new())
+impl<P: HighProgram> Checker<P>
+where
+    P::Value: ValueType,
+    P::Operator: From<LowOperator> + From<TypeOperator>,
+{
+    /// Compile an IR with a fresh private registry and no attribute
+    /// extension (a program whose schemas carry no attribute is unaffected).
+    pub fn build(ir: IR<P::Value, P::Attr>) -> Build<P> {
+        Self::build_with(ir, Module::new(), Self::no_attr_ext())
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
     /// registry — the entry point for importers that resolve [`ExprKind::Static`]
     /// leaves through a `PackageStore`.
-    pub fn build_in(ir: IR<V>, registry: Arc<RwLock<Registry<HighProgram<V>>>>) -> Build<V> {
+    pub fn build_in(ir: IR<P::Value, P::Attr>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module)
+        Self::build_with(ir, module, Self::no_attr_ext())
     }
 
-    fn build_with(ir: IR<V>, mut module: Module<HighProgram<V>>) -> Build<V> {
+    /// Compile an IR with a caller-supplied attribute extension registry — the
+    /// entry point for a language that plugs in a concrete attribute (e.g.
+    /// `Perspective`).  `attr_ext` maps an attribute marker to its lowering
+    /// behaviour; the checker never names a concrete attribute.
+    pub fn build_in_attr(
+        ir: IR<P::Value, P::Attr>,
+        registry: Arc<RwLock<Registry<P>>>,
+        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+    ) -> Build<P> {
+        let module = Registry::new_module(&registry);
+        Self::build_with(ir, module, attr_ext)
+    }
+
+    /// The no-op registry of a program with no attribute extension: no schema
+    /// carries an attribute, so it is never consulted.
+    fn no_attr_ext() -> Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>> {
+        Box::new(|_attr: &P::Attr| -> &'static dyn AttrExt<P> {
+            unreachable!("this program has no attribute extension")
+        })
+    }
+
+    fn build_with(
+        ir: IR<P::Value, P::Attr>,
+        mut module: Module<P>,
+        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+    ) -> Build<P> {
         // The lowlevel's default application guard (10k nested calls) sits
         // below what a thread stack survives once the checker's per-call
         // machinery (clone, unify, deep pass) is on the stack — a
@@ -195,11 +249,14 @@ impl<V: ValueType> Checker<V> {
             ir,
             module,
             current_block: root_block,
+            attr_ext,
             scopes: Vec::new(),
             function_stack: Vec::new(),
             term: vec![None; n],
             val: vec![None; n],
             ty: vec![None; n],
+            attr: vec![None; n],
+            function_param_attr: HashMap::new(),
             diary: Vec::new(),
             arrows: HashSet::new(),
             apply_edges: HashMap::new(),
@@ -211,6 +268,7 @@ impl<V: ValueType> Checker<V> {
             array_type_marker: NodeId::default(),
             type_struct_marker: NodeId::default(),
             table_type_marker: NodeId::default(),
+            zero_marker: NodeId::default(),
             int_type: NodeId::default(),
             type_expr: NodeId::default(),
         };
@@ -305,6 +363,7 @@ impl<V: ValueType> Checker<V> {
             term: checker.term,
             val: checker.val,
             ty: checker.ty,
+            attr: checker.attr,
             root_term,
             root_val,
             root_ty,
@@ -326,13 +385,14 @@ impl<V: ValueType> Checker<V> {
     /// type expression `[int, K]` every literal's pair carries.
     fn install_constants(&mut self) {
         let root = self.current_block;
-        self.int_marker = self.alloc_node(root, None, Some(V::int_marker()));
-        self.type_marker = self.alloc_node(root, None, Some(V::type_marker()));
-        self.function_type_marker = self.alloc_node(root, None, Some(V::function_type_marker()));
-        self.tuple_type_marker = self.alloc_node(root, None, Some(V::tuple_type_marker()));
-        self.array_type_marker = self.alloc_node(root, None, Some(V::array_type_marker()));
-        self.type_struct_marker = self.alloc_node(root, None, Some(V::type_struct_marker()));
-        self.table_type_marker = self.alloc_node(root, None, Some(V::table_type_marker()));
+        self.int_marker = self.alloc_node(root, None, Some(P::Value::int_marker()));
+        self.type_marker = self.alloc_node(root, None, Some(P::Value::type_marker()));
+        self.function_type_marker = self.alloc_node(root, None, Some(P::Value::function_type_marker()));
+        self.tuple_type_marker = self.alloc_node(root, None, Some(P::Value::tuple_type_marker()));
+        self.array_type_marker = self.alloc_node(root, None, Some(P::Value::array_type_marker()));
+        self.type_struct_marker = self.alloc_node(root, None, Some(P::Value::type_struct_marker()));
+        self.table_type_marker = self.alloc_node(root, None, Some(P::Value::table_type_marker()));
+        self.zero_marker = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
@@ -341,7 +401,7 @@ impl<V: ValueType> Checker<V> {
             ArrayItem::new(AnyNodeId::Dynamic(self.type_marker)),
             ArrayItem::new(AnyNodeId::Dynamic(universe)),
         ];
-        self.module.nodes[universe].value = Some(V::from(LowValue::Array(
+        self.module.nodes[universe].value = Some(P::Value::from(LowValue::Array(
             self.module.alloc_array(&items, root),
         )));
         self.type_expr = universe;
@@ -365,8 +425,8 @@ impl<V: ValueType> Checker<V> {
     fn alloc_node(
         &mut self,
         block: BlockId,
-        operation: Option<Operation<HighProgram<V>>>,
-        value: Option<V>,
+        operation: Option<Operation<P>>,
+        value: Option<P::Value>,
     ) -> NodeId {
         let node = self.module.add_node(block, operation, value);
         if let Some(function) = self.current_function() {
@@ -382,11 +442,11 @@ impl<V: ValueType> Checker<V> {
         self.alloc_node(
             self.current_block,
             None,
-            Some(V::from(LowValue::Parameterized)),
+            Some(P::Value::from(LowValue::Parameterized)),
         )
     }
 
-    fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
+    pub fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
         let items: Vec<ArrayItem> = ids
             .iter()
             .map(|&node| ArrayItem::new(AnyNodeId::Dynamic(node)))
@@ -394,7 +454,7 @@ impl<V: ValueType> Checker<V> {
         self.alloc_node(
             block,
             None,
-            Some(V::from(LowValue::Array(
+            Some(P::Value::from(LowValue::Array(
                 self.module.alloc_array(&items, block),
             ))),
         )
@@ -415,16 +475,16 @@ impl<V: ValueType> Checker<V> {
         self.alloc_node(
             block,
             None,
-            Some(V::from(LowValue::Array(
+            Some(P::Value::from(LowValue::Array(
                 self.module.alloc_array(&items, block),
             ))),
         )
     }
 
-    fn op_node(
+    pub fn op_node(
         &mut self,
         block: BlockId,
-        operator: HighProgramOperator,
+        operator: P::Operator,
         operand: Option<NodeId>,
     ) -> NodeId {
         self.alloc_node(block, Some(Operation { operator, operand }), None)
@@ -467,6 +527,45 @@ impl<V: ValueType> Checker<V> {
         self.ir.depths[range.start as usize..range.end as usize].to_vec()
     }
 
+    /// The direct sub-expressions of a compound whose perspectives participate
+    /// in a `# p` annotation's meet (gcd) — the reference.  A leaf has none.
+    /// Per the plan's combine table: the named sub-expressions of a `BinOp`/
+    /// `Apply`/`Instantiate`/`Index`/`Field`/`Find`/`TypeArray`/`TypeFunction`
+    /// and a `TypeFunction`, the `children` range of a variadic, transparent
+    /// through an `Annotation`, and empty for a leaf.
+    fn persp_combine_children(&self, e: ExprId) -> Vec<ExprId> {
+        match self.ir[e].kind {
+            ExprKind::BinOp { left, right, .. } => vec![left, right],
+            ExprKind::Apply { function, argument } => vec![function, argument],
+            ExprKind::Instantiate { type_expr, value } => vec![type_expr, value],
+            ExprKind::Index { array, index } => vec![array, index],
+            ExprKind::Field { container, key } => vec![container, key],
+            ExprKind::Find { container, key } => vec![container, key],
+            ExprKind::TypeArray {
+                element_type,
+                length,
+            } => vec![element_type, length],
+            ExprKind::TypeFunction { parameter, r#return } => vec![parameter, r#return],
+            ExprKind::Tuple(_)
+            | ExprKind::TypeTuple(_)
+            | ExprKind::Array(_)
+            | ExprKind::TypeStruct(_)
+            | ExprKind::Table(_)
+            | ExprKind::ShallowArray { .. } => self.range_children(e),
+            // Transparent: a `# p` on an annotated value is `value`'s own
+            // attribute.
+            ExprKind::Annotation { value, .. } => vec![value],
+            // Leaf kinds — the annotation binds the slot directly.
+            ExprKind::Constant(_)
+            | ExprKind::Parameter
+            | ExprKind::Placeholder
+            | ExprKind::Static { .. } => Vec::new(),
+            // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
+            ExprKind::Function { .. } => Vec::new(),
+            ExprKind::Assert { .. } => Vec::new(),
+        }
+    }
+
     /// The value of an expression: element 0 of its pair.  For expressions
     /// whose pair is a static node (literals, variables, lambdas) this is
     /// stored; for call results it is extracted at runtime with
@@ -478,15 +577,36 @@ impl<V: ValueType> Checker<V> {
         let pair = self.term[e].expect("expression must be compiled");
         let zero =
             self.module
-                .add_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+                .add_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
         let operands = self.array_node(self.current_block, &[pair, zero]);
         let index = self.op_node(
             self.current_block,
-            structural(LowOperator::Index),
+            P::Operator::from(LowOperator::Index),
             Some(operands),
         );
         self.val[e] = Some(index);
         index
+    }
+
+    /// The attribute slot of an expression, reading the attribute's
+    /// `missing()` value (`USize(0)` — neutral in `gcd`) for an expression
+    /// whose schema has no attribute slot.  Only meaningful after the
+    /// expression has been compiled.
+    fn attr_or_missing(&self, e: ExprId) -> NodeId {
+        self.attr[e].unwrap_or(self.zero_marker)
+    }
+
+    /// The value currently held by `node`'s equality class — the
+    /// representative's value — or `None` when the class is unbound.
+    /// Read-only (a parent-pointer walk, no path compression).  An attribute's
+    /// [`AttrExt::is_subtype`] uses this to compare two slot values after a
+    /// failed equality unify.
+    pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
+        let mut root = node;
+        while let Some(parent) = self.module.nodes[root].meta().parent {
+            root = parent;
+        }
+        self.module.nodes[root].value
     }
 
     // --- the check -------------------------------------------------------
@@ -494,7 +614,7 @@ impl<V: ValueType> Checker<V> {
     /// A checker-issued unification, diary-attributed: records which error
     /// (if any) it produced, with the span and check kind that drive the
     /// diagnostic's wording and expected/found direction.
-    fn check_unify(&mut self, a: NodeId, b: NodeId, span: Option<Span>, kind: DiagKind) {
+    pub fn check_unify(&mut self, a: NodeId, b: NodeId, span: Option<Span>, kind: DiagKind) {
         let before = self.module.unify_errors.len();
         self.module.unify(a, b);
         if self.module.unify_errors.len() > before {
@@ -505,6 +625,48 @@ impl<V: ValueType> Checker<V> {
                 span,
                 kind,
             });
+        }
+    }
+
+    /// A checker-issued unification that may be relaxed by an attribute's
+    /// optional subtype relation.  Attempts the ordinary unify; if it fails
+    /// **and** `is_subtype` holds for the two operands, the error(s) this
+    /// unify produced are discarded and the check counts as passed.
+    ///
+    /// `is_subtype` receives the unify's two operands `(a, b)` — the
+    /// *found/value* side first and the *expected/declared* side second, the
+    /// same convention as [`AttrExt::unify_slots`] — and returns whether the
+    /// relation is satisfied.  The attribute decides which operand is the
+    /// subtype and which the supertype.
+    ///
+    /// Suppression is a safe truncate: an attribute unify's operands are
+    /// scalar (a perspective is a `USize` or an unbound cell, never a
+    /// compound array), so a failed unify merges nothing and records exactly
+    /// the errors the truncate removes.  The checker's attribute check is a
+    /// *validation gate* — the value itself flows in through the lowlevel
+    /// apply's separate clone-unify — so suppressing leaves the graph correct.
+    pub fn check_unify_relaxed(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        span: Option<Span>,
+        kind: DiagKind,
+        is_subtype: impl Fn(&Checker<P>, NodeId, NodeId) -> bool,
+    ) {
+        let before = self.module.unify_errors.len();
+        self.module.unify(a, b);
+        if self.module.unify_errors.len() > before {
+            if is_subtype(self, a, b) {
+                self.module.unify_errors.truncate(before);
+            } else {
+                self.diary.push(DiaryEntry {
+                    error_index: before,
+                    a,
+                    b,
+                    span,
+                    kind,
+                });
+            }
         }
     }
 
@@ -534,7 +696,7 @@ impl<V: ValueType> Checker<V> {
             return false;
         };
         items.len() == 2
-            && self.module.node_value(items[0].node) == Some(V::type_marker())
+            && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
 
@@ -549,7 +711,7 @@ impl<V: ValueType> Checker<V> {
     }
 
     /// Whether `kind` is the kind expression `[marker, K]`.
-    fn kind_marker_is_any(&mut self, kind: AnyNodeId, marker: V) -> bool {
+    fn kind_marker_is_any(&mut self, kind: AnyNodeId, marker: P::Value) -> bool {
         let Some(items) = self.any_items(kind) else {
             return false;
         };
@@ -558,7 +720,7 @@ impl<V: ValueType> Checker<V> {
             && self.is_universe_any(items[1].node)
     }
 
-    fn kind_marker_is(&mut self, kind: NodeId, marker: V) -> bool {
+    fn kind_marker_is(&mut self, kind: NodeId, marker: P::Value) -> bool {
         self.kind_marker_is_any(AnyNodeId::Dynamic(kind), marker)
     }
 
@@ -569,7 +731,7 @@ impl<V: ValueType> Checker<V> {
         let Some(items) = self.any_items(ty) else {
             return false;
         };
-        items.len() == 2 && self.kind_marker_is_any(items[1].node, V::function_type_marker())
+        items.len() == 2 && self.kind_marker_is_any(items[1].node, P::Value::function_type_marker())
     }
 
     fn is_function_type(&mut self, ty: NodeId) -> bool {
@@ -590,7 +752,7 @@ impl<V: ValueType> Checker<V> {
             return false;
         };
         kind_items.len() == 2
-            && self.kind_marker_is_any(kind_items[1].node, V::type_struct_marker())
+            && self.kind_marker_is_any(kind_items[1].node, P::Value::type_struct_marker())
     }
 
     /// Whether `ty` is a concrete positional type expression — a tuple type
@@ -607,7 +769,7 @@ impl<V: ValueType> Checker<V> {
         if items.len() != 2 {
             return false;
         }
-        self.kind_marker_is_any(items[1].node, V::tuple_type_marker()) || self.is_struct_type_any(ty)
+        self.kind_marker_is_any(items[1].node, P::Value::tuple_type_marker()) || self.is_struct_type_any(ty)
     }
 
     fn is_positional_type(&mut self, ty: NodeId) -> bool {
@@ -663,12 +825,12 @@ impl<V: ValueType> Checker<V> {
         let pair = match self.ir[e].kind {
             ExprKind::Constant(value) => {
                 // `Type` is the canonical universe node itself — `Type : Type`.
-                if value == V::type_marker() {
+                if value == P::Value::type_marker() {
                     self.term[e] = Some(self.type_expr);
                     self.val[e] = Some(self.type_marker);
                     self.ty[e] = Some(self.type_expr);
                     self.type_expr
-                } else if value == V::int_marker() {
+                } else if value == P::Value::int_marker() {
                     // The int type constant: `[int, Type]` — its value is the
                     // marker and its type is the universe, shared with every
                     // literal's pair.
@@ -687,11 +849,11 @@ impl<V: ValueType> Checker<V> {
                             self.alloc_node(self.current_block, None, Some(value))
                         }
                         None => {
-                            if value == V::function_type_marker() {
+                            if value == P::Value::function_type_marker() {
                                 self.function_type_marker
-                            } else if value == V::tuple_type_marker() {
+                            } else if value == P::Value::tuple_type_marker() {
                                 self.tuple_type_marker
-                            } else if value == V::array_type_marker() {
+                            } else if value == P::Value::array_type_marker() {
                                 self.array_type_marker
                             } else {
                                 self.alloc_node(self.current_block, None, Some(value))
@@ -700,9 +862,9 @@ impl<V: ValueType> Checker<V> {
                         _ => unreachable!("only literals and type constants can be constants"),
                     };
                     let ty_value = value.type_of();
-                    let type_node = if ty_value == V::int_marker() {
+                    let type_node = if ty_value == P::Value::int_marker() {
                         self.int_type
-                    } else if ty_value == V::type_marker() {
+                    } else if ty_value == P::Value::type_marker() {
                         self.type_expr
                     } else {
                         let marker = self
@@ -732,9 +894,17 @@ impl<V: ValueType> Checker<V> {
             ExprKind::Function {
                 parameter,
                 parameter_type,
+                parameter_attribute,
                 r#return,
                 depth,
-            } => self.check_lam(e, depth, parameter_type, parameter, r#return),
+            } => self.check_lam(
+                e,
+                depth,
+                parameter_type,
+                parameter_attribute,
+                parameter,
+                r#return,
+            ),
             ExprKind::Apply { function, argument } => self.check_app(e, function, argument),
             ExprKind::BinOp {
                 operator,
@@ -750,8 +920,9 @@ impl<V: ValueType> Checker<V> {
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation {
                 value,
-                r#type: type_expr,
-            } => self.check_ann(e, value, type_expr),
+                r#type,
+                attribute,
+            } => self.check_ann(e, value, r#type, attribute),
             ExprKind::TypeFunction {
                 parameter,
                 r#return,
@@ -828,6 +999,7 @@ impl<V: ValueType> Checker<V> {
         e: ExprId,
         depth: u32,
         parameter_type: Option<ExprId>,
+        parameter_attribute: Option<ExprId>,
         parameter: ExprId,
         r#return: ExprId,
     ) -> NodeId {
@@ -839,7 +1011,17 @@ impl<V: ValueType> Checker<V> {
         // The parameter *is* the pair `[value, type]`; the cells live in the
         // function's scope so the apply's clone yields fresh cells per call
         // (that is what makes a polymorphic value usable at several types).
-        let param = self.array_node(return_block, &[value_cell, type_cell]);
+        // A `x # n` parameter carries a third attribute slot (a fresh cell
+        // bound to the attribute value in body scope), so the pair becomes
+        // the schema-shaped `[value, type, attribute]`.
+        let attr_cell = parameter_attribute.is_some().then(|| self.fresh_cell());
+        let param = match attr_cell {
+            Some(attr) => {
+                self.attr[parameter] = Some(attr);
+                self.array_node(return_block, &[value_cell, type_cell, attr])
+            }
+            None => self.array_node(return_block, &[value_cell, type_cell]),
+        };
         // The function shell: its id exists from the start of the body, so
         // every node compiled below is tagged with it and registered in its
         // scope — the template the apply clone walk recognizes by chain
@@ -868,20 +1050,29 @@ impl<V: ValueType> Checker<V> {
             block: return_block,
         });
         self.module.blocks[return_block].functions.push(function);
-        // The three nodes above predate the shell: the allocation helper
+        // The nodes above predate the shell: the allocation helper
         // tagged them with (and registered them in) the *enclosing*
         // function's scope.  They are this function's own — move them into
         // its scope and retag them, exactly where the helper would have put
         // them had the shell existed first.
+        let mut param_parts = vec![value_cell, type_cell];
+        if let Some(attr) = attr_cell {
+            param_parts.push(attr);
+        }
+        // The parameter pair itself (`param`) belongs to this function's
+        // template scope as well — the lowlevel [`Function`] contract and the
+        // apply clone walk both require `parameter` to be registered in
+        // `nodes`, so the debug gate in `function_apply` holds.
+        param_parts.push(param);
         if let Some(enclosing) = self.current_function() {
             self.module.functions[enclosing]
                 .nodes
-                .retain(|&n| n != value_cell && n != type_cell && n != param);
+                .retain(|&n| !param_parts.contains(&n));
         }
-        for &node in &[value_cell, type_cell, param] {
+        for &node in &param_parts {
             self.module.nodes[node].function = Some(function);
         }
-        self.module.functions[function].nodes = vec![value_cell, type_cell, param];
+        self.module.functions[function].nodes = param_parts;
         self.function_stack.push((function, depth));
         self.term[parameter] = Some(param);
         self.ty[parameter] = Some(type_cell);
@@ -926,6 +1117,31 @@ impl<V: ValueType> Checker<V> {
                 DiagKind::Annotation,
             );
         }
+        // The annotated parameter's attribute `x # n`, compiled in body scope
+        // like the type so `n` may reference the parameter itself.  The
+        // declared perspective is a *template* constraint: the apply's check
+        // compares each argument's attribute against this declared value node
+        // (via [`Checker::function_param_attr`], then the attribute's
+        // [`AttrExt::unify_slots`]).  The live attribute cell in the parameter
+        // pair is deliberately left **unbound** — binding it to the declared
+        // value here would let the deep pass *bake* it (it is a concrete
+        // value), so the per-apply clone would reference the template's cell
+        // instead of resetting it, and the lowlevel apply's positional unify
+        // would then enforce the declared perspective (equality) against the
+        // argument, defeating the attribute's subtype relaxation.  Kept
+        // unbound, it is a fresh per-apply clone that binds the argument's
+        // actual perspective, exactly like the value/type cells — so the
+        // body's return reads the caller's perspective and `f (5 # 4)` yields
+        // `5 # 4`.  The declared value itself stays only in
+        // [`Checker::function_param_attr`].
+        if let Some(parameter_attribute) = parameter_attribute {
+            self.check_expr(parameter_attribute);
+            let declared = self.value_of(parameter_attribute);
+            // The parameter's schema tail[0] names the attribute; the apply's
+            // check resolves its `AttrExt` from this marker.
+            let marker = self.ir.schema(parameter).tail[0];
+            self.function_param_attr.insert(e, (marker, declared));
+        }
         let ret = self.check_expr(r#return);
         self.scopes.pop();
         self.current_block = saved;
@@ -944,7 +1160,7 @@ impl<V: ValueType> Checker<V> {
         if !self.module.functions[function].nodes.contains(&ret) {
             self.module.functions[function].nodes.push(ret);
         }
-        self.module.nodes[func_node].value = Some(V::from(LowValue::Function(
+        self.module.nodes[func_node].value = Some(P::Value::from(LowValue::Function(
             AnyFunctionId::Dynamic(function),
         )));
         self.recursive_func_nodes.push(func_node);
@@ -974,7 +1190,26 @@ impl<V: ValueType> Checker<V> {
         // needs a `HighProgramValue::Function`, not the pair); the argument slot is the
         // full pair, so the apply's unify compares type cell to type cell.
         let function_value = self.value_of(function);
-        let argument_pair = self.term[argument].unwrap();
+        // The apply's argument operand is normalized to the function's
+        // declared *parameter* arity, slot-aligned: value@0, type@1, and — for
+        // a parameter carrying the attribute attribute — the argument's
+        // attribute@2 (read `missing()` = `0` when absent).  The lowlevel
+        // apply's positional unify then compares value-to-value and
+        // type-to-type, matching the parameter pair's shape.  The attribute
+        // equality is checked separately below (the per-apply parameter clone
+        // resets its own attribute cell, so it cannot enforce the template's
+        // declared value).
+        let param_persp = self.function_param_attr.get(&function).copied();
+        let argument_value = self.value_of(argument);
+        let argument_type = self.ty[argument].unwrap();
+        let argument_persp = self.attr_or_missing(argument);
+        let argument_pair = match param_persp {
+            Some(_) => self.array_node(
+                self.current_block,
+                &[argument_value, argument_type, argument_persp],
+            ),
+            None => self.array_node(self.current_block, &[argument_value, argument_type]),
+        };
         // Function-ness guard: catch *concretely* non-function types
         // statically (applying a literal is an error, not a runtime panic).
         // Concrete function types and unbound types (parameters, lambdas,
@@ -997,6 +1232,31 @@ impl<V: ValueType> Checker<V> {
             let fn_ty = self.array_node(self.current_block, &[shape, kind]);
             self.check_unify(function_ty, fn_ty, self.ir[e].span, DiagKind::Guard);
         }
+        // The apply's attribute equality check: the function's declared
+        // parameter attribute (or its `missing` for an unannotated parameter)
+        // against the argument's attribute (or `missing`).  This is what
+        // rejects `id (5 # 4)` (declared missing vs `4`) and `f 5` for
+        // `f = x # 4 => x` (declared `4` vs missing).  Routed through the
+        // attribute's `AttrExt::unify_slots`; a program with no attribute
+        // extension reaches neither branch (no schema carries an attribute).
+        if let Some((param_marker, param_slot)) = param_persp {
+            let ext = (self.attr_ext)(&param_marker);
+            ext.unify_slots(
+                self,
+                self.attr_or_missing(argument),
+                param_slot,
+                self.ir[e].span,
+            );
+        } else if self.attr[argument].is_some() {
+            let marker = &self.ir.schema(argument).tail[0];
+            let ext = (self.attr_ext)(marker);
+            ext.unify_slots(
+                self,
+                self.attr[argument].unwrap(),
+                self.zero_marker,
+                self.ir[e].span,
+            );
+        }
         // The result's type cell: unbound unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime
         // apply unifies the return pair with the apply node — the apply
@@ -1007,7 +1267,7 @@ impl<V: ValueType> Checker<V> {
         let operands = self.array_node(self.current_block, &[function_value, argument_pair, c]);
         let node = self.op_node(
             self.current_block,
-            structural(LowOperator::Apply),
+            P::Operator::from(LowOperator::Apply),
             Some(operands),
         );
         // Record the argument edge: the checker is the only place that knows
@@ -1049,10 +1309,10 @@ impl<V: ValueType> Checker<V> {
             DiagKind::BinOp,
         );
         let operator = match operator {
-            BinOp::Add => HighProgramOperator::TypeOperator(TypeOperator::Add),
-            BinOp::Sub => HighProgramOperator::TypeOperator(TypeOperator::Sub),
-            BinOp::Leq => HighProgramOperator::TypeOperator(TypeOperator::Leq),
-            BinOp::Eq => HighProgramOperator::TypeOperator(TypeOperator::Eq),
+            BinOp::Add => P::Operator::from(TypeOperator::Add),
+            BinOp::Sub => P::Operator::from(TypeOperator::Sub),
+            BinOp::Leq => P::Operator::from(TypeOperator::Leq),
+            BinOp::Eq => P::Operator::from(TypeOperator::Eq),
         };
         let left = self.value_of(left);
         let right = self.value_of(right);
@@ -1104,21 +1364,21 @@ impl<V: ValueType> Checker<V> {
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
         let value_node = self.op_node(
             self.current_block,
-            structural(LowOperator::Index),
+            P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
         let zero =
-            self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,
-            HighProgramOperator::TypeOperator(TypeOperator::Leq),
+            P::Operator::from(TypeOperator::Leq),
             Some(beyond_ops),
         );
         let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
         let in_range = self.op_node(
             self.current_block,
-            HighProgramOperator::TypeOperator(TypeOperator::Eq),
+            P::Operator::from(TypeOperator::Eq),
             Some(in_range_ops),
         );
         self.register_assert(in_range);
@@ -1174,25 +1434,25 @@ impl<V: ValueType> Checker<V> {
             });
         }
         let zero =
-            self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
-            structural(LowOperator::Index),
+            P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
         let shape_ops = self.array_node(self.current_block, &[container_ty, zero]);
         let shape = self.op_node(
             self.current_block,
-            structural(LowOperator::Index),
+            P::Operator::from(LowOperator::Index),
             Some(shape_ops),
         );
         let ty_ops = self.array_node(self.current_block, &[shape, key_value]);
         let ty_node = self.op_node(
             self.current_block,
-            structural(LowOperator::Index),
+            P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
         let pair = self.pair_of(value_node, ty_node);
@@ -1235,7 +1495,7 @@ impl<V: ValueType> Checker<V> {
         let ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
-            structural(LowOperator::TableGet),
+            P::Operator::from(LowOperator::TableGet),
             Some(ops),
         );
         let pair = self.pair_of(value_node, value_cell);
@@ -1245,22 +1505,66 @@ impl<V: ValueType> Checker<V> {
         pair
     }
 
-    fn check_ann(&mut self, e: ExprId, value: ExprId, type_expr: ExprId) -> NodeId {
-        self.check_expr(type_expr);
+    fn check_ann(
+        &mut self,
+        e: ExprId,
+        value: ExprId,
+        r#type: Option<ExprId>,
+        attribute: Option<ExprId>,
+    ) -> NodeId {
         self.check_expr(value);
-        // The annotation compares the full type expressions: the value
-        // expression's type against the type expression itself — both are
-        // pairs in the recursive encoding.  (Struct instantiation is not an
-        // annotation — it is the dedicated [`ExprKind::Instantiate`].)
-        let type_pair = self.term[type_expr].unwrap();
-        self.check_unify(
-            self.ty[value].unwrap(),
-            type_pair,
-            self.ir[e].span,
-            DiagKind::Annotation,
-        );
+        // `: T` — the value expression's type must unify with the type
+        // expression itself; both sides are pairs in the recursive encoding.
+        // The type slot is the annotation's own type expression (shared), or
+        // the value's own type when only `# p` is present.  (Struct
+        // instantiation is not an annotation — it is the dedicated
+        // [`ExprKind::Instantiate`].)
+        let type_pair = match r#type {
+            Some(type_expr) => {
+                self.check_expr(type_expr);
+                let type_pair = self.term[type_expr].unwrap();
+                self.check_unify(
+                    self.ty[value].unwrap(),
+                    type_pair,
+                    self.ir[e].span,
+                    DiagKind::Annotation,
+                );
+                type_pair
+            }
+            None => self.ty[value].unwrap(),
+        };
         let value_node = self.value_of(value);
-        let pair = self.pair_of(value_node, type_pair);
+        // `# p` — the attribute slot.  A leaf's slot is `p` itself; a
+        // compound's is the attribute's meet over its direct sub-expressions'
+        // attribute slots (absent → the attribute's `missing_value`), then
+        // `# p` unifies that slot with `p`.  `# p` also stamps this node's
+        // schema with the attribute tail, so the pair is built one slot
+        // wider.  The checker asks the registry for the attribute's
+        // `AttrExt` — it never names a concrete attribute.
+        let pair = match attribute {
+            Some(p) => {
+                self.check_expr(p);
+                let attr_val = self.value_of(p);
+                let marker = &self.ir.schema(e).tail[0];
+                let ext = (self.attr_ext)(marker);
+                let children = self.persp_combine_children(value);
+                let slot = if children.is_empty() {
+                    attr_val
+                } else {
+                    let child_attrs: Vec<NodeId> =
+                        children.iter().map(|&c| self.attr_or_missing(c)).collect();
+                    let combined = ext.combine(self, &child_attrs);
+                    ext.unify_slots(self, combined, attr_val, self.ir[e].span);
+                    combined
+                };
+                self.attr[e] = Some(slot);
+                self.array_node(self.current_block, &[value_node, type_pair, slot])
+            }
+            None => {
+                self.attr[e] = None;
+                self.pair_of(value_node, type_pair)
+            }
+        };
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(type_pair);
@@ -1287,7 +1591,7 @@ impl<V: ValueType> Checker<V> {
                 // dynamic array construction below.
                 let shape = self.module.as_dynamic(items[0].node, self.current_block);
                 let kind = self.module.as_dynamic(items[1].node, self.current_block);
-                if self.kind_marker_is(kind, V::tuple_type_marker()) {
+                if self.kind_marker_is(kind, P::Value::tuple_type_marker()) {
                     shape
                 } else {
                     value_ty
@@ -1425,7 +1729,7 @@ impl<V: ValueType> Checker<V> {
     /// kind  = [ type_id, [ TypeStruct, K ] ]
     /// ```
     ///
-    /// The id is a per-compilation [`HighProgramOperator::TypeOperator(TypeOperator::Fresh)`] call, so
+    /// The id is a per-compilation [`P::Operator::from(TypeOperator::Fresh)`] call, so
     /// two occurrences keep distinct nominal ids.  Fields are positional
     /// (no names in v1).
     fn check_type_struct(&mut self, e: ExprId) -> NodeId {
@@ -1436,7 +1740,7 @@ impl<V: ValueType> Checker<V> {
         }
         let id = self.op_node(
             self.current_block,
-            HighProgramOperator::TypeOperator(TypeOperator::Fresh),
+            P::Operator::from(TypeOperator::Fresh),
             None,
         );
         let shape = self.array_node(self.current_block, &tys);
@@ -1476,7 +1780,7 @@ impl<V: ValueType> Checker<V> {
         let length = self.alloc_node(
             self.current_block,
             None,
-            Some(V::from(LowValue::USize(vals.len()))),
+            Some(P::Value::from(LowValue::USize(vals.len()))),
         );
         let shape = self.array_node(self.current_block, &[element_ty, length]);
         let kind = self.kind_expr(self.current_block, self.array_type_marker);
@@ -1527,7 +1831,7 @@ impl<V: ValueType> Checker<V> {
         let value = self.alloc_node(
             self.current_block,
             None,
-            Some(V::from(LowValue::Table(table))),
+            Some(P::Value::from(LowValue::Table(table))),
         );
         let shape = self.array_node(self.current_block, &[key_ty, value_ty]);
         let kind = self.kind_expr(self.current_block, self.table_type_marker);

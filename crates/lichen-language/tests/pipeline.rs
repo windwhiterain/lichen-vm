@@ -2,10 +2,11 @@
 //! evaluation, and the diagnostics (frontend + checker) with their spans.
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::program::{HighProgram, HighProgramValue, TypeValue};
+use lichen_highlevel::program::{HighProgramValue, TypeValue};
 use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 
 use lichen_language::diag::Stage;
+use lichen_language::program::LangProgram;
 use lichen_language::{compile, frontend};
 
 /// Compile and run a program, asserting it checks; returns the module and the
@@ -18,7 +19,7 @@ fn dyn_node(id: AnyNodeId) -> NodeId {
     }
 }
 
-fn run(source: &str) -> (Module<HighProgram>, NodeId) {
+fn run(source: &str) -> (Module<LangProgram>, NodeId) {
     let report = compile(source);
     assert!(
         report.ok(),

@@ -35,7 +35,7 @@ stmt     := ['let'] name '=' expr                   -- binding (block-wide by de
 sep      := ';' | newline                           -- statement separator
 
 expr     := name (':' expr)? '=>' expr             -- lambda; body extends maximally
-          | expr ':' expr                         -- annotation; right-assoc, loosest
+          | expr (':' expr)? ('#' expr)?          -- type (':' ) and/or perspective ('#') annotation
           | expr '->' expr                        -- function type; right-assoc
           | atom '<' expr '>'                     -- array type  T<e>
           | atom '[' expr ']'                     -- index  e[i]
@@ -78,16 +78,21 @@ atom     := int_literal
   `_` is an ordinary name, so `_ = 5; _` and `_ => _` stay legal.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
-- **Precedence** (loosest → tightest): `:` → `->` → application → postfix
+- **Precedence** (loosest → tightest): `:` / `#` → `->` → application → postfix
   `<e>` / `[e]` / atoms.  `x => e : T` parses as `x => (e : T)` — lambda bodies
   extend through annotations, as do array lengths: `Int<x : T>` is the array
-  type whose length is the annotated expression.
+  type whose length is the annotated expression.  `#` binds at the same
+  precedence as `:`, so `e : T # p` annotates both the type and the
+  perspective slot, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
-  annotated with `T` — the frontend desugars it to `(x => e) : (T -> _)`, so
-  the parameter is pinned to `T` (applying the lambda at any other type fails
-  at the apply) while the codomain is inferred from the body.  The body still
-  extends maximally: `x : T => e : U` is `x : T => (e : U)`.  `x : T` without
-  a following `=>` stays an ordinary annotation.
+  annotated with `T` — the frontend desugars it to `x => { x : T; e }`, so the
+  annotation is a leading body statement that unifies the parameter's slot in
+  body scope (so a `T` referring to `x` itself is in scope, e.g. `x : x -> Int`)
+  while the codomain is inferred from the body.  Likewise `x # n => e` desugars
+  to `x => { x # n; e }` — the parameter's perspective slot, checked at each
+  apply against the argument's perspective.  The body still extends maximally:
+  `x : T => e : U` is `x : T => (e : U)`.  `x : T` without a following `=>`
+  stays an ordinary annotation.
 - **One grammar, one position flag.**  Types are expressions, so term and type
   forms share one grammar.  The parser threads a *type-mode* flag that only
   decides `(a, b)` — a `Tuple` value in term position, a `TypeTuple` type
@@ -236,11 +241,13 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `Int` | `Constant(TypeInt)` |
 | `Type` | `Constant(TypeType)` |
 | name use | the binder's own `ExprId` (pre-resolved) |
-| `x => e` | `Function { parameter, return }` — `parameter` is the `Parameter` expr for `x` |
-| `x : T => e` | `Annotation { value: Function, type: TypeFunction(T, _) }` — the desugared parameter annotation |
+| `x => e` | `Function { parameter, parameter_type: None, parameter_attribute: None, return }` — `parameter` is the `Parameter` expr for `x` |
+| `x : T => e` | `Function { parameter, parameter_type: Some(compile(T)), parameter_attribute: None, return }` — the annotated parameter's type, compiled in body scope (the §4.2 desugar kept as an optimization) |
+| `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
 | `e[i]` | `Index { array, index }` |
-| `e : T` | `Annotation { value, type }` |
+| `e : T` | `Annotation { value, type: Some(compile(T)), attribute: None }` |
+| `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attribute: Some(compile(p)) }` — the annotated node's schema gains the `[Perspective]` tail |
 | `_` (type position) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |

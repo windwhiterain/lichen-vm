@@ -27,13 +27,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lichen_highlevel::program::{HighProgram, HighProgramValue, TypeOperator, TypeValue};
+use lichen_highlevel::program::{HighProgramValue, TypeOperator, TypeValue};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, Program, StaticFunction,
     StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode, StaticOperation,
     TableItem,
 };
 use sha2::Digest as _;
+
+use crate::program::{GcdOp, LangOperator, LangProgram};
 
 /// The content hash of an artifact — 32 bytes of SHA-256.
 pub type Hash = [u8; 32];
@@ -145,8 +147,8 @@ fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) -> usi
 /// into the portable artifact format.  `hash` and `export` are the package
 /// metadata the store records alongside the module data.
 pub fn serialize_artifact(
-    module: &StaticModule<HighProgram<HighProgramValue>>,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+    module: &StaticModule<LangProgram>,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     hash: Hash,
     export: LocalNodeId,
 ) -> Vec<u8> {
@@ -234,11 +236,11 @@ where
     w.into_bytes()
 }
 
-impl ArtifactCodec<HighProgram<HighProgramValue>> for HighProgramCodec {
+impl ArtifactCodec<LangProgram> for HighProgramCodec {
     fn write_value(
         w: &mut Writer,
         value: HighProgramValue,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     ) {
         write_value(w, value, modules);
     }
@@ -248,16 +250,16 @@ impl ArtifactCodec<HighProgram<HighProgramValue>> for HighProgramCodec {
         self_key: ModuleKey,
         self_arena: &[u8],
         self_base: *const u8,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     ) -> Result<HighProgramValue, String> {
         read_value(r, self_key, self_arena, self_base, modules)
     }
 
-    fn write_operator(w: &mut Writer, operator: lichen_highlevel::program::HighProgramOperator) {
+    fn write_operator(w: &mut Writer, operator: LangOperator) {
         write_operator(w, operator);
     }
 
-    fn read_operator(r: &mut Reader<'_>) -> Result<lichen_highlevel::program::HighProgramOperator, String> {
+    fn read_operator(r: &mut Reader<'_>) -> Result<LangOperator, String> {
         read_operator(r)
     }
 }
@@ -265,7 +267,7 @@ impl ArtifactCodec<HighProgram<HighProgramValue>> for HighProgramCodec {
 fn write_value(
     w: &mut Writer,
     value: HighProgramValue,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
 ) {
     match value {
         HighProgramValue::LowValue(LowValue::USize(n)) => {
@@ -318,18 +320,18 @@ fn write_value(
     }
 }
 
-fn write_operator(w: &mut Writer, operator: lichen_highlevel::program::HighProgramOperator) {
-    use lichen_highlevel::program::HighProgramOperator;
+fn write_operator(w: &mut Writer, operator: LangOperator) {
     use lichen_lowlevel::LowOperator;
     match operator {
-        HighProgramOperator::LowOperator(LowOperator::Index) => w.u8(0),
-        HighProgramOperator::LowOperator(LowOperator::Apply) => w.u8(1),
-        HighProgramOperator::LowOperator(LowOperator::TableGet) => w.u8(8),
-        HighProgramOperator::TypeOperator(TypeOperator::Fresh) => w.u8(3),
-        HighProgramOperator::TypeOperator(TypeOperator::Add) => w.u8(4),
-        HighProgramOperator::TypeOperator(TypeOperator::Sub) => w.u8(5),
-        HighProgramOperator::TypeOperator(TypeOperator::Leq) => w.u8(6),
-        HighProgramOperator::TypeOperator(TypeOperator::Eq) => w.u8(7),
+        LangOperator::LowOperator(LowOperator::Index) => w.u8(0),
+        LangOperator::LowOperator(LowOperator::Apply) => w.u8(1),
+        LangOperator::LowOperator(LowOperator::TableGet) => w.u8(8),
+        LangOperator::TypeOperator(TypeOperator::Fresh) => w.u8(3),
+        LangOperator::TypeOperator(TypeOperator::Add) => w.u8(4),
+        LangOperator::TypeOperator(TypeOperator::Sub) => w.u8(5),
+        LangOperator::TypeOperator(TypeOperator::Leq) => w.u8(6),
+        LangOperator::TypeOperator(TypeOperator::Eq) => w.u8(7),
+        LangOperator::GcdOp(GcdOp::Gcd) => w.u8(9),
     }
 }
 
@@ -342,8 +344,8 @@ pub fn deserialize_artifact(
     bytes: &[u8],
     key: ModuleKey,
     hash: Hash,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
-) -> Result<(StaticModule<HighProgram<HighProgramValue>>, LocalNodeId), String> {
+    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
+) -> Result<(StaticModule<LangProgram>, LocalNodeId), String> {
     deserialize_artifact_with(bytes, key, hash, modules, HighProgramCodec)
 }
 
@@ -482,7 +484,7 @@ fn read_value(
     self_key: ModuleKey,
     self_arena: &[u8],
     self_base: *const u8,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
 ) -> Result<HighProgramValue, String> {
     Ok(match r.u8()? {
         0 => HighProgramValue::LowValue(LowValue::USize(r.u64()? as usize)),
@@ -560,18 +562,18 @@ fn read_value(
     })
 }
 
-fn read_operator(r: &mut Reader) -> Result<lichen_highlevel::program::HighProgramOperator, String> {
-    use lichen_highlevel::program::HighProgramOperator;
+fn read_operator(r: &mut Reader) -> Result<LangOperator, String> {
     use lichen_lowlevel::LowOperator;
     Ok(match r.u8()? {
-        0 => HighProgramOperator::LowOperator(LowOperator::Index),
-        1 => HighProgramOperator::LowOperator(LowOperator::Apply),
-        3 => HighProgramOperator::TypeOperator(TypeOperator::Fresh),
-        4 => HighProgramOperator::TypeOperator(TypeOperator::Add),
-        5 => HighProgramOperator::TypeOperator(TypeOperator::Sub),
-        6 => HighProgramOperator::TypeOperator(TypeOperator::Leq),
-        7 => HighProgramOperator::TypeOperator(TypeOperator::Eq),
-        8 => HighProgramOperator::LowOperator(LowOperator::TableGet),
+        0 => LangOperator::LowOperator(LowOperator::Index),
+        1 => LangOperator::LowOperator(LowOperator::Apply),
+        3 => LangOperator::TypeOperator(TypeOperator::Fresh),
+        4 => LangOperator::TypeOperator(TypeOperator::Add),
+        5 => LangOperator::TypeOperator(TypeOperator::Sub),
+        6 => LangOperator::TypeOperator(TypeOperator::Leq),
+        7 => LangOperator::TypeOperator(TypeOperator::Eq),
+        8 => LangOperator::LowOperator(LowOperator::TableGet),
+        9 => LangOperator::GcdOp(GcdOp::Gcd),
         tag => return Err(format!("unknown artifact operator tag {tag}")),
     })
 }
@@ -781,8 +783,8 @@ impl DeviceRegistry {
         &self,
         key: ModuleKey,
         hash: Hash,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>>,
-    ) -> Result<(StaticModule<HighProgram<HighProgramValue>>, LocalNodeId), String> {
+        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
+    ) -> Result<(StaticModule<LangProgram>, LocalNodeId), String> {
         let bytes = std::fs::read(self.artifact_path(hash))
             .map_err(|e| format!("cannot read cached artifact: {e}"))?;
         deserialize_artifact(&bytes, key, hash, modules)

@@ -340,4 +340,15 @@ output:
 Function: Int -> Int
 ```
 
+### `perspective.lichen`
+
+```text
+((1 # 4) + (2 # 6)) # 2
+```
+
+output:
+```text
+3: Int
+```
+
 <!-- end: examples -->

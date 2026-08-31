@@ -7,7 +7,7 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, ExprKind, IR};
-use lichen_highlevel::program::{HighGlobal, HighProgramValue, TypeValue};
+use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeValue};
 use lichen_lowlevel::{AnyNodeId, LowValue, NodeId};
 use lichen_utils::compose::AsField;
 
@@ -57,6 +57,7 @@ fn lam_at_typed(ir: &mut IR, b: ExprId, t: Option<ExprId>, body: ExprId, depth: 
         ExprKind::Function {
             parameter: b,
             parameter_type: t,
+            parameter_attribute: None,
             r#return: body,
             depth,
         },
@@ -84,7 +85,8 @@ fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
     ir.alloc(
         ExprKind::Annotation {
             value: e,
-            r#type: t,
+            r#type: Some(t),
+            attribute: None,
         },
         None,
     )
@@ -128,14 +130,14 @@ fn hole(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Placeholder, None)
 }
 
-fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build {
+fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build<ProgramImpl> {
     ir.set_root(root);
     Checker::build(ir)
 }
 
 /// The ids inside a checker-built array value.
 fn array_ids(
-    b: &lichen_highlevel::checker::Build,
+    b: &lichen_highlevel::checker::Build<ProgramImpl>,
     node: lichen_lowlevel::NodeId,
 ) -> Vec<lichen_lowlevel::NodeId> {
     b.module

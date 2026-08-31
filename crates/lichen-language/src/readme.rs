@@ -404,6 +404,9 @@ mod tests {
                 (3, "import".to_owned()),
                 (4, "import/math.lichen".to_owned()),
                 (4, "import/geometry.lichen".to_owned()),
+                // `perspective.lichen`'s order (6) places it after the
+                // `import` directory (order 5).
+                (3, "perspective.lichen".to_owned()),
             ])
             .collect::<Vec<_>>(),
             "directories render as units ordered by their `_.lichen`, files by their `-- order:`"

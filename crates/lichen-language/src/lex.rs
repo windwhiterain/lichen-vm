@@ -50,6 +50,9 @@ pub enum TokenKind {
     Colon,
     /// `::` — the table literal's key/value separator (`table{ k :: v, … }`).
     DoubleColon,
+    /// `#` — the perspective annotation (`e # p`, `x # n => e`).  Chosen over
+    /// `@` because the preprocessor owns `@import`.
+    Hash,
     /// `=` — a statement binding.
     Equals,
     /// `==` — equality (yields `USize(0/1)`).
@@ -101,6 +104,7 @@ impl TokenKind {
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
             TokenKind::DoubleColon => "'::'".to_string(),
+            TokenKind::Hash => "'#'".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::Eq => "'=='".to_string(),
             TokenKind::Leq => "'<='".to_string(),
@@ -231,6 +235,7 @@ impl Lexer<'_> {
                     self.push(line, col, 2, TokenKind::DoubleColon)
                 }
                 b':' => self.push(line, col, 1, TokenKind::Colon),
+                b'#' => self.push(line, col, 1, TokenKind::Hash),
                 b';' => self.push(line, col, 1, TokenKind::Semicolon),
                 b'+' => self.push(line, col, 1, TokenKind::Plus),
                 b'\n' => {

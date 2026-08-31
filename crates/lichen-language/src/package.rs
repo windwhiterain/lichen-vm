@@ -21,12 +21,13 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use lichen_highlevel::program::{HighPackageMeta, HighProgram, HighProgramValue};
+use lichen_highlevel::program::HighPackageMeta;
 use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
 
 use crate::diag::{Diag, Stage};
 use crate::persist::{self, DeviceRegistry, Hash};
 use crate::preprocess::preprocess;
+use crate::program::LangProgram;
 
 /// A loaded package: the path, its registry key, and the static ref to the
 /// exported final `[value, type]` pair (the package's final expression).
@@ -44,7 +45,7 @@ pub struct PackageHandle {
 /// loaded once is used in place by all of them (`packages` is public so a
 /// host or test can observe that sharing).
 pub struct PackageStore {
-    pub registry: Arc<RwLock<Registry<HighProgram<HighProgramValue>>>>,
+    pub registry: Arc<RwLock<Registry<LangProgram>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,
     /// The in-flight load stack (canonical paths) — a package re-entered
     /// while still loading closes an import cycle.
@@ -184,7 +185,7 @@ impl PackageStore {
         for (dep_path, _) in deps {
             self.load_package(dep_path)?;
         }
-        let mut modules: HashMap<ModuleKey, Arc<StaticModule<HighProgram<HighProgramValue>>>> =
+        let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> =
             HashMap::new();
         {
             let registry = self.registry.read().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -345,7 +346,7 @@ impl PackageStore {
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let mut modules: HashMap<
                     ModuleKey,
-                    Arc<StaticModule<HighProgram<HighProgramValue>>>,
+                    Arc<StaticModule<LangProgram>>,
                 > = HashMap::new();
                 for (key, package) in registry.iter() {
                     modules.insert(key, package.module.clone());
@@ -415,7 +416,7 @@ impl PackageStore {
     }
 
     /// The shared registry, for the importer's checker.
-    pub fn registry(&self) -> Arc<RwLock<Registry<HighProgram<HighProgramValue>>>> {
+    pub fn registry(&self) -> Arc<RwLock<Registry<LangProgram>>> {
         self.registry.clone()
     }
 }
