@@ -104,6 +104,7 @@ pub struct Checker<V: ValueType> {
     tuple_type_marker: NodeId,
     array_type_marker: NodeId,
     type_struct_marker: NodeId,
+    table_type_marker: NodeId,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
@@ -209,6 +210,7 @@ impl<V: ValueType> Checker<V> {
             tuple_type_marker: NodeId::default(),
             array_type_marker: NodeId::default(),
             type_struct_marker: NodeId::default(),
+            table_type_marker: NodeId::default(),
             int_type: NodeId::default(),
             type_expr: NodeId::default(),
         };
@@ -330,6 +332,7 @@ impl<V: ValueType> Checker<V> {
         self.tuple_type_marker = self.alloc_node(root, None, Some(V::tuple_type_marker()));
         self.array_type_marker = self.alloc_node(root, None, Some(V::array_type_marker()));
         self.type_struct_marker = self.alloc_node(root, None, Some(V::type_struct_marker()));
+        self.table_type_marker = self.alloc_node(root, None, Some(V::table_type_marker()));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
@@ -447,6 +450,7 @@ impl<V: ValueType> Checker<V> {
             | ExprKind::TypeTuple(range)
             | ExprKind::Array(range)
             | ExprKind::TypeStruct(range)
+            | ExprKind::Table(range)
             | ExprKind::ShallowArray { range, .. } => range,
             _ => unreachable!("expected a variadic expression kind"),
         };
@@ -589,29 +593,25 @@ impl<V: ValueType> Checker<V> {
             && self.kind_marker_is_any(kind_items[1].node, V::type_struct_marker())
     }
 
-    fn is_struct_type(&mut self, ty: NodeId) -> bool {
-        self.is_struct_type_any(AnyNodeId::Dynamic(ty))
-    }
-
-    /// Whether `ty` is a concrete indexable type expression — a tuple type
-    /// (`[shape, [TypeTuple, K]]`), an array type (`[shape, [TypeArray,
-    /// K]]`), or a struct type (`[shape, [id, [TypeStruct, K]]]`, whose shape
-    /// is the positional field-type list).  The index-target guard skips
-    /// these; only concretely *non*-indexable types are caught statically.
-    fn is_indexable_type_any(&mut self, ty: AnyNodeId) -> bool {
+    /// Whether `ty` is a concrete positional type expression — a tuple type
+    /// (`[shape, [TypeTuple, K]]`) or a struct type (`[shape, [id,
+    /// [TypeStruct, K]]]`, whose shape is the positional field-type list).
+    /// The field-read guard (`a(k)`) skips these; an array reads with
+    /// `a[i]` (its type is pinned, so misuse fails the pin unify), a table
+    /// with `t{k}`, and only concretely *non*-positional types are caught
+    /// statically here.
+    fn is_positional_type_any(&mut self, ty: AnyNodeId) -> bool {
         let Some(items) = self.any_items(ty) else {
             return false;
         };
         if items.len() != 2 {
             return false;
         }
-        self.kind_marker_is_any(items[1].node, V::tuple_type_marker())
-            || self.kind_marker_is_any(items[1].node, V::array_type_marker())
-            || self.is_struct_type_any(ty)
+        self.kind_marker_is_any(items[1].node, V::tuple_type_marker()) || self.is_struct_type_any(ty)
     }
 
-    fn is_indexable_type(&mut self, ty: NodeId) -> bool {
-        self.is_indexable_type_any(AnyNodeId::Dynamic(ty))
+    fn is_positional_type(&mut self, ty: NodeId) -> bool {
+        self.is_positional_type_any(AnyNodeId::Dynamic(ty))
     }
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
@@ -637,14 +637,16 @@ impl<V: ValueType> Checker<V> {
                 ExprKind::Apply { .. }
                     | ExprKind::BinOp { .. }
                     | ExprKind::Instantiate { .. }
-                    | ExprKind::Assert { .. }
-                    | ExprKind::Index { .. }
-                    | ExprKind::Annotation { .. }
+                | ExprKind::Assert { .. }
+                | ExprKind::Index { .. }
+                | ExprKind::Find { .. }
+                | ExprKind::Annotation { .. }
                     | ExprKind::TypeFunction { .. }
                     | ExprKind::Tuple(_)
                     | ExprKind::TypeTuple(_)
                     | ExprKind::TypeStruct(_)
                     | ExprKind::Array(_)
+                    | ExprKind::Table(_)
                     | ExprKind::ShallowArray { .. }
                     | ExprKind::TypeArray { .. }
             ) {
@@ -744,6 +746,8 @@ impl<V: ValueType> Checker<V> {
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
+            ExprKind::Field { container, key } => self.check_field(e, container, key),
+            ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation {
                 value,
                 r#type: type_expr,
@@ -767,6 +771,7 @@ impl<V: ValueType> Checker<V> {
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),
             ExprKind::TypeStruct(_) => self.check_type_struct(e),
             ExprKind::Array(_) => self.check_array_term(e),
+            ExprKind::Table(_) => self.check_table_term(e),
             ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
             ExprKind::Placeholder => {
                 // `_` — an inferrable type position: two fresh unbound
@@ -1060,24 +1065,40 @@ impl<V: ValueType> Checker<V> {
         pair
     }
 
-    /// An indexing expression `a[i]`: the value is the structural `Index`
-    /// over the array's value; the type is the element type.  For a
-    /// statically-known tuple or struct the type is a structural `Index`
-    /// over the element/field-type list — both sides then catch an
-    /// out-of-bounds index.  For an array (or a type known only at runtime
-    /// — a parameter, a call result) the type is a small dispatch subgraph
-    /// of native operators: the type's kind (its `[marker, K]` type slot —
-    /// free of the shape's possibly-unbound spine) is mapped to a USize
-    /// code by [`HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch)`], and the code
-    /// selects the extraction branch from a native `Index(table, code)`.
-    /// The array type's element type is shape[0] (the value-side `Index`
-    /// bounds-checks real reads, so the type read needs no length check).
-    /// A statically-array target additionally registers a *bounds
-    /// constraint* (`i < shape[1]`) on the module's assert worklist —
-    /// see the comment at the generation site below.
+    /// An array-element read `a[i]`.  The container's type is *pinned* to a
+    /// fresh array type — the same pin [`Self::check_binop`] applies to its
+    /// operands and [`Self::check_table_find`] to its container — so a
+    /// concretely non-array container (a tuple, a struct, a function, a
+    /// table) fails here with a diagnostic, and an unbound container (a
+    /// parameter, a call result) resolves at the call site's argument
+    /// unify: only an array can flow in.  Tuple and struct slots are read
+    /// with the dedicated positional form `a(k)` ([`Self::check_field`]),
+    /// table entries with `t{k}` — the operator and the type extraction
+    /// are chosen by syntax, never by a runtime kind dispatch.
+    ///
+    /// The value is the structural `Index` over the array's value; the type
+    /// is the pinned shape's element cell, which lands in the concrete
+    /// element type's class when the container type binds.  The read also
+    /// registers a *bounds constraint* on the module's assert worklist:
+    /// `i < length` as `length <= i == 0`, the comparison ops the value
+    /// language already has.  A concrete out-of-range index fails the
+    /// assert pass; a lazy length (an annotated parameter) keeps the assert
+    /// pending, and the apply clone re-checks it against each argument's
+    /// actual array.
     fn check_index(&mut self, e: ExprId, array: ExprId, index: ExprId) -> NodeId {
         self.check_expr(array);
         self.check_expr(index);
+        let elem_cell = self.fresh_cell();
+        let len_cell = self.fresh_cell();
+        let shape = self.array_node(self.current_block, &[elem_cell, len_cell]);
+        let kind = self.kind_expr(self.current_block, self.array_type_marker);
+        let array_ty = self.array_node(self.current_block, &[shape, kind]);
+        self.check_unify(
+            self.ty[array].unwrap(),
+            array_ty,
+            self.ir[e].span,
+            DiagKind::Guard,
+        );
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
@@ -1086,183 +1107,141 @@ impl<V: ValueType> Checker<V> {
             structural(LowOperator::Index),
             Some(value_ops),
         );
-        let array_ty = self.ty[array].unwrap();
-        // Index-target guard: indexing a *concretely* non-indexable type —
-        // a function, an atomic type — is an error, not a runtime panic
-        // (mirroring the apply guard).  Tuple, array, and struct types pass
-        // (a struct's shape is its field list, so instances are indexable);
-        // an unbound type (a parameter, a call result) defers to the
-        // runtime Index, which stays lazy until the type is known.
-        let concrete = self.module.nodes[array_ty].value.is_some_and(|value| {
+        let zero =
+            self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+        let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
+        let beyond = self.op_node(
+            self.current_block,
+            HighProgramOperator::TypeOperator(TypeOperator::Leq),
+            Some(beyond_ops),
+        );
+        let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
+        let in_range = self.op_node(
+            self.current_block,
+            HighProgramOperator::TypeOperator(TypeOperator::Eq),
+            Some(in_range_ops),
+        );
+        self.register_assert(in_range);
+        let pair = self.pair_of(value_node, elem_cell);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(elem_cell);
+        pair
+    }
+
+    /// A positional slot read `a(k)` — a tuple element or a struct field
+    /// (both type shapes are positional lists; the nominal struct id lives
+    /// in the kind slot, so the extraction is the same for both).  The
+    /// frontend emits this form for the adjacent single-expression paren —
+    /// `a(1)` — the syntactic distinction from struct instantiation
+    /// (`a(1,)`, `a(1,1)`, and the two zero-field spellings `a()` / `a(,)`,
+    /// mirroring the tuple grammar's `()` unit vs `(,)` empty tuple) and
+    /// from function application (a spaced paren), so no runtime kind
+    /// dispatch decides the read.
+    ///
+    /// The value is the structural `Index` over the container's value; the
+    /// type is `Index(shape, k)` over the container type's shape — read
+    /// structurally from the type pair itself, so a concrete tuple/struct
+    /// resolves at check time and an unbound container (a parameter, a call
+    /// result) resolves when the call binds it.  A *concretely*
+    /// non-positional container — an array (`a[i]` is its read), a table
+    /// (`t{k}`), a function, an atomic type — is the guard's error below,
+    /// not a runtime panic (mirroring the apply guard).
+    fn check_field(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
+        self.check_expr(container);
+        self.check_expr(key);
+        let container_ty = self.ty[container].unwrap();
+        let concrete = self.module.nodes[container_ty].value.is_some_and(|value| {
             matches!(
                 value.as_enum(),
                 None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
             )
         });
-        if concrete && !self.is_indexable_type(array_ty) {
+        if concrete && !self.is_positional_type(container_ty) {
             let error_index = self.module.unify_errors.len();
             self.module.unify_errors.push(UnifyError {
-                a: array_ty,
-                b: array_ty,
-                value_a: self.module.nodes[array_ty].value,
-                value_b: self.module.nodes[array_ty].value,
+                a: container_ty,
+                b: container_ty,
+                value_a: self.module.nodes[container_ty].value,
+                value_b: self.module.nodes[container_ty].value,
             });
             self.diary.push(DiaryEntry {
                 error_index,
-                a: array_ty,
-                b: array_ty,
+                a: container_ty,
+                b: container_ty,
                 span: self.ir[e].span,
                 kind: DiagKind::IndexTarget,
             });
         }
-        // The element-type list of a tuple type, or the field-type list of a
-        // struct type — both positional lists, so a literal index into a
-        // statically-known tuple or struct is bounds-checked at check time
-        // (a struct's list sits at shape[1], behind its [TypeId, …] shape).
-        // An array type's shape is `[element_type, length]` — not a
-        // positional list — so it (and any type known only at runtime) goes
-        // to the IndexType operator below.
-        let field_shape = match self.module.array_items(array_ty) {
-            Some(items) if items.len() == 2 => {
-                // Materialize static item refs into fresh dynamic nodes so
-                // the shape/kind can be used by the native `Index` machinery.
-                let shape = self.module.as_dynamic(items[0].node, self.current_block);
-                let kind = self.module.as_dynamic(items[1].node, self.current_block);
-                if self.kind_marker_is(kind, V::tuple_type_marker()) {
-                    Some(shape)
-                } else if self.is_struct_type(array_ty) {
-                    // A struct type's shape is the positional field-type
-                    // list itself (the nominal id lives in the kind).
-                    Some(shape)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        let ty_node = match field_shape {
-            // The element-type list is structural, so an out-of-bounds
-            // index is caught by the lowlevel `Index` bounds check.
-            Some(tys) => {
-                let ty_ops = self.array_node(self.current_block, &[tys, index_value]);
-                self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(ty_ops),
-                )
-            }
-            // An array type's shape is `[element_type, length]` — not a
-            // positional list — and any type known only at runtime must be
-            // dispatched on its kind once it is bound.  The dispatch is a
-            // native subgraph: extract the shape and the kind (the type
-            // pair's type slot — `[marker, K]`, free of the shape's spine)
-            // with plain `Index`, map the kind's marker to a USize code with
-            // [`HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch)`], and select the
-            // extraction branch from a native `Index(table, code)`.  A bound
-            // type always dispatches — the kind carries no unbound cells —
-            // so a lazy stream's type spine resolves at the level read; an
-            // unbound type defers (every native read yields the marker).
-            None => {
-                let zero =
-                    self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
-                let one =
-                    self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(1))));
-                let shape_ops = self.array_node(self.current_block, &[array_ty, zero]);
-                let shape = self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(shape_ops),
-                );
-                let kind_ops = self.array_node(self.current_block, &[array_ty, one]);
-                let kind = self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(kind_ops),
-                );
-                let code = self.op_node(
-                    self.current_block,
-                    HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch),
-                    Some(kind),
-                );
-                // A *statically-array* target also gets a generated bounds
-                // constraint: the length lives in the type's own shape
-                // (`shape[1]`), so the read asserts `i < len` through the
-                // module's constraint worklist (`i < len` as `len <= i == 0`,
-                // the comparison ops the value language already has).  A
-                // concrete out-of-range index fails the assert pass; a lazy
-                // length (an annotated parameter) keeps the assert pending,
-                // and the apply clone re-checks it against each argument's
-                // actual array.  A target whose kind is still unknown (an
-                // unannotated parameter, a call result) gets no constraint —
-                // the runtime `Index` bounds check remains the guard there.
-                // The gate reads the kind slot *structurally* from the type
-                // pair's cached value (like the tuple/struct match above) —
-                // the dispatch `kind` op below is still unevaluated here.
-                let statically_array = match self.module.array_items(array_ty) {
-                    Some(items) if items.len() == 2 => {
-                        self.kind_marker_is_any(items[1].node, V::array_type_marker())
-                    }
-                    _ => false,
-                };
-                if statically_array {
-                    let length_ops = self.array_node(self.current_block, &[shape, one]);
-                    let length = self.op_node(
-                        self.current_block,
-                        structural(LowOperator::Index),
-                        Some(length_ops),
-                    );
-                    let beyond_ops = self.array_node(self.current_block, &[length, index_value]);
-                    let beyond = self.op_node(
-                        self.current_block,
-                        HighProgramOperator::TypeOperator(TypeOperator::Leq),
-                        Some(beyond_ops),
-                    );
-                    let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
-                    let in_range = self.op_node(
-                        self.current_block,
-                        HighProgramOperator::TypeOperator(TypeOperator::Eq),
-                        Some(in_range_ops),
-                    );
-                    self.register_assert(in_range);
-                }
-                // Dispatch codes (see `IndexTypeDispatch`'s run): 0 = tuple,
-                // 1 = struct, 2 = array, 3 = any other kind (defer).
-                let tuple_ops = self.array_node(self.current_block, &[shape, index_value]);
-                let tuple_b = self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(tuple_ops),
-                );
-                // A struct type's shape is its positional field-type list
-                // (the nominal id lives in the kind), so a struct reads a
-                // field exactly like a tuple reads an element.
-                let struct_ops = self.array_node(self.current_block, &[shape, index_value]);
-                let struct_b = self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(struct_ops),
-                );
-                let array_ops = self.array_node(self.current_block, &[shape, zero]);
-                let array_b = self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(array_ops),
-                );
-                let fallback = self.fresh_cell();
-                let table =
-                    self.array_node(self.current_block, &[tuple_b, struct_b, array_b, fallback]);
-                let result_ops = self.array_node(self.current_block, &[table, code]);
-                self.op_node(
-                    self.current_block,
-                    structural(LowOperator::Index),
-                    Some(result_ops),
-                )
-            }
-        };
+        let zero =
+            self.alloc_node(self.current_block, None, Some(V::from(LowValue::USize(0))));
+        let container_value = self.value_of(container);
+        let key_value = self.value_of(key);
+        let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
+        let value_node = self.op_node(
+            self.current_block,
+            structural(LowOperator::Index),
+            Some(value_ops),
+        );
+        let shape_ops = self.array_node(self.current_block, &[container_ty, zero]);
+        let shape = self.op_node(
+            self.current_block,
+            structural(LowOperator::Index),
+            Some(shape_ops),
+        );
+        let ty_ops = self.array_node(self.current_block, &[shape, key_value]);
+        let ty_node = self.op_node(
+            self.current_block,
+            structural(LowOperator::Index),
+            Some(ty_ops),
+        );
         let pair = self.pair_of(value_node, ty_node);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(ty_node);
+        pair
+    }
+
+    /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose
+    /// stored key is deep-content-equal to `k`.  The frontend emits this
+    /// form for the *adjacent* brace — the syntactic distinction from
+    /// positional [`Self::check_index`] — so the operator is chosen by
+    /// syntax, never by a runtime kind dispatch.
+    ///
+    /// The container's type is *pinned* to a fresh table type — the same
+    /// pin [`Self::check_binop`] applies to its operands — so a concretely
+    /// non-table container fails here with a diagnostic, and an unbound
+    /// container (a parameter, a call result) resolves at the call site's
+    /// argument unify: only a table can flow in.  The value is the
+    /// `TableGet` op node itself; the type is the pinned shape's value-type
+    /// cell, which lands in the concrete value type's class when the
+    /// container type binds.
+    fn check_table_find(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
+        self.check_expr(container);
+        self.check_expr(key);
+        let key_cell = self.fresh_cell();
+        let value_cell = self.fresh_cell();
+        let shape = self.array_node(self.current_block, &[key_cell, value_cell]);
+        let kind = self.kind_expr(self.current_block, self.table_type_marker);
+        let table_ty = self.array_node(self.current_block, &[shape, kind]);
+        self.check_unify(
+            self.ty[container].unwrap(),
+            table_ty,
+            self.ir[e].span,
+            DiagKind::Guard,
+        );
+        let container_value = self.value_of(container);
+        let key_value = self.value_of(key);
+        let ops = self.array_node(self.current_block, &[container_value, key_value]);
+        let value_node = self.op_node(
+            self.current_block,
+            structural(LowOperator::TableGet),
+            Some(ops),
+        );
+        let pair = self.pair_of(value_node, value_cell);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(value_cell);
         pair
     }
 
@@ -1501,6 +1480,57 @@ impl<V: ValueType> Checker<V> {
         );
         let shape = self.array_node(self.current_block, &[element_ty, length]);
         let kind = self.kind_expr(self.current_block, self.array_type_marker);
+        let ty_node = self.array_node(self.current_block, &[shape, kind]);
+        let pair = self.pair_of(value, ty_node);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value);
+        self.ty[e] = Some(ty_node);
+        pair
+    }
+
+    /// A constant table literal `table { [k1, v1], [k2, v2], … }` — the
+    /// entries (interleaved key/value ids in the children arena) are checked
+    /// like an array's elements, against a shared key-type cell and a shared
+    /// value-type cell, and the value is built eagerly by the lowlevel
+    /// [`Module::build_table`]: every key is force-evaluated and
+    /// deep-content-hashed, an entry whose key is not concrete is dropped
+    /// with a recorded [`EvalError::TableKeyUnbound`], and the survivors are
+    /// stored sorted by hash.  The type is the kinded pair
+    /// `[[key type, value type], [TypeTable, Type]]`.
+    fn check_table_term(&mut self, e: ExprId) -> NodeId {
+        let entries = self.range_children(e);
+        let key_ty = self.fresh_cell();
+        let value_ty = self.fresh_cell();
+        let mut pairs = Vec::with_capacity(entries.len() / 2);
+        for chunk in entries.chunks(2) {
+            let (key, value) = (chunk[0], chunk[1]);
+            self.check_expr(key);
+            self.check_expr(value);
+            pairs.push((
+                AnyNodeId::Dynamic(self.value_of(key)),
+                AnyNodeId::Dynamic(self.value_of(value)),
+            ));
+            self.check_unify(
+                self.ty[key].unwrap(),
+                key_ty,
+                self.ir[key].span,
+                DiagKind::TableKey,
+            );
+            self.check_unify(
+                self.ty[value].unwrap(),
+                value_ty,
+                self.ir[value].span,
+                DiagKind::TableValue,
+            );
+        }
+        let table = self.module.build_table(&pairs, self.current_block);
+        let value = self.alloc_node(
+            self.current_block,
+            None,
+            Some(V::from(LowValue::Table(table))),
+        );
+        let shape = self.array_node(self.current_block, &[key_ty, value_ty]);
+        let kind = self.kind_expr(self.current_block, self.table_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
         self.term[e] = Some(pair);

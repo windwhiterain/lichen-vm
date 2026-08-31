@@ -4,7 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, Program,
+    LowValue, Module, NodeId, Operation, Program, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -96,174 +96,102 @@ impl<P: Program> Module<P> {
         node: NodeId,
         cell: Option<NodeId>,
     ) -> P::Value {
-        self.apply_depth += 1;
-        self.apply_total += 1;
-        if self.apply_depth > self.apply_depth_limit {
-            panic!(
-                "recursion depth exceeded in function application (limit {}) — non-terminating function application?",
-                self.apply_depth_limit
+        self.with_apply_frame(|module| {
+            let (r#return, parameter, asserts) = {
+                let function = &module.functions[function];
+                (
+                    function.r#return,
+                    function.parameter,
+                    function.asserts.clone(),
+                )
+            };
+            debug_assert!(
+                module.functions[function].nodes.contains(&r#return),
+                "function {function:?} (block {:?}, parent {:?}) return {return:?} not in scope {:?}",
+                module.functions[function].block,
+                module.functions[function].parent,
+                module.functions[function].nodes
             );
-        }
-        if self.apply_total > self.apply_total_limit {
-            panic!(
-                "too many function applications (limit {}) — non-terminating recursion?",
-                self.apply_total_limit
-            );
-        }
-        let (r#return, parameter, asserts) = {
-            let function = &self.functions[function];
-            (
-                function.r#return,
-                function.parameter,
-                function.asserts.clone(),
-            )
-        };
-        debug_assert!(
-            self.functions[function].nodes.contains(&r#return),
-            "function {function:?} (block {:?}, parent {:?}) return {return:?} not in scope {:?}",
-            self.functions[function].block,
-            self.functions[function].parent,
-            self.functions[function].nodes
-        );
-        debug_assert!(self.functions[function].nodes.contains(&parameter));
-        let mut remap = HashMap::new();
-        let mut ctx = ApplyCtx {
-            target: block,
-            // Membership is the chain test, not a scope snapshot: the clones
-            // this pass creates are stamped with the apply node's owner, so
-            // the enclosing template re-instantiates them per call.
-            anchor: function,
-            branch_top: function,
-            closure_scope: None,
-            applied: function,
-            parameter,
-            tag: self.nodes[node].function,
-            remap: &mut remap,
-        };
-        let applied = self.node_apply(r#return, &mut ctx);
-        // The parameter is an entry point of the clone walk, not just a node
-        // the return subtree happens to reach: the argument must satisfy the
-        // parameter's type even when the body never references the parameter
-        // (an ignored parameter), and a parameter read whose value a type
-        // annotation pinned is referenced in place and so is invisible from
-        // the return.  Walking it regardless guarantees the parameter unify
-        // below fires.  Idempotent: if the return clone already remapped it,
-        // this returns the same clone.
-        self.node_apply(parameter, &mut ctx);
-        // The body's asserts are the function's own registry entries (see
-        // `Function::asserts`): the return clone cannot reach a condition
-        // that no value references, so each one is instantiated through the
-        // shared remap — a condition the deep pass proved concrete is
-        // per-call invariant and is referenced in place (decided at
-        // normalize), while an unbound one rewrites to this call's clones,
-        // so the body's assert re-checks against the argument.  Only actual
-        // clones register: a fresh entry is a constraint on this call.
-        for &condition in &asserts {
-            let instantiated = self.node_apply(condition, &mut ctx);
-            if instantiated != condition {
-                self.asserts.push(instantiated);
-            }
-        }
-        // The parameter is cloned like any parameterized node, and the clone
-        // is unified with the argument instead of being replaced by it: the
-        // class binding propagates the argument's value to every reference
-        // to the parameter in the body.
-        if let Some(&cloned_param) = ctx.remap.get(&parameter) {
-            // The clones are fresh singleton classes; re-establish the
-            // template's internal class topology among them, so template
-            // nodes unified at definition time (e.g. the elements of a
-            // homogeneous array pattern) stay unified after cloning — the
-            // elementwise unify below then forces the argument to satisfy
-            // the pattern's internal constraints.  A single clone (just the
-            // parameter) has no topology to re-establish.
-            if ctx.remap.len() > 1 {
-                let mut groups: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
-                for (&template, &clone) in ctx.remap.iter() {
-                    groups
-                        .entry(disjoint::find(&mut self.nodes, template))
-                        .or_default()
-                        .push(clone);
+            debug_assert!(module.functions[function].nodes.contains(&parameter));
+            let mut remap = HashMap::new();
+            let mut ctx = ApplyCtx {
+                target: block,
+                // Membership is the chain test, not a scope snapshot: the clones
+                // this pass creates are stamped with the apply node's owner, so
+                // the enclosing template re-instantiates them per call.
+                anchor: function,
+                branch_top: function,
+                closure_scope: None,
+                applied: function,
+                parameter,
+                tag: module.nodes[node].function,
+                remap: &mut remap,
+            };
+            let applied = module.node_apply(r#return, &mut ctx);
+            // The parameter is an entry point of the clone walk, not just a node
+            // the return subtree happens to reach: the argument must satisfy the
+            // parameter's type even when the body never references the parameter
+            // (an ignored parameter), and a parameter read whose value a type
+            // annotation pinned is referenced in place and so is invisible from
+            // the return.  Walking it regardless guarantees the parameter unify
+            // below fires.  Idempotent: if the return clone already remapped it,
+            // this returns the same clone.
+            module.node_apply(parameter, &mut ctx);
+            // The body's asserts are the function's own registry entries (see
+            // `Function::asserts`): the return clone cannot reach a condition
+            // that no value references, so each one is instantiated through the
+            // shared remap — a condition the deep pass proved concrete is
+            // per-call invariant and is referenced in place (decided at
+            // normalize), while an unbound one rewrites to this call's clones,
+            // so the body's assert re-checks against the argument.  Only actual
+            // clones register: a fresh entry is a constraint on this call.
+            for &condition in &asserts {
+                let instantiated = module.node_apply(condition, &mut ctx);
+                if instantiated != condition {
+                    module.asserts.push(instantiated);
                 }
-                for clones in groups.values() {
-                    let first = clones[0];
-                    for &clone in &clones[1..] {
-                        self.unify(first, clone);
+            }
+            // The parameter is cloned like any parameterized node, and the clone
+            // is unified with the argument instead of being replaced by it: the
+            // class binding propagates the argument's value to every reference
+            // to the parameter in the body.
+            if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+                // The clones are fresh singleton classes; re-establish the
+                // template's internal class topology among them, so template
+                // nodes unified at definition time (e.g. the elements of a
+                // homogeneous array pattern) stay unified after cloning — the
+                // elementwise unify below then forces the argument to satisfy
+                // the pattern's internal constraints.  A single clone (just the
+                // parameter) has no topology to re-establish.
+                if ctx.remap.len() > 1 {
+                    for clones in crate::apply::regroup_clones(
+                        ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
+                        |template| disjoint::find(&mut module.nodes, template),
+                    )
+                    .values()
+                    {
+                        let first = clones[0];
+                        for &clone in &clones[1..] {
+                            module.unify(first, clone);
+                        }
                     }
                 }
-            }
-            // Evaluate the argument to the depth the parameter's pattern
-            // references, so the unify sees the argument's element values
-            // instead of unbound slots; positions the pattern treats as
-            // opaque stay lazy.
-            self.evaluate_pattern_argument(cloned_param, argument, block);
-            let pre_unify_errors = self.unify_errors.len();
-            self.unify(cloned_param, argument);
-            // A failed parameter check: the argument does not fit the applied
-            // function's declared parameter type.  Record the apply context
-            // for attribution (the raw UnifyError leaves drop the two
-            // top-level sides), then stop — evaluating the body under a
-            // mismatched argument is meaningless and may well panic (e.g. an
-            // `Index` over a non-array value).  The entries the unify just
-            // produced stay in `unify_errors`; the caller reports them with
-            // this context.  Deduplicated by apply node, so a later re-read
-            // of the same apply does not re-record it.
-            if self.unify_errors.len() > pre_unify_errors {
-                let parameter_type = self
-                    .array_items(parameter)
-                    .and_then(|items| items.get(1))
-                    .map(|item| self.as_dynamic(item.node, block))
-                    .unwrap_or(parameter);
-                let argument_type = self
-                    .array_items(argument)
-                    .and_then(|items| items.get(1))
-                    .map(|item| self.as_dynamic(item.node, block))
-                    .unwrap_or(argument);
-                if !self.apply_errors.iter().any(|e| e.apply_node == node) {
-                    self.apply_errors.push(ApplyError {
-                        function: AnyFunctionId::Dynamic(function),
-                        parameter_type,
-                        argument_type,
-                        argument,
-                        apply_node: node,
-                        error_index: pre_unify_errors,
-                    });
+                // A failed parameter check leaves the apply's result unknown:
+                // the body must not run under a mismatched argument.
+                if module.apply_parameter_check(
+                    cloned_param,
+                    argument,
+                    block,
+                    node,
+                    AnyFunctionId::Dynamic(function),
+                    parameter,
+                ) {
+                    return P::Value::from(LowValue::Parameterized);
                 }
-                self.apply_depth -= 1;
-                return P::Value::from(LowValue::Parameterized);
             }
-        }
-        let result = self.evaluate_node(Dyn(applied), Some(block));
-        self.apply_depth -= 1;
-        // The apply's result is the function's return pair `[value, type]`
-        // (the checker encodes every expression as such a pair).  The apply
-        // node caches that pair and is unified with the return node, so the
-        // classes merge — the apply node *is* the return pair — and the
-        // result cell (the checker's third operand element) binds to the
-        // return type.  Unifying the two equal pairs never conflicts (their
-        // elements are the same nodes); a lazy result — a polymorphic
-        // template — leaves the cell bound to an unresolved class, which
-        // reads as unbound until the deep pass resolves it.  An apply
-        // without a wired cell (a hand-built lowlevel graph) is unchanged.
-        match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(array))) if array.items().len() == 2 => {
-                let items = array.items();
-                self.nodes[node].value = Some(result);
-                self.unify(node, applied);
-                // Resolve the return type before binding the cell: the deep
-                // pass resolves the node later but does not replicate to
-                // class members, so an unresolved bind would leave the cell
-                // unbound.  A lazy return type — a body ending in a call —
-                // is an Index read, which already aliased its target cell at
-                // evaluation time (see the Index arm), so this unify joins
-                // the cell into that class and the binding propagates
-                // regardless of when the nested apply runs.
-                let item = self.as_dynamic(items[1].node, block);
-                self.evaluate_node(Dyn(item), Some(block));
-                self.unify(cell, item);
-                result
-            }
-            _ => result,
-        }
+            let result = module.evaluate_node(Dyn(applied), Some(block));
+            module.wire_apply_result(node, cell, result, applied, block)
+        })
     }
 
     /// Evaluate `argument` to the structural depth `pattern` (the cloned
@@ -448,6 +376,27 @@ impl<P: Program> Module<P> {
                     .collect();
                 P::Value::from(LowValue::Array(self.alloc_array(&items, ctx.target)))
             }
+            Some(LowValue::Table(table)) => {
+                // The entry nodes clone like array items; the stored hash
+                // travels verbatim — a cloned key holds the same forced
+                // value, so its hash stays valid for the fresh instance.
+                let items: Vec<TableItem> = table
+                    .items()
+                    .iter()
+                    .map(|&item| TableItem {
+                        key: match item.key {
+                            AnyNodeId::Static(_) => item.key,
+                            Dyn(node) => Dyn(self.node_apply(node, ctx)),
+                        },
+                        value: match item.value {
+                            AnyNodeId::Static(_) => item.value,
+                            Dyn(node) => Dyn(self.node_apply(node, ctx)),
+                        },
+                        hash: item.hash,
+                    })
+                    .collect();
+                P::Value::from(LowValue::Table(self.alloc_table(&items, ctx.target)))
+            }
             // A static function value is a frozen template — its captures are
             // static, so nothing needs rebinding per call; it is referenced
             // in place (its apply materializes per call).
@@ -587,10 +536,15 @@ impl<P: Program> Module<P> {
         let Some(value) = value else {
             return false;
         };
-        let Some(LowValue::Array(array)) = value.as_enum() else {
-            return false;
+        let mut stack: Vec<AnyNodeId> = match value.as_enum() {
+            Some(LowValue::Array(array)) => array.items().iter().map(|item| item.node).collect(),
+            Some(LowValue::Table(table)) => table
+                .items()
+                .iter()
+                .flat_map(|item| [item.key, item.value])
+                .collect(),
+            _ => return false,
         };
-        let mut stack: Vec<AnyNodeId> = array.items().iter().map(|item| item.node).collect();
         let mut seen = HashSet::new();
         while let Some(node) = stack.pop() {
             if !seen.insert(node) {
@@ -606,6 +560,12 @@ impl<P: Program> Module<P> {
                     }
                     Some(LowValue::Array(array)) => {
                         stack.extend(array.items().iter().map(|item| item.node))
+                    }
+                    Some(LowValue::Table(table)) => {
+                        for item in table.items() {
+                            stack.push(item.key);
+                            stack.push(item.value);
+                        }
                     }
                     _ => {}
                 },

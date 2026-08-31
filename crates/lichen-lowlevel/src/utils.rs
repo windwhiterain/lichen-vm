@@ -1,7 +1,8 @@
 use std::{alloc::Layout, ptr};
 
 use crate::{
-    AnyHandle, ArrayItem, BlockId, Handle, LowValue, Module, NodeId, Program, ValueExt as _,
+    AnyHandle, ArrayItem, BlockId, Handle, LowValue, Module, NodeId, Program, TableItem,
+    ValueExt as _,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -25,6 +26,16 @@ impl<P: Program> Module<P> {
     /// Copy `items` into `block.arena` and return the array handle pointing
     /// at the copy — the payload every [`LowValue::Array`] carries.
     pub fn alloc_array(&self, items: &[ArrayItem], block: BlockId) -> AnyHandle<[ArrayItem]> {
+        let slice = self.blocks[block].arena.alloc_slice_copy(items);
+        AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
+            slice.as_ptr(),
+            slice.len(),
+        )))
+    }
+
+    /// Copy `items` into `block.arena` and return the table handle pointing
+    /// at the copy — the payload every [`LowValue::Table`] carries.
+    pub fn alloc_table(&self, items: &[TableItem], block: BlockId) -> AnyHandle<[TableItem]> {
         let slice = self.blocks[block].arena.alloc_slice_copy(items);
         AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
             slice.as_ptr(),

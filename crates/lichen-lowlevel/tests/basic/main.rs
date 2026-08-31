@@ -8,6 +8,7 @@
 //! - `recursion` — lazy recursion, definition passes, depth guards
 //! - `equality` — `unify` and the DSU equivalence classes it binds through
 //! - `assert` — assert points, forced evaluation, clone-on-apply
+//! - `table` — constant table values, deep-content keys, `TableGet` reads
 //!
 //! The shared harness (the test `Program`/`Value`/`Operator` and the node
 //! and function builders) lives here; each category module pulls it in with
@@ -20,11 +21,12 @@ mod evaluation;
 mod function;
 mod recursion;
 mod static_module;
+mod table;
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, EvaluatedDeep, Function, FunctionId,
-    GlobalExt, Handle, LowOperator, LowValue, Module, NodeId, Operation, OperatorExt, Program,
-    StaticHandle, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, EvalError, EvaluatedDeep, Function,
+    FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId, Operation, OperatorExt,
+    Program, StaticHandle, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -168,7 +170,8 @@ impl OperatorExt<TestProgram> for TestOperator {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
             TestOperator::LowOperator(LowOperator::Index)
-            | TestOperator::LowOperator(LowOperator::Apply) => {
+            | TestOperator::LowOperator(LowOperator::Apply)
+            | TestOperator::LowOperator(LowOperator::TableGet) => {
                 unreachable!("structural operators are dispatched by the VM")
             }
             TestOperator::Id => operand,

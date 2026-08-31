@@ -31,6 +31,7 @@ use lichen_highlevel::program::{HighProgram, HighProgramValue, TypeOperator, Typ
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, Program, StaticFunction,
     StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode, StaticOperation,
+    TableItem,
 };
 use sha2::Digest as _;
 
@@ -167,7 +168,7 @@ where
 {
     let mut w = Writer::new();
     w.bytes(b"LCHN");
-    w.u32(1); // format version
+    w.u32(2); // format version
     w.u64(module.key.as_raw());
     w.bytes(&hash);
     w.u64(ARENA_ALIGN as u64);
@@ -282,6 +283,17 @@ fn write_value(
         HighProgramValue::LowValue(LowValue::Array(AnyHandle::Dynamic(_))) => {
             panic!("serializing a frozen module that carries a dynamic array payload")
         }
+        HighProgramValue::LowValue(LowValue::Table(AnyHandle::Static(handle))) => {
+            w.u8(12);
+            w.u64(handle.module.as_raw());
+            let module = &modules[&handle.module];
+            let slice = unsafe { &*handle.offset };
+            w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
+            w.u64(slice.len() as u64);
+        }
+        HighProgramValue::LowValue(LowValue::Table(AnyHandle::Dynamic(_))) => {
+            panic!("serializing a frozen module that carries a dynamic table payload")
+        }
         HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Static(function))) => {
             w.u8(2);
             w.u64(function.module.as_raw());
@@ -298,6 +310,7 @@ fn write_value(
         HighProgramValue::TypeValue(TypeValue::TypeTuple) => w.u8(8),
         HighProgramValue::TypeValue(TypeValue::TypeArray) => w.u8(9),
         HighProgramValue::TypeValue(TypeValue::TypeStruct) => w.u8(10),
+        HighProgramValue::TypeValue(TypeValue::TypeTable) => w.u8(13),
         HighProgramValue::TypeValue(TypeValue::TypeId(n)) => {
             w.u8(11);
             w.u64(n as u64);
@@ -311,7 +324,7 @@ fn write_operator(w: &mut Writer, operator: lichen_highlevel::program::HighProgr
     match operator {
         HighProgramOperator::LowOperator(LowOperator::Index) => w.u8(0),
         HighProgramOperator::LowOperator(LowOperator::Apply) => w.u8(1),
-        HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch) => w.u8(2),
+        HighProgramOperator::LowOperator(LowOperator::TableGet) => w.u8(8),
         HighProgramOperator::TypeOperator(TypeOperator::Fresh) => w.u8(3),
         HighProgramOperator::TypeOperator(TypeOperator::Add) => w.u8(4),
         HighProgramOperator::TypeOperator(TypeOperator::Sub) => w.u8(5),
@@ -351,7 +364,7 @@ where
     if r.take(4)? != b"LCHN" {
         return Err("bad artifact magic".into());
     }
-    if r.u32()? != 1 {
+    if r.u32()? != 2 {
         return Err("unknown artifact format version".into());
     }
     if ModuleKey::from_raw(r.u64()?) != key {
@@ -510,12 +523,38 @@ fn read_value(
         }
         3 => HighProgramValue::LowValue(LowValue::None),
         4 => HighProgramValue::LowValue(LowValue::Parameterized),
+        12 => {
+            let owner = ModuleKey::from_raw(r.u64()?);
+            let offset = r.u64()? as usize;
+            let len = r.u64()? as usize;
+            let (owner_arena, owner_base) = if owner == self_key {
+                (self_arena, self_base)
+            } else {
+                let module = modules.get(&owner).ok_or_else(|| {
+                    format!("artifact references unregistered dependency key {owner:?}")
+                })?;
+                let arena: &[u8] = &module.arena;
+                (arena, arena_base(arena))
+            };
+            let gap = owner_base as usize - owner_arena.as_ptr() as usize;
+            if offset + len > owner_arena.len() - gap {
+                return Err("artifact handle out of its arena's bounds".into());
+            }
+            let payload = unsafe { owner_base.add(offset) as *const TableItem };
+            HighProgramValue::LowValue(LowValue::Table(AnyHandle::Static(
+                StaticHandle {
+                    module: owner,
+                    offset: std::ptr::slice_from_raw_parts(payload, len),
+                },
+            )))
+        }
         5 => HighProgramValue::TypeValue(TypeValue::TypeInt),
         6 => HighProgramValue::TypeValue(TypeValue::TypeType),
         7 => HighProgramValue::TypeValue(TypeValue::TypeFunction),
         8 => HighProgramValue::TypeValue(TypeValue::TypeTuple),
         9 => HighProgramValue::TypeValue(TypeValue::TypeArray),
         10 => HighProgramValue::TypeValue(TypeValue::TypeStruct),
+        13 => HighProgramValue::TypeValue(TypeValue::TypeTable),
         11 => HighProgramValue::TypeValue(TypeValue::TypeId(r.u64()? as usize)),
         tag => return Err(format!("unknown artifact value tag {tag}")),
     })
@@ -527,12 +566,12 @@ fn read_operator(r: &mut Reader) -> Result<lichen_highlevel::program::HighProgra
     Ok(match r.u8()? {
         0 => HighProgramOperator::LowOperator(LowOperator::Index),
         1 => HighProgramOperator::LowOperator(LowOperator::Apply),
-        2 => HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch),
         3 => HighProgramOperator::TypeOperator(TypeOperator::Fresh),
         4 => HighProgramOperator::TypeOperator(TypeOperator::Add),
         5 => HighProgramOperator::TypeOperator(TypeOperator::Sub),
         6 => HighProgramOperator::TypeOperator(TypeOperator::Leq),
         7 => HighProgramOperator::TypeOperator(TypeOperator::Eq),
+        8 => HighProgramOperator::LowOperator(LowOperator::TableGet),
         tag => return Err(format!("unknown artifact operator tag {tag}")),
     })
 }

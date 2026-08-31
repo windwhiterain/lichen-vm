@@ -70,10 +70,31 @@ pub enum Expr {
         else_branch: Box<Expr>,
         span: Span,
     },
-    /// `e[i]` — an index into an array or tuple.
+    /// `e[i]` — an index into an array.
     Index {
         array: Box<Expr>,
         index: Box<Expr>,
+        span: Span,
+    },
+    /// `a(k)` — a positional slot read over a tuple element or a struct
+    /// field.  The `(` is *adjacent* to the container and holds a single
+    /// expression with no comma — the syntactic distinction from struct
+    /// instantiation (`a(1,)`, `a(1,1)`, and the two zero-field spellings
+    /// `a()` / `a(,)`, mirroring the tuple grammar's `()` unit vs `(,)`
+    /// empty tuple) and from function application (a spaced paren).
+    FieldRead {
+        container: Box<Expr>,
+        key: Box<Expr>,
+        span: Span,
+    },
+    /// `t{k}` — a table lookup: the entry whose stored key is deep-content
+    /// equal to `k`.  The `{` is *adjacent* to the container — no space
+    /// between — which is the syntactic distinction from a block (a spaced
+    /// or statement-position `{` is a block, and `t { … }` with a space
+    /// applies `t` to one), mirroring `C(...)` vs `f (x)`.
+    TableFind {
+        container: Box<Expr>,
+        key: Box<Expr>,
         span: Span,
     },
     /// `e : T` — an annotation.
@@ -98,8 +119,11 @@ pub enum Expr {
     /// generic struct constructor) applied to a positional field list.  The
     /// callee and the `(` are *adjacent* — no space between them — which is
     /// the syntactic distinction from function application (see
-    /// [`Expr::Apply`]).  `n` may be zero or one (a single field needs no
-    /// trailing comma).
+    /// [`Expr::Apply`]).  The instantiation forms mirror the tuple grammar's
+    /// comma discipline: `C()` and the empty-tuple spelling `C(,)` carry no
+    /// fields, `C(e,)` one, `C(e1, ..., en)` n.  The bare single-expression
+    /// form `C(e)` is *reserved for the positional slot read*
+    /// ([`Expr::FieldRead`]) — it is never an instantiation.
     StructInst {
         callee: Box<Expr>,
         fields: Vec<Expr>,
@@ -107,6 +131,12 @@ pub enum Expr {
     },
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
+    /// `table { [k1, v1], [k2, v2], … }` — a constant table literal.  Each
+    /// entry is a two-element array `[key, value]` (any expressions; the
+    /// parser validates the shape).  The keys are force-evaluated and
+    /// deep-content-hashed when the table is built; a key that is not
+    /// concrete (it depends on an unbound value) is dropped with an error.
+    Table(Vec<(Expr, Expr)>, Span),
     /// `~n e` — a shallow-marked array position (parsed only inside array
     /// literals).  `n` is the marker depth: `usize::MAX` = the bare `~` (the
     /// whole subtree shallow), `0` = unmarked (a no-op), `n` = the value
@@ -194,6 +224,8 @@ impl Expr {
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Index { span, .. } => *span,
+            Expr::FieldRead { span, .. } => *span,
+            Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
             Expr::Arrow { span, .. } => *span,
             Expr::Tuple(_, s) => *s,
@@ -201,6 +233,7 @@ impl Expr {
             Expr::StructType(_, s) => *s,
             Expr::StructInst { span, .. } => *span,
             Expr::Array(_, s) => *s,
+            Expr::Table(_, s) => *s,
             Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,

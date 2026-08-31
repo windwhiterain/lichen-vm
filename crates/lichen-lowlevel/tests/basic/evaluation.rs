@@ -70,13 +70,19 @@ fn index_out_of_bounds_records_an_eval_error() {
     // No panic, no element: the failure is recorded as facts instead.
     assert!(matches!(value, TestValue::LowValue(LowValue::None)));
     assert_eq!(m.eval_errors.len(), 1);
-    let err = m.eval_errors[0];
-    assert_eq!(err.index, lichen_lowlevel::AnyNodeId::Dynamic(idx));
-    assert_eq!(err.index_value, 5);
-    assert_eq!(err.length, 2);
+    let EvalError::Index {
+        index,
+        index_value,
+        length,
+    } = m.eval_errors[0]
+    else {
+        panic!("an out-of-bounds read records an Index failure")
+    };
+    assert_eq!(index, lichen_lowlevel::AnyNodeId::Dynamic(idx));
+    assert_eq!(index_value, 5);
+    assert_eq!(length, 2);
     assert!(m.unify_errors.is_empty());
-}
-#[test]
+}#[test]
 fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     let mut m = Module::new();
     let root = m.add_block(None);

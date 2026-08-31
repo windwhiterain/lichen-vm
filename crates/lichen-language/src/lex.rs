@@ -21,8 +21,8 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
-    /// An identifier, never `Int`/`Type`/`struct`/`let`/`if`/`then`/`else`
-    /// (those are keywords).
+    /// An identifier, never `Int`/`Type`/`struct`/`table`/`let`/`if`/`then`/
+    /// `else` (those are keywords).
     Name(String),
     /// The `Int` type constant.
     KwInt,
@@ -30,6 +30,8 @@ pub enum TokenKind {
     KwType,
     /// The `struct` keyword — a nominal struct type.
     KwStruct,
+    /// The `table` keyword — a constant table literal (`table { k => v, … }`).
+    KwTable,
     /// The `let` keyword — a restrictive binding (`let a = e`): the name is
     /// visible only to later bindings, never to itself.
     KwLet,
@@ -87,6 +89,7 @@ impl TokenKind {
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
+            TokenKind::KwTable => "'table'".to_string(),
             TokenKind::KwLet => "'let'".to_string(),
             TokenKind::KwIf => "'if'".to_string(),
             TokenKind::KwThen => "'then'".to_string(),
@@ -326,6 +329,7 @@ impl Lexer<'_> {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
+            "table" => TokenKind::KwTable,
             "let" => TokenKind::KwLet,
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,

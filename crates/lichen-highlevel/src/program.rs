@@ -110,6 +110,9 @@ pub enum TypeValue {
     /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
     /// the positional field-type list.
     TypeStruct,
+    /// The kind marker of table type expressions — the shape is
+    /// `[key type, value type]`.
+    TypeTable,
     /// A nominal type id — a struct type's identity marker, living at
     /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
     /// different ids don't (nominal identity), and an id never unifies
@@ -159,6 +162,9 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     /// The kind marker of struct type expressions — the shape is
     /// `[TypeId(n), fields_types_array]`.
     fn type_struct_marker() -> Self;
+    /// The kind marker of table type expressions — the shape is
+    /// `[key type, value type]`.
+    fn table_type_marker() -> Self;
     /// The value→type mapping: what type this value, used as a constant,
     /// pairs with.  `USize(_)` → the int marker; every type constant → the
     /// `Type` marker.  The checker only asks for constants (an int literal
@@ -188,6 +194,9 @@ impl ValueType for HighProgramValue {
     }
     fn type_struct_marker() -> Self {
         Self::TypeValue(TypeValue::TypeStruct)
+    }
+    fn table_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeTable)
     }
     fn type_of(&self) -> Self {
         match self {
@@ -219,20 +228,6 @@ impl ValueType for HighProgramValue {
 // composition below.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeOperator {
-    /// The dispatch code of a type's kind — the one step a native
-    /// `Index` table cannot express.
-    ///
-    /// Operand: a type value's *kind* — its `[marker, K]` type slot
-    /// (position 1 of the `[shape, kind]` pair).  The kind holds only
-    /// the marker and the universe, never the shape, so the deep pass
-    /// never marks it parameterized for a bound type and this operator
-    /// runs even when the shape's spine still holds unbound cells (a
-    /// lazy stream).  Yields `USize(code)`: 0 = tuple, 1 = struct,
-    /// 2 = array, 3 = any other kind.  The checker feeds the code to a
-    /// native `Index(table, code)` branch table — the code is an
-    /// internal dispatch value, never stored in a type value or
-    /// rendered.
-    IndexTypeDispatch,
     /// A fresh nominal type id: each call reads and increments
     /// [`HighGlobal::next_type_id`] and returns a `TypeId(n)` type value.
     /// Nullary — the checker emits it with no operand, so it fires once per
@@ -278,44 +273,6 @@ impl<V: ValueType> OperatorExt<HighProgram<V, HighProgramOperator>> for HighProg
             // them through `AsEnum` before falling through.
             HighProgramOperator::LowOperator(_) => {
                 unreachable!("structural operators are dispatched by the VM")
-            }
-            HighProgramOperator::TypeOperator(TypeOperator::IndexTypeDispatch) => {
-                // The kind expression `[marker, K]` carries no shape, so a
-                // bound type's kind is never marked parameterized and this
-                // operator runs even when the type's shape spine still
-                // holds unbound cells — the lazy-stream case a whole-type
-                // dispatch used to gate on.  An unbound kind is already the
-                // lazy marker (the VM gates on the operand's parameterized
-                // subtree).
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return V::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(kind)) = operand.as_enum() else {
-                    unreachable!("IndexTypeDispatch expects a kind expression pair")
-                };
-                let kind_items = kind.items();
-                let head = module.node_value(kind_items[0].node);
-                // A struct kind is `[id, [TypeStruct, K]]` — the nominal id
-                // sits in the head, so the `TypeStruct` tag is the inner
-                // layer's head, not the kind's own head (unlike tuple/array
-                // kinds, whose tag *is* the head).
-                let struct_tag = module
-                    .node_value(kind_items[1].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::Array(inner) => module.node_value(inner.items()[0].node),
-                        _ => None,
-                    });
-                let code = if head == Some(V::tuple_type_marker()) {
-                    0
-                } else if struct_tag == Some(V::type_struct_marker()) {
-                    1
-                } else if head == Some(V::array_type_marker()) {
-                    2
-                } else {
-                    3
-                };
-                V::from(LowValue::USize(code))
             }
             HighProgramOperator::TypeOperator(TypeOperator::Fresh) => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();

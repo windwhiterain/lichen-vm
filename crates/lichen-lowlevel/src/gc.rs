@@ -67,6 +67,31 @@ impl<P: Program> Module<P> {
                 // copy verbatim).
                 P::Value::from(LowValue::Array(self.alloc_array(array.items(), target)))
             }
+            Some(LowValue::Table(AnyHandle::Static(_))) => {
+                // A static payload lives in the plugged module's shared
+                // arena — no block to vacate, nothing to move.  The value is
+                // kept verbatim; its entry refs are all static (nothing to
+                // trace), and identity with every other reader of the
+                // payload is preserved.
+                value
+            }
+            Some(LowValue::Table(table)) => {
+                for item in table.items() {
+                    // A static entry lives in the static module — nothing
+                    // to move (its value stays, referenced in place).
+                    if let Dyn(node) = item.key {
+                        self.garbage_collect_node(node, source, target);
+                    }
+                    if let Dyn(node) = item.value {
+                        self.garbage_collect_node(node, source, target);
+                    }
+                }
+                // The whole payload — entry nodes and their stored hashes
+                // together — moves into the target arena, so a compacted
+                // table keeps its sorted order and per-entry hashes (static
+                // entry refs are absolute and copy verbatim).
+                P::Value::from(LowValue::Table(self.alloc_table(table.items(), target)))
+            }
             // A static function value is frozen in the static module — no
             // scope to walk, no home block to re-point.
             Some(LowValue::Function(AnyFunctionId::Static(_))) => value,

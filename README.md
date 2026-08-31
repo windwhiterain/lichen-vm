@@ -123,7 +123,7 @@ output:
 ```text
 a = [1, 2]
 b = (1, Int)
-(a[0], a[1], b[0], b[1])
+(a[0], a[1], b(0), b(1))
 ```
 
 output:
@@ -151,7 +151,7 @@ output:
 ### `dependent_type.lichen`
 
 ```text
-a = x => (1, Int)[x]
+a = x => (1, Int)(x)
 (a 0, a 1)
 ```
 
@@ -165,7 +165,7 @@ output:
 ```text
 f = x => [x, ~ f (x + 1)]
 inf = f 0
-(inf[1][0], inf[1][1][0], inf[1][1][1][0])
+(inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))
 ```
 
 output:
@@ -231,7 +231,7 @@ output:
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>
-    f1 x[1]
+    f1 x(1)
 }
 f2
 ```
@@ -247,8 +247,8 @@ Function: <Type, Int> -> Int
 A = struct<Int, Type>
 a = A(1, Int)
 B = struct<Int>
-b = B(1)
-(A, a, a[0], a[1], B, b, b[0])
+b = B(1,)
+(A, a, a(0), a(1), B, b, b(0))
 ```
 
 output:
