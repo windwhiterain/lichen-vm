@@ -301,10 +301,13 @@ impl PackageStore {
         // Compile against the shared registry so the import leaves resolve
         // in place; the module then carries the dependencies' absolute refs
         // into its freeze below.
-        let report = crate::compile_with_imports_in(
-            &preprocessed.source,
+        let line_starts = crate::lex::line_starts(&source);
+        let report = crate::compile_with_imports_at(
+            &preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
+            preprocessed.code_base,
+            &line_starts,
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(report.diagnostics);

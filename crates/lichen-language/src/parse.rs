@@ -7,7 +7,7 @@
 //! so it may recurse with itself and with the block's other bindings.  A
 //! `let` before a binding (`let a = …`) is *restrictive*: the name is in
 //! scope only in later statements, never in its own value.  Statements are
-//! separated by `;` or a newline (the lexer lexes both as `Semicolon`), and
+//! separated by `;`, `,`, or a newline (the lexer lexes all as `Separator`), and
 //! consecutive, leading, and trailing separators are all tolerated.  A
 //! binding at statement start is `name =` (or `let name =`); anything else
 //! is an expression — a bare expression is a statement anywhere, and only
@@ -20,10 +20,11 @@
 //! an ordinary name.  Angle brackets are exclusively type-level and need no
 //! mode: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>` always a
 //! `StructType`, and `T<e>` (a `<` directly after an expression) is always
-//! the array type.  A `[` directly after an expression is always an index
-//! `e[i]` — the array literal is the prefix `[e, …]` form, so no whitespace
-//! rule decides, and an array literal in argument position needs parens:
-//! `f ([1, 2])`.  Precedence (loosest → tightest): `=>` (right) → `:`
+//! the array type.  Postfix forms are marked by a `Glue` token (the lexer
+//! emits it when the delimiter is directly glued to the previous token): a
+//! glued `[` is an index `e[i]`, a glued `<` an array type.  A spaced `[` is
+//! a fresh array-literal atom (so `f ([1, 2])` applies `f` to the array) and
+//! a spaced `<` a tuple-type atom.  Precedence (loosest → tightest): `=>` (right) → `:`
 //! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
 //! (left) → postfix `<e>` / `[e]` / `(…)` / atoms.  A `(` immediately after
 //! an expression — no space between them — is *struct instantiation*
@@ -193,11 +194,11 @@ fn statement_list<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr), E<'a>> + Clone {
-    let seps = token(TokenKind::Semicolon)
+    let seps = token(TokenKind::Separator)
         .ignored()
         .repeated()
         .collect::<Vec<_>>();
-    let seps1 = token(TokenKind::Semicolon)
+    let seps1 = token(TokenKind::Separator)
         .ignored()
         .repeated()
         .at_least(1)
@@ -287,7 +288,7 @@ fn binding<'a>(
     // parses and the rest of the program is reached.
     let value = expr.recover_with(via_parser(
         any::<In<'a>, E<'a>>()
-            .filter(|t: &Token| t.kind != TokenKind::Semicolon)
+            .filter(|t: &Token| t.kind != TokenKind::Separator)
             .ignored()
             .repeated()
             .map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
@@ -536,25 +537,28 @@ fn atom_parser<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone + 'a,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    let primary = choice((
-        any::<In<'a>, E<'a>>()
-            .filter(|t: &Token| matches!(t.kind, TokenKind::Int(_)))
-            .map(|t| match t.kind {
-                TokenKind::Int(n) => Expr::Int(n, t.span),
-                _ => unreachable!("filtered for an int"),
-            }),
-        token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
-        token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
-        name().map(|(n, span)| Expr::Name(n, span)),
-        paren(tokens, expr.clone()),
-        array_literal(tokens, expr.clone()),
-        table_literal(tokens, expr.clone()),
-        block(tokens, expr.clone()),
-        angle_tuple(tokens, expr.clone()),
-        struct_type(tokens, expr.clone()),
-        if_expr(tokens, expr.clone()),
-    ))
-    .labelled("an expression");
+    let primary = token(TokenKind::Glue)
+        .ignored()
+        .or_not()
+        .ignore_then(choice((
+            any::<In<'a>, E<'a>>()
+                .filter(|t: &Token| matches!(t.kind, TokenKind::Int(_)))
+                .map(|t| match t.kind {
+                    TokenKind::Int(n) => Expr::Int(n, t.span),
+                    _ => unreachable!("filtered for an int"),
+                }),
+            token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
+            token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
+            name().map(|(n, span)| Expr::Name(n, span)),
+            paren(tokens, expr.clone()),
+            array_literal(tokens, expr.clone()),
+            table_literal(tokens, expr.clone()),
+            block(tokens, expr.clone()),
+            angle_tuple(tokens, expr.clone()),
+            struct_type(tokens, expr.clone()),
+            if_expr(tokens, expr.clone()),
+        )))
+        .labelled("an expression");
 
     // The postfix forms, chained left.  A `[` after an expression is always
     // an index, a `<` always an array type.  A `(` or a `{` is postfix only
@@ -564,26 +568,25 @@ fn atom_parser<'a>(
     // instantiation, an adjacent `{` is a table lookup.  A spaced `(` is a
     // paren atom and a spaced `{` a block; the application rule treats
     // either as an argument, never this postfix.
-    let adjacent_paren = any::<In<'a>, E<'a>>()
-        .filter(|t: &Token| t.kind == TokenKind::LParen && !t.space_before)
-        .labelled("a slot read or struct instantiation '('");
-    let adjacent_brace = any::<In<'a>, E<'a>>()
-        .filter(|t: &Token| t.kind == TokenKind::LBrace && !t.space_before)
-        .labelled("table lookup '{'");
+    let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
-        token(TokenKind::LBracket)
+        glue.clone()
+            .ignore_then(token(TokenKind::LBracket))
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RBracket))
             .map(Postfix::Index),
-        token(TokenKind::LAngle)
+        glue.clone()
+            .ignore_then(token(TokenKind::LAngle))
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RAngle))
             .map(Postfix::TypeArray),
-        adjacent_brace
+        glue.clone()
+            .ignore_then(token(TokenKind::LBrace))
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RBrace))
             .map(Postfix::TableFind),
-        adjacent_paren
+        glue.clone()
+            .ignore_then(token(TokenKind::LParen))
             .ignore_then(paren_fields(expr.clone()))
             .then_ignore(token(TokenKind::RParen))
             .map(Postfix::Paren),
@@ -659,12 +662,12 @@ fn paren_fields<'a>(
     let first = expr.clone().or_not();
     first
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(expr.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Comma).or_not())
+        .then(token(TokenKind::Separator).or_not())
         .map(|((first, rest), trailing)| {
             let saw_comma = !rest.is_empty() || trailing.is_some();
             let mut fields = Vec::new();
@@ -686,12 +689,12 @@ fn paren<'a>(
     token(TokenKind::LParen)
         .ignore_then(expr.clone())
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(expr.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Comma).or_not())
+        .then(token(TokenKind::Separator).or_not())
         .then_ignore(token(TokenKind::RParen))
         .map_with(|((first, rest), trailing), me| {
             let span = span_at(tokens, me.span().start);
@@ -715,12 +718,12 @@ fn array_literal<'a>(
     token(TokenKind::LBracket)
         .ignore_then(element.clone())
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(element.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Comma).or_not())
+        .then(token(TokenKind::Separator).or_not())
         .then_ignore(token(TokenKind::RBracket))
         .map_with(|((first, rest), _trailing), me| {
             Expr::Array(
@@ -760,15 +763,16 @@ fn table_literal<'a>(
             }
         });
     token(TokenKind::KwTable)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LBrace))
         .ignore_then(entry.clone().or_not())
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(entry.clone())
                 .repeated()
                 .collect::<Vec<_>>(),
         )
-        .then(token(TokenKind::Comma).or_not())
+        .then(token(TokenKind::Separator).or_not())
         .then_ignore(token(TokenKind::RBrace))
         .map_with(|((first, mut rest), _trailing), me| {
             let mut entries = Vec::new();
@@ -812,7 +816,7 @@ fn angle_tuple<'a>(
     token(TokenKind::LAngle)
         .ignore_then(expr.clone())
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(expr.clone())
                 .repeated()
                 .at_least(1)
@@ -835,10 +839,11 @@ fn struct_type<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     token(TokenKind::KwStruct)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LAngle))
         .ignore_then(expr.clone())
         .then(
-            token(TokenKind::Comma)
+            token(TokenKind::Separator)
                 .ignore_then(expr.clone())
                 .repeated()
                 .collect::<Vec<_>>(),

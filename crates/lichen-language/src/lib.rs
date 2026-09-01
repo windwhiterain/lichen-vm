@@ -14,7 +14,7 @@
 //! never panics.  Only an unresolved name (the resolve stage) still stops
 //! the pipeline.
 //!
-//! See `docs/language.md` for the language spec.
+//! See `docs/language-spec.md` for the language spec.
 
 pub mod ast;
 pub mod compile;
@@ -79,10 +79,26 @@ pub fn compile_with_imports_in(
     imports: &[ResolvedImport],
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
 ) -> Report {
+    let line_starts = lex::line_starts(source);
+    compile_with_imports_at(source, imports, registry, 0, &line_starts)
+}
+
+/// Compile and check a program that is a slice of a larger source starting at
+/// byte `base`, whose line starts are `line_starts`.  Token spans are absolute
+/// positions in that larger source, so diagnostics point at the real file even
+/// when `code` is only a suffix of it (the code after a stripped `@{...@}`
+/// block).
+pub fn compile_with_imports_at(
+    code: &str,
+    imports: &[ResolvedImport],
+    registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
+    base: u32,
+    line_starts: &[usize],
+) -> Report {
     let Frontend {
         ir,
         mut diagnostics,
-    } = frontend_with_imports(source, imports);
+    } = frontend_at(code, base, line_starts, imports);
     let Some(ir) = ir else {
         return Report {
             build: None,
@@ -135,15 +151,29 @@ pub struct Frontend {
 
 /// The frontend: text → IR.  See [`Frontend`].
 pub fn frontend(source: &str) -> Frontend {
-    frontend_with_imports(source, &[])
+    let line_starts = lex::line_starts(source);
+    frontend_at(source, 0, &line_starts, &[])
 }
 
 /// [`frontend`] with resolved imports seeded into the compiler's first frame.
 pub fn frontend_with_imports(source: &str, imports: &[ResolvedImport]) -> Frontend {
+    let line_starts = lex::line_starts(source);
+    frontend_at(source, 0, &line_starts, imports)
+}
+
+/// The frontend over a slice of a larger source: `code` starts at byte `base`
+/// in the source whose line starts are `line_starts`.  Token spans are
+/// absolute positions in the larger source.
+pub fn frontend_at(
+    code: &str,
+    base: u32,
+    line_starts: &[usize],
+    imports: &[ResolvedImport],
+) -> Frontend {
     let lex::Lexed {
         tokens,
         errors: mut diagnostics,
-    } = lex::lex(source);
+    } = lex::lex_with(code, line_starts, base);
     let parse::Parsed {
         program,
         errors: parse_errors,

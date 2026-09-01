@@ -1,4 +1,6 @@
--- order: 2
+@{
+  order = "2"
+  output = "55: Int"
+@}
 fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]
 fib 10
--- output: 55: Int

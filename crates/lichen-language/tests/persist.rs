@@ -46,8 +46,8 @@ fn cache_round_trip_across_stores() {
     // device keys, zero compiles.
     let dir = temp_dir("roundtrip");
     write(&dir, "inner.lichen", "x => x + 1\n");
-    write(&dir, "middle.lichen", "@import \"inner.lichen\" as inc\nx => inc x\n");
-    let main_path = write(&dir, "main.lichen", "@import \"middle.lichen\" as f\nf 41\n");
+    write(&dir, "middle.lichen", "@{inc = import \"inner.lichen\"@}x => inc x\n");
+    let main_path = write(&dir, "main.lichen", "@{f = import \"middle.lichen\"@}f 41\n");
     let cache = dir.join("cache");
 
     let mut store1 = PackageStore::with_cache_dir(cache.clone());
@@ -86,8 +86,8 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     // the recorded dependency graph and loads from the cache unchanged.
     let dir = temp_dir("incremental");
     write(&dir, "c.lichen", "40\n");
-    write(&dir, "b.lichen", "@import \"c.lichen\" as c\nc + 1\n");
-    let a_path = write(&dir, "a.lichen", "@import \"b.lichen\" as b\nb + 1\n");
+    write(&dir, "b.lichen", "@{c = import \"c.lichen\"@}c + 1\n");
+    let a_path = write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b + 1\n");
     let cache = dir.join("cache");
 
     let mut store1 = PackageStore::with_cache_dir(cache.clone());
@@ -95,7 +95,7 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     assert_eq!(store1.compiled, 3);
     let c_key = handle_of(&store1, "c.lichen").key;
 
-    write(&dir, "b.lichen", "@import \"c.lichen\" as c\nc + 2\n");
+    write(&dir, "b.lichen", "@{c = import \"c.lichen\"@}c + 2\n");
     let mut store2 = PackageStore::with_cache_dir(cache.clone());
     let a2 = store2.load_package(&a_path).unwrap();
     assert_eq!(store2.compiled, 2, "only B and A recompile");
@@ -173,7 +173,7 @@ fn gc_reclaims_orphans_and_reuses_keys() {
     // next fresh compile reuses the smallest reclaimed key.
     let dir = temp_dir("gc");
     write(&dir, "b.lichen", "1\n");
-    let a_path = write(&dir, "a.lichen", "@import \"b.lichen\" as b\nb\n");
+    let a_path = write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b\n");
     let cache = dir.join("cache");
     let mut store = PackageStore::with_cache_dir(cache.clone());
     store.load_package(&a_path).unwrap();

@@ -4,8 +4,7 @@ use super::*;
 fn replaces_the_region_between_markers() {
     let content = "before\n<!-- begin: examples -->\nstale\n<!-- end: examples -->\nafter";
     let blob = "### `x.lichen`\n\n```text\n1\n```";
-    let expected = "before\n<!-- begin: examples -->\n\n### `x.lichen`\n\n```text\n1\n```\n\n\
-         <!-- end: examples -->\nafter";
+    let expected = "before\n<!-- begin: examples -->\n\n### `x.lichen`\n\n```text\n1\n```\n\n<!-- end: examples -->\nafter";
     assert_eq!(replace_examples(content, blob).unwrap(), expected);
 }
 
@@ -62,44 +61,37 @@ fn renders_the_tree_grouped_and_ordered() {
         .into_iter()
         .map(|name| (3, name.to_owned()))
         .chain([
-            // The `import` directory is one unit: `_.lichen`'s order (7)
-            // places it after every top-level file, the face opens the
-            // group, and its files follow by their own orders.
             (3, "import".to_owned()),
             (4, "import/math.lichen".to_owned()),
             (4, "import/geometry.lichen".to_owned()),
-            // `perspective.lichen`'s order (6) places it after the
-            // `import` directory (order 5).
             (3, "perspective.lichen".to_owned()),
         ])
         .collect::<Vec<_>>(),
-        "directories render as units ordered by their `_.lichen`, files by their `-- order:`"
+        "directories render as units ordered by their `_.lichen`, files by their `order =`"
     );
     // The face opens the directory: `_.lichen`'s program sits directly
-    // under the directory heading.
+    // under the directory heading (its block is stripped, so the code shows).
     assert!(
-        blob.contains("### `import`\n\n```text\n@import \"math.lichen\" as math"),
+        blob.contains("### `import`\n\n```text\n(math 41, geo 5)"),
         "the directory's `_.lichen` is shown first inside the directory"
     );
-    // The output is computed by running the program, not read from the
-    // file: `array.lichen` runs to `[1, 2, 3]: Int<3>`, and no promise
-    // or directive remains.
+    // The output is computed by running the program, not read from the file.
     assert!(
         blob.contains("output:\n```text\n[1, 2, 3]: Int<3>\n```"),
         "the runner's output is embedded"
     );
-    assert!(!blob.contains("-- output:"), "file promises are not shown");
-    assert!(!blob.contains("-- order:"), "order directives are not shown");
+    assert!(!blob.contains("output ="), "file promises are not shown");
+    assert!(!blob.contains("order ="), "order directives are not shown");
 }
 
 #[test]
-fn declared_order_reads_the_comment_from_any_line() {
+fn declared_order_reads_the_block_anywhere() {
     assert_eq!(
-        declared_order(Path::new("a.lichen"), "-- order: 2\nx"),
+        declared_order(Path::new("a.lichen"), "@{order = \"2\"@}\nx"),
         Some(2)
     );
     assert_eq!(
-        declared_order(Path::new("a.lichen"), "x\n-- order: 42"),
+        declared_order(Path::new("a.lichen"), "x\n@{order = \"42\"@}"),
         Some(42)
     );
     assert_eq!(declared_order(Path::new("a.lichen"), "no order here"), None);
@@ -107,16 +99,16 @@ fn declared_order_reads_the_comment_from_any_line() {
 
 #[test]
 fn an_output_comment_is_replaced_in_place() {
-    let source = "-- order: 2\nrec f = x => x\nf 5\n-- output: stale\n";
+    let source = "@{order = \"2\"\noutput = \"stale\"@}\nrec f = x => x\nf 5\n";
     assert_eq!(
-        replace_output_comment(source, "-- output: 5: Int"),
-        "-- order: 2\nrec f = x => x\nf 5\n-- output: 5: Int\n"
+        replace_output_comment(source, "5: Int"),
+        "@{\n  order = \"2\"\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
     );
-    // A multi-line output becomes one `-- output:` line per line.
-    let source = "a\n-- output: x\n-- output: y\nb";
+    // A multi-line output becomes a multi-line string.
+    let source = "@{output = \"x\ny\"@}\nb";
     assert_eq!(
-        replace_output_comment(source, "-- output: 1\n-- output: 2"),
-        "a\n-- output: 1\n-- output: 2\nb\n"
+        replace_output_comment(source, "1\n2"),
+        "@{\n  output = \"1\n2\"\n@}\nb\n"
     );
 }
 
@@ -124,21 +116,21 @@ fn an_output_comment_is_replaced_in_place() {
 fn a_missing_output_comment_is_appended() {
     let source = "rec f = x => x\nf 5\n";
     assert_eq!(
-        replace_output_comment(source, "-- output: 5: Int"),
-        "rec f = x => x\nf 5\n-- output: 5: Int\n"
+        replace_output_comment(source, "5: Int"),
+        "@{\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
     );
     // A file without a trailing newline still ends up clean.
     let source = "rec f = x => x\nf 5";
     assert_eq!(
-        replace_output_comment(source, "-- output: 5: Int"),
-        "rec f = x => x\nf 5\n-- output: 5: Int\n"
+        replace_output_comment(source, "5: Int"),
+        "@{\n  output = \"5: Int\"\n@}\nrec f = x => x\nf 5\n"
     );
 }
 
 #[test]
 #[should_panic]
 fn a_bad_order_value_panics() {
-    declared_order(Path::new("a.lichen"), "-- order: two");
+    declared_order(Path::new("a.lichen"), "@{order = \"two\"@}");
 }
 
 #[test]
@@ -147,17 +139,17 @@ fn declared_order_breaks_ties_by_name() {
         (
             "c.lichen".to_string(),
             PathBuf::from("c.lichen"),
-            "-- order: 2".to_string(),
+            "@{order = \"2\"@}".to_string(),
         ),
         (
             "a.lichen".to_string(),
             PathBuf::from("a.lichen"),
-            "-- order: 1".to_string(),
+            "@{order = \"1\"@}".to_string(),
         ),
         (
             "b.lichen".to_string(),
             PathBuf::from("b.lichen"),
-            "-- order: 1".to_string(),
+            "@{order = \"1\"@}".to_string(),
         ),
         (
             "d.lichen".to_string(),

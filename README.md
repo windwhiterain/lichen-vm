@@ -274,12 +274,6 @@ output:
 ### `struct_generic.lichen`
 
 ```text
--- A struct constructor is generic: `Box t` (juxtaposition — a space, not a
--- parenthesized argument) builds the *same* nominal type for every field
--- type — the `Fresh` id is per occurrence and shared, so `Box Int` and
--- `Box Type` differ only in their field lists (the value shape), not in
--- their type (the shared kind).  They therefore coexist in one homogeneous
--- tuple.
 Box = t => struct<t>
 (Box Int, Box Type, Box Int)
 ```
@@ -304,8 +298,6 @@ output:
 ### `import`
 
 ```text
-@import "math.lichen" as math
-@import "geometry.lichen" as geo
 (math 41, geo 5)
 ```
 
@@ -330,7 +322,6 @@ Function: Int -> Int
 #### `import/geometry.lichen`
 
 ```text
-@import "math.lichen" as math
 double = x => math x + math x
 double
 ```

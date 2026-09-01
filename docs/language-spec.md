@@ -2,15 +2,15 @@
 
 *A minimal source language that compiles to the highlevel IR
 ([`lichen-highlevel`](crates/lichen-highlevel)) and produces proper diagnostics.
-Brainstormed 2026-08-22; the surface decisions (lambda syntax, no `let`, type
-literal names, program shape) were settled by the user. Status: spec for the
+Brainstormed 2026-08-22; the surface decisions (lambda syntax, `let` bindings,
+type literal names, program shape) were settled by the user. Status: spec for the
 `crates/lichen-language` crate.*
 
 The language is deliberately small: a pure lambda calculus with annotations,
 tuples, and arrays, over a single `Type : Type` universe. It exists to be the
-first real text → IR pipeline in the repo — a hand-written lexer, parser, name
-resolver, and IR emitter on top of the existing highlevel checker, which runs
-*unchanged*.
+first real text → IR pipeline in the repo — a logos-generated lexer, a chumsky
+parser, a name resolver, and an IR emitter on top of the existing highlevel
+checker, which runs *unchanged*.
 
 ---
 
@@ -32,41 +32,58 @@ resolver, and IR emitter on top of the existing highlevel checker, which runs
 program  := (stmt sep)* expr                        -- statements, then the final expression
 stmt     := ['let'] name '=' expr                   -- binding (block-wide by default; `let` restrictive)
           | expr                                    -- bare expression statement
-sep      := ';' | newline                           -- statement separator
+sep      := newline | ';' | ','                     -- one uniform Separator token
 
-expr     := name (':' expr)? '=>' expr             -- lambda; body extends maximally
-          | expr (':' expr)? ('#' expr)?          -- type (':' ) and/or perspective ('#') annotation
-          | expr '->' expr                        -- function type; right-assoc
-          | atom '<' expr '>'                     -- array type  T<e>
-          | atom '[' expr ']'                     -- index  e[i]
-          | expr expr                             -- application; left-assoc, tightest
-          | atom
-atom     := int_literal
-          | 'Int' | 'Type'                        -- the two type constants
-          | '_'                                   -- inference placeholder (type position only)
+expr     := lambda
+lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
+annotated:= arrow ((':' arrow) | ('#' arrow))*      -- type (':') and/or perspective ('#') annotation, right-assoc
+arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
+cmp      := arith (('<=' | '==') arith)*            -- comparison, left-assoc; yields 0/1
+arith    := apply (('+' | '-') apply)*              -- arithmetic, left-assoc
+apply    := atom atom*                              -- application; left-assoc, tightest
+atom     := primary postfix*                        -- a primary, then glued postfix forms
+primary  := int_literal
+          | 'Int' | 'Type'                          -- the two type constants
+          | '_'                                     -- inference placeholder (type position only)
           | name
-          | '(' expr ')'                          -- grouping
-          | '(' expr ',' expr (',' expr)* ')'     -- tuple  (TypeTuple in type position)
-          | '[' expr (',' expr)* ']'              -- array literal
-          | '<' expr ',' expr (',' expr)* '>'     -- tuple type  (always TypeTuple)
-          | 'struct' '<' expr (',' expr)* '>'     -- struct type  (nominal, positional fields)
-          | '{' (stmt sep)* expr '}'              -- block: scoped statements, then the block's value
+          | '(' expr ')'                            -- grouping (transparent)
+          | '(' expr (sep expr)* sep? ')'           -- tuple  (TypeTuple in type position)
+          | '[' element (sep element)* ']'          -- array literal
+          | 'table' '{' pair (sep pair)* '}'        -- constant table literal
+          | '{' (stmt sep)* expr '}'                -- block: scoped statements, then the block's value
+          | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
+          | 'struct' '<' expr (sep expr)* '>'       -- struct type  (nominal, positional fields)
+          | 'if' expr 'then' expr 'else' expr       -- conditional
+postfix  := glue ( '[' expr ']'                     -- index  e[i]
+                 | '<' expr '>'                     -- array type  T<e>
+                 | '{' expr '}'                     -- table lookup  t{k}
+                 | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
+element  := '~'n? expr                              -- shallow marker (inside array literals only)
+pair     := expr '::' expr                          -- table entry: deep-equal key :: value
+fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read paren content
 ```
 
-- **Keywords:** `Int`, `Type`, `struct`, `let`, `=>`, `->`, `:`.  `=` binds a name in
-  a statement; a binding is **block-wide** by default (its name is in scope
-  throughout the block, forward and backward, so it may reference and recurse
-  with the block's other bindings) and gets the restrictive, sequential form
-  with `let`.  A statement separator is `;` or a newline (they are
-  interchangeable — the lexer produces the same token for both), and `{` `}`
-  delimit a block (a program-shaped expression).  `--` starts a line comment
-  (to end of line).
-- **Newlines are separators, not whitespace.**  A newline is exactly a `;`, so
-  a statement ends at the end of its line: `a = 1\nb = 2\na` needs no `;`, and
-  `;` is only kept for one-line statement lists (`{a = 1; a}`).  Consecutive
-  separators (`;\n` at a line end) and leading/trailing ones (a comment line,
-  a final blank line) are tolerated.  The flip side is that an expression
-  cannot continue on the next line: a lambda body must start on the same line
+- **Keywords:** `Int`, `Type`, `struct`, `table`, `let`, `if`, `then`, `else`,
+  `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`, `~`, and the
+  operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
+  default (its name is in scope throughout the block, forward and backward, so
+  it may reference and recurse with the block's other bindings) and gets the
+  restrictive, sequential form with `let`.  A statement separator is any of
+  newline, `;`, or `,` — they are interchangeable, the lexer produces the same
+  `Separator` token for all three, and the quantity never matters.  `{` `}`
+  delimit a block (a program-shaped expression).  **There are no comments:** the
+  lexer never skips any text, so prose lives in the file's leading `@{...@}`
+  preprocessor block as metadata strings (see §2.2).  Whitespace (space/tab/cr)
+  is trivia; `@` is reserved for the block delimiters and cannot appear in code
+  or in a string.
+- **Newlines, semicolons, and commas are all one separator, and a separator is
+  never whitespace.**  `\n`, `;`, and `,` lex to the same `Separator` token, and
+  their quantity is irrelevant: `a = 1\nb = 2\na`, `a = 1; b = 2; a`, and
+  `a = 1, b = 2, a` all mean the same thing, and a run of them (a blank line,
+  a stray trailing separator) is tolerated.  The same separator separates the
+  elements of a tuple, array, or struct, so `(a, b)`, `(a; b)`, and a newline
+  between the elements are the same tuple.  The flip side is that an expression
+  cannot continue across a separator: a lambda body must start on the same line
   as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
@@ -78,12 +95,13 @@ atom     := int_literal
   `_` is an ordinary name, so `_ = 5; _` and `_ => _` stay legal.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
-- **Precedence** (loosest → tightest): `:` / `#` → `->` → application → postfix
-  `<e>` / `[e]` / atoms.  `x => e : T` parses as `x => (e : T)` — lambda bodies
-  extend through annotations, as do array lengths: `Int<x : T>` is the array
-  type whose length is the annotated expression.  `#` binds at the same
-  precedence as `:`, so `e : T # p` annotates both the type and the
-  perspective slot, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
+- **Precedence** (loosest → tightest): `=>` → `:` / `#` → `->` → `<=` / `==`
+  → `+` / `-` → application → postfix (glued delimiters) → atoms.  `x => e : T`
+  parses as `x => (e : T)` — lambda bodies extend through annotations, as do
+  array lengths: `Int<x : T>` is the array type whose length is the annotated
+  expression.  `#` binds at the same precedence as `:`, so `e : T # p` annotates
+  both the type and the perspective slot, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
+  A comparison (`<=` / `==`) yields `0` or `1`, driving an `if` branch.
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
   annotated with `T` — the frontend desugars it to `x => { x : T; e }`, so the
   annotation is a leading body statement that unifies the parameter's slot in
@@ -99,23 +117,71 @@ atom     := int_literal
   expression in type position (after `:`).  Angle brackets need no flag:
   `<a, b>` is always a `TypeTuple`, in both positions.
 
-### 2.1 Distinct delimiters
+- **Conditionals.**  `if cond then e1 else e2` is an expression: `cond` is any
+  expression up to `then` (the keyword delimits it — it is neither an atom nor
+  an infix operator, so the condition cannot extend through it), and the
+  branches extend maximally like a lambda body.  It desugars to the lazy index
+  `[e2, e1][cond]` — the condition (`0`/`1`) selects the branch, and the
+  untaken branch is never evaluated.
+- **Tables.**  `table { k1 :: v1, k2 :: v2, … }` is a constant table literal;
+  each entry is a deep-equal `key :: value` pair (the double colon is not part
+  of the expression grammar, so it unambiguously separates the pair).
+  `table {}` is the empty table.  `t{k}` (a glued `{`) is a table lookup
+  returning the entry whose stored key is deep-content-equal to `k`.
+- **Shallow markers.**  Inside an array literal, an element may be prefixed
+  with `~` (`~e`, `~2 e`): a *shallow* marker that keeps the value slot at
+  each of the first `n` levels of the element's type spine shallow (a bare
+  `~` marks the whole subtree).  `~` is accepted nowhere else.
+
+### 2.1 Delimiters, postfix forms, and adjacency (Glue)
 
 Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
 types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `T<3>` is the
 array type of length 3, `<Int, Type>` the tuple type, and
-`struct<Int, Type>` a nominal struct type.  A `<` directly
-after an expression is *always* the array type — application is
-juxtaposition, so no whitespace rule exists (the earlier `T[e]` design needed
-one to tell `Int[3]` from `f [3]`; angle brackets removed it).  A type tuple
-in argument position is parenthesized: `f (<Int, Type>)`.  A single-element
-`<Int>` is a parse error — `(Int)` is the grouping form.
+`struct<Int, Type>` a nominal struct type.
 
-`e[i]` indexes an array or tuple.  A `[` directly after an expression is
-*always* an index (position decides, never whitespace), so an array literal
-in argument position needs parens too: `f ([1, 2])`.  `a[0][1]` chains, and
-`[e1, e2][i]` is the language's only conditional form — with an integer
-index it selects a branch.
+All four postfix delimiters — `(` `{` `<` `[` — are **postfix-only when glued**
+to the preceding token.  The lexer emits a zero-width `Glue` token immediately
+before any of them that is adjacent (no trivia between) to the previous
+token; the parser reads `Glue` to decide postfix versus application.  A spaced
+delimiter is a fresh atom — an argument of an application:
+
+- `a[0]` (glued `[`) is an index; `a [0]` (spaced `[`) **applies** `a` to the
+  array `[0]`.  `a[0][1]` chains, and `[e1, e2][i]` is the language's only
+  conditional form — with an integer index it selects a branch.  An array
+  literal in argument position needs no parens when glued, but a spaced
+  `f ([1, 2])` applies `f` to the array.
+- `Int<3>` (glued `<`) is the array type of length 3; `f <3>` (spaced `<`)
+  applies `f` to `3`.  A type tuple in argument position is parenthesized:
+  `f (<Int, Type>)`.  A single-element `<Int>` is a parse error — `(Int)`
+  is the grouping form.
+- `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
+  `(`) applies `f` to the tuple.  A glued `(` after a container is a field/
+  slot read (`a(0)`).  A fresh atom may itself open with a glued delimiter,
+  e.g. the annotation `x :(Int, Type)`.
+- `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
+  `{k}`.  A table literal (`table{…}`) and a struct type (`struct<…>`) are
+  *keyword-led*, so their delimiter sits directly after the keyword.
+
+### 2.2 The `@{...@}` preprocessor block
+
+A file may open with a single `@{...@}` block — once, before any code; a
+non-`@` prefix is allowed and ignored.  It is cut out of the source by a pure
+byte scan (independent of the lexer), so the language lexer/parser never see
+it.  Inside the block is a set of statements, Separator-separated:
+
+- `name = import "path"` loads a package bound to `name` (the import namespace).
+- `name = "value"` defines a string metadata entry (the metadata namespace);
+  the two namespaces are separate.
+
+A string is `"…"` with no escape characters and may span newlines; its content
+is any character except `"` or `@`.  `@` is reserved for the block delimiters,
+so it cannot appear in the surrounding code or inside a string.  The block
+carries `order` / `output` / prose for the README tooling (see
+`crates/lichen-language/src/readme.rs`).  The code to compile is the source
+after the block (or the whole source when there is no `@`); the preprocessor
+returns that borrowed slice plus a base byte offset so the lexer maps every
+span back to the original file.
 
 ## 3. Semantics
 
@@ -125,7 +191,7 @@ index it selects a branch.
   type expression.
 - **Statements and bindings.**  A program is a sequence of statements — a
   `name = expr` binding or a bare expression — followed by a final expression,
-  each statement ended by a `;` or a newline.  A binding is *graph sharing*, not
+  each statement ended by a `Separator` (newline, `;`, or `,`).  A binding is *graph sharing*, not
   sugar: its value compiles once into the IR arena, and every use of the name
   is that same node id (the IR is a graph).  There is no `let` node and no
   desugared lambda — the final expression stays the program's root, so its
@@ -150,7 +216,7 @@ index it selects a branch.
   stmtₙ, final]), n)`), so each is checked and evaluated — the runtime *is*
   the typechecker — and only the final expression is the program's value.
 - **Blocks.**  `{ stmt …; expr }` is an expression: the same
-  statement list as a program (separators again `;` or newline, bare
+  statement list as a program (separators again a `Separator`, bare
   expression statements included), scoped to
   the block.  Bindings are block-wide inside it
   exactly as at the top level (each value compiles once, and a use of the name
@@ -294,6 +360,7 @@ frontend guarantees resolution before the IR leaves the crate.
 
 | stage | example |
 |---|---|
+| Preprocess | `cannot load package 'inner.lichen': unresolved name 'y'` |
 | Lex | `unexpected character '@'` |
 | Parse | `expected ')', found ']'` |
 | Resolve | `unresolved name 'y'` |
@@ -305,8 +372,12 @@ pipeline stage produced it.  Checker diagnostics additionally carry their
 structured facts in `check` — the highlevel `Diag` (`kind`, the conflicting
 classes `a`/`b` and their recorded values, `span`) — which tests and tooling
 match on instead of the message; frontend errors leave it `None`.  The
-frontend stops at the first lex/parse/resolve error (no recovery in v1);
-checker diagnostics can be many, in order.
+frontend *recovers*: lex errors accumulate (an unexpected character is skipped
+and lexing continues), the parser skips a broken statement and reports it,
+and the checker still runs on the resulting partial program — so one pass
+reports every problem it can find.  Only an unresolved name (the resolve
+stage) stops the pipeline, since no IR exists to check.  Checker diagnostics
+can be many, in order.
 
 ### Rendering
 

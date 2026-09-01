@@ -1,7 +1,9 @@
--- order: 3
+@{
+  order = "3"
+  output = "(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>"
+@}
 A = struct<Int, B>
 B = struct<Type, A>
 a = A(1, b)
 b = B(Int, a)
 (A , B, a, b)
--- output: (struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>

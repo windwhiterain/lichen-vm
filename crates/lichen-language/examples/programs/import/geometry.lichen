@@ -1,5 +1,7 @@
--- order: 1
-@import "math.lichen" as math
+@{
+  order = "1"
+  math = import "math.lichen"
+  output = "Function: Int -> Int"
+@}
 double = x => math x + math x
 double
--- output: Function: Int -> Int

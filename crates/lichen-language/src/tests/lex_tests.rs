@@ -1,6 +1,18 @@
 use super::*;
 
+/// The significant tokens: Glue and Separator are layout/boundary markers the
+/// parser consumes; the token-vocabulary tests focus on the real tokens.
 fn kinds(source: &str) -> Vec<TokenKind> {
+    lex(source)
+        .tokens
+        .into_iter()
+        .map(|t| t.kind)
+        .filter(|k| !matches!(k, TokenKind::Glue | TokenKind::Separator))
+        .collect()
+}
+
+/// The full token stream, including Glue and Separator.
+fn kinds_all(source: &str) -> Vec<TokenKind> {
     lex(source).tokens.into_iter().map(|t| t.kind).collect()
 }
 
@@ -48,7 +60,6 @@ fn arrows_and_punctuation() {
         vec![
             TokenKind::LParen,
             TokenKind::Name("a".to_string()),
-            TokenKind::Comma,
             TokenKind::Name("b".to_string()),
             TokenKind::RParen,
             TokenKind::Colon,
@@ -77,59 +88,42 @@ fn int_and_type_are_keywords_but_not_prefixes() {
     );
 }
 
-#[test]
-fn comments_are_skipped() {
-    // A comment is dropped, but the newline after it still lexes as the
-    // statement separator.
-    assert_eq!(
-        kinds("5 -- a comment\n-- another\n 6"),
-        vec![
-            TokenKind::Int(5),
-            TokenKind::Semicolon,
-            TokenKind::Semicolon,
-            TokenKind::Int(6),
-            TokenKind::Eof,
-        ]
-    );
-}
 
 #[test]
 fn spans_track_line_and_column() {
     let token = lex_one("  x");
     assert_eq!(token.span, (1, 3));
-    // Each newline is a Semicolon and advances the line.
     let tokens = lex("\n\n  y").tokens;
     let y = tokens
         .iter()
         .find(|t| t.kind == TokenKind::Name("y".to_string()))
         .unwrap();
     assert_eq!(y.span, (3, 3));
+    assert_eq!(y.range, (4, 5));
 }
 
 #[test]
-fn a_newline_lexes_as_a_semicolon() {
+fn a_newline_is_a_separator() {
     assert_eq!(
         kinds("a = 1\nb = 2"),
         vec![
             TokenKind::Name("a".to_string()),
             TokenKind::Equals,
             TokenKind::Int(1),
-            TokenKind::Semicolon,
             TokenKind::Name("b".to_string()),
             TokenKind::Equals,
             TokenKind::Int(2),
             TokenKind::Eof,
         ]
     );
-    // `;` plus a newline are two separators in a row.
     assert_eq!(
-        kinds("a = 1;\nb = 2"),
+        kinds_all("a = 1;\nb = 2"),
         vec![
             TokenKind::Name("a".to_string()),
             TokenKind::Equals,
             TokenKind::Int(1),
-            TokenKind::Semicolon,
-            TokenKind::Semicolon,
+            TokenKind::Separator,
+            TokenKind::Separator,
             TokenKind::Name("b".to_string()),
             TokenKind::Equals,
             TokenKind::Int(2),
@@ -140,7 +134,6 @@ fn a_newline_lexes_as_a_semicolon() {
 
 #[test]
 fn operators_and_keywords_lex() {
-    // A restrictive-`let` fibonacci binding — every new token in one line.
     assert_eq!(
         kinds("let fib = n => if n <= 1 then n else fib (n - 1) + fib (n - 2)"),
         vec![
@@ -172,7 +165,6 @@ fn operators_and_keywords_lex() {
             TokenKind::Eof,
         ]
     );
-    // `==` and `<=` are two-char tokens, distinct from `=` and `<`.
     assert_eq!(
         kinds("a == 1 a <= 2"),
         vec![
@@ -189,8 +181,6 @@ fn operators_and_keywords_lex() {
 
 #[test]
 fn angle_brackets_lex_as_their_own_tokens() {
-    // `Int<3>` — the array type; `<Int, Type>` — the tuple type.  Both
-    // are plain tokens; no adjacency rule exists.
     assert_eq!(
         kinds("Int<3> <Int, Type>"),
         vec![
@@ -200,7 +190,6 @@ fn angle_brackets_lex_as_their_own_tokens() {
             TokenKind::RAngle,
             TokenKind::LAngle,
             TokenKind::KwInt,
-            TokenKind::Comma,
             TokenKind::KwType,
             TokenKind::RAngle,
             TokenKind::Eof,
@@ -217,7 +206,6 @@ fn braces_lex_as_their_own_tokens() {
             TokenKind::Name("a".to_string()),
             TokenKind::Equals,
             TokenKind::Int(1),
-            TokenKind::Semicolon,
             TokenKind::Name("a".to_string()),
             TokenKind::RBrace,
             TokenKind::Eof,
@@ -227,8 +215,6 @@ fn braces_lex_as_their_own_tokens() {
 
 #[test]
 fn an_unexpected_character_is_a_lex_error() {
-    // The error is recorded and the character skipped — the rest of the
-    // line still lexes.
     let Lexed { errors, .. } = lex("x @ y");
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].stage, Stage::Lex);
@@ -253,13 +239,11 @@ fn an_overflowing_literal_is_a_lex_error() {
 
 #[test]
 fn a_tilde_is_a_shallow_marker_token() {
-    // `~` folds adjacent digits; a bare `~` is `Tilde(usize::MAX)`.
     assert_eq!(
         kinds("[1, ~ f (x + 1), ~2 y]"),
         vec![
             TokenKind::LBracket,
             TokenKind::Int(1),
-            TokenKind::Comma,
             TokenKind::Tilde(usize::MAX),
             TokenKind::Name("f".to_string()),
             TokenKind::LParen,
@@ -267,30 +251,19 @@ fn a_tilde_is_a_shallow_marker_token() {
             TokenKind::Plus,
             TokenKind::Int(1),
             TokenKind::RParen,
-            TokenKind::Comma,
             TokenKind::Tilde(2),
             TokenKind::Name("y".to_string()),
             TokenKind::RBracket,
             TokenKind::Eof,
         ]
     );
-    // `~0` is the unmarked no-op; a space after `~` separates the
-    // marker from the element.
     assert_eq!(
         kinds("~0 x"),
-        vec![
-            TokenKind::Tilde(0),
-            TokenKind::Name("x".to_string()),
-            TokenKind::Eof
-        ]
+        vec![TokenKind::Tilde(0), TokenKind::Name("x".to_string()), TokenKind::Eof]
     );
     assert_eq!(
         kinds("~ 1"),
-        vec![
-            TokenKind::Tilde(usize::MAX),
-            TokenKind::Int(1),
-            TokenKind::Eof
-        ]
+        vec![TokenKind::Tilde(usize::MAX), TokenKind::Int(1), TokenKind::Eof]
     );
 }
 
@@ -299,4 +272,57 @@ fn tokens_carry_their_byte_range() {
     let token = lex_one("  x");
     assert_eq!(token.span, (1, 3));
     assert_eq!(token.range, (2, 3));
+}
+
+#[test]
+fn a_separator_covers_newline_comma_and_semicolon() {
+    for src in ["a\nb", "a,b", "a;b"] {
+        let k = kinds_all(src);
+        assert_eq!(
+            &k[..],
+            &[
+                TokenKind::Name("a".to_string()),
+                TokenKind::Separator,
+                TokenKind::Name("b".to_string()),
+                TokenKind::Eof,
+            ],
+            "source: {src:?}"
+        );
+    }
+}
+
+#[test]
+fn glue_marks_a_glued_delimiter_only() {
+    assert_eq!(
+        kinds_all("f(1)"),
+        vec![
+            TokenKind::Name("f".to_string()),
+            TokenKind::Glue,
+            TokenKind::LParen,
+            TokenKind::Int(1),
+            TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds_all("f (1)"),
+        vec![
+            TokenKind::Name("f".to_string()),
+            TokenKind::LParen,
+            TokenKind::Int(1),
+            TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds_all("f\n(1)"),
+        vec![
+            TokenKind::Name("f".to_string()),
+            TokenKind::Separator,
+            TokenKind::LParen,
+            TokenKind::Int(1),
+            TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
 }

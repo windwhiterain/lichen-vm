@@ -1,3 +1,5 @@
--- order: 0
+@{
+  order = "0"
+  output = "[1, 2, 3]: Int<3>"
+@}
 [1, 2, 3] : Int<3>
--- output: [1, 2, 3]: Int<3>

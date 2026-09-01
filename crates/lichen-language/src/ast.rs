@@ -1,6 +1,6 @@
 //! The parsed AST: one node per syntactic form, each carrying the source
 //! position where it starts.  Terms and types share one `Expr` type — types
-//! are expressions (see `docs/language.md` §2).
+//! are expressions (see `docs/language-spec.md` §2).
 
 use lichen_highlevel::ir::Span;
 

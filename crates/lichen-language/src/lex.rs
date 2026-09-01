@@ -1,18 +1,30 @@
-//! The lexer: source text → tokens, each with a `(line, column)` span.
+//! The lexer: source text -> tokens, each with a (line, column) span.
 //!
-//! `Int`, `Type`, `struct`, `let`, `if`, `then`, and `else` lex as
-//! keywords; everything else that starts an identifier is a name.  `<` `>`
-//! build type-level forms (the array type `Int<3>`, the tuple type
-//! `<Int, Type>`, the struct type `struct<Int, Type>`); `[` `]` and `(`
-//! `)` stay value-level; `{` `}` delimit a block — scoped bindings followed
-//! by the block's value.  `;` separates statements, and so does a newline —
-//! both lex as the same `Semicolon` token.  `=` binds a name (`a = [1, 2]`);
-//! `=>` is still the lambda; `::` separates a table literal's key/value
-//! pairs (`table{ k :: v, … }`); `==` compares, `<=` compares, `+` and `-`
-//! add and subtract (and `->` is the function-type arrow).  `--` starts a
-//! line comment.  Any other character is a lex error — errors accumulate (the
-//! bad character is skipped and lexing continues), so a single stray
-//! character does not hide the rest of the program's errors.
+//! Whitespace (space/tab/cr) is trivia and never reaches the token stream.
+//! There are no comments at all in the language -- prose lives in the
+//! preprocessor's `@{...@}` block as metadata strings.  A newline, comma, or
+//! semicolon all lex as the same Separator token -- the language treats them
+//! uniformly as a boundary (statement or list-element separator), and the
+//! quantity never matters.
+//!
+//! The only whitespace-significance the grammar needs is adjacency: an
+//! expression followed immediately (no trivia) by '(' '{' '<' or '[' is a
+//! postfix form (a slot read, a table lookup, an array type, or an index).
+//! So the lexer emits a Glue token immediately before one of those four
+//! delimiters when it is directly glued to the previous token.  The parser
+//! reads Glue to decide postfix vs application -- no hidden space_before flag.
+//!
+//! There is no comment masking or re-scan: the lexer sees exactly the code it
+//! is given.  [lex] handles a whole source (byte 0); [lex_with] handles a
+//! slice of a larger source, mapping every token's span and range back to the
+//! original file via a base offset and the source's line starts.
+//!
+//! Int, Type, struct, table, let, if, then, and else lex as keywords.  '->'
+//! is the function-type arrow, '=>' a lambda, '::' a table key/value
+//! separator.  '~' with adjacent digits folds into Tilde(n).  Any other
+//! character is a lex error -- errors accumulate (the character is skipped).
+
+use logos::Logos;
 
 use lichen_highlevel::ir::Span;
 
@@ -22,67 +34,67 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
-    /// An identifier, never `Int`/`Type`/`struct`/`table`/`let`/`if`/`then`/
-    /// `else` (those are keywords).
+    /// An identifier, never a keyword.
     Name(String),
-    /// The `Int` type constant.
+    /// The Int type constant.
     KwInt,
-    /// The `Type` type constant — the universe.
+    /// The Type type constant -- the universe.
     KwType,
-    /// The `struct` keyword — a nominal struct type.
+    /// The struct keyword -- a nominal struct type.
     KwStruct,
-    /// The `table` keyword — a constant table literal (`table{ k :: v, … }`).
+    /// The table keyword -- a constant table literal.
     KwTable,
-    /// The `let` keyword — a restrictive binding (`let a = e`): the name is
-    /// visible only to later bindings, never to itself.
+    /// The let keyword -- a restrictive binding.
     KwLet,
-    /// The `if` keyword — a conditional expression.
+    /// The if keyword -- a conditional expression.
     KwIf,
-    /// The `then` keyword — the `if`'s then-branch delimiter.
+    /// The then keyword -- the if's then-branch delimiter.
     KwThen,
-    /// The `else` keyword — the `if`'s else-branch delimiter.
+    /// The else keyword -- the if's else-branch delimiter.
     KwElse,
-    /// `->` — a function type.
+    /// '->' -- a function type.
     Arrow,
-    /// `=>` — a lambda.
+    /// '=>' -- a lambda.
     FatArrow,
-    /// `:` — an annotation.
+    /// ':' -- an annotation.
     Colon,
-    /// `::` — the table literal's key/value separator (`table{ k :: v, … }`).
+    /// '::' -- the table literal's key/value separator.
     DoubleColon,
-    /// `#` — the perspective annotation (`e # p`, `x # n => e`).  Chosen over
-    /// `@` because the preprocessor owns `@import`.
+    /// '#' -- the perspective annotation.
     Hash,
-    /// `=` — a statement binding.
+    /// '=' -- a statement binding.
     Equals,
-    /// `==` — equality (yields `USize(0/1)`).
+    /// '==' -- equality.
     Eq,
-    /// `<=` — less-or-equal (yields `USize(0/1)`).
+    /// '<=' -- less-or-equal.
     Leq,
-    /// `+` — addition.
+    /// '+' -- addition.
     Plus,
-    /// `-` — subtraction.
+    /// '-' -- subtraction.
     Minus,
-    /// `;` or a newline — the statement separator.
-    Semicolon,
-    Comma,
+    /// '('.
     LParen,
+    /// ')'.
     RParen,
+    /// '['.
     LBracket,
+    /// ']'.
     RBracket,
-    /// `{` — opens a block.
+    /// '{'.
     LBrace,
-    /// `}` — closes a block.
+    /// '}'.
     RBrace,
-    /// `<` — the array-type postfix after an expression, the tuple-type
-    /// and struct-type prefixes at expression start.  Exclusively type-level.
+    /// '<' -- exclusively type-level.
     LAngle,
-    /// `>` — closes `<`.
+    /// '>' -- closes '<'.
     RAngle,
-    /// A `~` shallow marker on an array position.  `~` with adjacent digits
-    /// folds into `Tilde(n)` (`~2` marks two spine levels); a bare `~` (no
-    /// digits, or a space after) is `Tilde(usize::MAX)` — the whole subtree.
+    /// A '~' shallow marker.
     Tilde(usize),
+    /// A newline, comma, or semicolon -- a uniform boundary token.
+    Separator,
+    /// A zero-width marker: the next '(' '{' '<' or '[' is directly glued to
+    /// the previous token, so it is a postfix form.
+    Glue,
     Eof,
 }
 
@@ -110,8 +122,6 @@ impl TokenKind {
             TokenKind::Leq => "'<='".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
-            TokenKind::Semicolon => "';'".to_string(),
-            TokenKind::Comma => "','".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBracket => "'['".to_string(),
@@ -121,6 +131,8 @@ impl TokenKind {
             TokenKind::LAngle => "'<'".to_string(),
             TokenKind::RAngle => "'>'".to_string(),
             TokenKind::Tilde(_) => "'~'".to_string(),
+            TokenKind::Separator => "a separator".to_string(),
+            TokenKind::Glue => "a glued delimiter".to_string(),
             TokenKind::Eof => "the end of the program".to_string(),
         }
     }
@@ -129,16 +141,10 @@ impl TokenKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
-    /// `(line, column)`, 1-based — the token's start.
+    /// (line, column), 1-based -- the token's start.
     pub span: Span,
-    /// The token's byte range in the source, half-open — the offset-based
-    /// twin of `span`, for tooling (an LSP) that works in byte offsets.
+    /// The token's byte range in the source, half-open.
     pub range: (u32, u32),
-    /// Whether whitespace (or a `--` comment) immediately precedes this
-    /// token.  The parser uses it to apply the *adjacency* rule — a `(` with
-    /// no space before it is struct instantiation, one after a space is a
-    /// function-apply argument (a paren atom).
-    pub space_before: bool,
 }
 
 impl std::fmt::Display for Token {
@@ -147,197 +153,190 @@ impl std::fmt::Display for Token {
     }
 }
 
-/// The result of lexing: the tokens (always ending with `Eof`) plus any
-/// lex errors.  Errors accumulate — an unexpected character is skipped and
-/// lexing continues, so a stray character does not hide the rest of the
-/// program's errors.
+/// The result of lexing: the tokens (always ending with Eof) plus any lex
+/// errors.  Errors accumulate -- an unexpected character is skipped and
+/// lexing continues.
 pub struct Lexed {
     pub tokens: Vec<Token>,
     pub errors: Vec<Diag>,
 }
 
+/// The token kinds logos recognizes.  Payloads are read from the matched
+/// slice in the loop so integer overflow can be its own error.
+#[derive(Logos, Clone, Debug, PartialEq, Eq)]
+#[logos(skip r"[ \t\r]+")]
+enum RawToken {
+    #[regex(r"\n|,|;")]
+    Separator,
+    #[regex(r"[0-9]+")]
+    IntLit,
+    #[token("Int")]
+    KwInt,
+    #[token("Type")]
+    KwType,
+    #[token("struct")]
+    KwStruct,
+    #[token("table")]
+    KwTable,
+    #[token("let")]
+    KwLet,
+    #[token("if")]
+    KwIf,
+    #[token("then")]
+    KwThen,
+    #[token("else")]
+    KwElse,
+    #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
+    NameLit,
+    #[token("->")]
+    Arrow,
+    #[token("=>")]
+    FatArrow,
+    #[token("::")]
+    DoubleColon,
+    #[token(":")]
+    Colon,
+    #[token("#")]
+    Hash,
+    #[token("=")]
+    Equals,
+    #[token("==")]
+    Eq,
+    #[token("<=")]
+    Leq,
+    #[token("+")]
+    Plus,
+    #[token("-")]
+    Minus,
+    #[token("(")]
+    LParen,
+    #[token(")")]
+    RParen,
+    #[token("[")]
+    LBracket,
+    #[token("]")]
+    RBracket,
+    #[token("{")]
+    LBrace,
+    #[token("}")]
+    RBrace,
+    #[token("<")]
+    LAngle,
+    #[token(">")]
+    RAngle,
+    #[regex(r"~[0-9]*")]
+    TildeLit,
+}
+
+impl RawToken {
+    /// Whether this kind is one of the postfix-capable delimiters that a Glue
+    /// marker can precede.
+    fn is_postfix_delim(&self) -> bool {
+        matches!(
+            &self,
+            RawToken::LParen | RawToken::LBracket | RawToken::LBrace | RawToken::LAngle
+        )
+    }
+}
+
 pub fn lex(source: &str) -> Lexed {
-    let mut lexer = Lexer {
-        source,
-        bytes: source.as_bytes(),
-        pos: 0,
-        line: 1,
-        col: 1,
-        tokens: Vec::new(),
-        errors: Vec::new(),
-        space_before: false,
-    };
-    lexer.run();
-    lexer.tokens.push(Token {
+    let line_starts = line_starts(source);
+    lex_with(source, &line_starts, 0)
+}
+
+/// Lex `code`, a slice of a larger source (whose line starts are
+/// `line_starts`) beginning at byte `base` within it.  Token ranges and
+/// spans are absolute positions in the full source (`base + local`), so
+/// diagnostics and LSP positions point at the real source even when `code`
+/// is only a suffix of it (e.g. the code after a stripped `@{...@}`
+/// preprocessor block).
+pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut errors: Vec<Diag> = Vec::new();
+    let mut lexer = RawToken::lexer(code);
+    // End of the last real token (not a Separator/Glue).  Used to decide
+    // whether the next delimiter is glued to it.  Reset to None at a boundary
+    // (a Separator or an error) so a following delimiter is a fresh atom.
+    let mut prev_end: Option<u32> = None;
+    while let Some(result) = lexer.next() {
+        match result {
+            Ok(raw) => {
+                let span = lexer.span();
+                let (start, end) = (base + span.start as u32, base + span.end as u32);
+                let lc = line_col(line_starts, start);
+                if raw == RawToken::Separator {
+                    tokens.push(Token {
+                        kind: TokenKind::Separator,
+                        span: lc,
+                        range: (start, end),
+                    });
+                    prev_end = None;
+                    continue;
+                }
+                let glued = raw.is_postfix_delim() && prev_end == Some(start);
+                if glued {
+                    tokens.push(Token {
+                        kind: TokenKind::Glue,
+                        span: lc,
+                        range: (start, start),
+                    });
+                }
+                match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
+                    Some(kind) => {
+                        tokens.push(Token { kind, span: lc, range: (start, end) });
+                        prev_end = Some(end);
+                    }
+                    None => {
+                        // integer overflow: the run was consumed, no token.
+                        prev_end = Some(end);
+                    }
+                }
+            }
+            Err(..) => {
+                let span = lexer.span();
+                let start = base + span.start as u32;
+                let lc = line_col(line_starts, start);
+                let ch = lexer.slice().chars().next().unwrap_or('?');
+                errors.push(Diag::new(Stage::Lex, lc, format!("unexpected character '{ch}'")));
+                prev_end = None;
+            }
+        }
+    }
+    let pos = base + code.len() as u32;
+    tokens.push(Token {
         kind: TokenKind::Eof,
-        span: (lexer.line, lexer.col),
-        range: (lexer.pos as u32, lexer.pos as u32),
-        space_before: lexer.space_before,
+        span: line_col(line_starts, pos),
+        range: (pos, pos),
     });
-    Lexed {
-        tokens: lexer.tokens,
-        errors: lexer.errors,
-    }
+    Lexed { tokens, errors }
 }
 
-struct Lexer<'a> {
-    source: &'a str,
-    bytes: &'a [u8],
-    pos: usize,
-    line: u32,
-    col: u32,
-    tokens: Vec<Token>,
-    errors: Vec<Diag>,
-    /// Whether trivia (space/tab/cr, or a `--` comment) preceded the next
-    /// token — set by [`Lexer::skip_trivia`], consumed by every token
-    /// emitter, and reset for the following token.
-    space_before: bool,
-}
 
-impl Lexer<'_> {
-    /// Emit a `Token` at the current position, setting its `space_before`
-    /// from the trivia-skip in the main loop.
-    fn push(&mut self, line: u32, col: u32, len: usize, kind: TokenKind) {
-        let start = self.pos;
-        self.step(len);
-        let space_before = std::mem::replace(&mut self.space_before, false);
-        self.tokens.push(Token {
-            kind,
-            span: (line, col),
-            range: (start as u32, self.pos as u32),
-            space_before,
-        });
-    }
 
-    fn run(&mut self) {
-        loop {
-            self.skip_trivia();
-            let (line, col) = (self.line, self.col);
-            let Some(&b) = self.bytes.get(self.pos) else {
-                return;
-            };
-            match b {
-                b'0'..=b'9' => self.int_literal(line, col),
-                b'a'..=b'z' | b'A'..=b'Z' | b'_' => self.name_or_keyword(line, col),
-                b'(' => self.push(line, col, 1, TokenKind::LParen),
-                b')' => self.push(line, col, 1, TokenKind::RParen),
-                b'[' => self.push(line, col, 1, TokenKind::LBracket),
-                b']' => self.push(line, col, 1, TokenKind::RBracket),
-                b'{' => self.push(line, col, 1, TokenKind::LBrace),
-                b'}' => self.push(line, col, 1, TokenKind::RBrace),
-                b'<' if self.bytes.get(self.pos + 1) == Some(&b'=') => {
-                    self.push(line, col, 2, TokenKind::Leq)
-                }
-                b'<' => self.push(line, col, 1, TokenKind::LAngle),
-                b'>' => self.push(line, col, 1, TokenKind::RAngle),
-                b',' => self.push(line, col, 1, TokenKind::Comma),
-                b':' if self.bytes.get(self.pos + 1) == Some(&b':') => {
-                    self.push(line, col, 2, TokenKind::DoubleColon)
-                }
-                b':' => self.push(line, col, 1, TokenKind::Colon),
-                b'#' => self.push(line, col, 1, TokenKind::Hash),
-                b';' => self.push(line, col, 1, TokenKind::Semicolon),
-                b'+' => self.push(line, col, 1, TokenKind::Plus),
-                b'\n' => {
-                    self.push(line, col, 1, TokenKind::Semicolon);
-                    self.line += 1;
-                    self.col = 1;
-                }
-                b'-' if self.bytes.get(self.pos + 1) == Some(&b'>') => {
-                    self.push(line, col, 2, TokenKind::Arrow)
-                }
-                b'-' => self.push(line, col, 1, TokenKind::Minus),
-                b'=' if self.bytes.get(self.pos + 1) == Some(&b'>') => {
-                    self.push(line, col, 2, TokenKind::FatArrow)
-                }
-                b'=' if self.bytes.get(self.pos + 1) == Some(&b'=') => {
-                    self.push(line, col, 2, TokenKind::Eq)
-                }
-                b'=' => self.push(line, col, 1, TokenKind::Equals),
-                b'~' => self.tilde(line, col),
-                _ => {
-                    let ch = self.source[self.pos..].chars().next().unwrap();
-                    self.errors.push(Diag::new(
-                        Stage::Lex,
-                        (line, col),
-                        format!("unexpected character '{ch}'"),
-                    ));
-                    self.step(ch.len_utf8());
-                }
-            }
-        }
-    }
-
-    /// Whitespace and `--` line comments.  A newline is *not* trivia: it
-    /// lexes as a `Semicolon` (see [`Lexer::run`]).  Sets `space_before` so
-    /// the next token knows whether trivia separated it from the previous
-    /// one.
-    fn skip_trivia(&mut self) {
-        loop {
-            match self.bytes.get(self.pos) {
-                Some(b' ') | Some(b'\t') | Some(b'\r') => {
-                    self.space_before = true;
-                    self.step(1);
-                }
-                Some(b'-') if self.bytes.get(self.pos + 1) == Some(&b'-') => {
-                    self.space_before = true;
-                    while let Some(&b) = self.bytes.get(self.pos) {
-                        if b == b'\n' {
-                            break;
-                        }
-                        self.step(1);
+/// Map a raw token plus its matched slice to a TokenKind.  Integer literals
+/// are parsed here: overflow records an error and returns None (no token).
+fn raw_to_kind(
+    raw: &RawToken,
+    slice: &str,
+    lc: Span,
+    errors: &mut Vec<Diag>,
+) -> Option<TokenKind> {
+    match raw {
+        RawToken::IntLit => {
+            let mut value: usize = 0;
+            for byte in slice.bytes() {
+                let digit = (byte - b'0') as usize;
+                match value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
+                    Some(v) => value = v,
+                    None => {
+                        errors.push(Diag::new(Stage::Lex, lc, "integer literal out of range"));
+                        return None;
                     }
                 }
-                _ => return,
             }
+            Some(TokenKind::Int(value))
         }
-    }
-
-    fn int_literal(&mut self, line: u32, col: u32) {
-        let start = self.pos;
-        let mut value: usize = 0;
-        while let Some(&b) = self.bytes.get(self.pos) {
-            if !b.is_ascii_digit() {
-                break;
-            }
-            let digit = (b - b'0') as usize;
-            match value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
-                Some(v) => value = v,
-                None => {
-                    self.errors.push(Diag::new(
-                        Stage::Lex,
-                        (line, col),
-                        "integer literal out of range".to_string(),
-                    ));
-                    // Skip the remaining digits so the overflowed number does
-                    // not re-lex as separate literals; no token is emitted.
-                    while self.bytes.get(self.pos).is_some_and(|b| b.is_ascii_digit()) {
-                        self.step(1);
-                    }
-                    return;
-                }
-            }
-            self.step(1);
-        }
-        self.tokens.push(Token {
-            kind: TokenKind::Int(value),
-            span: (line, col),
-            range: (start as u32, self.pos as u32),
-            space_before: std::mem::replace(&mut self.space_before, false),
-        });
-    }
-
-    fn name_or_keyword(&mut self, line: u32, col: u32) {
-        let start = self.pos;
-        while let Some(&b) = self.bytes.get(self.pos) {
-            if b.is_ascii_alphanumeric() || b == b'_' {
-                self.step(1);
-            } else {
-                break;
-            }
-        }
-        let text = &self.source[start..self.pos];
-        let kind = match text {
+        RawToken::NameLit => Some(match slice {
             "Int" => TokenKind::KwInt,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
@@ -346,51 +345,71 @@ impl Lexer<'_> {
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,
             "else" => TokenKind::KwElse,
-            _ => TokenKind::Name(text.to_string()),
-        };
-        self.tokens.push(Token {
-            kind,
-            span: (line, col),
-            range: (start as u32, self.pos as u32),
-            space_before: std::mem::replace(&mut self.space_before, false),
-        });
-    }
-
-    /// A `~` shallow marker: `~` with adjacent digits folds into `Tilde(n)`
-    /// (`~2` marks two spine levels); a bare `~` (a space or a non-digit
-    /// follows) is `Tilde(usize::MAX)` — the whole subtree.
-    fn tilde(&mut self, line: u32, col: u32) {
-        let start = self.pos;
-        self.step(1);
-        let mut n: usize = 0;
-        let mut digits = 0;
-        while let Some(&b) = self.bytes.get(self.pos) {
-            if !b.is_ascii_digit() {
-                break;
-            }
-            digits += 1;
-            n = n.saturating_mul(10).saturating_add((b - b'0') as usize);
-            self.step(1);
+            _ => TokenKind::Name(slice.to_string()),
+        }),
+        RawToken::TildeLit => {
+            let digits = &slice[1..];
+            let n = if digits.is_empty() {
+                usize::MAX
+            } else {
+                let mut n: usize = 0;
+                for byte in digits.bytes() {
+                    n = n.saturating_mul(10).saturating_add((byte - b'0') as usize);
+                }
+                n
+            };
+            Some(TokenKind::Tilde(n))
         }
-        let kind = if digits == 0 {
-            TokenKind::Tilde(usize::MAX)
-        } else {
-            TokenKind::Tilde(n)
-        };
-        self.tokens.push(Token {
-            kind,
-            span: (line, col),
-            range: (start as u32, self.pos as u32),
-            space_before: std::mem::replace(&mut self.space_before, false),
-        });
+        RawToken::KwInt => Some(TokenKind::KwInt),
+        RawToken::KwType => Some(TokenKind::KwType),
+        RawToken::KwStruct => Some(TokenKind::KwStruct),
+        RawToken::KwTable => Some(TokenKind::KwTable),
+        RawToken::KwLet => Some(TokenKind::KwLet),
+        RawToken::KwIf => Some(TokenKind::KwIf),
+        RawToken::KwThen => Some(TokenKind::KwThen),
+        RawToken::KwElse => Some(TokenKind::KwElse),
+        RawToken::Arrow => Some(TokenKind::Arrow),
+        RawToken::FatArrow => Some(TokenKind::FatArrow),
+        RawToken::DoubleColon => Some(TokenKind::DoubleColon),
+        RawToken::Colon => Some(TokenKind::Colon),
+        RawToken::Hash => Some(TokenKind::Hash),
+        RawToken::Equals => Some(TokenKind::Equals),
+        RawToken::Eq => Some(TokenKind::Eq),
+        RawToken::Leq => Some(TokenKind::Leq),
+        RawToken::Plus => Some(TokenKind::Plus),
+        RawToken::Minus => Some(TokenKind::Minus),
+        RawToken::LParen => Some(TokenKind::LParen),
+        RawToken::RParen => Some(TokenKind::RParen),
+        RawToken::LBracket => Some(TokenKind::LBracket),
+        RawToken::RBracket => Some(TokenKind::RBracket),
+        RawToken::LBrace => Some(TokenKind::LBrace),
+        RawToken::RBrace => Some(TokenKind::RBrace),
+        RawToken::LAngle => Some(TokenKind::LAngle),
+        RawToken::RAngle => Some(TokenKind::RAngle),
+        RawToken::Separator => Some(TokenKind::Separator),
     }
+}
 
-    fn step(&mut self, len: usize) {
-        for _ in 0..len {
-            self.pos += 1;
-            self.col += 1;
+/// Byte offsets at which each line starts (line 1 begins at 0).
+pub fn line_starts(source: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (i, byte) in source.bytes().enumerate() {
+        if byte == b'\n' {
+            starts.push(i + 1);
         }
     }
+    starts
+}
+
+/// Map a byte offset to its 1-based (line, column).
+pub fn line_col(starts: &[usize], pos: u32) -> Span {
+    let pos = pos as usize;
+    let line = match starts.binary_search(&pos) {
+        Ok(i) => i + 1,
+        Err(i) => i,
+    };
+    let col = pos - starts[line - 1] + 1;
+    (line as u32, col as u32)
 }
 
 #[cfg(test)]

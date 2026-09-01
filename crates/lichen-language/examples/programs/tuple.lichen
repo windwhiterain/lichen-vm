@@ -1,3 +1,5 @@
--- order: 0
+@{
+  order = "0"
+  output = "(1, Int): <Int, Type>"
+@}
 (1, Int) : <Int, Type>
--- output: (1, Int): <Int, Type>

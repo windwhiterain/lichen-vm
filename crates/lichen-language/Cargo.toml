@@ -6,6 +6,7 @@ default-run = "lichen"
 
 [dependencies]
 chumsky = "0.13.0"
+logos = "0.16"
 sha2 = "0.10"
 lichen-highlevel = { path = "../lichen-highlevel" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }

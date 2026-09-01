@@ -168,7 +168,7 @@ fn build_file(path: &Path) -> ExitCode {
             // prints the exported type.  The import names the file itself,
             // resolved against the file's directory.
             let name = path.file_name().unwrap().to_string_lossy();
-            let source = format!("@import \"{name}\" as _pkg;\n_pkg\n");
+            let source = format!("@{{\n  _pkg = import \"{name}\"\n@}}\n_pkg\n");
             match lichen_language::run::evaluate_raw(&source, Some(path), &mut store) {
                 Ok(output) => println!("type: {}", output.split(": ").nth(1).unwrap_or(&output)),
                 Err(diags) => {

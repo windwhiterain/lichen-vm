@@ -56,7 +56,7 @@ fn statement_errors_carry_spans() {
     assert!(err.message.contains("must end with an expression"));
     // A binding without a value.
     let err = parse_err("a = ; 5");
-    assert_eq!(err.message, "expected an expression, found ';'");
+    assert_eq!(err.message, "expected an expression, found a separator");
     assert_eq!(err.span, Some((1, 5)));
 }
 
@@ -346,9 +346,9 @@ fn the_angle_bracket_array_type() {
         panic!("expected an array type")
     };
     assert!(matches!(*element_type, Expr::TypeArray { .. }));
-    // a `<` right after an expression is always the array type, never an
-    // application — no whitespace rule.
-    let Expr::TypeArray { element_type, .. } = parse_ok("f <3>") else {
+    // A glued `<` after an expression is the array type (never an
+    // application); a spaced `<` is a fresh tuple-type atom.
+    let Expr::TypeArray { element_type, .. } = parse_ok("f<3>") else {
         panic!("expected an array type")
     };
     assert!(matches!(*element_type, Expr::Name(..)));
@@ -361,8 +361,8 @@ fn the_index_postfix() {
     };
     assert!(matches!(*array, Expr::Name(..)));
     assert!(matches!(*index, Expr::Int(0, _)));
-    // No whitespace rule: `a [0]` is still an index.
-    assert!(matches!(parse_ok("a [0]"), Expr::Index { .. }));
+    // A spaced `[` is a fresh array literal: `a [0]` is an application.
+    assert!(matches!(parse_ok("a [0]"), Expr::Apply { .. }));
     // Chained: a[0][1] = (a[0])[1].
     let Expr::Index { array, .. } = parse_ok("a[0][1]") else {
         panic!("expected an index")
@@ -536,7 +536,7 @@ fn broken_statements_are_recovered() {
     let tokens = lex("a = ; b = 2; 5").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1, "the broken binding's error");
-    assert_eq!(errors[0].message, "expected an expression, found ';'");
+    assert_eq!(errors[0].message, "expected an expression, found a separator");
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Expr::Int(5, _)));
     // An unclosed paren in a value is recovered the same way.

@@ -1,5 +1,7 @@
--- order: 0
+@{
+  order = "0"
+  output = "Function: Int -> Int"
+@}
 succ = x => x + 1
 add = x => y => x + y
 succ
--- output: Function: Int -> Int

@@ -1,7 +1,9 @@
--- order: 2
+@{
+  order = "2"
+  output = "[1, 1]: Int<2>"
+@}
 f1 = x => {
     f2 = y => [y, y]
     f2 x 
 }
 f1 1
--- output: [1, 1]: Int<2>

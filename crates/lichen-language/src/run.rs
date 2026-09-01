@@ -52,10 +52,13 @@ pub fn evaluate_raw(
     if !diags.is_empty() {
         return Err(diags);
     }
-    let report = crate::compile_with_imports_in(
-        &preprocessed.source,
+    let line_starts = crate::lex::line_starts(source);
+    let report = crate::compile_with_imports_at(
+        &preprocessed.code,
         &preprocessed.imports,
         Some(store.registry()),
+        preprocessed.code_base,
+        &line_starts,
     );
     if !report.diagnostics.is_empty() {
         return Err(report.diagnostics);

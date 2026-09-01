@@ -1,8 +1,10 @@
--- order: 3
+@{
+  order = "3"
+  output = "Function: <Type, Int> -> Int"
+@}
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>
     f1 x(1)
 }
 f2
--- output: Function: <Type, Int> -> Int

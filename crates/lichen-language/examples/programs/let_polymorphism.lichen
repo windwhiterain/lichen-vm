@@ -1,4 +1,6 @@
--- order: 2
+@{
+  order = "2"
+  output = "(Function, 1, Int): <?a -> ?a, Int, Type>"
+@}
 f = x => x
 (f, f 1, f Int)
--- output: (Function, 1, Int): <?a -> ?a, Int, Type>

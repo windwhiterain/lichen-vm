@@ -7,15 +7,16 @@
 //! with nested directories rendering the same way to any depth, one heading
 //! level deeper each time.  Every program is rendered with its code and its
 //! *actual* output, computed by running it — the README never relies on a
-//! hand-written promise in the file.  Placement is declared with a
-//! `-- order: N` comment: a file's own orders it among its siblings, and a
-//! directory's is the one in its `_.lichen`, whose program also always
-//! shows first inside the directory; undeclared entries sort last, ties by
-//! name.  Programs run standalone wherever they sit — `@import` lines
-//! resolve relative to their own file, so a directory of packages is just a
-//! group of ordinary programs.  [`sync_output_comments`] rewrites each
-//! file's `-- output:` comment to that same actual output (appending it
-//! when the file has none), so the file and the README agree.
+//! hand-written promise in the file.  Placement is declared in each file's
+//! opening `@{...@}` block as `order = "N"`: a file's order places it among
+//! its siblings, and a directory's is the one in its `_.lichen`, whose
+//! program also always shows first inside the directory; undeclared entries
+//! sort last, ties by name.  Programs run standalone wherever they sit —
+//! the block's `name = import "path"` entries resolve relative to their own
+//! file, so a directory of packages is just a group of ordinary programs.
+//! [`sync_output_comments`] rewrites each file's `output = "..."` entry (in
+//! the same block) to that same actual output, so the file and the README
+//! agree.
 //! [`replace_examples`] splices the rendered blob into the region between
 //! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
@@ -26,6 +27,9 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::preprocess::Directive;
+use crate::preprocess::{block_directives, split_block};
 
 /// The marker that opens the generated region in the READMEs.
 pub const BEGIN_MARKER: &str = "<!-- begin: examples -->";
@@ -94,13 +98,14 @@ const DEFAULT_ORDER: usize = usize::MAX;
 /// with the file's name, so a typo is caught by the sync command instead of
 /// silently mis-ordering the section.
 fn declared_order(file: &Path, source: &str) -> Option<usize> {
-    let line = source.lines().find(|l| l.starts_with("-- order:"))?;
-    let value = line.strip_prefix("-- order:").unwrap().trim();
+    let (interior, _) = split_block(source);
+    let interior = interior?;
+    let value = crate::preprocess::block_metadata(interior)
+        .into_iter()
+        .find(|(name, _)| name == "order")
+        .map(|(_, value)| value)?;
     Some(value.parse().unwrap_or_else(|_| {
-        panic!(
-            "{}: expected a number after `-- order:`, found {value:?}",
-            file.display()
-        )
+        panic!("{}: expected a number after `order =`, found {value:?}", file.display())
     }))
 }
 
@@ -157,11 +162,8 @@ fn program_output(file: &Path, source: &str) -> String {
 /// computed by running it.
 fn render_program_body(path: &Path) -> String {
     let source = read_normalized(path);
-    let text = source
-        .lines()
-        .filter(|line| !line.starts_with("-- output:") && !line.starts_with("-- order:"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let (_, code) = split_block(&source);
+    let text = code.trim_end_matches('\n');
     let output = program_output(path, &source);
     format!("```text\n{text}\n```\n\noutput:\n```text\n{output}\n```")
 }
@@ -256,12 +258,7 @@ pub fn sync_output_comments() -> bool {
     for (_, file) in example_files() {
         let source = read_normalized(&file);
         let output = program_output(&file, &source);
-        let comment = output
-            .lines()
-            .map(|line| format!("-- output: {line}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let updated = replace_output_comment(&source, &comment);
+        let updated = replace_output_comment(&source, &output);
         if updated != source {
             fs::write(&file, updated).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
             changed = true;
@@ -273,35 +270,42 @@ pub fn sync_output_comments() -> bool {
 /// Replace the first run of `-- output:` lines in `source` with `comment`;
 /// append `comment` (on a fresh line) when there is no such line.  The
 /// result always ends with a newline.
-fn replace_output_comment(source: &str, comment: &str) -> String {
-    let lines: Vec<&str> = source.lines().collect();
-    let start = lines.iter().position(|line| line.starts_with("-- output:"));
-    let mut out = String::with_capacity(source.len() + comment.len() + 2);
-    match start {
-        Some(start) => {
-            let mut end = start;
-            while end < lines.len() && lines[end].starts_with("-- output:") {
-                end += 1;
-            }
-            for line in &lines[..start] {
-                out.push_str(line);
-                out.push('\n');
-            }
-            out.push_str(comment);
-            out.push('\n');
-            for line in &lines[end..] {
-                out.push_str(line);
-                out.push('\n');
+fn replace_output_comment(source: &str, output: &str) -> String {
+    let (interior, code) = split_block(source);
+    let mut out = String::with_capacity(source.len() + output.len() + 16);
+    out.push_str("@{\n");
+    let mut has_output = false;
+    if let Some(interior) = interior {
+        for dir in block_directives(interior) {
+            match dir {
+                Directive::Import { name, path } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("{name} = import \"{path}\""));
+                    out.push('\n');
+                }
+                Directive::Metadata { name, value: _ } if name == "output" => {
+                    out.push_str("  ");
+                    out.push_str(&format!("output = \"{output}\""));
+                    out.push('\n');
+                    has_output = true;
+                }
+                Directive::Metadata { name, value } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("{name} = \"{value}\""));
+                    out.push('\n');
+                }
             }
         }
-        None => {
-            out.push_str(source);
-            if !source.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(comment);
-            out.push('\n');
-        }
+    }
+    if !has_output {
+        out.push_str("  ");
+        out.push_str(&format!("output = \"{output}\""));
+        out.push('\n');
+    }
+    out.push_str("@}\n");
+    out.push_str(code.trim_start_matches('\n'));
+    if !out.ends_with('\n') {
+        out.push('\n');
     }
     out
 }

@@ -1,5 +1,7 @@
--- order: 5
-@import "math.lichen" as math
-@import "geometry.lichen" as geo
+@{
+  order = "5"
+  math = import "math.lichen"
+  geo = import "geometry.lichen"
+  output = "(42, 12): <Int, Int>"
+@}
 (math 41, geo 5)
--- output: (42, 12): <Int, Int>
