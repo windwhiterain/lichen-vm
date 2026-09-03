@@ -18,6 +18,7 @@
 
 pub mod ast;
 pub mod compile;
+pub mod compute;
 pub mod diag;
 pub mod lex;
 pub mod package;
@@ -105,7 +106,12 @@ pub fn compile_with_imports_at(
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
-    let build = Checker::<LangProgram>::build_in_attr(ir, registry, persp_attr_ext());
+    let build = Checker::<LangProgram>::build_in_attr_native(
+        ir,
+        registry,
+        persp_attr_ext(),
+        compute::native_registry(),
+    );
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
     // message carries no `?a` journey — the user inspects an expression's

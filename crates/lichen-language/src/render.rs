@@ -22,21 +22,21 @@
 //! ```
 //!
 //! Both printers are generic over the value vocabulary ([`ValueType`]), so an
-//! *extended* union — a crate that re-splices `HighProgramValue` with its own
-//! variants via `extend_HighProgramValue!` — renders with the same machinery;
+//! *extended* union — a crate that re-splices `LangValue` with its own
+//! variants via `extend_LangValue!` — renders with the same machinery;
 //! the extension's own variants render through the hook the printers carry
 //! ([`TypePrinter::new_with_ext`], [`ValuePrinter::new_with_ext`]).
 
 use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
-use lichen_highlevel::program::{HighProgram, HighProgramValue, ValueType};
+use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
 use crate::diag::Diag;
-use crate::program::LangProgram;
+use crate::program::{LangProgram, LangValue};
 
 // A rendering hook for extension vocabularies: an extension value → its
 // spelling, or `None` when the value is not the extension’s to name.  The
@@ -1028,8 +1028,8 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
         ),
         DiagKind::IndexOutOfBounds => {
             let (
-                Some(HighProgramValue::LowValue(LowValue::USize(index))),
-                Some(HighProgramValue::LowValue(LowValue::USize(length))),
+                Some(LangValue::LowValue(LowValue::USize(index))),
+                Some(LangValue::LowValue(LowValue::USize(length))),
             ) = (d.value_a, d.value_b)
             else {
                 return "index out of bounds".to_string();
@@ -1043,8 +1043,8 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
         }
         DiagKind::Assert => {
             let value = match d.value_a {
-                Some(HighProgramValue::LowValue(LowValue::USize(n))) => n.to_string(),
-                Some(HighProgramValue::LowValue(LowValue::None)) => "none".to_string(),
+                Some(LangValue::LowValue(LowValue::USize(n))) => n.to_string(),
+                Some(LangValue::LowValue(LowValue::None)) => "none".to_string(),
                 Some(other) => format!("{other:?}"),
                 None => "—".to_string(),
             };

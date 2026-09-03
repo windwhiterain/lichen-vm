@@ -38,6 +38,7 @@ use lichen_utils::extend::AsEnum;
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
+use crate::native::{no_native_ext, NativeExt};
 use crate::program::{HighProgram, LiteralCtx, LiteralExt, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
@@ -63,6 +64,12 @@ where
     /// concrete attribute — it asks this registry for the `AttrExt` and
     /// calls through it.
     attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+    /// The native-operator registry: maps a callee's type to the
+    /// `NativeExt` that lowers it (see [`crate::native`]).  The no-op default
+    /// keeps every `Apply` an ordinary function application; a program with
+    /// native operators (e.g. `lichen-compute`'s `jit`/`launch`) supplies a
+    /// registry that recognises its operator types.
+    native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
     scopes: Vec<HashMap<ExprId, Binding>>,
     /// The lexical function stack: one `(id, depth)` entry per enclosing
     /// lambda whose body is being compiled, innermost last — `depth` is the
@@ -206,7 +213,7 @@ where
     /// Compile an IR with a fresh private registry and no attribute
     /// extension (a program whose schemas carry no attribute is unaffected).
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
-        Self::build_with(ir, Module::new(), Self::no_attr_ext())
+        Self::build_with(ir, Module::new(), Self::no_attr_ext(), no_native_ext())
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
@@ -214,7 +221,7 @@ where
     /// leaves through a `PackageStore`.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, Self::no_attr_ext())
+        Self::build_with(ir, module, Self::no_attr_ext(), no_native_ext())
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry — the
@@ -227,7 +234,21 @@ where
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext)
+        Self::build_with(ir, module, attr_ext, no_native_ext())
+    }
+
+    /// [`Self::build_in_attr`] with a native-operator registry — the entry
+    /// point for a program with injected native operators (such as
+    /// `lichen-compute`).  `native_ext` maps a callee's type to the
+    /// `NativeExt` that lowers it, or `None` to keep every `Apply` ordinary.
+    pub fn build_in_attr_native(
+        ir: IR<P::Attr, P::Literal>,
+        registry: Arc<RwLock<Registry<P>>>,
+        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
+    ) -> Build<P> {
+        let module = Registry::new_module(&registry);
+        Self::build_with(ir, module, attr_ext, native_ext)
     }
 
     /// The no-op registry of a program with no attribute extension: no schema
@@ -242,6 +263,7 @@ where
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
     ) -> Build<P> {
         // The lowlevel's default application guard (10k nested calls) sits
         // below what a thread stack survives once the checker's per-call
@@ -269,6 +291,7 @@ where
             module,
             current_block: root_block,
             attr_ext,
+            native_ext,
             scopes: Vec::new(),
             function_stack: Vec::new(),
             term: vec![None; n],
@@ -461,12 +484,19 @@ where
 
     /// A fresh, unbound type cell (a parameterized node — evaluating it
     /// yields the lazy marker, never a panic).
-    fn fresh_cell(&mut self) -> NodeId {
+    pub fn fresh_cell(&mut self) -> NodeId {
         self.alloc_node(
             self.current_block,
             None,
             Some(P::Value::from(LowValue::Parameterized)),
         )
+    }
+
+    /// A plain value node in the current block — the way a native operator
+    /// extension builds a custom value (e.g. `Kernel`/`LaunchTarget`) without
+    /// an operation.
+    pub fn value_node(&mut self, value: P::Value) -> NodeId {
+        self.alloc_node(self.current_block, None, Some(value))
     }
 
     pub fn array_node(&mut self, block: BlockId, ids: &[NodeId]) -> NodeId {
@@ -630,6 +660,20 @@ where
             root = parent;
         }
         self.module.nodes[root].value
+    }
+
+    /// The canonical universe node `[Type, ↺]` (`Type : Type`) — the kind slip a
+    /// type expression's kind slot closes on (`[marker, Type]`).  Native
+    /// operator extensions build type expressions with it.
+    pub fn type_expr_node(&self) -> NodeId {
+        self.type_expr
+    }
+
+    /// The canonical, shared `[int, Type]` type expression — the type of every
+    /// int value.  A native operator extension (e.g. `jit`) compares a
+    /// function's signature against it.
+    pub fn int_type_node(&self) -> NodeId {
+        self.int_type
     }
 
     // --- the check -------------------------------------------------------
@@ -1201,6 +1245,30 @@ where
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
         let function_ty = self.ty[function].unwrap();
+        // Native-operator hook: an `Apply` whose callee's *type* is a native
+        // operator type is lowered by the extension (which emits a program
+        // operator and does that operator's own type check) instead of a
+        // runtime function apply.  The callee and argument are already
+        // compiled; the extension receives their value/type nodes.
+        if let Some(native) = self
+            .class_value(function_ty)
+            .and_then(|ty_value| (self.native_ext)(&ty_value))
+        {
+            let native_apply = native.check_apply(
+                self,
+                e,
+                function_value,
+                function_ty,
+                argument_value,
+                argument_type,
+                argument,
+                self.ir[e].span,
+            );
+            self.term[e] = Some(native_apply.node);
+            self.val[e] = native_apply.val;
+            self.ty[e] = Some(native_apply.ty);
+            return native_apply.node;
+        }
         let concrete = self.module.nodes[function_ty].value.is_some_and(|value| {
             matches!(
                 value.as_enum(),

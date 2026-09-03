@@ -12,13 +12,13 @@ fn gcd_run(values: &[usize]) -> usize {
             let node = module.add_node(
                 block,
                 None,
-                Some(HighProgramValue::from(LowValue::USize(n))),
+                Some(LangValue::from(LowValue::USize(n))),
             );
             ArrayItem::new(AnyNodeId::Dynamic(node))
         })
         .collect();
     let array = module.alloc_array(&items, block);
-    let operand = HighProgramValue::from(LowValue::Array(array));
+    let operand = LangValue::from(LowValue::Array(array));
     let out = LangOperator::GcdOp(GcdOp::Gcd).run(operand, block, &mut module);
     let Some(LowValue::USize(n)) = out.as_enum() else {
         panic!("Gcd must evaluate to a USize meet")

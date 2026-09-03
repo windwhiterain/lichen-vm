@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lichen_highlevel::program::{HighProgramValue, TypeOperator, TypeValue};
+use lichen_highlevel::program::{TypeOperator, TypeValue};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, Program, StaticFunction,
     StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode, StaticOperation,
@@ -35,7 +35,7 @@ use lichen_lowlevel::{
 };
 use sha2::Digest as _;
 
-use crate::program::{GcdOp, LangOperator, LangProgram};
+use crate::program::{GcdOp, LangOperator, LangProgram, LangValue};
 
 /// The content hash of an artifact — 32 bytes of SHA-256.
 pub type Hash = [u8; 32];
@@ -83,7 +83,7 @@ pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
 // ---------------------------------------------------------------------------
 
 /// The payload alignment of the frozen arena: array item slices (the only
-/// payload kind of this vocabulary — `HighProgramValue` carries no ext
+/// payload kind of this vocabulary — `LangValue` carries no ext
 /// handle variants).  `StaticModule::from_module` lays out payloads aligned
 /// to `max(align_of::<ArrayItem>, P::Value::alignment())`; for the
 /// highlevel vocabulary that maximum is `align_of::<ArrayItem>()`.
@@ -239,7 +239,7 @@ where
 impl ArtifactCodec<LangProgram> for HighProgramCodec {
     fn write_value(
         w: &mut Writer,
-        value: HighProgramValue,
+        value: LangValue,
         modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     ) {
         write_value(w, value, modules);
@@ -251,7 +251,7 @@ impl ArtifactCodec<LangProgram> for HighProgramCodec {
         self_arena: &[u8],
         self_base: *const u8,
         modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-    ) -> Result<HighProgramValue, String> {
+    ) -> Result<LangValue, String> {
         read_value(r, self_key, self_arena, self_base, modules)
     }
 
@@ -266,15 +266,15 @@ impl ArtifactCodec<LangProgram> for HighProgramCodec {
 
 fn write_value(
     w: &mut Writer,
-    value: HighProgramValue,
+    value: LangValue,
     modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
 ) {
     match value {
-        HighProgramValue::LowValue(LowValue::USize(n)) => {
+        LangValue::LowValue(LowValue::USize(n)) => {
             w.u8(0);
             w.u64(n as u64);
         }
-        HighProgramValue::LowValue(LowValue::Array(AnyHandle::Static(handle))) => {
+        LangValue::LowValue(LowValue::Array(AnyHandle::Static(handle))) => {
             w.u8(1);
             w.u64(handle.module.as_raw());
             let module = &modules[&handle.module];
@@ -282,10 +282,10 @@ fn write_value(
             w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
             w.u64(slice.len() as u64);
         }
-        HighProgramValue::LowValue(LowValue::Array(AnyHandle::Dynamic(_))) => {
+        LangValue::LowValue(LowValue::Array(AnyHandle::Dynamic(_))) => {
             panic!("serializing a frozen module that carries a dynamic array payload")
         }
-        HighProgramValue::LowValue(LowValue::Table(AnyHandle::Static(handle))) => {
+        LangValue::LowValue(LowValue::Table(AnyHandle::Static(handle))) => {
             w.u8(12);
             w.u64(handle.module.as_raw());
             let module = &modules[&handle.module];
@@ -293,29 +293,35 @@ fn write_value(
             w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
             w.u64(slice.len() as u64);
         }
-        HighProgramValue::LowValue(LowValue::Table(AnyHandle::Dynamic(_))) => {
+        LangValue::LowValue(LowValue::Table(AnyHandle::Dynamic(_))) => {
             panic!("serializing a frozen module that carries a dynamic table payload")
         }
-        HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Static(function))) => {
+        LangValue::LowValue(LowValue::Function(AnyFunctionId::Static(function))) => {
             w.u8(2);
             w.u64(function.module.as_raw());
             w.u64(function.index.0 as u64);
         }
-        HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(_))) => {
+        LangValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(_))) => {
             panic!("serializing a frozen module that carries a dynamic function ref")
         }
-        HighProgramValue::LowValue(LowValue::None) => w.u8(3),
-        HighProgramValue::LowValue(LowValue::Parameterized) => w.u8(4),
-        HighProgramValue::TypeValue(TypeValue::TypeInt) => w.u8(5),
-        HighProgramValue::TypeValue(TypeValue::TypeType) => w.u8(6),
-        HighProgramValue::TypeValue(TypeValue::TypeFunction) => w.u8(7),
-        HighProgramValue::TypeValue(TypeValue::TypeTuple) => w.u8(8),
-        HighProgramValue::TypeValue(TypeValue::TypeArray) => w.u8(9),
-        HighProgramValue::TypeValue(TypeValue::TypeStruct) => w.u8(10),
-        HighProgramValue::TypeValue(TypeValue::TypeTable) => w.u8(13),
-        HighProgramValue::TypeValue(TypeValue::TypeId(n)) => {
+        LangValue::LowValue(LowValue::None) => w.u8(3),
+        LangValue::LowValue(LowValue::Parameterized) => w.u8(4),
+        LangValue::TypeValue(TypeValue::TypeInt) => w.u8(5),
+        LangValue::TypeValue(TypeValue::TypeType) => w.u8(6),
+        LangValue::TypeValue(TypeValue::TypeFunction) => w.u8(7),
+        LangValue::TypeValue(TypeValue::TypeTuple) => w.u8(8),
+        LangValue::TypeValue(TypeValue::TypeArray) => w.u8(9),
+        LangValue::TypeValue(TypeValue::TypeStruct) => w.u8(10),
+        LangValue::TypeValue(TypeValue::TypeTable) => w.u8(13),
+        LangValue::TypeValue(TypeValue::TypeId(n)) => {
             w.u8(11);
             w.u64(n as u64);
+        }
+        // A compute value (a kernel artifact, a native operator, or the
+        // kernel/launch type markers) is runtime-only and never serialized
+        // into a frozen, persistent package.
+        LangValue::ComputeValue(_) => {
+            panic!("serializing a compute value (Kernel/Launch are runtime-only)")
         }
     }
 }
@@ -332,6 +338,9 @@ fn write_operator(w: &mut Writer, operator: LangOperator) {
         LangOperator::TypeOperator(TypeOperator::Leq) => w.u8(6),
         LangOperator::TypeOperator(TypeOperator::Eq) => w.u8(7),
         LangOperator::GcdOp(GcdOp::Gcd) => w.u8(9),
+        LangOperator::ComputeOperator(_) => {
+            panic!("serializing a compute operator (Jit/Launch) into a persistent package");
+        }
     }
 }
 
@@ -485,9 +494,9 @@ fn read_value(
     self_arena: &[u8],
     self_base: *const u8,
     modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-) -> Result<HighProgramValue, String> {
+) -> Result<LangValue, String> {
     Ok(match r.u8()? {
-        0 => HighProgramValue::LowValue(LowValue::USize(r.u64()? as usize)),
+        0 => LangValue::LowValue(LowValue::USize(r.u64()? as usize)),
         1 => {
             let owner = ModuleKey::from_raw(r.u64()?);
             let offset = r.u64()? as usize;
@@ -506,7 +515,7 @@ fn read_value(
                 return Err("artifact handle out of its arena's bounds".into());
             }
             let payload = unsafe { owner_base.add(offset) as *const ArrayItem };
-            HighProgramValue::LowValue(LowValue::Array(AnyHandle::Static(
+            LangValue::LowValue(LowValue::Array(AnyHandle::Static(
                 StaticHandle {
                     module: owner,
                     offset: std::ptr::slice_from_raw_parts(payload, len),
@@ -516,15 +525,15 @@ fn read_value(
         2 => {
             let module = ModuleKey::from_raw(r.u64()?);
             let index = r.u64()? as usize;
-            HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Static(
+            LangValue::LowValue(LowValue::Function(AnyFunctionId::Static(
                 StaticFunctionRef {
                     module,
                     index: StaticFunctionId(index),
                 },
             )))
         }
-        3 => HighProgramValue::LowValue(LowValue::None),
-        4 => HighProgramValue::LowValue(LowValue::Parameterized),
+        3 => LangValue::LowValue(LowValue::None),
+        4 => LangValue::LowValue(LowValue::Parameterized),
         12 => {
             let owner = ModuleKey::from_raw(r.u64()?);
             let offset = r.u64()? as usize;
@@ -543,21 +552,21 @@ fn read_value(
                 return Err("artifact handle out of its arena's bounds".into());
             }
             let payload = unsafe { owner_base.add(offset) as *const TableItem };
-            HighProgramValue::LowValue(LowValue::Table(AnyHandle::Static(
+            LangValue::LowValue(LowValue::Table(AnyHandle::Static(
                 StaticHandle {
                     module: owner,
                     offset: std::ptr::slice_from_raw_parts(payload, len),
                 },
             )))
         }
-        5 => HighProgramValue::TypeValue(TypeValue::TypeInt),
-        6 => HighProgramValue::TypeValue(TypeValue::TypeType),
-        7 => HighProgramValue::TypeValue(TypeValue::TypeFunction),
-        8 => HighProgramValue::TypeValue(TypeValue::TypeTuple),
-        9 => HighProgramValue::TypeValue(TypeValue::TypeArray),
-        10 => HighProgramValue::TypeValue(TypeValue::TypeStruct),
-        13 => HighProgramValue::TypeValue(TypeValue::TypeTable),
-        11 => HighProgramValue::TypeValue(TypeValue::TypeId(r.u64()? as usize)),
+        5 => LangValue::TypeValue(TypeValue::TypeInt),
+        6 => LangValue::TypeValue(TypeValue::TypeType),
+        7 => LangValue::TypeValue(TypeValue::TypeFunction),
+        8 => LangValue::TypeValue(TypeValue::TypeTuple),
+        9 => LangValue::TypeValue(TypeValue::TypeArray),
+        10 => LangValue::TypeValue(TypeValue::TypeStruct),
+        13 => LangValue::TypeValue(TypeValue::TypeTable),
+        11 => LangValue::TypeValue(TypeValue::TypeId(r.u64()? as usize)),
         tag => return Err(format!("unknown artifact value tag {tag}")),
     })
 }

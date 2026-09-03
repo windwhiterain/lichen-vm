@@ -74,6 +74,12 @@ pub fn compile_with_imports(
                 &import.span,
             );
             frame.insert(import.name.clone(), id);
+            // A package's direct exports are bound as names too (the compute
+            // package's `jit`/`launch`/`Kernel`).
+            for (name, export) in &import.direct {
+                let id = compiler.alloc(ExprKind::Static { export: *export }, &import.span);
+                frame.insert(name.clone(), id);
+            }
         }
         compiler.scopes.push(frame);
     }

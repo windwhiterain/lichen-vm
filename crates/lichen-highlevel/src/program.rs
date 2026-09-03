@@ -528,20 +528,70 @@ pub trait HighProgram: Program {
 /// operators) and use `Module<ProgramImpl<V, MyOperator, MyAttr>>`; the
 /// runtime/static-module/registry machinery is then reusable with the extended
 /// operator set.
-#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
     A: AttrSpec = NoAttr,
     L = HighProgramLiteral,
->(PhantomData<(V, O, A, L)>);
+    G: GlobalExt = HighGlobalExt,
+>(
+    #[doc(hidden)] pub PhantomData<(V, O, A, L, G)>,
+);
 
-impl<V, O, A, L> Program for ProgramImpl<V, O, A, L>
+// The marker's `Debug`/`Clone`/`Copy`/`PartialEq` are structural: the single
+// `PhantomData` field is `Clone`/`Copy`/`Debug`/`PartialEq` for *any* type
+// argument, so the impls carry only the struct's own bounds and never demand
+// `G: Debug`/`G: Copy` — keeping `GlobalExt` flexible (it only promises
+// `Default`).
+impl<V, O, A, L, G> std::fmt::Debug for ProgramImpl<V, O, A, L, G>
+where
+    V: ValueType,
+    O: std::fmt::Debug + Copy + PartialEq,
+    A: AttrSpec,
+    G: GlobalExt,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProgramImpl").finish()
+    }
+}
+impl<V, O, A, L, G> Clone for ProgramImpl<V, O, A, L, G>
+where
+    V: ValueType,
+    O: std::fmt::Debug + Copy + PartialEq,
+    A: AttrSpec,
+    G: GlobalExt,
+{
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+impl<V, O, A, L, G> Copy for ProgramImpl<V, O, A, L, G>
+where
+    V: ValueType,
+    O: std::fmt::Debug + Copy + PartialEq,
+    A: AttrSpec,
+    G: GlobalExt,
+{
+}
+impl<V, O, A, L, G> PartialEq for ProgramImpl<V, O, A, L, G>
+where
+    V: ValueType,
+    O: std::fmt::Debug + Copy + PartialEq,
+    A: AttrSpec,
+    G: GlobalExt,
+{
+    fn eq(&self, _other: &Self) -> bool {
+        true
+    }
+}
+
+impl<V, O, A, L, G> Program for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     A: AttrSpec,
     L: std::fmt::Debug + Copy + PartialEq,
-    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L>>
+    G: GlobalExt,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>
         + From<LowOperator>
         + lichen_utils::extend::AsEnum<LowOperator>
         + std::fmt::Debug
@@ -550,16 +600,17 @@ where
 {
     type Value = V;
     type Operator = O;
-    type GlobalExt = HighGlobalExt;
+    type GlobalExt = G;
     type PackageMeta = HighPackageMeta;
 }
 
-impl<V, O, A, L> HighProgram for ProgramImpl<V, O, A, L>
+impl<V, O, A, L, G> HighProgram for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     A: AttrSpec,
-    L: LiteralExt<ProgramImpl<V, O, A, L>>,
-    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L>>
+    L: LiteralExt<ProgramImpl<V, O, A, L, G>>,
+    G: GlobalExt,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>
         + From<LowOperator>
         + lichen_utils::extend::AsEnum<LowOperator>
         + std::fmt::Debug

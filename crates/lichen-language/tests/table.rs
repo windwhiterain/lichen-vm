@@ -5,11 +5,12 @@
 //! (a miss, an unbound key dropped at build, key/value type mismatches).
 
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::program::HighProgramValue;
-use lichen_language::compile;
 use lichen_lowlevel::LowValue;
 
-fn evaluate(source: &str) -> HighProgramValue {
+use lichen_language::compile;
+use lichen_language::program::LangValue;
+
+fn evaluate(source: &str) -> LangValue {
     let report = compile(source);
     assert!(
         report.ok(),
@@ -21,8 +22,8 @@ fn evaluate(source: &str) -> HighProgramValue {
     module.evaluate_node_deep(root, None)
 }
 
-fn usize_of(value: &HighProgramValue) -> usize {
-    let HighProgramValue::LowValue(LowValue::USize(n)) = value else {
+fn usize_of(value: &LangValue) -> usize {
+    let LangValue::LowValue(LowValue::USize(n)) = value else {
         panic!("expected a usize value, got {value:?}");
     };
     *n

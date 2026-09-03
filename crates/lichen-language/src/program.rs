@@ -17,10 +17,14 @@ use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Span;
-use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeOperator, ValueType};
-use lichen_lowlevel::{LowOperator, LowValue, Module, NodeId, OperatorExt};
+use lichen_highlevel::program::{
+    HighGlobal, ProgramImpl, TypeOperator, TypeValue, ValueType,
+};
+use lichen_lowlevel::{LowOperator, LowValue, Module, NodeId, OperatorExt, ValueExt};
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
+
+use crate::compute::{ComputeOperator, ComputeValue};
 
 /// The language's own operators: the perspective combine.
 ///
@@ -36,8 +40,9 @@ pub enum GcdOp {
 }
 
 // The language program's operator vocabulary: a flat union of the
-// structural [`LowOperator`], the highlevel's [`TypeOperator`], and the
-// language's own [`GcdOp`] — each carried whole as one sibling variant.
+// structural [`LowOperator`], the highlevel's [`TypeOperator`], the
+// language's own [`GcdOp`], and the compute [`ComputeOperator`] — each carried
+// whole as one sibling variant.
 lichen_utils::enum_ext! {
     /// The language program's operator vocabulary.
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -46,6 +51,59 @@ lichen_utils::enum_ext! {
     + LowOperator as LowOperator;
     + TypeOperator as TypeOperator;
     + GcdOp as GcdOp;
+    + ComputeOperator as ComputeOperator;
+}
+
+lichen_utils::enum_ext! {
+    /// The language program's value vocabulary.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum LangValue {
+    }
+    + LowValue as LowValue;
+    + TypeValue as TypeValue;
+    + ComputeValue as ComputeValue;
+}
+
+impl ValueExt for LangValue {
+    fn is_handle(&self) -> bool {
+        false
+    }
+}
+
+// The compute vocabulary's only new type-constant marker is `TypeKernel`
+// (a kernel's type mirror is `[signature, [TypeKernel, Type]]`); every other
+// marker delegates to the highlevel type values.
+impl ValueType for LangValue {
+    fn int_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeInt)
+    }
+    fn type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeType)
+    }
+    fn function_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeFunction)
+    }
+    fn tuple_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeTuple)
+    }
+    fn array_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeArray)
+    }
+    fn type_struct_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeStruct)
+    }
+    fn table_type_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeTable)
+    }
+    fn type_id(&self) -> Option<usize> {
+        match self {
+            Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
+            _ => None,
+        }
+    }
+    fn type_id_value(n: usize) -> Self {
+        Self::TypeValue(TypeValue::TypeId(n))
+    }
 }
 
 /// The perspective attribute: a plain non-negative integer whose lattice is
@@ -62,9 +120,9 @@ pub struct Perspective;
 
 impl AttrSpec for Perspective {}
 
-/// The language's concrete program: `Value = HighProgramValue`,
+/// The language's concrete program: `Value = LangValue`,
 /// `Operator = LangOperator`, `Attr = Perspective`.
-pub type LangProgram = ProgramImpl<HighProgramValue, LangOperator, Perspective>;
+pub type LangProgram = ProgramImpl<LangValue, LangOperator, Perspective>;
 
 /// The attribute-extension registry for [`LangProgram`]: maps the
 /// `Perspective` marker to its lowering behavior.  The checker consults this
@@ -87,7 +145,7 @@ impl OperatorExt<LangProgram> for LangOperator {
     fn run(
         &self,
         operand: <LangProgram as lichen_lowlevel::Program>::Value,
-        _block: lichen_lowlevel::BlockId,
+        block: lichen_lowlevel::BlockId,
         module: &mut Module<LangProgram>,
     ) -> <LangProgram as lichen_lowlevel::Program>::Value {
         match self {
@@ -98,7 +156,7 @@ impl OperatorExt<LangProgram> for LangOperator {
             }
             LangOperator::TypeOperator(TypeOperator::Fresh) => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                HighProgramValue::type_id_value(id)
+                                LangValue::type_id_value(id)
             }
             LangOperator::TypeOperator(
                 TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq,
@@ -107,7 +165,7 @@ impl OperatorExt<LangProgram> for LangOperator {
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return HighProgramValue::from(LowValue::Parameterized);
+                    return LangValue::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
@@ -126,7 +184,7 @@ impl OperatorExt<LangProgram> for LangOperator {
                         _ => None,
                     })
                 else {
-                    return HighProgramValue::from(LowValue::Parameterized);
+                    return LangValue::from(LowValue::Parameterized);
                 };
                 let Some(right) = module
                     .node_value(operands[1].node)
@@ -136,20 +194,20 @@ impl OperatorExt<LangProgram> for LangOperator {
                         _ => None,
                     })
                 else {
-                    return HighProgramValue::from(LowValue::Parameterized);
+                    return LangValue::from(LowValue::Parameterized);
                 };
                 match self {
                     LangOperator::TypeOperator(TypeOperator::Add) => {
-                        HighProgramValue::from(LowValue::USize(left.wrapping_add(right)))
+                        LangValue::from(LowValue::USize(left.wrapping_add(right)))
                     }
                     LangOperator::TypeOperator(TypeOperator::Sub) => {
-                        HighProgramValue::from(LowValue::USize(left.wrapping_sub(right)))
+                        LangValue::from(LowValue::USize(left.wrapping_sub(right)))
                     }
                     LangOperator::TypeOperator(TypeOperator::Leq) => {
-                        HighProgramValue::from(LowValue::USize((left <= right) as usize))
+                        LangValue::from(LowValue::USize((left <= right) as usize))
                     }
                     LangOperator::TypeOperator(TypeOperator::Eq) => {
-                        HighProgramValue::from(LowValue::USize((left == right) as usize))
+                        LangValue::from(LowValue::USize((left == right) as usize))
                     }
                     _ => unreachable!("all binary operators are handled above"),
                 }
@@ -159,7 +217,7 @@ impl OperatorExt<LangProgram> for LangOperator {
                 // pre-padded with the missing value (`0`) by the checker.  A
                 // lazy operand (an unbound parameter) stays lazy.
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return HighProgramValue::from(LowValue::Parameterized);
+                    return LangValue::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("Gcd expects an operand array")
@@ -174,12 +232,13 @@ impl OperatorExt<LangProgram> for LangOperator {
                             _ => None,
                         })
                     else {
-                        return HighProgramValue::from(LowValue::Parameterized);
+                        return LangValue::from(LowValue::Parameterized);
                     };
                     acc = gcd(acc, n);
                 }
-                HighProgramValue::from(LowValue::USize(acc))
+                LangValue::from(LowValue::USize(acc))
             }
+            LangOperator::ComputeOperator(op) => op.run(operand, block, module),
         }
     }
 }

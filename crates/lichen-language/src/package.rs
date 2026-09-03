@@ -29,6 +29,11 @@ use crate::persist::{self, DeviceRegistry, Hash};
 use crate::preprocess::preprocess;
 use crate::program::LangProgram;
 
+/// The virtual path of the `lichen-compute` native package.  Imported as
+/// `compute.lichen`, it is served from a registered native module (see
+/// [`PackageStore::register_compute`]) rather than a source file on disk.
+const COMPUTE_PATH: &str = "compute.lichen";
+
 /// A loaded package: the path, its registry key, and the static ref to the
 /// exported final `[value, type]` pair (the package's final expression).
 #[derive(Clone, Debug)]
@@ -36,6 +41,10 @@ pub struct PackageHandle {
     pub path: PathBuf,
     pub key: ModuleKey,
     pub export: StaticNodeId,
+    /// Extra `(name, export)` bindings a package exposes directly, so `import`
+    /// can bind them as names (the compute package's `jit`/`launch`/`Kernel`).
+    /// Empty for an ordinary package.
+    pub direct: Vec<(String, StaticNodeId)>,
 }
 
 /// The process-local package store: a shared registry plus a path cache,
@@ -50,6 +59,11 @@ pub struct PackageStore {
     /// The in-flight load stack (canonical paths) — a package re-entered
     /// while still loading closes an import cycle.
     loading: Vec<PathBuf>,
+    /// Native virtual packages — a package name served from a registered
+    /// native module (the `lichen-compute` package) instead of a disk file,
+    /// keyed by the import path (`compute.lichen`).  See
+    /// [`Self::register_compute`].
+    native: HashMap<PathBuf, PackageHandle>,
     /// The device's cache directory (`None` = in-memory only).
     cache_dir: Option<PathBuf>,
     device: Option<DeviceRegistry>,
@@ -74,6 +88,7 @@ impl PackageStore {
             registry,
             packages: HashMap::new(),
             loading: Vec::new(),
+            native: HashMap::new(),
             cache_dir: None,
             device: None,
             next_key: 0,
@@ -121,6 +136,17 @@ impl PackageStore {
     /// before this package compiles, so its refs are absolute from birth
     /// and the freeze below sees their keys already registered.
     pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag>> {
+        // The `lichen-compute` native package: served from a registered
+        // module, not a disk file.
+        if path.file_name().is_some_and(|n| n == "compute.lichen") {
+            if let Some(handle) = self.native.get(Path::new(COMPUTE_PATH)) {
+                return Ok(handle.clone());
+            }
+            let handle = self
+                .register_compute()
+                .map_err(|e| vec![Diag::new(Stage::Preprocess, (0, 0), e)])?;
+            return Ok(handle);
+        }
         let canonical = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
             Err(e) => {
@@ -149,6 +175,56 @@ impl PackageStore {
         self.loading.pop();
         let handle = result?;
         self.packages.insert(canonical, handle.clone());
+        Ok(handle)
+    }
+
+    /// Register the `lichen-compute` native package: build its frozen module,
+    /// file it in the shared registry under a device key, and remember the
+    /// handle so `compute.lichen` imports are served from here (no disk file).
+    fn register_compute(&mut self) -> Result<PackageHandle, String> {
+        let (module, exports) = crate::compute::build_compute_module();
+        let hash = persist::artifact_hash(b"lichen-compute native package", &[]);
+        let (key, _is_new) = self.alloc_key(hash);
+        let freeze = self
+            .registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .freeze_mapped(&module, key, hash);
+        let export = StaticNodeId {
+            module: freeze.key,
+            index: freeze.node_map[&exports.export_pair],
+        };
+        // The three direct exports, for name binding (which is what the checker
+        // needs to detect a native callee statically).
+        let direct = [
+            ("jit", exports.jit),
+            ("launch", exports.launch),
+            ("Kernel", exports.kernel),
+        ]
+        .into_iter()
+        .map(|(name, node)| (name.to_string(), StaticNodeId {
+            module: freeze.key,
+            index: freeze.node_map[&node],
+        }))
+        .collect();
+        self.registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_package_meta(
+                freeze.key,
+                lichen_highlevel::program::HighPackageMeta {
+                    export: Some(export),
+                },
+            );
+        let handle = PackageHandle {
+            path: PathBuf::from(COMPUTE_PATH),
+            key: freeze.key,
+            export,
+            direct,
+        };
+        self.native
+            .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
+        self.compiled += 1;
         Ok(handle)
     }
 
@@ -199,6 +275,7 @@ impl PackageStore {
                         path: canonical.to_path_buf(),
                         key,
                         export,
+                        direct: Vec::new(),
                     }));
                 }
                 Some(_) => panic!(
@@ -235,6 +312,7 @@ impl PackageStore {
             path: canonical.to_path_buf(),
             key,
             export,
+            direct: Vec::new(),
         }))
     }
 
@@ -381,6 +459,7 @@ impl PackageStore {
             path: canonical.to_path_buf(),
             key: freeze.key,
             export,
+            direct: Vec::new(),
         })
     }
 

@@ -42,6 +42,10 @@ pub struct ResolvedImport {
     pub export: StaticNodeId,
     /// The canonical path of the imported package.
     pub path: PathBuf,
+    /// Extra `(name, export)` bindings the package exposes directly (the
+    /// compute package's `jit`/`launch`/`Kernel`), bound as names alongside
+    /// the import's own `name`.
+    pub direct: Vec<(String, StaticNodeId)>,
 }
 
 /// The preprocessor output: the borrowed code (a suffix of the source), the
@@ -114,6 +118,7 @@ pub fn preprocess<'a>(
                                     span,
                                     export: handle.export,
                                     path: handle.path,
+                                    direct: handle.direct,
                                 }),
                                 Err(mut diag) => {
                                     diag.span = Some(span);
