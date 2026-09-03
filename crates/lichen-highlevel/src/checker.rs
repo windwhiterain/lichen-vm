@@ -38,7 +38,7 @@ use lichen_utils::extend::AsEnum;
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
-use crate::program::{HighProgram, TypeOperator, ValueType};
+use crate::program::{HighProgram, LiteralCtx, LiteralExt, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -55,7 +55,7 @@ pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
 {
-    ir: IR<P::Value, P::Attr>,
+    ir: IR<P::Attr, P::Literal>,
     module: Module<P>,
     pub current_block: BlockId,
     /// The attribute extension registry: maps an attribute marker
@@ -109,6 +109,19 @@ where
     /// diagnostics use to attribute a runtime parameter-check failure to the
     /// argument's source span (see [`ApplyEdge`]).
     apply_edges: HashMap<NodeId, ApplyEdge>,
+    /// The runtime-attribution edges: a node a runtime failure will
+    /// reference (an `Index`/`TableGet` operand, an assert condition) mapped
+    /// to its source span.  Recorded by the checker as it builds the
+    /// operation, so the diagnostic layer attributes a runtime error to the
+    /// *source* that built it without storing any span *on* the node — which
+    /// is what lets the lowlevel graph be freely shared.
+    node_edges: HashMap<NodeId, Span>,
+    /// The assert conditions that are *user-facing* — the explicit `assert`
+    /// expressions (not the generated array-bounds guard `check_index`
+    /// registers, which duplicates the index eval error).  The diagnostics
+    /// layer renders only these as `DiagKind::Assert`; a bounds guard fires
+    /// a separate `EvalError::Index`, so rendering both would double report.
+    user_asserts: HashSet<NodeId>,
     /// The value nodes of recursive bindings' functions, collected by
     /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates them before
     /// the definition pass (proving them concrete), so a recursive reference
@@ -154,7 +167,7 @@ pub struct Build<P: HighProgram>
 where
     P::Value: ValueType,
 {
-    pub ir: IR<P::Value, P::Attr>,
+    pub ir: IR<P::Attr, P::Literal>,
     pub module: Module<P>,
     pub term: Vec<Option<NodeId>>,
     pub val: Vec<Option<NodeId>>,
@@ -176,6 +189,12 @@ where
     /// The apply edges keyed by apply op node (see [`ApplyEdge`]) — the
     /// argument structure for attributing a runtime parameter-check failure.
     pub apply_edges: HashMap<NodeId, ApplyEdge>,
+    /// The runtime-attribution edges (see [`Checker::node_edges`]) — a runtime
+    /// failure's node mapped to the source span that built it.  No span is
+    /// stored on a node, so the graph is freely shareable.
+    pub node_edges: HashMap<NodeId, Span>,
+    /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
+    pub user_asserts: HashSet<NodeId>,
     pub ok: bool,
 }
 
@@ -186,14 +205,14 @@ where
 {
     /// Compile an IR with a fresh private registry and no attribute
     /// extension (a program whose schemas carry no attribute is unaffected).
-    pub fn build(ir: IR<P::Value, P::Attr>) -> Build<P> {
+    pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
         Self::build_with(ir, Module::new(), Self::no_attr_ext())
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
     /// registry — the entry point for importers that resolve [`ExprKind::Static`]
     /// leaves through a `PackageStore`.
-    pub fn build_in(ir: IR<P::Value, P::Attr>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
+    pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
         Self::build_with(ir, module, Self::no_attr_ext())
     }
@@ -203,7 +222,7 @@ where
     /// `Perspective`).  `attr_ext` maps an attribute marker to its lowering
     /// behaviour; the checker never names a concrete attribute.
     pub fn build_in_attr(
-        ir: IR<P::Value, P::Attr>,
+        ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
@@ -220,7 +239,7 @@ where
     }
 
     fn build_with(
-        ir: IR<P::Value, P::Attr>,
+        ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
@@ -260,6 +279,8 @@ where
             diary: Vec::new(),
             arrows: HashSet::new(),
             apply_edges: HashMap::new(),
+            node_edges: HashMap::new(),
+            user_asserts: HashSet::new(),
             recursive_func_nodes: Vec::new(),
             int_marker: NodeId::default(),
             type_marker: NodeId::default(),
@@ -374,6 +395,8 @@ where
             diary: checker.diary,
             arrows: checker.arrows,
             apply_edges: checker.apply_edges,
+            node_edges: checker.node_edges,
+            user_asserts: checker.user_asserts,
             ok,
         }
     }
@@ -556,7 +579,7 @@ where
             // attribute.
             ExprKind::Annotation { value, .. } => vec![value],
             // Leaf kinds — the annotation binds the slot directly.
-            ExprKind::Constant(_)
+            ExprKind::Literal(_)
             | ExprKind::Parameter
             | ExprKind::Placeholder
             | ExprKind::Static { .. } => Vec::new(),
@@ -823,61 +846,21 @@ where
             None
         };
         let pair = match self.ir[e].kind {
-            ExprKind::Constant(value) => {
-                // `Type` is the canonical universe node itself — `Type : Type`.
-                if value == P::Value::type_marker() {
-                    self.term[e] = Some(self.type_expr);
-                    self.val[e] = Some(self.type_marker);
-                    self.ty[e] = Some(self.type_expr);
-                    self.type_expr
-                } else if value == P::Value::int_marker() {
-                    // The int type constant: `[int, Type]` — its value is the
-                    // marker and its type is the universe, shared with every
-                    // literal's pair.
-                    self.term[e] = Some(self.int_type);
-                    self.val[e] = Some(self.int_marker);
-                    self.ty[e] = Some(self.type_expr);
-                    self.int_type
-                } else {
-                    // A literal: a fresh value node paired with its type from
-                    // the value→type mapping.  A type constant: a kind marker
-                    // or a nominal id — `[marker, Type]`, first-class like any
-                    // type.  The pre-installed markers are reused so the
-                    // shared type expressions are reached in place.
-                    let value_node = match value.as_enum() {
-                        Some(LowValue::USize(_)) => {
-                            self.alloc_node(self.current_block, None, Some(value))
-                        }
-                        None => {
-                            if value == P::Value::function_type_marker() {
-                                self.function_type_marker
-                            } else if value == P::Value::tuple_type_marker() {
-                                self.tuple_type_marker
-                            } else if value == P::Value::array_type_marker() {
-                                self.array_type_marker
-                            } else {
-                                self.alloc_node(self.current_block, None, Some(value))
-                            }
-                        }
-                        _ => unreachable!("only literals and type constants can be constants"),
-                    };
-                    let ty_value = value.type_of();
-                    let type_node = if ty_value == P::Value::int_marker() {
-                        self.int_type
-                    } else if ty_value == P::Value::type_marker() {
-                        self.type_expr
-                    } else {
-                        let marker = self
-                            .module
-                            .add_node(self.current_block, None, Some(ty_value));
-                        self.kind_expr(self.current_block, marker)
-                    };
-                    let pair = self.pair_of(value_node, type_node);
-                    self.term[e] = Some(pair);
-                    self.val[e] = Some(value_node);
-                    self.ty[e] = Some(type_node);
-                    pair
-                }
+            ExprKind::Literal(lit) => {
+                // A literal builds its `[value, type]` pair itself through
+                // its `LiteralExt::build` — the built-in int literal and
+                // type-constant literal each build their value and type
+                // nodes (referencing the prebuilt singleton exprs the
+                // context exposes); a custom literal builds any value and
+                // type pair, potentially referencing other exprs.  The
+                // checker records the pair and its two halves — `Type : Type`
+                // is built as the self-referential universe node, so it is
+                // not `[value, type]`.
+                let built = lit.build(self);
+                self.term[e] = Some(built.pair);
+                self.val[e] = Some(built.value);
+                self.ty[e] = Some(built.ty);
+                built.pair
             }
             ExprKind::Parameter => {
                 // A use of the parameter: the function's return expression
@@ -1361,6 +1344,9 @@ where
         );
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
+        if let Some(span) = self.ir[index].span {
+            self.node_edges.insert(index_value, span);
+        }
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1381,7 +1367,7 @@ where
             P::Operator::from(TypeOperator::Eq),
             Some(in_range_ops),
         );
-        self.register_assert(in_range);
+        self.register_assert(in_range, self.ir[e].span, false);
         let pair = self.pair_of(value_node, elem_cell);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
@@ -1420,6 +1406,9 @@ where
         if concrete && !self.is_positional_type(container_ty) {
             let error_index = self.module.unify_errors.len();
             self.module.unify_errors.push(UnifyError {
+                root_a: container_ty,
+                root_b: container_ty,
+                steps: Vec::new(),
                 a: container_ty,
                 b: container_ty,
                 value_a: self.module.nodes[container_ty].value,
@@ -1437,6 +1426,9 @@ where
             self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
+        if let Some(span) = self.ir[key].span {
+            self.node_edges.insert(key_value, span);
+        }
         let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1492,6 +1484,9 @@ where
         );
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
+        if let Some(span) = self.ir[key].span {
+            self.node_edges.insert(key_value, span);
+        }
         let ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1647,7 +1642,7 @@ where
         // The checked thing is a `USize`, so the assert names the value
         // node — element 0 of the pair — not the pair itself.
         let value = self.value_of(condition);
-        self.register_assert(value);
+        self.register_assert(value, self.ir[e].span, true);
         let pair = self.term[condition].unwrap();
         self.term[e] = Some(pair);
         self.val[e] = self.val[condition];
@@ -1658,8 +1653,18 @@ where
     /// Registers an assert condition: the module worklist entry plus, when
     /// a function body is being compiled, the current function's own list —
     /// the function owns it, so an apply clones it and re-checks the
-    /// instantiated condition against each call's argument.
-    fn register_assert(&mut self, condition: NodeId) {
+    /// instantiated condition against each call's argument.  `span` is
+    /// recorded as the runtime attribution edge for the condition node;
+    /// `user_facing` marks an explicit `assert` (rendered as a diagnostic) as
+    /// opposed to a generated guard (the array-bounds check, which duplicates
+    /// the index eval error and is not rendered).
+    fn register_assert(&mut self, condition: NodeId, span: Option<Span>, user_facing: bool) {
+        if let Some(span) = span {
+            self.node_edges.insert(condition, span);
+        }
+        if user_facing {
+            self.user_asserts.insert(condition);
+        }
         self.module.add_assert(condition);
         if let Some(function) = self.current_function() {
             self.module.functions[function].asserts.push(condition);
@@ -1810,10 +1815,11 @@ where
             let (key, value) = (chunk[0], chunk[1]);
             self.check_expr(key);
             self.check_expr(value);
-            pairs.push((
-                AnyNodeId::Dynamic(self.value_of(key)),
-                AnyNodeId::Dynamic(self.value_of(value)),
-            ));
+            let key_node = self.value_of(key);
+            if let Some(span) = self.ir[key].span {
+                self.node_edges.insert(key_node, span);
+            }
+            pairs.push((AnyNodeId::Dynamic(key_node), AnyNodeId::Dynamic(self.value_of(value))));
             self.check_unify(
                 self.ty[key].unwrap(),
                 key_ty,
@@ -1975,5 +1981,94 @@ where
             .rev()
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
+    }
+}
+
+impl<P: HighProgram> LiteralCtx<P> for Checker<P>
+where
+    P::Value: ValueType,
+    P::Operator: From<LowOperator> + From<TypeOperator>,
+{
+    /// Compile a referenced sub-expression — the way a literal references
+    /// another expr.
+    fn compile_sub(&mut self, e: ExprId) -> NodeId {
+        self.check_expr(e)
+    }
+
+    /// The value node for a raw value: a built-in type marker reuses the
+    /// checker's installed shared marker node, so the canonical type
+    /// expressions are reached in place; anything else allocates a node.
+    fn value_node(&mut self, value: P::Value) -> NodeId {
+        if value == P::Value::int_marker() {
+            self.int_marker
+        } else if value == P::Value::function_type_marker() {
+            self.function_type_marker
+        } else if value == P::Value::tuple_type_marker() {
+            self.tuple_type_marker
+        } else if value == P::Value::array_type_marker() {
+            self.array_type_marker
+        } else if value == P::Value::type_struct_marker() {
+            self.type_struct_marker
+        } else if value == P::Value::table_type_marker() {
+            self.table_type_marker
+        } else {
+            self.alloc_node(self.current_block, None, Some(value))
+        }
+    }
+
+    fn array_node(&mut self, ids: &[NodeId]) -> NodeId {
+        Checker::array_node(self, self.current_block, ids)
+    }
+
+    fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId {
+        Checker::op_node(self, self.current_block, op, operand)
+    }
+
+    fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId {
+        Checker::pair_of(self, value, ty)
+    }
+
+    fn kind_expr(&mut self, marker: NodeId) -> NodeId {
+        Checker::kind_expr(self, self.current_block, marker)
+    }
+
+    fn fresh(&mut self) -> NodeId {
+        Checker::fresh_cell(self)
+    }
+
+    fn universe(&self) -> NodeId {
+        self.type_expr
+    }
+
+    fn int_type(&self) -> NodeId {
+        self.int_type
+    }
+
+    fn int_marker_node(&self) -> NodeId {
+        self.int_marker
+    }
+
+    fn type_marker_node(&self) -> NodeId {
+        self.type_marker
+    }
+
+    fn function_type_marker_node(&self) -> NodeId {
+        self.function_type_marker
+    }
+
+    fn tuple_type_marker_node(&self) -> NodeId {
+        self.tuple_type_marker
+    }
+
+    fn array_type_marker_node(&self) -> NodeId {
+        self.array_type_marker
+    }
+
+    fn type_struct_marker_node(&self) -> NodeId {
+        self.type_struct_marker
+    }
+
+    fn table_type_marker_node(&self) -> NodeId {
+        self.table_type_marker
     }
 }

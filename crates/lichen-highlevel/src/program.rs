@@ -14,12 +14,13 @@
 use std::marker::PhantomData;
 
 use lichen_lowlevel::{
-    BlockId, GlobalExt, LowOperator, LowValue, Module, OperatorExt, Program, ValueExt,
+    BlockId, GlobalExt, LowOperator, LowValue, Module, NodeId, OperatorExt, Program, ValueExt,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
 use crate::attr::{AttrSpec, NoAttr};
+use crate::ir::ExprId;
 
 /// The fresh-nominal-type-id state — one extension component of
 /// [`HighGlobalExt`].
@@ -85,13 +86,180 @@ pub struct HighPackageMeta {
     pub export: Option<lichen_lowlevel::StaticNodeId>,
 }
 
+/// The result of building a literal: the compiled `[value, type]` pair plus
+/// its value and type nodes.  The checker records all three (the value and
+/// type are read for the surrounding constructs), and the pair is the
+/// expression's compiled term.  `Type : Type` is the one case where the pair
+/// *is* the value's universe node (self-referential), not `[value, type]` —
+/// so a literal returns all three rather than assuming `pair = [value, ty]`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LiteralBuild {
+    pub pair: NodeId,
+    pub value: NodeId,
+    pub ty: NodeId,
+}
+
+/// The build context a literal sees — the minimal, program-generic subset of
+/// the checker's node-building surface.  The checker implements this; a
+/// literal's [`LiteralExt::build`] uses it to construct its value and type
+/// nodes and to reference *other exprs* (through [`Self::compile_sub`]).
+pub trait LiteralCtx<P: Program> {
+    /// Compile a referenced sub-expression to its compiled pair node — the
+    /// way a literal references another expr.
+    fn compile_sub(&mut self, e: ExprId) -> NodeId;
+    /// The value node for a raw value: a built-in type marker reuses the
+    /// checker's installed shared marker node; anything else allocates a node.
+    fn value_node(&mut self, value: P::Value) -> NodeId;
+    /// An array node of the given element nodes.
+    fn array_node(&mut self, ids: &[NodeId]) -> NodeId;
+    /// An operation node with the given operator and optional operand.
+    fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
+    /// A `[value, type]` pair node.
+    fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
+    /// A kind expression `[marker, Type]`.
+    fn kind_expr(&mut self, marker: NodeId) -> NodeId;
+    /// A fresh unbound type cell.
+    fn fresh(&mut self) -> NodeId;
+    /// The canonical universe node `[Type, ↺]` (`Type : Type`).  Referenced,
+    /// not rebuilt — the prebuilt composite that must be shared, because
+    /// cloning the self-referential universe breaks unification.
+    fn universe(&self) -> NodeId;
+    /// The canonical, shared `[int, Type]` type expression — the type of every
+    /// int value and the pair of the `Int` type constant.  Referenced, not
+    /// rebuilt: a composite type with a single semantic identity is shared
+    /// across occurrences, since diagnostics are attributed by the lowlevel
+    /// unify trace and the checker's edges (never by span-on-node).
+    fn int_type(&self) -> NodeId;
+    /// The installed `int` marker node.
+    fn int_marker_node(&self) -> NodeId;
+    /// The installed `Type` marker node.
+    fn type_marker_node(&self) -> NodeId;
+    /// The installed `FunctionType` kind marker node.
+    fn function_type_marker_node(&self) -> NodeId;
+    /// The installed `TupleType` kind marker node.
+    fn tuple_type_marker_node(&self) -> NodeId;
+    /// The installed `ArrayType` kind marker node.
+    fn array_type_marker_node(&self) -> NodeId;
+    /// The installed `TypeStruct` kind marker node.
+    fn type_struct_marker_node(&self) -> NodeId;
+    /// The installed `TypeTable` kind marker node.
+    fn table_type_marker_node(&self) -> NodeId;
+}
+
+/// A literal — the operator-like value-extension point: any struct that
+/// builds a `value : type` pair (potentially referencing other exprs) through
+/// a [`LiteralCtx`].  A literal's [`LiteralExt::build`] is the single creation
+/// function: it decides the value node and the type node (referencing the
+/// prebuilt singleton exprs the context exposes, and other exprs by id).
+///
+/// A downstream composes its literal vocabulary with
+/// [`lichen_utils::enum_ext!`](`lichen_utils::extend`), carrying the
+/// built-in literal structs and its own literal structs as sibling variants,
+/// then implements this trait for the composed enum (delegating each variant
+/// to its own build) and passes the enum as the program's `Literal` type.
+pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
+    /// Build this literal's value and type nodes (and their pair).
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild;
+}
+
+/// The built-in int literal: stores just the value.  `build` references the
+/// canonical, shared `[int, Type]` type expression for the type, so the
+/// composite is never duplicated per occurrence.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct IntLit(pub usize);
+
+impl<P> LiteralExt<P> for IntLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+        let value_node = ctx.value_node(P::Value::from(LowValue::USize(self.0)));
+        let ty = ctx.int_type();
+        let pair = ctx.pair(value_node, ty);
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
+/// The built-in `Int` type constant — `Int : Type`.  A unit literal (the type
+/// constant carries no data).  `build` produces the value node `int_marker`
+/// and its type the canonical universe; the pair is the shared `[int, Type]`
+/// type expression.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct IntTypeLit;
+
+impl<P> LiteralExt<P> for IntTypeLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+        let value_node = ctx.int_marker_node();
+        let ty = ctx.universe();
+        let pair = ctx.int_type();
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
+/// The built-in `Type` type constant — `Type : Type`.  A unit literal.  Its
+/// pair is the canonical self-referential universe node (the single prebuilt
+/// composite that must be shared, not rebuilt).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct TypeTypeLit;
+
+impl<P> LiteralExt<P> for TypeTypeLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+        LiteralBuild {
+            pair: ctx.universe(),
+            value: ctx.type_marker_node(),
+            ty: ctx.universe(),
+        }
+    }
+}
+
+// The highlevel program's literal vocabulary: the built-in int literal and the
+// `Int`/`Type` type-constant literals, as sibling carry variants — the same
+// composition a downstream uses for its own literal structs.  Each type
+// constant has its own literal; each `build` rebuilds its value/type nodes
+// fresh per occurrence.
+lichen_utils::enum_ext! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum HighProgramLiteral {
+    }
+    + IntLit as Int;
+    + IntTypeLit as IntType;
+    + TypeTypeLit as TypeType;
+}
+
+impl<P> LiteralExt<P> for HighProgramLiteral
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+        match self {
+            HighProgramLiteral::Int(lit) => lit.build(ctx),
+            HighProgramLiteral::IntType(lit) => lit.build(ctx),
+            HighProgramLiteral::TypeType(lit) => lit.build(ctx),
+        }
+    }
+}
+
 /// The highlevel's own value extension — a plain enum of the type constants,
 /// provided whole for the compositions below (and for a language crate
 /// composing its own vocabulary from [`LowValue`] + this).
 ///
 /// Every variant is a *type constant*: its own type is the canonical
-/// universe (`Type : Type`), which makes the composed vocabulary's
-/// `ValueType::type_of` a one-arm answer for this whole branch.
+/// universe (`Type : Type`), which makes the composed vocabulary's literal
+/// build a one-arm answer for this whole branch.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TypeValue {
     /// The `int` type constant.
@@ -167,11 +335,6 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     /// The kind marker of table type expressions — the shape is
     /// `[key type, value type]`.
     fn table_type_marker() -> Self;
-    /// The value→type mapping: what type this value, used as a constant,
-    /// pairs with.  `USize(_)` → the int marker; every type constant → the
-    /// `Type` marker.  The checker only asks for constants (an int literal
-    /// or a type value).
-    fn type_of(&self) -> Self;
     /// The nominal id of a struct type value, if this is one.
     fn type_id(&self) -> Option<usize>;
     /// A nominal type id value — what the checker's `Fresh` operator yields.
@@ -199,20 +362,6 @@ impl ValueType for HighProgramValue {
     }
     fn table_type_marker() -> Self {
         Self::TypeValue(TypeValue::TypeTable)
-    }
-    fn type_of(&self) -> Self {
-        match self {
-            // Every type constant — the whole TypeValue branch — has the
-            // canonical universe as its type.
-            Self::TypeValue(_) => Self::type_marker(),
-            // Int literals are structural values.
-            Self::LowValue(LowValue::USize(_)) => Self::int_marker(),
-            // Array, Function, None, Parameterized are built by other
-            // expression kinds — the checker never asks their type.
-            Self::LowValue(_) => {
-                unreachable!("a structural non-USize value is not a constant")
-            }
-        }
     }
     fn type_id(&self) -> Option<usize> {
         match self {
@@ -268,8 +417,17 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType> OperatorExt<ProgramImpl<V, HighProgramOperator, NoAttr>> for HighProgramOperator {
-    fn run(&self, operand: V, _block: BlockId, module: &mut Module<ProgramImpl<V, HighProgramOperator, NoAttr>>) -> V {
+impl<V: ValueType, L> OperatorExt<ProgramImpl<V, HighProgramOperator, NoAttr, L>>
+    for HighProgramOperator
+where
+    L: std::fmt::Debug + Copy + PartialEq,
+{
+    fn run(
+        &self,
+        operand: V,
+        _block: BlockId,
+        module: &mut Module<ProgramImpl<V, HighProgramOperator, NoAttr, L>>,
+    ) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
             // them through `AsEnum` before falling through.
@@ -352,10 +510,16 @@ pub trait HighProgram: Program {
     /// no attribute extension — while a language plugs in its own (e.g.
     /// `Perspective`).
     type Attr: AttrSpec;
+    /// The literal vocabulary — a downstream's composed `enum_ext!` union (or
+    /// the built-in [`HighProgramLiteral`] for the default).  Every literal
+    /// node carries a value of this type; the checker builds it through
+    /// [`LiteralExt::build`].
+    type Literal: LiteralExt<Self>;
 }
 
 /// The highlevel's concrete lowlevel program: a marker generic over the value
-/// vocabulary, the operator vocabulary, *and* the attribute type.
+/// vocabulary, the operator vocabulary, the attribute type, *and* the literal
+/// vocabulary.
 ///
 /// The default [`HighProgramOperator`] is what the checked highlevel builder
 /// emits.  A downstream that needs additional lowlevel operators can compose
@@ -369,13 +533,15 @@ pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
     A: AttrSpec = NoAttr,
->(PhantomData<(V, O, A)>);
+    L = HighProgramLiteral,
+>(PhantomData<(V, O, A, L)>);
 
-impl<V, O, A> Program for ProgramImpl<V, O, A>
+impl<V, O, A, L> Program for ProgramImpl<V, O, A, L>
 where
     V: ValueType,
     A: AttrSpec,
-    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A>>
+    L: std::fmt::Debug + Copy + PartialEq,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L>>
         + From<LowOperator>
         + lichen_utils::extend::AsEnum<LowOperator>
         + std::fmt::Debug
@@ -388,11 +554,12 @@ where
     type PackageMeta = HighPackageMeta;
 }
 
-impl<V, O, A> HighProgram for ProgramImpl<V, O, A>
+impl<V, O, A, L> HighProgram for ProgramImpl<V, O, A, L>
 where
     V: ValueType,
     A: AttrSpec,
-    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A>>
+    L: LiteralExt<ProgramImpl<V, O, A, L>>,
+    O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L>>
         + From<LowOperator>
         + lichen_utils::extend::AsEnum<LowOperator>
         + std::fmt::Debug
@@ -400,4 +567,5 @@ where
         + PartialEq,
 {
     type Attr = A;
+    type Literal = L;
 }

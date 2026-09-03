@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use crate::attr::{AttrSpec, NoAttr};
-use crate::program::HighProgramValue;
+use crate::program::HighProgramLiteral;
 
 /// The static schema of an expression: which compile-time attributes ride on
 /// its runtime pair and in which order.  `tail` is index-aligned with the
@@ -79,11 +79,14 @@ pub struct ChildRange {
 /// A source span, supplied by the language frontend: `(line, column)`.
 pub type Span = (u32, u32);
 
-/// The highlevel program: a pure expression tree, generic over the value
-/// vocabulary it embeds (defaults to the highlevel's own [`HighProgramValue`]).
+/// The highlevel program: a pure expression tree, generic over the
+/// compile-time attribute type `A` (an expression schema's tail) and the
+/// literal vocabulary `L` (the [`LiteralExt`](crate::program::LiteralExt)
+/// value a literal node carries, defaulting to the built-in
+/// [`HighProgramLiteral`]).
 #[derive(Clone, Debug)]
-pub struct IR<V = HighProgramValue, A = NoAttr> {
-    pub expr: Vec<Expr<V>>,
+pub struct IR<A = NoAttr, L = HighProgramLiteral> {
+    pub expr: Vec<Expr<L>>,
     /// One dense arena for all variadic children lists ([`ExprKind::Tuple`],
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
     /// [`ExprKind::ShallowArray`], [`ExprKind::Table`]).
@@ -109,19 +112,24 @@ pub struct IR<V = HighProgramValue, A = NoAttr> {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct Expr<V> {
-    pub kind: ExprKind<V>,
+pub struct Expr<L> {
+    pub kind: ExprKind<L>,
     pub span: Option<Span>,
 }
 
-/// The expression kinds.  Generic over the constant vocabulary `V`: a
-/// constant leaf is a value of the program's union directly (an int literal
-/// or one of the type constants — the other values are built by other
-/// expression kinds, never constants).
+/// The expression kinds.  Generic over the literal vocabulary `L` — a literal
+/// node carries an extensible [`LiteralExt`](crate::program::LiteralExt)
+/// value (any struct that builds a `value : type` pair, referencing other
+/// exprs); the built-in leaf literal wraps a raw value token.
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub enum ExprKind<V> {
-    /// A constant leaf value — an int literal or a type constant.
-    Constant(V),
+pub enum ExprKind<L> {
+    /// A literal leaf — a `value : type` pair declared together.  The literal
+    /// is any struct implementing [`LiteralExt`](crate::program::LiteralExt):
+    /// it builds the value and type nodes through the checker's
+    /// [`LiteralCtx`](crate::program::LiteralCtx), and it may reference other
+    /// exprs (a leaf literal is the built-in case — an int literal or a type
+    /// constant whose type is derived via [`ValueType::type_of`]).
+    Literal(L),
     /// A function parameter (or, `let` desugared by the frontend, a let-bound
     /// name).  Uses of the parameter in the return expression are the
     /// parameter's own `ExprId`.
@@ -272,7 +280,7 @@ pub enum ExprKind<V> {
     },
 }
 
-impl<V, A: AttrSpec> IR<V, A> {
+impl<A: AttrSpec, L> IR<A, L> {
     pub fn new() -> Self {
         IR {
             expr: Vec::new(),
@@ -287,7 +295,7 @@ impl<V, A: AttrSpec> IR<V, A> {
         }
     }
 
-    pub fn alloc(&mut self, kind: ExprKind<V>, span: Option<Span>) -> ExprId {
+    pub fn alloc(&mut self, kind: ExprKind<L>, span: Option<Span>) -> ExprId {
         let id = ExprId(self.expr.len() as u32);
         self.expr.push(Expr { kind, span });
         self.schemas.push(SchemaId(0));
@@ -384,7 +392,7 @@ impl<V, A: AttrSpec> IR<V, A> {
     fn alloc_variadic(
         &mut self,
         elements: &[ExprId],
-        make: fn(ChildRange) -> ExprKind<V>,
+        make: fn(ChildRange) -> ExprKind<L>,
         span: Option<Span>,
     ) -> ExprId {
         let start = self.children.len() as u32;
@@ -401,15 +409,15 @@ impl<V, A: AttrSpec> IR<V, A> {
     }
 }
 
-impl<V, A: AttrSpec> Default for IR<V, A> {
+impl<A: AttrSpec, L> Default for IR<A, L> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<V, A: AttrSpec> std::ops::Index<ExprId> for IR<V, A> {
-    type Output = Expr<V>;
-    fn index(&self, id: ExprId) -> &Expr<V> {
+impl<A, L> std::ops::Index<ExprId> for IR<A, L> {
+    type Output = Expr<L>;
+    fn index(&self, id: ExprId) -> &Expr<L> {
         &self.expr[id.0 as usize]
     }
 }

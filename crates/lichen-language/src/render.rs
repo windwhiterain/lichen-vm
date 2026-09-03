@@ -1041,6 +1041,15 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
             "table key is not concrete (it depends on an unbound value) — the entry is dropped"
                 .to_string()
         }
+        DiagKind::Assert => {
+            let value = match d.value_a {
+                Some(HighProgramValue::LowValue(LowValue::USize(n))) => n.to_string(),
+                Some(HighProgramValue::LowValue(LowValue::None)) => "none".to_string(),
+                Some(other) => format!("{other:?}"),
+                None => "—".to_string(),
+            };
+            format!("assertion failed: expected 1, found {value}")
+        }
     }
 }
 

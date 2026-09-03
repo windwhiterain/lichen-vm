@@ -4,8 +4,11 @@ use crate::diag::Stage;
 use lichen_highlevel::attr::NoAttr;
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::ir::{ExprKind, IR};
-use lichen_highlevel::program::{HighProgramOperator, ProgramImpl, TypeValue};
-use lichen_lowlevel::ValueExt;
+use lichen_highlevel::program::{
+    HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralCtx, LiteralExt, ProgramImpl,
+    TypeTypeLit, TypeValue, ValueType,
+};
+use lichen_lowlevel::{LowValue, Program, ValueExt};
 
 #[test]
 fn renders_the_offending_line_with_a_caret() {
@@ -181,15 +184,6 @@ impl ValueType for ProbeValue {
     fn table_type_marker() -> Self {
         Self::TypeValue(TypeValue::TypeTable)
     }
-    fn type_of(&self) -> Self {
-        match self {
-            ProbeValue::FloatType | ProbeValue::TypeValue(_) => Self::type_marker(),
-            ProbeValue::LowValue(LowValue::USize(_)) => Self::int_marker(),
-            ProbeValue::LowValue(_) => {
-                unreachable!("a structural non-USize value is not a constant")
-            }
-        }
-    }
     fn type_id(&self) -> Option<usize> {
         match self {
             Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
@@ -201,16 +195,61 @@ impl ValueType for ProbeValue {
     }
 }
 
+// The probe literal vocabulary, mirroring the value-vocabulary extension: the
+// highlevel's built-in literal structs compose with a downstream's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloatLit;
+
+impl<P> LiteralExt<P> for FloatLit
+where
+    P: Program,
+    P::Value: From<ProbeValue>,
+{
+    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+        let value_node = ctx.value_node(P::Value::from(ProbeValue::FloatType));
+        let ty = ctx.universe();
+        let pair = ctx.pair(value_node, ty);
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
+lichen_utils::enum_ext! {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    pub enum ProbeLiteral {
+    }
+    + IntLit as Int;
+    + IntTypeLit as IntType;
+    + TypeTypeLit as TypeType;
+    + FloatLit as Float;
+}
+
+pub type ProbeProgram = ProgramImpl<ProbeValue, HighProgramOperator, NoAttr, ProbeLiteral>;
+
+impl LiteralExt<ProbeProgram> for ProbeLiteral {
+    fn build(&self, ctx: &mut dyn LiteralCtx<ProbeProgram>) -> LiteralBuild {
+        match self {
+            ProbeLiteral::Int(lit) => lit.build(ctx),
+            ProbeLiteral::IntType(lit) => lit.build(ctx),
+            ProbeLiteral::TypeType(lit) => lit.build(ctx),
+            ProbeLiteral::Float(lit) => lit.build(ctx),
+        }
+    }
+}
+
 #[test]
 fn an_extended_value_renders_through_the_hook() {
     // `FloatType : Type` — the extension's type constant, paired with the
     // universe like `Int` is.  The value printer (generic over the
     // vocabulary) reads it as an atomic type constant; the extension's
     // own spelling comes from the render hook.
-    let mut ir: IR<ProbeValue> = IR::new();
-    let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
+    let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
+    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)), None);
     ir.set_root(float_ty);
-    let build = Checker::<ProgramImpl<ProbeValue, HighProgramOperator, NoAttr>>::build(ir);
+    let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok);
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
@@ -228,10 +267,10 @@ fn an_extended_value_renders_through_the_hook() {
 fn an_extended_value_without_a_hook_prints_a_placeholder() {
     // Without a hook the base renderer cannot know the extension's own
     // variant — it degrades to `?` rather than panicking.
-    let mut ir: IR<ProbeValue> = IR::new();
-    let float_ty = ir.alloc(ExprKind::Constant(ProbeValue::FloatType), None);
+    let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
+    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)), None);
     ir.set_root(float_ty);
-    let build = Checker::<ProgramImpl<ProbeValue, HighProgramOperator, NoAttr>>::build(ir);
+    let build = Checker::<ProbeProgram>::build(ir);
     let mut module = build.module;
     let value = module.evaluate_node_deep(build.root_val, None);
     module.evaluate_node_deep(build.root_ty, None);

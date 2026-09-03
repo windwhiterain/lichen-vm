@@ -216,7 +216,7 @@ fn conflicting_kinds_record_an_error_and_stay_separate() {
     m.unify(a, b);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(m.equality_representative(a), m.equality_representative(b));
-    let error = m.unify_errors[0];
+    let error = m.unify_errors[0].clone();
     assert!(matches!(
         error.value_a,
         Some(TestValue::LowValue(LowValue::USize(1)))
@@ -313,6 +313,13 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
         m.equality_representative(left),
         m.equality_representative(right)
     );
+    // The traced descent: root operands are the two arrays, and the failure
+    // is at element 1 (one vs `'s'`); element 0 (`x` vs `two`) bound instead.
+    let error = m.unify_errors[0].clone();
+    assert_eq!(error.root_a, left);
+    assert_eq!(error.root_b, right);
+    assert_eq!(error.steps.len(), 1);
+    assert_eq!(error.steps[0].index, 1);
     // the non-conflicting element still bound
     let rep_x = m.equality_representative(x);
     assert!(matches!(
@@ -617,7 +624,7 @@ fn apply_time_conflict_records_an_error() {
         m.equality_representative(param),
         m.equality_representative(float)
     );
-    let error = m.unify_errors[0];
+    let error = m.unify_errors[0].clone();
     assert!(matches!(
         error.value_a,
         Some(TestValue::LowValue(LowValue::USize(1)))

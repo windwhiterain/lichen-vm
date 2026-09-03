@@ -22,6 +22,7 @@ pub mod program;
 // own variants.  Each layer provides a plain enum; nothing nests.
 pub use attr::{AttrExt, AttrSpec, NoAttr};
 pub use program::{
-    HighGlobal, HighGlobalExt, HighProgram, HighProgramOperator, HighProgramValue, ProgramImpl,
-    TypeOperator, TypeValue, ValueType,
+    HighGlobal, HighGlobalExt, HighProgram, HighProgramLiteral, HighProgramOperator,
+    HighProgramValue, IntLit, IntTypeLit, LiteralBuild, LiteralCtx, LiteralExt, ProgramImpl,
+    TypeOperator, TypeValue, TypeTypeLit, ValueType,
 };

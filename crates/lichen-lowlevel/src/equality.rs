@@ -9,8 +9,36 @@ use crate::{
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
 
+/// One step of a failed unification's descent: the array element the
+/// traversal moved into, and the two child operands it compared there.  The
+/// flat sequence of steps (in order) is the structural *path* from the
+/// unified root operands down to the failing pair — the "step by step" the
+/// highlevel needs to pinpoint which component of a compound type is the
+/// actual conflict.  A static child resolves to [`NodeId::default()`] (it
+/// materializes into a fresh leaf), so only `index` is authoritative; the
+/// highlevel re-reads the path through the graph when it needs positions.
 #[derive(Debug, Clone, Copy)]
+pub struct UnifyStep {
+    /// The array element index the traversal descended into.
+    pub index: usize,
+    /// The two child operands compared at that step.
+    pub a: NodeId,
+    pub b: NodeId,
+}
+
+#[derive(Debug, Clone)]
 pub struct UnifyError<P: Program> {
+    /// The two top-level operands the trigger framed — the checker's
+    /// source-meaningful sides for a checker-issued unify, the cloned
+    /// parameter and argument for an apply-time parameter check.  These are
+    /// what the highlevel attributes the diagnostic to; the raw `a`/`b`
+    /// leaves below are the deep conflict.
+    pub root_a: NodeId,
+    pub root_b: NodeId,
+    /// The descent path (element by element) from `root_a`/`root_b` to the
+    /// conflict, per [`UnifyStep`].  Empty for a top-level (non-array) clash.
+    pub steps: Vec<UnifyStep>,
+    /// The conflicting classes, as the lowlevel recorded them.
     pub a: NodeId,
     pub b: NodeId,
     pub value_a: Option<P::Value>,
@@ -59,7 +87,10 @@ impl<P: Program> Module<P> {
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
         let mut path = Vec::new();
         let mut materialized = HashMap::new();
-        self.unify_inner(Dyn(a), Dyn(b), &mut path, &mut materialized);
+        // The descent path, seeded empty; the root operands are carried
+        // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
+        let mut steps = Vec::new();
+        self.unify_inner(Dyn(a), Dyn(b), &mut path, &mut materialized, &mut steps, (a, b));
         disjoint::find(&mut self.nodes, a)
     }
 
@@ -159,6 +190,8 @@ impl<P: Program> Module<P> {
         b: AnyNodeId,
         path: &mut Vec<(NodeId, NodeId)>,
         materialized: &mut HashMap<StaticNodeId, NodeId>,
+        steps: &mut Vec<UnifyStep>,
+        root: (NodeId, NodeId),
     ) -> bool {
         let a = self.unify_side(a, b, materialized);
         let b = self.unify_side(b, Dyn(a), materialized);
@@ -168,7 +201,7 @@ impl<P: Program> Module<P> {
             return true;
         }
         if path.contains(&(ra, rb)) || path.contains(&(rb, ra)) {
-            self.record_error(ra, rb);
+            self.record_error(ra, rb, steps, root);
             return false;
         }
         let va = self.nodes[ra].value;
@@ -225,7 +258,7 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                     return true;
                 }
-                self.record_error(ra, rb);
+                self.record_error(ra, rb, steps, root);
                 return false;
             }
         }
@@ -241,7 +274,7 @@ impl<P: Program> Module<P> {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
                 let (left, right) = (pa.items(), pb.items());
                 if left.len() != right.len() {
-                    self.record_error(ra, rb);
+                    self.record_error(ra, rb, steps, root);
                     return false;
                 }
                 // Two self-referential universes are the same structural
@@ -252,10 +285,23 @@ impl<P: Program> Module<P> {
                     return true;
                 }
                 path.push((ra, rb));
-                let ok = left
-                    .iter()
-                    .zip(right.iter())
-                    .all(|(na, nb)| self.unify_inner(na.node, nb.node, path, materialized));
+                let mut ok = true;
+                for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
+                    // Record the descent step before recursing, so the deep
+                    // failure's trace carries the full element path.
+                    steps.push(UnifyStep {
+                        index: i,
+                        a: node_or_default(na.node),
+                        b: node_or_default(nb.node),
+                    });
+                    let child_ok =
+                        self.unify_inner(na.node, nb.node, path, materialized, steps, root);
+                    steps.pop();
+                    if !child_ok {
+                        ok = false;
+                        break;
+                    }
+                }
                 path.pop();
                 if ok {
                     self.add_equality(ra, rb);
@@ -277,7 +323,7 @@ impl<P: Program> Module<P> {
                 true
             }
             _ => {
-                self.record_error(ra, rb);
+                self.record_error(ra, rb, steps, root);
                 false
             }
         }
@@ -574,12 +620,26 @@ impl<P: Program> Module<P> {
         Some(value)
     }
 
-    fn record_error(&mut self, ra: NodeId, rb: NodeId) {
+    fn record_error(&mut self, ra: NodeId, rb: NodeId, steps: &[UnifyStep], root: (NodeId, NodeId)) {
         self.unify_errors.push(UnifyError {
+            root_a: root.0,
+            root_b: root.1,
+            steps: steps.to_vec(),
             a: ra,
             b: rb,
             value_a: self.nodes[ra].value,
             value_b: self.nodes[rb].value,
         });
+    }
+}
+
+/// The dynamic node id behind an [`AnyNodeId`], or [`NodeId::default()`]
+/// for a static ref (which materializes into a fresh leaf before it is
+/// compared) — used only to name the operands in a [`UnifyStep`], where
+/// `index` is authoritative and the highlevel re-reads the graph.
+fn node_or_default(id: AnyNodeId) -> NodeId {
+    match id {
+        AnyNodeId::Dynamic(node) => node,
+        AnyNodeId::Static(_) => NodeId::default(),
     }
 }

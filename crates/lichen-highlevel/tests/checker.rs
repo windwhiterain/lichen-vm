@@ -7,7 +7,10 @@
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, ExprKind, IR};
-use lichen_highlevel::program::{HighGlobal, HighProgramValue, ProgramImpl, TypeValue};
+use lichen_highlevel::program::{
+    HighGlobal, HighProgramLiteral, HighProgramValue, IntLit, IntTypeLit, ProgramImpl, TypeTypeLit,
+    TypeValue,
+};
 use lichen_lowlevel::{AnyNodeId, LowValue, NodeId};
 use lichen_utils::compose::AsField;
 
@@ -23,19 +26,19 @@ fn dyn_node(id: AnyNodeId) -> NodeId {
 
 fn int(ir: &mut IR, n: u64) -> ExprId {
     ir.alloc(
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(n as usize))),
+        ExprKind::Literal(HighProgramLiteral::from(IntLit(n as usize))),
         None,
     )
 }
 fn ty(ir: &mut IR) -> ExprId {
     ir.alloc(
-        ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeType)),
+        ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
         None,
     )
 }
 fn int_t(ir: &mut IR) -> ExprId {
     ir.alloc(
-        ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt)),
+        ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)),
         None,
     )
 }
@@ -168,6 +171,33 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
     array.items().iter().map(|item| item.shallow).collect()
 }
 
+/// Whether the given ids form the int type — a `[int, Type]` pair.  Literals
+/// rebuild their type per occurrence, so it is content-equal to the shared
+/// `Build::int_type` node but never node-identical to it.
+fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[NodeId]) -> bool {
+    ids.len() == 2
+        && matches!(
+            b.module.nodes[ids[0]].value,
+            Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
+        )
+        && ids[1] == b.type_expr
+}
+
+/// Whether `node` is the int type — content-equal to a rebuilt `[int, Type]`
+/// pair (literals rebuild their type per occurrence, so it is not the shared
+/// `Build::int_type` node, but the same structure).
+fn is_int_type(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId) -> bool {
+    is_int_type_ids(b, &array_ids(b, node))
+}
+
+/// Whether an evaluated value is the int type pair `[int, Type]`.
+fn is_int_type_value(
+    b: &lichen_highlevel::checker::Build<ProgramImpl>,
+    value: HighProgramValue,
+) -> bool {
+    is_int_type_ids(b, &array_ids_from(value))
+}
+
 // --- checking -------------------------------------------------------------
 
 #[test]
@@ -176,9 +206,10 @@ fn int_literal_checks() {
     let five = int(&mut ir, 5);
     let b = build(five, ir);
     assert!(b.ok, "5 should check");
-    // The type of 5 is the recursive pair [int, [Type, ↺]].
-    assert_eq!(b.ty[five], Some(b.int_type));
-    let ids = array_ids(&b, b.int_type);
+    // The type of 5 is the recursive pair [int, [Type, ↺]] — rebuilt fresh per
+    // occurrence (content-equal to the shared int_type, not node-identical).
+    assert!(is_int_type(&b, b.ty[five].unwrap()));
+    let ids = array_ids(&b, b.ty[five].unwrap());
     assert_eq!(ids.len(), 2);
     assert!(matches!(
         b.module.nodes[ids[0]].value,
@@ -199,7 +230,7 @@ fn annotated_literal_checks() {
     let a = ann(&mut ir, five, t);
     let b = build(a, ir);
     assert!(b.ok, "5 : int should check");
-    assert_eq!(b.ty[a], Some(b.int_type));
+    assert!(is_int_type(&b, b.ty[a].unwrap()));
 }
 
 #[test]
@@ -305,8 +336,8 @@ fn typed_tuple_is_a_kinded_tuple() {
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
-    assert_eq!(shape_ids[0], b.int_type);
-    assert_eq!(shape_ids[1], b.int_type);
+    assert!(is_int_type(&b, shape_ids[0]));
+    assert!(is_int_type(&b, shape_ids[1]));
     let kind_ids = array_ids(&b, ids[1]);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
@@ -339,7 +370,7 @@ fn real_array_type_is_type_and_length() {
     let shape = b.val[arr].unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
-    assert_eq!(shape_ids[0], b.int_type, "instance[0] is the element type");
+    assert!(is_int_type(&b, shape_ids[0]), "instance[0] is the element type");
     assert!(
         matches!(
             b.module.nodes[shape_ids[1]].value,
@@ -421,16 +452,15 @@ fn array_literal_is_homogeneous() {
     let e1 = int(&mut ir, 1);
     let e2 = int(&mut ir, 2);
     let arr = array(&mut ir, &[e1, e2]);
-    let mut b = build(arr, ir);
+    let b = build(arr, ir);
     assert!(b.ok, "[1, 2] as an array literal should check");
     let ty = b.ty[arr].unwrap();
     let ids = array_ids(&b, ty);
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
     assert_eq!(shape_ids.len(), 2);
-    assert_eq!(
-        b.module.equality_representative(shape_ids[0]),
-        b.module.equality_representative(b.int_type),
+    assert!(
+        is_int_type(&b, shape_ids[0]),
         "the shared element type unifies to int"
     );
     assert!(
@@ -859,12 +889,11 @@ fn an_unannotated_call_syncs_its_root_type_to_the_return_type() {
     let call = app(&mut ir, b1, five);
     let outer = lam(&mut ir, b1, call);
     let whole = app(&mut ir, outer, id);
-    let mut b = build(whole, ir);
+    let b = build(whole, ir);
     assert!(b.ok);
     assert!(b.diagnostics().is_empty());
-    assert_eq!(
-        b.module.equality_representative(b.root_ty),
-        b.module.equality_representative(b.int_type),
+    assert!(
+        is_int_type(&b, b.root_ty),
         "the root type is synced to the return type (int)"
     );
 }
@@ -894,8 +923,8 @@ fn a_tuples_unbound_element_types_sync_from_the_return_types() {
     let pair = array_ids(&b, b.root_ty);
     assert_eq!(pair.len(), 2);
     let shape = array_ids(&b, pair[0]);
-    assert_eq!(
-        b.module.nodes[shape[0]].value, b.module.nodes[b.int_type].value,
+    assert!(
+        is_int_type(&b, shape[0]),
         "element 0's cell syncs to int"
     );
     assert_eq!(
@@ -1036,9 +1065,8 @@ fn tuple_index_selects_value_and_type() {
         "the value is the selected element"
     );
     let ty_val = b.module.evaluate_node_deep(b.ty[idx].unwrap(), None);
-    assert_eq!(
-        ty_val,
-        b.module.nodes[b.int_type].value.unwrap(),
+    assert!(
+        is_int_type_value(&b, ty_val),
         "the type is the element type"
     );
 }
@@ -1066,9 +1094,8 @@ fn array_index_selects_value_and_type() {
         "the value is the selected element"
     );
     let ty_val = b.module.evaluate_node_deep(b.ty[idx].unwrap(), None);
-    assert_eq!(
-        ty_val,
-        b.module.nodes[b.int_type].value.unwrap(),
+    assert!(
+        is_int_type_value(&b, ty_val),
         "the type is the element type"
     );
 }
@@ -1174,7 +1201,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let shape = b.val[s].unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
-    assert_eq!(shape_ids[0], b.int_type);
+    assert!(is_int_type(&b, shape_ids[0]));
     // the kind slot is [type_id, [TypeStruct, K]]
     let kind = b.ty[s].unwrap();
     let kind_ids = array_ids(&b, kind);
@@ -1235,7 +1262,7 @@ fn two_struct_type_occurrences_do_not_unify() {
     let mut module = b.module;
     module.unify(b.term[s1].unwrap(), b.term[s2].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
-    let err = module.unify_errors[0];
+    let err = module.unify_errors[0].clone();
     assert!(matches!(
         err.value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
@@ -1262,7 +1289,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     // so the nominal distinction now lives in the kind slot: the struct
     // kind's `[TypeId(n), …]` head clashes with the tuple kind's
     // `[TupleType, …]` head.
-    let err = module.unify_errors[0];
+    let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
     assert!(
         matches!(
@@ -1561,13 +1588,12 @@ fn partial_inference_in_an_arrow_type() {
     let h = hole(&mut ir);
     let t = arrow(&mut ir, it, h);
     let a = ann(&mut ir, l, t);
-    let mut b = build(a, ir);
+    let b = build(a, ir);
     assert!(b.ok, "the identity fits Int -> _");
     let arrow = array_ids(&b, b.ty[l].unwrap());
     let shape_ids = array_ids(&b, arrow[0]);
-    assert_eq!(
-        b.module.equality_representative(shape_ids[0]),
-        b.module.equality_representative(b.int_type),
+    assert!(
+        is_int_type(&b, shape_ids[0]),
         "the parameter type unifies with int"
     );
 }

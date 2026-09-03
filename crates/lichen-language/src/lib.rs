@@ -33,7 +33,6 @@ use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
-use lichen_highlevel::program::HighProgramValue;
 use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
@@ -145,7 +144,7 @@ pub fn compile_with_imports_at(
 /// failed (an unresolved name); `diagnostics` holds every lex and parse
 /// error encountered.
 pub struct Frontend {
-    pub ir: Option<IR<HighProgramValue, program::Perspective>>,
+    pub ir: Option<IR<program::Perspective>>,
     pub diagnostics: Vec<Diag>,
 }
 

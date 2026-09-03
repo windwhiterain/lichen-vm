@@ -1,8 +1,9 @@
 use super::*;
 use crate::lex::lex;
 use crate::parse::parse;
+use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit};
 
-fn compile_ok(source: &str) -> IR<HighProgramValue, Perspective> {
+fn compile_ok(source: &str) -> IR<Perspective> {
     let tokens = lex(source).tokens;
     let ast = parse(&tokens).program;
     compile(&ast).unwrap()
@@ -14,22 +15,20 @@ fn compile_err(source: &str) -> Diag {
     compile(&ast).unwrap_err()
 }
 
-fn kind(ir: &IR<HighProgramValue, Perspective>, id: ExprId) -> ExprKind<HighProgramValue> {
+fn kind(ir: &IR<Perspective>, id: ExprId) -> ExprKind<HighProgramLiteral> {
     ir[id].kind
 }
 
 /// The node the statement wrapper selects: the root is either the final
 /// expression's own node (no wrap) or `Field(Tuple([…, final]), n)`,
 /// which unwraps to the final expression.
-fn wrapped(ir: &IR<HighProgramValue, Perspective>) -> ExprId {
+fn wrapped(ir: &IR<Perspective>) -> ExprId {
     match ir[ir.root].kind {
         ExprKind::Field { container: array, key: index } => {
             let ExprKind::Tuple(range) = ir[array].kind else {
                 panic!("expected the wrapped tuple")
             };
-            let ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(n))) =
-                ir[index].kind
-            else {
+            let ExprKind::Literal(HighProgramLiteral::Int(IntLit(n))) = ir[index].kind else {
                 panic!("expected a constant index")
             };
             ir.children[range.start as usize + n]
@@ -64,7 +63,7 @@ fn let_is_just_application() {
     assert!(matches!(kind(&ir, function), ExprKind::Function { .. }));
     assert!(matches!(
         kind(&ir, argument),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(5)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(5)))
     ));
 }
 
@@ -129,7 +128,7 @@ fn a_block_compiles_to_its_final_expression() {
     let ir = compile_ok("{a = 1; a}");
     assert!(matches!(
         kind(&ir, ir.root),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(1)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     // The same holds through a lambda body: x => {y = x; y} is the
     // identity function, whose return is the parameter itself.
@@ -153,7 +152,7 @@ fn a_block_scopes_its_bindings() {
     let ir = compile_ok("a = 2; {a = 1; a}");
     assert!(matches!(
         kind(&ir, wrapped(&ir)),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(1)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     // After the `}`, the block's bindings are gone and the outer name
     // resolves again: `{a = 1; a} a` applies the block (the `1` node) to
@@ -164,11 +163,11 @@ fn a_block_scopes_its_bindings() {
     };
     assert!(matches!(
         kind(&ir, function),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(1)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     assert!(matches!(
         kind(&ir, argument),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(2)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(2)))
     ));
 }
 
@@ -186,18 +185,18 @@ fn a_statement_expression_is_wired_into_the_root() {
     ));
     assert!(matches!(
         kind(&ir, index),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(1)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     assert!(matches!(
         kind(&ir, wrapped(&ir)),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(7)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(7)))
     ));
     // A trailing statement identical to the final expression is not
     // wrapped: `a = 1; a` stays the `1` node.
     let ir = compile_ok("a = 1; a");
     assert!(matches!(
         kind(&ir, ir.root),
-        ExprKind::Constant(HighProgramValue::LowValue(LowValue::USize(1)))
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     // A bare expression statement between bindings is compiled too.
     let ir = compile_ok("a = 1; 5; a");
@@ -230,7 +229,7 @@ fn an_annotated_parameter_rides_the_function() {
     assert_eq!(r#return, parameter, "the identity's body is the parameter");
     assert!(matches!(
         kind(&ir, parameter_type.expect("the annotated type")),
-        ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt))
+        ExprKind::Literal(HighProgramLiteral::IntType(IntTypeLit))
     ));
     // An unannotated lambda carries no parameter type.
     let ir = compile_ok("x => x");

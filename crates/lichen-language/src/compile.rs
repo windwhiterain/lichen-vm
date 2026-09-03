@@ -39,15 +39,14 @@
 use std::collections::HashMap;
 
 use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR, Schema, Span};
-use lichen_highlevel::program::{HighProgramValue, TypeValue};
-use lichen_lowlevel::LowValue;
+use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit, TypeTypeLit};
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
 use crate::program::Perspective;
 
-pub fn compile(program: &Program) -> Result<IR<HighProgramValue, Perspective>, Diag> {
+pub fn compile(program: &Program) -> Result<IR<Perspective>, Diag> {
     compile_with_imports(program, &[])
 }
 
@@ -57,7 +56,7 @@ pub fn compile(program: &Program) -> Result<IR<HighProgramValue, Perspective>, D
 pub fn compile_with_imports(
     program: &Program,
     imports: &[ResolvedImport],
-) -> Result<IR<HighProgramValue, Perspective>, Diag> {
+) -> Result<IR<Perspective>, Diag> {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
@@ -88,7 +87,7 @@ pub fn compile_with_imports(
 }
 
 struct Compiler {
-    ir: IR<HighProgramValue, Perspective>,
+    ir: IR<Perspective>,
     /// The in-scope binders, innermost last.
     scopes: Vec<HashMap<String, ExprId>>,
     /// The count of enclosing function scopes at the current compilation
@@ -208,9 +207,7 @@ impl Compiler {
         // the shape list at the key.
         let tuple = self.ir.alloc_tuple(&statements, Some(*span));
         let index = self.ir.alloc(
-            ExprKind::Constant(HighProgramValue::from(LowValue::USize(
-                statements.len() - 1,
-            ))),
+            ExprKind::Literal(HighProgramLiteral::from(IntLit(statements.len() - 1))),
             Some(*span),
         );
         self.ir.alloc(
@@ -224,15 +221,15 @@ impl Compiler {
     fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
         let id = match e {
             Expr::Int(n, span) => self.alloc(
-                ExprKind::Constant(HighProgramValue::from(LowValue::USize(*n))),
+                ExprKind::Literal(HighProgramLiteral::from(IntLit(*n))),
                 span,
             ),
             Expr::TypeConst(TypeConst::Int, span) => self.alloc(
-                ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeInt)),
+                ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)),
                 span,
             ),
             Expr::TypeConst(TypeConst::Type, span) => self.alloc(
-                ExprKind::Constant(HighProgramValue::TypeValue(TypeValue::TypeType)),
+                ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
             Expr::Name(name, span) => self.lookup(name).ok_or_else(|| {
@@ -536,7 +533,7 @@ impl Compiler {
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn alloc(&mut self, kind: ExprKind<HighProgramValue>, span: &Span) -> ExprId {
+    fn alloc(&mut self, kind: ExprKind<HighProgramLiteral>, span: &Span) -> ExprId {
         self.ir.alloc(kind, Some(*span))
     }
 }

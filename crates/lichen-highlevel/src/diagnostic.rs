@@ -20,8 +20,8 @@
 use std::collections::{HashMap, HashSet};
 
 use lichen_lowlevel::{
-    AnyNodeId, ApplyError, ArrayItem, EvalError, LowOperator, LowValue, NodeId, UnifyError,
-    is_unbound,
+    AnyNodeId, ApplyError, ArrayItem, AssertError, EvalError, LowOperator, LowValue, NodeId,
+    UnifyError, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 
@@ -29,7 +29,7 @@ use lichen_utils::extend::AsEnum;
 
 use crate::{
     checker::Build,
-    ir::{ExprId, Span},
+    ir::Span,
     program::{HighProgram, ValueType},
 };
 
@@ -88,6 +88,10 @@ pub enum DiagKind {
     /// equal the expected one — expected = the declared/derived attribute,
     /// found = the argument's attribute.
     Attribute,
+    /// A failed assert: the condition resolved to a concrete value other
+    /// than `USize(1)`.  A runtime evaluation failure, not a unify; `a` is
+    /// the condition node, `value_a` the value it resolved to.
+    Assert,
     /// A runtime apply-time failure (the parameter type check, executed by
     /// the VM) — no diary entry.  Reversed direction: `a` = the parameter's
     /// expected type, `b` = the argument's found type.
@@ -127,7 +131,6 @@ impl<P: HighProgram> Build<P> where P::Value: ValueType {
             build: self,
             names: HashMap::new(),
             next: 0,
-            node_spans: self.node_spans(),
             univ: NodeId::default(),
         };
         report.univ = report.rep(self.type_expr);
@@ -152,60 +155,24 @@ impl<P: HighProgram> Build<P> where P::Value: ValueType {
                 out.push(report.eval_error(err));
             }
         }
+        // Failed asserts — only the explicit `assert` expressions (a
+        // generated array-bounds guard duplicates the index eval error, so it
+        // is not rendered separately).
+        for err in &self.module.assert_errors {
+            if self.user_asserts.contains(&err.condition) {
+                out.push(report.assert_error(err));
+            }
+        }
         out
     }
-
-    /// The node → span side table: every checker-built node (the compiled
-    /// pair, value, and type of each expression) *and the elements of its
-    /// array values* map to its source span, so a type marker buried inside
-    /// a type expression is attributed to the expression that built it.  The
-    /// shared universe `[Type, ↺]` is recorded but not descended into — its
-    /// elements (the `Type` marker) only carry spans through direct
-    /// references, so a parameter's template type never inherits the span of
-    /// an unrelated expression that happens to share the universe.
-    pub fn node_spans(&self) -> HashMap<NodeId, Span> {
-        let mut map = HashMap::new();
-        let mut visited = HashSet::new();
-        for (i, expr) in self.ir.expr.iter().enumerate() {
-            if let Some(span) = expr.span {
-                let e = ExprId(i as u32);
-                for node in [self.term[e], self.val[e], self.ty[e]]
-                    .into_iter()
-                    .flatten()
-                {
-                    self.record_span(node, span, &mut map, &mut visited);
-                }
-            }
-        }
-        map
-    }
-
-    fn record_span(
-        &self,
-        node: NodeId,
-        span: Span,
-        map: &mut HashMap<NodeId, Span>,
-        visited: &mut HashSet<NodeId>,
-    ) {
-        if !visited.insert(node) {
-            return;
-        }
-        map.insert(node, span);
-        if node == self.type_expr {
-            return; // the shared universe — do not leak its span to its elements
-        }
-        if let Some(items) = self.module.array_items(node) {
-            for item in items {
-                // A static ref has no importer span: the imported value was
-                // not written in this source file.  Only dynamic nodes get
-                // spans recorded.
-                if let AnyNodeId::Dynamic(node) = item.node {
-                    self.record_span(node, span, map, visited);
-                }
-            }
-        }
-    }
 }
+
+// The node → span side table is gone: a node never carries a span, so the
+// lowlevel graph can be freely shared.  Every diagnostic's location comes
+// from a check-time edge the checker recorded — the diary (a checker-issued
+// unify's span), `Build::apply_edges` (a runtime apply's argument), or
+// `Build::node_edges` (an index/table operand or an assert condition).
+// Spans live only in these edges; they are never on nodes.
 
 struct Report<'a, P: HighProgram> where P::Value: ValueType {
     build: &'a Build<P>,
@@ -213,7 +180,6 @@ struct Report<'a, P: HighProgram> where P::Value: ValueType {
     /// diagnostic.
     names: HashMap<NodeId, String>,
     next: usize,
-    node_spans: HashMap<NodeId, Span>,
     /// The class representative of the canonical universe `[Type, ↺]`.
     univ: NodeId,
 }
@@ -256,7 +222,7 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
         // The owning diary entry: the last one whose error_index <= i (one
         // unify may own a whole run of errors, e.g. elementwise).
         let entry = self.build.diary.iter().rev().find(|e| e.error_index <= i);
-        let span = entry.and_then(|e| e.span).or_else(|| self.best_span(err));
+        let span = entry.and_then(|e| e.span);
         // `a`/`b` are the *source-meaningful* sides — a diary-attributed
         // check's top-level operands (an expression's type, an annotation's
         // type), so the message reads through the source expr's type chain
@@ -307,8 +273,7 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
             .build
             .apply_edges
             .get(&apply.apply_node)
-            .and_then(|edge| edge.argument_span)
-            .or_else(|| self.node_spans.get(&apply.argument).copied());
+            .and_then(|edge| edge.argument_span);
         let kind = DiagKind::Runtime;
         let message = format!(
             "expected {}, found {}",
@@ -373,7 +338,8 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
             DiagKind::Runtime
             | DiagKind::IndexOutOfBounds
             | DiagKind::TableMiss
-            | DiagKind::TableKeyUnbound => {
+            | DiagKind::TableKeyUnbound
+            | DiagKind::Assert => {
                 unreachable!("the diary never attributes runtime diagnostics")
             }
         }
@@ -389,21 +355,15 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
         )
     }
 
-    /// Attribution for runtime failures: walk both conflict classes for
-    /// checker-built nodes; the first known span wins.
-    fn best_span(&self, err: &UnifyError<P>) -> Option<Span> {
-        for rep in [err.a, err.b] {
-            for member in disjoint::members(&self.build.module.nodes, rep) {
-                if let Some(span) = self.node_spans.get(&member) {
-                    return Some(*span);
-                }
-            }
-        }
-        None
+    /// Attribution for runtime failures: an edge recorded by the checker at
+    /// build time — the node a runtime failure references mapped to the
+    /// source that built it.  No span is stored on the node.
+    fn edge_span(&self, node: NodeId) -> Option<Span> {
+        self.build.node_edges.get(&node).copied()
     }
 
     /// A runtime evaluation failure — an out-of-bounds index or a table
-    /// read.  The offending literal's span attributes it; there are no
+    /// read.  The offending literal's edge attributes it; there are no
     /// conflict classes to walk.
     fn eval_error(&mut self, err: &EvalError) -> Diag<P> {
         match err {
@@ -431,7 +391,7 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
                     };
                 };
                 Diag {
-                    span: self.node_spans.get(&key).copied(),
+                    span: self.edge_span(key),
                     kind: DiagKind::TableMiss,
                     a: key,
                     b: key,
@@ -455,7 +415,7 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
                     };
                 };
                 Diag {
-                    span: self.node_spans.get(&key).copied(),
+                    span: self.edge_span(key),
                     kind: DiagKind::TableKeyUnbound,
                     a: key,
                     b: key,
@@ -482,13 +442,34 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
             };
         };
         Diag {
-            span: self.node_spans.get(&index).copied(),
+            span: self.edge_span(index),
             kind: DiagKind::IndexOutOfBounds,
             a: index,
             b: index,
             value_a: Some(P::Value::from(LowValue::USize(index_value))),
             value_b: Some(P::Value::from(LowValue::USize(length))),
             message: format!("index {index_value} out of bounds (array length {length})"),
+            error_index: None,
+        }
+    }
+
+    /// A failed assert: the condition resolved to a concrete value other
+    /// than `USize(1)`.  The condition node's edge attributes it; a static
+    /// condition (a solved constant of a plugged dependency) has no edge.
+    fn assert_error(&mut self, err: &AssertError<P>) -> Diag<P> {
+        let value = match err.value.as_enum() {
+            Some(LowValue::USize(n)) => n.to_string(),
+            Some(LowValue::None) => "none".to_string(),
+            _ => format!("{:?}", err.value),
+        };
+        Diag {
+            span: self.build.node_edges.get(&err.condition).copied(),
+            kind: DiagKind::Assert,
+            a: err.condition,
+            b: err.condition,
+            value_a: Some(err.value),
+            value_b: None,
+            message: format!("assertion failed: expected 1, found {value}"),
             error_index: None,
         }
     }
