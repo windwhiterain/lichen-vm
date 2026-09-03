@@ -31,7 +31,7 @@ use std::sync::{Mutex, OnceLock};
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{ExprId, Span};
+use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeExt};
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_lowlevel::{
@@ -469,7 +469,7 @@ impl NativeExt<LangProgram> for JitNativeExt {
         argument_value: NodeId,
         argument_ty: NodeId,
         _argument: ExprId,
-        span: Option<Span>,
+        loc: Loc,
     ) -> NativeApply {
         let block = checker.current_block;
         // Function-ness gate: `jit` on a *concretely non-function* value is an
@@ -481,7 +481,7 @@ impl NativeExt<LangProgram> for JitNativeExt {
         let universe = checker.type_expr_node();
         let kind = checker.array_node(block, &[fn_marker, universe]);
         let fn_ty = checker.array_node(block, &[shape, kind]);
-        checker.check_unify(argument_ty, fn_ty, span, DiagKind::Guard);
+        checker.check_unify(argument_ty, fn_ty, loc, DiagKind::Guard);
 
         // Kernel type: `Kernel<Int -> Int>` = `[[int, int], [TypeKernel, Type]]`.
         let int_ty = checker.int_type_node();
@@ -517,7 +517,7 @@ impl NativeExt<LangProgram> for LaunchNativeExt {
         argument_value: NodeId,
         argument_ty: NodeId,
         _argument: ExprId,
-        span: Option<Span>,
+        loc: Loc,
     ) -> NativeApply {
         let block = checker.current_block;
         // Kernel-ness gate: `launch` on a *concretely non-kernel* value is an
@@ -530,7 +530,7 @@ impl NativeExt<LangProgram> for LaunchNativeExt {
         let universe = checker.type_expr_node();
         let k_kind = checker.array_node(block, &[k_marker, universe]);
         let kernel_ty = checker.array_node(block, &[shape, k_kind]);
-        checker.check_unify(argument_ty, kernel_ty, span, DiagKind::Guard);
+        checker.check_unify(argument_ty, kernel_ty, loc, DiagKind::Guard);
 
         // The curried intermediate: `launch k` is a function-shaped value
         // `domain -> codomain` that the outer apply completes.
@@ -559,7 +559,7 @@ impl NativeExt<LangProgram> for LaunchTargetNativeExt {
         argument_value: NodeId,
         argument_ty: NodeId,
         _argument: ExprId,
-        span: Option<Span>,
+        loc: Loc,
     ) -> NativeApply {
         let Some(ComputeValue::LaunchTarget(lt)) =
             checker.class_value(callee_value).and_then(|v| v.as_enum())
@@ -568,7 +568,7 @@ impl NativeExt<LangProgram> for LaunchTargetNativeExt {
         };
         let block = checker.current_block;
         // Unify the argument against the kernel's domain.
-        checker.check_unify(argument_ty, lt.domain, span, DiagKind::Guard);
+        checker.check_unify(argument_ty, lt.domain, loc, DiagKind::Guard);
         // Emit the `Launch` operator with operand `[kernel, arg]`.
         let operands = checker.array_node(block, &[lt.kernel, argument_value]);
         let op = checker.op_node(

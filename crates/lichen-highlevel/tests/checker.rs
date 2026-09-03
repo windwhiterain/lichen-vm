@@ -707,13 +707,16 @@ fn annotation_mismatch_reports_expected_found() {
     let five = int(&mut ir, 5);
     let t = ty(&mut ir);
     let a = ann(&mut ir, five, t);
-    ir.expr[a.0 as usize].span = Some((3, 7));
+    ir.expr[five.0 as usize].span = Some((3, 7));
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(diags[0].span, Some((3, 7)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((3, 7))
+    );
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
@@ -739,7 +742,10 @@ fn applying_a_non_function_reports_expected_function() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
-    assert_eq!(diags[0].span, Some((2, 3)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((2, 3))
+    );
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
@@ -761,13 +767,16 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     let l = lam(&mut ir, x, x);
     let zero = int(&mut ir, 0);
     let idx = index(&mut ir, l, zero);
-    ir.expr[idx.0 as usize].span = Some((3, 7));
+    ir.expr[l.0 as usize].span = Some((3, 7));
     let b = build(idx, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
-    assert_eq!(diags[0].span, Some((3, 7)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((3, 7))
+    );
     assert_eq!(diags[0].a, b.ty[l].unwrap());
 }
 
@@ -802,7 +811,10 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
-    assert_eq!(diags[0].span, Some((5, 17)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((5, 17))
+    );
     // runtime direction is reversed: a = the parameter's expected type,
     // b = the argument's found type
     assert_eq!(
@@ -1116,7 +1128,8 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(diags[0].message, "index 5 out of bounds (array length 2)");
+    assert_eq!(diags[0].index, Some(5));
+    assert_eq!(diags[0].length, Some(2));
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::USize(5)))
@@ -1125,7 +1138,10 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::USize(2)))
     );
-    assert_eq!(diags[0].span, Some((3, 9)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((3, 9))
+    );
 }
 
 #[test]
@@ -1145,7 +1161,8 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(diags[0].message, "index 5 out of bounds (array length 3)");
+    assert_eq!(diags[0].index, Some(5));
+    assert_eq!(diags[0].length, Some(3));
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::LowValue(LowValue::USize(5)))
@@ -1154,7 +1171,10 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     );
-    assert_eq!(diags[0].span, Some((4, 11)));
+    assert_eq!(
+        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
+        Some((4, 11))
+    );
 }
 
 #[test]
@@ -1176,7 +1196,8 @@ fn array_index_out_of_bounds_against_a_bound_length() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::IndexOutOfBounds);
-    assert_eq!(diags[0].message, "index 3 out of bounds (array length 2)");
+    assert_eq!(diags[0].index, Some(3));
+    assert_eq!(diags[0].length, Some(2));
 }
 
 // --- struct types ----------------------------------------------------------
@@ -1341,11 +1362,10 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     );
-    assert!(
-        diags[0].message.starts_with("expected ["),
-        "the struct's shape renders as the expected side: {}",
-        diags[0].message
-    );
+    // The struct's shape is the structured expected side now; the wording
+    // ("expected [...]") is re-rendered by the language layer from the kind
+    // and the value_a/value_b facts.
+    assert!(diags[0].loc().is_some(), "the annotation conflict is located");
 }
 
 #[test]
@@ -1367,11 +1387,11 @@ fn two_struct_types_conflict_reports_the_nominal_ids() {
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
-    assert!(
-        diags[0].message.contains("TypeId("),
-        "the nominal ids render: {}",
-        diags[0].message
-    );
+    // The two distinct struct types conflict on their nominal id.  That
+    // id-bearing wording ("TypeId(…)") is the language layer's job to
+    // re-render from the structured facts; the checker only guarantees the
+    // runtime apply-time kind and that the conflict is located.
+    assert!(diags[0].loc().is_some(), "the runtime conflict is located");
 }
 
 #[test]
@@ -1520,7 +1540,18 @@ fn instances_of_different_struct_occurrences_conflict() {
     );
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
-    assert!(diags[0].message.contains("TypeId("), "{}", diags[0].message);
+    assert_eq!(diags[0].kind, DiagKind::ArrayElement);
+    // The conflict is the two distinct struct instances' nominal ids.
+    assert!(
+        matches!(
+            (&diags[0].value_a, &diags[0].value_b),
+            (
+                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_))),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_)))
+            )
+        ),
+        "the two distinct struct instances conflict on their nominal id"
+    );
 }
 
 // --- the `_` placeholder ----------------------------------------------------

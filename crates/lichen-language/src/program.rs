@@ -16,7 +16,7 @@
 use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::Span;
+use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{
     HighGlobal, ProgramImpl, TypeOperator, TypeValue, ValueType,
 };
@@ -277,9 +277,9 @@ impl AttrExt<LangProgram> for Perspective {
         checker: &mut Checker<LangProgram>,
         a: NodeId,
         b: NodeId,
-        span: Option<Span>,
+        loc: Loc,
     ) {
-        checker.check_unify_relaxed(a, b, span, DiagKind::Attribute, |checker, value, declared| {
+        checker.check_unify_relaxed(a, b, loc, DiagKind::Attribute, |checker, value, declared| {
             // `a` (first) is the value's actual perspective, `b` (second) the
             // declared one.  A value uniform over `value` threads is usable
             // where `declared` is required iff `declared | value` (an aligned

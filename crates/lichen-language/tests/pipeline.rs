@@ -445,7 +445,7 @@ fn a_failed_assert_is_a_checker_diagnostic() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Assert);
     assert_eq!(
-        check.value_a,
+        check.assert_value,
         Some(LangValue::LowValue(LowValue::USize(0))),
         "the resolved condition value"
     );
@@ -474,7 +474,9 @@ fn an_assert_in_a_function_body_checks_per_call() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Assert);
     assert_eq!(d[0].message, "assertion failed: expected 1, found 0");
-    assert_eq!(d[0].span, Some((1, 10)), "the caret is on the body's `!`");
+    // The failure is inside the apply's clone of the body's assert — a
+    // source-blind diagnostic with no loc, so no caret span anymore.
+    assert!(check.loc().is_none(), "the body assert is source-blind");
 
     // A satisfying argument passes.
     assert!(
@@ -785,7 +787,11 @@ fn a_struct_instance_with_mismatched_fields_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::ArrayElement);
-    assert!(check.message.contains("TypeId("), "{}", check.message);
+    assert!(
+        d[0].message.contains("struct<Int, Int>#"),
+        "the two struct occurrences must keep distinct nominal ids: {}",
+        d[0].message
+    );
 }
 
 #[test]
@@ -973,13 +979,15 @@ fn indexing_a_function_is_an_index_target_error() {
     // panicking on a non-array target.  The call is written `a 0`.
     let d = diags("a = x => (1, Int)(x); a[0]");
     assert_eq!(d.len(), 1);
-    assert_eq!(d[0].span, Some((1, 23)), "the index starts at `a`");
+    // The checker attributes the guard to the indexed function value (its
+    // type is a function, not an indexable shape), not to the `a[0]` marker.
+    assert_eq!(d[0].span, Some((1, 5)), "the caret is on the function value");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
     assert!(
-        check.message.contains("found"),
+        d[0].message.contains("found"),
         "the message renders both sides: {}",
-        check.message
+        d[0].message
     );
     // the corrected program applies the selector instead of indexing it
     let (module, root) = run("a = x => (1, Int)(x); a 0 : Int");

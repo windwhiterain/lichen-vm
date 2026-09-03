@@ -79,6 +79,82 @@ pub struct ChildRange {
 /// A source span, supplied by the language frontend: `(line, column)`.
 pub type Span = (u32, u32);
 
+/// A source-blind diagnostic location: the IR expression a check is about,
+/// plus a single **recursive** descent path through its `[value, type, …]`
+/// spine.
+///
+/// The highlevel is deliberately source-blind — it never sees a [`Span`]
+/// (the source↔IR mapping is the frontend's own record), so a location must
+/// be expressible purely in terms of the expression's structure.  The highlevel
+/// *does* parse each level of that structure, tagging it as either an
+/// expression's `[value, type]` pair (a [`LocStep::Value`]/[`LocStep::Type`]/
+/// [`LocStep::Attr`] slot) or a tuple/array/struct shape (a [`LocStep::Elem`]),
+/// so the language layer can build a precise diagnostic without re-deriving
+/// the type grammar.
+///
+/// There is no distinct "kind" in lichen: `kind` is just the type's type, one
+/// more `[value, type]` pairing, and that chain is unbounded (`Type : Type`).
+/// So a [`LocStep::Type`] may repeat arbitrarily; a [`LocStep::Type`] followed
+/// by [`LocStep::Type`] is the type's type, and so on.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Loc {
+    /// The IR expression the diagnostic is about.
+    pub expr: ExprId,
+    /// The recursive descent of [`LocStep`]s (see [`Self`]).
+    pub path: Vec<LocStep>,
+}
+
+/// One step of the recursive location descent.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LocStep {
+    /// The value slot of a `[value, type]` pair (element 0).  For an atomic
+    /// type expression this is that type's marker.
+    Value,
+    /// The type slot of a `[value, type]` pair (element 1).  Repeating reaches
+    /// the type's type, ad infinitum.
+    Type,
+    /// An attribute-tail slot of an expression pair (element 2 + index).
+    Attr(usize),
+    /// Entering a tuple/array/struct structure — a compound type's element 0,
+    /// the list of its fields/elements.
+    Shape,
+    /// Element `i` of a tuple/array/struct shape.
+    Elem(usize),
+}
+
+/// The coarse category that begins a [`Loc`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LocKind {
+    /// The expression's value slot (leading [`LocStep::Value`]).
+    Value,
+    /// The expression's type slot, or a further link of the type chain
+    /// (leading [`LocStep::Type`]).
+    Type,
+    /// The expression's attribute-tail slot (leading [`LocStep::Attr`]).
+    Attribute,
+}
+
+impl Loc {
+    /// The coarse category the location denotes.
+    pub fn kind(&self) -> LocKind {
+        match self.path.first() {
+            None | Some(LocStep::Value) => LocKind::Value,
+            Some(LocStep::Type) => LocKind::Type,
+            Some(LocStep::Attr(_)) => LocKind::Attribute,
+            // A shape / element only appears deeper in a type's chain; the
+            // leading slot is still the type of the surrounding pair.
+            Some(LocStep::Shape) | Some(LocStep::Elem(_)) => LocKind::Type,
+        }
+    }
+
+    /// How many `[value, type]` pairings the location descends: how many
+    /// leading [`LocStep::Type`]s (the first is the type, the second is the
+    /// type's type, and so on, unbounded).
+    pub fn type_depth(&self) -> usize {
+        self.path.iter().take_while(|s| **s == LocStep::Type).count()
+    }
+}
+
 /// The highlevel program: a pure expression tree, generic over the
 /// compile-time attribute type `A` (an expression schema's tail) and the
 /// literal vocabulary `L` (the [`LiteralExt`](crate::program::LiteralExt)

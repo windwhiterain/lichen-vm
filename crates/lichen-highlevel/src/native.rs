@@ -18,7 +18,7 @@
 use lichen_lowlevel::NodeId;
 
 use crate::checker::Checker;
-use crate::ir::{ExprId, Span};
+use crate::ir::{ExprId, Loc};
 use crate::program::{HighProgram, ValueType};
 
 /// The result of a native operator's [`NativeExt::check_apply`]: the compiled
@@ -57,7 +57,7 @@ where
         argument_value: NodeId,
         argument_ty: NodeId,
         argument: ExprId,
-        span: Option<Span>,
+        loc: Loc,
     ) -> NativeApply;
 }
 

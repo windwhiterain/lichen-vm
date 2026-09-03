@@ -993,25 +993,23 @@ pub fn render_all(source: &str, diags: &[Diag]) -> String {
 // so the user inspects an expr's type instead of reading a source trace.
 
 /// Re-render a checker diagnostic's message with the shared pretty printer,
-/// mirroring the highlevel's raw rendering ([`liche_highlevel::diagnostic`])
-/// but in the language's own type syntax.  `printer` is shared across a whole
-/// report, so a class keeps a single `?a` name across diagnostics.
+/// from the highlevel's structured facts, in the language's own type syntax.
+/// `printer` is shared across a whole report, so a class keeps a single `?a`
+/// name across diagnostics.
 pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) -> String {
     match d.kind {
         DiagKind::Annotation
         | DiagKind::Attribute
         | DiagKind::ArrayElement
         | DiagKind::TableKey
-        | DiagKind::TableValue => format!(
-            "expected {}, found {}",
-            printer.node(d.b),
-            printer.node(d.a)
-        ),
-        DiagKind::Guard => format!(
-            "expected {}, found {}",
-            printer.node(d.b),
-            printer.node(d.a)
-        ),
+        | DiagKind::TableValue
+        | DiagKind::Guard => {
+            format!(
+                "expected {}, found {}",
+                printer.node(d.b),
+                printer.node(d.a)
+            )
+        }
         DiagKind::IndexTarget => {
             format!(
                 "expected a tuple, array, or struct type, found {}",
@@ -1019,19 +1017,15 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
             )
         }
         DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
-        // A runtime apply-time failure: the parameter is the expected side,
-        // the argument the found side.
+        // A runtime apply-time failure: the parameter is the expected side
+        // (a), the argument the found side (b).
         DiagKind::Runtime => format!(
             "expected {}, found {}",
             printer.node(d.a),
             printer.node(d.b)
         ),
         DiagKind::IndexOutOfBounds => {
-            let (
-                Some(LangValue::LowValue(LowValue::USize(index))),
-                Some(LangValue::LowValue(LowValue::USize(length))),
-            ) = (d.value_a, d.value_b)
-            else {
+            let (Some(index), Some(length)) = (d.index, d.length) else {
                 return "index out of bounds".to_string();
             };
             format!("index {index} out of bounds (array length {length})")
@@ -1042,7 +1036,7 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
                 .to_string()
         }
         DiagKind::Assert => {
-            let value = match d.value_a {
+            let value = match d.assert_value {
                 Some(LangValue::LowValue(LowValue::USize(n))) => n.to_string(),
                 Some(LangValue::LowValue(LowValue::None)) => "none".to_string(),
                 Some(other) => format!("{other:?}"),

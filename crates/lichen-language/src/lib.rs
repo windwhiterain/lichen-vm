@@ -130,11 +130,18 @@ pub fn compile_with_imports_at(
             build
                 .diagnostics()
                 .into_iter()
-                .map(|d| Diag {
-                    span: d.span,
-                    message: crate::render::checker_message(&mut printer, &d),
-                    stage: Stage::Check,
-                    check: Some(Box::new(d)),
+                .map(|d| {
+                    // The highlevel is source-blind: a diagnostic carries a
+                    // structured `Loc` (an IR expression + position), and the
+                    // frontend maps that back to a source span through its own
+                    // IR (which still carries spans at this stage).
+                    let span = d.loc().and_then(|loc| build.ir[loc.expr].span);
+                    Diag {
+                        span,
+                        message: crate::render::checker_message(&mut printer, &d),
+                        stage: Stage::Check,
+                        check: Some(Box::new(d)),
+                    }
                 })
                 .collect::<Vec<_>>(),
         );

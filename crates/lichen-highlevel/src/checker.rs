@@ -37,7 +37,7 @@ use lichen_utils::extend::AsEnum;
 
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ExprId, ExprKind, IR, Span};
+use crate::ir::{BinOp, ExprId, ExprKind, IR, Loc, LocStep};
 use crate::native::{no_native_ext, NativeExt};
 use crate::program::{HighProgram, LiteralCtx, LiteralExt, TypeOperator, ValueType};
 
@@ -118,11 +118,11 @@ where
     apply_edges: HashMap<NodeId, ApplyEdge>,
     /// The runtime-attribution edges: a node a runtime failure will
     /// reference (an `Index`/`TableGet` operand, an assert condition) mapped
-    /// to its source span.  Recorded by the checker as it builds the
+    /// to its source-blind location.  Recorded by the checker as it builds the
     /// operation, so the diagnostic layer attributes a runtime error to the
-    /// *source* that built it without storing any span *on* the node — which
-    /// is what lets the lowlevel graph be freely shared.
-    node_edges: HashMap<NodeId, Span>,
+    /// *expression* that built it without storing any span *on* the node —
+    /// which is what lets the lowlevel graph be freely shared.
+    node_edges: HashMap<NodeId, Loc>,
     /// The assert conditions that are *user-facing* — the explicit `assert`
     /// expressions (not the generated array-bounds guard `check_index`
     /// registers, which duplicates the index eval error).  The diagnostics
@@ -159,10 +159,10 @@ where
 /// when the argument node is reused (`Int`'s term is the shared int type).
 #[derive(Clone, Copy, Debug)]
 pub struct ApplyEdge {
-    /// The source span of the argument expression — the caret target.
-    pub argument_span: Option<Span>,
-    /// The source span of the whole apply (the call site) — context.
-    pub apply_span: Option<Span>,
+    /// The argument's IR expression — the caret target.
+    pub argument_expr: ExprId,
+    /// The whole apply's IR expression (the call site) — context.
+    pub apply_expr: ExprId,
 }
 
 /// The result of building a program: the compiled Module plus the checker's
@@ -197,9 +197,9 @@ where
     /// argument structure for attributing a runtime parameter-check failure.
     pub apply_edges: HashMap<NodeId, ApplyEdge>,
     /// The runtime-attribution edges (see [`Checker::node_edges`]) — a runtime
-    /// failure's node mapped to the source span that built it.  No span is
-    /// stored on a node, so the graph is freely shareable.
-    pub node_edges: HashMap<NodeId, Span>,
+    /// failure's node mapped to the source-blind location that built it.  No
+    /// span is stored on a node, so the graph is freely shareable.
+    pub node_edges: HashMap<NodeId, Loc>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
     pub ok: bool,
@@ -679,17 +679,25 @@ where
     // --- the check -------------------------------------------------------
 
     /// A checker-issued unification, diary-attributed: records which error
-    /// (if any) it produced, with the span and check kind that drive the
-    /// diagnostic's wording and expected/found direction.
-    pub fn check_unify(&mut self, a: NodeId, b: NodeId, span: Option<Span>, kind: DiagKind) {
+    /// (if any) it produced, with the source-blind [`Loc`] and check kind that
+    /// drive the diagnostic's expected/found direction.  The `loc`'s `slot`
+    /// names which element of the expression's `[value, type, attrs…]` pair
+    /// the check is about; its `path` is filled from the unify's own descent
+    /// (`steps`).
+    pub fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
         let before = self.module.unify_errors.len();
         self.module.unify(a, b);
         if self.module.unify_errors.len() > before {
+            let err = &self.module.unify_errors[before];
+            let path = tag_descent(&self.module, loc.path.clone(), b, &err.steps);
             self.diary.push(DiaryEntry {
                 error_index: before,
                 a,
                 b,
-                span,
+                loc: Loc {
+                    expr: loc.expr,
+                    path,
+                },
                 kind,
             });
         }
@@ -716,7 +724,7 @@ where
         &mut self,
         a: NodeId,
         b: NodeId,
-        span: Option<Span>,
+        loc: Loc,
         kind: DiagKind,
         is_subtype: impl Fn(&Checker<P>, NodeId, NodeId) -> bool,
     ) {
@@ -726,11 +734,16 @@ where
             if is_subtype(self, a, b) {
                 self.module.unify_errors.truncate(before);
             } else {
+                let err = &self.module.unify_errors[before];
+                let path = tag_descent(&self.module, loc.path.clone(), b, &err.steps);
                 self.diary.push(DiaryEntry {
                     error_index: before,
                     a,
                     b,
-                    span,
+                    loc: Loc {
+                        expr: loc.expr,
+                        path,
+                    },
                     kind,
                 });
             }
@@ -1140,7 +1153,7 @@ where
             self.check_unify(
                 type_cell,
                 type_pair,
-                self.ir[parameter_type].span,
+                self.loc(parameter_type, 1),
                 DiagKind::Annotation,
             );
         }
@@ -1262,7 +1275,7 @@ where
                 argument_value,
                 argument_type,
                 argument,
-                self.ir[e].span,
+                self.loc(e, 1),
             );
             self.term[e] = Some(native_apply.node);
             self.val[e] = native_apply.val;
@@ -1281,7 +1294,7 @@ where
             let shape = self.array_node(self.current_block, &[d, c]);
             let kind = self.kind_expr(self.current_block, self.function_type_marker);
             let fn_ty = self.array_node(self.current_block, &[shape, kind]);
-            self.check_unify(function_ty, fn_ty, self.ir[e].span, DiagKind::Guard);
+            self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // The apply's attribute equality check: the function's declared
         // parameter attribute (or its `missing` for an unannotated parameter)
@@ -1296,7 +1309,7 @@ where
                 self,
                 self.attr_or_missing(argument),
                 param_slot,
-                self.ir[e].span,
+                self.loc(e, 2),
             );
         } else if self.attr[argument].is_some() {
             let marker = &self.ir.schema(argument).tail[0];
@@ -1305,7 +1318,7 @@ where
                 self,
                 self.attr[argument].unwrap(),
                 self.zero_marker,
-                self.ir[e].span,
+                self.loc(e, 2),
             );
         }
         // The result's type cell: unbound unless the apply's evaluation
@@ -1331,8 +1344,8 @@ where
         self.apply_edges.insert(
             node,
             ApplyEdge {
-                argument_span: self.ir[argument].span,
-                apply_span: self.ir[e].span,
+                argument_expr: argument,
+                apply_expr: e,
             },
         );
         self.term[e] = Some(node);
@@ -1351,12 +1364,16 @@ where
     fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
         self.check_expr(left);
         self.check_expr(right);
-        let span = self.ir[e].span;
-        self.check_unify(self.ty[left].unwrap(), self.int_type, span, DiagKind::BinOp);
+        self.check_unify(
+            self.ty[left].unwrap(),
+            self.int_type,
+            self.loc(left, 1),
+            DiagKind::BinOp,
+        );
         self.check_unify(
             self.ty[right].unwrap(),
             self.int_type,
-            span,
+            self.loc(right, 1),
             DiagKind::BinOp,
         );
         let operator = match operator {
@@ -1407,14 +1424,12 @@ where
         self.check_unify(
             self.ty[array].unwrap(),
             array_ty,
-            self.ir[e].span,
+            self.loc(array, 1),
             DiagKind::Guard,
         );
         let array_value = self.value_of(array);
         let index_value = self.value_of(index);
-        if let Some(span) = self.ir[index].span {
-            self.node_edges.insert(index_value, span);
-        }
+        self.node_edges.insert(index_value, self.loc(index, 0));
         let value_ops = self.array_node(self.current_block, &[array_value, index_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1435,7 +1450,7 @@ where
             P::Operator::from(TypeOperator::Eq),
             Some(in_range_ops),
         );
-        self.register_assert(in_range, self.ir[e].span, false);
+        self.register_assert(in_range, self.loc(e, 0), false);
         let pair = self.pair_of(value_node, elem_cell);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
@@ -1486,7 +1501,7 @@ where
                 error_index,
                 a: container_ty,
                 b: container_ty,
-                span: self.ir[e].span,
+                loc: self.loc(container, 1),
                 kind: DiagKind::IndexTarget,
             });
         }
@@ -1494,9 +1509,7 @@ where
             self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
-        if let Some(span) = self.ir[key].span {
-            self.node_edges.insert(key_value, span);
-        }
+        self.node_edges.insert(key_value, self.loc(key, 0));
         let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1547,14 +1560,12 @@ where
         self.check_unify(
             self.ty[container].unwrap(),
             table_ty,
-            self.ir[e].span,
+            self.loc(container, 1),
             DiagKind::Guard,
         );
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
-        if let Some(span) = self.ir[key].span {
-            self.node_edges.insert(key_value, span);
-        }
+        self.node_edges.insert(key_value, self.loc(key, 0));
         let ops = self.array_node(self.current_block, &[container_value, key_value]);
         let value_node = self.op_node(
             self.current_block,
@@ -1589,7 +1600,7 @@ where
                 self.check_unify(
                     self.ty[value].unwrap(),
                     type_pair,
-                    self.ir[e].span,
+                    self.loc(value, 1),
                     DiagKind::Annotation,
                 );
                 type_pair
@@ -1617,7 +1628,7 @@ where
                     let child_attrs: Vec<NodeId> =
                         children.iter().map(|&c| self.attr_or_missing(c)).collect();
                     let combined = ext.combine(self, &child_attrs);
-                    ext.unify_slots(self, combined, attr_val, self.ir[e].span);
+                    ext.unify_slots(self, combined, attr_val, self.loc(e, 2));
                     combined
                 };
                 self.attr[e] = Some(slot);
@@ -1686,7 +1697,7 @@ where
         self.check_unify(
             value_shape,
             field_list,
-            self.ir[e].span,
+            self.loc(e, 1),
             DiagKind::Annotation,
         );
         let value_node = self.value_of(value);
@@ -1710,7 +1721,7 @@ where
         // The checked thing is a `USize`, so the assert names the value
         // node — element 0 of the pair — not the pair itself.
         let value = self.value_of(condition);
-        self.register_assert(value, self.ir[e].span, true);
+        self.register_assert(value, self.loc(e, 0), true);
         let pair = self.term[condition].unwrap();
         self.term[e] = Some(pair);
         self.val[e] = self.val[condition];
@@ -1721,19 +1732,14 @@ where
     /// Registers an assert condition: the module worklist entry plus, when
     /// a function body is being compiled, the current function's own list —
     /// the function owns it, so an apply clones it and re-checks the
-    /// instantiated condition against each call's argument.  `span` is
+    /// instantiated condition against each call's argument.  `loc` is
     /// recorded as the runtime attribution edge for the condition node;
     /// `user_facing` marks an explicit `assert` (rendered as a diagnostic) as
     /// opposed to a generated guard (the array-bounds check, which duplicates
-    /// the index eval error and is not rendered).
-    fn register_assert(&mut self, condition: NodeId, span: Option<Span>, user_facing: bool) {
-        if let Some(span) = span {
-            self.node_edges.insert(condition, span);
-            // The span also rides the lowlevel module so a per-call clone of
-            // the condition keeps the assert's location (the `node_edges` map
-            // is a highlevel-only table the clone paths cannot reach).
-            self.module.assert_spans.insert(condition, span);
-        }
+    /// the index eval error and is not rendered).  The location is source-blind
+    /// (an [`ExprId`]-based [`Loc`]), so no span reaches the lowlevel module.
+    fn register_assert(&mut self, condition: NodeId, loc: Loc, user_facing: bool) {
+        self.node_edges.insert(condition, loc);
         if user_facing {
             self.user_asserts.insert(condition);
             self.module.add_user_assert(condition);
@@ -1851,7 +1857,7 @@ where
             self.check_unify(
                 self.ty[el].unwrap(),
                 element_ty,
-                self.ir[el].span,
+                self.loc(el, 1),
                 DiagKind::ArrayElement,
             );
         }
@@ -1890,20 +1896,18 @@ where
             self.check_expr(key);
             self.check_expr(value);
             let key_node = self.value_of(key);
-            if let Some(span) = self.ir[key].span {
-                self.node_edges.insert(key_node, span);
-            }
+            self.node_edges.insert(key_node, self.loc(key, 0));
             pairs.push((AnyNodeId::Dynamic(key_node), AnyNodeId::Dynamic(self.value_of(value))));
             self.check_unify(
                 self.ty[key].unwrap(),
                 key_ty,
-                self.ir[key].span,
+                self.loc(key, 1),
                 DiagKind::TableKey,
             );
             self.check_unify(
                 self.ty[value].unwrap(),
                 value_ty,
-                self.ir[value].span,
+                self.loc(value, 1),
                 DiagKind::TableValue,
             );
         }
@@ -2049,12 +2053,85 @@ where
         pair
     }
 
+    /// A source-blind location naming `slot` of expression `e` (0 = value,
+    /// 1 = type, 2+ = the attribute tail).  The recursive descent beyond the
+    /// leading slot is filled by [`Checker::check_unify`] from the lowlevel's
+    /// unify `steps`.
+    fn loc(&self, e: ExprId, slot: usize) -> Loc {
+        let step = match slot {
+            0 => LocStep::Value,
+            1 => LocStep::Type,
+            n => LocStep::Attr(n - 2),
+        };
+        Loc {
+            expr: e,
+            path: vec![step],
+        }
+    }
+
     fn lookup(&self, target: ExprId) -> Binding {
         self.scopes
             .iter()
             .rev()
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
+    }
+}
+
+/// The full-parse walk: append a [`LocStep`] for each unify `step`,
+/// classifying the current node as an expression's `[value, type]` pair
+/// (→ `Value`/`Type`/`Attr`) or a tuple/array/struct shape (→ `Shape` then
+/// `Elem`).
+///
+/// `start` is the unify's `b`-side top operand (`root_b`); the walk tracks the
+/// `step.b` child as it descends.  Both sides of a unify are structurally
+/// parallel (unification only descends where both are arrays), so the shape
+/// tags are identical whichever side is tracked — the `b` side is just the one
+/// the source-blind location is anchored to.
+pub(crate) fn tag_descent<P: lichen_lowlevel::Program>(
+    module: &Module<P>,
+    mut path: Vec<LocStep>,
+    start: NodeId,
+    steps: &[lichen_lowlevel::UnifyStep],
+) -> Vec<LocStep> {
+    let mut cur = start;
+    let mut in_shape = false;
+    for step in steps {
+        let tag = if in_shape {
+            in_shape = false;
+            LocStep::Elem(step.index)
+        } else if step.index == 0 {
+            if slot0_is_shape(module, cur) {
+                in_shape = true;
+                LocStep::Shape
+            } else {
+                LocStep::Value
+            }
+        } else if step.index == 1 {
+            LocStep::Type
+        } else {
+            LocStep::Attr(step.index - 2)
+        };
+        path.push(tag);
+        cur = step.b;
+    }
+    path
+}
+
+/// Whether `node`'s element 0 is a list — a tuple/array/struct structure (a
+/// "shape") rather than an expression's `[value, type]` pair.
+fn slot0_is_shape<P: lichen_lowlevel::Program>(module: &Module<P>, node: NodeId) -> bool {
+    let Some(items) = module.array_items(node) else {
+        return false;
+    };
+    if items.is_empty() {
+        return false;
+    }
+    match items[0].node {
+        AnyNodeId::Dynamic(child) => module.array_items(child).is_some(),
+        // A static element is a leaf (a package export); it is never a
+        // tuple/array/struct shape we descend into.
+        AnyNodeId::Static(_) => false,
     }
 }
 

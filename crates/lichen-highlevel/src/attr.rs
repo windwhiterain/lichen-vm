@@ -16,7 +16,7 @@
 use lichen_lowlevel::{LowValue, NodeId};
 
 use crate::checker::Checker;
-use crate::ir::Span;
+use crate::ir::Loc;
 use crate::program::{HighProgram, ValueType};
 
 /// The marker bound every attribute type must satisfy: a plain, hashable,
@@ -61,8 +61,8 @@ where
     /// the *expected/declared* side as `b`.  A perspective's default impl is
     /// an equality unify; an attribute that defines [`Self::is_subtype`] may
     /// call [`Checker::check_unify_relaxed`] instead so a subtype (not just an
-    /// exact match) passes.
-    fn unify_slots(&self, checker: &mut Checker<P>, a: NodeId, b: NodeId, span: Option<Span>);
+    /// exact match) passes.  `loc` is the source-blind location of the check.
+    fn unify_slots(&self, checker: &mut Checker<P>, a: NodeId, b: NodeId, loc: Loc);
 
     /// The optional subtype relation on this attribute's slot values: whether
     /// `sub` is a subtype of `super` under its lattice.  The checker consults
