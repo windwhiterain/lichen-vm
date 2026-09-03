@@ -2,7 +2,7 @@
 //! from highlevel expression trees.
 //!
 //! Layering (language → highlevel → lowlevel): the real language frontend
-//! (not built yet) compiles source into an [`ir::ExprTable`]; the
+//! (not built yet) compiles source into an [`ir::IR`]; the
 //! [`checker::Checker`] checks it and builds the lowlevel
 //! [`lichen_lowlevel::Module`] in one pass — unify is runtime behaviour, so
 //! checking happens while building.

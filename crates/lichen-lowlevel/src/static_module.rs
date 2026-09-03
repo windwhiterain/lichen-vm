@@ -2,7 +2,7 @@
 //! in the device's [`Registry`] and used in place by an importer
 //! [`Module`].
 //!
-//! The design (canonical plan: `docs/static-module-deps-plan.md`):
+//! The design (see the feature note `docs/notes/static-modules.md`):
 //! - every ref into a static module — node, function, or handle — carries
 //!   the module's device key ([`ModuleKey`]), so refs are absolute from
 //!   birth.  An importer stores and resolves them verbatim

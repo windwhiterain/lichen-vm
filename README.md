@@ -2,9 +2,9 @@
 
 *A lazy, unification-based infrastructure for type-checker — where a type is just a value.*
 
-## Highlevel
+## [Highlevel](crates/lichen-highlevel/)
 
-Built program from lowlevel from IR (intermediate representation), checking and runtime are unified.
+Build type system over untyped lowlevel from IR (intermediate representation).
 
 ### Features:
 
@@ -17,9 +17,9 @@ Built program from lowlevel from IR (intermediate representation), checking and 
 - No Curry
 - `Type : Type`
 
-## Lowlevel
+## [Lowlevel](crates/lichen-lowlevel/)
 
-Interpreter that type and value are same thing.
+Interpreter that has no type.
 
 ### Features:
 
@@ -37,9 +37,9 @@ Interpreter that type and value are same thing.
 - Minimal Allocation.
 - High Speed For Trivial Program (complex one will be JIT compiled in the future).
 
-## Language
+## [Language](crates/lichen-language/)
 
-A minimal language demostrating the features.
+A minimal language built over highlevel.
 
 - [spec](docs/language-spec.md)
 

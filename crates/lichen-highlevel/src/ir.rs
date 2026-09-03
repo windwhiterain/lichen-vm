@@ -62,13 +62,13 @@ pub enum BinOp {
     Eq,
 }
 
-/// A dense index into [`ExprTable::expr`].  References are pre-resolved: a
+/// A dense index into [`IR::expr`].  References are pre-resolved: a
 /// use of a parameter *is* the [`ExprKind::Parameter`]'s own `ExprId` (the
 /// checker's scope stack is keyed by it), so the IR carries no name strings.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct ExprId(pub u32);
 
-/// A half-open range into [`ExprTable::children`] (as plain fields, since
+/// A half-open range into [`IR::children`] (as plain fields, since
 /// `std::ops::Range` is not `Copy`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct ChildRange {
@@ -220,11 +220,11 @@ pub enum ExprKind<L> {
     TypeFunction { parameter: ExprId, r#return: ExprId },
     /// A tuple instance `[v1, ..., vn]` — one type slot per element, so the
     /// elements may be heterogeneous.  Elements stored in
-    /// [`ExprTable::children`].
+    /// [`IR::children`].
     Tuple(ChildRange),
     /// A tuple type expression `[T1, ..., Tn]` — the element types, kinded
     /// `[[T1, ..., Tn], [TupleType, Type]]`.  Elements stored in
-    /// [`ExprTable::children`].
+    /// [`IR::children`].
     TypeTuple(ChildRange),
     /// A struct type expression `[T1, ..., Tn]` — the field types
     /// (positional, no names in v1), kinded with a fixed `TypeStruct` marker
@@ -233,16 +233,16 @@ pub enum ExprKind<L> {
     /// length]` shape).  Each occurrence's `Fresh` call allocates a new id,
     /// so two occurrences never unify at the value level; a struct type is
     /// reused by binding it once through a parameter.  Elements stored in
-    /// [`ExprTable::children`].
+    /// [`IR::children`].
     TypeStruct(ChildRange),
     /// An array instance `[v1, ..., vn]` — every element shares one type
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
-    /// [`ExprTable::children`].
+    /// [`IR::children`].
     Array(ChildRange),
     /// A constant table instance `table { k1 :: v1, k2 :: v2, … }` — every
     /// key shares one key type and every value one value type (checked
     /// against two shared cells, like an array's single element cell).  The
-    /// entries are stored interleaved in [`ExprTable::children`]:
+    /// entries are stored interleaved in [`IR::children`]:
     /// `[k1, v1, k2, v2, …]`.  The checker builds the lowlevel table value
     /// eagerly — keys must be force-evaluated to hash them — and drops an
     /// entry whose key is not concrete (recording the error), per the table
@@ -251,7 +251,7 @@ pub enum ExprKind<L> {
     /// An array instance with `~`-marked positions — `[v1, ~ v2, ~2 v3]`.
     /// Typed like a tuple (per-element type slots — a homogeneous
     /// [`Self::Array`] type would reject `[x, ~ f(x+1)]` with an `Int` head
-    /// and a `Stream` tail).  Elements stored in [`ExprTable::children`],
+    /// and a `Stream` tail).  Elements stored in [`IR::children`],
     /// the per-element depths in [`IR::depths`] (0 = unmarked, `usize::MAX`
     /// = the bare `~`, n = the value slot shallow at the first n levels of
     /// the element's type spine).

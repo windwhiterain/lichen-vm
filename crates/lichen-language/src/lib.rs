@@ -1,7 +1,7 @@
 //! The minimal source language: text → highlevel IR → checked program.
 //!
 //! The pipeline is [`frontend`] (lex → parse → resolve → an
-//! [`ExprTable`], the highlevel IR, with names pre-resolved to binder ids and
+//! [`lichen_highlevel::ir::IR`], the highlevel IR, with names pre-resolved to binder ids and
 //! every expression carrying a source span) followed by
 //! [`lichen_highlevel::checker::Checker::build`], which runs unchanged.
 //! [`compile`] runs the whole pipeline and merges the frontend and checker

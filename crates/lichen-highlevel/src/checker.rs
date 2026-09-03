@@ -1,4 +1,4 @@
-//! The builder/checker: compiles an [`ExprTable`] into a lowlevel [`Module`]
+//! The builder/checker: compiles an [`IR`] into a lowlevel [`Module`]
 //! where the runtime *is* the typechecker.
 //!
 //! Every expression compiles to a **recursive pair** `[value, type]` — a

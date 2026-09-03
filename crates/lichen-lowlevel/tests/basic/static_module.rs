@@ -1,6 +1,6 @@
 //! Static module dependencies: a fully-solved [`StaticModule`] registered
 //! in the device's [`Registry`] and used in place.  The crisis demos of the
-//! canonical plan (`docs/static-module-deps-plan.md`): residual re-open,
+//! feature note (`docs/notes/static-modules.md`): residual re-open,
 //! constant baking, the shared-arena rule, device-key resolution,
 //! recursion, parameter topology, per-call asserts, GC, and static closures.
 

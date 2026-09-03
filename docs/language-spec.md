@@ -1,5 +1,10 @@
 # Language spec (v1)
 
+> Status: current — the single source of truth for the lichen source language.
+> Owned by [`crates/lichen-language`](../crates/lichen-language). This is the one
+> retained early document; feature notes describe the surrounding system and refer
+> here for syntax ([doc index](README.md)).
+
 *A minimal source language that compiles to the highlevel IR
 ([`lichen-highlevel`](crates/lichen-highlevel)) and produces proper diagnostics.
 Brainstormed 2026-08-22; the surface decisions (lambda syntax, `let` bindings,
@@ -17,14 +22,14 @@ checker, which runs *unchanged*.
 ## 1. Goals
 
 1. **A real pipeline.** Source text → lex → parse → resolve → IR
-   (`lichen_highlevel::ir::ExprTable`) → `Checker::build` → rendered
+   (`lichen_highlevel::ir::IR`) → `Checker::build` → rendered
    diagnostics. Every stage is testable on its own.
 2. **Proper diagnostics.** Every error — frontend or checker — is a value with
    a span and a message; bad input never panics. Checker failures keep the
    expected/found wording and the `?a` flow, rendered by the same pretty
    printer as the CLI output (§5).
 3. **No changes to the type layer.** The checker, the IR, and the lowlevel VM
-   are used as-is; the frontend is a pure producer of `ExprTable`s.
+   are used as-is; the frontend is a pure producer of the `IR`.
 
 ## 2. Syntax
 

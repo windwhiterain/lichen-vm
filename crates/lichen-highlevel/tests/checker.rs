@@ -1,4 +1,4 @@
-//! The highlevel checker: compiles an ExprTable into a lowlevel Module where
+//! The highlevel checker: compiles an IR into a lowlevel Module where
 //! the runtime *is* the typechecker — values are recursive pairs
 //! `[value, type]` whose type slots are themselves pairs bottoming out at
 //! the self-referential `Type : Type` universe, and the apply-time unify is
