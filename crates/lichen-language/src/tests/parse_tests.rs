@@ -56,7 +56,7 @@ fn statement_errors_carry_spans() {
     assert!(err.message.contains("must end with an expression"));
     // A binding without a value.
     let err = parse_err("a = ; 5");
-    assert_eq!(err.message, "expected an expression, found a separator");
+    assert_eq!(err.message, "expected '!' or an expression, found a separator");
     assert_eq!(err.span, Some((1, 5)));
 }
 
@@ -380,7 +380,7 @@ fn index_errors_carry_spans() {
     // `a[]` is application of `a` to an empty array literal — the
     // element error mentions the `~` prefix the array parser now accepts.
     let err = parse_err("a[]");
-    assert_eq!(err.message, "expected '~' or an expression, found ']'");
+    assert_eq!(err.message, "expected '~', '!', or an expression, found ']'");
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
 }
@@ -397,7 +397,7 @@ fn parse_errors_carry_spans() {
     assert_eq!(err.stage, Stage::Parse);
     assert_eq!(
         err.message,
-        "expected an expression, found the end of the program"
+        "expected '!' or an expression, found the end of the program"
     );
     assert_eq!(err.span, Some((1, 5)));
     let err = parse_err("(x");
@@ -433,6 +433,42 @@ fn an_underscore_in_type_position_is_a_placeholder() {
     assert!(matches!(*r#return, Expr::Placeholder(_)));
     // In term position `_` stays an ordinary name.
     assert!(matches!(parse_ok("_"), Expr::Name(name, _) if name == "_"));
+}
+
+#[test]
+fn a_bang_prefix_parses_as_an_assert() {
+    let e = parse_ok("!(1 == 1)");
+    let Expr::Assert { value, span } = e else {
+        panic!("expected an assert, got {e:?}")
+    };
+    assert!(matches!(
+        *value,
+        Expr::BinOp {
+            operator: BinOp::Eq,
+            ..
+        }
+    ));
+    assert_eq!(span, (1, 1), "the assert's span starts at the `!`");
+}
+
+#[test]
+fn a_bang_binds_a_full_application_but_tighter_than_a_binary_operator() {
+    // `! f x` asserts `f x` — the application is the operand.
+    let e = parse_ok("!f x");
+    assert!(matches!(
+        e,
+        Expr::Assert { value, .. } if matches!(*value, Expr::Apply { .. })
+    ));
+    // `! x <= 3` is `(!x) <= 3`, not `!(x <= 3)` — `!` binds tighter than `<=`.
+    let e = parse_ok("!x <= 3");
+    assert!(matches!(
+        e,
+        Expr::BinOp {
+            operator: BinOp::Leq,
+            left,
+            ..
+        } if matches!(*left, Expr::Assert { .. })
+    ));
 }
 
 #[test]
@@ -536,7 +572,10 @@ fn broken_statements_are_recovered() {
     let tokens = lex("a = ; b = 2; 5").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1, "the broken binding's error");
-    assert_eq!(errors[0].message, "expected an expression, found a separator");
+    assert_eq!(
+        errors[0].message,
+        "expected '!' or an expression, found a separator"
+    );
     assert_eq!(program.statements.len(), 2);
     assert!(matches!(program.expr, Expr::Int(5, _)));
     // An unclosed paren in a value is recovered the same way.

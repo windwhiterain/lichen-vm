@@ -144,11 +144,22 @@ impl<P: Program> Module<P> {
             // per-call invariant and is referenced in place (decided at
             // normalize), while an unbound one rewrites to this call's clones,
             // so the body's assert re-checks against the argument.  Only actual
-            // clones register: a fresh entry is a constraint on this call.
+            // clones register: a fresh entry is a constraint on this call.  A
+            // user-facing assert survives the clone — an explicit `assert` is
+            // rendered on failure even when the failure came from a per-call
+            // clone (the generated bounds guards stay unmarked, so they are
+            // still suppressed after cloning).
             for &condition in &asserts {
+                let user_facing = module.user_asserts.contains(&condition);
                 let instantiated = module.node_apply(condition, &mut ctx);
                 if instantiated != condition {
                     module.asserts.push(instantiated);
+                    if user_facing {
+                        module.user_asserts.insert(instantiated);
+                    }
+                    if let Some(&span) = module.assert_spans.get(&condition) {
+                        module.assert_spans.insert(instantiated, span);
+                    }
                 }
             }
             // The parameter is cloned like any parameterized node, and the clone
@@ -462,9 +473,16 @@ impl<P: Program> Module<P> {
                 // place.
                 let mut fresh_asserts = Vec::with_capacity(asserts.len());
                 for &condition in &asserts {
+                    let user_facing = self.user_asserts.contains(&condition);
                     let instantiated = self.node_apply(condition, &mut inner);
                     if instantiated != condition {
                         self.asserts.push(instantiated);
+                        if user_facing {
+                            self.user_asserts.insert(instantiated);
+                        }
+                        if let Some(&span) = self.assert_spans.get(&condition) {
+                            self.assert_spans.insert(instantiated, span);
+                        }
                     }
                     fresh_asserts.push(instantiated);
                 }

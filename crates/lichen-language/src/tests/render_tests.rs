@@ -3,6 +3,7 @@ use crate::diag::Stage;
 
 use lichen_highlevel::attr::NoAttr;
 use lichen_highlevel::checker::Checker;
+use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
 use lichen_highlevel::program::{
     HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralCtx, LiteralExt, ProgramImpl,
@@ -66,6 +67,20 @@ fn a_struct_conflict_keeps_the_nominal_ids() {
         crate::compile("s1 = struct<Int, Int>; s2 = struct<Int, Int>; [s1(1, 2), s2(1, 2)]");
     let message = &report.diagnostics[0].message;
     assert!(message.contains("struct<Int, Int>#"), "{}", message);
+}
+
+#[test]
+fn a_failed_assert_renders_its_message() {
+    // `!(1 == 2)` — the condition resolves to 0, a failed assert (a runtime
+    // evaluation failure, not a unify): the message and the caret at the `!`.
+    let report = crate::compile("!(1 == 2)");
+    assert_eq!(report.diagnostics.len(), 1);
+    let d = &report.diagnostics[0];
+    assert_eq!(d.stage, Stage::Check);
+    let check = d.check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::Assert);
+    assert_eq!(d.message, "assertion failed: expected 1, found 0");
+    assert_eq!(d.span, Some((1, 1)));
 }
 
 // --- the type-chain-driven value rendering ------------------------------

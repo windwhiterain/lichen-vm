@@ -65,23 +65,29 @@ fn renders_the_tree_grouped_and_ordered() {
             (4, "import/math.lichen".to_owned()),
             (4, "import/geometry.lichen".to_owned()),
             (3, "perspective.lichen".to_owned()),
+            (3, "assert.lichen".to_owned()),
+            (3, "assert_in_function.lichen".to_owned()),
         ])
         .collect::<Vec<_>>(),
         "directories render as units ordered by their `_.lichen`, files by their `order =`"
     );
-    // The face opens the directory: `_.lichen`'s program sits directly
-    // under the directory heading (its block is stripped, so the code shows).
+    // The face opens the directory: `_.lichen`'s whole file sits directly
+    // under the directory heading, `@{...@}` block included.
     assert!(
-        blob.contains("### `import`\n\n```text\n(math 41, geo 5)"),
+        blob.contains("### `import`\n\n```text\n@{"),
         "the directory's `_.lichen` is shown first inside the directory"
     );
-    // The output is computed by running the program, not read from the file.
+    // The whole file is embedded, so its (already-synced) `output =` metadata
+    // is what shows; there is no separate computed output block anymore.
     assert!(
-        blob.contains("output:\n```text\n[1, 2, 3]: Int<3>\n```"),
-        "the runner's output is embedded"
+        blob.contains("output = \"[1, 2, 3]: Int<3>\""),
+        "each file's output metadata is embedded with the whole file"
     );
-    assert!(!blob.contains("output ="), "file promises are not shown");
-    assert!(!blob.contains("order ="), "order directives are not shown");
+    assert!(
+        blob.contains("order = \"0\""),
+        "the order metadata is shown with the whole file"
+    );
+    assert!(!blob.contains("output:\n```text"), "no separate output block");
 }
 
 #[test]

@@ -344,8 +344,19 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             token(TokenKind::Plus).to(BinOp::Add),
             token(TokenKind::Minus).to(BinOp::Sub),
         ));
-        let term1 = application.clone().foldl(
-            arith.then(operand(tokens, application.clone())).repeated(),
+        // `! e` — a prefix assert.  It binds tighter than the binary
+        // operators but looser than application: `! f x` asserts `f x`,
+        // `! (x <= 3)` the comparison.  Asserting a comparison under the
+        // binary operators requires parens — `! x <= 3` is `(!x) <= 3`.
+        let unary = token(TokenKind::Bang)
+            .ignore_then(application.clone())
+            .map_with(|e, me| Expr::Assert {
+                value: Box::new(e),
+                span: span_at(tokens, me.span().start),
+            })
+            .or(application.clone());
+        let term1 = unary.clone().foldl(
+            arith.then(operand(tokens, unary.clone())).repeated(),
             |lhs, (op, rhs)| {
                 let span = lhs.span();
                 Expr::BinOp {
@@ -953,6 +964,10 @@ fn apply_type_mode(program: Program) -> Program {
                 condition: Box::new(expr(*condition, type_mode)),
                 then_branch: Box::new(expr(*then_branch, type_mode)),
                 else_branch: Box::new(expr(*else_branch, type_mode)),
+                span,
+            },
+            Expr::Assert { value, span } => Expr::Assert {
+                value: Box::new(expr(*value, type_mode)),
                 span,
             },
             Expr::Index { array, index, span } => Expr::Index {

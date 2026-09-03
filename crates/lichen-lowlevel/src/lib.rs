@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -576,6 +576,21 @@ pub struct Module<P: Program> {
     /// leaving exactly the not-yet-triggered ones.  Garbage collection
     /// prunes the entries of dropped blocks.
     pub asserts: Vec<NodeId>,
+    /// The *user-facing* assert conditions — the explicit `assert` expressions,
+    /// as opposed to a generated array-bounds guard.  Every [`Self::add_assert`]
+    /// that is a user assert (via [`Self::add_user_assert`]) and every
+    /// per-call clone of one (see [`Module::function_apply`]) lands here, so a
+    /// failed assert's diagnostic knows whether to render it.  The bounds-guard
+    /// conditions are deliberately absent — their failure is already reported
+    /// as an [`EvalError::Index`], so rendering the assert too would double
+    /// report.
+    pub user_asserts: HashSet<NodeId>,
+    /// The source span of an assert's condition, keyed by condition node —
+    /// populated by the checker (which knows source positions) and propagated
+    /// by the clone paths, so a per-call clone keeps its assert's location.
+    /// Stored as `(line, column)`, the same shape as the checker's span.
+    /// Absent for a spanless assert (the checker records no location).
+    pub assert_spans: HashMap<NodeId, (u32, u32)>,
     /// Failed asserts: a condition that resolved to a concrete value other
     /// than `USize(1)`.  An assert whose condition stays lazy (an unbound
     /// parameter) is not triggered and records nothing.  Same append-only,
@@ -817,6 +832,8 @@ impl<P: Program> Module<P> {
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
             asserts: Vec::new(),
+            user_asserts: HashSet::new(),
+            assert_spans: HashMap::new(),
             assert_errors: Vec::new(),
             apply_errors: Vec::new(),
             global_ext: P::GlobalExt::default(),
@@ -913,6 +930,17 @@ impl<P: Program> Module<P> {
     /// each call's argument.
     pub fn add_assert(&mut self, condition: NodeId) -> NodeId {
         self.asserts.push(condition);
+        condition
+    }
+
+    /// [`Self::add_assert`] for a *user-facing* condition — an explicit
+    /// `assert` expression rather than a generated array-bounds guard.  The
+    /// condition also lands in [`Self::user_asserts`], so a failure is
+    /// rendered as a diagnostic; a per-call clone of such a condition keeps
+    /// the marker when an apply re-registers it.
+    pub fn add_user_assert(&mut self, condition: NodeId) -> NodeId {
+        self.asserts.push(condition);
+        self.user_asserts.insert(condition);
         condition
     }
 

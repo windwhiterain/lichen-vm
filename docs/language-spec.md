@@ -39,7 +39,8 @@ lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs 
 annotated:= arrow ((':' arrow) | ('#' arrow))*      -- type (':') and/or perspective ('#') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
 cmp      := arith (('<=' | '==') arith)*            -- comparison, left-assoc; yields 0/1
-arith    := apply (('+' | '-') apply)*              -- arithmetic, left-assoc
+arith    := prefix (('+' | '-') prefix)*            -- arithmetic, left-assoc
+prefix   := '!' apply | apply                       -- prefix assert: `!e` asserts `e`; tighter than binary ops
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
@@ -64,7 +65,7 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `table`, `let`, `if`, `then`, `else`,
-  `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`, `~`, and the
+  `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`, `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
   it may reference and recurse with the block's other bindings) and gets the
@@ -96,12 +97,16 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
 - **Precedence** (loosest → tightest): `=>` → `:` / `#` → `->` → `<=` / `==`
-  → `+` / `-` → application → postfix (glued delimiters) → atoms.  `x => e : T`
+  → `+` / `-` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
   array lengths: `Int<x : T>` is the array type whose length is the annotated
   expression.  `#` binds at the same precedence as `:`, so `e : T # p` annotates
   both the type and the perspective slot, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
-  A comparison (`<=` / `==`) yields `0` or `1`, driving an `if` branch.
+  A comparison (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
+  is a prefix assert: `!e` compiles to the highlevel `assert(e)` — the checker
+  force-evaluates `e` and requires `USize(1)`.  It binds tighter than the binary
+  operators but looser than application, so `! f x` asserts `f x` and `! x <= 3`
+  is `(!x) <= 3`; assert a comparison by parenthesizing it (`!(x <= 3)`).
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
   annotated with `T` — the frontend desugars it to `x => { x : T; e }`, so the
   annotation is a leading body statement that unifies the parameter's slot in

@@ -5,10 +5,12 @@
 //!
 //! The section lives between the `<!-- begin: examples -->` and
 //! `<!-- end: examples -->` markers; only that region is rewritten, so the
-//! heading and lead-in around it stay as they are.  Idempotent: running it
-//! twice changes nothing.  `tests/readme.rs` resyncs the README in place on
-//! drift, so this command is only needed to commit the result of an example
-//! change right away.
+//! heading and lead-in around it stay as they are.  Each example's `output =`
+//! metadata is also rewritten to its actual output first, so the README
+//! embeds the whole file as it stands.  Idempotent: running it twice changes
+//! nothing.  `tests/readme.rs` resyncs the README in place on drift, so this
+//! command is only needed to commit the result of an example change right
+//! away.
 
 use std::fs;
 use std::process::ExitCode;
@@ -17,7 +19,7 @@ use lichen_language::readme;
 
 fn main() -> ExitCode {
     if readme::sync_output_comments() {
-        println!("updated example output comments");
+        println!("updated example output metadata");
     }
     let blob = readme::render_examples();
     let path = readme::readme_path();

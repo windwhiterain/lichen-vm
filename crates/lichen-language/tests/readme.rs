@@ -1,10 +1,10 @@
 //! The example programs in `examples/programs/` are the living spec, and the
 //! top-level README embeds them.  This test keeps everything in sync
-//! automatically: each example's `-- output:` comment is rewritten to its
+//! automatically: each example's `output =` metadata entry is rewritten to its
 //! actual output (appended when missing), and when the README's embedded
 //! section drifts from the files it is rendered from, the README is rewritten
 //! in place (exactly what the `sync-readme` binary does), so the suite never
-//! fails on a stale README or stale output comment — a changed example simply
+//! fails on a stale README or stale output metadata — a changed example simply
 //! resyncs both on the next `cargo test`.
 
 use lichen_language::readme;

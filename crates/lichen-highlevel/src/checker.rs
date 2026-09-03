@@ -1661,11 +1661,17 @@ where
     fn register_assert(&mut self, condition: NodeId, span: Option<Span>, user_facing: bool) {
         if let Some(span) = span {
             self.node_edges.insert(condition, span);
+            // The span also rides the lowlevel module so a per-call clone of
+            // the condition keeps the assert's location (the `node_edges` map
+            // is a highlevel-only table the clone paths cannot reach).
+            self.module.assert_spans.insert(condition, span);
         }
         if user_facing {
             self.user_asserts.insert(condition);
+            self.module.add_user_assert(condition);
+        } else {
+            self.module.add_assert(condition);
         }
-        self.module.add_assert(condition);
         if let Some(function) = self.current_function() {
             self.module.functions[function].asserts.push(condition);
         }

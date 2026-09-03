@@ -268,6 +268,22 @@ fn a_tilde_is_a_shallow_marker_token() {
 }
 
 #[test]
+fn a_bang_is_a_prefix_assert_token() {
+    assert_eq!(
+        kinds("! (1 == 1)"),
+        vec![
+            TokenKind::Bang,
+            TokenKind::LParen,
+            TokenKind::Int(1),
+            TokenKind::Eq,
+            TokenKind::Int(1),
+            TokenKind::RParen,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn tokens_carry_their_byte_range() {
     let token = lex_one("  x");
     assert_eq!(token.span, (1, 3));

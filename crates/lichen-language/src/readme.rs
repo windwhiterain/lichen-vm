@@ -5,24 +5,26 @@
 //! as a tree, and every directory under it renders as one unit — opened by
 //! the directory's `_.lichen` program, followed by the files it contains,
 //! with nested directories rendering the same way to any depth, one heading
-//! level deeper each time.  Every program is rendered with its code and its
-//! *actual* output, computed by running it — the README never relies on a
-//! hand-written promise in the file.  Placement is declared in each file's
-//! opening `@{...@}` block as `order = "N"`: a file's order places it among
-//! its siblings, and a directory's is the one in its `_.lichen`, whose
-//! program also always shows first inside the directory; undeclared entries
-//! sort last, ties by name.  Programs run standalone wherever they sit —
-//! the block's `name = import "path"` entries resolve relative to their own
-//! file, so a directory of packages is just a group of ordinary programs.
+//! level deeper each time.  Every program is rendered as its whole source
+//! file, `@{...@}` block included; the block's `output = "..."` metadata is
+//! the file's actual output, kept current by [`sync_output_comments`], so
+//! the README never relies on a hand-written promise in the file.
+//! Placement is declared in each file's opening `@{...@}` block as
+//! `order = "N"`: a file's order places it among its siblings, and a
+//! directory's is the one in its `_.lichen`, whose program also always shows
+//! first inside the directory; undeclared entries sort last, ties by name.
+//! Programs run standalone wherever they sit — the block's
+//! `name = import "path"` entries resolve relative to their own file, so a
+//! directory of packages is just a group of ordinary programs.
 //! [`sync_output_comments`] rewrites each file's `output = "..."` entry (in
 //! the same block) to that same actual output, so the file and the README
 //! agree.
 //! [`replace_examples`] splices the rendered blob into the region between
 //! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
-//! `tests/readme.rs` resyncs the README and the output comments in place
+//! `tests/readme.rs` resyncs the README and the output metadata in place
 //! whenever they drift, so they cannot go stale — `cargo test` self-heals a
-//! stale README or stale comment (the sync binary does the same, for
+//! stale README or stale output metadata (the sync binary does the same, for
 //! committing on demand).
 
 use std::fs;
@@ -36,8 +38,8 @@ pub const BEGIN_MARKER: &str = "<!-- begin: examples -->";
 /// The marker that closes the generated region in the READMEs.
 pub const END_MARKER: &str = "<!-- end: examples -->";
 
-/// A directory's own program: its `-- order:` places the whole directory
-/// among its siblings, and its code and output open the directory's section.
+/// A directory's own program: its `order =` places the whole directory
+/// among its siblings, and its code opens the directory's section.
 const DIR_FACE: &str = "_.lichen";
 
 /// The crate directory, embedded at compile time so it is independent of the
@@ -92,7 +94,7 @@ pub fn example_files() -> Vec<(String, PathBuf)> {
 /// The order an unnumbered entry sorts after — after every numbered entry.
 const DEFAULT_ORDER: usize = usize::MAX;
 
-/// Read the `-- order: N` comment from a program's source, if it has one.
+/// Read the `order = "N"` metadata from a program's source, if it has one.
 ///
 /// The directive can sit on any line; a value that is not a number panics
 /// with the file's name, so a typo is caught by the sync command instead of
@@ -120,7 +122,7 @@ struct Entry {
 }
 
 impl Entry {
-    /// The `-- order:` the entry sorts by: a file's own directive, or a
+    /// The `order =` the entry sorts by: a file's own directive, or a
     /// directory's the one in its `_.lichen`.  Undeclared sorts last either
     /// way — including a directory without an `_.lichen` at all.
     fn order(&self) -> usize {
@@ -156,16 +158,14 @@ fn program_output(file: &Path, source: &str) -> String {
     })
 }
 
-/// One program's markdown body: its code — with the `-- output:` and
-/// `-- order:` directives dropped, so the section shows what the language
-/// really prints, not what the file claims — and its actual output,
-/// computed by running it.
+/// One program's markdown body: the whole source file, `@{...@}` block
+/// included, shown as-is.  The block's `output = "..."` metadata is the
+/// file's actual output (kept current by [`sync_output_comments`]), so the
+/// README shows the file exactly as it is in the repo.
 fn render_program_body(path: &Path) -> String {
     let source = read_normalized(path);
-    let (_, code) = split_block(&source);
-    let text = code.trim_end_matches('\n');
-    let output = program_output(path, &source);
-    format!("```text\n{text}\n```\n\noutput:\n```text\n{output}\n```")
+    let text = source.trim_end_matches('\n');
+    format!("```text\n{text}\n```")
 }
 
 /// Render one directory's entries — its `.lichen` files and subdirectories,
@@ -200,7 +200,7 @@ fn render_dir(dir: &Path, prefix: &str, level: usize) -> Vec<String> {
 }
 
 /// Render one entry at the given heading level: a program file becomes a
-/// heading over its code and output; a directory becomes a heading — opened
+/// heading over its whole file; a directory becomes a heading — opened
 /// by its `_.lichen` when it has one — over its entries, one level deeper.
 /// Headings start at `###` for the top level and deepen per directory,
 /// capped at `######`, so nesting of any depth still renders as markdown.
@@ -227,9 +227,11 @@ fn render_entry(entry: &Entry, level: usize) -> String {
 /// `examples/programs/` is walked as a tree: each directory renders as one
 /// unit — a heading named by its path relative to the example directory,
 /// opened by its `_.lichen` program when it has one, then its files and
-/// nested directories, ordered by their `-- order:` comments (a directory's
-/// is its `_.lichen`'s), undeclared last, ties by name.  A program that
-/// fails to run panics with its diagnostics.
+/// nested directories, ordered by their `order =` metadata (a directory's
+/// is its `_.lichen`'s), undeclared last, ties by name.  Each program is
+/// shown as its whole file, so its `output =` metadata must be current —
+/// [`sync_output_comments`] keeps it that way (and `tests/readme.rs` runs
+/// it before rendering).
 pub fn render_examples() -> String {
     let root = example_dir();
     let mut blocks = Vec::new();
@@ -247,12 +249,12 @@ pub fn render_examples() -> String {
     blocks.join("\n\n")
 }
 
-/// Rewrite every example program's `-- output:` comment to its actual
-/// output, so each file shows what the language really prints.  An existing
-/// `-- output:` line is replaced in place; a file without one gets the
-/// comment appended.  A multi-line output becomes one `-- output:` line per
-/// line, so [`render_examples`]'s filter drops them all.  Returns true when
-/// any file was rewritten.
+/// Rewrite every example program's `output = "..."` metadata entry to its
+/// actual output, so each file shows what the language really prints — which
+/// is exactly what the README then embeds.  An existing `output =` entry is
+/// replaced in place; a file without one gets it appended.  A multi-line
+/// output becomes a multi-line string.  Returns true when any file was
+/// rewritten.
 pub fn sync_output_comments() -> bool {
     let mut changed = false;
     for (_, file) in example_files() {
@@ -267,9 +269,10 @@ pub fn sync_output_comments() -> bool {
     changed
 }
 
-/// Replace the first run of `-- output:` lines in `source` with `comment`;
-/// append `comment` (on a fresh line) when there is no such line.  The
-/// result always ends with a newline.
+/// Replace the `output = "..."` metadata entry in `source` with `comment`;
+/// append it (inside the block) when there is none.  The result always ends
+/// with a newline; the block is normalized to the `@{` … `@}` form, one
+/// directive per line, two-space indented.
 fn replace_output_comment(source: &str, output: &str) -> String {
     let (interior, code) = split_block(source);
     let mut out = String::with_capacity(source.len() + output.len() + 16);

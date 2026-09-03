@@ -122,6 +122,24 @@ fn a_type_position_underscore_compiles_to_a_placeholder() {
 }
 
 #[test]
+fn a_bang_prefix_compiles_to_an_assert() {
+    // !(1 == 1) — the highlevel Assert form, whose condition is the operand.
+    let ir = compile_ok("!(1 == 1)");
+    let ExprKind::Assert { condition } = kind(&ir, ir.root) else {
+        panic!("expected an assert")
+    };
+    assert!(matches!(
+        kind(&ir, condition),
+        ExprKind::BinOp {
+            operator: lichen_highlevel::ir::BinOp::Eq,
+            ..
+        }
+    ));
+    // The assert node carries the `!`'s span (the caret points at the `!`).
+    assert_eq!(ir[ir.root].span, Some((1, 1)));
+}
+
+#[test]
 fn a_block_compiles_to_its_final_expression() {
     // {a = 1; a} — the block is its final expression's own node; the
     // binding is pure sharing, not a new IR form.

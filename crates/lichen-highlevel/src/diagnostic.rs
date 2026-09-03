@@ -157,9 +157,13 @@ impl<P: HighProgram> Build<P> where P::Value: ValueType {
         }
         // Failed asserts — only the explicit `assert` expressions (a
         // generated array-bounds guard duplicates the index eval error, so it
-        // is not rendered separately).
+        // is not rendered separately).  The module tracks the user-facing
+        // conditions themselves (originals *and* per-call clones), so a body
+        // assert that fails against a call's argument is rendered even though
+        // its condition is the apply's fresh clone, while a bounds guard stays
+        // suppressed after cloning.
         for err in &self.module.assert_errors {
-            if self.user_asserts.contains(&err.condition) {
+            if self.module.user_asserts.contains(&err.condition) {
                 out.push(report.assert_error(err));
             }
         }
@@ -456,14 +460,24 @@ impl<'a, P: HighProgram> Report<'a, P> where P::Value: ValueType {
     /// A failed assert: the condition resolved to a concrete value other
     /// than `USize(1)`.  The condition node's edge attributes it; a static
     /// condition (a solved constant of a plugged dependency) has no edge.
+    /// The span comes from the module's clone-aware `assert_spans` table — a
+    /// per-call clone keeps the source position of the `assert` it
+    /// instantiates — falling back to `node_edges` for the original.
     fn assert_error(&mut self, err: &AssertError<P>) -> Diag<P> {
         let value = match err.value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
             Some(LowValue::None) => "none".to_string(),
             _ => format!("{:?}", err.value),
         };
+        let span = self
+            .build
+            .module
+            .assert_spans
+            .get(&err.condition)
+            .copied()
+            .or_else(|| self.build.node_edges.get(&err.condition).copied());
         Diag {
-            span: self.build.node_edges.get(&err.condition).copied(),
+            span,
             kind: DiagKind::Assert,
             a: err.condition,
             b: err.condition,

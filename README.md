@@ -99,41 +99,42 @@ This section is generated from [`examples/programs`](crates/lichen-language/exam
 ### `array.lichen`
 
 ```text
+@{
+  order = "0"
+  output = "[1, 2, 3]: Int<3>"
+@}
 [1, 2, 3] : Int<3>
-```
-
-output:
-```text
-[1, 2, 3]: Int<3>
 ```
 
 ### `tuple.lichen`
 
 ```text
+@{
+  order = "0"
+  output = "(1, Int): <Int, Type>"
+@}
 (1, Int) : <Int, Type>
-```
-
-output:
-```text
-(1, Int): <Int, Type>
 ```
 
 ### `index.lichen`
 
 ```text
+@{
+  order = "1"
+  output = "(1, 2, 1, Int): <Int, Int, Int, Type>"
+@}
 a = [1, 2]
 b = (1, Int)
 (a[0], a[1], b(0), b(1))
 ```
 
-output:
-```text
-(1, 2, 1, Int): <Int, Int, Int, Type>
-```
-
 ### `closure.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "[1, 2, 3, 4]: Int<4>"
+@}
 a = 1
 f1 = x => {
     b = 2
@@ -143,64 +144,59 @@ f1 = x => {
 f1 3 4 
 ```
 
-output:
-```text
-[1, 2, 3, 4]: Int<4>
-```
-
 ### `dependent_type.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "(1, Int): <Int, Type>"
+@}
 a = x => (1, Int)(x)
 (a 0, a 1)
-```
-
-output:
-```text
-(1, Int): <Int, Type>
 ```
 
 ### `lazy_infinite.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "(1, 2, 3): <Int, Int, Int>"
+@}
 f = x => [x, ~ f (x + 1)]
 inf = f 0
 (inf(1)(0), inf(1)(1)(0), inf(1)(1)(1)(0))
 ```
 
-output:
-```text
-(1, 2, 3): <Int, Int, Int>
-```
-
 ### `let_polymorphism.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "(Function, 1, Int): <?a -> ?a, Int, Type>"
+@}
 f = x => x
 (f, f 1, f Int)
-```
-
-output:
-```text
-(Function, 1, Int): <?a -> ?a, Int, Type>
 ```
 
 ### `mutual_recursion.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "(0, 1): <Int, Int>"
+@}
 is_even = x => [is_old (x - 1), 1][x == 0]
 is_old = x => [is_even (x - 1), 0][x == 0]
 (is_even 3, is_old 3)
 ```
 
-output:
-```text
-(0, 1): <Int, Int>
-```
-
 ### `nested_function.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "[1, 1]: Int<2>"
+@}
 f1 = x => {
     f2 = y => [y, y]
     f2 x 
@@ -208,26 +204,24 @@ f1 = x => {
 f1 1
 ```
 
-output:
-```text
-[1, 1]: Int<2>
-```
-
 ### `recursion.lichen`
 
 ```text
+@{
+  order = "2"
+  output = "55: Int"
+@}
 fib = x => [fib (x - 1) + fib (x - 2), x][x <= 1]
 fib 10
-```
-
-output:
-```text
-55: Int
 ```
 
 ### `placeholder.lichen`
 
 ```text
+@{
+  order = "3"
+  output = "Function: <Type, Int> -> Int"
+@}
 f1 = x => x : Int
 f2 = x => {
     x: <Type, _>
@@ -236,14 +230,13 @@ f2 = x => {
 f2
 ```
 
-output:
-```text
-Function: <Type, Int> -> Int
-```
-
 ### `struct.lichen`
 
 ```text
+@{
+  order = "3"
+  output = "(struct<Int, Type>, (1, Int), 1, Int, struct<Int>, (1,), 1): <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>"
+@}
 A = struct<Int, Type>
 a = A(1, Int)
 B = struct<Int>
@@ -251,14 +244,13 @@ b = B(1,)
 (A, a, a(0), a(1), B, b, b(0))
 ```
 
-output:
-```text
-(struct<Int, Type>, (1, Int), 1, Int, struct<Int>, (1,), 1): <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>
-```
-
 ### `struct_recursion.lichen`
 
 ```text
+@{
+  order = "3"
+  output = "(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>"
+@}
 A = struct<Int, B>
 B = struct<Type, A>
 a = A(1, b)
@@ -266,80 +258,100 @@ b = B(Int, a)
 (A , B, a, b)
 ```
 
-output:
-```text
-(struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, struct<Type, …>>>, (1, (Int, (1, …))), (Int, (1, …))): <TypeStruct, TypeStruct, struct<Int, struct<Type, struct<Int, …>>>, struct<Type, struct<Int, …>>>
-```
-
 ### `struct_generic.lichen`
 
 ```text
+@{
+  order = "4"
+  doc = "A struct constructor is generic: `Box t` (juxtaposition — a space, not a
+parenthesized argument) builds the *same* nominal type for every field
+type — the `Fresh` id is per occurrence and shared, so `Box Int` and
+`Box Type` differ only in their field lists (the value shape), not in
+their type (the shared kind).  They therefore coexist in one homogeneous
+tuple."
+  output = "(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>"
+@}
 Box = t => struct<t>
 (Box Int, Box Type, Box Int)
-```
-
-output:
-```text
-(struct<Int>, struct<Type>, struct<Int>): <TypeStruct, TypeStruct, TypeStruct>
 ```
 
 ### `table.lichen`
 
 ```text
+@{
+  order = "4"
+  output = "(10, 20): <Int, Int>"
+@}
 t = table{ [1, 2] :: 10, [3, 4] :: 20 }
 (t{[1, 2]}, t{[3, 4]})
-```
-
-output:
-```text
-(10, 20): <Int, Int>
 ```
 
 ### `import`
 
 ```text
+@{
+  order = "5"
+  math = import "math.lichen"
+  geo = import "geometry.lichen"
+  output = "(42, 12): <Int, Int>"
+@}
 (math 41, geo 5)
-```
-
-output:
-```text
-(42, 12): <Int, Int>
 ```
 
 #### `import/math.lichen`
 
 ```text
+@{
+  order = "0"
+  output = "Function: Int -> Int"
+@}
 succ = x => x + 1
 add = x => y => x + y
 succ
 ```
 
-output:
-```text
-Function: Int -> Int
-```
-
 #### `import/geometry.lichen`
 
 ```text
+@{
+  order = "1"
+  math = import "math.lichen"
+  output = "Function: Int -> Int"
+@}
 double = x => math x + math x
 double
-```
-
-output:
-```text
-Function: Int -> Int
 ```
 
 ### `perspective.lichen`
 
 ```text
+@{
+  order = "6"
+  output = "3: Int"
+@}
 ((1 # 4) + (2 # 6)) # 2
 ```
 
-output:
+### `assert.lichen`
+
 ```text
-3: Int
+@{
+  order = "7"
+  output = "(1, 5): <Int, Int>"
+@}
+n = 5
+(! (n <= 5), n)
+```
+
+### `assert_in_function.lichen`
+
+```text
+@{
+  order = "8"
+  output = "1: Int"
+@}
+f = x => ! (x <= 10)
+f 5
 ```
 
 <!-- end: examples -->

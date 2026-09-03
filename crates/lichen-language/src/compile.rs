@@ -30,7 +30,9 @@
 //! the annotation and arrow are ordinary expressions, so no new IR form is
 //! needed.  A conditional `if c then t else e` desugars to the lazy branch
 //! `[e, t][c]` — the existing `Index` form, so no new IR form either.  A
-//! binary operation `a op b` compiles to `ExprKind::BinOp`.
+//! binary operation `a op b` compiles to `ExprKind::BinOp`.  A prefix assert
+//! `!e` compiles straight to the highlevel `ExprKind::Assert` — a side
+//! constraint (the condition must evaluate to `USize(1)`), not a new IR form.
 //! Shadowing is allowed (the inner binding wins); an unknown name is a
 //! resolve diagnostic — the checker's `lookup` panics on unresolved ids, so
 //! resolution completes here.  Every emitted expression carries its source
@@ -365,6 +367,17 @@ impl Compiler {
                     },
                     span,
                 )
+            }
+            Expr::Assert { value, span } => {
+                // `! e` — the highlevel `Assert` form: a side constraint, not
+                // a unify.  The checker force-evaluates the condition and
+                // requires `USize(1)`; the expression compiles to the
+                // condition itself (an assert checks its subject, it does not
+                // replace it), so its value and type are the condition's.
+                // The compiled span is the construct's own, so a failed
+                // assert points its caret at the `!`.
+                let condition = self.compile_expr(value)?;
+                self.alloc(ExprKind::Assert { condition }, span)
             }
             Expr::Annotation {
                 value,

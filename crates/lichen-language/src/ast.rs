@@ -74,6 +74,16 @@ pub enum Expr {
         else_branch: Box<Expr>,
         span: Span,
     },
+    /// `!e` — a prefix assert: the highlevel `assert(e)` form.  A side
+    /// constraint, not a unify — the checker force-evaluates the condition
+    /// and requires `USize(1)`, while the expression's own value stays the
+    /// condition's (an assert checks its subject, it does not replace it).
+    /// `! 1 == 1` parses as `(!1) == 1`; assert a comparison by parenthesizing
+    /// it: `!(1 == 1)`.
+    Assert {
+        value: Box<Expr>,
+        span: Span,
+    },
     /// `e[i]` — an index into an array.
     Index {
         array: Box<Expr>,
@@ -230,6 +240,7 @@ impl Expr {
             Expr::Apply { span, .. } => *span,
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
+            Expr::Assert { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,

@@ -21,8 +21,9 @@
 //!
 //! Int, Type, struct, table, let, if, then, and else lex as keywords.  '->'
 //! is the function-type arrow, '=>' a lambda, '::' a table key/value
-//! separator.  '~' with adjacent digits folds into Tilde(n).  Any other
-//! character is a lex error -- errors accumulate (the character is skipped).
+//! separator, '!' a prefix assert.  '~' with adjacent digits folds into
+//! Tilde(n).  Any other character is a lex error -- errors accumulate (the
+//! character is skipped).
 
 use logos::Logos;
 
@@ -62,6 +63,8 @@ pub enum TokenKind {
     DoubleColon,
     /// '#' -- the perspective annotation.
     Hash,
+    /// '!' -- a prefix assert: `!e` asserts `e`.
+    Bang,
     /// '=' -- a statement binding.
     Equals,
     /// '==' -- equality.
@@ -117,6 +120,7 @@ impl TokenKind {
             TokenKind::Colon => "':'".to_string(),
             TokenKind::DoubleColon => "'::'".to_string(),
             TokenKind::Hash => "'#'".to_string(),
+            TokenKind::Bang => "'!'".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::Eq => "'=='".to_string(),
             TokenKind::Leq => "'<='".to_string(),
@@ -198,6 +202,8 @@ enum RawToken {
     Colon,
     #[token("#")]
     Hash,
+    #[token("!")]
+    Bang,
     #[token("=")]
     Equals,
     #[token("==")]
@@ -373,6 +379,7 @@ fn raw_to_kind(
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::Hash => Some(TokenKind::Hash),
+        RawToken::Bang => Some(TokenKind::Bang),
         RawToken::Equals => Some(TokenKind::Equals),
         RawToken::Eq => Some(TokenKind::Eq),
         RawToken::Leq => Some(TokenKind::Leq),
