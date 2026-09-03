@@ -20,7 +20,8 @@ use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
 use crate::attr::{AttrSpec, NoAttr};
-use crate::ir::ExprId;
+use crate::diagnostic::DiagKind;
+use crate::ir::Loc;
 
 /// The fresh-nominal-type-id state — one extension component of
 /// [`HighGlobalExt`].
@@ -99,22 +100,30 @@ pub struct LiteralBuild {
     pub ty: NodeId,
 }
 
-/// The build context a literal sees — the minimal, program-generic subset of
-/// the checker's node-building surface.  The checker implements this; a
-/// literal's [`LiteralExt::build`] uses it to construct its value and type
-/// nodes and to reference *other exprs* (through [`Self::compile_sub`]).
-pub trait LiteralCtx<P: Program> {
-    /// Compile a referenced sub-expression to its compiled pair node — the
-    /// way a literal references another expr.
-    fn compile_sub(&mut self, e: ExprId) -> NodeId;
+/// The curated safe context an extension point sees — the program-generic
+/// subset of the checker's *encoding* surface.  This is the "who encode, who
+/// parse" boundary: the highlevel owns the `[value, type]` grammar, and an
+/// extension expresses *content* through these semantic encoders rather than
+/// hand-assembling lowlevel nodes.  Each encoder builds a well-formed
+/// structure by construction — a [`Self::pair`] is always `[value, type]`, a
+/// [`Self::kind_expr`] always `[marker, Type]` — and the active block is
+/// managed internally, so an extension can never build into the wrong block.
+///
+/// The checker implements this; a literal's [`LiteralExt::build`], a native
+/// operator's [`crate::native::NativeExt::check_apply`], and an attribute's
+/// [`crate::attr::AttrExt`] all drive it.  (The one deliberate exception: the
+/// lowlevel-only constructs a native operator genuinely needs — a fresh cell,
+/// an op node, an array shape — are the *shape* of the grammar, not a
+/// bypass.)
+pub trait Ctx<P: Program> {
     /// The value node for a raw value: a built-in type marker reuses the
     /// checker's installed shared marker node; anything else allocates a node.
     fn value_node(&mut self, value: P::Value) -> NodeId;
-    /// An array node of the given element nodes.
+    /// An array node of the given element nodes — a structural shape.
     fn array_node(&mut self, ids: &[NodeId]) -> NodeId;
     /// An operation node with the given operator and optional operand.
     fn op_node(&mut self, op: P::Operator, operand: Option<NodeId>) -> NodeId;
-    /// A `[value, type]` pair node.
+    /// A `[value, type]` pair node — the encoding of an expression's term.
     fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
@@ -144,13 +153,31 @@ pub trait LiteralCtx<P: Program> {
     fn type_struct_marker_node(&self) -> NodeId;
     /// The installed `TypeTable` kind marker node.
     fn table_type_marker_node(&self) -> NodeId;
+    /// A checker-issued unification — an extension's type check, executed
+    /// through the highlevel's own discipline (diary-attributed).
+    fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind);
+    /// A unification that may be relaxed by an attribute's optional subtype
+    /// relation (see [`Checker::check_unify_relaxed`]).  The `is_subtype`
+    /// callback receives the curated context, so relation reads go through
+    /// [`Self::class_value`] again — never raw node inspection.
+    fn check_unify_relaxed(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        loc: Loc,
+        kind: DiagKind,
+        is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
+    );
+    /// The value currently held by `node`'s equality class — read-only, for
+    /// an attribute's subtype relation.
+    fn class_value(&self, node: NodeId) -> Option<P::Value>;
 }
 
 /// A literal — the operator-like value-extension point: any struct that
-/// builds a `value : type` pair (potentially referencing other exprs) through
-/// a [`LiteralCtx`].  A literal's [`LiteralExt::build`] is the single creation
-/// function: it decides the value node and the type node (referencing the
-/// prebuilt singleton exprs the context exposes, and other exprs by id).
+/// builds a `value : type` pair through the curated [`Ctx`].  A literal's
+/// [`LiteralExt::build`] is the single creation function: it decides the
+/// value node and the type node (referencing the prebuilt singleton exprs the
+/// context exposes).
 ///
 /// A downstream composes its literal vocabulary with
 /// [`lichen_utils::enum_ext!`](`lichen_utils::extend`), carrying the
@@ -159,7 +186,7 @@ pub trait LiteralCtx<P: Program> {
 /// to its own build) and passes the enum as the program's `Literal` type.
 pub trait LiteralExt<P>: Clone + Copy + PartialEq + std::fmt::Debug {
     /// Build this literal's value and type nodes (and their pair).
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild;
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild;
 }
 
 /// The built-in int literal: stores just the value.  `build` references the
@@ -172,7 +199,7 @@ impl<P> LiteralExt<P> for IntLit
 where
     P: Program,
 {
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(LowValue::USize(self.0)));
         let ty = ctx.int_type();
         let pair = ctx.pair(value_node, ty);
@@ -195,7 +222,7 @@ impl<P> LiteralExt<P> for IntTypeLit
 where
     P: Program,
 {
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.int_marker_node();
         let ty = ctx.universe();
         let pair = ctx.int_type();
@@ -217,7 +244,7 @@ impl<P> LiteralExt<P> for TypeTypeLit
 where
     P: Program,
 {
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         LiteralBuild {
             pair: ctx.universe(),
             value: ctx.type_marker_node(),
@@ -244,7 +271,7 @@ impl<P> LiteralExt<P> for HighProgramLiteral
 where
     P: Program,
 {
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         match self {
             HighProgramLiteral::Int(lit) => lit.build(ctx),
             HighProgramLiteral::IntType(lit) => lit.build(ctx),

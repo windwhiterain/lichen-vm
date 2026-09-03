@@ -50,7 +50,7 @@ delegates to the matching `NativeExt` instead of a runtime function apply. The V
 ```rust
 // check_app (highlevel):
 if let Some(native) = self.class_value(function_ty).and_then(|t| (self.native_ext)(&t)) {
-    let r = native.check_apply(self, e, function_value, function_ty, argument_value, argument_ty, argument, span);
+    let r = native.check_apply(self, e, function_value, function_ty, argument_value, argument_ty, argument, loc);
     self.term[e] = Some(r.node); self.val[e] = r.val; self.ty[e] = Some(r.ty);
     return r.node;
 }

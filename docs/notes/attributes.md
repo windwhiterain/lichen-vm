@@ -62,9 +62,11 @@ lowlevel/highlevel core never names it. An absent perspective reads `USize(0)`.
 
 ## Subtyping: checking is a generalised unify
 
-`check_unify_relaxed(a, b, span, kind, is_subtype)` attempts an equality unify; on
+`check_unify_relaxed(a, b, loc, kind, is_subtype)` attempts an equality unify; on
 failure it retries through the attribute's `is_subtype` and suppresses the error if the
-partial order holds. `Perspective` overrides it as **`declared ⊑ value`
+partial order holds. `is_subtype` is invoked through the curated [`Ctx`](...)
+(`&dyn Ctx<P>`), so the relation reads slot values — never raw lowlevel nodes.
+`Perspective` overrides it as **`declared ⊑ value`
 (`declared | value`)**: an aligned `n`-group partitions into `q`-groups, so a value
 uniform over `n` is usable where `q` is declared iff `q | n`. Since `0` is the top,
 `divides(0, sup) ⟺ sup == 0` (a `#4` value is not "uniform everywhere") and

@@ -39,7 +39,7 @@ use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ExprId, ExprKind, IR, Loc, LocStep};
 use crate::native::{no_native_ext, NativeExt};
-use crate::program::{HighProgram, LiteralCtx, LiteralExt, TypeOperator, ValueType};
+use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -710,9 +710,9 @@ where
     ///
     /// `is_subtype` receives the unify's two operands `(a, b)` — the
     /// *found/value* side first and the *expected/declared* side second, the
-    /// same convention as [`AttrExt::unify_slots`] — and returns whether the
-    /// relation is satisfied.  The attribute decides which operand is the
-    /// subtype and which the supertype.
+    /// same convention as [`AttrExt::unify_slots`] — as a `&dyn Ctx<P>` (the
+    /// curated context), and returns whether the relation is satisfied.  The
+    /// attribute decides which operand is the subtype and which the supertype.
     ///
     /// Suppression is a safe truncate: an attribute unify's operands are
     /// scalar (a perspective is a `USize` or an unbound cell, never a
@@ -726,7 +726,7 @@ where
         b: NodeId,
         loc: Loc,
         kind: DiagKind,
-        is_subtype: impl Fn(&Checker<P>, NodeId, NodeId) -> bool,
+        is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
     ) {
         let before = self.module.unify_errors.len();
         self.module.unify(a, b);
@@ -1267,6 +1267,7 @@ where
             .class_value(function_ty)
             .and_then(|ty_value| (self.native_ext)(&ty_value))
         {
+            let loc1 = self.loc(e, 1);
             let native_apply = native.check_apply(
                 self,
                 e,
@@ -1275,7 +1276,7 @@ where
                 argument_value,
                 argument_type,
                 argument,
-                self.loc(e, 1),
+                loc1,
             );
             self.term[e] = Some(native_apply.node);
             self.val[e] = native_apply.val;
@@ -1305,21 +1306,16 @@ where
         // extension reaches neither branch (no schema carries an attribute).
         if let Some((param_marker, param_slot)) = param_persp {
             let ext = (self.attr_ext)(&param_marker);
-            ext.unify_slots(
-                self,
-                self.attr_or_missing(argument),
-                param_slot,
-                self.loc(e, 2),
-            );
+            let arg_missing = self.attr_or_missing(argument);
+            let loc2 = self.loc(e, 2);
+            ext.unify_slots(self, arg_missing, param_slot, loc2);
         } else if self.attr[argument].is_some() {
             let marker = &self.ir.schema(argument).tail[0];
             let ext = (self.attr_ext)(marker);
-            ext.unify_slots(
-                self,
-                self.attr[argument].unwrap(),
-                self.zero_marker,
-                self.loc(e, 2),
-            );
+            let found_attr = self.attr[argument].unwrap();
+            let zero_marker = self.zero_marker;
+            let loc2 = self.loc(e, 2);
+            ext.unify_slots(self, found_attr, zero_marker, loc2);
         }
         // The result's type cell: unbound unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime
@@ -1628,7 +1624,8 @@ where
                     let child_attrs: Vec<NodeId> =
                         children.iter().map(|&c| self.attr_or_missing(c)).collect();
                     let combined = ext.combine(self, &child_attrs);
-                    ext.unify_slots(self, combined, attr_val, self.loc(e, 2));
+                    let loc2 = self.loc(e, 2);
+                    ext.unify_slots(self, combined, attr_val, loc2);
                     combined
                 };
                 self.attr[e] = Some(slot);
@@ -2135,17 +2132,11 @@ fn slot0_is_shape<P: lichen_lowlevel::Program>(module: &Module<P>, node: NodeId)
     }
 }
 
-impl<P: HighProgram> LiteralCtx<P> for Checker<P>
+impl<P: HighProgram> Ctx<P> for Checker<P>
 where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
-    /// Compile a referenced sub-expression — the way a literal references
-    /// another expr.
-    fn compile_sub(&mut self, e: ExprId) -> NodeId {
-        self.check_expr(e)
-    }
-
     /// The value node for a raw value: a built-in type marker reuses the
     /// checker's installed shared marker node, so the canonical type
     /// expressions are reached in place; anything else allocates a node.
@@ -2221,5 +2212,24 @@ where
 
     fn table_type_marker_node(&self) -> NodeId {
         self.table_type_marker
+    }
+
+    fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
+        Checker::check_unify(self, a, b, loc, kind)
+    }
+
+    fn check_unify_relaxed(
+        &mut self,
+        a: NodeId,
+        b: NodeId,
+        loc: Loc,
+        kind: DiagKind,
+        is_subtype: &dyn Fn(&dyn Ctx<P>, NodeId, NodeId) -> bool,
+    ) {
+        Checker::check_unify_relaxed(self, a, b, loc, kind, is_subtype)
+    }
+
+    fn class_value(&self, node: NodeId) -> Option<P::Value> {
+        Checker::class_value(self, node)
     }
 }

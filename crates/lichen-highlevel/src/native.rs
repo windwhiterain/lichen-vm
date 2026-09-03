@@ -17,9 +17,8 @@
 
 use lichen_lowlevel::NodeId;
 
-use crate::checker::Checker;
 use crate::ir::{ExprId, Loc};
-use crate::program::{HighProgram, ValueType};
+use crate::program::{Ctx, HighProgram, ValueType};
 
 /// The result of a native operator's [`NativeExt::check_apply`]: the compiled
 /// pair node, the value node (or `None` when only known at runtime, like a call
@@ -37,9 +36,8 @@ pub struct NativeApply {
 /// `check_apply` is called by [`Checker::check_app`] for an `Apply` whose
 /// callee's type is one of this extension's operator types.  The callee and the
 /// argument have already been compiled, so the implementation receives their
-/// value and type nodes, the checks the operator's types, emits the operator's
-/// operation node (through the public `Checker` surface), and returns the
-/// applied pair.
+/// value and type nodes, checks the operator's types, emits the operator's
+/// operation node (through the curated [`Ctx`]), and returns the applied pair.
 pub trait NativeExt<P: HighProgram>
 where
     P::Value: ValueType,
@@ -47,10 +45,12 @@ where
     /// Check and emit this native operator's application.  `e` is the `Apply`
     /// expression being compiled; `callee_value`/`callee_ty` are the applied
     /// value and its type; `argument_value`/`argument_ty` are the argument's
-    /// value and its type; `argument` is the argument expression id.
+    /// value and its type; `argument` is the argument expression id.  `ctx` is
+    /// the curated context — the operator builds through the highlevel's
+    /// encoding ([`Ctx`]), never raw lowlevel nodes.
     fn check_apply(
         &self,
-        checker: &mut Checker<P>,
+        ctx: &mut dyn Ctx<P>,
         e: ExprId,
         callee_value: NodeId,
         callee_ty: NodeId,

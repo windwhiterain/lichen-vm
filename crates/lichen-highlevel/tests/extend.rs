@@ -12,7 +12,7 @@ use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR};
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::program::{
-    HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralCtx, LiteralExt, ProgramImpl,
+    Ctx, HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralExt, ProgramImpl,
     TypeOperator, TypeTypeLit, TypeValue, ValueType,
 };
 use lichen_lowlevel::{
@@ -94,7 +94,7 @@ where
     P: Program,
     P::Value: From<ProbeValue>,
 {
-    fn build(&self, ctx: &mut dyn LiteralCtx<P>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         let value_node = ctx.value_node(P::Value::from(ProbeValue::FloatType));
         let ty = ctx.universe();
         let pair = ctx.pair(value_node, ty);
@@ -121,7 +121,7 @@ lichen_utils::enum_ext! {
 pub type ProbeProgram = ProgramImpl<ProbeValue, ProbeOperator, NoAttr, ProbeLiteral>;
 
 impl LiteralExt<ProbeProgram> for ProbeLiteral {
-    fn build(&self, ctx: &mut dyn LiteralCtx<ProbeProgram>) -> LiteralBuild {
+    fn build(&self, ctx: &mut dyn Ctx<ProbeProgram>) -> LiteralBuild {
         match self {
             ProbeLiteral::Int(lit) => lit.build(ctx),
             ProbeLiteral::IntType(lit) => lit.build(ctx),

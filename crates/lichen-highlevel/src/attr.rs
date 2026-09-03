@@ -15,9 +15,8 @@
 
 use lichen_lowlevel::{LowValue, NodeId};
 
-use crate::checker::Checker;
 use crate::ir::Loc;
-use crate::program::{HighProgram, ValueType};
+use crate::program::{Ctx, HighProgram, ValueType};
 
 /// The marker bound every attribute type must satisfy: a plain, hashable,
 /// interning-friendly token (the [`Schema`](crate::ir::Schema)`::tail` entries
@@ -54,28 +53,29 @@ where
     /// Combine the direct sub-expressions' attribute slots into one node
     /// (a perspective → the language's meet operator over the operand array, a
     /// lazy operand → `Parameterized`).  `children` are the already-compiled
-    /// child slots, pre-padded with [`Self::missing_value`].
-    fn combine(&self, checker: &mut Checker<P>, children: &[NodeId]) -> NodeId;
+    /// child slots, pre-padded with [`Self::missing_value`].  Built through
+    /// the curated [`Ctx`], never raw lowlevel nodes.
+    fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId;
 
     /// Unify two attribute slots.  Receives the *found/value* side as `a` and
     /// the *expected/declared* side as `b`.  A perspective's default impl is
     /// an equality unify; an attribute that defines [`Self::is_subtype`] may
-    /// call [`Checker::check_unify_relaxed`] instead so a subtype (not just an
+    /// call [`Ctx::check_unify_relaxed`] instead so a subtype (not just an
     /// exact match) passes.  `loc` is the source-blind location of the check.
-    fn unify_slots(&self, checker: &mut Checker<P>, a: NodeId, b: NodeId, loc: Loc);
+    fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc);
 
     /// The optional subtype relation on this attribute's slot values: whether
     /// `sub` is a subtype of `super` under its lattice.  The checker consults
-    /// it after a failed equality unify ([`Checker::check_unify_relaxed`]); if
+    /// it after a failed equality unify ([`Ctx::check_unify_relaxed`]); if
     /// it holds, the failure's error is suppressed and the check passes.
     ///
     /// Default `false` — no subtyping, exact equality is required.  A
     /// concrete attribute (e.g. `Perspective`) overrides it to relax its
     /// apply/`# p` check from equality to a partial order.  Implementations
-    /// read the two slot values with [`Checker::class_value`]; an unbound
+    /// read the two slot values with [`Ctx::class_value`]; an unbound
     /// value (a runtime-dependent perspective) should return `false`, so the
     /// check stays conservative.
-    fn is_subtype(&self, _checker: &Checker<P>, _sub: NodeId, _super: NodeId) -> bool {
+    fn is_subtype(&self, _ctx: &dyn Ctx<P>, _sub: NodeId, _super: NodeId) -> bool {
         false
     }
 }

@@ -29,11 +29,10 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeExt};
-use lichen_highlevel::program::{TypeOperator, ValueType};
+use lichen_highlevel::program::{Ctx, TypeOperator, ValueType};
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId,
     OperatorExt,
@@ -462,7 +461,7 @@ static LAUNCH_TARGET: LaunchTargetNativeExt = LaunchTargetNativeExt;
 impl NativeExt<LangProgram> for JitNativeExt {
     fn check_apply(
         &self,
-        checker: &mut Checker<LangProgram>,
+        ctx: &mut dyn Ctx<LangProgram>,
         _e: ExprId,
         _callee_value: NodeId,
         _callee_ty: NodeId,
@@ -471,34 +470,32 @@ impl NativeExt<LangProgram> for JitNativeExt {
         _argument: ExprId,
         loc: Loc,
     ) -> NativeApply {
-        let block = checker.current_block;
         // Function-ness gate: `jit` on a *concretely non-function* value is an
         // error (mirroring the ordinary apply guard).
-        let d = checker.fresh_cell();
-        let c = checker.fresh_cell();
-        let shape = checker.array_node(block, &[d, c]);
-        let fn_marker = checker.value_node(LangValue::function_type_marker());
-        let universe = checker.type_expr_node();
-        let kind = checker.array_node(block, &[fn_marker, universe]);
-        let fn_ty = checker.array_node(block, &[shape, kind]);
-        checker.check_unify(argument_ty, fn_ty, loc, DiagKind::Guard);
+        let d = ctx.fresh();
+        let c = ctx.fresh();
+        let shape = ctx.array_node(&[d, c]);
+        let fn_marker = ctx.value_node(LangValue::function_type_marker());
+        let universe = ctx.universe();
+        let kind = ctx.array_node(&[fn_marker, universe]);
+        let fn_ty = ctx.array_node(&[shape, kind]);
+        ctx.check_unify(argument_ty, fn_ty, loc, DiagKind::Guard);
 
         // Kernel type: `Kernel<Int -> Int>` = `[[int, int], [TypeKernel, Type]]`.
-        let int_ty = checker.int_type_node();
-        let sig = checker.array_node(block, &[int_ty, int_ty]);
-        let k_marker = checker.value_node(LangValue::from(ComputeValue::TypeKernel));
-        let universe = checker.type_expr_node();
-        let k_kind = checker.array_node(block, &[k_marker, universe]);
-        let kernel_ty = checker.array_node(block, &[sig, k_kind]);
+        let int_ty = ctx.int_type();
+        let sig = ctx.array_node(&[int_ty, int_ty]);
+        let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
+        let universe = ctx.universe();
+        let k_kind = ctx.array_node(&[k_marker, universe]);
+        let kernel_ty = ctx.array_node(&[sig, k_kind]);
 
-        let op = checker.op_node(
-            block,
+        let op = ctx.op_node(
             LangOperator::from(ComputeOperator::Jit),
             Some(argument_value),
         );
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
-        let pair = checker.array_node(block, &[op, kernel_ty]);
+        let pair = ctx.array_node(&[op, kernel_ty]);
         NativeApply {
             node: pair,
             val: None,
@@ -510,7 +507,7 @@ impl NativeExt<LangProgram> for JitNativeExt {
 impl NativeExt<LangProgram> for LaunchNativeExt {
     fn check_apply(
         &self,
-        checker: &mut Checker<LangProgram>,
+        ctx: &mut dyn Ctx<LangProgram>,
         _e: ExprId,
         _callee_value: NodeId,
         _callee_ty: NodeId,
@@ -519,18 +516,17 @@ impl NativeExt<LangProgram> for LaunchNativeExt {
         _argument: ExprId,
         loc: Loc,
     ) -> NativeApply {
-        let block = checker.current_block;
         // Kernel-ness gate: `launch` on a *concretely non-kernel* value is an
         // error.  The fresh kernel type's signature cells bind to the kernel's
         // actual domain/codomain.
-        let d = checker.fresh_cell();
-        let c = checker.fresh_cell();
-        let shape = checker.array_node(block, &[d, c]);
-        let k_marker = checker.value_node(LangValue::from(ComputeValue::TypeKernel));
-        let universe = checker.type_expr_node();
-        let k_kind = checker.array_node(block, &[k_marker, universe]);
-        let kernel_ty = checker.array_node(block, &[shape, k_kind]);
-        checker.check_unify(argument_ty, kernel_ty, loc, DiagKind::Guard);
+        let d = ctx.fresh();
+        let c = ctx.fresh();
+        let shape = ctx.array_node(&[d, c]);
+        let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
+        let universe = ctx.universe();
+        let k_kind = ctx.array_node(&[k_marker, universe]);
+        let kernel_ty = ctx.array_node(&[shape, k_kind]);
+        ctx.check_unify(argument_ty, kernel_ty, loc, DiagKind::Guard);
 
         // The curried intermediate: `launch k` is a function-shaped value
         // `domain -> codomain` that the outer apply completes.
@@ -539,8 +535,8 @@ impl NativeExt<LangProgram> for LaunchNativeExt {
             domain: d,
             codomain: c,
         });
-        let lt_node = checker.value_node(LangValue::from(lt));
-        let lt_ty = checker.value_node(LangValue::from(ComputeValue::TypeLaunchTarget));
+        let lt_node = ctx.value_node(LangValue::from(lt));
+        let lt_ty = ctx.value_node(LangValue::from(ComputeValue::TypeLaunchTarget));
         NativeApply {
             node: lt_node,
             val: Some(lt_node),
@@ -552,7 +548,7 @@ impl NativeExt<LangProgram> for LaunchNativeExt {
 impl NativeExt<LangProgram> for LaunchTargetNativeExt {
     fn check_apply(
         &self,
-        checker: &mut Checker<LangProgram>,
+        ctx: &mut dyn Ctx<LangProgram>,
         _e: ExprId,
         callee_value: NodeId,
         _callee_ty: NodeId,
@@ -562,23 +558,21 @@ impl NativeExt<LangProgram> for LaunchTargetNativeExt {
         loc: Loc,
     ) -> NativeApply {
         let Some(ComputeValue::LaunchTarget(lt)) =
-            checker.class_value(callee_value).and_then(|v| v.as_enum())
+            ctx.class_value(callee_value).and_then(|v| v.as_enum())
         else {
             unreachable!("a LaunchTarget-typed callee must carry a LaunchTarget value")
         };
-        let block = checker.current_block;
         // Unify the argument against the kernel's domain.
-        checker.check_unify(argument_ty, lt.domain, loc, DiagKind::Guard);
+        ctx.check_unify(argument_ty, lt.domain, loc, DiagKind::Guard);
         // Emit the `Launch` operator with operand `[kernel, arg]`.
-        let operands = checker.array_node(block, &[lt.kernel, argument_value]);
-        let op = checker.op_node(
-            block,
+        let operands = ctx.array_node(&[lt.kernel, argument_value]);
+        let op = ctx.op_node(
             LangOperator::from(ComputeOperator::Launch),
             Some(operands),
         );
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare result.
-        let pair = checker.array_node(block, &[op, lt.codomain]);
+        let pair = ctx.array_node(&[op, lt.codomain]);
         NativeApply {
             node: pair,
             val: None,

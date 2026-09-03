@@ -195,16 +195,16 @@ pub struct Expr<L> {
 
 /// The expression kinds.  Generic over the literal vocabulary `L` — a literal
 /// node carries an extensible [`LiteralExt`](crate::program::LiteralExt)
-/// value (any struct that builds a `value : type` pair, referencing other
-/// exprs); the built-in leaf literal wraps a raw value token.
+/// value (any struct that builds a `value : type` pair); the built-in leaf
+/// literal wraps a raw value token.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum ExprKind<L> {
     /// A literal leaf — a `value : type` pair declared together.  The literal
     /// is any struct implementing [`LiteralExt`](crate::program::LiteralExt):
-    /// it builds the value and type nodes through the checker's
-    /// [`LiteralCtx`](crate::program::LiteralCtx), and it may reference other
-    /// exprs (a leaf literal is the built-in case — an int literal or a type
-    /// constant whose type is derived via [`ValueType::type_of`]).
+    /// it builds the value and type nodes through the curated
+    /// [`Ctx`](crate::program::Ctx) (a leaf literal is the built-in case — an
+    /// int literal or a type constant whose type is derived via
+    /// [`ValueType::type_of`]).
     Literal(L),
     /// A function parameter (or, `let` desugared by the frontend, a let-bound
     /// name).  Uses of the parameter in the return expression are the

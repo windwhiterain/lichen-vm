@@ -14,11 +14,10 @@
 //! `Operator = LangOperator`, and `Attr = Perspective`.
 
 use lichen_highlevel::attr::{AttrExt, AttrSpec};
-use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{
-    HighGlobal, ProgramImpl, TypeOperator, TypeValue, ValueType,
+    Ctx, HighGlobal, ProgramImpl, TypeOperator, TypeValue, ValueType,
 };
 use lichen_lowlevel::{LowOperator, LowValue, Module, NodeId, OperatorExt, ValueExt};
 use lichen_utils::compose::AsField;
@@ -260,33 +259,23 @@ impl AttrExt<LangProgram> for Perspective {
     /// attribute slots (the n-ary gcd meet).  An absent child reads `0`
     /// (padded by the checker), which is neutral, so `(1 # 4 + 2) # 4`
     /// derives `gcd(4, 0) = 4`.
-    fn combine(&self, checker: &mut Checker<LangProgram>, children: &[NodeId]) -> NodeId {
-        let operands = checker.array_node(checker.current_block, children);
-        checker.op_node(
-            checker.current_block,
-            LangOperator::from(GcdOp::Gcd),
-            Some(operands),
-        )
+    fn combine(&self, ctx: &mut dyn Ctx<LangProgram>, children: &[NodeId]) -> NodeId {
+        let operands = ctx.array_node(children);
+        ctx.op_node(LangOperator::from(GcdOp::Gcd), Some(operands))
     }
 
     /// Perspective unify: two slots must unify, or — when they differ — the
     /// declared (`b`) must be a *subtype* of the value's (`a`) under the
     /// divisibility order.  An absent side reads `0` before this is called.
-    fn unify_slots(
-        &self,
-        checker: &mut Checker<LangProgram>,
-        a: NodeId,
-        b: NodeId,
-        loc: Loc,
-    ) {
-        checker.check_unify_relaxed(a, b, loc, DiagKind::Attribute, |checker, value, declared| {
+    fn unify_slots(&self, ctx: &mut dyn Ctx<LangProgram>, a: NodeId, b: NodeId, loc: Loc) {
+        ctx.check_unify_relaxed(a, b, loc, DiagKind::Attribute, &|ctx, value, declared| {
             // `a` (first) is the value's actual perspective, `b` (second) the
             // declared one.  A value uniform over `value` threads is usable
             // where `declared` is required iff `declared | value` (an aligned
             // `value`-group can be partitioned into `declared`-groups, so
             // uniform-`value` implies uniform-`declared`).  `0` (no
             // perspective) matches only `0`.
-            self.is_subtype(checker, declared, value)
+            self.is_subtype(ctx, declared, value)
         });
     }
 
@@ -295,8 +284,8 @@ impl AttrExt<LangProgram> for Perspective {
     /// satisfied only by `super = 0`, and `super = 0` satisfies any `sub`.
     /// Implementation reads the two slot values (an unbound value — a
     /// runtime-dependent perspective — is not a subtype).
-    fn is_subtype(&self, checker: &Checker<LangProgram>, sub: NodeId, sup: NodeId) -> bool {
-        let (Some(sub), Some(sup)) = (checker.class_value(sub), checker.class_value(sup)) else {
+    fn is_subtype(&self, ctx: &dyn Ctx<LangProgram>, sub: NodeId, sup: NodeId) -> bool {
+        let (Some(sub), Some(sup)) = (ctx.class_value(sub), ctx.class_value(sup)) else {
             return false;
         };
         let (Some(LowValue::USize(sub)), Some(LowValue::USize(sup))) =
