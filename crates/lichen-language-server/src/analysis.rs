@@ -138,6 +138,12 @@ pub struct Doc {
     /// (`succ` → `Function : Int -> Int`) we read it from the `Record` node's
     /// field-value tuple.
     field_types: HashMap<String, StatementValue>,
+    /// Per field access on an imported module (`math.succ`), keyed by
+    /// `(import binding name, field name)`: the accessed field checked
+    /// `value : type` snapshot.  Read from each `NamedField` IR node whose
+    /// container is the module's imported `Static`, so hovering a field
+    /// *access* renders the field's value:type too (not just "field of module").
+    module_field_types: HashMap<(String, String), StatementValue>,
 }
 
 impl Doc {
@@ -206,10 +212,18 @@ impl Doc {
             }
         }
 
+        // Directive span → import binding name, so a field access's container
+        // (an imported module's `Static` node) can be traced back to its module.
+        let import_name_by_span: HashMap<Span, &str> = pre
+            .imports
+            .iter()
+            .map(|i| (i.span, i.name.as_str()))
+            .collect();
+
         // A read-only per-statement type/value snapshot.  It is computed here,
         // once, by reading the built module's cached values — never by
         // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
-        let (statements, stmt_starts, field_types) = match report.build {
+        let (statements, stmt_starts, field_types, module_field_types) = match report.build {
             Some(build) => {
                 let mut statements = Vec::new();
                 let mut starts = Vec::new();
@@ -301,9 +315,64 @@ impl Doc {
                         );
                     }
                 }
-                (statements, starts, field_types)
+                // A field *access* on an imported module (`math.succ`): the
+                // compiler lowers it to a `NamedField` IR node whose container
+                // is the module's imported `Static`.  The field's value node
+                // resolves (read below), but the field-access node's *type* slot
+                // stays a lazy cell (`?a`), so the field's type is read from the
+                // module's own rendered `struct<...>` type.  The table is keyed
+                // by `(import binding name, field name)`.
+                let mut module_field_types: HashMap<(String, String), StatementValue> =
+                    HashMap::new();
+                for id in 0..build.ir.expr.len() {
+                    let eid = ExprId(id as u32);
+                    let lichen_highlevel::ir::ExprKind::NamedField { container, name } =
+                        build.ir[eid].kind
+                    else {
+                        continue;
+                    };
+                    let lichen_highlevel::ir::ExprKind::Static { .. } = build.ir[container].kind
+                    else {
+                        continue;
+                    };
+                    let Some(container_span) = build.ir[container].span else {
+                        continue;
+                    };
+                    let Some(&module_name) = import_name_by_span.get(&container_span) else {
+                        continue;
+                    };
+                    let ty = import_ty
+                        .get(&container_span)
+                        .and_then(|mty| field_type_in_struct(mty, name))
+                        .unwrap_or_default();
+                    let value = build.val[eid].and_then(|vn| {
+                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                            Some(v) => Some(print_value(
+                                &build.module,
+                                v,
+                                build.ty[eid].unwrap_or_default(),
+                            )),
+                            None => None,
+                        }
+                    });
+                    module_field_types.insert(
+                        (module_name.to_string(), name.to_string()),
+                        StatementValue {
+                            span: (0, 0),
+                            ty,
+                            value,
+                        },
+                    );
+                }
+                (statements, starts, field_types, module_field_types)
             }
-            None => (Vec::new(), Vec::new(), HashMap::new()),
+            None => (
+                Vec::new(),
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
         };
 
         let (defs, resolve, def_index) = index(&program, &pre.imports);
@@ -356,6 +425,7 @@ impl Doc {
             imports,
             import_by_span,
             field_types,
+            module_field_types,
         }
     }
 
@@ -454,32 +524,30 @@ impl Doc {
                     match self.stmt_by_span.get(&def.span).copied() {
                         Some(stmt_i) => {
                             let sv = &self.statements[stmt_i];
-                            match (&sv.value, sv.ty.is_empty()) {
-                                // A concrete value: `value : type`.
-                                (Some(v), false) => format!("`{name}` — `{v} : {}`", sv.ty),
-                                // A lazy / recursive binding: type only.
-                                (None, false) => format!("`{name}` — `{}`", sv.ty),
-                                // No type either: fall back to the definition.
-                                _ => format!("`{name}` — defined at line `{}`", def.span.0),
-                            }
+                            snapshot_hover(
+                                name,
+                                sv,
+                                format!("`{name}` — defined at line `{}`", def.span.0),
+                            )
                         }
                         // A struct-block field (`succ` in `{succ = …}`): its
                         // value:type from the Record node's field table.
                         None => match self.field_types.get(&def.name) {
-                            Some(sv) => match (&sv.value, sv.ty.is_empty()) {
-                                (Some(v), false) => format!("`{name}` — `{v} : {}`", sv.ty),
-                                (None, false) => format!("`{name}` — `{}`", sv.ty),
-                                _ => format!("`{name}` — defined at line `{}`", def.span.0),
-                            },
+                            Some(sv) => snapshot_hover(
+                                name,
+                                sv,
+                                format!("`{name}` — defined at line `{}`", def.span.0),
+                            ),
                             None => format!("`{name}` — defined at line `{}`", def.span.0),
                         },
                     }
                 }
                 None => {
-                    // A field of an imported module (`math.succ`): the name
-                    // before the `.` resolves to an import, so the field is a
-                    // member of that module — not unresolved.
-                    match self.imported_field_hover(name, token.span) {
+                    // A field access (`math.succ`, `point.x`): the field belongs
+                    // to its container — an imported module or a local struct —
+                    // so it is not unresolved.  The hover renders the field's
+                    // own `value : type`.
+                    match self.field_access_hover(name, token.span) {
                         Some(msg) => return Some((msg, range)),
                         None => format!("`{name}` — unresolved name"),
                     }
@@ -506,11 +574,14 @@ impl Doc {
         None
     }
 
-    /// When the hovered name is a field access on an imported module
-    /// (`math.succ`), the field belongs to that module — render it as a member
-    /// of the import, so hovering is not "unresolved".  Detected by the name
-    /// being preceded by a `.` and the container name resolving to an import.
-    fn imported_field_hover(&self, name: &str, field_span: Span) -> Option<String> {
+    /// When the hovered name is a field access (`math.succ`, `point.x`), the
+    /// field belongs to its container — an imported module or a local struct
+    /// binding — so it is not "unresolved".  Detected by the name being preceded
+    /// by a `.` and the container resolving to a knowable struct.  The hover
+    /// renders the field's own `value : type` from the checker: an imported
+    /// module's field via [`Doc::module_field_types`], a local struct field via
+    /// [`Doc::field_types`].
+    fn field_access_hover(&self, name: &str, field_span: Span) -> Option<String> {
         let idx = self.tokens.iter().position(|t| t.span == field_span)?;
         if idx < 2 || self.tokens[idx - 1].kind != TokenKind::Dot {
             return None;
@@ -519,13 +590,31 @@ impl Doc {
             TokenKind::Name(_) => self.tokens[idx - 2].span,
             _ => return None,
         };
-        let container_def = self.resolve.get(&container_span).copied()?;
-        let import_i = self
-            .import_by_span
-            .get(&self.defs[container_def].span)
-            .copied()?;
-        let module = &self.imports[import_i].name;
-        Some(format!("`.{name}` — field of imported module `{module}`"))
+        let container_def = self.resolve.get(&container_span).copied();
+
+        // An imported-module container (`math.succ`): look the field up in the
+        // module's field table.
+        if let Some(d) = container_def
+            && let Some(import_i) = self.import_by_span.get(&self.defs[d].span).copied()
+        {
+            let module = &self.imports[import_i].name;
+            let fallback = format!("`.{name}` — field of imported module `{module}`");
+            return Some(match self.module_field_types.get(&(module.clone(), name.to_string())) {
+                Some(sv) => snapshot_hover(&format!(".{name}"), sv, fallback),
+                None => fallback,
+            });
+        }
+
+        // A local struct-binding container (`point.x`): the field's value:type
+        // from this file's struct-block table.
+        if let Some(sv) = self.field_types.get(name) {
+            return Some(snapshot_hover(
+                &format!(".{name}"),
+                sv,
+                format!("`{name}` — unresolved name"),
+            ));
+        }
+        None
     }
 
     /// Classify each source token into an LSP semantic token, driven by Lichen's
@@ -619,6 +708,20 @@ fn severity_for(stage: Stage) -> DiagnosticSeverity {
     }
 }
 
+/// Render a `value : type` hover snapshot for a resolved definition: a concrete
+/// value (`v : ty`), else just the type (a lazy / recursive binding), else the
+/// caller's `fallback` (no type was computed).
+fn snapshot_hover(display: &str, sv: &StatementValue, fallback: String) -> String {
+    match (&sv.value, sv.ty.is_empty()) {
+        // A concrete value: `value : type`.
+        (Some(v), false) => format!("`{display}` — `{v} : {}`", sv.ty),
+        // A lazy / recursive binding: type only.
+        (None, false) => format!("`{display}` — `{}`", sv.ty),
+        // No type either: the caller's fallback.
+        _ => fallback,
+    }
+}
+
 /// The hover text for a use of an imported module: the imported module's type
 /// (its export's checked type) when the build computed one, else a plain
 /// "imported module" description naming the imported file.
@@ -627,6 +730,81 @@ fn import_hover(name: &str, imp: &ImportBinding) -> String {
         Some(ty) => format!("`{name}` — imported module : {ty}"),
         None => format!("`{name}` — imported module (from `{}`)", imp.path),
     }
+}
+
+/// The type of the named field `field` inside a rendered `struct<...>` type
+/// string, e.g. `field_type_in_struct("struct<.succ Int -> Int, .add Int -> Int
+/// -> Int>", "succ")` → `Some("Int -> Int")`.  The field-access IR node's own
+/// type slot is a lazy cell (it reads `?a` until a later resolve), so a field
+/// access on an imported module resolves its type from the module's rendered
+/// type instead.  Handles arrow types (`->`) and nested `struct<...>` values.
+fn field_type_in_struct(struct_ty: &str, field: &str) -> Option<String> {
+    let inner = struct_ty.strip_prefix("struct<")?;
+    // Find the matching `>` for the opening `<` (ignoring the `>` of `->`),
+    // then split the interior on top-level commas.
+    let body = match_close(inner)?;
+    for seg in split_top_level(body, ',') {
+        let seg = seg.trim();
+        let Some(rest) = seg.strip_prefix('.') else {
+            continue; // positional field, not named.
+        };
+        // A well-formed named field is `.name type`; skip a malformed segment.
+        let Some(name_end) = rest.find(|c: char| c.is_whitespace()) else {
+            continue;
+        };
+        if &rest[..name_end] == field {
+            return Some(rest[name_end..].trim().to_string());
+        }
+    }
+    None
+}
+
+/// The substring up to the `>` that closes a depth-1 `struct<...>` opening that
+/// was already stripped.  The `>` of an arrow `->` is not a close.
+fn match_close(inner: &str) -> Option<&str> {
+    let bytes = inner.as_bytes();
+    let mut depth = 1;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'<' => depth += 1,
+            b'>' if !(i > 0 && bytes[i - 1] == b'-') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&inner[..i]);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Split `s` on `sep` at bracket depth 0 (over `()[]<>`, with the `>` of `->`
+/// ignored), returning the segments.
+fn split_top_level(s: &str, sep: char) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    let mut i = 0;
+    while i < s.len() {
+        let c = bytes[i] as char;
+        match c {
+            '(' | '[' | '<' => depth += 1,
+            ')' | ']' => depth -= 1,
+            '>' if !(i > 0 && bytes[i - 1] == b'-') => depth -= 1,
+            _ if c == sep && depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&s[start..]);
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1309,10 +1487,15 @@ mod tests {
         assert!(msg.contains("imported module"), "module hover msg = {msg}");
         assert!(msg.contains("Int -> Int"), "module hover type = {msg}");
 
-        // The field `succ` (line 3, char 5): a field of the imported module.
+        // The field `succ` (line 3, char 5): a field of the imported module —
+        // its `value : type`, not "unresolved".
         let (msg, _) = d.hover_at(Position { line: 3, character: 5 }).expect("hover on `succ`");
         assert!(
-            msg.contains("field of imported module `math`"),
+            msg.contains("Int -> Int"),
+            "field hover msg = {msg}"
+        );
+        assert!(
+            !msg.contains("unresolved"),
             "field hover msg = {msg}"
         );
 
@@ -1320,6 +1503,59 @@ mod tests {
         // (`math` in `@{`...` math = import ...` at line 1, char 2).
         let def = d.definition_at(Position { line: 3, character: 0 }).expect("def on `math`");
         assert_eq!(def.start, Position { line: 1, character: 2 });
+    }
+
+    #[test]
+    fn imported_field_access_hovers_with_value_and_type() {
+        // The repo's living spec `import/_.lichen`: hovering an accessed field
+        // of an imported module (`math.succ`, `geo.double`, `geo.inc_twice`)
+        // renders the field's `value : type` (the module's field table), not
+        // "field of imported module `X`" and never "unresolved".
+        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../lichen-language/examples/programs/import");
+        let main_path = examples.join("_.lichen");
+        let d = Doc::new_with_base(
+            fs::read_to_string(&main_path).unwrap(),
+            Some(main_path.as_path()),
+        );
+        assert!(
+            d.diagnostics.is_empty(),
+            "repo import example should check clean; got {:?}",
+            d.diagnostics
+        );
+
+        // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`
+        for pos in [
+            // `.succ` field access on `math`
+            Position { line: 6, character: 6 },
+            // `.double` field access on `geo`
+            Position { line: 6, character: 19 },
+            // `.inc_twice` field access on `geo`
+            Position { line: 6, character: 33 },
+        ] {
+            let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
+            assert!(
+                msg.contains("Function : Int -> Int"),
+                "field access hover msg = {msg}"
+            );
+            assert!(
+                !msg.contains("unresolved") && !msg.contains("field of imported module"),
+                "field access hover msg = {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn local_struct_field_access_hovers_with_value_and_type() {
+        // A field access on a *local* struct binding (`point.x`) renders the
+        // field's value:type too — not "unresolved".  It reads the current
+        // file's struct-block field table.
+        let d = doc("point = { x = 1, y = 2 }\npoint.x\n");
+        let (msg, _) = d.hover_at(Position { line: 1, character: 6 }).expect("hover on `.x`");
+        assert!(
+            msg.contains("Int") && !msg.contains("unresolved"),
+            "local field access hover msg = {msg}"
+        );
     }
 
     #[test]
