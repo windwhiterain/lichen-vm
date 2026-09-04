@@ -334,11 +334,9 @@ fn emit_node(
         },
         LangOperator::LowOperator(LowOperator::Index) => {
             let (target, index) = operand_pair(module, operation.operand)?;
-            // A read of the parameter at some index path → a wasm `local.get`.
-            // `param_path` returns `Some(..)` for `Index(param_pair, k)`
-            // (scalar domain) and for `Index(Index(param_pair, 0).., k)` (a
-            // flat or nested tuple element); `None` for a structured-array
-            // index (the `if` conditional).
+            // A parameter read at some index path → a wasm `local.get`.  (This
+            // must run before the value_of defuse: `Index(param_pair, 0)` is
+            // a node's value slot, not a general extraction.)
             if let Some(path) = param_path(module, param_pair, node) {
                 let domain = module
                     .node_shape(param_value)
@@ -347,25 +345,36 @@ fn emit_node(
                 body.instruction(&Instruction::LocalGet(offset as u32));
                 return Ok(());
             }
-            // Conditional branch: `if c then a else b` lowers to `[b, a][c]`
-            // — a 2-element array indexed by a 0/1 selector, a wasm `select`.
-            // Push the then-branch, the else-branch, then the selector
-            // (wrapped to i32); `select` picks the then-branch when the
-            // selector is non-zero.
-            if let Some(items) = module.array_items(target) {
-                if items.len() == 2 {
-                    let then_node = dyn_node(items[1].node)?;
-                    let else_node = dyn_node(items[0].node)?;
-                    emit_node(module, param_pair, param_value, then_node, body)?;
-                    emit_node(module, param_pair, param_value, else_node, body)?;
-                    emit_node(module, param_pair, param_value, index, body)?;
-                    body.instruction(&Instruction::I32WrapI64);
-                    body.instruction(&Instruction::Select);
-                    return Ok(());
+            // A `value_of` extraction — `Index(pair, 0)` with a constant `0`
+            // index and `pair` a `[value, type]` pair.  Emit the pair's value
+            // slot instead of treating the extraction as a real index.
+            if usize_value(module, index) == Some(0) {
+                if let Some(value_node) = value_of_node(module, node) {
+                    return emit_node(module, param_pair, param_value, value_node, body);
+                }
+            }
+            // A conditional `if c then a else b` lowers to `[b, a][c]` — a
+            // 2-element array value indexed by a *computed* (non-constant)
+            // selector, a wasm `select`.  The array may be reached through a
+            // value_of extraction; look through it.
+            if usize_value(module, index).is_none() {
+                if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
+                    if let Some(items) = module.array_items(array_value) {
+                        if items.len() == 2 {
+                            let then_node = dyn_node(items[1].node)?;
+                            let else_node = dyn_node(items[0].node)?;
+                            emit_node(module, param_pair, param_value, then_node, body)?;
+                            emit_node(module, param_pair, param_value, else_node, body)?;
+                            emit_node(module, param_pair, param_value, index, body)?;
+                            body.instruction(&Instruction::I32WrapI64);
+                            body.instruction(&Instruction::Select);
+                            return Ok(());
+                        }
+                    }
                 }
             }
             return Err(
-                "unsupported index in kernel body (only parameter reads and 2-element conditionals)"
+                "unsupported index in kernel body (only parameter reads, value_of extractions, and 2-element conditionals)"
                     .into(),
             );
         }
@@ -411,6 +420,24 @@ fn usize_value(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
         Some(LowValue::USize(n)) => Some(n),
         _ => None,
     }
+}
+
+/// Follow a `value_of` extraction — `Index(pair, 0)`, where `pair` is a
+/// `[value, type]` pair and the index is the constant `0` — to the pair's
+/// value slot.  The checker accesses most values through such an extraction,
+/// so the JIT must look through it to reach the actual value (a constant, a
+/// parameter read, or a computation).
+fn value_of_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+    let operation = module.nodes[node].operation?;
+    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+        return None;
+    }
+    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    if usize_value(module, index)? != 0 {
+        return None;
+    }
+    let items = module.array_items(target)?;
+    dyn_node(items.first()?.node).ok()
 }
 
 /// The index *path* from the parameter to the value `node` reads, if `node` is
