@@ -61,13 +61,45 @@ fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// A binary arithmetic/comparison operator of the kernel-safe subset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KernelBin {
+    Add,
+    Sub,
+    Leq,
+    Eq,
+}
+
+/// One abstract instruction in a lowered kernel body.
+///
+/// A [`KernelFragment`] stores a `Vec<KernelInstr>` — **not** raw wasm — so the
+/// launcher can lower cross-kernel calls with indices resolved *after* the
+/// kernel's relative launch set is laid out (the deferred-linker condition
+/// style-2 `k x` calls need).  Style-1 inline lichen-function calls and the
+/// scalar-arithmetic subset lower directly; a later variant carries a
+/// cross-kernel call by callee [`KernelId`].
+#[derive(Debug, Clone)]
+enum KernelInstr {
+    /// Push an `i64` constant.
+    Const(i64),
+    /// A binary `add/sub/leq/eq` over the top two stack values.
+    Bin(KernelBin),
+    /// Read a parameter local (a flattened scalar offset in the domain).
+    LocalGet(u32),
+    /// Convert the top stack value `i64 -> i32` (a `select` condition).
+    I32WrapI64,
+    /// A `if c then a else b` — emitted as then/else values, the selector,
+    /// `I32WrapI64`, then this `select`.
+    Select,
+}
+
 /// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
 /// module.
 ///
 /// `jit` lowers one lichen function to a [`KernelFragment`]: the function's
-/// body as raw wasm, plus the domain shape signature a linker needs.  The
-/// fragment is stored (not the whole module); `launch` links the reachable
-/// fragment set into a module (today [`link_fragment`]'s degenerate
+/// body as abstract instructions, plus the domain shape signature a linker
+/// needs.  The fragment is stored (not the whole module); `launch` links the
+/// reachable fragment set into a module (today [`link_fragment`]'s degenerate
 /// single-fragment link) and runs it.  Splitting "emit bytecode" from "assemble
 /// a module" is what lets a later step link many fragments together (helper
 /// sharing, recursion) and emit cross-module imports for callees compiled
@@ -77,10 +109,9 @@ struct KernelFragment {
     /// The parameter domain shape — the wasm parameter types and the layout
     /// the body emitter used for parameter reads.
     param_shape: LowShape,
-    /// The lowered wasm function body: raw bytes (locals + opcodes, no
-    /// leading size prefix), as produced by
-    /// [`wasm_encoder::Function::into_raw_body`].
-    body: Vec<u8>,
+    /// The lowered function body as abstract instructions.  The launcher
+    /// lowers these to wasm with any cross-kernel call indices resolved.
+    body: Vec<KernelInstr>,
 }
 
 /// The compute value vocabulary — injected as a sibling leaf into the
@@ -198,8 +229,6 @@ fn compile_fragment(
     module: &mut Module<LangProgram>,
     function: AnyFunctionId,
 ) -> Result<KernelFragment, String> {
-    use wasm_encoder::{Function, Instruction};
-
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
     };
@@ -228,13 +257,12 @@ fn compile_fragment(
     };
     module.set_node_shape(param_value, Some(param_shape.clone()));
 
-    let mut body = Function::new([]);
+    let mut body: Vec<KernelInstr> = Vec::new();
     emit_node(module, param_pair, param_value, ret_value, &mut body)?;
-    body.instruction(&Instruction::End);
 
     Ok(KernelFragment {
         param_shape,
-        body: body.into_raw_body(),
+        body,
     })
 }
 
@@ -244,8 +272,8 @@ fn compile_fragment(
 /// reachable fragment set and emits imports for cross-module callees.
 fn link_fragment(fragment: &KernelFragment) -> Result<Vec<u8>, String> {
     use wasm_encoder::{
-        CodeSection, ExportKind, ExportSection, FunctionSection, Module as WasmModule, TypeSection,
-        ValType,
+        CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction,
+        Module as WasmModule, TypeSection, ValType,
     };
 
     let arity = flat_arity(&fragment.param_shape);
@@ -260,9 +288,54 @@ fn link_fragment(fragment: &KernelFragment) -> Result<Vec<u8>, String> {
     exports.export("main", ExportKind::Func, 0);
     wasm.section(&exports);
     let mut code = CodeSection::new();
-    code.raw(&fragment.body);
+    let mut body = Function::new([]);
+    lower_body(&fragment.body, &mut body)?;
+    body.instruction(&Instruction::End);
+    code.function(&body);
     wasm.section(&code);
     Ok(wasm.finish())
+}
+
+/// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
+/// Cross-kernel calls are not yet allowed in a lone fragment — a later linker
+/// resolves them to in-module indices once the kernel's relative launch set is
+/// laid out.
+fn lower_body(body: &[KernelInstr], out: &mut wasm_encoder::Function) -> Result<(), String> {
+    use wasm_encoder::Instruction;
+
+    for instr in body {
+        match instr {
+            KernelInstr::Const(n) => {
+                out.instruction(&Instruction::I64Const(*n));
+            }
+            KernelInstr::Bin(op) => match op {
+                KernelBin::Add => {
+                    out.instruction(&Instruction::I64Add);
+                }
+                KernelBin::Sub => {
+                    out.instruction(&Instruction::I64Sub);
+                }
+                KernelBin::Leq => {
+                    out.instruction(&Instruction::I64LeS);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
+                KernelBin::Eq => {
+                    out.instruction(&Instruction::I64Eq);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
+            },
+            KernelInstr::LocalGet(k) => {
+                out.instruction(&Instruction::LocalGet(*k));
+            }
+            KernelInstr::I32WrapI64 => {
+                out.instruction(&Instruction::I32WrapI64);
+            }
+            KernelInstr::Select => {
+                out.instruction(&Instruction::Select);
+            }
+        }
+    }
+    Ok(())
 }
 
 /// The [`LowShape`] of a function's parameter, from its type cell: a tuple
@@ -332,14 +405,12 @@ fn emit_node(
     param_pair: NodeId,
     param_value: NodeId,
     node: NodeId,
-    body: &mut wasm_encoder::Function,
+    body: &mut Vec<KernelInstr>,
 ) -> Result<(), String> {
-    use wasm_encoder::Instruction;
-
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match value.as_enum() {
             Some(LowValue::USize(n)) => {
-                body.instruction(&Instruction::I64Const(n as i64));
+                body.push(KernelInstr::Const(n as i64));
                 return Ok(());
             }
             _ => {}
@@ -354,23 +425,14 @@ fn emit_node(
                 let (left, right) = operand_pair(module, operation.operand)?;
                 emit_node(module, param_pair, param_value, left, body)?;
                 emit_node(module, param_pair, param_value, right, body)?;
-                match op {
-                    TypeOperator::Add => {
-                        body.instruction(&Instruction::I64Add);
-                    }
-                    TypeOperator::Sub => {
-                        body.instruction(&Instruction::I64Sub);
-                    }
-                    TypeOperator::Leq => {
-                        body.instruction(&Instruction::I64LeS);
-                        body.instruction(&Instruction::I64ExtendI32U);
-                    }
-                    TypeOperator::Eq => {
-                        body.instruction(&Instruction::I64Eq);
-                        body.instruction(&Instruction::I64ExtendI32U);
-                    }
+                let bin = match op {
+                    TypeOperator::Add => KernelBin::Add,
+                    TypeOperator::Sub => KernelBin::Sub,
+                    TypeOperator::Leq => KernelBin::Leq,
+                    TypeOperator::Eq => KernelBin::Eq,
                     _ => unreachable!(),
-                }
+                };
+                body.push(KernelInstr::Bin(bin));
             }
             _ => return Err(format!("unsupported highlevel operator in kernel body: {op:?}")),
         },
@@ -384,7 +446,7 @@ fn emit_node(
                     .node_shape(param_value)
                     .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
                 let offset = flatten_offset(domain, &path)?;
-                body.instruction(&Instruction::LocalGet(offset as u32));
+                body.push(KernelInstr::LocalGet(offset as u32));
                 return Ok(());
             }
             // A `value_of` extraction — `Index(pair, 0)` with a constant `0`
@@ -408,8 +470,8 @@ fn emit_node(
                             emit_node(module, param_pair, param_value, then_node, body)?;
                             emit_node(module, param_pair, param_value, else_node, body)?;
                             emit_node(module, param_pair, param_value, index, body)?;
-                            body.instruction(&Instruction::I32WrapI64);
-                            body.instruction(&Instruction::Select);
+                            body.push(KernelInstr::I32WrapI64);
+                            body.push(KernelInstr::Select);
                             return Ok(());
                         }
                     }
