@@ -8,10 +8,12 @@
 //! `lichen-language-server`'s library, so the extension and the server agree
 //! byte-for-byte. See `docs/notes/language-toolchain.md`.
 //!
-//! Under the default (no-feature) build this crate is a thin host stub (so a
-//! plain `cargo build` stays green). With the `zed` feature it becomes the
-//! extension: it declares the `lichen-language-server` command that Zed launches
-//! from `extension.toml`'s `language_servers` table.
+//! The `zed` feature is on by default (`default = ["zed"]` in `Cargo.toml`), so
+//! a plain `cargo build` — including the one Zed's own dev-extension builder
+//! runs, which passes no `--features` — compiles the extension body and emits the
+//! `zed:api-version` custom section Zed requires. The extension declares the
+//! `lichen-language-server` command that Zed launches from `extension.toml`'s
+//! `language_servers` table.
 //!
 //! The installable extension is this directory (`extension.toml` + the `zed`
 //! feature). Build the WASM for the current Zed target (`wasm32-wasip2`) and
@@ -42,10 +44,18 @@ mod zed_impl {
         fn language_server_command(
             &mut self,
             _language_server_id: &LanguageServerId,
-            _worktree: &Worktree,
+            worktree: &Worktree,
         ) -> zed::Result<Command> {
+            // `command` must be an *absolute* path: Zed resolves a bare command
+            // name relative to the extension's work directory (not `$PATH`), so
+            // a relative name fails with "file not found" on launch. Resolve the
+            // LSP binary the same way Zed's built-in languages do — via
+            // `Worktree::which`, which searches `$PATH`.
+            let server = worktree
+                .which(LANGUAGE_SERVER_BINARY)
+                .ok_or_else(|| format!("`{LANGUAGE_SERVER_BINARY}` not found on `$PATH`"))?;
             Ok(Command {
-                command: LANGUAGE_SERVER_BINARY.to_string(),
+                command: server,
                 args: Vec::new(),
                 env: Vec::new(),
             })

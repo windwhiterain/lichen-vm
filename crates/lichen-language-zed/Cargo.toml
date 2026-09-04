@@ -8,11 +8,15 @@ description = "A Zed editor extension for Lichen, built on the shared lichen-lan
 crate-type = ["lib", "cdylib"]
 
 [features]
-default = []
+# `zed` is on by default so that a plain `cargo build` (including the one Zed's
+# own dev-extension builder runs, which does NOT pass `--features zed`) compiles
+# the extension body and emits the required `zed:api-version` custom section.
+# Without it, Zed reports "no zed:api-version section".
+default = ["zed"]
 # Turns this crate into an actual Zed WASM plugin (adds `zed_extension_api`).
 # Build it with:
 #   rustup target add wasm32-wasip2
-#   cargo build -p lichen-language-zed --features zed --target wasm32-wasip2
+#   cargo build -p lichen-language-zed --target wasm32-wasip2
 # then install the built `target/wasm32-wasip2/release/lichen_language_zed.wasm`
 # as a dev extension (Zed reads `extension.toml` in this directory).
 zed = ["dep:zed_extension_api"]

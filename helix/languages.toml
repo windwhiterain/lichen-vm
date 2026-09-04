@@ -1,0 +1,19 @@
+# Lichen language support for Helix.
+#
+# Drives the same `lichen-language-server` LSP that the Zed extension uses, so
+# diagnostics / hover / go-to-definition behave identically in Helix.
+#
+# Installed for local development by linking this file into the Helix config
+# home (`%APPDATA%\helix\languages.toml` on Windows, `~/.config/helix/`); see the
+# project README / setup notes. The `lichen-language-server` binary must be on
+# `$PATH`.
+
+[[language]]
+name = "lichen"
+scope = "source.lichen"
+file-types = ["lichen"]
+language-servers = ["lichen-server"]
+
+[language-server.lichen-server]
+command = "lichen-language-server"
+args = []

@@ -1,1 +1,5 @@
 /target
+# Zed's dev-extension install writes these into the source directory; they are
+# rebuilt on every "Install Dev Extension", so keep them out of version control.
+/extension.wasm
+/grammars/

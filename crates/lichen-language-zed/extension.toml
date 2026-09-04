@@ -40,17 +40,17 @@ languages = ["Lichen"]
 # already run so `src/parser.c` is committed.
 #
 # NOTE: `9b23892` currently exists only on the local `v1`/`feature/lichen-zed`
-# branches. Once the tree-sitter-lichen history is pushed to `origin/v1`
-# (or the branch it is merged into), this SHA will resolve from the registry
-# path. Until then, use the `file://` form below for local development.
-#
-# For local development with an uncommitted grammar you can point `repository`
-# at the filesystem instead (leave `path` as-is):
+# branches — it is NOT pushed to the `origin` remote. For local development the
+# grammar is therefore sourced from the *local* git repository via a `file://`
+# URL below (Zed clones it and checks out `rev` from the local clone). Once the
+# tree-sitter-lichen history is pushed to `origin/v1` (or the branch it is
+# merged into), restore the remote form:
 #
 #   [grammars.lichen]
-#   repository = "file:///C:/resource/lichen-vm-zed"
+#   repository = "https://github.com/windwhiterain/lichen-vm"
+#   rev = "9b23892d04b8daed9ffa6e40226d44af66e66ec1"
 #   path = "tree-sitter-lichen"
 [grammars.lichen]
-repository = "https://github.com/windwhiterain/lichen-vm"
+repository = "file:///C:/resource/lichen-vm"
 rev = "9b23892d04b8daed9ffa6e40226d44af66e66ec1"
 path = "tree-sitter-lichen"
