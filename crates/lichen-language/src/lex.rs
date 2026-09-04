@@ -324,6 +324,182 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
     Lexed { tokens, errors }
 }
 
+/// Re-lex a source **incrementally**, given the previous full token stream and
+/// a single edit.
+///
+/// The edit replaces the bytes `[a, b)` **of the old source** (a pure insertion
+/// has `a == b`; a pure deletion removes `[a, b)` and inserts nothing) with new
+/// text, turning `old_source` into `new_source` (so positions `>= a` shift by
+/// `delta = new_source.len() - old_source.len()`).  `prev` is the full token
+/// stream of `old_source` (including its `Eof`), with byte ranges in absolute
+/// source coordinates.
+///
+/// The result reuses the *prefix* of `prev` unchanged, re-lexes only the
+/// affected region, and re-uses the *suffix* by re-synchronizing against the
+/// old stream once lexing has passed the changed region and produced a token
+/// that is byte-identical to an old one at the shifted position.  This is
+/// `O(edit)` in the regex work; materializing the returned `Vec` copies the
+/// prefix and suffix.
+///
+/// The lexer is stateless except for `Glue` (an immediately-preceding token's
+/// byte-end equals this delimiter's start), so the only cross-token dependency
+/// is local.  Re-synchronization must compare (**kind, byte range**) — not
+/// byte offset alone — because an edit can *merge* two tokens (`a b` -> `ab`)
+/// or *split* one (`ab` -> `a b`).
+pub fn lex_resume(
+    prev: &[Token],
+    old_source: &str,
+    new_source: &str,
+    line_starts: &[usize],
+    a: usize,
+    b: usize,
+) -> Lexed {
+    let delta = new_source.len() as isize - old_source.len() as isize;
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut errors: Vec<Diag> = Vec::new();
+
+    // The first old token that could be affected: the one whose byte range
+    // ends at or after `a`.  This is the token that would absorb an insertion
+    // just before `a`, or that contains the edit.
+    let i = prev
+        .iter()
+        .position(|t| t.range.1 >= a as u32)
+        .unwrap_or(prev.len());
+    // The byte offset (in `old_source`/`new_source`) at which to start re-lexing.
+    // `prev[i].range.0 <= a`, so this offset is identical in old and new.
+    let s: u32 = if i < prev.len() { prev[i].range.0 } else { a as u32 };
+
+    // Reuse the intact prefix (tokens before index `i` are before the edit).
+    tokens.extend_from_slice(&prev[..i]);
+
+    // Seed the `Glue` decision: the byte end of the last real token before the
+    // region, or `None` after a separator/error/bos.
+    let mut prev_end = seed_prev_end(prev, i);
+
+    let code = &new_source[s as usize..];
+    let mut lexer = RawToken::lexer(code);
+
+    // Probe index into `prev` for the re-sync search.
+    let mut j = i;
+    let mut resynced_at: Option<usize> = None;
+
+    'lex: while let Some(result) = lexer.next() {
+        match result {
+            Ok(raw) => {
+                let span = lexer.span();
+                let start_abs = s + span.start as u32;
+                let end_abs = s + span.end as u32;
+                let lc = line_col(line_starts, start_abs);
+                if raw == RawToken::Separator {
+                    let t = Token { kind: TokenKind::Separator, span: lc, range: (start_abs, end_abs) };
+                    if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                        resynced_at = Some(jj);
+                        break 'lex;
+                    }
+                    tokens.push(t);
+                    prev_end = None;
+                    continue;
+                }
+                let glued = raw.is_postfix_delim() && prev_end == Some(start_abs);
+                if glued {
+                    let g = Token { kind: TokenKind::Glue, span: lc, range: (start_abs, start_abs) };
+                    if let Some(jj) = resync(&prev, &mut j, &g, delta, b) {
+                        resynced_at = Some(jj);
+                        break 'lex;
+                    }
+                    tokens.push(g);
+                }
+                match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
+                    Some(kind) => {
+                        let t = Token { kind, span: lc, range: (start_abs, end_abs) };
+                        if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                            resynced_at = Some(jj);
+                            break 'lex;
+                        }
+                        tokens.push(t);
+                        prev_end = Some(end_abs);
+                    }
+                    None => prev_end = Some(end_abs),
+                }
+            }
+            Err(..) => {
+                let span = lexer.span();
+                let start_abs = s + span.start as u32;
+                let lc = line_col(line_starts, start_abs);
+                let ch = lexer.slice().chars().next().unwrap_or('?');
+                errors.push(Diag::new(Stage::Lex, lc, format!("unexpected character '{ch}'")));
+                prev_end = None;
+            }
+        }
+    }
+
+    if let Some(jj) = resynced_at {
+        // Reuse the old suffix, shifted to the new source (positions at or past
+        // the edit move by `delta`); recompute spans so line/col stay correct
+        // even if the edit added/removed newlines.
+        for tk in &prev[jj..] {
+            let r = (tk.range.0 as isize + delta) as u32;
+            let re = (tk.range.1 as isize + delta) as u32;
+            tokens.push(Token {
+                kind: tk.kind.clone(),
+                span: line_col(line_starts, r),
+                range: (r, re),
+            });
+        }
+    } else {
+        // The region ran to the end without re-synchronizing (no unchanged
+        // suffix): push a fresh Eof at the new end.
+        let pos = s + code.len() as u32;
+        tokens.push(Token {
+            kind: TokenKind::Eof,
+            span: line_col(line_starts, pos),
+            range: (pos, pos),
+        });
+    }
+
+    Lexed { tokens, errors }
+}
+
+/// The `Glue` seed for the token at index `i`: the byte end of the last *real*
+/// token before it (skipping `Glue`s, which do not set the flag), or `None`
+/// after a separator / error / beginning of the stream.
+fn seed_prev_end(prev: &[Token], i: usize) -> Option<u32> {
+    let mut k = i;
+    while k > 0 {
+        k -= 1;
+        match prev[k].kind {
+            TokenKind::Glue => continue,
+            TokenKind::Separator => return None,
+            _ => return Some(prev[k].range.1),
+        }
+    }
+    None
+}
+
+/// Attempt to re-synchronize the re-lexed token `t` against the old stream,
+/// probing from `j`.  Only re-sync on a token at or past the old edit end `b`
+/// (the only tokens whose new position is `old + delta`); an earlier token is
+/// still inside the changed region.  Advances `j` past old tokens entirely
+/// before the target so the probe is amortized `O(edit)`.
+fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> Option<usize> {
+    let target = t.range.0 as isize - delta;
+    if target < b as isize {
+        return None;
+    }
+    while *j < prev.len() && (prev[*j].range.1 as isize) < target {
+        *j += 1;
+    }
+    if *j < prev.len()
+        && prev[*j].range.0 as isize == target
+        && prev[*j].range.1 as isize == t.range.1 as isize - delta
+        && prev[*j].kind == t.kind
+    {
+        Some(*j)
+    } else {
+        None
+    }
+}
+
 
 
 /// Map a raw token plus its matched slice to a TokenKind.  Integer literals

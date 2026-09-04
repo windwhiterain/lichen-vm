@@ -342,3 +342,85 @@ fn glue_marks_a_glued_delimiter_only() {
         ]
     );
 }
+
+// ---------------------------------------------------------------------------
+// Incremental re-lex (`lex_resume`) — the output must be *identical* to a full
+// re-lex (`lex`) of the new source, for every edit shape: token growth, split,
+// merge, deletion, append, and a newline insertion that shifts the suffix.
+// ---------------------------------------------------------------------------
+
+/// Apply the edit `replace [a, b) of old with text`, re-lex both whole and
+/// incrementally, and assert they agree (tokens and errors).
+fn assert_incremental_eq(old: &str, a: usize, b: usize, text: &str) {
+    let mut new = String::with_capacity(old.len() + text.len());
+    new.push_str(&old[..a]);
+    new.push_str(text);
+    new.push_str(&old[b..]);
+
+    let ls = line_starts(&new);
+    let prev = lex(old).tokens;
+    let expected = lex(&new);
+    let got = lex_resume(&prev, old, &new, &ls, a, b);
+
+    assert_eq!(
+        got.tokens, expected.tokens,
+        "incremental tokens differ for edit {:?} on {:?} -> {:?}",
+        (a, b, text), old, new
+    );
+    assert_eq!(
+        got.errors.len(),
+        expected.errors.len(),
+        "incremental error count differs for {:?} on {:?} -> {:?}",
+        (a, b, text), old, new
+    );
+}
+
+#[test]
+fn incremental_resume_matches_full_relex() {
+    let cases: &[(&str, usize, usize, &str)] = &[
+        // Grow an identifier (`x` -> `xy`): the token absorbs the insert.
+        ("x = 1", 1, 1, "y"),
+        // Split an identifier (`ab` -> `a b`): one token becomes two.
+        ("ab = 1", 1, 1, " "),
+        // Merge two identifiers (`a b` -> `ab`): delete the space.
+        ("a b = 1", 1, 2, ""),
+        // Delete a character inside an identifier.
+        ("xy = 1", 1, 2, ""),
+        // Insert a separator (a newline) mid-file — shifts the suffix AND its
+        // line numbers.
+        ("a = 1\nb = 2\nc = 3", 6, 6, "\n"),
+        // Delete a separator (merge two statements onto one line).
+        ("a = 1\nb = 2", 5, 6, ""),
+        // Append at the very end.
+        ("a = 1\nf = x => a + x", 20, 20, "\nf 2"),
+        // Insert an integer literal's digit.
+        ("a = 12\nb = 3", 4, 4, "3"),
+        // Insert a parenthesis so a `(` becomes glued to the previous token.
+        ("f x", 1, 1, "("),
+        // Go from glued to un-glued parenthesis.
+        ("f(1)\ng", 1, 1, " "),
+        // Edit whitespace that is trivia (no token change).
+        ("a = 1\nb = 2", 4, 4, " "),
+        // Delete a brace (an unbalanced region is one error block).
+        ("{ a = 1 }", 0, 1, ""),
+    ];
+    for &(old, a, b, text) in cases {
+        assert_incremental_eq(old, a, b, text);
+    }
+}
+
+#[test]
+fn incremental_resume_append_to_large_prefix() {
+    let mut old = String::new();
+    for i in 0..5_000 {
+        old.push_str(&format!("x{i} = {i}\n"));
+    }
+    let a = old.len();
+    let new = format!("{old}tail = x0 + x1\n");
+    let ls = line_starts(&new);
+    let prev = lex(&old).tokens;
+    let expected = lex(&new);
+    let got = lex_resume(&prev, &old, &new, &ls, a, old.len());
+    assert_eq!(got.tokens, expected.tokens);
+    assert_eq!(got.errors.len(), expected.errors.len());
+}
