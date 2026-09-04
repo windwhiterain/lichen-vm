@@ -71,23 +71,30 @@ pass, copied by the static freeze, and serialized by the artifact codec (see
 
 `crates/lichen-language/src/compute.rs`:
 
-- `kernel_param_shape` reads the parameter's type cell → the domain shape
-  (`USize` for a scalar, `Tuple([USize; n])` for a tuple), and stores it on
-  the parameter's value cell via `set_node_shape`.
-- `codegen_function` derives the wasm arity from that shape and emits
-  `(param i64)* (result i64)`.
-- `emit_node` reads the stored parameter shape / detects the parameter's value
-  node to distinguish a scalar parameter read (`local.get 0`) from a
-  tuple-element read (`local.get k`).
+- `kernel_param_shape` / `element_shape` recurse the parameter's type cell into a
+  nested `LowShape::Tuple` (scalar `Int` → `USize`), and `codegen_function`
+  stores the domain shape on the parameter's value cell via `set_node_shape`.
+- `flat_arity` counts the scalar leaves for the wasm signature, so a nested
+  tuple `((Int, Int), Int)` flattens to three `i64` params.
+- `emit_node` reads a parameter at an index path (`param_path` + `flatten_offset`)
+  and maps it to its flattened wasm local — one mechanism for scalar, flat-tuple,
+  and nested-tuple reads.  It also looks through the checker's `value_of`
+  extraction (`Index(pair, 0)`) to reach a value's actual computation, and
+  lowers an `if c then a else b` (a 2-element array indexed by a computed
+  selector) to a wasm `select`.
 - `run_kernel` uses the dynamic `wasmi::Func::call` over an `&[i64]` argument
-  vector, so an arity-N kernel launches with N arguments; `Launch` unpacks a
-  scalar `USize` or an `Array` of `USize`.
+  vector; `Launch` flattens a (possibly nested) tuple argument into that vector.
+- A kernel body may close over a module-level constant (graph-shared `USize`,
+  lowered to `i64.const`).
 
 ## Out of scope (next steps on the same foundation)
 
-- Shapes for the whole traceable spine of a general backend (arrays/tables as
-  first-class kernel values, `Apply`, higher-order kernels) — the value-graph
-  rules above extend naturally.
+- Higher-order kernels and **recursion** — a body that applies itself or a
+  helper; the checked graph is a `value_of` extraction over a shallow-array
+  branch whose callee is an `Apply` of a function value, a shape that needs its
+  own distinct handling before `Apply` can lower to a wasm `call`.
+- Arrays/tables as first-class kernel values — only the tuple-of-scalars domain
+  and scalar body operations are covered.
 - Static/imported kernel functions (compute v1 rejects them; the freeze/persist
   plumbing is already in place for when they are supported).
 - SPIRV / GPU backend — `wasm-encoder` + `wasmi` only today.
