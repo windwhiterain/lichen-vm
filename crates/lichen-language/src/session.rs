@@ -64,6 +64,18 @@ impl SessionReport {
 pub struct BufferSession {
     source: String,
     cache: Option<Cache>,
+    /// The state the last compile ran under — the baseline the *next* edit is
+    /// diffed against and, for lexing, the token stream it resumes from.
+    last: Option<LastState>,
+}
+
+/// The snapshot of the buffer a compile ran under.  Diffing
+/// [`LastState::source`] against the current [`BufferSession::source`] yields
+/// the edit span, and `lex::lex_resume` reuses [`LastState::tokens`] to re-lex
+/// only that span.
+struct LastState {
+    source: String,
+    tokens: Vec<lex::Token>,
 }
 
 struct Cache {
@@ -83,6 +95,7 @@ impl BufferSession {
         BufferSession {
             source: source.into(),
             cache: None,
+            last: None,
         }
     }
 
@@ -134,14 +147,37 @@ impl BufferSession {
     /// edit that only extends an unresolved name (or an error block, or a
     /// consistent rename) never re-lowers or re-checks the established program.
     /// A changed signature re-lowers and re-checks, then refreshes the cache.
+    ///
+    /// When the previous compile left a [`LastState`] snapshot, lexing is
+    /// **incremental** (`lex::lex_resume` over the edit span) rather than a
+    /// whole-buffer re-lex, so a keystroke in a long buffer is `O(edit)` in the
+    /// regex work.  The result is identical to a full re-lex (`lex_resume` is
+    /// proven equal to [`lex::lex_with`] — see the lex tests); only the cost
+    /// changes.
     pub fn compile(&mut self) -> SessionReport {
         let line_starts = lex::line_starts(&self.source);
-        let lex::Lexed {
-            tokens,
-            errors: mut diagnostics,
-        } = lex::lex_with(&self.source, &line_starts, 0);
+        // Re-lex incrementally when the source changed from the last snapshot;
+        // on the first compile (or a reset without an edit) lex the whole buffer.
+        let (tokens, mut diagnostics) = match &self.last {
+            Some(prev) if prev.source != self.source => {
+                let (a, b, _delta) = edit_span(&prev.source, &self.source);
+                let lexed =
+                    lex::lex_resume(&prev.tokens, &prev.source, &self.source, &line_starts, a, b);
+                (lexed.tokens, lexed.errors)
+            }
+            _ => {
+                let lexed = lex::lex_with(&self.source, &line_starts, 0);
+                (lexed.tokens, lexed.errors)
+            }
+        };
         let parse::Parsed { program, errors } = parse::parse(&tokens);
         diagnostics.extend(errors);
+        // Snapshot the state this compile ran under, as the baseline for the
+        // next edit (its source is diffed, its tokens are re-lexed from).
+        self.last = Some(LastState {
+            source: self.source.clone(),
+            tokens,
+        });
 
         // Resolution-aware signature of the *name-resolved* structure, plus the
         // current resolve diagnostics — computed from the parsed AST, without
@@ -191,6 +227,31 @@ impl BufferSession {
             reused: false,
         }
     }
+}
+
+/// The minimal byte span `[a, b)` of `new` that differs from `old`, plus the
+/// length delta (`new.len() - old.len()`).
+///
+/// `a` is the common-prefix length — a byte position valid in *both* sources,
+/// because every byte before it is identical.  `b` is `new.len()` minus the
+/// common-suffix length, i.e. the byte position in `new` where the unchanged
+/// tail begins.  Together they describe the smallest region an edit changed, in
+/// the coordinates `lex::lex_resume` expects (`a` against the old token stream,
+/// `b` against the new source, with the delta converting between them).
+fn edit_span(old: &str, new: &str) -> (usize, usize, isize) {
+    let delta = new.len() as isize - old.len() as isize;
+    let ob = old.as_bytes();
+    let nb = new.as_bytes();
+    let max = ob.len().min(nb.len());
+    let mut a = 0;
+    while a < max && ob[a] == nb[a] {
+        a += 1;
+    }
+    let mut suf = 0;
+    while suf < max - a && ob[ob.len() - 1 - suf] == nb[nb.len() - 1 - suf] {
+        suf += 1;
+    }
+    (a, nb.len() - suf, delta)
 }
 
 /// The beyond-error content signature of a parsed program: a hash over its

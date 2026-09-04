@@ -217,3 +217,68 @@ fn renaming_a_binding_consistently_reuses() {
     assert!(r1.reused, "the established build is reused across a consistent rename");
     assert_eq!(r1.build.as_ref().map(|b| b.ok), Some(true));
 }
+
+/// The diagnostics of a report, as a comparable multiset (each rendered and
+/// sorted; `Stage` is not `Ord`).
+fn diag_set(report: &crate::session::SessionReport) -> Vec<String> {
+    let mut v: Vec<String> = report
+        .diagnostics
+        .iter()
+        .map(|d| format!("{:?}", d))
+        .collect();
+    v.sort();
+    v
+}
+
+/// A report and its key observable fields, in a comparable form.  The `reused`
+/// flag is intentionally excluded: it depends on the session's *history* (a
+/// fresh session's first compile is never reused), not on the source, so it is
+/// not comparable across differently-warmed sessions.  What must match is the
+/// resolved structure (signature), the check outcome, and the diagnostics.
+#[derive(PartialEq, Debug)]
+struct ReportShape {
+    signature: u64,
+    build_ok: Option<bool>,
+    diagnostics: Vec<String>,
+}
+
+fn shape(report: &crate::session::SessionReport) -> ReportShape {
+    ReportShape {
+        signature: report.signature,
+        build_ok: report.build.as_ref().map(|b| b.ok),
+        diagnostics: diag_set(report),
+    }
+}
+
+#[test]
+fn an_edited_session_compiles_identically_to_a_fresh_one() {
+    // The incremental re-lex must never change what the compile *produces*.
+    // After each edit, the session's report must equal a brand-new session over
+    // the same source — identical signature, build outcome, and diagnostics.
+    // (The established-build reuse still applies; what this guards is that the
+    // incremental *lex* path is indistinguishable from a whole-buffer re-lex.)
+    let cases: &[&[&str]] = &[
+        // The source after each successive edit of the base program.
+        &["a = 1\nz = 3\nf = x => a + x\nf 2\n"],
+        &["a = 1\nf = x => a + x\nf 2\nzzz"],
+        &["a = 99\nf = x => a + x\nf 2\n"],
+        &["a = 1\nf = x => a + x\nf 2\nner = (2"],
+        &["a = 1\nf = x => a + x\nf 2"],
+        &["a = 1\nf = x => a\nf 2\n"],
+    ];
+    for edit in cases {
+        let mut sess = BufferSession::new("a = 1\nf = x => a + x\nf 2\n");
+        let _ = sess.compile();
+        for (i, target) in edit.iter().enumerate() {
+            // Apply the edit by replacing the whole source with the target.
+            sess.replace(0..sess.len(), target);
+            assert_eq!(
+                shape(&sess.compile()),
+                shape(&BufferSession::new(*target).compile()),
+                "edit {i} to {target:?} diverged from a fresh compile"
+            );
+            assert_eq!(sess.source(), *target);
+        }
+    }
+}
+
