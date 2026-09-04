@@ -17,13 +17,54 @@ use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{
-    Ctx, HighGlobal, ProgramImpl, TypeOperator, TypeValue, ValueType,
+    Ctx, HighGlobal, TypeOperator, TypeValue, ValueType,
 };
 use lichen_lowlevel::{LowOperator, LowValue, Module, NodeId, OperatorExt, ValueExt};
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-use lichen_compute::{ComputeOperator, ComputeValue};
+/// Compose the language's concrete program marker from a manifest of its
+/// vocabulary leaves and attribute.
+///
+/// This is the single place the **native-plugin set** is declared: the value
+/// and operator leaves list each plugin's contribution (alongside the core
+/// lowlevel/highlevel leaves), and `attr` names the language's attribute.  A
+/// package manager that assembles a new compiler re-invokes this macro with a
+/// different plugin set; the impls below (the checker/VM wiring) and the
+/// frontend are unchanged.
+#[macro_export]
+macro_rules! lang_compose_vocabulary {
+    (
+        attr = $attr:ty;
+        values = [ $( $value:path as $value_name:ident ; )* ];
+        operators = [ $( $operator:path as $operator_name:ident ; )* ];
+    ) => {
+        ::lichen_utils::enum_ext! {
+            /// The language program's operator vocabulary: a flat union of the
+            /// structural [`lichen_lowlevel::LowOperator`], the highlevel's
+            /// `TypeOperator`, the language's own operators, and each native
+            /// plugin's operators — one carry variant per extension.
+            #[derive(Debug, Clone, Copy, PartialEq)]
+            pub enum LangOperator {
+            }
+            $( + $operator as $operator_name ; )*
+        }
+
+        ::lichen_utils::enum_ext! {
+            /// The language program's value vocabulary: a flat union of the
+            /// lowlevel structural values, the highlevel type values, and each
+            /// native plugin's values.
+            #[derive(Debug, Clone, Copy, PartialEq)]
+            pub enum LangValue {
+            }
+            $( + $value as $value_name ; )*
+        }
+
+        /// The language's concrete program marker: `Value = LangValue`,
+        /// `Operator = LangOperator`, `Attr = $attr`.
+        pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, $attr>;
+    };
+}
 
 /// The language's own operators: the perspective combine.
 ///
@@ -38,29 +79,24 @@ pub enum GcdOp {
     Gcd,
 }
 
-// The language program's operator vocabulary: a flat union of the
-// structural [`LowOperator`], the highlevel's [`TypeOperator`], the
-// language's own [`GcdOp`], and the compute [`ComputeOperator`] — each carried
-// whole as one sibling variant.
-lichen_utils::enum_ext! {
-    /// The language program's operator vocabulary.
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum LangOperator {
-    }
-    + LowOperator as LowOperator;
-    + TypeOperator as TypeOperator;
-    + GcdOp as GcdOp;
-    + ComputeOperator as ComputeOperator;
-}
-
-lichen_utils::enum_ext! {
-    /// The language program's value vocabulary.
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    pub enum LangValue {
-    }
-    + LowValue as LowValue;
-    + TypeValue as TypeValue;
-    + ComputeValue as ComputeValue;
+// The language program's value/operator vocabulary and program marker: a flat
+// union of the structural [`LowOperator`]/[`LowValue`], the highlevel's
+// [`TypeOperator`]/[`TypeValue`], the language's own [`GcdOp`], and the
+// `lichen-compute` native plugin's [`ComputeOperator`]/[`ComputeValue`].  This
+// is the one manifest that fixes the compiler's plugin set.
+crate::lang_compose_vocabulary! {
+    attr = Perspective;
+    values = [
+        LowValue as LowValue;
+        TypeValue as TypeValue;
+        lichen_compute::ComputeValue as ComputeValue;
+    ];
+    operators = [
+        LowOperator as LowOperator;
+        TypeOperator as TypeOperator;
+        GcdOp as GcdOp;
+        lichen_compute::ComputeOperator as ComputeOperator;
+    ];
 }
 
 impl ValueExt for LangValue {
@@ -121,10 +157,6 @@ impl ValueType for LangValue {
 pub struct Perspective;
 
 impl AttrSpec for Perspective {}
-
-/// The language's concrete program: `Value = LangValue`,
-/// `Operator = LangOperator`, `Attr = Perspective`.
-pub type LangProgram = ProgramImpl<LangValue, LangOperator, Perspective>;
 
 /// The attribute-extension registry for [`LangProgram`]: maps the
 /// `Perspective` marker to its lowering behavior.  The checker consults this
