@@ -26,7 +26,15 @@ fn a_synced_region_is_a_noop() {
 
 #[test]
 fn renders_the_tree_grouped_and_ordered() {
-    let blob = render_examples();
+    // Render the controlled fixture tree, not the live example set: the real
+    // `examples/programs/` is a moving spec, so asserting its names here
+    // would force a test edit for every example added/renamed/reordered.
+    // The fixture exercises the same behaviours the live tree does: files at
+    // several `order =` values, a tie broken by name, an undeclared entry
+    // sorting last, a directory opened by its `_.lichen`, and a nested
+    // directory rendered a level deeper.
+    let fixture = crate_dir().join("tests").join("fixtures").join("readme");
+    let blob = render_examples_in(&fixture);
     let headings: Vec<(usize, String)> = blob
         .lines()
         .filter_map(|line| {
@@ -42,45 +50,30 @@ fn renders_the_tree_grouped_and_ordered() {
     assert_eq!(
         headings,
         [
-            "array.lichen",
-            "tuple.lichen",
-            "index.lichen",
-            "closure.lichen",
-            "dependent_type.lichen",
-            "lazy_infinite.lichen",
-            "let_polymorphism.lichen",
-            "mutual_recursion.lichen",
-            "nested_function.lichen",
-            "recursion.lichen",
-            "placeholder.lichen",
-            "struct.lichen",
-            "struct_recursion.lichen",
-            "struct_generic.lichen",
-            "table.lichen",
+            (3, "b.lichen"),
+            (3, "d.lichen"),
+            (3, "a.lichen"),
+            (3, "pkg"),
+            (4, "pkg/sub"),
+            (5, "pkg/sub/z.lichen"),
+            (4, "pkg/x.lichen"),
+            (4, "pkg/y.lichen"),
+            (3, "c.lichen"),
         ]
         .into_iter()
-        .map(|name| (3, name.to_owned()))
-        .chain([
-            (3, "import".to_owned()),
-            (4, "import/math.lichen".to_owned()),
-            (4, "import/geometry.lichen".to_owned()),
-            (3, "perspective.lichen".to_owned()),
-            (3, "assert.lichen".to_owned()),
-            (3, "assert_in_function.lichen".to_owned()),
-        ])
+        .map(|(level, name)| (level as usize, name.to_owned()))
         .collect::<Vec<_>>(),
         "directories render as units ordered by their `_.lichen`, files by their `order =`"
     );
     // The face opens the directory: `_.lichen`'s whole file sits directly
     // under the directory heading, `@{...@}` block included.
     assert!(
-        blob.contains("### `import`\n\n```text\n@{"),
+        blob.contains("### `pkg`\n\n```text\n@{"),
         "the directory's `_.lichen` is shown first inside the directory"
     );
-    // The whole file is embedded, so its (already-synced) `output =` metadata
-    // is what shows; there is no separate computed output block anymore.
+    // The whole file is embedded, so its output metadata is what shows.
     assert!(
-        blob.contains("output = \"[1, 2, 3]: Int<3>\""),
+        blob.contains("output = \"1: Int\""),
         "each file's output metadata is embedded with the whole file"
     );
     assert!(
