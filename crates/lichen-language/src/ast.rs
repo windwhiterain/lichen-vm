@@ -133,13 +133,15 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `e : T` and/or `e # p` — a type and/or perspective annotation.
-    /// `: T` fills `r#type`, `# p` fills `perspective`.  Either may be absent
-    /// (`e # p`, `e : T`); at most one of each.
+    /// `e : T`, `e # p`, and/or `e ? doc` — a type, perspective, and/or doc
+    /// annotation.  `: T` fills `r#type`, `# p` fills `perspective`,
+    /// `? doc` fills `doc`.  Any may be absent (`e # p`, `e : T`, `e ? d`);
+    /// at most one of each.
     Annotation {
         value: Box<Expr>,
         r#type: Option<Box<Expr>>,
         perspective: Option<Box<Expr>>,
+        doc: Option<Box<Expr>>,
         span: Span,
     },
     /// `T1 -> T2` — a function type.

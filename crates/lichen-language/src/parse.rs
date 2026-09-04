@@ -640,6 +640,9 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                     token(TokenKind::Hash)
                         .ignore_then(operand(tokens, term3.clone()))
                         .map(AnnPiece::Perspective),
+                    token(TokenKind::Question)
+                        .ignore_then(operand(tokens, term3.clone()))
+                        .map(AnnPiece::Doc),
                 ))
                 .repeated()
                 .collect::<Vec<_>>(),
@@ -674,6 +677,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         r#type,
                         perspective,
                         span,
+                        ..
                     } => match *value {
                         Expr::Name(parameter, parameter_span) => Expr::Lambda {
                             parameter,
@@ -713,19 +717,21 @@ where
     combine(first, acc)
 }
 
-/// One `: T` or `# p` partner of an annotation chain.
+/// One `: T`, `# p`, or `? doc` partner of an annotation chain.
 #[derive(Clone, Debug)]
 enum AnnPiece {
     Type(Expr),
     Perspective(Expr),
+    Doc(Expr),
 }
 
-/// Accumulate a `: T` / `# p` chain into one [`Expr::Annotation`], carrying
-/// whichever of the two annotations are present (at most one of each — a
-/// later one of the same kind overwrites, matching the `expr [: expr] [# expr]`
-/// grammar).  `e : A : B` keeps `B` (rightmost wins), as before.  An
-/// expression with no annotation (`rest` empty) is returned unchanged — it is
-/// not wrapped in a no-op `Annotation`, so the grammar stays faithful.
+/// Accumulate a `: T` / `# p` / `? doc` chain into one [`Expr::Annotation`],
+/// carrying whichever of the three annotations are present (at most one of
+/// each — a later one of the same kind overwrites, matching the
+/// `expr [: expr] [# expr] [? expr]` grammar).  `e : A : B` keeps `B`
+/// (rightmost wins), as before.  An expression with no annotation (`rest`
+/// empty) is returned unchanged — it is not wrapped in a no-op
+/// `Annotation`, so the grammar stays faithful.
 fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     if rest.is_empty() {
         return first;
@@ -734,16 +740,19 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     let value = Box::new(first);
     let mut r#type = None;
     let mut perspective = None;
+    let mut doc = None;
     for piece in rest {
         match piece {
             AnnPiece::Type(t) => r#type = Some(Box::new(t)),
             AnnPiece::Perspective(p) => perspective = Some(Box::new(p)),
+            AnnPiece::Doc(d) => doc = Some(Box::new(d)),
         }
     }
     Expr::Annotation {
         value,
         r#type,
         perspective,
+        doc,
         span,
     }
 }
@@ -791,6 +800,7 @@ fn atom_parser<'a>(
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
             table_literal(tokens, expr.clone()),
+            doc_literal(tokens, expr.clone()),
             block(tokens, expr.clone()),
             angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
@@ -1105,6 +1115,57 @@ fn table_literal<'a>(
             }
             entries.append(&mut rest);
             Expr::Table(entries, span_at(tokens, me.span().start))
+        })
+}
+
+/// Convert a struct-returning block's statements into an
+/// [`Expr::RecordBlock`] — an anonymous struct instance carrying the block's
+/// named/positional fields.
+fn to_record_block(statements: Vec<BlockStmt>, span: Span) -> Expr {
+    Expr::RecordBlock {
+        fields: statements
+            .into_iter()
+            .map(|b| {
+                let public = b.public;
+                let span = b.stmt.span();
+                let (name, value, field) = match b.stmt {
+                    Stmt::Binding(binding) => (
+                        Some(binding.name),
+                        binding.value,
+                        // A `let` binding is a block-local, never a struct field.
+                        !binding.restrictive,
+                    ),
+                    Stmt::Expr(e) => (None, e, true),
+                };
+                RecordField {
+                    name,
+                    value,
+                    public,
+                    field,
+                    span,
+                }
+            })
+            .collect(),
+        span,
+    }
+}
+
+/// `doc { name = "…", description = "…" }` — a doc literal.  A struct-returning
+/// block, so its value is a `Doc`-shaped struct instance (named fields
+/// `.name`, `.description`); `doc` is a keyword.  A tail expression isn't a
+/// doc; the literal recovers to the record block (the statements win).
+fn doc_literal<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwDoc)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(token(TokenKind::LBrace))
+        .ignore_then(block_body(tokens, expr))
+        .then_ignore(token(TokenKind::RBrace))
+        .map_with(|(statements, _tail), me| {
+            let span = span_at(tokens, me.span().start);
+            to_record_block(statements, span)
         })
 }
 
@@ -1484,11 +1545,13 @@ fn apply_type_mode(program: Program) -> Program {
                 value,
                 r#type,
                 perspective,
+                doc,
                 span,
             } => Expr::Annotation {
                 value: Box::new(expr(*value, type_mode)),
                 r#type: r#type.map(|t| Box::new(expr(*t, true))),
                 perspective: perspective.map(|p| Box::new(expr(*p, false))),
+                doc: doc.map(|d| Box::new(expr(*d, false))),
                 span,
             },
             Expr::Arrow {

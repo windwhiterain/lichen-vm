@@ -459,7 +459,8 @@ fn classify_token_kind(kind: &TokenKind) -> Option<(SemanticTokenType, Vec<Seman
         | TokenKind::KwThen
         | TokenKind::KwElse
         | TokenKind::KwReturn
-        | TokenKind::KwPub => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        | TokenKind::KwPub
+        | TokenKind::KwDoc => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
         // Operators: arrows, annotations, separators-of-fields, and math.
@@ -468,6 +469,7 @@ fn classify_token_kind(kind: &TokenKind) -> Option<(SemanticTokenType, Vec<Seman
         | TokenKind::Colon
         | TokenKind::DoubleColon
         | TokenKind::Hash
+        | TokenKind::Question
         | TokenKind::Bang
         | TokenKind::Dollar
         | TokenKind::Equals

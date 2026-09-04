@@ -21,6 +21,7 @@
 pub mod ast;
 pub mod compile;
 pub mod diag;
+pub mod doc;
 pub mod lex;
 pub mod package;
 pub mod parse;
@@ -41,7 +42,7 @@ use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
-use program::{LangProgram, persp_attr_ext};
+use program::{LangProgram, lang_attr_ext};
 
 /// The result of compiling and checking a source program.
 ///
@@ -112,7 +113,7 @@ pub fn compile_with_imports_at(
 /// [`BufferSession`] both end here — the session reuses this for its cached
 /// rebuild path, so the rendering is centralized.
 pub fn build_report(
-    ir: Option<IR<program::Perspective>>,
+    ir: Option<IR<program::LangAttr>>,
     mut diagnostics: Vec<Diag>,
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
     native_ops: NativeOps<LangProgram>,
@@ -127,7 +128,7 @@ pub fn build_report(
     let build = Checker::<LangProgram>::build_in_attr_native(
         ir,
         registry,
-        persp_attr_ext::<LangProgram>(),
+        lang_attr_ext::<LangProgram>(),
         native_ops,
     );
     // The pretty rendering is shared across the whole report: one type
@@ -176,7 +177,7 @@ pub fn build_report(
 /// layer uses, so `ir` is always `Some` and `diagnostics` carries every lex,
 /// parse, and resolve error encountered.
 pub struct Frontend {
-    pub ir: Option<IR<program::Perspective>>,
+    pub ir: Option<IR<program::LangAttr>>,
     pub diagnostics: Vec<Diag>,
 }
 
