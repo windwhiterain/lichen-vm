@@ -13,10 +13,11 @@
 //! two of them — `NoAttr` (the default, an empty attribute whose extension is
 //! never reached) and the trait plumbing — while a language adds its own.
 
-use lichen_lowlevel::{LowValue, NodeId};
+use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 
 use crate::ir::Loc;
 use crate::program::{Ctx, HighProgram, ValueType};
+use lichen_utils::extend::AsEnum;
 
 /// The marker bound every attribute type must satisfy: a plain, hashable,
 /// interning-friendly token (the [`Schema`](crate::ir::Schema)`::tail` entries
@@ -91,5 +92,26 @@ where
     /// replace path (label) over the combine path (constraint).
     fn is_label(&self) -> bool {
         false
+    }
+
+    /// Render this attribute's slot value in the language's own syntax
+    /// (`# 4`, `? doc{…}`), or `None` when it cannot be spelled (an unbound
+    /// or runtime-dependent value, or an attribute with no display).  The
+    /// output printers use it to show the attributes an expression actually
+    /// carries: they iterate the expression's schema tail and render every
+    /// *present* attribute, so an un-annotated expression spells nothing.
+    ///
+    /// Default `None` — an attribute that does not override it is not shown.
+    fn render(&self, _module: &Module<P>, _slot: NodeId) -> Option<String> {
+        None
+    }
+
+    /// The slot value of an attribute node, read from the module — a helper
+    /// for [`Self::render`].  Returns the value as a `LowValue` enum.
+    fn slot_value(&self, module: &Module<P>, slot: NodeId) -> Option<LowValue> {
+        module
+            .node_value(AnyNodeId::Dynamic(slot))
+            .and_then(|v| v.as_enum())
+            .filter(|v| !matches!(v, LowValue::None | LowValue::Parameterized))
     }
 }

@@ -24,7 +24,7 @@ use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
-use lichen_lowlevel::{LowValue, NodeId};
+use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
 /// The doc attribute marker.  Carries no data — the doc's *value* is a
@@ -85,5 +85,24 @@ where
     /// Two differing docs are always compatible — never an error.
     fn is_subtype(&self, _ctx: &dyn Ctx<P>, _sub: NodeId, _super: NodeId) -> bool {
         true
+    }
+
+    /// A doc spells `? doc{ … }` with its field values (a `Doc` struct
+    /// instance's positional field tuple).
+    fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
+        let value = self.slot_value(module, slot)?;
+        let LowValue::Array(items) = value else {
+            return None;
+        };
+        let fields: Vec<String> = items
+            .items()
+            .iter()
+            .filter_map(|item| match module.node_value(item.node).and_then(|v| v.as_enum()) {
+                Some(LowValue::Str(s)) => Some(format!("\"{s}\"")),
+                Some(LowValue::USize(n)) => Some(n.to_string()),
+                _ => None,
+            })
+            .collect();
+        Some(format!("? doc{{ {} }}", fields.join(", ")))
     }
 }

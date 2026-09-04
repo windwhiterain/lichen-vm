@@ -18,7 +18,7 @@ use lichen_language::run::evaluate;
 #[test]
 fn a_doc_annotation_evaluates_cleanly() {
     let out = evaluate("5 ? doc{ name = \"five\", description = \"an int\" }").unwrap();
-    assert_eq!(out, "5: Int");
+    assert_eq!(out, "5 ? doc{ \"five\", \"an int\" }: Int");
 }
 
 /// A doc'd value passed as an argument to a plain function is accepted — the
@@ -80,5 +80,22 @@ fn a_doc_does_not_weaken_a_perspective_mismatch() {
     assert!(
         !compile("f = x # 4 => x\nf (5 # 2 ? doc{ name = \"five\" })").ok(),
         "the perspective constraint must still reject a mismatched argument"
+    );
+}
+
+/// The output renderer shows an expression's attributes **only when the
+/// expression actually carries them** — an un-annotated expression spells
+/// exactly as before, and a perspective/doc that is present is spelled.
+#[test]
+fn attributes_render_only_when_present() {
+    assert_eq!(evaluate("5").unwrap(), "5: Int");
+    assert_eq!(evaluate("5 # 4").unwrap(), "5 # 4: Int");
+    assert_eq!(
+        evaluate("5 ? doc{ name = \"five\" }").unwrap(),
+        "5 ? doc{ \"five\" }: Int"
+    );
+    assert_eq!(
+        evaluate("5 # 4 ? doc{ name = \"five\" }").unwrap(),
+        "5 # 4 ? doc{ \"five\" }: Int"
     );
 }

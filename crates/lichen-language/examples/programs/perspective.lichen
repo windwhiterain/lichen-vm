@@ -1,5 +1,5 @@
 @{
   order = "6"
-  output = "3: Int"
+  output = "3 # 2: Int"
 @}
 ((1 # 4) + (2 # 6)) # 2

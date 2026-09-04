@@ -29,6 +29,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
@@ -71,6 +72,48 @@ where
     P::Value: ValueType,
 {
     TypePrinter::new(module).node(root)
+}
+
+/// Render the attributes an expression actually carries, from its schema tail
+/// (the expression's attribute *set*) and its runtime pair.  Returns empty when
+/// the expression carries no attribute; otherwise one spelling per *present*
+/// attribute, space-separated — so an un-annotated expression renders exactly
+/// as it always did, and only the attributes that are genuinely there appear.
+pub fn render_attributes<P: HighProgram>(
+    module: &Module<P>,
+    pair: NodeId,
+    tail: &[P::Attr],
+    attr_ext: &dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>,
+) -> String
+where
+    P::Value: ValueType,
+{
+    if tail.is_empty() {
+        return String::new();
+    }
+    let values = module
+        .node_value(AnyNodeId::Dynamic(pair))
+        .and_then(|v| v.as_enum())
+        .and_then(|v| match v {
+            LowValue::Array(a) => Some(a.items().to_vec()),
+            _ => None,
+        });
+    let Some(values) = values else {
+        return String::new();
+    };
+    let mut parts = Vec::new();
+    for (i, marker) in tail.iter().enumerate() {
+        let slot = values.get(2 + i).and_then(|item| match item.node {
+            AnyNodeId::Dynamic(n) => Some(n),
+            AnyNodeId::Static(_) => None,
+        });
+        if let Some(slot) = slot
+            && let Some(spelling) = attr_ext(marker).render(module, slot)
+        {
+            parts.push(spelling);
+        }
+    }
+    parts.join(" ")
 }
 
 /// The shared pretty type printer: stateful across calls, so one instance

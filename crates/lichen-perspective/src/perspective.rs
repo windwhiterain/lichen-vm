@@ -194,4 +194,13 @@ where
         };
         divides(sub, sup)
     }
+
+    /// A leaf perspective spells `# n`; a compound's gcd meet (or an unbound
+    /// value) has no single spelling and is not shown.
+    fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
+        match self.slot_value(module, slot)? {
+            LowValue::USize(n) => Some(format!("# {n}")),
+            _ => None,
+        }
+    }
 }
