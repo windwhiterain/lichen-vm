@@ -9,7 +9,7 @@
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{ExprKind, IR};
+use lichen_highlevel::ir::{ChildRange, ExprKind, IR};
 use lichen_highlevel::NoAttr;
 use lichen_highlevel::program::{
     Ctx, HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralExt, ProgramImpl,
@@ -162,7 +162,7 @@ fn the_checker_runs_on_an_extended_union() {
         ExprKind::Annotation {
             value: five,
             r#type: Some(int_t),
-            attribute: None,
+            attributes: ChildRange::EMPTY,
         },
         None,
     );
@@ -200,7 +200,7 @@ fn an_extended_union_reports_type_conflicts() {
         ExprKind::Annotation {
             value: five,
             r#type: Some(ty),
-            attribute: None,
+            attributes: ChildRange::EMPTY,
         },
         None,
     );

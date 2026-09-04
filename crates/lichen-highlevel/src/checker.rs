@@ -94,10 +94,12 @@ where
     val: Vec<Option<NodeId>>,
     /// Element 1 of the pair (the type).
     ty: Vec<Option<NodeId>>,
-    /// Element 2+ of the pair — the static-schema attributes' slots.  Indexed
-    /// like [`Checker::ty`]: `None` for an expression whose schema is the
-    /// ordinary `[value, type]` pair; the attribute slot for one carrying
-    /// the `Perspective` tail (a `# p` annotation or a `x # n` parameter).
+    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
+    /// apply-time attribute check reads.  Indexed like [`Checker::ty`]: `None`
+    /// for an expression whose schema carries only a label attribute (`? d`)
+    /// or no attribute; the constraint slot for one carrying a constraint
+    /// (a `# p` annotation's perspective).  A label slot (e.g. `Doc`) is
+    /// metadata and lives only in the pair, never here.
     attr: Vec<Option<NodeId>>,
     /// The parameter-attribute slot of each function whose parameter is
     /// annotated `x # n` — keyed by the `Function` expression id, carrying the
@@ -1056,11 +1058,7 @@ where
             ExprKind::Field { container, key } => self.check_field(e, container, key),
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
-            ExprKind::Annotation {
-                value,
-                r#type,
-                attribute,
-            } => self.check_ann(e, value, r#type, attribute),
+            ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
             ExprKind::TypeFunction {
                 parameter,
                 r#return,
@@ -1915,13 +1913,12 @@ where
         e: ExprId,
         value: ExprId,
         r#type: Option<ExprId>,
-        attribute: Option<ExprId>,
     ) -> NodeId {
         self.check_expr(value);
         // `: T` — the value expression's type must unify with the type
         // expression itself; both sides are pairs in the recursive encoding.
         // The type slot is the annotation's own type expression (shared), or
-        // the value's own type when only `# p` is present.  (Struct
+        // the value's own type when only an attribute is present.  (Struct
         // instantiation is not an annotation — it is the dedicated
         // [`ExprKind::Instantiate`].)
         let type_pair = match r#type {
@@ -1939,21 +1936,38 @@ where
             None => self.ty[value].unwrap(),
         };
         let value_node = self.value_of(value);
-        // `# p` — the attribute slot.  A leaf's slot is `p` itself; a
-        // compound's is the attribute's meet over its direct sub-expressions'
-        // attribute slots (absent → the attribute's `missing_value`), then
-        // `# p` unifies that slot with `p`.  `# p` also stamps this node's
-        // schema with the attribute tail, so the pair is built one slot
-        // wider.  The checker asks the registry for the attribute's
-        // `AttrExt` — it never names a concrete attribute.
-        let pair = match attribute {
-            Some(p) => {
-                self.check_expr(p);
-                let attr_val = self.value_of(p);
-                let marker = &self.ir.schema(e).tail[0];
-                let ext = (self.attr_ext)(marker);
+        // One schema-tail entry per attribute slot, paired — by position —
+        // with the annotation's attribute value expressions.  A *label*
+        // attribute (e.g. `Doc`) carries no constraint, so its annotation
+        // value *replaces* any existing value outright — no combine, no
+        // unify, and two differing labels never conflict (`? b` over doc `a`
+        // yields `b`).  A *constraint* attribute (e.g. `Perspective`)
+        // combines over its children as before (a leaf's slot is its own
+        // value; a compound's is the meet over its direct sub-expressions'
+        // slots, then unifies with the annotation value).  The checker asks
+        // the registry for each attribute's `AttrExt` — it never names a
+        // concrete attribute, so the mechanism is generic over the attribute
+        // set.
+        let tail = self.ir.schema(e).clone().tail;
+        let attrs = self.ir.annotation_attrs(e).to_vec();
+        let mut slots: Vec<NodeId> = Vec::with_capacity(tail.len());
+        let mut constraint_slot: Option<NodeId> = None;
+        for (i, marker) in tail.into_iter().enumerate() {
+            let ext = (self.attr_ext)(&marker);
+            let attr_val = match attrs.get(i).copied() {
+                Some(pe) => {
+                    self.check_expr(pe);
+                    self.value_of(pe)
+                }
+                // A tail entry with no value expression (unreachable for a
+                // well-formed annotation) reads the missing marker.
+                None => self.zero_marker,
+            };
+            let slot = if ext.is_label() {
+                attr_val
+            } else {
                 let children = self.persp_combine_children(value);
-                let slot = if children.is_empty() {
+                if children.is_empty() {
                     attr_val
                 } else {
                     let child_attrs: Vec<NodeId> =
@@ -1962,15 +1976,21 @@ where
                     let loc2 = self.loc(e, 2);
                     ext.unify_slots(self, combined, attr_val, loc2);
                     combined
-                };
-                self.attr[e] = Some(slot);
-                self.array_node(self.current_block, &[value_node, type_pair, slot])
+                }
+            };
+            if !ext.is_label() {
+                constraint_slot = Some(slot);
             }
-            None => {
-                self.attr[e] = None;
-                self.pair_of(value_node, type_pair)
-            }
-        };
+            slots.push(slot);
+        }
+        // The constraint slot (e.g. the perspective) is what the apply-time
+        // attribute check reads; a label slot is metadata only.
+        self.attr[e] = constraint_slot;
+        let mut pair = Vec::with_capacity(slots.len() + 2);
+        pair.push(value_node);
+        pair.push(type_pair);
+        pair.extend(slots);
+        let pair = self.array_node(self.current_block, &pair);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(type_pair);

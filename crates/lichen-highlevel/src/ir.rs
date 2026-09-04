@@ -76,6 +76,11 @@ pub struct ChildRange {
     pub end: u32,
 }
 
+impl ChildRange {
+    /// An empty range — no children.
+    pub const EMPTY: ChildRange = ChildRange { start: 0, end: 0 };
+}
+
 /// A source span, supplied by the language frontend: `(line, column)`.
 pub type Span = (u32, u32);
 
@@ -316,16 +321,18 @@ pub enum ExprKind<L> {
     /// [`Self::Index`] — so the checker compiles the read to the dedicated
     /// lowlevel `TableGet` directly, never a kind dispatch.
     Find { container: ExprId, key: ExprId },
-    /// `{ value, type?, attribute? }` — a type and/or attribute annotation.
-    /// `: T` fills `r#type` (existing), `# p` fills `attribute` (new).  Either
-    /// may be absent (`e # p`, `e : T`); at most one each.  A `# p` on a term
-    /// also stamps the annotated node's schema with the attribute tail — the
-    /// one asymmetry with `:` (the slot comes into existence by being
-    /// annotated).
+    /// `{ value, type?, attributes }` — a type and/or attribute annotation.
+    /// `: T` fills `r#type`.  `attributes` is a contiguous range into
+    /// [`IR::children`] holding one value expression per schema-tail entry,
+    /// **aligned by position** with the node's schema tail (so a `# p ? doc`
+    /// tail `[Perspective, Doc]` pairs `attributes[0]` with the perspective
+    /// and `attributes[1]` with the doc).  The attributes also stamp the
+    /// annotated node's schema — the one asymmetry with `:` (the slots come
+    /// into existence by being annotated).
     Annotation {
         value: ExprId,
         r#type: Option<ExprId>,
-        attribute: Option<ExprId>,
+        attributes: ChildRange,
     },
     /// `{ parameter, return }` — a function type, compiled to the kinded
     /// arrow `[[in, out], [FunctionType, Type]]`.
@@ -430,6 +437,36 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.expr.push(Expr { kind, span });
         self.schemas.push(SchemaId(0));
         id
+    }
+
+    /// Allocate an [`ExprKind::Annotation`] whose attribute value expressions
+    /// are `attrs` — stored contiguously in [`IR::children`] and referenced as
+    /// the node's `attributes` range, so the checker pairs each one with its
+    /// schema-tail entry by position.
+    pub fn alloc_annotation(
+        &mut self,
+        value: ExprId,
+        r#type: Option<ExprId>,
+        attrs: &[ExprId],
+        span: Option<Span>,
+    ) -> ExprId {
+        let start = self.children.len() as u32;
+        self.children.extend_from_slice(attrs);
+        let attributes = ChildRange {
+            start,
+            end: self.children.len() as u32,
+        };
+        self.alloc(ExprKind::Annotation { value, r#type, attributes }, span)
+    }
+
+    /// The attribute value expressions of an [`ExprKind::Annotation`] — aligned,
+    /// by position, with the node's schema tail.
+    pub fn annotation_attrs(&self, e: ExprId) -> &[ExprId] {
+        let range = match self.expr[e.0 as usize].kind {
+            ExprKind::Annotation { attributes, .. } => attributes,
+            _ => unreachable!("annotation_attrs on a non-annotation expression"),
+        };
+        &self.children[range.start as usize..range.end as usize]
     }
 
     /// Intern a schema into the table (deduped) and return its id.

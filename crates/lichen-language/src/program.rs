@@ -23,21 +23,30 @@ use lichen_utils::extend::AsEnum;
 
 pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 
+use crate::doc::Doc;
+pub use crate::doc::doc_attr_ext;
+
 /// Compose the language's concrete program marker from a manifest of its
-/// vocabulary leaves and attribute.
+/// vocabulary leaves and attribute set.
 ///
 /// This is the single place the plugin set is declared: the value and operator
 /// leaves list each plugin's contribution (a compiler plugin's attribute
 /// operator like [`GcdOp`], a native plugin's operators/values —
 /// [`lichen_compute::ComputeOperator`]/[`lichen_compute::ComputeValue`] —
-/// alongside the core lowlevel/highlevel leaves), and `attr` names the
-/// language's attribute.  A package manager that assembles a new compiler
-/// re-invokes this macro with a different plugin set; the impls below (the
-/// checker/VM wiring) and the frontend are unchanged.
+/// alongside the core lowlevel/highlevel leaves), and `attrs` names the
+/// language's attributes.  Each attribute is a compiler plugin: a marker
+/// implementing [`lichen_highlevel::attr::AttrSpec`] plus an
+/// [`lichen_highlevel::attr::AttrExt`] impl, listed here as
+/// `<Marker> as <VariantName>`.  The trailing `[ … ]` holds any extra
+/// where-clause bounds the composed [`lang_attr_ext`] registry needs to
+/// instantiate the attributes' `AttrExt`s (e.g. `P::Operator: From<GcdOp>` for
+/// a `Perspective` that emits a `Gcd` operator).  A package manager that
+/// assembles a new compiler re-invokes this macro with a different plugin set;
+/// the impls below (the checker/VM wiring) and the frontend are unchanged.
 #[macro_export]
 macro_rules! lang_compose_vocabulary {
     (
-        attr = $attr:ty;
+        attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         values = [ $( $value:path as $value_name:ident ; )* ];
         operators = [ $( $operator:path as $operator_name:ident ; )* ];
     ) => {
@@ -62,9 +71,37 @@ macro_rules! lang_compose_vocabulary {
             $( + $value as $value_name ; )*
         }
 
+        /// The language's compile-time attributes, composed from the manifest:
+        /// one variant per plugin marker, so a single program can carry any of
+        /// them (an expression's schema tail holds one entry per attached
+        /// attribute).  Each marker's behaviour lives in its own
+        /// [`lichen_highlevel::attr::AttrExt`].
+        #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+        pub enum LangAttr {
+            $( $attr_name($attr) ),*
+        }
+
+        impl ::lichen_highlevel::attr::AttrSpec for LangAttr {}
+
+        /// The attribute-extension registry for the language's [`LangAttr`]:
+        /// maps each composed marker to its behaviour, so the checker
+        /// dispatches each attribute through its own semantics.
+        pub fn lang_attr_ext<P>() -> Box<dyn Fn(&LangAttr) -> &'static dyn ::lichen_highlevel::attr::AttrExt<P>>
+        where
+            P: ::lichen_highlevel::program::HighProgram,
+            P::Value: ::lichen_highlevel::program::ValueType + ::lichen_utils::extend::AsEnum<::lichen_lowlevel::LowValue>,
+            $( $bound )*
+        {
+            Box::new(|attr| -> &'static dyn ::lichen_highlevel::attr::AttrExt<P> {
+                match attr {
+                    $( LangAttr::$attr_name(_) => &$attr ),*
+                }
+            })
+        }
+
         /// The language's concrete program marker: `Value = LangValue`,
-        /// `Operator = LangOperator`, `Attr = $attr`.
-        pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, $attr>;
+        /// `Operator = LangOperator`, `Attr = LangAttr`.
+        pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>;
     };
 }
 
@@ -75,7 +112,13 @@ macro_rules! lang_compose_vocabulary {
 // [`ComputeOperator`]/[`ComputeValue`].  This is the one manifest that fixes
 // the compiler's plugin set.
 crate::lang_compose_vocabulary! {
-    attr = Perspective;
+    attrs = [
+        Perspective as Perspective;
+        Doc as Doc;
+    ]
+    // A `Perspective` emits a `Gcd` operator, so its `AttrExt` needs the
+    // operator bound; a `Doc` label needs none.
+    [ P::Operator: From<GcdOp> ];
     values = [
         LowValue as LowValue;
         TypeValue as TypeValue;

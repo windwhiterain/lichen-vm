@@ -3,7 +3,7 @@ use crate::lex::lex;
 use crate::parse::parse;
 use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit};
 
-fn compile_ok(source: &str) -> IR<Perspective> {
+fn compile_ok(source: &str) -> IR<LangAttr> {
     let tokens = lex(source).tokens;
     let ast = parse(&tokens).program;
     compile(&ast).0
@@ -17,14 +17,14 @@ fn compile_err(source: &str) -> Diag {
     compile(&ast).1.into_iter().next().expect("expected a resolve diagnostic")
 }
 
-fn kind(ir: &IR<Perspective>, id: ExprId) -> ExprKind<HighProgramLiteral> {
+fn kind(ir: &IR<LangAttr>, id: ExprId) -> ExprKind<HighProgramLiteral> {
     ir[id].kind
 }
 
 /// The node the statement wrapper selects: the root is either the final
 /// expression's own node (no wrap) or `Field(Tuple([…, final]), n)`,
 /// which unwraps to the final expression.
-fn wrapped(ir: &IR<Perspective>) -> ExprId {
+fn wrapped(ir: &IR<LangAttr>) -> ExprId {
     match ir[ir.root].kind {
         ExprKind::Field { container: array, key: index } => {
             let ExprKind::Tuple(range) = ir[array].kind else {

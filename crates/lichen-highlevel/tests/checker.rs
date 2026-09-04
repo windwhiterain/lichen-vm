@@ -6,7 +6,7 @@
 
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
-use lichen_highlevel::ir::{ExprId, ExprKind, IR};
+use lichen_highlevel::ir::{ChildRange, ExprId, ExprKind, IR};
 use lichen_highlevel::program::{
     HighGlobal, HighProgramLiteral, HighProgramValue, IntLit, IntTypeLit, ProgramImpl, TypeTypeLit,
     TypeValue,
@@ -89,7 +89,7 @@ fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
         ExprKind::Annotation {
             value: e,
             r#type: Some(t),
-            attribute: None,
+            attributes: ChildRange::EMPTY,
         },
         None,
     )

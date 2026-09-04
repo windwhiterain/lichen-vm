@@ -61,6 +61,8 @@ pub enum TokenKind {
     KwReturn,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
+    /// The doc keyword -- a doc literal: `doc { name = …, description = … }`.
+    KwDoc,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -71,6 +73,8 @@ pub enum TokenKind {
     DoubleColon,
     /// '#' -- the perspective annotation.
     Hash,
+    /// '?' -- the doc annotation: `e ? doc{…}`.
+    Question,
     /// '!' -- a prefix assert: `!e` asserts `e`.
     Bang,
     /// '$' -- a native-operator call prefix: `$jit(f)`.  Reserved for a
@@ -133,11 +137,13 @@ impl TokenKind {
             TokenKind::KwElse => "'else'".to_string(),
             TokenKind::KwReturn => "'return'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
+            TokenKind::KwDoc => "'doc'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
             TokenKind::DoubleColon => "'::'".to_string(),
             TokenKind::Hash => "'#'".to_string(),
+            TokenKind::Question => "'?'".to_string(),
             TokenKind::Bang => "'!'".to_string(),
             TokenKind::Dollar => "'$'".to_string(),
             TokenKind::Equals => "'='".to_string(),
@@ -221,6 +227,8 @@ enum RawToken {
     KwReturn,
     #[token("pub")]
     KwPub,
+    #[token("doc")]
+    KwDoc,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -233,6 +241,8 @@ enum RawToken {
     Colon,
     #[token("#")]
     Hash,
+    #[token("?")]
+    Question,
     #[token("!")]
     Bang,
     #[token("$")]
@@ -602,11 +612,13 @@ fn raw_to_kind(
         RawToken::KwElse => Some(TokenKind::KwElse),
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
+        RawToken::KwDoc => Some(TokenKind::KwDoc),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::Hash => Some(TokenKind::Hash),
+        RawToken::Question => Some(TokenKind::Question),
         RawToken::Bang => Some(TokenKind::Bang),
         RawToken::Dollar => Some(TokenKind::Dollar),
         RawToken::Equals => Some(TokenKind::Equals),

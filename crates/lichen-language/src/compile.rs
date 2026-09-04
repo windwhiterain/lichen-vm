@@ -48,9 +48,10 @@ use lichen_highlevel::program::{
 use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
-use crate::program::Perspective;
+use crate::program::{LangAttr, Perspective};
+use crate::doc::Doc;
 
-pub fn compile(program: &Program) -> (IR<Perspective>, Vec<Diag>) {
+pub fn compile(program: &Program) -> (IR<LangAttr>, Vec<Diag>) {
     compile_with_imports(program, &[])
 }
 
@@ -67,7 +68,7 @@ pub fn compile(program: &Program) -> (IR<Perspective>, Vec<Diag>) {
 pub fn compile_with_imports(
     program: &Program,
     imports: &[ResolvedImport],
-) -> (IR<Perspective>, Vec<Diag>) {
+) -> (IR<LangAttr>, Vec<Diag>) {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
@@ -113,7 +114,7 @@ pub fn compile_with_imports(
 }
 
 struct Compiler {
-    ir: IR<Perspective>,
+    ir: IR<LangAttr>,
     /// The in-scope binders, innermost last.
     scopes: Vec<HashMap<String, ExprId>>,
     /// The count of enclosing function scopes at the current compilation
@@ -198,6 +199,12 @@ impl Compiler {
                     } else {
                         self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
                         self.ir.expr[p.0 as usize].span = self.ir.expr[value.0 as usize].span;
+                        // The schema (an attribute tail, e.g. `# p` or `? doc`)
+                        // rides the *expression*, not the kind, so the
+                        // transplant must carry it too — otherwise a bound
+                        // annotated value (`a = 5 ? doc{…}`) drops its tail and
+                        // the checker panics reading `schema(p).tail[0]`.
+                        self.ir.set_schema(p, self.ir.schema(value).clone());
                         p
                     }
                 }
@@ -347,7 +354,7 @@ impl Compiler {
                 // to dispatch the apply's attribute equality check.
                 if parameter_perspective.is_some() {
                     self.ir
-                        .set_schema(parameter_id, Schema { tail: vec![Perspective] });
+                        .set_schema(parameter_id, Schema { tail: vec![LangAttr::Perspective(Perspective)] });
                 }
                 self.scopes
                     .push(HashMap::from([(parameter.clone(), parameter_id)]));
@@ -488,24 +495,32 @@ impl Compiler {
                 value,
                 r#type,
                 perspective,
+                doc,
                 span,
             } => {
                 let value = self.compile_expr(value);
                 let r#type = r#type.as_ref().map(|t| self.compile_expr(t));
-                let attribute = perspective.as_ref().map(|p| self.compile_expr(p));
-                let id = self.alloc(
-                    ExprKind::Annotation {
-                        value,
-                        r#type,
-                        attribute,
-                    },
-                    span,
-                );
-                // `# p` stamps the annotated node's static schema with the
-                // `Perspective` tail — the one asymmetry with `:` (the slot
-                // comes into existence by being annotated).
-                if attribute.is_some() {
-                    self.ir.set_schema(id, Schema { tail: vec![Perspective] });
+                // Attribute value expressions, in tail order (the perspective
+                // constraint first, then the doc label), aligned by position
+                // with the schema tail — so the checker pairs `tail[i]` with
+                // `attributes[i]`.  The mechanism is generic: each annotation
+                // kind contributes one tail entry + one value expression.
+                let mut attrs: Vec<ExprId> = Vec::new();
+                let mut tail: Vec<LangAttr> = Vec::new();
+                if let Some(p) = &perspective {
+                    attrs.push(self.compile_expr(p));
+                    tail.push(LangAttr::Perspective(Perspective));
+                }
+                if let Some(d) = &doc {
+                    attrs.push(self.compile_expr(d));
+                    tail.push(LangAttr::Doc(Doc));
+                }
+                let id = self.ir.alloc_annotation(value, r#type, &attrs, Some(*span));
+                // The attribute tail stamps the annotated node's static
+                // schema — the one asymmetry with `:` (the slots come into
+                // existence by being annotated).
+                if !tail.is_empty() {
+                    self.ir.set_schema(id, Schema { tail });
                 }
                 id
             }
