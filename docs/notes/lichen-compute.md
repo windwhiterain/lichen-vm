@@ -113,11 +113,28 @@ enum KernelInstr {
 
 `emit_node` walks the simple kernel-safe subset — integer constants, `Add`/`Sub`/`Leq`/
 `Eq`, the parameter read (`Index(param_pair, 0)` → a `local.get`), a `value_of`
-extraction (`Index(pair, 0)`), and a 2-element conditional (a wasm `select`). The
-parameter is read by **shape** (`LowShape`, a host marker on the node), so the backend
-emits bytecode without consulting the type half or forcing the value. A scalar domain is
-one `i64` local; a tuple domain is flattened to per-element locals (`flat_arity`,
-`flatten_offset`).
+extraction (`Index(pair, 0)`), and a 2-element conditional (a wasm `select`).
+
+### The JIT walks the value graph, not the types
+
+The design decision that keeps this safe: the JIT reads the lowlevel **value dataflow**
+(parameter reads + scalar operators), gets the I/O contract from the kernel signature
+(`Kernel<sig>`), and ignores the type halves and union-find classes. It compiles the
+**template shape** — the parameter value (`Index(param_pair, 0)`) is a *symbolic* wasm
+local, constants are concrete `i64.const`, and every operator is concrete. There is no
+snapshotting of a bound argument and no class-rep routing, so the launch-argument
+`Parameterized` handling (§6) does not apply to a pure shape walk. The "runtime is the
+typechecker" guarantee holds because the checker's gates run first; the JIT only lowers a
+graph the checker has already accepted.
+
+A **multi-arg (tuple) kernel** is just a wider shape: `compute(0) (p : (Int, Int) =>
+p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
+*type* cell (`kernel_param_shape`/`element_shape` yield `LowShape::Tuple(..)`), which
+drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element reads:
+`param_path`/`is_param_value` recognise `Index(param_pair, 0)` → `local.get 0` (scalar) and
+`Index(Index(param_pair, 0), k)` → `local.get k` (tuple element k), via `flat_arity`/
+`flatten_offset`. On the launch side the tuple argument is unwrapped by `collect_args` and
+the now multi-arity `main` is called through the dynamic `wasmi::Func::call` API.
 
 ## 5. Launch-time assembly (the deferred linker)
 
