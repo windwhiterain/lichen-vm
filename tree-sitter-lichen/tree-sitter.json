@@ -2,7 +2,23 @@
   "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
   "grammar": "grammar.js",
   "parser-directories": ["."],
+  "grammars": [
+    {
+      "name": "lichen",
+      "title": "Lichen",
+      "camelcase": "Lichen",
+      "scope": "source.lichen",
+      "path": ".",
+      "file-types": [".lichen"],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "lichen"
+    }
+  ],
   "metadata": {
-    "version": "0.1.0"
+    "version": "0.1.0",
+    "license": "Apache-2.0",
+    "links": {
+      "repository": "https://github.com/windwhiterain/lichen-vm"
+    }
   }
 }

@@ -161,14 +161,17 @@ frontend stays a single source of truth for the *syntax*; resolution for
 
 - `lib.rs` — the shared editor-view library:
   - `lsp` — the canonical `lsp_types` protocol types (`Position`/`Range`/
-    `Diagnostic`) plus the `Span`/`line_starts` ↔ LSP-utf16 conversion;
+    `Diagnostic`) plus the `Span`/`line_starts` ↔ LSP-utf16 conversion, the
+    semantic-token **legend**, and the delta encoding of a token slice into a
+    `SemanticTokens` payload;
   - `analysis` — `Doc`: parse a source once, hold the tokens, AST, pipeline
     diagnostics and the resolution index; `hover_at`, `definition_at`,
-    `lsp_diagnostics` on top of it.
+    `lsp_diagnostics`, and `semantic_tokens`/`semantic_tokens_lsp` on top of it.
 - `src/bin/lichen-language-server.rs` — a [`tower_lsp::LanguageServer`] (stdlib
   JSON-RPC transport via `LspService`/`Server`): `initialize` (capabilities:
-  full text-sync, hover, definition), `textDocument/didOpen|didChange|didClose`
-  (→ publish diagnostics), `textDocument/hover`, `textDocument/definition`,
+  full text-sync, hover, definition, `semanticTokensProvider`),
+  `textDocument/didOpen|didChange|didClose` (→ publish diagnostics),
+  `textDocument/hover`, `textDocument/definition`, `textDocument/semanticTokens/full`,
   `shutdown`/`exit`. `tower-lsp` owns framing, dispatch, cancellation and error
   codes; the binary only decides how to answer each request.
 
@@ -178,6 +181,16 @@ server holds only the *source text* per open document and re-runs the frontend o
 demand in a blocking task, because `Doc` is `!Send` (it owns raw pointers into the
 frontend arena via the diagnostics). Making the frontend artefacts `Send` is the
 follow-up that would let the server cache a `Doc` per URI.
+
+**Semantic tokens are the grammar-optional highlighting path.** Lichen's own
+frontend classifies every token — literals, keywords, operators, and names
+(disambiguated through the AST as binding declarations / lambda parameters /
+function calls / `.field` accesses) — into a `SemanticTokens` delta payload served
+by `textDocument/semanticTokens/full`. Because the LSP advertises the capability,
+an editor colors the buffer from the language's parser even where the tree-sitter
+grammar is absent; the grammar (when present) and the semantic tokens are
+complementary. The `@{…@}` preprocessor block is the one comment-like construct
+and is colored as a comment.
 
 `tower-lsp` is a **non-default `server` feature** of this crate, and the `zed`
 extension depends on it with `default-features = false`, so the WASM plugin does
@@ -213,9 +226,16 @@ not pull the tokio/tower async stack.
   `src/parser.c` is committed, so Zed builds it without the toolchain. Queries
   live both in `tree-sitter-lichen/queries/` and (mirrored) in the extension's
   `languages/lichen/`, because Zed reads queries from the extension directory.
-- **Still missing:** a pinned `rev` in `[grammars.lichen]` (set it to the commit
-  that contains `tree-sitter-lichen/` after committing, or use a `file://`
-  `repository` for local dev).
+- **Grammar `rev`:** pinned to `9b23892` (the commit containing `tree-sitter-lichen/`),
+  with `[grammars.lichen]` `repository` pointing at the real remote
+  (`windwhiterain/lichen-vm`). **Push caveat:** that SHA is currently only on the
+  local `v1`/`feature/lichen-zed` branches — until it is pushed to `origin/v1`
+  (or the branch it merges into), the registry-path grammar fetch fails, so use
+  the `file://` `repository` form for local development.
+- **Semantic tokens** (the grammar-optional highlight path) are served by the
+  LSP, so the extension neither needs the grammar for color nor needs any extra
+  client-side config — Zed requests `textDocument/semanticTokens/full` because
+  the server advertises the capability.
 
 ## Fitting future tools into the model
 
