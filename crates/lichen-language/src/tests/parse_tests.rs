@@ -395,8 +395,8 @@ fn struct_instantiation_is_adjacent_parens() {
     };
     assert!(matches!(*callee, Expr::Name(n, _) if n == "A"));
     assert_eq!(fields.len(), 2);
-    assert!(matches!(fields[0], Expr::Int(1, _)));
-    assert!(matches!(fields[1], Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(fields[0].value, Expr::Int(1, _)));
+    assert!(matches!(fields[1].value, Expr::TypeConst(TypeConst::Int, _)));
     // a single field carries a trailing comma — the bare `A(1)` is the
     // positional slot read.
     assert!(matches!(
@@ -426,6 +426,33 @@ fn struct_instantiation_is_adjacent_parens() {
         panic!("expected a struct instance")
     };
     assert!(matches!(*callee, Expr::StructType(..)));
+}
+
+#[test]
+fn struct_instantiation_carries_optional_field_names() {
+    // `A(.x 1, .y Int)` — a leading `.` names an argument; a bare expression
+    // is a positional argument.
+    let Expr::StructInst { fields, .. } = parse_ok("A(.x 1, .y Int)") else {
+        panic!("expected a struct instance")
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name.as_deref(), Some("x"));
+    assert!(matches!(fields[0].value, Expr::Int(1, _)));
+    assert_eq!(fields[1].name.as_deref(), Some("y"));
+    assert!(matches!(fields[1].value, Expr::TypeConst(TypeConst::Int, _)));
+    // mixed positional and named
+    let Expr::StructInst { fields, .. } = parse_ok("A(1, .y Int)") else {
+        panic!("expected a struct instance")
+    };
+    assert_eq!(fields[0].name, None);
+    assert!(matches!(fields[0].value, Expr::Int(1, _)));
+    assert_eq!(fields[1].name.as_deref(), Some("y"));
+    // a single named argument is an instantiation, never the positional slot
+    // read.
+    assert!(matches!(
+        parse_ok("A(.x 1)"),
+        Expr::StructInst { fields, .. } if fields.len() == 1 && fields[0].name.as_deref() == Some("x")
+    ));
 }
 
 #[test]

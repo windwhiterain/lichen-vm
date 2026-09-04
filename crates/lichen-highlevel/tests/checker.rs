@@ -1553,7 +1553,7 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
 
 /// Struct instantiation: `s(1, 2)` — the struct type applied to a tuple.
 fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
-    ir.alloc_instantiate(type_expr, value, None)
+    ir.alloc_instantiate(type_expr, value, &[], None)
 }
 
 // --- struct instantiation ----------------------------------------------------

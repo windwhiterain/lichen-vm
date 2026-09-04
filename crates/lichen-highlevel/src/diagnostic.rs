@@ -38,6 +38,20 @@ pub enum DiagKind {
     /// A named field read `a.name` on a struct that has no such field —
     /// expected = a field of that name, found = a struct without it.
     NamedField,
+    /// A `.name` argument in a struct instantiation against a field the
+    /// struct has no named field for — expected = a field of that name.
+    StructUnknownField,
+    /// A struct instantiation supplying the same named field twice.
+    StructDuplicateField,
+    /// A struct instantiation omitting a field (or supplying fewer arguments
+    /// than the definition has fields).
+    StructMissingField,
+    /// A struct instantiation supplying more arguments than the definition has
+    /// fields.
+    StructExcessField,
+    /// A `.name` argument in a struct instantiation against a struct type with
+    /// no named fields.
+    StructAnonymousField,
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,
@@ -76,6 +90,9 @@ pub struct DiaryEntry {
     /// position within the `[value, type]` spine.
     pub loc: Loc,
     pub kind: DiagKind,
+    /// The offending (or missing) struct field name, for a
+    /// `struct<...>` instantiation mismatch.
+    pub field: Option<String>,
 }
 
 /// A structured diagnostic.  The highlevel emits *facts*, never a rendered
@@ -107,6 +124,9 @@ pub struct Diag<P: Program> {
     pub index: Option<usize>,
     /// The container's length for an out-of-bounds read.
     pub length: Option<usize>,
+    /// The offending (or missing) struct field name, for a `struct<...>`
+    /// instantiation mismatch.
+    pub field: Option<String>,
     /// Which `Module::unify_errors` entry a mismatch came from — the key back
     /// to its diary entry, for callers that re-render.
     pub error_index: Option<usize>,
@@ -162,6 +182,7 @@ where
                     assert_value: None,
                     index: Some(*index_value),
                     length: Some(*length),
+                    field: None,
                     error_index: None,
                 }),
                 EvalError::TableMiss { key, .. } => out.push(Diag {
@@ -174,6 +195,7 @@ where
                     assert_value: None,
                     index: None,
                     length: None,
+                    field: None,
                     error_index: None,
                 }),
                 EvalError::TableKeyUnbound { key } => out.push(Diag {
@@ -186,6 +208,7 @@ where
                     assert_value: None,
                     index: None,
                     length: None,
+                    field: None,
                     error_index: None,
                 }),
             }
@@ -205,6 +228,7 @@ where
                     assert_value: Some(err.value),
                     index: None,
                     length: None,
+                    field: None,
                     error_index: None,
                 });
             }
@@ -249,6 +273,7 @@ where
                 assert_value: None,
                 index: None,
                 length: None,
+                field: None,
                 error_index: Some(i),
             };
         }
@@ -261,6 +286,7 @@ where
         };
         let loc = entry.map(|e| e.loc.clone());
         let kind = entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime);
+        let field = entry.map(|e| e.field.clone()).flatten();
         Diag {
             loc,
             kind,
@@ -271,6 +297,7 @@ where
             assert_value: None,
             index: None,
             length: None,
+            field,
             error_index: Some(i),
         }
     }

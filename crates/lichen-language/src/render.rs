@@ -1133,6 +1133,25 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
             "no field with this name in the struct type {}",
             printer.node(d.a)
         ),
+        DiagKind::StructUnknownField => match &d.field {
+            Some(name) => format!(
+                "no field named {name} in the struct type {}",
+                printer.node(d.a)
+            ),
+            None => format!("no such field in the struct type {}", printer.node(d.a)),
+        },
+        DiagKind::StructDuplicateField => match &d.field {
+            Some(name) => format!("duplicate field {name} in struct instantiation"),
+            None => "duplicate field in struct instantiation".to_string(),
+        },
+        DiagKind::StructMissingField => match &d.field {
+            Some(name) => format!("missing field {name} in struct instantiation"),
+            None => "missing a field in struct instantiation".to_string(),
+        },
+        DiagKind::StructExcessField => "too many fields in struct instantiation".to_string(),
+        DiagKind::StructAnonymousField => {
+            "cannot name a field — the struct has no named fields".to_string()
+        }
         DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).

@@ -157,9 +157,12 @@ pub enum Expr {
     /// where the name is the syntactic prefix `<name> ::`.
     StructType(Vec<StructField>, Span),
     /// `C(e1, ..., en)` — struct instantiation: a callee (a struct type or a
-    /// generic struct constructor) applied to a positional field list.  The
-    /// callee and the `(` are *adjacent* — no space between them — which is
-    /// the syntactic distinction from function application (see
+    /// generic struct constructor) applied to a field list.  Each field may be
+    /// positional (`C(1, 2)`) or *named* (`C(.x 1, .y Int)`) — the `.name`
+    /// prefix is the same discriminator a `struct<.x T, ...>` definition uses,
+    /// and the checker reorders the values to the definition's positional
+    /// order.  The callee and the `(` are *adjacent* — no space between them —
+    /// which is the syntactic distinction from function application (see
     /// [`Expr::Apply`]).  The instantiation forms mirror the tuple grammar's
     /// comma discipline: `C()` and the empty-tuple spelling `C(,)` carry no
     /// fields, `C(e,)` one, `C(e1, ..., en)` n.  The bare single-expression
@@ -167,7 +170,7 @@ pub enum Expr {
     /// ([`Expr::FieldRead`]) — it is never an instantiation.
     StructInst {
         callee: Box<Expr>,
-        fields: Vec<Expr>,
+        fields: Vec<StructInstArg>,
         span: Span,
     },
     /// `[e1, ..., en]` — an array literal.
@@ -248,6 +251,15 @@ pub struct Binding {
 pub struct StructField {
     pub name: Option<String>,
     pub ty: Expr,
+}
+
+/// One field argument of a struct instantiation: an optional `.name` prefix
+/// plus the value expression.  `name` is `Some` for a `.x 1` argument and
+/// `None` for a positional (`1`) argument.
+#[derive(Clone, Debug)]
+pub struct StructInstArg {
+    pub name: Option<String>,
+    pub value: Expr,
 }
 
 /// A recovered-error region the parser masked: `range` is the byte span it

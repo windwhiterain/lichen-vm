@@ -384,16 +384,25 @@ impl Compiler {
             // [`ExprKind::Instantiate`]; a spaced `C (…)` is a plain apply
             // and reaches the Apply arm above.  There is no compile-time
             // callee-kind dispatch — the checker decides whether the callee
-            // is a struct type, and a callee that is not one fails there.
+            // is a struct type, and a callee that is not one fails there.  A
+            // `.x 1` argument carries its name through to the checker, which
+            // reorders the values to the definition's positional order.
             Expr::StructInst {
                 callee,
                 fields,
                 span,
             } => {
                 let type_expr = self.compile_expr(callee);
-                let field_ids = self.compile_all(fields);
+                let field_ids: Vec<ExprId> = fields
+                    .iter()
+                    .map(|f| self.compile_expr(&f.value))
+                    .collect();
+                let names: Vec<Option<&'static str>> = fields
+                    .iter()
+                    .map(|f| f.name.as_deref().map(|n| self.intern_str(n)))
+                    .collect();
                 let value = self.ir.alloc_tuple(&field_ids, Some(*span));
-                self.alloc(ExprKind::Instantiate { type_expr, value }, span)
+                self.ir.alloc_instantiate(type_expr, value, &names, Some(*span))
             }
             Expr::BinOp {
                 operator,

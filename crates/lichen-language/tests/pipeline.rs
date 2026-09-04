@@ -872,6 +872,110 @@ fn a_struct_instance_index_out_of_bounds_is_rejected() {
 }
 
 #[test]
+fn a_named_struct_instantiation_reorders_arguments() {
+    // S(.y Int, .x 1) — the named arguments are reordered to the definition's
+    // positional order, so a(0) reads the .x field (1) and a(1) the .y field
+    // (Int).
+    let (module, root) =
+        run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a(0), a(1))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(
+        usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()),
+        1,
+        "a(0) reads the reordered .x field"
+    );
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        Some(LangValue::TypeValue(TypeValue::TypeInt)),
+        "a(1) reads the reordered .y field"
+    );
+}
+
+#[test]
+fn a_named_struct_instantiation_in_definition_order() {
+    // S(.x 1, .y Int) — the named arguments in definition order evaluate to
+    // the positional tuple (1, Int).
+    let value = evaluate("S = struct<.x Int, .y Type>; S(.x 1, .y Int)");
+    let ids = array_ids(value);
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
+fn a_named_struct_instantiation_mixes_positional_and_named() {
+    // S(.y Int, 1) — the bare positional argument fills the lowest-numbered
+    // unclaimed definition position (.x), so the instance is (1, Int).
+    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a(0), a(1))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1);
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        Some(LangValue::TypeValue(TypeValue::TypeInt))
+    );
+}
+
+#[test]
+fn a_named_struct_instantiation_against_an_unknown_field_is_rejected() {
+    let d = diags("S = struct<.x Int, .y Type>; S(.z 1, .x 1, .y Int)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::StructUnknownField);
+    assert_eq!(check.field.as_deref(), Some("z"), "the unknown field name");
+    assert!(
+        d[0].message.contains("z"),
+        "the message names the unknown field: {}",
+        d[0].message
+    );
+}
+
+#[test]
+fn a_named_struct_instantiation_against_a_duplicate_field_is_rejected() {
+    let d = diags("S = struct<.x Int, .y Type>; S(.x 1, .x 2, .y Int)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::StructDuplicateField);
+    assert_eq!(check.field.as_deref(), Some("x"));
+}
+
+#[test]
+fn a_named_struct_instantiation_against_a_missing_field_is_rejected() {
+    let d = diags("S = struct<.x Int, .y Type>; S(.x 1)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::StructMissingField);
+    assert_eq!(check.field.as_deref(), Some("y"), "the missing field name");
+}
+
+#[test]
+fn a_named_struct_instantiation_against_an_anonymous_struct_is_rejected() {
+    // A struct type with no named fields rejects a .name argument.
+    let d = diags("S = struct<Int, Type>; S(.x 1, .y Int)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::StructAnonymousField);
+}
+
+#[test]
+fn a_named_struct_instantiation_with_a_wrong_field_type_is_rejected() {
+    // .x : Int but the argument is a Type value — after reordering the value's
+    // element types are checked against the field list, so this fails as an
+    // annotation mismatch.
+    let d = diags("S = struct<.x Int, .y Type>; S(.x Type, .y Int)");
+    assert_eq!(d[0].check.as_ref().expect("a checker diagnostic").kind, DiagKind::Annotation);
+}
+
+#[test]
+fn a_named_struct_instantiation_reads_through_a_parameter() {
+    // Lazy resolution through a parameter: get = s => s.y, applied to a named
+    // instantiation, resolves the field through the struct's name table at
+    // the call.
+    let report = compile("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type");
+    assert!(
+        report.ok(),
+        "a named-instantiation field read through a parameter must check: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
 fn mutually_recursive_structs_check_and_evaluate() {
     // A = struct<Int, B>; B = struct<Type, A>; a = A(1, b); b = B(Int, a) —
     // two struct types that reference each other *as types*, plus a pair of

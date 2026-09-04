@@ -167,9 +167,11 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
     /// [`ExprKind::ShallowArray`], [`ExprKind::Table`]).
     pub children: Vec<ExprId>,
-    /// One dense arena for struct **field names**, index-aligned with the
-    /// [`ExprKind::TypeStruct`] `fields` range: `None` for an unnamed
-    /// (positional) field, `Some(name)` for a `name :: Ty` field.
+    /// One dense arena for struct **field names** — index-aligned with the
+    /// [`ExprKind::TypeStruct`] `fields` range **and** the
+    /// [`ExprKind::Instantiate`] `value` tuple's elements: `None` for an
+    /// unnamed (positional) field/argument, `Some(name)` for a `name :: Ty`
+    /// field or a `.name bool` argument.
     pub struct_names: Vec<Option<&'static str>>,
     /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
     /// — one `usize` per element: 0 = unmarked, `usize::MAX` = the bare `~`
@@ -248,12 +250,21 @@ pub enum ExprKind<L> {
         left: ExprId,
         right: ExprId,
     },
-    /// `{ type_expr, value }` — struct instantiation: `s(1, 2)` wraps the
-    /// positional tuple `value` in the struct type `type_expr`.  The
-    /// value's element types are checked against the struct's field list,
-    /// and the expression's type is the struct type itself.  Emitted by the
-    /// frontend when an application's callee is a struct type.
-    Instantiate { type_expr: ExprId, value: ExprId },
+    /// `{ type_expr, value, names }` — struct instantiation: `s(1, 2)` wraps
+    /// the positional tuple `value` in the struct type `type_expr`.  `names`
+    /// is a range into [`IR::struct_names`], index-aligned with `value`'s
+    /// tuple elements, one optional field name per argument (a `.x 1`
+    /// argument is `Some("x")`, a positional `1` is `None`); the checker
+    /// reorders the value's elements to the definition's positional order
+    /// against the struct type's name table.  The value's element types are
+    /// checked against the struct's field list, and the expression's type is
+    /// the struct type itself.  Emitted by the frontend when an application's
+    /// callee is a struct type.
+    Instantiate {
+        type_expr: ExprId,
+        value: ExprId,
+        names: ChildRange,
+    },
     /// `assert(condition)` — an explicit constraint, not a unify: the
     /// condition's value node is registered as an assert point.  The
     /// checker force-evaluates every assert after the definition pass
@@ -468,9 +479,23 @@ impl<A: AttrSpec, L> IR<A, L> {
         &mut self,
         type_expr: ExprId,
         value: ExprId,
+        names: &[Option<&'static str>],
         span: Option<Span>,
     ) -> ExprId {
-        self.alloc(ExprKind::Instantiate { type_expr, value }, span)
+        let nstart = self.struct_names.len() as u32;
+        self.struct_names.extend_from_slice(names);
+        let name_range = ChildRange {
+            start: nstart,
+            end: self.struct_names.len() as u32,
+        };
+        self.alloc(
+            ExprKind::Instantiate {
+                type_expr,
+                value,
+                names: name_range,
+            },
+            span,
+        )
     }
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {

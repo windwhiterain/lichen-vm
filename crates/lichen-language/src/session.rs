@@ -1005,7 +1005,14 @@ impl Sig {
                 self.cur.update(&[19]);
                 self.hash_expr(callee);
                 for f in fields {
-                    self.hash_expr(f);
+                    // The argument's optional name is part of its identity: a
+                    // named argument is distinct from a positional one of the
+                    // same value.
+                    self.cur.update(&[f.name.is_some() as u8]);
+                    if let Some(name) = &f.name {
+                        self.cur.update(name.as_bytes());
+                    }
+                    self.hash_expr(&f.value);
                 }
             }
             Expr::Table(entries, _) => {

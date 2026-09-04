@@ -608,7 +608,9 @@ where
         match self.ir[e].kind {
             ExprKind::BinOp { left, right, .. } => vec![left, right],
             ExprKind::Apply { function, argument } => vec![function, argument],
-            ExprKind::Instantiate { type_expr, value } => vec![type_expr, value],
+            ExprKind::Instantiate {
+                type_expr, value, ..
+            } => vec![type_expr, value],
             ExprKind::Index { array, index } => vec![array, index],
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
@@ -720,6 +722,7 @@ where
                     path,
                 },
                 kind,
+                field: None,
             });
         }
     }
@@ -766,6 +769,7 @@ where
                         path,
                     },
                     kind,
+                    field: None,
                 });
             }
         }
@@ -983,8 +987,14 @@ where
                 left,
                 right,
             } => self.check_binop(e, operator, left, right),
-            ExprKind::Instantiate { type_expr, value } => {
-                self.check_instantiate(e, type_expr, value)
+            ExprKind::Instantiate {
+                type_expr,
+                value,
+                names,
+            } => {
+                let arg_names: Vec<Option<&'static str>> =
+                    self.ir.struct_names[names.start as usize..names.end as usize].to_vec();
+                self.check_instantiate(e, type_expr, value, &arg_names)
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
@@ -1571,6 +1581,7 @@ where
                 b: container_ty,
                 loc: self.loc(container, 1),
                 kind: DiagKind::IndexTarget,
+                field: None,
             });
         }
         let zero =
@@ -1773,6 +1784,7 @@ where
             b: ty,
             loc: self.loc(e, slot),
             kind: DiagKind::IndexTarget,
+            field: None,
         });
     }
 
@@ -1795,6 +1807,7 @@ where
             b: ty,
             loc: self.loc(e, slot),
             kind: DiagKind::NamedField,
+            field: None,
         });
     }
 
@@ -1916,27 +1929,16 @@ where
     /// the nominal id; the tuple's own kind marker is discarded).  A
     /// non-tuple value fails the list check — a literal is not a struct
     /// value.
-    fn check_instantiate(&mut self, e: ExprId, type_expr: ExprId, value: ExprId) -> NodeId {
+    fn check_instantiate(
+        &mut self,
+        e: ExprId,
+        type_expr: ExprId,
+        value: ExprId,
+        arg_names: &[Option<&'static str>],
+    ) -> NodeId {
         self.check_expr(type_expr);
         self.check_expr(value);
         let type_pair = self.term[type_expr].unwrap();
-        let value_ty = self.ty[value].unwrap();
-        // The value's shape: the element-type list of a tuple type, or the
-        // type itself for anything else (which then fails the list check).
-        let value_shape = match self.module.array_items(value_ty) {
-            Some(items) if items.len() == 2 => {
-                // Materialize static refs so the shape can participate in
-                // dynamic array construction below.
-                let shape = self.module.as_dynamic(items[0].node, self.current_block);
-                let kind = self.module.as_dynamic(items[1].node, self.current_block);
-                if self.kind_marker_is(kind, P::Value::tuple_type_marker()) {
-                    shape
-                } else {
-                    value_ty
-                }
-            }
-            _ => value_ty,
-        };
         // The struct pair's shape *is* the positional field-type list (the
         // nominal id lives in the kind slot).  During a recursive struct's
         // own descent the shape is still an unbound cell (the bindings are
@@ -1958,18 +1960,215 @@ where
                 fields_cell
             }
         };
-        self.check_unify(
-            value_shape,
-            field_list,
-            self.loc(e, 1),
-            DiagKind::Annotation,
-        );
-        let value_node = self.value_of(value);
+        let any_named = arg_names.iter().any(|n| n.is_some());
+        let (value_node, value_shape, valid) = if any_named {
+            self.named_instantiate(e, type_pair, value, arg_names)
+        } else {
+            // A positional instantiation keeps the value's own tuple shape.
+            // The value's shape: the element-type list of a tuple type, or
+            // the type itself for anything else (which then fails the list
+            // check).
+            let value_ty = self.ty[value].unwrap();
+            let value_shape = match self.module.array_items(value_ty) {
+                Some(items) if items.len() == 2 => {
+                    // Materialize static refs so the shape can participate in
+                    // dynamic array construction below.
+                    let shape = self.module.as_dynamic(items[0].node, self.current_block);
+                    let kind = self.module.as_dynamic(items[1].node, self.current_block);
+                    if self.kind_marker_is(kind, P::Value::tuple_type_marker()) {
+                        shape
+                    } else {
+                        value_ty
+                    }
+                }
+                _ => value_ty,
+            };
+            (self.value_of(value), value_shape, true)
+        };
+        if valid {
+            self.check_unify(
+                value_shape,
+                field_list,
+                self.loc(e, 1),
+                DiagKind::Annotation,
+            );
+        }
         let pair = self.pair_of(value_node, type_pair);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
         self.ty[e] = Some(type_pair);
         pair
+    }
+
+    /// A named struct instantiation: validates the `.name` arguments against
+    /// the struct type's name table, reorders the argument values into the
+    /// definition's positional order, and returns `(value_node, value_shape,
+    /// valid)`.  `valid` is `false` when a structural mismatch was recorded
+    /// (an unknown, duplicate, missing, or excess field, or a `.name`
+    /// argument against an anonymous struct) — the caller then skips the
+    /// ordinary field-list unify, since the mismatch is the structural one.
+    fn named_instantiate(
+        &mut self,
+        e: ExprId,
+        type_pair: NodeId,
+        value: ExprId,
+        arg_names: &[Option<&'static str>],
+    ) -> (NodeId, NodeId, bool) {
+        // The value's tuple elements are the argument value expressions (call
+        // order); their values and types are reordered into definition order.
+        let elem_ids = self.range_children(value);
+        let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
+        let tys: Vec<NodeId> = elem_ids.iter().map(|&a| self.ty[a].unwrap()).collect();
+        // A `.name` argument against an anonymous struct cannot match: record
+        // it and fall back to the call-order value (the caller skips the
+        // field-list unify).
+        if self
+            .struct_names_any(AnyNodeId::Dynamic(type_pair))
+            .is_none()
+        {
+            for (i, name) in arg_names.iter().enumerate() {
+                if name.is_some() {
+                    self.record_struct_error(elem_ids[i], type_pair, *name, DiagKind::StructAnonymousField);
+                }
+            }
+            return (self.value_of(value), self.ty[value].unwrap(), false);
+        }
+        // The definition's field count (the shape's length) — `None` when the
+        // shape is still an unbound cell mid-recursion, in which case the
+        // missing/excess checks are deferred to the probe unify.
+        let def_len = self
+            .module
+            .array_items(type_pair)
+            .and_then(|items| items.get(0))
+            .and_then(|item| self.any_items(item.node))
+            .map(|items| items.len());
+        // `assign[pos]` = the argument index supplying definition position
+        // `pos`.  `valid` flips when a structural mismatch is recorded.
+        let mut assign: Vec<Option<usize>> = Vec::new();
+        let mut valid = true;
+        // Named arguments claim their name's positional index.
+        for (i, name) in arg_names.iter().enumerate() {
+            if let Some(name) = name {
+                match self.named_field_index_any(AnyNodeId::Dynamic(type_pair), name) {
+                    Some(pos) => {
+                        if pos >= assign.len() {
+                            assign.resize(pos + 1, None);
+                        }
+                        if assign[pos].is_some() {
+                            self.record_struct_error(elem_ids[i], type_pair, Some(name), DiagKind::StructDuplicateField);
+                            valid = false;
+                        } else {
+                            assign[pos] = Some(i);
+                        }
+                    }
+                    None => {
+                        self.record_struct_error(elem_ids[i], type_pair, Some(name), DiagKind::StructUnknownField);
+                        valid = false;
+                    }
+                }
+            }
+        }
+        // Positional arguments fill the lowest-numbered unclaimed position.
+        let mut next = 0usize;
+        for (i, name) in arg_names.iter().enumerate() {
+            if name.is_none() {
+                while next < assign.len() && assign[next].is_some() {
+                    next += 1;
+                }
+                if next < assign.len() {
+                    assign[next] = Some(i);
+                    next += 1;
+                } else if assign.len() >= def_len.unwrap_or(assign.len() + 1) {
+                    // Every definition position is claimed; this is an excess.
+                    self.record_struct_error(elem_ids[i], type_pair, None, DiagKind::StructExcessField);
+                    valid = false;
+                } else if next == assign.len() {
+                    // Append a fresh position past the currently-claimed ones.
+                    assign.push(Some(i));
+                    next += 1;
+                }
+            }
+        }
+        // Missing fields — only when the definition's field count is known.
+        if let Some(def_len) = def_len {
+            if assign.len() < def_len {
+                assign.resize(def_len, None);
+            }
+            for pos in 0..def_len {
+                if assign[pos].is_none() {
+                    let name = self.struct_field_name(type_pair, pos);
+                    self.record_struct_error(e, type_pair, name, DiagKind::StructMissingField);
+                    valid = false;
+                }
+            }
+        }
+        if !valid {
+            // The structural mismatch is the recorded diagnostic; return the
+            // call-order value so the checker still produces a term, but the
+            // caller skips the field-list unify.
+            return (self.value_of(value), self.ty[value].unwrap(), false);
+        }
+        // Reorder the argument values and their element types into definition
+        // order, so the instance's value reads positionally against the
+        // field list and a `.b` / `a(0)` read sees the definition's order.
+        let order: Vec<NodeId> = assign.iter().map(|&a| vals[a.unwrap()]).collect();
+        let order_ty: Vec<NodeId> = assign.iter().map(|&a| tys[a.unwrap()]).collect();
+        let value_node = self.array_node(self.current_block, &order);
+        let value_shape = self.array_node(self.current_block, &order_ty);
+        (value_node, value_shape, true)
+    }
+
+    /// The field name at a definition position, from the struct's name table
+    /// (`None` for a positional field or an anonymous struct).
+    fn struct_field_name(&mut self, type_pair: NodeId, pos: usize) -> Option<&'static str> {
+        let table = self.struct_names_any(AnyNodeId::Dynamic(type_pair))?;
+        for item in table.items() {
+            if self
+                .module
+                .node_value(item.value)
+                .and_then(|v| v.as_enum())
+                .is_some_and(|v| v == LowValue::USize(pos))
+            {
+                if let Some(LowValue::Str(name)) =
+                    self.module.node_value(item.key).and_then(|v| v.as_enum())
+                {
+                    return Some(name);
+                }
+            }
+        }
+        None
+    }
+
+    /// Record a struct-instantiation argument mismatch (an unknown, duplicate,
+    /// missing, or excess field, or a `.name` argument against an anonymous
+    /// struct) as a reported type error.  `loc_expr` is the IR expression the
+    /// caret points at — the offending argument, or the instantiation itself
+    /// for a missing field; `field` is the field's name when there is one.
+    fn record_struct_error(
+        &mut self,
+        loc_expr: ExprId,
+        ty: NodeId,
+        field: Option<&'static str>,
+        kind: DiagKind,
+    ) {
+        let error_index = self.module.unify_errors.len();
+        self.module.unify_errors.push(UnifyError {
+            root_a: ty,
+            root_b: ty,
+            steps: Vec::new(),
+            a: ty,
+            b: ty,
+            value_a: self.module.node_value(AnyNodeId::Dynamic(ty)),
+            value_b: self.module.node_value(AnyNodeId::Dynamic(ty)),
+        });
+        self.diary.push(DiaryEntry {
+            error_index,
+            a: ty,
+            b: ty,
+            loc: self.loc(loc_expr, 0),
+            kind,
+            field: field.map(|f| f.to_string()),
+        });
     }
 
     /// `assert(condition)` — an explicit constraint, not a unify: the

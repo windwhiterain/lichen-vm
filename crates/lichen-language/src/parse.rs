@@ -55,7 +55,7 @@ use chumsky::prelude::*;
 use lichen_highlevel::ir::Span;
 
 use crate::ast::{
-    BinOp, Binding, ErrorBlock, Expr, Program, Stmt, StructField, TypeConst,
+    BinOp, Binding, ErrorBlock, Expr, Program, Stmt, StructField, StructInstArg, TypeConst,
 };
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
@@ -827,7 +827,7 @@ fn atom_parser<'a>(
             .map(Postfix::TableFind),
         glue.clone()
             .ignore_then(token(TokenKind::LParen))
-            .ignore_then(paren_fields(expr.clone()))
+            .ignore_then(struct_inst_fields(expr.clone()))
             .then_ignore(token(TokenKind::RParen))
             .map(Postfix::Paren),
     ));
@@ -863,11 +863,16 @@ fn atom_parser<'a>(
                         // positional slot read; every empty or comma-bearing
                         // form instantiates (`a()`, `a(,)`, `a(e,)`,
                         // `a(e1, e2)`), mirroring the tuple grammar's `()`
-                        // unit vs `(,)` empty tuple.
-                        if fields.len() == 1 && !saw_comma {
+                        // unit vs `(,)` empty tuple.  A single comma-free
+                        // *named* argument (`a(.x 1)`) is still an
+                        // instantiation — the `.name` prefix is a field
+                        // argument, never a positional slot expression.
+                        if fields.len() == 1 && !saw_comma && fields[0].name.is_none() {
+                            let mut iter = fields.into_iter();
+                            let only = iter.next().unwrap();
                             Expr::FieldRead {
                                 container: Box::new(acc),
-                                key: Box::new(fields.into_iter().next().unwrap()),
+                                key: Box::new(only.value),
                                 span,
                             }
                         } else {
@@ -891,7 +896,57 @@ enum Postfix {
     Index(Expr),
     TableFind(Expr),
     TypeArray(Expr),
-    Paren((Vec<Expr>, bool)),
+    Paren((Vec<StructInstArg>, bool)),
+}
+
+/// `.name expr` — a named struct-field argument (`A(.x 1)`) or a plain
+/// expression (a positional argument).  The `.` prefix is the discriminator,
+/// the same one a `struct<.x T, ...>` definition field uses.
+fn struct_inst_field<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, StructInstArg, E<'a>> + Clone {
+    choice((
+        token(TokenKind::Dot)
+            .ignore_then(name())
+            .then(expr.clone())
+            .map(|((name, _span), value)| StructInstArg {
+                name: Some(name),
+                value,
+            }),
+        expr.clone().map(|value| StructInstArg {
+            name: None,
+            value,
+        }),
+    ))
+}
+
+/// The content of an adjacent `(` in a struct-instantiation position: zero or
+/// more field arguments (each positional or `.name`-prefixed) separated by
+/// commas, a trailing comma tolerated — plus *whether any comma appeared*.
+/// The caller splits the single-comma-free form: a lone unnamed argument is
+/// the positional slot read, everything else instantiates.
+fn struct_inst_fields<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), E<'a>> + Clone {
+    let field = struct_inst_field(expr.clone());
+    let first = field.clone().or_not();
+    first
+        .then(
+            token(TokenKind::Separator)
+                .ignore_then(field.clone())
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Separator).or_not())
+        .map(|((first, rest), trailing)| {
+            let saw_comma = !rest.is_empty() || trailing.is_some();
+            let mut fields = Vec::new();
+            if let Some(f0) = first {
+                fields.push(f0);
+            }
+            fields.extend(rest);
+            (fields, saw_comma)
+        })
 }
 
 /// The content of an adjacent `(`: zero or more expressions separated by
@@ -1326,7 +1381,13 @@ fn apply_type_mode(program: Program) -> Program {
                 span,
             } => Expr::StructInst {
                 callee: Box::new(expr(*callee, type_mode)),
-                fields: fields.into_iter().map(|e| expr(e, type_mode)).collect(),
+                fields: fields
+                    .into_iter()
+                    .map(|arg| StructInstArg {
+                        name: arg.name,
+                        value: expr(arg.value, type_mode),
+                    })
+                    .collect(),
                 span,
             },
             Expr::Array(elements, span) => Expr::Array(
@@ -1486,7 +1547,7 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
             Expr::StructInst { callee, fields, .. } => {
                 walk_expr(callee, out);
                 for f in fields {
-                    walk_expr(f, out);
+                    walk_expr(&f.value, out);
                 }
             }
             Expr::Table(entries, _) => {
