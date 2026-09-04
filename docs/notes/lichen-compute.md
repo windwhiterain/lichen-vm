@@ -13,12 +13,12 @@ surface is an embedded `compute.lichen` that re-exports two functions:
 
 ```
 @{ compute = import "compute.lichen" @}
-k = compute(0) (x => x + 1)     -- jit: compile the lambda to a kernel (via `$jit`)
-compute(1) k 5                  -- launch: run it -> 6 : Int (via `$launch`)
+k = compute.jit (x => x + 1)     -- jit: compile the lambda to a kernel (via `$jit`)
+compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 
-`compute(0)` is `jit`, `compute(1)` is `launch`, exported as the positional tuple
-`(jit, launch)`. A kernel's **type is its signature** (`Kernel<Int -> Int>`), so the
+`compute.jit` is `jit`, `compute.launch` is `launch`, exported as a named struct
+(`compute`). A kernel's **type is its signature** (`Kernel<Int -> Int>`), so the
 whole function-apply machinery transfers to kernels.
 
 ## 1. The vocabulary injection
@@ -57,9 +57,10 @@ not callee-type dispatch:
   checker knows nothing about kernels.
 
 ```
-jit   = f => $jit(f)                 -- : (F -> G) → Kernel
-launch = k => a => $launch(k, a)     -- : Kernel → F → G   (curried, two-step)
-(jit, launch)                        -- the exported positional tuple
+{
+  jit    = f => $jit(f)                -- : (F -> G) → Kernel
+  launch = k => a => $launch(k, a)     -- : Kernel → F → G   (curried, two-step)
+}                                      -- the exported named struct
 ```
 
 `NativeOp::build` receives the **already-compiled** arguments (`NativeArg { expr, value,
@@ -127,7 +128,7 @@ snapshotting of a bound argument and no class-rep routing, so the launch-argumen
 typechecker" guarantee holds because the checker's gates run first; the JIT only lowers a
 graph the checker has already accepted.
 
-A **multi-arg (tuple) kernel** is just a wider shape: `compute(0) (p : (Int, Int) =>
+A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : (Int, Int) =>
 p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
 *type* cell (`kernel_param_shape`/`element_shape` yield `LowShape::Tuple(..)`), which
 drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element reads:
@@ -152,7 +153,7 @@ module where `ordered[i]` is function `i`, the root exported as `main`, and each
 - **Style 2 — kernel value** (`k x`): an `Apply` whose callee is a kernel value →
   `emit_cross_kernel_call` (an arg then a `CallKernel`), assembled at launch time. The
   bare `k x` form leaves the codomain unresolved (`?a`), so it's asserted, not typed.
-- **Style 3 — the wrapper launch** (`compute(1) k x`, the typed cross-module form): the
+- **Style 3 — the wrapper launch** (`compute.launch k x`, the typed cross-module form): the
   `ComputeOperator::Launch` is lowered exactly like a kernel `Apply`, and its result is
   typed `Int` (the codomain resolved by `LaunchOp`).
 

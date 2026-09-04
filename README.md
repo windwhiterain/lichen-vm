@@ -362,9 +362,9 @@ f 5
   compute = import "compute.lichen"
   output = "8: Int"
 @}
-k_double = compute(0) (y => y + y)
-k_outer  = compute(0) (x => compute(1) k_double (x + 1))
-compute(1) k_outer 3
+k_double = compute.jit (y => y + y)
+k_outer  = compute.jit (x => compute.launch k_double (x + 1))
+compute.launch k_outer 3
 ```
 
 <!-- end: examples -->

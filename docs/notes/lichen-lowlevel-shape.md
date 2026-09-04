@@ -40,7 +40,7 @@ the value graph alone does not say "scalar or 2-tuple or 3-tuple."  Its shape
 node in the same graph, so this is still partial evaluation, not a separate
 type system.  This is also the only choice that keeps the wasm arity
 consistent with `launch`, which passes **exactly the declared domain arity**
-(`compute(1) k (5, 3, 2)` → 3 args → wasm must take 3 params).  A body-usage
+(`compute.launch k (5, 3, 2)` → 3 args → wasm must take 3 params).  A body-usage
 inference would under-read in the annotated-but-unused-element case and
 mismatch the launch arg count.
 

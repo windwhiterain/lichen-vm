@@ -1,7 +1,7 @@
 //! End-to-end tests for the `lichen-compute` extension: `jit` a function to a
 //! kernel (wasm), `launch` it with an argument, and the kernel/codomain type
-//! checks.  The plugin is exposed as a positional tuple namespace (`compute`):
-//! `compute(0)` is `jit`, `compute(1)` is `launch`.
+//! checks.  The plugin is exposed as a named struct namespace (`compute`):
+//! `compute.jit` and `compute.launch`.
 
 use lichen_language::package::PackageStore;
 
@@ -23,15 +23,15 @@ fn fail(source: &str) -> Vec<String> {
 
 #[test]
 fn jit_then_launch_scalar() {
-    // `compute(0)` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
+    // `compute.jit` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
     let out = run(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (x => x + 1)
-compute(1) k 5
+k = compute.jit (x => x + 1)
+compute.launch k 5
 "#,
     );
     assert_eq!(out, "6: Int", "jit+launch produced: {out:?}");
@@ -45,8 +45,8 @@ fn jit_multi_op_signature() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (x => x + 1 + 2)
-compute(1) k 5
+k = compute.jit (x => x + 1 + 2)
+compute.launch k 5
 "#,
     );
     assert_eq!(out, "8: Int", "multi-op jit+launch produced: {out:?}");
@@ -60,7 +60,7 @@ fn jit_rejects_a_non_function() {
 @{
   compute = import "compute.lichen"
 @}
-compute(0) 5
+compute.jit 5
 "#,
     );
     assert!(
@@ -77,7 +77,7 @@ fn launch_rejects_a_non_kernel() {
 @{
   compute = import "compute.lichen"
 @}
-compute(1) (x => x + 1) 5
+compute.launch (x => x + 1) 5
 "#,
     );
     assert!(
@@ -95,8 +95,8 @@ fn jit_multi_arg_tuple() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : (Int, Int) => p(0) + p(1))
-compute(1) k (5, 3)
+k = compute.jit (p : (Int, Int) => p(0) + p(1))
+compute.launch k (5, 3)
 "#,
     );
     assert_eq!(out, "8: Int", "tuple-domain jit+launch produced: {out:?}");
@@ -109,8 +109,8 @@ fn jit_multi_arg_ternary() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : (Int, Int, Int) => p(0) + p(1) + p(2))
-compute(1) k (5, 3, 2)
+k = compute.jit (p : (Int, Int, Int) => p(0) + p(1) + p(2))
+compute.launch k (5, 3, 2)
 "#,
     );
     assert_eq!(out, "10: Int", "ternary jit+launch produced: {out:?}");
@@ -123,8 +123,8 @@ fn jit_multi_arg_sub() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : (Int, Int) => p(0) - p(1))
-compute(1) k (10, 3)
+k = compute.jit (p : (Int, Int) => p(0) - p(1))
+compute.launch k (10, 3)
 "#,
     );
     assert_eq!(out, "7: Int", "tuple subtraction produced: {out:?}");
@@ -140,8 +140,8 @@ fn launch_rejects_wrong_arity() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : (Int, Int) => p(0) + p(1))
-compute(1) k 5
+k = compute.jit (p : (Int, Int) => p(0) + p(1))
+compute.launch k 5
 "#,
     );
     assert!(
@@ -161,8 +161,8 @@ fn jit_closes_over_constant() {
   compute = import "compute.lichen"
 @}
 a = 42
-k = compute(0) (x => x + a)
-compute(1) k 1
+k = compute.jit (x => x + a)
+compute.launch k 1
 "#,
     );
     assert_eq!(out, "43: Int", "closure-over-constant produced: {out:?}");
@@ -177,8 +177,8 @@ fn jit_multi_arg_all_ops() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : (Int, Int) => (p(0) + p(1)) - (p(0) <= p(1)))
-compute(1) k (5, 3)
+k = compute.jit (p : (Int, Int) => (p(0) + p(1)) - (p(0) <= p(1)))
+compute.launch k (5, 3)
 "#,
     );
     assert_eq!(out, "8: Int", "mixed-op tuple produced: {out:?}");
@@ -193,8 +193,8 @@ fn jit_conditional_then() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (x => if x <= 3 then 10 else 20)
-compute(1) k 2
+k = compute.jit (x => if x <= 3 then 10 else 20)
+compute.launch k 2
 "#,
     );
     assert_eq!(out, "10: Int", "conditional (then) produced: {out:?}");
@@ -207,8 +207,8 @@ fn jit_conditional_else() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (x => if x <= 3 then 10 else 20)
-compute(1) k 5
+k = compute.jit (x => if x <= 3 then 10 else 20)
+compute.launch k 5
 "#,
     );
     assert_eq!(out, "20: Int", "conditional (else) produced: {out:?}");
@@ -224,8 +224,8 @@ fn jit_nested_tuple_domain() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute(0) (p : ((Int, Int), Int) => p(0)(0) + p(0)(1) + p(1))
-compute(1) k ((2, 3), 4)
+k = compute.jit (p : ((Int, Int), Int) => p(0)(0) + p(0)(1) + p(1))
+compute.launch k ((2, 3), 4)
 "#,
     );
     assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
@@ -239,16 +239,16 @@ fn jit_cross_kernel_call() {
     //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
     // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
     // checker only resolves it via `$launch`), so the value is asserted.  The
-    // wrapper form `compute(1) k0 (x + 1)` *does* give `Int` — covered by
+    // wrapper form `compute.launch k0 (x + 1)` *does* give `Int` — covered by
     // `jit_cross_kernel_wrapper` below.
     let out = run(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-k0 = compute(0) (y => y + 1)
-k1 = compute(0) (x => k0 (x + 1))
-compute(1) k1 5
+k0 = compute.jit (y => y + 1)
+k1 = compute.jit (x => k0 (x + 1))
+compute.launch k1 5
 "#,
     );
     assert!(
@@ -265,9 +265,9 @@ fn jit_cross_kernel_subexpr() {
     // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
-k0 = compute(0) (y => y + 1)
-k1 = compute(0) (x => k0 (x) + 1)
-compute(1) k1 5
+k0 = compute.jit (y => y + 1)
+k1 = compute.jit (x => k0 (x) + 1)
+compute.launch k1 5
 "#);
     assert!(out.starts_with("7:"), "subexpr produced: {out:?}");
 }
@@ -283,15 +283,15 @@ fn jit_inline_lichen_function() {
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
 helper = y => y + 2
-k = compute(0) (x => helper x + 1)
-compute(1) k 5
+k = compute.jit (x => helper x + 1)
+compute.launch k 5
 "#);
     assert!(out.starts_with("8:"), "inline produced: {out:?}");
 }
 
 #[test]
 fn jit_cross_kernel_wrapper() {
-    // Style 3: the wrapper/`$launch` form `compute(1) k0 (x + 1)` inside a
+    // Style 3: the wrapper/`$launch` form `compute.launch k0 (x + 1)` inside a
     // kernel body.  `launch = k => a => $launch(k, a)` is a *two-step* native
     // (assemble the module, then call it), so its argument is a run-time value
     // and arrives as a `Parameterized` cell at codegen time.  The cell is
@@ -299,11 +299,10 @@ fn jit_cross_kernel_wrapper() {
     // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
     // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
     let out = run(r#"
-    let out = run(r#"
 @{ compute = import "compute.lichen" @}
-k0 = compute(0) (y => y + 1)
-k1 = compute(0) (x => compute(1) k0 (x + 1))
-compute(1) k1 5
+k0 = compute.jit (y => y + 1)
+k1 = compute.jit (x => compute.launch k0 (x + 1))
+compute.launch k1 5
 "#);
     assert!(out.starts_with("7:"), "wrapper produced: {out:?}");
 }
@@ -317,8 +316,8 @@ fn jit_inline_nested_function() {
 @{ compute = import "compute.lichen" @}
 a = y => y + 1
 b = y => a y + 1
-k = compute(0) (x => b x + 1)
-compute(1) k 5
+k = compute.jit (x => b x + 1)
+compute.launch k 5
 "#);
     assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
 }
