@@ -239,8 +239,8 @@ fn jit_cross_kernel_call() {
     //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
     // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
     // checker only resolves it via `$launch`), so the value is asserted.  The
-    // wrapper form `compute(1) k0 (x + 1)` *does* give `Int` but needs style-1
-    // inline (trace through the `launch` wrapper) to JIT — a next step.
+    // wrapper form `compute(1) k0 (x + 1)` *does* give `Int` — covered by
+    // `jit_cross_kernel_wrapper` below.
     let out = run(
         r#"
 @{
@@ -287,6 +287,25 @@ k = compute(0) (x => helper x + 1)
 compute(1) k 5
 "#);
     assert!(out.starts_with("8:"), "inline produced: {out:?}");
+}
+
+#[test]
+fn jit_cross_kernel_wrapper() {
+    // Style 3: the wrapper/`$launch` form `compute(1) k0 (x + 1)` inside a
+    // kernel body.  `launch = k => a => $launch(k, a)` is a *two-step* native
+    // (assemble the module, then call it), so its argument is a run-time value
+    // and arrives as a `Parameterized` cell at codegen time.  The cell is
+    // unified with the defining `x + 1` computation, and the JIT emits that
+    // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
+    // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
+    let out = run(r#"
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => compute(1) k0 (x + 1))
+compute(1) k1 5
+"#);
+    assert!(out.starts_with("7:"), "wrapper produced: {out:?}");
 }
 
 #[test]

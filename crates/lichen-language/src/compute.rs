@@ -448,6 +448,29 @@ fn equality_rep(module: &Module<LangProgram>, node: NodeId) -> NodeId {
     root
 }
 
+/// The member of `node`'s equality class that *defines* its value — a class
+/// member carrying a computational operator (anything but a `value_of` index
+/// extraction, which is a view of a `[value, type]` pair rather than the
+/// computation itself).  The deep pass collapses some values to a bare
+/// `Parameterized` cell and unifies that cell with the defining computation
+/// (a kernel call's result, a `launch` argument); the emitter reaches the
+/// computation through the class.  Returns `None` when the class has no such
+/// member — the value is genuinely opaque (an uncomputable leaf).
+fn class_computation_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+    let root = equality_rep(module, node);
+    for (n, nd) in &module.nodes {
+        if equality_rep(module, n) != root {
+            continue;
+        }
+        if let Some(op) = nd.operation.as_ref() {
+            if !matches!(op.operator, LangOperator::LowOperator(LowOperator::Index)) {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
 /// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and the parameter value
 /// (`Index(param_pair, 0)` → `local.get 0`).
@@ -481,6 +504,14 @@ fn emit_node(
             let offset = flatten_offset(domain, &[])?;
             body.push(KernelInstr::LocalGet(offset as u32));
             return Ok(());
+        }
+        // A value collapsed to a bare `Parameterized` cell resolves through its
+        // equality class to the computation that defines it — a kernel call's
+        // result, or a `launch` argument (whose cell is *expected* to be
+        // parameterized: `launch` is two-step, assemble then call, so the
+        // argument is only concrete at run time).  Emit the defining member.
+        if let Some(definer) = class_computation_node(module, node) {
+            return emit_node(module, param_pair, param_value, definer, body);
         }
         return Err(format!(
             "kernel body hits a node with neither value nor operation (node={node:?})"
