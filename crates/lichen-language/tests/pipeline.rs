@@ -193,6 +193,30 @@ fn expression_statements_check_and_evaluate() {
 }
 
 #[test]
+fn a_nonterminating_binding_is_reported_an_error() {
+    // `omega omega` beta-reduces to itself (infinite); `w` is only referenced
+    // in the unselected `if` branch.  The checker evaluates every top-level
+    // statement, hits the VM depth guard, and reports `w` as a
+    // `NonTerminating` error — it does not certify it and does not panic.
+    let report = compile("omega = x => x x\nw = omega omega\nif 0 then (w : Int) else 5");
+    assert!(!report.ok(), "a non-terminating binding must not certify");
+    let nonterminating: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.stage == Stage::Check
+                && d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NonTerminating)
+        })
+        .collect();
+    assert_eq!(nonterminating.len(), 1, "one NonTerminating diagnostic");
+    assert!(
+        nonterminating[0].message.contains("non-terminating"),
+        "diagnostic message = {:?}",
+        nonterminating[0].message
+    );
+}
+
+#[test]
 fn an_annotated_parameter_checks() {
     // x : Int => x — the parameter is pinned to Int; applying at Int
     // checks and runs, the body's use of the parameter is the identity.
