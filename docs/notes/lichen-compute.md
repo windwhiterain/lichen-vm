@@ -1,139 +1,159 @@
-# lichen-compute: a native "compute" extension package
+# lichen-compute: the JIT package (compile functions to wasm, launch them)
 
-> Status: current (implemented 2026; see the module rustdoc for the live contract)
-> Points at: `crates/lichen-language/src/compute.rs` (the native part),
-> `crates/lichen-language/src/program.rs` (`LangValue`/`LangOperator` composition),
-> `crates/lichen-highlevel/src/native.rs` (the `NativeExt` extension point),
-> `crates/lichen-highlevel/src/checker.rs` (`check_app` hook), and
-> `crates/lichen-language/src/package.rs` (the virtual `compute.lichen` package).
+> Status: current (implemented; the live contract is the `crates/lichen-language/src/compute.rs` rustdoc)
+> Points at: `crates/lichen-language/src/compute.rs` (the native core),
+> `crates/lichen-language/src/program.rs` (`LangValue`/`LangOperator`/`LangProgram` composition),
+> `crates/lichen-highlevel/src/native.rs` (the `NativeOp`/`NativeOps` extension point),
+> `crates/lichen-language/src/package.rs` (`register_compute`, the virtual `compute.lichen`),
+> and `crates/lichen-language/tests/compute.rs` (the end-to-end suite).
 
-`lichen-compute` is lichen's version of a Python *native wrapper package* (think
-`numpy`): a compiled native core plus a thin typed source surface. The native core
-injects a new **value** `Kernel` and two **operators** `Jit`/`Launch`; the `.lichen` side
-is a `compute.lichen` package that re-exports `jit`/`launch`/`Kernel`. Type checking is
-the hard requirement, so a **kernel's type is its signature** — mirroring a function type
-but with a `Kernel` kind head.
+`lichen-compute` is a compiler plugin — a native wrapper package (think `numpy`)
+that jit-compiles a lichen function to a **wasm kernel** and runs it. The user-facing
+surface is an embedded `compute.lichen` that re-exports two functions:
 
 ```
-@{
-  compute = import "compute.lichen"
-@}
-k = jit (x => x + 1)     -- k : Kernel<Int -> Int>   (compiles f to wasm)
-launch k 5               -- 6 : Int                   (runs the kernel)
+@{ compute = import "compute.lichen" @}
+k = compute(0) (x => x + 1)     -- jit: compile the lambda to a kernel (via `$jit`)
+compute(1) k 5                  -- launch: run it -> 6 : Int (via `$launch`)
 ```
+
+`compute(0)` is `jit`, `compute(1)` is `launch`, exported as the positional tuple
+`(jit, launch)`. A kernel's **type is its signature** (`Kernel<Int -> Int>`), so the
+whole function-apply machinery transfers to kernels.
 
 ## 1. The vocabulary injection
 
-The native part provides two plain enums, composed as sibling leaves into the language's
-value/operator vocabularies with `lichen_utils::enum_ext!`:
+The native core provides two plain, `Copy` enums, composed as sibling leaves into the
+language's value/operator vocabularies with `lichen_utils::enum_ext!`:
 
-- **`ComputeValue`**: `Kernel(KernelId)` (a compiled wasm artifact), `Native(Jit)` /
-  `Native(Launch)` (first-class operator values), `TypeKernel` (the kind marker of a
-  kernel type = `[signature, [TypeKernel, Type]]`), `TypeNativeJit`/`TypeNativeLaunch`/
-  `TypeLaunchTarget` (the callee *type markers* that route an `Apply` to an operator),
-  and `LaunchTarget { kernel, domain, codomain }` (the curried `launch` intermediate).
-- **`ComputeOperator`**: `Jit` (function → Kernel) and `Launch` (`[kernel, arg]` → result),
-  whose `OperatorExt::run` does the wasm compile/execute and a process-global kernel
-  registry (`KERNELS`).
+- **`ComputeValue`** = `Kernel(KernelId)` (a compiled artifact id) | `TypeKernel` (the
+  kind marker of a kernel type). A `KernelId` is a small host-owned scalar (`usize`) into
+  the process kernel registry — never an arena payload, so GC / static-freeze / `ValueExt`
+  are unchanged.
+- **`ComputeOperator`** = `Jit` (function → kernel) | `Launch` (`[kernel, arg]` → result),
+  whose `OperatorExt::run` does the compile/execute.
 
-The language's `LangValue = LowValue + TypeValue + ComputeValue` and
-`LangOperator = LowOperator + TypeOperator + GcdOp + ComputeOperator`; `LangProgram` is
-`ProgramImpl<LangValue, LangOperator, Perspective>`.
+```
+LangValue    = LowValue + TypeValue + ComputeValue
+LangOperator = LowOperator + TypeOperator + GcdOp + ComputeOperator
+LangProgram  = ProgramImpl<LangValue, LangOperator, Perspective>
+```
 
-## 2. Binding native operators to source (Option B)
+`enum_ext!` generates the `From<X>` / `AsEnum<X>` pair each extension needs, so the
+vocabularies are flat unions with no `Ext` wrapper. The program marker (`LangProgram`)
+is what fixes the vocabulary for the whole frontend.
 
-`jit`/`launch` are **values whose type tags them**; `jit f` is an ordinary `Apply`. The
-checker, in `check_app`, reads the callee's type and, when it is a native-operator type,
-delegates to the matching `NativeExt` instead of a runtime function apply. The VM's
-`LowOperator::Apply` never sees them.
+## 2. Native operators as `$name(args)` + an embedded source wrapper
 
-```rust
-// check_app (highlevel):
-if let Some(native) = self.class_value(function_ty).and_then(|t| (self.native_ext)(&t)) {
-    let r = native.check_apply(self, e, function_value, function_ty, argument_value, argument_ty, argument, loc);
-    self.term[e] = Some(r.node); self.val[e] = r.val; self.ty[e] = Some(r.ty);
-    return r.node;
+Ops are bound to source through a **general native-call IR** (`ExprKind::NativeCall`),
+not callee-type dispatch:
+
+- The plugin registers a private `NativeOps` table (`native_ops()`), a name→`NativeOp`
+  `&'static` slice. Only the compilation of the plugin's own embedded `WRAPPER_SOURCE`
+  is run against it (`register_compute`), so a `$jit`/`$launch` is **private** to that
+  module — two plugins each registering `$jit` never collide.
+- `$jit(f)` / `$launch(k, a)` parse to a `NativeCall`; the checker delegates to the
+  matching `NativeOp::build` and adopts whatever `[value, type]` pair it returns. The
+  checker knows nothing about kernels.
+
+```
+jit   = f => $jit(f)                 -- : (F -> G) → Kernel
+launch = k => a => $launch(k, a)     -- : Kernel → F → G   (curried, two-step)
+(jit, launch)                        -- the exported positional tuple
+```
+
+`NativeOp::build` receives the **already-compiled** arguments (`NativeArg { expr, value,
+ty }`) and shapes the type through the curated `Ctx` (never raw lowlevel nodes): it
+calls `ctx.fresh()`/`ctx.array_node()`/`ctx.value_node()`/`ctx.check_unify()`/`ctx.universe()`,
+emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
+
+- **`JitOp::build`** — function-ness gate: unify `f`'s type with an arrow `[d, c]`;
+  re-head it with `TypeKernel` to get `[sig, [TypeKernel, Type]]`; emit
+  `ComputeOperator::Jit` over `f.value`; pair with that kernel type.
+- **`LaunchOp::build`** — kernel-ness gate: `k`'s type is `[sig, [TypeKernel, Type]]`;
+  unify the argument against the domain `d`; emit `ComputeOperator::Launch` over
+  `[k.value, a.value]`; pair with the codomain `c` (so the result is `Int`).
+
+See [compiler-plugin](compiler-plugin.md) for the general model.
+
+## 3. Runtime dispatch
+
+The VM dispatches structural `LowOperator`s (`Index`/`Apply`/`TableGet`) through
+`AsEnum` first; everything else falls to the program's `OperatorExt::run`. The compute
+arm:
+
+- **`Jit`** — `compile_fragment` lowers the function's body to a `KernelFragment`, stores
+  it in the process-global `KERNELS` registry under a fresh `KernelId`, returns
+  `Kernel(id)`. A non-function target or a body outside the kernel-safe subset stays
+  lazy (`Parameterized`) — those are *reported* type errors, not panics.
+- **`Launch`** — reads `[kernel, arg]`; flattens the argument to an `i64` vector
+  (`collect_args`); `run_kernel` assembles and runs; returns the `USize` result. A
+  non-scalar/non-literal argument stays lazy.
+
+The kernel registry is **process-global** (`KERNELS`/`NEXT_KERNEL_ID`), deliberately not
+a `GlobalExt` component: kernels are immutable, cross-module-shared artifacts.
+
+## 4. Codegen: bytecode fragments, not a module
+
+`jit` emits the function's **body** as a `KernelFragment { param_shape, body }` — a
+`Vec<KernelInstr>` of *abstract* instructions, not raw wasm. Splitting "emit bytecode"
+from "assemble a module" is what lets the launcher resolve cross-kernel call indices
+after the kernel's relative launch set is laid out.
+
+```
+enum KernelInstr {
+  Const(i64),          // i64.const
+  Bin(KernelBin),      // add/sub/leq/eq over the top two i64
+  LocalGet(u32),       // a flattened parameter read
+  I32WrapI64,          // the `select` condition
+  Select,              // if c then a else b
+  CallKernel(KernelId) // style-2/3 cross-kernel call, resolved at assembly
 }
 ```
 
-`native_ext` is a new registry (like `attr_ext`): `&P::Value -> Option<&'static dyn NativeExt<P>>`
-— see `crates/lichen-highlevel/src/native.rs`. This is the one new core extension point.
+`emit_node` walks the simple kernel-safe subset — integer constants, `Add`/`Sub`/`Leq`/
+`Eq`, the parameter read (`Index(param_pair, 0)` → a `local.get`), a `value_of`
+extraction (`Index(pair, 0)`), and a 2-element conditional (a wasm `select`). The
+parameter is read by **shape** (`LowShape`, a host marker on the node), so the backend
+emits bytecode without consulting the type half or forcing the value. A scalar domain is
+one `i64` local; a tuple domain is flattened to per-element locals (`flat_arity`,
+`flatten_offset`).
 
-## 3. The import bridge — why direct names, not just a tuple
+## 5. Launch-time assembly (the deferred linker)
 
-The compute package exports a tuple `[Jit, Launch, Kernel]` (**and** the three items as
-direct `[value,type]` pairs). The direct pairs are essential: `compute(0)` is a lazy `Index`
-whose element type the checker cannot read statically, so it could never detect a native
-callee at check time. Direct `[value,type]` pairs are statically known, so `jit`/`launch`/
-`Kernel` are detectable wherever they're used. `PackageStore` serves `compute.lichen` from
-a registered native module (no disk file); `import` binds `compute` *and* injects the three
-direct names (`ResolvedImport::direct` → `compile_with_imports`).
+`run_kernel` BFS's the kernel's **relative launch set** — the kernel plus every kernel it
+(transitively) `CallKernel`s — into an ordered slice; `assemble_module` builds one wasm
+module where `ordered[i]` is function `i`, the root exported as `main`, and each
+`CallKernel` resolves to the callee's in-module `call`. `wasmi` instantiates and calls
+`main`. This single step covers both a lone kernel and a cross-calling one.
 
-## 4. Kernel type = signature
+## 6. The three call styles
 
-`compile` a kernel's type is `[signature, [TypeKernel, Type]]`, where `signature` is the
-arrow `[domain, codomain]`. Everything the checker knows how to do with functions transfers:
+- **Style 1 — same-module lichen function** (`helper x`): the deep pass eagerly *reduces*
+  the call, so the JIT traces the reduced graph; a substituted parameter cell resolves
+  to the enclosing kernel's parameter (via its equality class) and becomes a `local.get`.
+- **Style 2 — kernel value** (`k x`): an `Apply` whose callee is a kernel value →
+  `emit_cross_kernel_call` (an arg then a `CallKernel`), assembled at launch time. The
+  bare `k x` form leaves the codomain unresolved (`?a`), so it's asserted, not typed.
+- **Style 3 — the wrapper launch** (`compute(1) k x`, the typed cross-module form): the
+  `ComputeOperator::Launch` is lowered exactly like a kernel `Apply`, and its result is
+  typed `Int` (the codomain resolved by `LaunchOp`).
 
-- **`Jit f`** re-heads `f`'s arrow with `TypeKernel` (function-ness gate via a fresh
-  function type + `check_unify`; scalar-v1 signature `Kernel<Int -> Int>`).
-- **`launch k`** (stage 1) gates on kernel-ness (fresh kernel type + `check_unify`) and
-  produces a `LaunchTarget(kernel, domain, codomain)` typed `TypeLaunchTarget`.
-- **`(launch k) a`** (stage 2) unifies `a` against the kernel's domain and yields the
-  kernel's codomain — a function-style apply over a kernel.
+For style 3, `launch` is a **native two-step** — assemble the module, then call it — so
+the argument arrives at codegen time as a bare `Parameterized` cell (expected; it's only
+concrete at run time). That cell is **unified** with the defining computation (e.g. the
+`x + 1` `Add`) in its equality class, and `emit_node` resolves collapsed cells through
+the class (`class_computation_node`) to emit the real expression.
 
-The operator's own runtime `run` enforces the scalar monomorphization (a body outside the
-kernel-safe subset stays `Parameterized`).
+## 7. Tests
 
-## 5. Codegen + execution (wasm, wasmi)
+`tests/compute.rs` covers scalar/tuple domains, all the safe ops, conditionals, closure
+constants, cross-kernel calls (bare and sub-expression), inline lichen functions (nested),
+and the wrapper `$launch` form — as `value: type` end-to-end runs.
 
-`Jit::run` walks the function's body graph (`function.return` → its `[value,type]` pair's
-value element, `function.parameter`) and lowers the scalar subset to a wasm module
-`(func "main" (param i64) (result i64))` via `wasm-encoder`:
-integer literals → `i64.const`; `Add`/`Sub`/`Leq`/`Eq` → the wasm arith/compare forms;
-`Index(param_pair, 0)` (the parameter value) → `local.get 0`. `Launch::run` instantiates the
-bytes with `wasmi` and calls `main`, marshalling `usize` ↔ `i64`.
+## 8. v1 scope
 
-## 6. Extension points in the existing code
-
-**New (`lichen-language/src/compute.rs`):** `ComputeValue`, `ComputeOperator`, `NativeOp`,
-`LaunchTarget`, `OperatorExt::run` (codegen + registry), the two `NativeExt`s, `native_registry`,
-and `build_compute_module` (the virtual package's frozen module).
-
-**Core — `lichen-highlevel/src/native.rs`:** `NativeExt` trait + `NativeApply` + `no_native_ext`.
-
-**Core — `lichen-highlevel/src/checker.rs`:** the `native_ext` field/registry,
-`build_in_attr_native`, the `check_app` hook, and public accessors
-(`class_value`, `type_expr_node`, `int_type_node`, `value_node`, `fresh_cell`).
-
-**Core — `lichen-highlevel/src/program.rs`:** `ProgramImpl` generic over `GlobalExt` (so a
-program may carry a different per-module global state).
-
-**Core — `lichen-language`:** `program.rs` (`LangValue`/`LangOperator` + `ValueType`),
-`lib.rs` (`build_in_attr_native` + the native registry), `package.rs` (virtual `compute.lichen`,
-`register_compute`), `preprocess/mod.rs` (`ResolvedImport::direct`), `compile.rs` (direct
-name binding), `persist.rs` (compute arms), `render.rs` (renamed to `LangValue`),
-`Cargo.toml` (`wasmi`, `wasm-encoder`).
-
-**Tests:** `tests/compute.rs` (new) plus the `HighProgramValue` → `LangValue` rename in the
-existing value-vocabulary tests.
-
-## 7. Design decisions & tradeoffs
-
-- **Kernel type = signature** — the single decision that makes type checking "covered":
-  kernels reuse the arrow machinery, so function-style apply/gating transfer without a new
-  kind system.
-- **Kernel is host-owned** (a `Copy` `KernelId` into a process-global registry) — never an
-  arena payload, so GC/static-freeze/`ValueExt` are unchanged; but a kernel is runtime-only,
-  so a package ships source, not kernels (`persist::write_value` rejects compute values).
-- **Direct names + tuple** — the direct pairs are what makes check-time native detection
-  reliable; the tuple is retained for positional-`compute(0)`-style value access.
-- **Dedicated `NativeExt` extension point** — mirrors `AttrExt`; the core stays generic with
-  one consult point, and a program without native operators uses `no_native_ext()`.
-- **Scalar-only v1** — the kernel-safe subset is `Int -> Int`; richer signatures are phase 2.
-
-## 8. Non-goals (phase 2)
-
-- Non-scalar kernel signatures (tuples/arrays) and a generic-kernel pinning rule.
-- Higher-order kernels and recursion inside the compiled region.
-- Launch-config type checking (grid/block dims, device).
-- A `GlobalExt`-based `ComputeGlobal` (currently a process-global kernel registry).
+The kernel-safe subset is scalar arithmetic over a scalar or tuple-of-scalars domain; the
+codomain is a single `i64`. Cross-kernel callees are restricted to a scalar domain
+(arity 1). Beyond that: higher-order kernels, recursion inside the compiled region, and a
+`GlobalExt`-based compute global (the registry is currently process-global).
