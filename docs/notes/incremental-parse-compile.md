@@ -1,10 +1,11 @@
 # Incremental parsing / compilation for a typing editor
 
-> Status: partially implemented — roadmap steps 1–2 are landed; T2/T3 remain.
-> Nothing here reflects work that was not done; the implemented stages are
-> marked below.
+> Status: partially implemented — the T1 heart plus the O(edit) lex and
+> statement-region re-parse primitives are landed; the session splice and
+> T3/T4 remain.  Nothing here reflects work that was not done; the implemented
+> stages are marked below.
 >
-> **Implemented (steps 1–2 of the roadmap, the "T1" heart):**
+> **Implemented (the "T1" heart):**
 > - *Step 1* — the `Placeholder` / `ErrorBlock` split: `Expr::Err` now carries a
 >   byte `range` (and `start`); the parser surfaces the recovered error regions
 >   on `Program::error_blocks`; a recovered error lowers to a distinct
@@ -28,11 +29,33 @@
 >   `IR`+`Build` is reused and only the fresh frontend/resolve diagnostics are
 >   re-derived.  An edit that changes the resolved structure re-lowers and
 >   re-checks (the debounced-rebuild fallback).
-> - **Not implemented (optional T2/T3/T4):** suffix lex + statement-region
->   parse (`BufferSession::lex_resume`), memoized check (`done`/`check_into`
->   resume), and the true unification-state checkpoint/rollback.  T1 re-lexes
->   and re-parses the whole buffer each input; the expensive re-lower and
->   re-check are what it skips.
+>
+> **Implemented (the O(edit) lex / parse primitives — T2's heart):**
+> - `lex::lex_resume` — re-lex only the region an edit touched, reusing the old
+>   prefix and re-synchronizing with the old stream once a token is (kind, byte
+>   range) identical at the shifted position.  `O(edit)` in regex work; the
+>   lexer is stateless except `Glue` (immediately-preceded-by-no-trivia), so a
+>   merge (`a b` → `ab`) or split (`ab` → `a b`) is handled.  Tokens keep
+>   owning **byte ranges**.
+> - `parse::parse_statement_region` — re-parse a contiguous *statement window*
+>   into its statements, with the whole statement-list recovery, for incremental
+>   splicing.
+> - `Program::stmt_ranges` — the AST records each statement's **token-index
+>   range** (`Vec<(usize, usize)>`, one per statement + one for the final expr);
+>   tokens own byte ranges, so the session maps a changed byte region → token
+>   indices → statements for re-parsing.  No byte-range duplication.
+> - `Sig` (session signature) is now **per-statement**: `stmt_hashes: Vec<u64>`
+>   plus an order-sensitive `combined()`, so the high (AST) layer can re-derive
+>   only the statements an edit touched instead of re-hashing the whole tree.
+>
+> **Not yet wired / not implemented:**
+> - The `BufferSession::compile` splice: map changed bytes → `stmt_ranges` →
+>   re-parse only that window → splice the AST + recompute the per-statement
+>   signature.  The lexer/lowerer still re-lexes and re-parses the whole buffer
+>   today; the signature reuse is what keeps the expensive re-lower + re-check
+>   out.
+> - T3 memoized check (`done`/`check_into` resume) and T4 true
+>   unification-state checkpoint/rollback.
 >
 > Points at: `crates/lichen-language/src/{lex,parse,compile,lib,session}.rs`,
 > `crates/lichen-highlevel/src/{ir,checker}.rs`.
@@ -265,10 +288,14 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
 ## 9. Roadmap
 
 1. **Split `Placeholder` vs `ErrorBlock`** and add byte-range error masks at
-   parse — the prerequisite for every diff/reuse decision.
+   parse. ✅ (the prerequisite for every diff/reuse decision).
 2. **T1**: per-layer lowering signature + cached `signature → output`; error-only
-   edits reuse everything. (The user-visible behavior.)
-3. **T2**: `BufferSession` suffix lex + statement-region parse (large-file cost).
+   edits reuse everything. ✅ (name-resolved signature; the user-visible behavior).
+3. **T2**: suffix lex + statement-region parse. ✅ primitives landed
+   (`lex::lex_resume`, `parse::parse_statement_region`, `Program::stmt_ranges`),
+   plus the per-statement signature. ⏳ *wiring*: the `BufferSession::compile`
+   splice that re-parses only the touched statement window and recomputes only
+   the changed per-statement hashes.
 4. **T3**: memoized check (`done`/`term` skip, `check_into` resume).
 5. **Debounced re-check** as the fallback for edits that genuinely change code.
 

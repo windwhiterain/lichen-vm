@@ -258,6 +258,12 @@ pub struct Program {
     /// frontend excludes them from a content signature so an edit that only
     /// grows an error block reuses the established AST/IR/check.
     pub error_blocks: Vec<ErrorBlock>,
+    /// The **token-index** range each logical statement covers, in source order.
+    /// There is one entry per statement in [`Program::statements`] plus one for
+    /// the final [`Program::expr`].  Tokens own byte ranges; the AST owns token
+    /// ranges, so the session can map a changed byte region to the statements it
+    /// touches (via the token stream) for incremental re-parsing.
+    pub stmt_ranges: Vec<(usize, usize)>,
 }
 
 impl Expr {

@@ -31,6 +31,21 @@ fn bindings(program: &Program) -> Vec<&Binding> {
 }
 
 #[test]
+fn a_program_records_statement_token_ranges() {
+    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    let program = parse(&tokens).program;
+    // One entry per statement plus one for the final expression, each the
+    // token-index range `[start, end)` its parse consumed.
+    assert_eq!(program.statements.len() + 1, program.stmt_ranges.len());
+    // Tokens: a = 1 SEP b = 2 SEP a + b EOF.
+    assert_eq!(program.stmt_ranges, vec![(0, 3), (4, 7), (8, 11)]);
+    // Ranges are monotone non-overlapping and in-bounds.
+    for w in &program.stmt_ranges {
+        assert!(w.0 <= w.1 && w.1 <= tokens.len());
+    }
+}
+
+#[test]
 fn a_program_is_bindings_followed_by_the_final_expression() {
     let tokens = lex("a = [1, 2]; b = 0; a[b]").tokens;
     let program = parse(&tokens).program;

@@ -140,6 +140,7 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
                 statements: Vec::new(),
                 expr: Expr::Err { range, start: span },
                 error_blocks: Vec::new(),
+                stmt_ranges: Vec::new(),
             }
         }
     };
@@ -244,6 +245,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         statements: output.unwrap_or_default(),
         expr: Expr::Int(0, (1, 1)),
         error_blocks: Vec::new(),
+        stmt_ranges: Vec::new(),
     };
     let program = apply_type_mode(program);
     (program.statements, errors)
@@ -338,10 +340,11 @@ fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E
     // token, not stream exhaustion — `end()` would fail with it unconsumed.
     statement_list(tokens, expr)
         .then_ignore(token(TokenKind::Eof).ignored())
-        .map(|(statements, expr)| Program {
+        .map(|(statements, expr, stmt_ranges)| Program {
             statements,
             expr,
             error_blocks: Vec::new(),
+            stmt_ranges,
         })
 }
 
@@ -350,10 +353,13 @@ fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E
 /// only the last statement is the list's value.  The last element is the
 /// final expression; a trailing binding (or an empty list) is an error, and
 /// the list's value becomes an error node.
+///
+/// Also yields the **token-index range** each logical statement covers, in
+/// source order — one per returned statement plus one for the final expression.
 fn statement_list<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr), E<'a>> + Clone {
+) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr, Vec<(usize, usize)>), E<'a>> + Clone {
     let seps = token(TokenKind::Separator)
         .ignored()
         .repeated()
@@ -372,13 +378,15 @@ fn statement_list<'a>(
     // bad statement does not swallow the rest of the program.  The retry
     // stops at the end of the input *or* a block's closing brace — a block
     // must not swallow the tokens after its `}`.
-    let elem = statement(tokens, expr).recover_with(skip_then_retry_until(
-        any::<In<'a>, E<'a>>().ignored(),
-        choice((
-            token(TokenKind::Eof).ignored(),
-            token(TokenKind::RBrace).ignored(),
-        )),
-    ));
+    let elem = statement(tokens, expr)
+        .recover_with(skip_then_retry_until(
+            any::<In<'a>, E<'a>>().ignored(),
+            choice((
+                token(TokenKind::Eof).ignored(),
+                token(TokenKind::RBrace).ignored(),
+            )),
+        ))
+        .map_with(|s, me| (s, (me.span().start, me.span().end)));
 
     seps.clone()
         .then(elem.clone())
@@ -392,29 +400,40 @@ fn statement_list<'a>(
             let _ = leading;
             std::iter::once(first)
                 .chain(rest.into_iter().map(|(_, e)| e))
-                .collect::<Vec<Stmt>>()
+                .collect::<Vec<(Stmt, (usize, usize))>>()
         })
         .validate(|mut elems, me, emit| match elems.pop() {
-            Some(Stmt::Expr(final_expr)) => (elems, final_expr),
-            Some(Stmt::Binding(binding)) => {
+            Some((Stmt::Expr(final_expr), last_range)) => {
+                let mut ranges: Vec<(usize, usize)> = elems.iter().map(|(_, r)| *r).collect();
+                ranges.push(last_range);
+                (elems.into_iter().map(|(s, _)| s).collect(), final_expr, ranges)
+            }
+            Some((Stmt::Binding(binding), last_range)) => {
                 emit.emit(Rich::custom(
                     me.span(),
                     "a program must end with an expression",
                 ));
                 let span = binding.span;
-                elems.push(Stmt::Binding(binding));
+                let mut ranges: Vec<(usize, usize)> = elems.iter().map(|(_, r)| *r).collect();
+                ranges.push(last_range);
+                let mut stmts: Vec<Stmt> = elems.into_iter().map(|(s, _)| s).collect();
+                stmts.push(Stmt::Binding(binding));
                 // The trailing-binding error is a masked point at the
                 // binding's own position (a zero-width mask, stable across
                 // edits that grow an earlier region).
                 let pos = byte_at_span(tokens, span);
-                (elems, Expr::Err { range: (pos, pos), start: span })
+                (stmts, Expr::Err { range: (pos, pos), start: span }, ranges)
             }
             None => {
                 emit.emit(Rich::custom(
                     me.span(),
                     "a program must end with an expression",
                 ));
-                (elems, err_node(tokens, me.span()))
+                (
+                    vec![],
+                    err_node(tokens, me.span()),
+                    vec![(me.span().start, me.span().end)],
+                )
             }
         })
 }
@@ -1071,7 +1090,7 @@ fn block<'a>(
     token(TokenKind::LBrace)
         .ignore_then(statement_list(tokens, expr))
         .then_ignore(token(TokenKind::RBrace))
-        .map_with(|(statements, expr), me| Expr::Block {
+        .map_with(|(statements, expr, _ranges), me| Expr::Block {
             statements,
             expr: Box::new(expr),
             span: span_at(tokens, me.span().start),
@@ -1281,6 +1300,7 @@ fn apply_type_mode(program: Program) -> Program {
             .collect(),
         expr: expr(program.expr, false),
         error_blocks: program.error_blocks,
+        stmt_ranges: program.stmt_ranges,
     }
 }
 
