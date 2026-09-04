@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use lichen_highlevel::ir::Span;
+use lichen_highlevel::ir::{ExprId, Span};
 use lichen_highlevel::no_native_ops;
 use lichen_language::program::LangValue;
 use lichen_language::render::{print_type, print_value};
@@ -28,6 +28,7 @@ use lichen_language::lex::{Token, TokenKind};
 use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
+use lichen_language::preprocess::ResolvedImport;
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
 
@@ -41,6 +42,25 @@ use crate::lsp::{
 pub struct Definition {
     pub name: String,
     pub span: Span,
+}
+
+/// An imported binding, indexed for the editor: the name it is bound to, the
+/// site of its `@import` directive (a definition in this file), the import
+/// path, and the imported module's rendered type (for hover).  A use of the
+/// name resolves to this, so hovering an imported module (or a field of it) is
+/// not "unresolved".
+#[derive(Clone, Debug)]
+struct ImportBinding {
+    /// The binding name the import is available under (`math`).
+    name: String,
+    /// The (start) span of the `@import` directive in the original file — the
+    /// definition site a use of the imported name resolves to.
+    span: Span,
+    /// The import path (`math.lichen`), for a descriptive hover.
+    path: String,
+    /// The imported module's rendered type (its export's type), when the build
+    /// computed one.
+    ty: Option<String>,
 }
 
 /// The checked type and — when the build produced a concrete one — the value
@@ -106,6 +126,12 @@ pub struct Doc {
     /// The byte offset of each statement's start, source order (the span index
     /// backing [`Doc::statement_at`]).
     stmt_starts: Vec<u32>,
+    /// The imported bindings this file resolves, source order — so a use of an
+    /// imported module resolves to its `@import` directive and hovers as the
+    /// imported module (with its type).
+    imports: Vec<ImportBinding>,
+    /// Import-directive span → index into [`Doc::imports`].
+    import_by_span: HashMap<Span, usize>,
 }
 
 impl Doc {
@@ -153,6 +179,26 @@ impl Doc {
         diagnostics.extend(frontend.diagnostics);
         let report = build_report(frontend.ir, diagnostics, Some(store.registry()), no_native_ops());
         let diagnostics = report.diagnostics;
+
+        // The imported module's checked type, per `@import` directive span: the
+        // compiler allocates a `Static` node at the directive's span, so we
+        // find it in the IR and read its type for the hover.  Borrowed here so
+        // `report.build` is still owned by the match below.
+        let mut import_ty: HashMap<Span, String> = HashMap::new();
+        if let Some(build) = &report.build {
+            for imp in &pre.imports {
+                let eid = build.ir.expr.iter().enumerate().find_map(|(i, e)| {
+                    (e.span == Some(imp.span)
+                        && matches!(e.kind, lichen_highlevel::ir::ExprKind::Static { .. }))
+                    .then_some(ExprId(i as u32))
+                });
+                if let Some(eid) = eid
+                    && let Some(t) = build.ty[eid]
+                {
+                    import_ty.insert(imp.span, print_type(&build.module, t));
+                }
+            }
+        }
 
         // A read-only per-statement type/value snapshot.  It is computed here,
         // once, by reading the built module's cached values — never by
@@ -205,7 +251,7 @@ impl Doc {
             None => (Vec::new(), Vec::new()),
         };
 
-        let (defs, resolve, def_index) = index(&program);
+        let (defs, resolve, def_index) = index(&program, &pre.imports);
         // Map each statement's span (a binding's name span, or an
         // expression's start span) to its statement index, so a name
         // (resolved to a binding) can reach the binding's value/type.
@@ -213,6 +259,27 @@ impl Doc {
             .iter()
             .enumerate()
             .map(|(i, s)| (s.span, i))
+            .collect();
+        // The imported bindings and their type (for the hover).  `imp.path` is
+        // the canonical resolved path; display its file name (`math.lichen`).
+        let imports: Vec<ImportBinding> = pre
+            .imports
+            .iter()
+            .map(|imp| ImportBinding {
+                name: imp.name.clone(),
+                span: imp.span,
+                path: imp
+                    .path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| imp.path.display().to_string()),
+                ty: import_ty.get(&imp.span).cloned(),
+            })
+            .collect();
+        let import_by_span: HashMap<Span, usize> = imports
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (b.span, i))
             .collect();
         // `pre.code` borrows `source`, so copy the offset out before moving
         // `source` into the result.
@@ -231,6 +298,8 @@ impl Doc {
             stmt_by_span,
             statements,
             stmt_starts,
+            imports,
+            import_by_span,
         }
     }
 
@@ -320,6 +389,12 @@ impl Doc {
             let msg = match def_idx {
                 Some(i) => {
                     let def = &self.defs[i];
+                    // An imported module: the use resolves to its `@import`
+                    // directive, so render the imported module's type rather
+                    // than "defined at line".
+                    if let Some(import_i) = self.import_by_span.get(&def.span).copied() {
+                        return Some((import_hover(name, &self.imports[import_i]), range));
+                    }
                     match self.stmt_by_span.get(&def.span).copied() {
                         Some(stmt_i) => {
                             let sv = &self.statements[stmt_i];
@@ -335,7 +410,15 @@ impl Doc {
                         None => format!("`{name}` — defined at line `{}`", def.span.0),
                     }
                 }
-                None => format!("`{name}` — unresolved name"),
+                None => {
+                    // A field of an imported module (`math.succ`): the name
+                    // before the `.` resolves to an import, so the field is a
+                    // member of that module — not unresolved.
+                    match self.imported_field_hover(name, token.span) {
+                        Some(msg) => return Some((msg, range)),
+                        None => format!("`{name}` — unresolved name"),
+                    }
+                }
             };
             return Some((msg, range));
         }
@@ -356,6 +439,28 @@ impl Doc {
             }
         }
         None
+    }
+
+    /// When the hovered name is a field access on an imported module
+    /// (`math.succ`), the field belongs to that module — render it as a member
+    /// of the import, so hovering is not "unresolved".  Detected by the name
+    /// being preceded by a `.` and the container name resolving to an import.
+    fn imported_field_hover(&self, name: &str, field_span: Span) -> Option<String> {
+        let idx = self.tokens.iter().position(|t| t.span == field_span)?;
+        if idx < 2 || self.tokens[idx - 1].kind != TokenKind::Dot {
+            return None;
+        }
+        let container_span = match &self.tokens[idx - 2].kind {
+            TokenKind::Name(_) => self.tokens[idx - 2].span,
+            _ => return None,
+        };
+        let container_def = self.resolve.get(&container_span).copied()?;
+        let import_i = self
+            .import_by_span
+            .get(&self.defs[container_def].span)
+            .copied()?;
+        let module = &self.imports[import_i].name;
+        Some(format!("`.{name}` — field of imported module `{module}`"))
     }
 
     /// Classify each source token into an LSP semantic token, driven by Lichen's
@@ -446,6 +551,16 @@ fn severity_for(stage: Stage) -> DiagnosticSeverity {
         Stage::Preprocess | Stage::Lex | Stage::Parse | Stage::Resolve | Stage::Check => {
             DiagnosticSeverity::ERROR
         }
+    }
+}
+
+/// The hover text for a use of an imported module: the imported module's type
+/// (its export's checked type) when the build computed one, else a plain
+/// "imported module" description naming the imported file.
+fn import_hover(name: &str, imp: &ImportBinding) -> String {
+    match &imp.ty {
+        Some(ty) => format!("`{name}` — imported module : {ty}"),
+        None => format!("`{name}` — imported module (from `{}`)", imp.path),
     }
 }
 
@@ -676,13 +791,26 @@ impl<'a> NameClass<'a> {
 // value (a fresh frame); a lambda enters its parameter for the body; a block
 // pushes/pops its own frame.
 
-fn index(program: &Program) -> (Vec<Definition>, HashMap<Span, usize>, HashMap<Span, usize>) {
+fn index(
+    program: &Program,
+    imports: &[ResolvedImport],
+) -> (Vec<Definition>, HashMap<Span, usize>, HashMap<Span, usize>) {
     let mut walk = Walk {
         defs: Vec::new(),
         scopes: Vec::new(),
         resolve: HashMap::new(),
         def_index: HashMap::new(),
     };
+    // Seed the imported bindings into a base scope frame, mirroring the
+    // compiler's import frame below the block-wide binding frames: a use of an
+    // imported module resolves to its `@import` directive, and a local binding
+    // may shadow an imported name (the local frame sits above the import one).
+    if !imports.is_empty() {
+        walk.scopes.push(HashMap::new());
+        for imp in imports {
+            walk.enter(&imp.name, imp.span);
+        }
+    }
     walk.scope(&program.statements, Some(&program.expr));
     (walk.defs, walk.resolve, walk.def_index)
 }
@@ -1076,6 +1204,42 @@ mod tests {
             "relative imports should resolve; got {:?}",
             d.diagnostics
         );
+    }
+
+    #[test]
+    fn hover_resolves_imports_and_their_fields() {
+        // Hovering an imported module (or a field of it) must not say
+        // "unresolved name": the module resolves to its `@import` directive
+        // (and hovers with the module's type), and a field resolves to the
+        // imported module it belongs to.
+        let dir = temp_dir("hoverimport");
+        write(&dir, "math.lichen", "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n");
+        let main_path = write(
+            &dir,
+            "main.lichen",
+            "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
+        );
+        let d = Doc::new_with_base(
+            fs::read_to_string(&main_path).unwrap(),
+            Some(main_path.as_path()),
+        );
+
+        // The module name `math` (line 3, char 0): imported module + its type.
+        let (msg, _) = d.hover_at(Position { line: 3, character: 0 }).expect("hover on `math`");
+        assert!(msg.contains("imported module"), "module hover msg = {msg}");
+        assert!(msg.contains("Int -> Int"), "module hover type = {msg}");
+
+        // The field `succ` (line 3, char 5): a field of the imported module.
+        let (msg, _) = d.hover_at(Position { line: 3, character: 5 }).expect("hover on `succ`");
+        assert!(
+            msg.contains("field of imported module `math`"),
+            "field hover msg = {msg}"
+        );
+
+        // Go-to-definition on the module use jumps to the import directive
+        // (`math` in `@{`...` math = import ...` at line 1, char 2).
+        let def = d.definition_at(Position { line: 3, character: 0 }).expect("def on `math`");
+        assert_eq!(def.start, Position { line: 1, character: 2 });
     }
 
     #[test]
