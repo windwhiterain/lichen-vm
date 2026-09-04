@@ -230,3 +230,28 @@ compute(1) k ((2, 3), 4)
     );
     assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
 }
+
+#[test]
+fn jit_cross_kernel_call() {
+    // Style 2: `k1`'s body calls kernel `k0` (`k0 (x + 1)`).  Launch assembles
+    // k1's *relative launch set* — k1 plus the kernel it cross-calls, k0 — into
+    // one wasm module, so the cross-kernel call is an in-module `call`:
+    //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
+    // The codomain type of a direct kernel apply is still `?a` (the checker
+    // leaves it unbound, unlike `$launch`), so we assert the value.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => k0 (x + 1))
+compute(1) k1 5
+"#,
+    );
+    assert!(
+        out.starts_with("7:"),
+        "cross-kernel call produced window 7, got: {out:?}"
+    );
+}
+

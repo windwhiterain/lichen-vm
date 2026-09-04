@@ -25,7 +25,7 @@
 //! - `(launch k) a` unifies `a` against the kernel's domain and its result is
 //!   the kernel's codomain — a function-style apply over a kernel.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -50,7 +50,7 @@ pub type KernelId = usize;
 /// The process kernel registry: compiled kernel **fragments** (bytecode units),
 /// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
 /// modules in the process.  The fragment is the durable JIT output; the module
-/// bytes are derived on demand by [`link_fragment`].
+/// bytes are derived on demand by [`assemble_module`] at launch.
 static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelFragment>>> = OnceLock::new();
 fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
     KERNELS.get_or_init(Default::default)
@@ -91,6 +91,10 @@ enum KernelInstr {
     /// A `if c then a else b` — emitted as then/else values, the selector,
     /// `I32WrapI64`, then this `select`.
     Select,
+    /// A cross-kernel call (style 2): the top `arity` stack values are the
+    /// argument; the caller's launch-time assembler resolves this to an
+    /// in-module `call` to the callee kernel's assembled function index.
+    CallKernel(KernelId),
 }
 
 /// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
@@ -98,9 +102,9 @@ enum KernelInstr {
 ///
 /// `jit` lowers one lichen function to a [`KernelFragment`]: the function's
 /// body as abstract instructions, plus the domain shape signature a linker
-/// needs.  The fragment is stored (not the whole module); `launch` links the
-/// reachable fragment set into a module (today [`link_fragment`]'s degenerate
-/// single-fragment link) and runs it.  Splitting "emit bytecode" from "assemble
+/// needs.  The fragment is stored (not the whole module); `launch` assembles the
+/// reachable fragment set into one module ([`assemble_module`]) and runs it.
+/// Splitting "emit bytecode" from "assemble
 /// a module" is what lets a later step link many fragments together (helper
 /// sharing, recursion) and emit cross-module imports for callees compiled
 /// elsewhere.
@@ -216,8 +220,8 @@ impl OperatorExt<LangProgram> for ComputeOperator {
 /// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
 /// arith over a scalar or a tuple of scalars) into a [`KernelFragment`] — the
 /// function's **body**, not a module.  `jit` emits a fragment per function;
-/// module assembly is a separate step ([`link_fragment`]), so a later JIT can
-/// emit fragments lazily and a `launch` can link a reachable set of them into
+/// module assembly is a separate step ([`assemble_module`]), so a later JIT can
+/// emit fragments lazily and a `launch` assembles a reachable set of them into
 /// one module.
 ///
 /// The parameter's domain shape (scalar vs tuple of scalars) is derived from
@@ -235,10 +239,13 @@ fn compile_fragment(
     let param_pair = module.functions[fid].parameter;
     let ret = module.functions[fid].r#return;
     // The function's `return` is the `[value, type]` pair node; the kernel's
-    // result is the pair's *value* (element 0).
+    // result is the pair's *value* (element 0).  A body whose return is a bare
+    // value node (the checker leaves a direct kernel-apply's codomain unbound,
+    // so it stores the body's value node directly instead of a pair) is used
+    // as the value itself.
     let ret_value = match module.array_items(ret) {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
-        _ => return Err("function return is not a [value, type] pair".into()),
+        _ => ret,
     };
 
     // The domain shape from the parameter's type cell.
@@ -266,41 +273,67 @@ fn compile_fragment(
     })
 }
 
-/// Lower a [`KernelFragment`] into a standalone wasm module exporting a single
-/// `main` function.  This is the degenerate link — one fragment = one module.
-/// A later step replaces it with a linker that assembles a kernel's whole
-/// reachable fragment set and emits imports for cross-module callees.
-fn link_fragment(fragment: &KernelFragment) -> Result<Vec<u8>, String> {
+/// Assemble an ordered slice of kernel fragments into a single wasm module.
+///
+/// `ordered[i]` becomes wasm function index `i`; `index` maps each callee
+/// [`KernelId`] to its function index, so a cross-kernel `CallKernel` lowers to
+/// an in-module `call`.  The root (index 0) is exported as `main`.  For a
+/// single-kernel set this is the degenerate link — one fragment = one module;
+/// for a kernel that cross-calls others it is the launch-time assembly that
+/// pulls the relative kernel set into one module.
+fn assemble_module(
+    ordered: &[KernelFragment],
+    index: &HashMap<KernelId, u32>,
+) -> Result<Vec<u8>, String> {
     use wasm_encoder::{
         CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction,
         Module as WasmModule, TypeSection, ValType,
     };
 
-    let arity = flat_arity(&fragment.param_shape);
-    let mut wasm = WasmModule::new();
+    // Type section: one (param-arity) -> i64 signature per distinct arity.
     let mut types = TypeSection::new();
-    types.ty().function(vec![ValType::I64; arity], vec![ValType::I64]);
+    let mut type_index_by_arity: HashMap<usize, u32> = HashMap::new();
+    let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
+    for frag in ordered {
+        let arity = flat_arity(&frag.param_shape);
+        let ti = *type_index_by_arity.entry(arity).or_insert_with(|| {
+            let id = types.len();
+            types.ty().function(vec![ValType::I64; arity], vec![ValType::I64]);
+            id
+        });
+        func_types.push(ti);
+    }
+
+    let mut wasm = WasmModule::new();
     wasm.section(&types);
     let mut funcs = FunctionSection::new();
-    funcs.function(0);
+    for &ti in &func_types {
+        funcs.function(ti);
+    }
     wasm.section(&funcs);
     let mut exports = ExportSection::new();
     exports.export("main", ExportKind::Func, 0);
     wasm.section(&exports);
+
     let mut code = CodeSection::new();
-    let mut body = Function::new([]);
-    lower_body(&fragment.body, &mut body)?;
-    body.instruction(&Instruction::End);
-    code.function(&body);
+    for frag in ordered {
+        let mut body = Function::new([]);
+        lower_body(&frag.body, index, &mut body)?;
+        body.instruction(&Instruction::End);
+        code.function(&body);
+    }
     wasm.section(&code);
     Ok(wasm.finish())
 }
 
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
-/// Cross-kernel calls are not yet allowed in a lone fragment — a later linker
-/// resolves them to in-module indices once the kernel's relative launch set is
-/// laid out.
-fn lower_body(body: &[KernelInstr], out: &mut wasm_encoder::Function) -> Result<(), String> {
+/// `index` resolves each cross-kernel `CallKernel` to the callee's in-module
+/// function index (assigned by the launch-time assembly).
+fn lower_body(
+    body: &[KernelInstr],
+    index: &HashMap<KernelId, u32>,
+    out: &mut wasm_encoder::Function,
+) -> Result<(), String> {
     use wasm_encoder::Instruction;
 
     for instr in body {
@@ -332,6 +365,12 @@ fn lower_body(body: &[KernelInstr], out: &mut wasm_encoder::Function) -> Result<
             }
             KernelInstr::Select => {
                 out.instruction(&Instruction::Select);
+            }
+            KernelInstr::CallKernel(kid) => {
+                let target = *index.get(kid).ok_or_else(|| {
+                    format!("cross-kernel call to kernel {kid} is not in the assembled set")
+                })?;
+                out.instruction(&Instruction::Call(target));
             }
         }
     }
@@ -417,7 +456,9 @@ fn emit_node(
         }
     }
     let Some(operation) = module.nodes[node].operation else {
-        return Err(format!("kernel body hits a node with neither value nor operation"));
+        return Err(format!(
+            "kernel body hits a node with neither value nor operation (node={node:?})"
+        ));
     };
     match &operation.operator {
         LangOperator::TypeOperator(op) => match op {
@@ -482,6 +523,37 @@ fn emit_node(
                     .into(),
             );
         }
+        LangOperator::LowOperator(LowOperator::Apply) => {
+            let (callee, arg) = apply_pair(module, operation.operand)?;
+            // Style 2: a cross-kernel call — the callee is a kernel value (the
+            // result of an earlier `jit`).  Emit the (scalar) argument, then a
+            // call the launch-time assembler resolves to the callee's function
+            // index once the kernel's relative launch set is laid out.
+            if let Some(kid) = kernel_id_of(module, callee) {
+                // v1 restricts the callee domain to a scalar (arity 1): the
+                // argument is one i64 on the stack.
+                let arity = kernels()
+                    .lock()
+                    .unwrap()
+                    .get(&kid)
+                    .map(|f| flat_arity(&f.param_shape))
+                    .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
+                if arity != 1 {
+                    return Err(
+                        "cross-kernel call supports only a scalar-domain callee in v1".into()
+                    );
+                }
+                let arg = pair_value_node(module, arg).unwrap_or(arg);
+                emit_node(module, param_pair, param_value, arg, body)?;
+                body.push(KernelInstr::CallKernel(kid));
+                return Ok(());
+            }
+            // Style 1: a full lichen-function call (inline its body) — deferred.
+            return Err(
+                "kernel body Apply is supported only for a cross-kernel (kernel-value) callee v1; inline lichen-function calls are not yet supported"
+                    .into(),
+            );
+        }
         other => {
             return Err(format!(
                 "unsupported operation in kernel body: {other:?} (kernel-safe subset is scalar arith)"
@@ -541,6 +613,30 @@ fn value_of_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
         return None;
     }
     let items = module.array_items(target)?;
+    dyn_node(items.first()?.node).ok()
+}
+
+/// The [`KernelId`] of a kernel-value node (`ComputeValue::Kernel`), looking
+/// through any `value_of` extractions.  Returns `None` for a node that is not
+/// (or does not reach) a kernel value — e.g. a lichen function, used by the
+/// style-1 inline path instead.
+fn kernel_id_of(module: &Module<LangProgram>, node: NodeId) -> Option<KernelId> {
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
+        if let Some(ComputeValue::Kernel(kid)) = value.as_enum() {
+            return Some(kid);
+        }
+    }
+    let inner = value_of_node(module, node)?;
+    kernel_id_of(module, inner)
+}
+
+/// The *value* node behind a `[value, type]` pair stored as a **concrete array
+/// value** — a node whose value is an array, its element 0 the value.  The
+/// checker stores some argument values as such pairs (whereas [`value_of_node`]
+/// handles the `Index(pair, 0)` extraction form); the JIT must look through to
+/// the value before emitting.  Returns `None` when `node` is not such a pair.
+fn pair_value_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+    let items = module.array_items(node)?;
     dyn_node(items.first()?.node).ok()
 }
 
@@ -641,6 +737,21 @@ fn operand_items(module: &Module<LangProgram>, node: NodeId) -> Result<&'static 
     module.array_items(node).ok_or_else(|| "operand is not an array value".into())
 }
 
+/// The `[function, argument]` of an `Apply` operand array.  The checker's
+/// apply operands are `[function, argument, result_cell]` (the result cell is
+/// a checker-wired value that does not participate in codegen), so unlike
+/// [`operand_pair`] this tolerates extra elements and takes the first two.
+fn apply_pair(module: &Module<LangProgram>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String> {
+    let Some(operand) = operand else {
+        return Err("Apply operand is missing".into());
+    };
+    let items = operand_items(module, operand)?;
+    if items.len() < 2 {
+        return Err("Apply operand array must have at least two elements".into());
+    }
+    Ok((dyn_node(items[0].node)?, dyn_node(items[1].node)?))
+}
+
 fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
     match id {
         AnyNodeId::Dynamic(n) => Ok(n),
@@ -649,17 +760,46 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
 }
 
 /// Execute a compiled kernel on an argument vector with wasmi, returning the
-/// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number
-/// of `i64` inputs, so a tuple-domain kernel (arity N) launches with N
-/// arguments and a scalar kernel (arity 1) with one.
+/// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number of
+/// `i64` inputs, so a tuple-domain kernel (arity N) launches with N arguments
+/// and a scalar kernel (arity 1) with one.
+///
+/// The kernel's **relative launch set** — the kernel itself plus every kernel
+/// it (transitively) cross-calls, discovered by scanning each fragment's
+/// cross-kernel instructions — is assembled into one wasm module (launch-time
+/// assembly, the deferred linker), the root exported as `main`.
 fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
-    let fragment = kernels()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| "kernel id is not registered".to_string())?;
-    let bytes = link_fragment(&fragment)?;
+    // Discover the relative kernel set in BFS order: `ordered[i]` becomes wasm
+    // function index `i`; `index` maps a callee kernel-id to that index.
+    let mut ordered: Vec<KernelFragment> = Vec::new();
+    let mut index: HashMap<KernelId, u32> = HashMap::new();
+    let mut seen: HashSet<KernelId> = HashSet::new();
+    let mut queue: VecDeque<KernelId> = VecDeque::new();
+    seen.insert(id);
+    queue.push_back(id);
+    let fragments = kernels().lock().unwrap();
+    while let Some(k) = queue.pop_front() {
+        let frag = fragments
+            .get(&k)
+            .cloned()
+            .ok_or_else(|| format!("kernel {k} is not registered"))?;
+        index.insert(k, ordered.len() as u32);
+        for instr in &frag.body {
+            if let KernelInstr::CallKernel(kid) = instr {
+                let kid = *kid;
+                if seen.insert(kid) {
+                    if !fragments.contains_key(&kid) {
+                        return Err(format!("cross-kernel callee kernel {kid} is not registered"));
+                    }
+                    queue.push_back(kid);
+                }
+            }
+        }
+        ordered.push(frag);
+    }
+    drop(fragments);
+
+    let bytes = assemble_module(&ordered, &index)?;
     let engine = wasmi::Engine::default();
     let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
     let mut store = wasmi::Store::new(&engine, ());
