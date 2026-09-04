@@ -1,0 +1,114 @@
+# The plugin taxonomy: native plugins vs. compiler plugins
+
+> Status: current
+> Points at: `crates/lichen-highlevel/src/plugin.rs` (`NativePlugin`),
+> `crates/lichen-compute` (the reference native plugin),
+> `crates/lichen-language/src/program.rs` (`lang_compose_vocabulary!`),
+> and `crates/lichen-language/src/package.rs` (`compute_native_ops!`).
+
+The lichen system extends itself through a compile-time composition, not a
+loadable ABI. There are **two kinds of extension**, split by one question:
+**does the language layer have to change (codesign) to accommodate it, or not?**
+
+## Native plugin (pluggable into a fixed language layer)
+
+A **native plugin** is a crate that extends the core — `lichen-utils`,
+`lichen-lowlevel`, `lichen-highlevel` — through the program-generic extension
+points, and composes into a *fixed* host layer **without the host codesigning
+with it**. It never names the host's concrete `Program` marker, its IR, its
+grammar, or its on-disk format.
+
+It contributes, in any combination:
+
+- **vocabulary leaves** — value/operator enums the host combines with
+  [`enum_ext!`](lichen_utils::enum_ext);
+- **native operators** — `NativeOp<P>` impls, exposed through a
+  plugin-provided `#[macro_export] macro_rules! <name>_native_ops` that, for a
+  host program `$program`, expands to a `NativeOps` value (the host invokes it
+  to build its private per-module registry);
+- **an attribute** — an `AttrSpec` marker + `AttrExt<P>` provider;
+- **a `GlobalExt` component** — composed by the host with
+  [`compose_ext!`](lichen_utils::compose_ext).
+
+Crucially, a native plugin is **program-generic**: every entry point is
+bounded by the lowlevel/highlevel `Program` marker and the extension-point
+traits, so it never depends on a specific language crate. It also **adds no
+syntax** — no grammar production, no IR node, no schema-tail literal, no
+persist discriminator.
+
+`lichen-compute` is the reference native plugin: it contributes
+`ComputeValue`/`ComputeOperator` leaves, an `OperatorExt<P>`/`NativeOp<P>`
+impls, and a `compute_native_ops!` macro. It is host-agnostic.
+
+**The "fixed slot".** Because enum composition is a compile-time expansion, a
+native plugin set is fixed at **build** time, not runtime. The language layer
+exposes a single manifest — `lang_compose_vocabulary!` (in `lichen-language`)
+— that declares the whole plugin set. A host (now, or a package manager later)
+composes:
+
+```
+lang_compose_vocabulary! {
+    attr = Perspective;
+    values = [ LowValue as LowValue; TypeValue as TypeValue;
+               lichen_compute::ComputeValue as ComputeValue; ];
+    operators = [ LowOperator as LowOperator; TypeOperator as TypeOperator;
+                  GcdOp as GcdOp;
+                  lichen_compute::ComputeOperator as ComputeOperator; ];
+}
+```
+
+and assembles each plugin's private per-module registry with its
+`<name>_native_ops!` macro (`licher_compute::compute_native_ops!(LangProgram)`).
+The frontend, checker, and VM are reused unchanged. **Adding a native plugin is
+one manifest line** (and one op-registry line).
+
+This is the "package manager pulls a crate and builds a new compiler" story:
+the reusable layer is the generic core + the composition manifest, and a built
+compiler is just a particular plugin set substituted into that manifest.
+
+## Compiler plugin (codesigned with the language layer)
+
+A **compiler plugin** is a feature the language layer must be **written to know**.
+It needs one or more of: a **grammar production**, an **AST node**, an **IR
+form**, a **schema-tail literal**, or a **persist discriminator**. Because the
+language's frontend is not attribute/feature-generic, the language and the
+feature are designed *together* — you cannot package-manager-pull it.
+
+`Perspective` (the `# p` attribute) is the reference compiler plugin: its
+*micro-semantics* (the `AttrExt`, `GcdOp`, `gcd`/`divides`) are
+native-plugin-shaped, but the feature also requires
+
+- the `#` grammar production (`AnnPiece::Perspective` in `parse.rs`),
+- AST fields (`perspective` / `parameter_perspective`),
+- `IR<Perspective>` + `Schema { tail: vec![Perspective] }` (`compile.rs`),
+- the `LangOperator::GcdOp(GcdOp::Gcd)` persist discriminator (`persist.rs`).
+
+So `Perspective` is a compiler plugin: the language layer owns and codesigns
+those sites. Its semantic core could live in a crate, but it would never be a
+native plugin (it invents syntax/IR/persist).
+
+## The decision rule
+
+> If a feature needs a new grammar production, an IR node, a schema-tail
+> literal, or a persist node, it is a **compiler plugin** (the language
+> codesigns with it). If it only supplies vocabulary leaves + extension-point
+> values (and adds no syntax), it is a **native plugin** (composable into a
+> fixed layer, regenerable by a package manager).
+
+## Why the split matters
+
+- A native plugin is **reusable by any host**: a test harness, a different
+  frontend, a future compiler, all compose `lichen-compute` unchanged. It never
+  depends on a specific language crate.
+- The **language layer** shrinks: it owns the grammar/IR/persist, the
+  composition manifest, and the checker wiring — not whole subsystems.
+- The **plugin boundary is checkable**: "program-generic + no syntax" is an
+  objective test, so a crate either is or is not a native plugin.
+
+## Current state
+
+- `lichen-compute` is a native plugin (its own crate; `NativePlugin` marker +
+  `compute_native_ops!`).
+- `lichen-language` composes it via `lang_compose_vocabulary!` (leaves) and
+  `compute_native_ops!` (op registry) in one manifest each.
+- `Perspective` remains a compiler plugin, codesigned in `lichen-language`.
