@@ -17,6 +17,8 @@ use crate::package::PackageStore;
 use crate::preprocess::preprocess;
 pub use crate::render::print_type;
 pub use crate::render::print_value;
+use crate::render::render_attributes;
+use crate::program::{lang_attr_ext, LangProgram};
 
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///
@@ -35,8 +37,19 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag>> {
     let value = module.evaluate_node_deep(build.root_val, None);
     module.evaluate_node_deep(build.root_ty, None);
     Ok(format!(
-        "{}: {}",
+        "{}{}: {}",
         print_value(&module, value, build.root_ty),
+        {
+            // Render only the attributes the root expression actually carries.
+            let attr_ext = lang_attr_ext::<LangProgram>();
+            let tail = &build.ir.schema(build.ir.root).tail;
+            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
+            if attrs.is_empty() {
+                String::new()
+            } else {
+                format!(" {attrs}")
+            }
+        },
         print_type(&module, build.root_ty)
     ))
 }
@@ -69,8 +82,19 @@ pub fn evaluate_raw(
     let value = module.evaluate_node_deep(build.root_val, None);
     module.evaluate_node_deep(build.root_ty, None);
     Ok(format!(
-        "{}: {}",
+        "{}{}: {}",
         print_value(&module, value, build.root_ty),
+        {
+            // Render only the attributes the root expression actually carries.
+            let attr_ext = lang_attr_ext::<LangProgram>();
+            let tail = &build.ir.schema(build.ir.root).tail;
+            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
+            if attrs.is_empty() {
+                String::new()
+            } else {
+                format!(" {attrs}")
+            }
+        },
         print_type(&module, build.root_ty)
     ))
 }
