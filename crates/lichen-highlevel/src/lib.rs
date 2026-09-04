@@ -22,6 +22,7 @@ pub mod program;
 // directly — `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
 // own variants.  Each layer provides a plain enum; nothing nests.
 pub use attr::{AttrExt, AttrSpec, NoAttr};
+pub use native::{no_native_ops, NativeApply, NativeArg, NativeOp, NativeOps};
 pub use program::{
     Ctx, HighGlobal, HighGlobalExt, HighProgram, HighProgramLiteral, HighProgramOperator,
     HighProgramValue, IntLit, IntTypeLit, LiteralBuild, LiteralExt, ProgramImpl, TypeOperator,

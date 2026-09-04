@@ -2,8 +2,9 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvaluatedDeep, LowOperator,
-    LowValue, Module, NodeId, OperatorExt as _, Program,
+    LowValue, Module, NodeId, OperatorExt as _, Program, is_unbound,
 };
+use lichen_utils::disjoint::Node as _;
 use lichen_utils::extend::AsEnum;
 
 /// A runtime evaluation failure — an out-of-bounds [`LowOperator::Index`], a
@@ -265,6 +266,29 @@ impl<P: Program> Module<P> {
         // postlude — they return their cached marker from the top.
         if !matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             self.nodes[node].value = Some(value);
+            // A value that becomes concrete on a member of a class reaches
+            // every unbound pure-cell member, so a late-arriving value —
+            // e.g. a lazy host-operator (`OperatorExt::run`) result written
+            // onto the class representative after the apply's parameter
+            // unify merged the argument with the parameter — replicates into
+            // the cells bound before it was concrete.  Without this, `bind`
+            // (which reads only the representative's value) cannot see the
+            // member's concrete value when the class later merges, and the
+            // parameter stays unbound (the closure captures `Parameterized`).
+            // This is the evaluation-side counterpart of `bind`'s and
+            // `force_pending`'s linked-list replication.  Only operation-free
+            // (pure) cells are touched — a pending computation member keeps
+            // its own operation rather than being overridden.
+            let rep = self.equality_representative(node);
+            let mut member = rep;
+            loop {
+                let next = self.nodes[member].meta().next;
+                if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
+                    self.nodes[member].value = Some(value);
+                }
+                let Some(next) = next else { break };
+                member = next;
+            }
         }
         self.nodes[node].visiting = false;
         value

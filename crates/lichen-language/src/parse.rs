@@ -561,6 +561,7 @@ fn atom_parser<'a>(
             token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
             name().map(|(n, span)| Expr::Name(n, span)),
+            native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
             table_literal(tokens, expr.clone()),
@@ -714,6 +715,28 @@ fn paren<'a>(
             } else {
                 Expr::Tuple(std::iter::once(first).chain(rest).collect(), span)
             }
+        })
+}
+
+/// `$name(args…)` — a native-operator call.  A plugin's embedded source uses
+/// this to call one of its registered native operators; the name resolves only
+/// against the compiling module's private registry.  The arg list is the
+/// comma-separated expr list of a parenthesized form (adjacent parens — a
+/// `$` native call never uses a spaced paren).
+fn native_call<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::Dollar)
+        .ignore_then(name())
+        .then(token(TokenKind::Glue).or_not())
+        .then_ignore(token(TokenKind::LParen))
+        .then(paren_fields(expr.clone()))
+        .then_ignore(token(TokenKind::RParen))
+        .map_with(|(((op, _), _), (args, _)), me| Expr::NativeCall {
+            op,
+            args,
+            span: span_at(tokens, me.span().start),
         })
 }
 

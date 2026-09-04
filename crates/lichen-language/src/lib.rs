@@ -34,6 +34,7 @@ use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
+use lichen_highlevel::{no_native_ops, NativeOps};
 use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
@@ -80,7 +81,7 @@ pub fn compile_with_imports_in(
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
 ) -> Report {
     let line_starts = lex::line_starts(source);
-    compile_with_imports_at(source, imports, registry, 0, &line_starts)
+    compile_with_imports_at(source, imports, registry, 0, &line_starts, no_native_ops())
 }
 
 /// Compile and check a program that is a slice of a larger source starting at
@@ -94,6 +95,7 @@ pub fn compile_with_imports_at(
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
     base: u32,
     line_starts: &[usize],
+    native_ops: NativeOps<LangProgram>,
 ) -> Report {
     let Frontend {
         ir,
@@ -110,7 +112,7 @@ pub fn compile_with_imports_at(
         ir,
         registry,
         persp_attr_ext(),
-        compute::native_registry(),
+        native_ops,
     );
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The

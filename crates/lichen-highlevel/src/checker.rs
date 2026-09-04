@@ -37,8 +37,8 @@ use lichen_utils::extend::AsEnum;
 
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ExprId, ExprKind, IR, Loc, LocStep};
-use crate::native::{no_native_ext, NativeExt};
+use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep};
+use crate::native::{no_native_ops, NativeArg, NativeOps};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
@@ -64,12 +64,12 @@ where
     /// concrete attribute — it asks this registry for the `AttrExt` and
     /// calls through it.
     attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
-    /// The native-operator registry: maps a callee's type to the
-    /// `NativeExt` that lowers it (see [`crate::native`]).  The no-op default
-    /// keeps every `Apply` an ordinary function application; a program with
-    /// native operators (e.g. `lichen-compute`'s `jit`/`launch`) supplies a
-    /// registry that recognises its operator types.
-    native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
+    /// The native-operator registry: a private, name→operator mapping for the
+    /// compiling module's plugin (see [`crate::native`]).  The empty default
+    /// `no_native_ops` rejects every `$name` call (the frontend reports it as
+    /// unresolved); a plugin whose source is being compiled (e.g.
+    /// `lichen-compute`'s `jit`/`launch`) supplies its own slice.
+    native_ops: NativeOps<P>,
     scopes: Vec<HashMap<ExprId, Binding>>,
     /// The lexical function stack: one `(id, depth)` entry per enclosing
     /// lambda whose body is being compiled, innermost last — `depth` is the
@@ -213,7 +213,7 @@ where
     /// Compile an IR with a fresh private registry and no attribute
     /// extension (a program whose schemas carry no attribute is unaffected).
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
-        Self::build_with(ir, Module::new(), Self::no_attr_ext(), no_native_ext())
+        Self::build_with(ir, Module::new(), Self::no_attr_ext(), no_native_ops())
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
@@ -221,7 +221,7 @@ where
     /// leaves through a `PackageStore`.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, Self::no_attr_ext(), no_native_ext())
+        Self::build_with(ir, module, Self::no_attr_ext(), no_native_ops())
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry — the
@@ -234,21 +234,22 @@ where
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, no_native_ext())
+        Self::build_with(ir, module, attr_ext, no_native_ops())
     }
 
     /// [`Self::build_in_attr`] with a native-operator registry — the entry
-    /// point for a program with injected native operators (such as
-    /// `lichen-compute`).  `native_ext` maps a callee's type to the
-    /// `NativeExt` that lowers it, or `None` to keep every `Apply` ordinary.
+    /// point for a plugin whose embedded source calls `$name(args…)`.  The
+    /// `native_ops` slice is that plugin's *private* registry: it is what a
+    /// `$name` in its source resolves against, and it is empty for every
+    /// ordinary file.
     pub fn build_in_attr_native(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
-        native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
+        native_ops: NativeOps<P>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, native_ext)
+        Self::build_with(ir, module, attr_ext, native_ops)
     }
 
     /// The no-op registry of a program with no attribute extension: no schema
@@ -263,7 +264,7 @@ where
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
-        native_ext: Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>,
+        native_ops: NativeOps<P>,
     ) -> Build<P> {
         // The lowlevel's default application guard (10k nested calls) sits
         // below what a thread stack survives once the checker's per-call
@@ -291,7 +292,7 @@ where
             module,
             current_block: root_block,
             attr_ext,
-            native_ext,
+            native_ops,
             scopes: Vec::new(),
             function_stack: Vec::new(),
             term: vec![None; n],
@@ -565,6 +566,7 @@ where
             | ExprKind::TypeStruct(range)
             | ExprKind::Table(range)
             | ExprKind::ShallowArray { range, .. } => range,
+            ExprKind::NativeCall { args, .. } => args,
             _ => unreachable!("expected a variadic expression kind"),
         };
         self.ir.children[range.start as usize..range.end as usize].to_vec()
@@ -616,6 +618,7 @@ where
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
             ExprKind::Assert { .. } => Vec::new(),
+            ExprKind::NativeCall { .. } => self.range_children(e),
         }
     }
 
@@ -891,6 +894,7 @@ where
                     | ExprKind::Table(_)
                     | ExprKind::ShallowArray { .. }
                     | ExprKind::TypeArray { .. }
+                    | ExprKind::NativeCall { .. }
             ) {
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
@@ -1021,6 +1025,7 @@ where
                 self.ty[e] = Some(ty_node);
                 pair
             }
+            ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
         };
         // Bind the skeleton's cells to the real value and type, so every
         // reference that resolved to the skeleton during the descent now
@@ -1032,6 +1037,42 @@ where
             self.module.unify(tc, ty);
         }
         pair
+    }
+
+    /// A `$name(args…)` call: compile each argument, look `name` up in this
+    /// module's private [`NativeOps`] registry, and adopt the `[value, type]`
+    /// pair the plugin's [`NativeOp`] builder returns.  The checker has no
+    /// knowledge of what the operator does — the plugin's registration owns the
+    /// lowering and the type construction (the private contract with its own
+    /// source).
+    fn check_native_call(&mut self, e: ExprId, op: &str, args: ChildRange) -> NodeId {
+        let arg_ids: Vec<ExprId> =
+            self.ir.children[args.start as usize..args.end as usize].to_vec();
+        for &arg in &arg_ids {
+            self.check_expr(arg);
+        }
+        let native_args: Vec<NativeArg> = arg_ids
+            .iter()
+            .map(|&arg| NativeArg {
+                expr: arg,
+                value: self.value_of(arg),
+                ty: self.ty[arg].expect("a compiled argument has a type"),
+            })
+            .collect();
+        let loc = self.loc(e, 0);
+        let ops = self.native_ops;
+        let built = ops
+            .iter()
+            .copied()
+            .find(|(name, _)| *name == op)
+            .map(|(_, op)| op.build(self, e, &native_args, loc))
+            .expect(
+                "a native op name must be validated by the frontend against the module's registry",
+            );
+        self.term[e] = Some(built.node);
+        self.val[e] = built.val;
+        self.ty[e] = Some(built.ty);
+        built.node
     }
 
     fn check_lam(
@@ -1258,31 +1299,6 @@ where
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
         let function_ty = self.ty[function].unwrap();
-        // Native-operator hook: an `Apply` whose callee's *type* is a native
-        // operator type is lowered by the extension (which emits a program
-        // operator and does that operator's own type check) instead of a
-        // runtime function apply.  The callee and argument are already
-        // compiled; the extension receives their value/type nodes.
-        if let Some(native) = self
-            .class_value(function_ty)
-            .and_then(|ty_value| (self.native_ext)(&ty_value))
-        {
-            let loc1 = self.loc(e, 1);
-            let native_apply = native.check_apply(
-                self,
-                e,
-                function_value,
-                function_ty,
-                argument_value,
-                argument_type,
-                argument,
-                loc1,
-            );
-            self.term[e] = Some(native_apply.node);
-            self.val[e] = native_apply.val;
-            self.ty[e] = Some(native_apply.ty);
-            return native_apply.node;
-        }
         let concrete = self.module.nodes[function_ty].value.is_some_and(|value| {
             matches!(
                 value.as_enum(),

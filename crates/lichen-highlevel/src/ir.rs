@@ -354,6 +354,15 @@ pub enum ExprKind<L> {
     Static {
         export: lichen_lowlevel::StaticNodeId,
     },
+    /// `$name(args…)` — a call to a native operator registered by the compiling
+    /// module's plugin.  `op` is a *private* name (an interned `&'static str`),
+    /// resolved only against that module's registry
+    /// ([`Checker::native_ops`](crate::checker::Checker)) — so two plugins each
+    /// registering `$jit` never collide.  The checker compiles each argument
+    /// (stored in [`IR::children`], like a tuple), delegates to the plugin's
+    /// [`NativeOp`] builder, and adopts the `[value, type]` pair it returns; it
+    /// has no knowledge of what the operator does.
+    NativeCall { op: &'static str, args: ChildRange },
 }
 
 impl<A: AttrSpec, L> IR<A, L> {

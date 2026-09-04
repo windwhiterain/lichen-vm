@@ -68,6 +68,11 @@ pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
 //   | node_count u64 | nodes...
 //   | function_count u64 | functions...
 //
+// A function: parameter u64, return u64, assert_count u64, [asserts u64...],
+// node_count u64, [nodes u64...].  The node list is the function's template
+// scope in local-index order — the static mirror of `Function::nodes`, so a
+// re-homed static closure knows its own scope.
+//
 // A node:  value_flag u8, [value], op_flag u8, [op_tag u8, operand_flag u8,
 // operand u64], equality (parent/next/tail: flag+u64, size u32),
 // parameterized u8.
@@ -170,7 +175,7 @@ where
 {
     let mut w = Writer::new();
     w.bytes(b"LCHN");
-    w.u32(2); // format version
+    w.u32(3); // format version
     w.u64(module.key.as_raw());
     w.bytes(&hash);
     w.u64(ARENA_ALIGN as u64);
@@ -231,6 +236,10 @@ where
         w.u64(function.asserts.len() as u64);
         for &assert in &function.asserts {
             w.u64(assert.index as u64);
+        }
+        w.u64(function.nodes.len() as u64);
+        for &node in &function.nodes {
+            w.u64(node.index as u64);
         }
     }
     w.into_bytes()
@@ -375,7 +384,7 @@ where
     if r.take(4)? != b"LCHN" {
         return Err("bad artifact magic".into());
     }
-    if r.u32()? != 2 {
+    if r.u32()? != 3 {
         return Err("unknown artifact format version".into());
     }
     if ModuleKey::from_raw(r.u64()?) != key {
@@ -468,10 +477,18 @@ where
                 index: r.u64()? as usize,
             });
         }
+        let node_count = r.u64()? as usize;
+        let mut nodes = Vec::with_capacity(node_count);
+        for _ in 0..node_count {
+            nodes.push(LocalNodeId {
+                index: r.u64()? as usize,
+            });
+        }
         functions.push(StaticFunction {
             parameter,
             r#return,
             asserts,
+            nodes,
         });
     }
     if !r.done() {

@@ -31,7 +31,7 @@ use std::sync::{Mutex, OnceLock};
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
-use lichen_highlevel::native::{NativeApply, NativeExt};
+use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
 use lichen_highlevel::program::{Ctx, TypeOperator, ValueType};
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId,
@@ -59,26 +59,6 @@ fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// A native operator bound to source as a value (Option B).
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum NativeOp {
-    Jit,
-    Launch,
-}
-
-/// The intermediate of a curried `launch k` (stage 1): captures the kernel
-/// value node and the kernel's signature cells, so the outer `(launch k) a`
-/// (stage 2) can emit the `Launch` operator and type-check the argument.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LaunchTarget {
-    /// The kernel value node — the `k` of `launch k`.
-    pub kernel: NodeId,
-    /// The kernel's domain type cell.
-    pub domain: NodeId,
-    /// The kernel's codomain type cell.
-    pub codomain: NodeId,
-}
-
 /// The compute value vocabulary — injected as a sibling leaf into the
 /// language's value union (see [`crate::program`]).  A plain enum of exactly
 /// this extension's variants, composed with [`lichen_utils::enum_ext!`].
@@ -86,23 +66,9 @@ pub struct LaunchTarget {
 pub enum ComputeValue {
     /// A compiled, runnable kernel artifact.
     Kernel(KernelId),
-    /// A first-class native operator value (`jit`/`launch`).
-    Native(NativeOp),
     /// The kind marker of kernel types — a kernel's type is
     /// `[signature, [TypeKernel, Type]]`.
     TypeKernel,
-    /// The type of a `Native(Jit)` value — the callee type that routes an
-    /// `Apply` to the `Jit` native operator.
-    TypeNativeJit,
-    /// The type of a `Native(Launch)` value — routes an `Apply` to the first
-    /// stage of the curried `launch`.
-    TypeNativeLaunch,
-    /// The type of a [`LaunchTarget`] value — routes an `Apply` to the second
-    /// stage of the curried `launch`.
-    TypeLaunchTarget,
-    /// The value produced by `launch k`: a function-shaped intermediate that
-    /// the second apply `(launch k) a` completes.
-    LaunchTarget(LaunchTarget),
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -114,14 +80,6 @@ pub enum ComputeOperator {
     Jit,
     /// `[kernel, arg]` operand — run the kernel on the arg → the result.
     Launch,
-}
-
-/// The type of a [`Native(Jit)`](ComputeValue::Native) value.
-pub fn jit_native_type() -> ComputeValue {
-    ComputeValue::TypeNativeJit
-}
-pub fn launch_native_type() -> ComputeValue {
-    ComputeValue::TypeNativeLaunch
 }
 
 // --- OperatorExt::run (the VM dispatch for the injected operators) ---------
@@ -150,10 +108,11 @@ impl OperatorExt<LangProgram> for ComputeOperator {
                         kernels().lock().unwrap().insert(id, bytes);
                         LangValue::from(ComputeValue::Kernel(id))
                     }
-                    Err(..) => {
+                    Err(err) => {
                         // The body uses an operator outside the kernel-safe
                         // subset — record nothing and stay lazy; the definition
                         // pass's error channel reports the unbound result.
+                        let _ = err;
                         LangValue::from(LowValue::Parameterized)
                     }
                 }
@@ -350,128 +309,44 @@ fn run_kernel(id: KernelId, arg: usize) -> Result<usize, String> {
     Ok(result as usize)
 }
 
-// --- The virtual compute package (the import bridge) ----------------------
+// --- Native operators: the private contract with the plugin's source -------
 
-/// The static export nodes of the compute package.  The package exposes a
-/// tuple `[jit, launch, Kernel]` (for positional namespace access) **and** the
-/// three items as direct `[value, type]` pairs (so an import can bind them as
-/// names, which is what the checker needs to detect a native callee
-/// statically — a tuple element read would stay a lazy `Index`).
-pub(crate) struct ComputePackageExports {
-    /// The exported tuple `[jit, launch, Kernel]` pair.
-    pub export_pair: NodeId,
-    /// The `[jit]` direct pair.
-    pub jit: NodeId,
-    /// The `[launch]` direct pair.
-    pub launch: NodeId,
-    /// The `[Kernel]` direct pair.
-    pub kernel: NodeId,
+/// `$jit(f)` — compile a function to a kernel.  The function-ness gate unifies
+/// the argument's type with an arrow shape (the *gate*); the kernel type
+/// `[sig, [TypeKernel, Type]]` carries the arrow's `[in, out]` shape as its
+/// signature, so `launch` reads the domain/codomain out of the type.
+struct JitOp;
+static JIT_OP: JitOp = JitOp;
+
+/// `$launch(k, a)` — run kernel `k` on `a`.  The kernel-ness gate unifies `k`'s
+/// type with a kernel type (binding the domain/codomain to fresh cells); the
+/// argument is unified against the domain and the result typed as the codomain.
+struct LaunchOp;
+static LAUNCH_OP: LaunchOp = LaunchOp;
+
+/// The `lichen-compute` plugin's private native registry: the ops its embedded
+/// source calls with `$jit`/`$launch`.  Attached only to the compilation of
+/// `compute.lichen`, so the names resolve privately — no global string
+/// namespace, so a second plugin registering its own `$jit` never collides.
+pub fn native_ops() -> NativeOps<LangProgram> {
+    &NATIVE_OPS
 }
+static NATIVE_OPS: [(&str, &dyn NativeOp<LangProgram>); 2] = [
+    ("jit", &JIT_OP),
+    ("launch", &LAUNCH_OP),
+];
 
-/// Build the frozen `compute` package's module and its export nodes.
-pub(crate) fn build_compute_module() -> (Module<LangProgram>, ComputePackageExports) {
-    use lichen_highlevel::program::TypeValue;
-
-    let mut module = Module::<LangProgram>::new();
-    let block = module.add_block(None);
-    // The canonical universe `[Type, ↺]` (`Type : Type`).
-    let type_marker = module.add_node(block, None, Some(LangValue::type_marker()));
-    let universe = module.add_node(block, None, None);
-    let univ = [
-        ArrayItem::new(AnyNodeId::Dynamic(type_marker)),
-        ArrayItem::new(AnyNodeId::Dynamic(universe)),
-    ];
-    let univ_payload = module.alloc_array(&univ, block);
-    module.nodes[universe].value = Some(LangValue::from(LowValue::Array(univ_payload)));
-
-    let fn_node = |module: &mut Module<LangProgram>, v: LangValue| {
-        module.add_node(block, None, Some(v))
-    };
-
-    // The three native exports and their element-type markers.
-    let jit_v = fn_node(&mut module, LangValue::from(ComputeValue::Native(NativeOp::Jit)));
-    let jit_ty = fn_node(&mut module, LangValue::from(ComputeValue::TypeNativeJit));
-    let launch_v = fn_node(&mut module, LangValue::from(ComputeValue::Native(NativeOp::Launch)));
-    let launch_ty = fn_node(&mut module, LangValue::from(ComputeValue::TypeNativeLaunch));
-    let kernel_v = fn_node(&mut module, LangValue::from(ComputeValue::TypeKernel));
-    let kernel_ty = fn_node(&mut module, LangValue::type_marker());
-
-    // Direct `[value, type]` pairs for name binding.
-    let jit = array_value(&mut module, block, &[jit_v, jit_ty]);
-    let launch = array_value(&mut module, block, &[launch_v, launch_ty]);
-    let kernel = array_value(&mut module, block, &[kernel_v, kernel_ty]);
-
-    // Tuple value `[jit, launch, Kernel]`.
-    let tuple_value = array_value(&mut module, block, &[jit_v, launch_v, kernel_v]);
-    // Tuple type `[ [jit_ty, launch_ty, kernel_ty], [TypeTuple, Type] ]`.
-    let shape = array_value(&mut module, block, &[jit_ty, launch_ty, kernel_ty]);
-    let tuple_type_marker = fn_node(&mut module, LangValue::TypeValue(TypeValue::TypeTuple));
-    let tuple_kind = array_value(&mut module, block, &[tuple_type_marker, universe]);
-    let tuple_ty = array_value(&mut module, block, &[shape, tuple_kind]);
-
-    // The exported `[value, type]` pair.
-    let export_pair = array_value(&mut module, block, &[tuple_value, tuple_ty]);
-    (
-        module,
-        ComputePackageExports {
-            export_pair,
-            jit,
-            launch,
-            kernel,
-        },
-    )
-}
-
-fn array_value(module: &mut Module<LangProgram>, block: BlockId, ids: &[NodeId]) -> NodeId {
-    let items: Vec<ArrayItem> = ids
-        .iter()
-        .map(|&n| ArrayItem::new(AnyNodeId::Dynamic(n)))
-        .collect();
-    let payload = module.alloc_array(&items, block);
-    module.add_node(
-        block,
-        None,
-        Some(LangValue::from(LowValue::Array(payload))),
-    )
-}
-
-// --- Executing and building kernels ---------------------------------------
-
-struct JitNativeExt;
-struct LaunchNativeExt;
-struct LaunchTargetNativeExt;
-
-/// The native-operator registry for [`LangProgram`]: maps a callee's *type* to
-/// the [`NativeExt`] that lowers it.  This is what makes `jit f` / `launch k a`
-/// a normal `Apply` — the callee's type carries the operator identity.
-pub fn native_registry(
-) -> Box<dyn Fn(&LangValue) -> Option<&'static dyn NativeExt<LangProgram>>> {
-    Box::new(|ty_value: &LangValue| match ty_value.as_enum() {
-        Some(ComputeValue::TypeNativeJit) => Some(&JIT),
-        Some(ComputeValue::TypeNativeLaunch) => Some(&LAUNCH),
-        Some(ComputeValue::TypeLaunchTarget) => Some(&LAUNCH_TARGET),
-        _ => None,
-    })
-}
-
-static JIT: JitNativeExt = JitNativeExt;
-static LAUNCH: LaunchNativeExt = LaunchNativeExt;
-static LAUNCH_TARGET: LaunchTargetNativeExt = LaunchTargetNativeExt;
-
-impl NativeExt<LangProgram> for JitNativeExt {
-    fn check_apply(
+impl NativeOp<LangProgram> for JitOp {
+    fn build(
         &self,
         ctx: &mut dyn Ctx<LangProgram>,
         _e: ExprId,
-        _callee_value: NodeId,
-        _callee_ty: NodeId,
-        argument_value: NodeId,
-        argument_ty: NodeId,
-        _argument: ExprId,
+        args: &[NativeArg],
         loc: Loc,
     ) -> NativeApply {
-        // Function-ness gate: `jit` on a *concretely non-function* value is an
-        // error (mirroring the ordinary apply guard).
+        let f = &args[0];
+        // Function-ness gate: the argument's type must be a function (an arrow),
+        // binding the domain/codomain to the fresh cells below.
         let d = ctx.fresh();
         let c = ctx.fresh();
         let shape = ctx.array_node(&[d, c]);
@@ -479,20 +354,19 @@ impl NativeExt<LangProgram> for JitNativeExt {
         let universe = ctx.universe();
         let kind = ctx.array_node(&[fn_marker, universe]);
         let fn_ty = ctx.array_node(&[shape, kind]);
-        ctx.check_unify(argument_ty, fn_ty, loc, DiagKind::Guard);
+        ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
 
-        // Kernel type: `Kernel<Int -> Int>` = `[[int, int], [TypeKernel, Type]]`.
-        let int_ty = ctx.int_type();
-        let sig = ctx.array_node(&[int_ty, int_ty]);
+        // Kernel type: `[sig, [TypeKernel, Type]]` where `sig = [d, c]` is the
+        // arrow's signature — this is what `launch` reads the domain/codomain
+        // from.  It references the cells the gate just bound, so a concrete
+        // function signature flows into the kernel's type.
+        let sig = ctx.array_node(&[d, c]);
         let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
         let kernel_ty = ctx.array_node(&[sig, k_kind]);
 
-        let op = ctx.op_node(
-            LangOperator::from(ComputeOperator::Jit),
-            Some(argument_value),
-        );
+        let op = ctx.op_node(LangOperator::from(ComputeOperator::Jit), Some(f.value));
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
         let pair = ctx.array_node(&[op, kernel_ty]);
@@ -504,79 +378,46 @@ impl NativeExt<LangProgram> for JitNativeExt {
     }
 }
 
-impl NativeExt<LangProgram> for LaunchNativeExt {
-    fn check_apply(
+impl NativeOp<LangProgram> for LaunchOp {
+    fn build(
         &self,
         ctx: &mut dyn Ctx<LangProgram>,
         _e: ExprId,
-        _callee_value: NodeId,
-        _callee_ty: NodeId,
-        argument_value: NodeId,
-        argument_ty: NodeId,
-        _argument: ExprId,
+        args: &[NativeArg],
         loc: Loc,
     ) -> NativeApply {
-        // Kernel-ness gate: `launch` on a *concretely non-kernel* value is an
-        // error.  The fresh kernel type's signature cells bind to the kernel's
-        // actual domain/codomain.
+        let k = &args[0];
+        let a = &args[1];
+        // Kernel-ness gate: `k`'s type must be a kernel type, binding the
+        // domain/codomain to the fresh signature cells.
         let d = ctx.fresh();
         let c = ctx.fresh();
-        let shape = ctx.array_node(&[d, c]);
+        let sig = ctx.array_node(&[d, c]);
         let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
-        let kernel_ty = ctx.array_node(&[shape, k_kind]);
-        ctx.check_unify(argument_ty, kernel_ty, loc, DiagKind::Guard);
-
-        // The curried intermediate: `launch k` is a function-shaped value
-        // `domain -> codomain` that the outer apply completes.
-        let lt = ComputeValue::LaunchTarget(LaunchTarget {
-            kernel: argument_value,
-            domain: d,
-            codomain: c,
-        });
-        let lt_node = ctx.value_node(LangValue::from(lt));
-        let lt_ty = ctx.value_node(LangValue::from(ComputeValue::TypeLaunchTarget));
-        NativeApply {
-            node: lt_node,
-            val: Some(lt_node),
-            ty: lt_ty,
-        }
-    }
-}
-
-impl NativeExt<LangProgram> for LaunchTargetNativeExt {
-    fn check_apply(
-        &self,
-        ctx: &mut dyn Ctx<LangProgram>,
-        _e: ExprId,
-        callee_value: NodeId,
-        _callee_ty: NodeId,
-        argument_value: NodeId,
-        argument_ty: NodeId,
-        _argument: ExprId,
-        loc: Loc,
-    ) -> NativeApply {
-        let Some(ComputeValue::LaunchTarget(lt)) =
-            ctx.class_value(callee_value).and_then(|v| v.as_enum())
-        else {
-            unreachable!("a LaunchTarget-typed callee must carry a LaunchTarget value")
-        };
+        let kernel_ty = ctx.array_node(&[sig, k_kind]);
+        ctx.check_unify(k.ty, kernel_ty, loc.clone(), DiagKind::Guard);
         // Unify the argument against the kernel's domain.
-        ctx.check_unify(argument_ty, lt.domain, loc, DiagKind::Guard);
-        // Emit the `Launch` operator with operand `[kernel, arg]`.
-        let operands = ctx.array_node(&[lt.kernel, argument_value]);
-        let op = ctx.op_node(
-            LangOperator::from(ComputeOperator::Launch),
-            Some(operands),
-        );
-        // The expression's `term` must evaluate to a `[value, type]` pair, so
-        // `value_of` can `Index` it; the op's own result is the bare result.
-        let pair = ctx.array_node(&[op, lt.codomain]);
+        ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
+        // Emit the `Launch` operator over `[k, a]`, typed as the codomain.
+        let operands = ctx.array_node(&[k.value, a.value]);
+        let op = ctx.op_node(LangOperator::from(ComputeOperator::Launch), Some(operands));
+        let pair = ctx.array_node(&[op, c]);
         NativeApply {
             node: pair,
             val: None,
-            ty: lt.codomain,
+            ty: c,
         }
     }
 }
+
+/// The `lichen-compute` plugin's embedded lichen source — the real `compute`
+/// plugin file.  It defines the user-facing `jit`/`launch` functions as
+/// ordinary typed lichen (whose bodies call the native `$jit`/`$launch`), and
+/// exports them as the positional namespace tuple `compute`.
+pub const WRAPPER_SOURCE: &str = "\
+jit = f => $jit(f)
+launch = k => a => $launch(k, a)
+(jit, launch)
+";

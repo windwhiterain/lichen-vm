@@ -59,6 +59,7 @@ pub fn evaluate_raw(
         Some(store.registry()),
         preprocessed.code_base,
         &line_starts,
+        lichen_highlevel::no_native_ops(),
     );
     if !report.diagnostics.is_empty() {
         return Err(report.diagnostics);

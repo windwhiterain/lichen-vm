@@ -84,6 +84,15 @@ pub enum Expr {
         value: Box<Expr>,
         span: Span,
     },
+    /// `$name(args…)` — a call to a native operator registered by the compiling
+    /// module's plugin (a private, per-file naming contract).  `name` resolves
+    /// only against the module's native registry; the args are ordinary
+    /// expressions.
+    NativeCall {
+        op: String,
+        args: Vec<Expr>,
+        span: Span,
+    },
     /// `e[i]` — an index into an array.
     Index {
         array: Box<Expr>,
@@ -241,6 +250,7 @@ impl Expr {
             Expr::BinOp { span, .. } => *span,
             Expr::If { span, .. } => *span,
             Expr::Assert { span, .. } => *span,
+            Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,

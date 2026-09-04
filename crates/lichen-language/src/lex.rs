@@ -65,6 +65,10 @@ pub enum TokenKind {
     Hash,
     /// '!' -- a prefix assert: `!e` asserts `e`.
     Bang,
+    /// '$' -- a native-operator call prefix: `$jit(f)`.  Reserved for a
+    /// plugin's own embedded source; a normal file never lexes it as a valid
+    /// call (the checker's private registry resolves it, or it is an error).
+    Dollar,
     /// '=' -- a statement binding.
     Equals,
     /// '==' -- equality.
@@ -121,6 +125,7 @@ impl TokenKind {
             TokenKind::DoubleColon => "'::'".to_string(),
             TokenKind::Hash => "'#'".to_string(),
             TokenKind::Bang => "'!'".to_string(),
+            TokenKind::Dollar => "'$'".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::Eq => "'=='".to_string(),
             TokenKind::Leq => "'<='".to_string(),
@@ -204,6 +209,8 @@ enum RawToken {
     Hash,
     #[token("!")]
     Bang,
+    #[token("$")]
+    Dollar,
     #[token("=")]
     Equals,
     #[token("==")]
@@ -380,6 +387,7 @@ fn raw_to_kind(
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::Hash => Some(TokenKind::Hash),
         RawToken::Bang => Some(TokenKind::Bang),
+        RawToken::Dollar => Some(TokenKind::Dollar),
         RawToken::Equals => Some(TokenKind::Equals),
         RawToken::Eq => Some(TokenKind::Eq),
         RawToken::Leq => Some(TokenKind::Leq),

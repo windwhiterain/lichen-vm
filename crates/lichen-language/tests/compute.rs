@@ -1,6 +1,7 @@
 //! End-to-end tests for the `lichen-compute` extension: `jit` a function to a
 //! kernel (wasm), `launch` it with an argument, and the kernel/codomain type
-//! checks.
+//! checks.  The plugin is exposed as a positional tuple namespace (`compute`):
+//! `compute(0)` is `jit`, `compute(1)` is `launch`.
 
 use lichen_language::package::PackageStore;
 
@@ -22,15 +23,15 @@ fn fail(source: &str) -> Vec<String> {
 
 #[test]
 fn jit_then_launch_scalar() {
-    // `jit (x => x + 1)` compiles the lambda to a wasm kernel; `launch k 5`
+    // `compute(0)` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
     let out = run(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-k = jit (x => x + 1)
-launch k 5
+k = compute(0) (x => x + 1)
+compute(1) k 5
 "#,
     );
     assert_eq!(out, "6: Int", "jit+launch produced: {out:?}");
@@ -44,8 +45,8 @@ fn jit_multi_op_signature() {
 @{
   compute = import "compute.lichen"
 @}
-k = jit (x => x + 1 + 2)
-launch k 5
+k = compute(0) (x => x + 1 + 2)
+compute(1) k 5
 "#,
     );
     assert_eq!(out, "8: Int", "multi-op jit+launch produced: {out:?}");
@@ -53,13 +54,13 @@ launch k 5
 
 #[test]
 fn jit_rejects_a_non_function() {
-    // `jit` requires a function argument.
+    // `jit` requires a function argument (the function-ness gate).
     let diags = fail(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-jit 5
+compute(0) 5
 "#,
     );
     assert!(
@@ -70,13 +71,13 @@ jit 5
 
 #[test]
 fn launch_rejects_a_non_kernel() {
-    // `launch` requires a kernel target.
+    // `launch` requires a kernel target (the kernel-ness gate).
     let diags = fail(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-launch (x => x + 1) 5
+compute(1) (x => x + 1) 5
 "#,
     );
     assert!(

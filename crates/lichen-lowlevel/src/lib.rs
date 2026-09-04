@@ -484,6 +484,14 @@ pub struct StaticFunction {
     pub parameter: LocalNodeId,
     pub r#return: LocalNodeId,
     pub asserts: Vec<LocalNodeId>,
+    /// The template scope — [`StaticFunction::parameter`], [`Self::r#return`],
+    /// and every node owned by this function's body, as local indices.  This
+    /// is the static mirror of [`Function::nodes`]: a nested static closure
+    /// re-homed as a dynamic `Function` uses it as the fresh closure's scope,
+    /// so the clone walk can distinguish the closure's own nodes (re-tagged
+    /// with the fresh owner) from its captures (kept in the enclosing
+    /// template).
+    pub nodes: Vec<LocalNodeId>,
 }
 
 /// The outcome of the deep pass ([`Module::evaluate_node_deep`],

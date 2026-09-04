@@ -178,11 +178,44 @@ impl PackageStore {
         Ok(handle)
     }
 
-    /// Register the `lichen-compute` native package: build its frozen module,
-    /// file it in the shared registry under a device key, and remember the
-    /// handle so `compute.lichen` imports are served from here (no disk file).
+    /// Register the `lichen-compute` native package: compile its embedded
+    /// wrapper source into a frozen module, file it in the shared registry,
+    /// and remember the handle so `compute.lichen` imports are served from
+    /// here (no disk file).  The wrapper is compiled against the plugin's
+    /// *private* native registry — the only compilation that resolves its
+    /// `$jit`/`$launch` calls.
     fn register_compute(&mut self) -> Result<PackageHandle, String> {
-        let (module, exports) = crate::compute::build_compute_module();
+        let source = crate::compute::WRAPPER_SOURCE;
+        let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
+        if !diags.is_empty() {
+            return Err(diags.drain(..).map(|d| d.message).collect::<Vec<_>>().join("\n"));
+        }
+        let line_starts = crate::lex::line_starts(&preprocessed.code);
+        let report = crate::compile_with_imports_at(
+            &preprocessed.code,
+            &preprocessed.imports,
+            Some(self.registry()),
+            preprocessed.code_base,
+            &line_starts,
+            crate::compute::native_ops(),
+        );
+        if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
+            return Err(
+                report
+                    .diagnostics
+                    .into_iter()
+                    .map(|d| d.message)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+            );
+        }
+        let build = report.build.unwrap();
+
+        // Fully evaluate the exported value and type before freezing.
+        let mut module = build.module;
+        module.evaluate_node_deep(build.root_val, None);
+        module.evaluate_node_deep(build.root_ty, None);
+
         let hash = persist::artifact_hash(b"lichen-compute native package", &[]);
         let (key, _is_new) = self.alloc_key(hash);
         let freeze = self
@@ -192,21 +225,8 @@ impl PackageStore {
             .freeze_mapped(&module, key, hash);
         let export = StaticNodeId {
             module: freeze.key,
-            index: freeze.node_map[&exports.export_pair],
+            index: freeze.node_map[&build.root_term],
         };
-        // The three direct exports, for name binding (which is what the checker
-        // needs to detect a native callee statically).
-        let direct = [
-            ("jit", exports.jit),
-            ("launch", exports.launch),
-            ("Kernel", exports.kernel),
-        ]
-        .into_iter()
-        .map(|(name, node)| (name.to_string(), StaticNodeId {
-            module: freeze.key,
-            index: freeze.node_map[&node],
-        }))
-        .collect();
         self.registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -220,7 +240,7 @@ impl PackageStore {
             path: PathBuf::from(COMPUTE_PATH),
             key: freeze.key,
             export,
-            direct,
+            direct: Vec::new(),
         };
         self.native
             .insert(PathBuf::from(COMPUTE_PATH), handle.clone());
@@ -386,6 +406,7 @@ impl PackageStore {
             Some(self.registry()),
             preprocessed.code_base,
             &line_starts,
+            lichen_highlevel::no_native_ops(),
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(report.diagnostics);

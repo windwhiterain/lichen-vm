@@ -40,7 +40,7 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::ir::{BinOp, ExprId, ExprKind, IR, Schema, Span};
+use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema, Span};
 use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit, TypeTypeLit};
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
@@ -63,6 +63,7 @@ pub fn compile_with_imports(
         ir: IR::new(),
         scopes: Vec::new(),
         fn_depth: 0,
+        op_names: HashMap::new(),
     };
     if !imports.is_empty() {
         let mut frame = HashMap::new();
@@ -105,6 +106,11 @@ struct Compiler {
     /// Incremented only around a lambda's `r#return` compilation (a lambda's
     /// own depth is the value *before* its body opens).
     fn_depth: usize,
+    /// The interned native-operator names — a `$name`'s name is interned to a
+    /// `&'static str` (leaked once per unique name), because an
+    /// `ExprKind::NativeCall`'s op field is a `&'static str` (the `ExprKind`
+    /// must stay `Copy`).
+    op_names: HashMap<String, &'static str>,
 }
 
 impl Compiler {
@@ -226,6 +232,18 @@ impl Compiler {
             Some(*span),
         )
     }
+
+    /// Intern a native-operator name to a `&'static str` (leaked once per
+    /// unique name), so an [`ExprKind::NativeCall`]'s `op` stays `Copy`.
+    fn intern_op(&mut self, name: &str) -> &'static str {
+        if let Some(&s) = self.op_names.get(name) {
+            return s;
+        }
+        let s: &'static str = Box::leak(name.to_string().into_boxed_str());
+        self.op_names.insert(name.to_string(), s);
+        s
+    }
+
     fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
         let id = match e {
             Expr::Int(n, span) => self.alloc(
@@ -384,6 +402,24 @@ impl Compiler {
                 // assert points its caret at the `!`.
                 let condition = self.compile_expr(value)?;
                 self.alloc(ExprKind::Assert { condition }, span)
+            }
+            Expr::NativeCall { op, args, span } => {
+                // `$name(args…)` — compile each arg into the children arena,
+                // intern the op name, and alloc the NativeCall IR.  The name
+                // is validated against the compiling module's *private* native
+                // registry at check time (the frontend cannot see it).
+                let arg_ids: Vec<ExprId> = args
+                    .iter()
+                    .map(|a| self.compile_expr(a))
+                    .collect::<Result<_, _>>()?;
+                let start = self.ir.children.len() as u32;
+                self.ir.children.extend_from_slice(&arg_ids);
+                let range = ChildRange {
+                    start,
+                    end: self.ir.children.len() as u32,
+                };
+                let op = self.intern_op(op);
+                self.alloc(ExprKind::NativeCall { op, args: range }, span)
             }
             Expr::Annotation {
                 value,

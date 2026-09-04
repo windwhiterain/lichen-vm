@@ -1,27 +1,29 @@
 //! The native-operator extension point.
 //!
-//! A downstream may inject operators that are **values** with a distinctive
-//! type (e.g. a `Native(Jit)` value typed `TypeNativeJit`).  To call one from
-//! source, the program makes `jit f` an ordinary `Apply`; the checker, when it
-//! sees an `Apply` whose callee's *type* is a native-operator type, delegates
-//! to a [`NativeExt`] instead of building a runtime function apply.  This is
-//! the mechanism behind "Option B": the native operator is a value, its *type*
-//! carries the identity, and the core apply dispatch stays generic with one
-//! consult point ([`Checker::native_ext`]).
+//! A plugin registers native operators (e.g. `lichen-compute`'s `jit`/`launch`)
+//! that its own embedded lichen source calls through the `$name(args…)` form,
+//! compiled by the frontend to [`ExprKind::NativeCall`](crate::ir::ExprKind).
+//! The checker is a bystander: it compiles the arguments, looks `name` up in
+//! the *current module's* private [`NativeOps`] registry, and adopts the
+//! `[value, type]` pair the operator's [`NativeOp::build`] returns.  It has no
+//! knowledge of what the operator does or what its types are — the plugin's
+//! registration owns that, as a private contract with its own source.
 //!
 //! The extension point mirrors [`AttrExt`](crate::attr::AttrExt): the checker
-//! knows only the shape — "an `Apply` whose callee has one of your operator
-//! types should call you" — and a concrete extension supplies the operator's
-//! check-and-emit behaviour in the layer that defines it.  Highlevel ships the
-//! no-op [`no_native_ext`].
+//! knows only the shape — "a `$name(args)` call should delegate to your
+//! registry" — and a concrete plugin supplies the operator's check-and-emit
+//! behaviour in the layer that defines it.  Highlevel ships the empty
+//! [`no_native_ops`].  Because the registry is per-module and only a plugin's
+//! own file is compiled against it, a `$name` resolves privately: two plugins
+//! each registering `$jit` never collide.
 
 use lichen_lowlevel::NodeId;
 
 use crate::ir::{ExprId, Loc};
 use crate::program::{Ctx, HighProgram, ValueType};
 
-/// The result of a native operator's [`NativeExt::check_apply`]: the compiled
-/// pair node, the value node (or `None` when only known at runtime, like a call
+/// The result of a native operator's [`NativeOp::build`]: the compiled pair
+/// node, the value node (or `None` when only known at runtime, like a call
 /// result), and the type node — the same three records the ordinary apply
 /// wiring sets on an expression.
 #[derive(Debug, Clone, Copy)]
@@ -31,41 +33,55 @@ pub struct NativeApply {
     pub ty: NodeId,
 }
 
+/// A native operator's compiled argument: the expression id plus its value and
+/// type nodes.  The checker compiles each argument before calling
+/// [`NativeOp::build`] and hands the value/type nodes over, so the operator
+/// builds without re-reading per-expression internals (the curated [`Ctx`]
+/// does not expose them).
+#[derive(Debug, Clone, Copy)]
+pub struct NativeArg {
+    pub expr: ExprId,
+    pub value: NodeId,
+    pub ty: NodeId,
+}
+
 /// The compile-time lowering behaviour of one native operator.
 ///
-/// `check_apply` is called by [`Checker::check_app`] for an `Apply` whose
-/// callee's type is one of this extension's operator types.  The callee and the
-/// argument have already been compiled, so the implementation receives their
-/// value and type nodes, checks the operator's types, emits the operator's
-/// operation node (through the curated [`Ctx`]), and returns the applied pair.
-pub trait NativeExt<P: HighProgram>
+/// `build` is called by [`Checker::check_native_call`](crate::checker::Checker)
+/// for an [`ExprKind::NativeCall`](crate::ir::ExprKind).  The arguments have
+/// already been compiled, so the implementation receives their value/type
+/// nodes, checks the operator's types, emits the operator's operation node
+/// (through the curated [`Ctx`]), and returns the compiled pair.
+pub trait NativeOp<P: HighProgram>: Sync
 where
     P::Value: ValueType,
 {
-    /// Check and emit this native operator's application.  `e` is the `Apply`
-    /// expression being compiled; `callee_value`/`callee_ty` are the applied
-    /// value and its type; `argument_value`/`argument_ty` are the argument's
-    /// value and its type; `argument` is the argument expression id.  `ctx` is
-    /// the curated context — the operator builds through the highlevel's
-    /// encoding ([`Ctx`]), never raw lowlevel nodes.
-    fn check_apply(
+    /// Check and emit this native operator's call.  `e` is the `NativeCall`
+    /// expression being compiled; `args` are its compiled arguments; `loc` is
+    /// the call's source location.  `ctx` is the curated context — the
+    /// operator builds through the highlevel's encoding ([`Ctx`]), never raw
+    /// lowlevel nodes.
+    fn build(
         &self,
         ctx: &mut dyn Ctx<P>,
         e: ExprId,
-        callee_value: NodeId,
-        callee_ty: NodeId,
-        argument_value: NodeId,
-        argument_ty: NodeId,
-        argument: ExprId,
+        args: &[NativeArg],
         loc: Loc,
     ) -> NativeApply;
 }
 
-/// The no-op native-operator registry of a program with no native operators:
-/// no callee is recognised, so every `Apply` stays an ordinary function apply.
-pub fn no_native_ext<P: HighProgram>() -> Box<dyn Fn(&P::Value) -> Option<&'static dyn NativeExt<P>>>
+/// The registry attached to ONE module's checker: a private, name→operator
+/// mapping.  Empty for a normal file.  Because a plugin's file is compiled on
+/// its own, the slice is naturally private — resolving `$name` against it
+/// never leaks into another plugin's names.
+pub type NativeOps<P> = &'static [(&'static str, &'static dyn NativeOp<P>)];
+
+/// The no-op registry of a program with no native operators: no `$name` is
+/// recognised, so the frontend rejects any `$` form (a `NativeCall` that
+/// reaches the checker with an empty registry is a frontend/checker bug).
+pub fn no_native_ops<P: HighProgram>() -> NativeOps<P>
 where
     P::Value: ValueType,
 {
-    Box::new(|_| None)
+    &[]
 }
