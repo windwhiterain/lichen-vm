@@ -1,10 +1,16 @@
 # Zed language config for Lichen.
 #
 # `grammar` references the Tree-sitter grammar registered in `extension.toml`
-# under `[grammars.lichen]`. Lichen does not have a Tree-sitter grammar yet, so
-# this language currently loads with the language server but without syntax
-# highlighting until `tree-sitter-lichen` exists (see `extension.toml`).
+# under `[grammars.lichen]`, which is the `tree-sitter-lichen/` sub-directory of
+# this repository (see README in that directory).
 
 name = "Lichen"
 grammar = "lichen"
 path_suffixes = ["lichen"]
+tab_size = 4
+hard_tabs = false
+
+# Lichen has no real comments; prose lives in the `@{ ... @}` preprocessor block.
+# Indent after constructs that open a block / parenthesised group.
+increase_indent_pattern = "\\{\\s*$"
+decrease_indent_pattern = "^\\s*\\}\\s*$"

@@ -1,13 +1,15 @@
-; Tree-sitter highlights for Lichen (mirrors tree-sitter-lichen/queries/highlights.scm).
+; highlight queries for Lichen (tree-sitter-lichen)
 ;
-; Zed reads queries from the extension's `languages/<lang>/` directory, not from
-; the grammar repo — so this file must stay in sync with the grammar's queries.
+; Note: the same rules are mirrored in the Zed extension at
+; crates/lichen-language-zed/languages/lichen/highlights.scm because Zed reads
+; queries from the extension's language directory, not from the grammar repo.
+; Keep the two in sync.
 
-; The `@{ ... @}` preprocessor block is Lichen's only "prose" home (doc strings,
-; metadata); treat the whole block as a comment.
+; The `@{ ... @}` preprocessor block is Lichen's only "prose" home (doc
+; strings, metadata); treat the whole block as a comment.
 (preprocess_block) @comment
 
-; metadata keys / names inside the preprocessor block
+; The metadata keys / names inside the preprocessor block.
 (pp_entry name: (identifier) @property)
 (pp_entry path: (string_literal) @string)
 (pp_entry value: (string_literal) @string)
@@ -22,7 +24,7 @@
 ; bindings / definitions
 (binding name: (identifier) @variable)
 
-; keyword-like tokens
+; keyword-like tokens (anonymous)
 "if" @keyword
 "then" @keyword
 "else" @keyword
@@ -31,7 +33,7 @@
 "table" @keyword
 "import" @keyword
 
-; operators
+; operators (anonymous)
 "->" @operator
 "=>" @operator
 "::" @operator

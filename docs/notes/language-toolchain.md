@@ -72,6 +72,13 @@ crates/
                              is a different *package kind* (a WASM plugin that
                              speaks `zed_extension_api`), not because it is a
                              "different tool".
+
+tree-sitter-lichen/          the Tree-sitter grammar, at the repo root so it can
+                             be a *sub-directory grammar* of this monorepo for
+                             the Zed extension (`[grammars.lichen]` with
+                             `path = "tree-sitter-lichen"`). A simple, permissive
+                             grammar for highlighting / outline / brackets — not
+                             a re-implementation of the strict frontend.
 ```
 
 The tooling crate is the trick. It bundles two things that belong together:
@@ -194,10 +201,21 @@ not pull the tokio/tower async stack.
   with `path = "crates/lichen-language-zed"` (and `default-features = false` on
   the `lichen-language-server` dependency keeps the tower-lsp/tokio stack out of
   the WASM). Install-as-dev-extension needs no Git or registry at all.
-- **Known gap:** Lichen's lexer/parser is hand-rolled, so there is no
-  `tree-sitter-lichen` grammar yet. Until one exists (a separate repo registered
-  under `[grammars.lichen]`), Zed can load the language and run the language
-  server, but there is no syntax highlighting.
+- **Grammar:** Lichen's lexer/parser is hand-rolled, so syntax highlighting needs
+  a Tree-sitter grammar. `tree-sitter-lichen/` at the repo root provides it.
+  It is a **deliberately simple, permissive** grammar (not a re-implementation of
+  the strict frontend): its job is highlighting, outline and bracket-matching,
+  so it glosses over the frontend's whitespace-sensitive "Glue" postfix
+  distinction and accepts more than the strict parser. It lives in this repo as
+  a sub-directory so the extension can reference it via the grammar `path` field
+  (`[grammars.lichen]` with `path = "tree-sitter-lichen"`), which Zed supports
+  for (mono)repos holding multiple grammars. `tree-sitter generate` was run and
+  `src/parser.c` is committed, so Zed builds it without the toolchain. Queries
+  live both in `tree-sitter-lichen/queries/` and (mirrored) in the extension's
+  `languages/lichen/`, because Zed reads queries from the extension directory.
+- **Still missing:** a pinned `rev` in `[grammars.lichen]` (set it to the commit
+  that contains `tree-sitter-lichen/` after committing, or use a `file://`
+  `repository` for local dev).
 
 ## Fitting future tools into the model
 

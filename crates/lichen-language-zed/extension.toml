@@ -30,15 +30,22 @@ languages = ["Lichen"]
 [language_servers.lichen-language-server.language_ids]
 "Lichen" = "lichen"
 
-# Tree-sitter grammar for syntax highlighting.
+# Tree-sitter grammar for syntax highlighting, living in THIS repository as the
+# `tree-sitter-lichen/` sub-directory.  The optional `path` field (seen here) is
+# what lets Zed build a grammar from a sub-directory of a (mono)repo; it is
+# interpreted relative to the root of the grammar repository.
 #
-# Lichen's lexer/parser is hand-rolled (in `crates/lichen-language`); there is no
-# `tree-sitter-lichen` yet. Until one exists, Zed loads the language and the
-# language server, but nothing is syntax-highlighted. Author the grammar (a
-# separate `tree-sitter-lichen` repo), then add an entry here:
+# `rev` must be a real Git SHA in `lichen-vm` — set it to the commit that
+# contains the `tree-sitter-lichen/` directory, then `tree-sitter generate` was
+# already run so `src/parser.c` is committed.
+#
+# For local development with an uncommitted grammar you can point `repository`
+# at the filesystem instead (leave `path` as-is):
 #
 #   [grammars.lichen]
-#   repository = "https://github.com/<user>/tree-sitter-lichen"
-#   rev = "<commit sha>"
-#
-# and keep `grammar = "lichen"` in `languages/lichen/config.toml`.
+#   repository = "file:///C:/resource/lichen-vm"
+#   path = "tree-sitter-lichen"
+[grammars.lichen]
+repository = "https://github.com/lichen-lang/lichen-vm"
+rev = "0000000000000000000000000000000000000000" # TODO: set to a real commit SHA
+path = "tree-sitter-lichen"

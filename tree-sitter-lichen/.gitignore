@@ -1,0 +1,15 @@
+# C build artifacts from `tree-sitter parse`/`build` on Windows
+parser.obj
+parser.lib
+parser.exp
+
+# rust / cargo
+target/
+Cargo.lock
+
+# node
+node_modules/
+
+# tree-sitter scratch
+*.o
+*.wasm

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammar": "grammar.js",
+  "parser-directories": ["."],
+  "metadata": {
+    "version": "0.1.0"
+  }
+}

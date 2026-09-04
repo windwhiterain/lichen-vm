@@ -7,4 +7,5 @@ members = [
     "crates/lichen-language",
     "crates/lichen-language-server",
     "crates/lichen-language-zed",
+    "tree-sitter-lichen",
 ]
