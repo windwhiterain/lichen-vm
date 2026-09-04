@@ -10,6 +10,7 @@ logos = "0.16"
 sha2 = "0.10"
 lichen-compute = { path = "../lichen-compute" }
 lichen-highlevel = { path = "../lichen-highlevel" }
+lichen-perspective = { path = "../lichen-perspective" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
 lichen-utils = { path = "../lichen-utils" }
 

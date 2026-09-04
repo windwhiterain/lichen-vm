@@ -127,7 +127,7 @@ pub fn build_report(
     let build = Checker::<LangProgram>::build_in_attr_native(
         ir,
         registry,
-        persp_attr_ext(),
+        persp_attr_ext::<LangProgram>(),
         native_ops,
     );
     // The pretty rendering is shared across the whole report: one type

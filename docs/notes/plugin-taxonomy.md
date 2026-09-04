@@ -3,6 +3,7 @@
 > Status: current
 > Points at: `crates/lichen-highlevel/src/plugin.rs` (`NativePlugin`),
 > `crates/lichen-compute` (the reference native plugin),
+> `crates/lichen-perspective` (the established compiler plugin),
 > `crates/lichen-language/src/program.rs` (`lang_compose_vocabulary!`),
 > and `crates/lichen-language/src/package.rs` (`compute_native_ops!`).
 
@@ -84,8 +85,12 @@ native-plugin-shaped, but the feature also requires
 - the `LangOperator::GcdOp(GcdOp::Gcd)` persist discriminator (`persist.rs`).
 
 So `Perspective` is a compiler plugin: the language layer owns and codesigns
-those sites. Its semantic core could live in a crate, but it would never be a
-native plugin (it invents syntax/IR/persist).
+those sites. Its **semantic core** — the program-generic `AttrExt<P>`,
+`OperatorExt<P> for GcdOp`, `gcd`/`divides`, and `persp_attr_ext::<P>()` — is
+established as its own crate, `lichen-perspective`, so the lattice meaning is
+shared across hosts and testable without one. The codesign sites (grammar, AST,
+IR, persist) stay in the language layer; that is exactly why it is not a native
+plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
 
 ## The decision rule
 
@@ -109,6 +114,11 @@ native plugin (it invents syntax/IR/persist).
 
 - `lichen-compute` is a native plugin (its own crate; `NativePlugin` marker +
   `compute_native_ops!`).
-- `lichen-language` composes it via `lang_compose_vocabulary!` (leaves) and
-  `compute_native_ops!` (op registry) in one manifest each.
-- `Perspective` remains a compiler plugin, codesigned in `lichen-language`.
+- `lichen-perspective` is a compiler plugin (its own crate): the program-generic
+  semantic core (`AttrExt<P>`, `OperatorExt<P> for GcdOp`, `gcd`/`divides`,
+  `persp_attr_ext::<P>()`).
+- `lichen-language` composes both: the native plugin's leaves and op registry
+  via `lang_compose_vocabulary!` / `compute_native_ops!`, and the compiler
+  plugin's leaves (`Perspective`, `GcdOp`) via `lang_compose_vocabulary!`.
+- `Perspective`'s codesign sites (grammar `# p`, AST fields, `IR<Perspective>`
+  schema tails, the `GcdOp` persist discriminator) stay in `lichen-language`.

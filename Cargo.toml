@@ -5,6 +5,7 @@ members = [
     "crates/lichen-lowlevel",
     "crates/lichen-highlevel",
     "crates/lichen-compute",
+    "crates/lichen-perspective",
     "crates/lichen-language",
     "crates/lichen-language-server",
     "crates/lichen-language-zed",
