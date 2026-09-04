@@ -230,3 +230,95 @@ compute(1) k ((2, 3), 4)
     );
     assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
 }
+
+#[test]
+fn jit_cross_kernel_call() {
+    // Style 2: `k1`'s body calls kernel `k0` (`k0 (x + 1)`).  Launch assembles
+    // k1's *relative launch set* — k1 plus the kernel it cross-calls, k0 — into
+    // one wasm module, so the cross-kernel call is an in-module `call`:
+    //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
+    // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
+    // checker only resolves it via `$launch`), so the value is asserted.  The
+    // wrapper form `compute(1) k0 (x + 1)` *does* give `Int` — covered by
+    // `jit_cross_kernel_wrapper` below.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => k0 (x + 1))
+compute(1) k1 5
+"#,
+    );
+    assert!(
+        out.starts_with("7:"),
+        "cross-kernel call produced 7, got: {out:?}"
+    );
+}
+
+#[test]
+fn jit_cross_kernel_subexpr() {
+    // A cross-kernel call result used as a sub-expression: `k0 (x) + 1`.  The
+    // checker peels the call result via `Index(apply, 0)` (a `value_of`
+    // extraction), which the JIT now looks through to emit the kernel call
+    // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => k0 (x) + 1)
+compute(1) k1 5
+"#);
+    assert!(out.starts_with("7:"), "subexpr produced: {out:?}");
+}
+
+#[test]
+fn jit_inline_lichen_function() {
+    // Style 1: a lichen-function call in a kernel body.  The checker's deep
+    // pass already *reduces* the same-module call (`helper x` → `x + 2`), so
+    // the JIT traces the reduced graph; a substituted parameter cell resolves
+    // to the enclosing kernel's parameter (via its unified equality class) and
+    // becomes a `local.get`.  `helper x + 1` → `(x + 2) + 1`:
+    //   launch k 5 = (5 + 2) + 1 = 8.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+helper = y => y + 2
+k = compute(0) (x => helper x + 1)
+compute(1) k 5
+"#);
+    assert!(out.starts_with("8:"), "inline produced: {out:?}");
+}
+
+#[test]
+fn jit_cross_kernel_wrapper() {
+    // Style 3: the wrapper/`$launch` form `compute(1) k0 (x + 1)` inside a
+    // kernel body.  `launch = k => a => $launch(k, a)` is a *two-step* native
+    // (assemble the module, then call it), so its argument is a run-time value
+    // and arrives as a `Parameterized` cell at codegen time.  The cell is
+    // unified with the defining `x + 1` computation, and the JIT emits that
+    // through the cell's equality class:  launch k1 5 = k0(5 + 1) = 7.
+    // Unlike the bare `k x` apply, the wrapper's result is typed `Int`.
+    let out = run(r#"
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => compute(1) k0 (x + 1))
+compute(1) k1 5
+"#);
+    assert!(out.starts_with("7:"), "wrapper produced: {out:?}");
+}
+
+#[test]
+fn jit_inline_nested_function() {
+    // Nested inline: the deep pass reduces `b x` (which calls `a`) through to
+    // the leaf arithmetic, so `b x + 1` → `(x + 1) + 1 + 1`:
+    //   a = y => y + 1;  b = y => a y + 1;  launch k 5 = (((5 + 1) + 1) + 1) = 8.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+a = y => y + 1
+b = y => a y + 1
+k = compute(0) (x => b x + 1)
+compute(1) k 5
+"#);
+    assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
+}

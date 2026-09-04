@@ -184,7 +184,16 @@ impl<P: Program> Module<P> {
                                         .static_function_apply(sref, argument, block, node, cell),
                                 }
                             }
-                            _ => unreachable!("Apply target must be a function value"),
+                            // A non-`Function` target is a *callable program
+                            // value* (e.g. a compute `Kernel`) — not a
+                            // structural apply.  The compute layer compiles it;
+                            // here it stays lazy so a body's deep pass and the
+                            // JIT can read the graph instead of panicking on a
+                            // legitimate (checker-validated) kernel apply.  A
+                            // genuinely non-callable target is caught by the
+                            // checker's unification before the deep pass runs,
+                            // so reaching this arm is never a real error.
+                            _ => P::Value::from(LowValue::Parameterized),
                         }
                     }
                     _ => unreachable!("Apply operand must be an array of [function, argument]"),
