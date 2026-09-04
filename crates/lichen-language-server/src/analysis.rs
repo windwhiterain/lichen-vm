@@ -132,6 +132,12 @@ pub struct Doc {
     imports: Vec<ImportBinding>,
     /// Import-directive span → index into [`Doc::imports`].
     import_by_span: HashMap<Span, usize>,
+    /// Per struct-block field (an exported struct's `succ`/`add`), keyed by
+    /// field name: the field value's checked `value : type` snapshot.  Field
+    /// names are not IR nodes, so to hover a field *definition* with its type
+    /// (`succ` → `Function : Int -> Int`) we read it from the `Record` node's
+    /// field-value tuple.
+    field_types: HashMap<String, StatementValue>,
 }
 
 impl Doc {
@@ -203,7 +209,7 @@ impl Doc {
         // A read-only per-statement type/value snapshot.  It is computed here,
         // once, by reading the built module's cached values — never by
         // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
-        let (statements, stmt_starts) = match report.build {
+        let (statements, stmt_starts, field_types) = match report.build {
             Some(build) => {
                 let mut statements = Vec::new();
                 let mut starts = Vec::new();
@@ -246,9 +252,58 @@ impl Doc {
                     statements.push(StatementValue { span, ty, value });
                     starts.push(start as u32);
                 }
-                (statements, starts)
+                // A struct-block field's value:type snapshot, keyed by field
+                // name.  A `RecordBlock` emits a `Record` node whose value is a
+                // tuple of the field values (parallel to its `struct_names`),
+                // so we read each field's value/type from the checker.  Field
+                // names are not IR nodes, hence this name-keyed table — it is
+                // what lets hovering a field *definition* (`succ` in
+                // `{succ = x => x + 1}`) render `Function : Int -> Int`.
+                let mut field_types: HashMap<String, StatementValue> = HashMap::new();
+                for id in 0..build.ir.expr.len() {
+                    let eid = ExprId(id as u32);
+                    let lichen_highlevel::ir::ExprKind::Record { value, names } =
+                        build.ir[eid].kind
+                    else {
+                        continue;
+                    };
+                    let lichen_highlevel::ir::ExprKind::Tuple(tuple_range) = build.ir[value].kind
+                    else {
+                        continue;
+                    };
+                    let vals = &build.ir.children[tuple_range.start as usize..tuple_range.end as usize];
+                    let field_names =
+                        &build.ir.struct_names[names.start as usize..names.end as usize];
+                    for (name, &val_id) in field_names.iter().zip(vals.iter()) {
+                        let Some(name) = name else { continue };
+                        let ty = match build.ty[val_id] {
+                            Some(t) => print_type(&build.module, t),
+                            None => String::new(),
+                        };
+                        let value = build.val[val_id].and_then(|vn| {
+                            match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                                Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                                Some(v) => Some(print_value(
+                                    &build.module,
+                                    v,
+                                    build.ty[val_id].unwrap_or_default(),
+                                )),
+                                None => None,
+                            }
+                        });
+                        field_types.insert(
+                            name.to_string(),
+                            StatementValue {
+                                span: (0, 0),
+                                ty,
+                                value,
+                            },
+                        );
+                    }
+                }
+                (statements, starts, field_types)
             }
-            None => (Vec::new(), Vec::new()),
+            None => (Vec::new(), Vec::new(), HashMap::new()),
         };
 
         let (defs, resolve, def_index) = index(&program, &pre.imports);
@@ -300,6 +355,7 @@ impl Doc {
             stmt_starts,
             imports,
             import_by_span,
+            field_types,
         }
     }
 
@@ -407,7 +463,16 @@ impl Doc {
                                 _ => format!("`{name}` — defined at line `{}`", def.span.0),
                             }
                         }
-                        None => format!("`{name}` — defined at line `{}`", def.span.0),
+                        // A struct-block field (`succ` in `{succ = …}`): its
+                        // value:type from the Record node's field table.
+                        None => match self.field_types.get(&def.name) {
+                            Some(sv) => match (&sv.value, sv.ty.is_empty()) {
+                                (Some(v), false) => format!("`{name}` — `{v} : {}`", sv.ty),
+                                (None, false) => format!("`{name}` — `{}`", sv.ty),
+                                _ => format!("`{name}` — defined at line `{}`", def.span.0),
+                            },
+                            None => format!("`{name}` — defined at line `{}`", def.span.0),
+                        },
                     }
                 }
                 None => {
@@ -1274,19 +1339,15 @@ mod tests {
             Some(math_path.as_path()),
         );
 
-        // `succ` at line 1, char 2; `add` at line 2, char 2.
+        // `succ` at line 1, char 2; `add` at line 2, char 2.  Each hovers with
+        // its value:type (`Function : Int -> Int` / `... -> Int -> Int`), never
+        // "unresolved" and never merely "defined at line".
         for (line, name) in [(1usize, "succ"), (2, "add")] {
             let (msg, _) = d
                 .hover_at(Position { line: line as u32, character: 2 })
                 .expect(&format!("hover on `{name}`"));
-            assert!(
-                !msg.contains("unresolved"),
-                "`{name}` definition should resolve; got {msg}"
-            );
-            assert!(
-                msg.contains("defined at line") || msg.contains("->"),
-                "`{name}` definition should resolve to a definition/type; got {msg}"
-            );
+            assert!(!msg.contains("unresolved"), "`{name}` should resolve; got {msg}");
+            assert!(msg.contains("->"), "`{name}` should show its type; got {msg}");
         }
     }
 
