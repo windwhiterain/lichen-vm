@@ -2,6 +2,7 @@
 parser.obj
 parser.lib
 parser.exp
+*.dll
 
 # rust / cargo
 target/

@@ -7,7 +7,7 @@
 //! The `server` feature is required (it provides the binary target); `cargo
 //! test -p lichen-language-server` runs with default features, so this builds.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 
 /// Encode one JSON-RPC message as an LSP stdio frame.
@@ -80,6 +80,7 @@ fn handshake_and_features() {
     let init = read_frame(&mut stdout);
     assert!(init.contains("\"id\":1"), "initialize resp = {init}");
     assert!(init.contains("\"capabilities\""), "initialize resp = {init}");
+    assert!(init.contains("semanticTokensProvider"), "initialize resp = {init}");
 
     // initialized (notification), then open a document that has an unresolved name.
     send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
@@ -108,10 +109,19 @@ fn handshake_and_features() {
     assert!(definition.contains("\"id\":3"), "definition resp = {definition}");
     assert!(definition.contains("file:///test.lichen"), "definition resp = {definition}");
 
+    // semanticTokens/full — Lichen's own parser drives the highlight payload.
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.lichen"}}}"#,
+    );
+    let tokens = read_frame(&mut stdout);
+    assert!(tokens.contains("\"id\":4"), "semanticTokens resp = {tokens}");
+    assert!(tokens.contains("\"data\""), "semanticTokens resp = {tokens}");
+
     // shutdown, then exit.
-    send(&mut stdin, r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#);
     let shutdown = read_frame(&mut stdout);
-    assert!(shutdown.contains("\"id\":4"), "shutdown resp = {shutdown}");
+    assert!(shutdown.contains("\"id\":5"), "shutdown resp = {shutdown}");
     send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
     drop(stdin);
     child.wait().expect("server exits cleanly");

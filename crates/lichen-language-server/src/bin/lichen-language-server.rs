@@ -22,6 +22,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use lichen_language_server::analysis::Doc;
+use lichen_language_server::lsp::semantic_token_legend;
 
 /// The server state: one source buffer per open document URI.
 ///
@@ -74,6 +75,18 @@ impl LanguageServer for Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                // Lichen's own parser drives highlighting, so Zed can run with
+                // (or without) the tree-sitter grammar — the semantic tokens
+                // carry the color when the grammar is absent.
+                semantic_tokens_provider: Some(
+                    SemanticTokensOptions {
+                        legend: semantic_token_legend(),
+                        range: None,
+                        full: Some(SemanticTokensFullOptions::Bool(true)),
+                        ..Default::default()
+                    }
+                    .into(),
+                ),
                 ..Default::default()
             },
             server_info: None,
@@ -136,6 +149,20 @@ impl LanguageServer for Backend {
             range,
         }));
         Ok(response)
+    }
+
+    async fn semantic_tokens_full(&self, params: SemanticTokensParams) -> Result<Option<SemanticTokensResult>> {
+        let uri = params.text_document.uri;
+        let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
+            return Ok(None);
+        };
+        // The frontend classifies every token into a `SemanticTokens` payload
+        // (delta-encoded, with the legend indices).  `Doc` is `!Send`, so the
+        // `spawn_blocking` returns the fully-encoded (Send) exchange object.
+        let tokens = tokio::task::spawn_blocking(move || Doc::new(text).semantic_tokens_lsp())
+            .await
+            .expect("compile lichen source");
+        Ok(Some(SemanticTokensResult::Tokens(tokens)))
     }
 }
 
