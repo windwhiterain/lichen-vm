@@ -149,6 +149,106 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
     (program, errors)
 }
 
+/// Re-parse a contiguous statement *window* `tokens[start..end]` into its
+/// statements, for incremental splicing.
+///
+/// The window must begin at a token-before-a-statement (it may open with
+/// leading separators and close with trailing ones, both dropped) — the caller
+/// chooses it to cover exactly the statements that a user edit touched.  The
+/// statements are produced with the [`apply_type_mode`] post-pass applied (a
+/// top-level statement is in term mode).  Like [`parse`], the window carries
+/// recovered errors rather than failing.
+///
+/// This is the incremental-parse primitive: the tokens it consumes already
+/// carry *absolute* byte ranges and (line, col) spans (the lexer emits them),
+/// so the resulting statements are directly spliceable into a program without
+/// any position re-mapping.  It reuses the recovery behavior of the whole
+/// statement list, so a statement in the window recovers in exactly the way it
+/// would when parsed as part of a full program.
+pub fn parse_statement_region(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> (Vec<Stmt>, Vec<Diag>) {
+    let (statements, errors) = std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, || region_inner(tokens, start, end))
+            .expect("spawn the region parse worker");
+        worker.join().expect("the region parse worker panicked")
+    });
+    let errors = errors
+        .into_iter()
+        .map(|(span, message, stage)| Diag {
+            span,
+            message,
+            stage,
+            check: None,
+        })
+        .collect();
+    (statements, errors)
+}
+
+/// The worker's result for a region: the statements plus their diagnostics in a
+/// `Send` form (the crate's `Diag` embeds the checker's, which is not `Send`).
+type RegionOut = (Vec<Stmt>, Vec<(Option<Span>, String, Stage)>);
+
+fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
+    let region = &tokens[start..end];
+    let expr = expression(region);
+    // `seps elem (seps elem)* seps` — like the statement list, but without the
+    // final-expr pop.  Leading/trailing separators are consumed and dropped.
+    let seps = token(TokenKind::Separator).ignored().repeated().collect::<Vec<_>>();
+    let seps1 = token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>();
+    let elem = statement(region, expr.clone()).recover_with(skip_then_retry_until(
+        any::<In<'_>, E<'_>>().ignored(),
+        choice((
+            token(TokenKind::Eof).ignored(),
+            token(TokenKind::RBrace).ignored(),
+        )),
+    ));
+    let parser = seps
+        .clone()
+        .then(elem.clone())
+        .then(
+            (seps1.clone().then(elem.clone()))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(seps)
+        .map(|(((_, first), rest), _)| {
+            std::iter::once(first)
+                .chain(rest.into_iter().map(|(_, e)| e))
+                .collect::<Vec<Stmt>>()
+        });
+    let stream = Stream::from_iter(region.iter().cloned());
+    let (output, errs) = parser.parse(stream).into_output_errors();
+    let mut errors: Vec<(Option<Span>, String, Stage)> = Vec::new();
+    for e in &errs {
+        let diag = diag_from(region, e);
+        if !errors
+            .iter()
+            .any(|(span, message, _)| *span == diag.span && *message == diag.message)
+        {
+            errors.push((diag.span, diag.message, diag.stage));
+        }
+    }
+    // The region's tokens carry absolute positions, so the statements are
+    // spliceable as-is.  Apply the type-mode post-pass (top-level statements
+    // are in term mode), reusing the whole-program pass on a synthetic program.
+    let program = Program {
+        statements: output.unwrap_or_default(),
+        expr: Expr::Int(0, (1, 1)),
+        error_blocks: Vec::new(),
+    };
+    let program = apply_type_mode(program);
+    (program.statements, errors)
+}
+
 // ---------------------------------------------------------------------------
 // Grammar
 

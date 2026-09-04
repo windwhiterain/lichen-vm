@@ -43,6 +43,61 @@ fn a_program_is_bindings_followed_by_the_final_expression() {
 }
 
 #[test]
+fn a_region_over_the_whole_stream_equals_the_statement_sequence() {
+    // Ends in an expression so the program parses cleanly.
+    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    let program = parse(&tokens).program;
+    // The full logical statement list = the program's `statements` (all but the
+    // last) plus the final expression as its own statement.
+    let expected_full = {
+        let mut v = program.statements.clone();
+        v.push(Stmt::Expr(program.expr.clone()));
+        v
+    };
+    // The region parser over the whole stream (everything before Eof) must
+    // reproduce exactly that sequence.
+    let (region_stmts, errors) = parse_statement_region(&tokens, 0, tokens.len() - 1);
+    assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
+    assert_eq!(region_stmts.len(), expected_full.len());
+    // Statements don't derive PartialEq: compare their debug rendering.
+    assert_eq!(format!("{region_stmts:?}"), format!("{expected_full:?}"));
+}
+
+#[test]
+fn a_region_parses_a_middle_window() {
+    let tokens = lex("a = 1\nb = 2\nc = a + b").tokens;
+    // The tokens: a = 1 SEP b = 2 SEP c = a + b EOF.
+    // Statement "b = 2" spans token indices 4..7.
+    let (region_stmts, errors) = parse_statement_region(&tokens, 4, 7);
+    assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
+    assert_eq!(region_stmts.len(), 1);
+    match &region_stmts[0] {
+        Stmt::Binding(binding) => assert_eq!(binding.name, "b"),
+        _ => panic!("expected a binding, got {:?}", region_stmts[0]),
+    }
+}
+
+#[test]
+fn a_region_recovering_over_a_broken_window_still_produces_statements() {
+    // An unclosed `(` makes the trailing *expression* statement an error block;
+    // the region parser must still return that statement (recovered), like the
+    // whole program parser would.
+    let source = "a = 1\n(2";
+    let tokens = lex(source).tokens;
+    let whole_program = parse(&tokens).program;
+    let (region_stmts, _) = parse_statement_region(&tokens, 0, tokens.len() - 1);
+    // The whole program's statement list, with the recovered tail expression
+    // appended as its own statement (the form the region parser produces).
+    let expected_full = {
+        let mut v = whole_program.statements.clone();
+        v.push(Stmt::Expr(whole_program.expr.clone()));
+        v
+    };
+    assert_eq!(region_stmts.len(), expected_full.len());
+    assert_eq!(format!("{region_stmts:?}"), format!("{expected_full:?}"));
+}
+
+#[test]
 fn statement_errors_carry_spans() {
     // A binding-only program has no final expression.
     let err = parse_err("a = 5");
