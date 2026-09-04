@@ -529,24 +529,8 @@ fn emit_node(
             // result of an earlier `jit`).  Emit the (scalar) argument, then a
             // call the launch-time assembler resolves to the callee's function
             // index once the kernel's relative launch set is laid out.
-            if let Some(kid) = kernel_id_of(module, callee) {
-                // v1 restricts the callee domain to a scalar (arity 1): the
-                // argument is one i64 on the stack.
-                let arity = kernels()
-                    .lock()
-                    .unwrap()
-                    .get(&kid)
-                    .map(|f| flat_arity(&f.param_shape))
-                    .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
-                if arity != 1 {
-                    return Err(
-                        "cross-kernel call supports only a scalar-domain callee in v1".into()
-                    );
-                }
-                let arg = pair_value_node(module, arg).unwrap_or(arg);
-                emit_node(module, param_pair, param_value, arg, body)?;
-                body.push(KernelInstr::CallKernel(kid));
-                return Ok(());
+            if kernel_id_of(module, callee).is_some() {
+                return emit_cross_kernel_call(module, param_pair, param_value, callee, arg, body);
             }
             // Style 1: a full lichen-function call (inline its body) — deferred.
             return Err(
@@ -554,12 +538,60 @@ fn emit_node(
                     .into(),
             );
         }
+        LangOperator::ComputeOperator(op) => match op {
+            // The wrapper's `launch`/`$launch` (`compute(1) k x`) — the *typed*
+            // cross-kernel call form (its codomain is resolved by `LaunchOp`,
+            // unlike a bare `k x`).  Lower it exactly like a kernel `Apply`.
+            ComputeOperator::Launch => {
+                let (kernel, arg) = apply_pair(module, operation.operand)?;
+                return emit_cross_kernel_call(module, param_pair, param_value, kernel, arg, body);
+            }
+            // Jitting another function from *inside* a kernel body is not a v1
+            // cross-kernel call.
+            other => {
+                return Err(format!(
+                    "unsupported compute operator in kernel body: {other:?}"
+                ))
+            }
+        },
         other => {
             return Err(format!(
                 "unsupported operation in kernel body: {other:?} (kernel-safe subset is scalar arith)"
             ))
         }
     }
+    Ok(())
+}
+
+/// Emit a cross-kernel call (style 2): the (scalar) argument expression, then a
+/// [`KernelInstr::CallKernel`] the launch-time assembler resolves.  Both a
+/// direct kernel `Apply` (`k x`) and the wrapper's `launch`/`$launch`
+/// (`compute(1) k x`) lower here — the latter is the typed form (its codomain
+/// is resolved by [`LaunchOp`]), the former the untyped-form gap.
+fn emit_cross_kernel_call(
+    module: &Module<LangProgram>,
+    param_pair: NodeId,
+    param_value: NodeId,
+    kernel: NodeId,
+    arg: NodeId,
+    body: &mut Vec<KernelInstr>,
+) -> Result<(), String> {
+    let kid = kernel_id_of(module, kernel)
+        .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
+    // v1 restricts the callee domain to a scalar (arity 1): the argument is one
+    // i64 on the stack.
+    let arity = kernels()
+        .lock()
+        .unwrap()
+        .get(&kid)
+        .map(|f| flat_arity(&f.param_shape))
+        .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
+    if arity != 1 {
+        return Err("cross-kernel call supports only a scalar-domain callee in v1".into());
+    }
+    let arg = pair_value_node(module, arg).unwrap_or(arg);
+    emit_node(module, param_pair, param_value, arg, body)?;
+    body.push(KernelInstr::CallKernel(kid));
     Ok(())
 }
 

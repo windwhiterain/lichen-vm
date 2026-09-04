@@ -237,8 +237,10 @@ fn jit_cross_kernel_call() {
     // k1's *relative launch set* — k1 plus the kernel it cross-calls, k0 — into
     // one wasm module, so the cross-kernel call is an in-module `call`:
     //   launch k1 5 = k0(5 + 1) = k0(6) = 7.
-    // The codomain type of a direct kernel apply is still `?a` (the checker
-    // leaves it unbound, unlike `$launch`), so we assert the value.
+    // The bare `k x` apply leaves a direct kernel apply's codomain `?a` (the
+    // checker only resolves it via `$launch`), so the value is asserted.  The
+    // wrapper form `compute(1) k0 (x + 1)` *does* give `Int` but needs style-1
+    // inline (trace through the `launch` wrapper) to JIT — a next step.
     let out = run(
         r#"
 @{
@@ -251,7 +253,7 @@ compute(1) k1 5
     );
     assert!(
         out.starts_with("7:"),
-        "cross-kernel call produced window 7, got: {out:?}"
+        "cross-kernel call produced 7, got: {out:?}"
     );
 }
 
