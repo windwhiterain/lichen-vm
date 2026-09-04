@@ -362,8 +362,26 @@ fn emit_node(
                 body.instruction(&Instruction::LocalGet(k as u32));
                 return Ok(());
             }
+            // Conditional branch: `if c then a else b` lowers to `[b, a][c]`
+            // — a 2-element array indexed by a 0/1 selector, which is a
+            // wasm `select`.  Push the then-branch, the else-branch, then the
+            // selector (wrapped to i32), and `select` picks the then-branch
+            // when the selector is non-zero.
+            if let Some(items) = module.array_items(target) {
+                if items.len() == 2 {
+                    let then_node = dyn_node(items[1].node)?;
+                    let else_node = dyn_node(items[0].node)?;
+                    emit_node(module, param_pair, param_value, then_node, body)?;
+                    emit_node(module, param_pair, param_value, else_node, body)?;
+                    emit_node(module, param_pair, param_value, index, body)?;
+                    body.instruction(&Instruction::I32WrapI64);
+                    body.instruction(&Instruction::Select);
+                    return Ok(());
+                }
+            }
             return Err(
-                "unsupported index in kernel body (only parameter reads)".into(),
+                "unsupported index in kernel body (only parameter reads and 2-element conditionals)"
+                    .into(),
             );
         }
         other => {

@@ -149,3 +149,67 @@ compute(1) k 5
         "launch of a 2-arg kernel with 1 arg must be a type error, got: {diags:?}"
     );
 }
+
+#[test]
+fn jit_closes_over_constant() {
+    // A kernel body may reference a module-level constant binding (non-function
+    // values are graph-shared, so the body references the value node in place
+    // and the JIT lowers it to `i64.const`).
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+a = 42
+k = compute(0) (x => x + a)
+compute(1) k 1
+"#,
+    );
+    assert_eq!(out, "43: Int", "closure-over-constant produced: {out:?}");
+}
+
+#[test]
+fn jit_multi_arg_all_ops() {
+    // A tuple-domain body mixing `+`, `-`, `<=` and a constant.
+    // (5 + 3) - (5 <= 3) = 8 - 0 = 8.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : (Int, Int) => (p(0) + p(1)) - (p(0) <= p(1)))
+compute(1) k (5, 3)
+"#,
+    );
+    assert_eq!(out, "8: Int", "mixed-op tuple produced: {out:?}");
+}
+
+#[test]
+fn jit_conditional_then() {
+    // `if x <= 3 then 10 else 20` lowers to `[20, 10][x <= 3]` — a 2-element
+    // array index the JIT lowers to a wasm `select`.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (x => if x <= 3 then 10 else 20)
+compute(1) k 2
+"#,
+    );
+    assert_eq!(out, "10: Int", "conditional (then) produced: {out:?}");
+}
+
+#[test]
+fn jit_conditional_else() {
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (x => if x <= 3 then 10 else 20)
+compute(1) k 5
+"#,
+    );
+    assert_eq!(out, "20: Int", "conditional (else) produced: {out:?}");
+}
