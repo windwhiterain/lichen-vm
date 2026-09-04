@@ -991,9 +991,24 @@ impl Walk {
             }
             Expr::Block { statements, expr, .. } => self.scope(statements, Some(expr)),
             Expr::RecordBlock { fields, .. } => {
-                for f in fields {
-                    self.expr(&f.value);
-                }
+                // A struct-returning block scopes its field statements exactly
+                // like a block: a named field is a binding (a `let` a
+                // restrictive one), so the field names resolve — both as the
+                // definition site (hovering `succ` in `{succ = ...}`) and as
+                // in-block uses.
+                let stmts: Vec<Stmt> = fields
+                    .iter()
+                    .map(|f| match &f.name {
+                        Some(name) => Stmt::Binding(lichen_language::ast::Binding {
+                            name: name.clone(),
+                            value: f.value.clone(),
+                            span: f.span,
+                            restrictive: !f.field,
+                        }),
+                        None => Stmt::Expr(f.value.clone()),
+                    })
+                    .collect();
+                self.scope(&stmts, None);
             }
         }
     }
@@ -1240,6 +1255,39 @@ mod tests {
         // (`math` in `@{`...` math = import ...` at line 1, char 2).
         let def = d.definition_at(Position { line: 3, character: 0 }).expect("def on `math`");
         assert_eq!(def.start, Position { line: 1, character: 2 });
+    }
+
+    #[test]
+    fn module_field_definitions_resolve() {
+        // Inside a module file (math.lichen = `{succ = …, add = …}`), hovering
+        // a record *field* definition (`succ`, `add`) must not say
+        // "unresolved name" — a struct block scopes its field bindings just
+        // like a block, so the field name is a definition site.
+        let dir = temp_dir("modulefields");
+        let math_path = write(
+            &dir,
+            "math.lichen",
+            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+        );
+        let d = Doc::new_with_base(
+            fs::read_to_string(&math_path).unwrap(),
+            Some(math_path.as_path()),
+        );
+
+        // `succ` at line 1, char 2; `add` at line 2, char 2.
+        for (line, name) in [(1usize, "succ"), (2, "add")] {
+            let (msg, _) = d
+                .hover_at(Position { line: line as u32, character: 2 })
+                .expect(&format!("hover on `{name}`"));
+            assert!(
+                !msg.contains("unresolved"),
+                "`{name}` definition should resolve; got {msg}"
+            );
+            assert!(
+                msg.contains("defined at line") || msg.contains("->"),
+                "`{name}` definition should resolve to a definition/type; got {msg}"
+            );
+        }
     }
 
     #[test]
