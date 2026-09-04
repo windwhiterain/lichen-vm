@@ -625,19 +625,19 @@ fn dangling_operators_are_recovered() {
         let recovered = matches!(
             &binding.value,
             Expr::BinOp { right, .. }
-                if matches!(**right, Expr::Err(_) | Expr::Placeholder(_))
+                if matches!(**right, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
             Expr::Arrow { r#return, .. }
-                if matches!(**r#return, Expr::Err(_) | Expr::Placeholder(_))
+                if matches!(**r#return, Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
             Expr::Annotation { r#type, .. }
-                if matches!(*r#type.as_deref().unwrap(), Expr::Err(_) | Expr::Placeholder(_))
+                if matches!(*r#type.as_deref().unwrap(), Expr::Err { .. } | Expr::Placeholder(_))
         ) || matches!(
             &binding.value,
             Expr::Lambda { r#return, .. }
-                if matches!(**r#return, Expr::Err(_) | Expr::Placeholder(_))
+                if matches!(**r#return, Expr::Err { .. } | Expr::Placeholder(_))
         );
         assert!(recovered, "{source}: recovered shape: {:?}", binding.value);
     }

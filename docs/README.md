@@ -30,6 +30,8 @@ Every note opens with a `> Status:` line:
 - `current` — describes shipped behaviour (matches today's code).
 - `historical` — a past decision or investigation, kept for context; never the
   authority on current behaviour.
+- `proposed` — a design/investigation for not-yet-implemented behaviour; the
+  design rationale, not a description of what the code does today.
 
 ## Feature notes
 
@@ -42,6 +44,7 @@ Every note opens with a `> Status:` line:
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
 | [Packages & import](notes/packages.md) | `lichen-language` (`preprocess`/`package`/`persist`/`run`) | current |
 | [Build performance](notes/build-performance.md) | `lichen-language` (`parse`) | historical |
+| [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language` (`lex`/`parse`/`compile`), `lichen-highlevel` (`checker`) | proposed |
 
 ## The language spec
 

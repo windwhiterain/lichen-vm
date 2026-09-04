@@ -184,11 +184,16 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
-    /// A syntactic error recovered by the parser — the position where the
-    /// broken construct started.  A compile-time leaf: it lowers to an
-    /// inference placeholder, so a partially parsed program still compiles
-    /// and checks (the parse error is reported alongside).
-    Err(Span),
+    /// A syntactic error recovered by the parser — an opaque error block,
+    /// carried by the frontend only and never consumed by the lower layers as
+    /// real code (it lowers to a distinct [`ExprKind::ErrorBlock`], not an
+    /// inference placeholder).  `range` is the byte span the broken
+    /// construct's fallback covers (the mask — what a content signature /
+    /// diff excludes); `start` the position where the broken construct began.
+    Err {
+        range: (u32, u32),
+        start: Span,
+    },
 }
 
 /// One statement: a binding or a bare expression (the program's non-final
@@ -221,6 +226,16 @@ pub struct Binding {
     pub restrictive: bool,
 }
 
+/// A recovered-error region the parser masked: `range` is the byte span it
+/// covers in the source, `start` the position where the broken construct began.
+/// The frontend surfaces these so a content signature / diff can exclude the
+/// error regions (see [`Program::error_blocks`]).
+#[derive(Clone, Copy, Debug)]
+pub struct ErrorBlock {
+    pub range: (u32, u32),
+    pub start: Span,
+}
+
 /// A program: `name = expr; …` statements followed by the final expression.
 ///
 /// The statements are *graph sharing*, not sugar for application: each
@@ -235,6 +250,11 @@ pub struct Program {
     /// The non-final statements, in source order.
     pub statements: Vec<Stmt>,
     pub expr: Expr,
+    /// The error blocks the parser recovered, in source order.  These are the
+    /// byte-range masks this program's `Expr::Err` nodes describe — the
+    /// frontend excludes them from a content signature so an edit that only
+    /// grows an error block reuses the established AST/IR/check.
+    pub error_blocks: Vec<ErrorBlock>,
 }
 
 impl Expr {
@@ -265,7 +285,7 @@ impl Expr {
             Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
-            Expr::Err(s) => *s,
+            Expr::Err { start, .. } => *start,
         }
     }
 }

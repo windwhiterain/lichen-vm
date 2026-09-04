@@ -913,9 +913,12 @@ fn an_unresolved_name_is_reported() {
     assert_eq!(d[0].stage, Stage::Resolve);
     assert_eq!(d[0].message, "unresolved name 'y'");
     assert_eq!(d[0].span, Some((1, 6)));
+    // The resolve error is *absorbed* at its layer — it lowers to the same
+    // inert ErrorBlock a parse error uses, so the pipeline stays total and the
+    // checker still runs on the effective content.
     assert!(
-        compile("x => y").build.is_none(),
-        "the frontend failed first"
+        compile("x => y").build.is_some(),
+        "the resolve error is absorbed; the frontend no longer fails first"
     );
 }
 

@@ -339,6 +339,15 @@ pub enum ExprKind<L> {
     /// that binds to whatever the context unifies it with: `x : _`,
     /// `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.
     Placeholder,
+    /// A recovered-error region, masked at the frontend: an opaque leaf the
+    /// checker *skips* (no cells, no unification, no cascade).  Distinct from
+    /// [`ExprKind::Placeholder`] (a real `_` inference hole the context
+    /// fills) so the frontend can identify an error region and exclude it
+    /// from a content signature / diff.  The checker compiles it to a pair of
+    /// fresh, never-unified cells, so it cannot emit a *type*-level
+    /// "expected X, found Y" from inside itself; the parser's own *syntactic*
+    /// diagnostic for the region still fires at the parse layer.
+    ErrorBlock,
     /// The real array type `{ element_type, length }`.  Its type instance
     /// is the 2-element shape `[element_type, length]` — element 0 is the
     /// type shared by all elements, element 1 the length — kinded

@@ -48,22 +48,30 @@ use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
 use crate::program::Perspective;
 
-pub fn compile(program: &Program) -> Result<IR<Perspective>, Diag> {
+pub fn compile(program: &Program) -> (IR<Perspective>, Vec<Diag>) {
     compile_with_imports(program, &[])
 }
 
-/// Compile a parsed program with resolved imports pre-seeded in the first
+/// Lower a parsed program with resolved imports pre-seeded in the first
 /// scope frame.  Local bindings may shadow an imported name because the
 /// import frame is below the block-wide binding frames.
+///
+/// The lowering is **total**: it does not stop at the first problem.  A
+/// recovered parse error lowers to an inert [`ExprKind::ErrorBlock`] (masked,
+/// checked-skipped) and an *unresolved name* lowers to the **same** inert
+/// block plus a `Resolve` diagnostic — the resolve layer reports it and the
+/// lower layers proceed on the effective content.  So the pipeline always
+/// produces an `IR`; diagnostics are returned alongside it.
 pub fn compile_with_imports(
     program: &Program,
     imports: &[ResolvedImport],
-) -> Result<IR<Perspective>, Diag> {
+) -> (IR<Perspective>, Vec<Diag>) {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
         fn_depth: 0,
         op_names: HashMap::new(),
+        diagnostics: Vec::new(),
     };
     if !imports.is_empty() {
         let mut frame = HashMap::new();
@@ -88,11 +96,11 @@ pub fn compile_with_imports(
     // any value compiles, restrictive `let` bindings are entered as they're
     // seen; the scope is never popped, so later statements (and the final
     // expression) see every earlier binding.
-    let statements = compiler.compile_scope_statements(&program.statements)?;
-    let final_id = compiler.compile_expr(&program.expr)?;
+    let statements = compiler.compile_scope_statements(&program.statements);
+    let final_id = compiler.compile_expr(&program.expr);
     let root = compiler.wrap(statements, final_id, &program.expr.span());
     compiler.ir.set_root(root);
-    Ok(compiler.ir)
+    (compiler.ir, compiler.diagnostics)
 }
 
 struct Compiler {
@@ -111,6 +119,10 @@ struct Compiler {
     /// `ExprKind::NativeCall`'s op field is a `&'static str` (the `ExprKind`
     /// must stay `Copy`).
     op_names: HashMap<String, &'static str>,
+    /// The frontend diagnostics the lowering accumulated (the resolve-layer
+    /// errors for unresolved names).  The frontend surfaces these alongside
+    /// the IR; lowering itself never fails on them.
+    diagnostics: Vec<Diag>,
 }
 
 impl Compiler {
@@ -119,7 +131,7 @@ impl Compiler {
     /// reference the block's bindings.  Restrictive `let` bindings are
     /// entered during the pass (their value compiles first, so the name is
     /// visible only to later statements).
-    fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Result<Vec<ExprId>, Diag> {
+    fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Vec<ExprId> {
         // Pre-pass: reserve a `Placeholder` per block-wide binding and enter
         // the name, in one frame.  A scope's block-wide bindings are mutually
         // visible in both directions.
@@ -146,7 +158,7 @@ impl Compiler {
                     // scope, so it is visible only to later statements and
                     // never to itself.  `let a = a` resolves `a` to the outer
                     // (or block-wise) binding, exactly the sequential case.
-                    let id = self.compile_expr(&binding.value)?;
+                    let id = self.compile_expr(&binding.value);
                     self.scopes
                         .push(HashMap::from([(binding.name.clone(), id)]));
                     id
@@ -163,7 +175,7 @@ impl Compiler {
                     let p = self
                         .lookup(&binding.name)
                         .expect("a block-wide binding's name is pre-entered");
-                    let value = self.compile_expr(&binding.value)?;
+                    let value = self.compile_expr(&binding.value);
                     if matches!(&binding.value, Expr::Name(..)) {
                         // A bare name reference (`b = a`, `y = x`, and the
                         // degenerate `a = a`): share the resolved id rather
@@ -176,10 +188,10 @@ impl Compiler {
                         p
                     }
                 }
-                Stmt::Expr(e) => self.compile_expr(e)?,
+                Stmt::Expr(e) => self.compile_expr(e),
             });
         }
-        Ok(out)
+        out
     }
 
     /// Change the mapping of `name` from the reserved placeholder `p` to `to`
@@ -244,8 +256,8 @@ impl Compiler {
         s
     }
 
-    fn compile_expr(&mut self, e: &Expr) -> Result<ExprId, Diag> {
-        let id = match e {
+    fn compile_expr(&mut self, e: &Expr) -> ExprId {
+        match e {
             Expr::Int(n, span) => self.alloc(
                 ExprKind::Literal(HighProgramLiteral::from(IntLit(*n))),
                 span,
@@ -258,15 +270,29 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
-            Expr::Name(name, span) => self.lookup(name).ok_or_else(|| {
-                Diag::new(Stage::Resolve, *span, format!("unresolved name '{name}'"))
-            })?,
+            Expr::Name(name, span) => match self.lookup(name) {
+                Some(id) => id,
+                None => {
+                    // An unresolved name is a *resolve-layer* diagnostic,
+                    // absorbed here — it never stops the lowering.  It lowers
+                    // to the same inert `ErrorBlock` the parse layer reuses,
+                    // so the region is masked and the checker skips it; the
+                    // lower layers keep seeing the same effective content.
+                    self.diagnostics.push(Diag::new(
+                        Stage::Resolve,
+                        *span,
+                        format!("unresolved name '{name}'"),
+                    ));
+                    self.alloc(ExprKind::ErrorBlock, span)
+                }
+            },
             Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span),
-            // A recovered parse error: a compile-time leaf — an inference
-            // placeholder, so the partial program still compiles and checks
-            // (the parse diagnostic is reported alongside; the placeholder's
-            // type is inferred, never a source of spurious check errors).
-            Expr::Err(span) => self.alloc(ExprKind::Placeholder, span),
+            // A recovered parse error: a masked error block — an opaque leaf
+            // ([`ExprKind::ErrorBlock`]) the checker skips, never a real
+            // placeholder.  The partial program still compiles and checks
+            // (the parse diagnostic is reported alongside; the region is
+            // distinct from a genuine `_` so a diff can exclude it).
+            Expr::Err { start, .. } => self.alloc(ExprKind::ErrorBlock, start),
             Expr::Lambda {
                 parameter,
                 parameter_span,
@@ -289,14 +315,9 @@ impl Compiler {
                 // The annotated parameter's type and attribute are compiled
                 // in scope too — either may reference the parameter
                 // (`x : x -> Int`).
-                let parameter_type = parameter_type
-                    .as_ref()
-                    .map(|t| self.compile_expr(t))
-                    .transpose();
-                let parameter_attribute = parameter_perspective
-                    .as_ref()
-                    .map(|p| self.compile_expr(p))
-                    .transpose();
+                let parameter_type = parameter_type.as_ref().map(|t| self.compile_expr(t));
+                let parameter_attribute =
+                    parameter_perspective.as_ref().map(|p| self.compile_expr(p));
                 let body = {
                     self.fn_depth += 1;
                     let body = self.compile_expr(r#return);
@@ -304,9 +325,6 @@ impl Compiler {
                     body
                 };
                 self.scopes.pop();
-                let body = body?;
-                let parameter_type = parameter_type?;
-                let parameter_attribute = parameter_attribute?;
                 self.alloc(
                     ExprKind::Function {
                         parameter: parameter_id,
@@ -323,8 +341,8 @@ impl Compiler {
                 argument,
                 span,
             } => {
-                let function = self.compile_expr(function)?;
-                let argument = self.compile_expr(argument)?;
+                let function = self.compile_expr(function);
+                let argument = self.compile_expr(argument);
                 self.alloc(ExprKind::Apply { function, argument }, span)
             }
             // Struct instantiation is a *syntactic* form now — `C(f1, …, fn)`
@@ -339,8 +357,8 @@ impl Compiler {
                 fields,
                 span,
             } => {
-                let type_expr = self.compile_expr(callee)?;
-                let field_ids = self.compile_all(fields)?;
+                let type_expr = self.compile_expr(callee);
+                let field_ids = self.compile_all(fields);
                 let value = self.ir.alloc_tuple(&field_ids, Some(*span));
                 self.alloc(ExprKind::Instantiate { type_expr, value }, span)
             }
@@ -356,8 +374,8 @@ impl Compiler {
                     crate::ast::BinOp::Leq => BinOp::Leq,
                     crate::ast::BinOp::Eq => BinOp::Eq,
                 };
-                let left = self.compile_expr(left)?;
-                let right = self.compile_expr(right)?;
+                let left = self.compile_expr(left);
+                let right = self.compile_expr(right);
                 self.alloc(
                     ExprKind::BinOp {
                         operator,
@@ -378,9 +396,9 @@ impl Compiler {
                 // the untaken branch is never evaluated.  The branch array
                 // is homogeneous (both branches share one type, like any
                 // conditional).
-                let condition = self.compile_expr(condition)?;
-                let then_branch = self.compile_expr(then_branch)?;
-                let else_branch = self.compile_expr(else_branch)?;
+                let condition = self.compile_expr(condition);
+                let then_branch = self.compile_expr(then_branch);
+                let else_branch = self.compile_expr(else_branch);
                 let branches = self
                     .ir
                     .alloc_array(&[else_branch, then_branch], Some(*span));
@@ -400,7 +418,7 @@ impl Compiler {
                 // replace it), so its value and type are the condition's.
                 // The compiled span is the construct's own, so a failed
                 // assert points its caret at the `!`.
-                let condition = self.compile_expr(value)?;
+                let condition = self.compile_expr(value);
                 self.alloc(ExprKind::Assert { condition }, span)
             }
             Expr::NativeCall { op, args, span } => {
@@ -408,10 +426,7 @@ impl Compiler {
                 // intern the op name, and alloc the NativeCall IR.  The name
                 // is validated against the compiling module's *private* native
                 // registry at check time (the frontend cannot see it).
-                let arg_ids: Vec<ExprId> = args
-                    .iter()
-                    .map(|a| self.compile_expr(a))
-                    .collect::<Result<_, _>>()?;
+                let arg_ids: Vec<ExprId> = args.iter().map(|a| self.compile_expr(a)).collect();
                 let start = self.ir.children.len() as u32;
                 self.ir.children.extend_from_slice(&arg_ids);
                 let range = ChildRange {
@@ -427,12 +442,9 @@ impl Compiler {
                 perspective,
                 span,
             } => {
-                let value = self.compile_expr(value)?;
-                let r#type = r#type.as_ref().map(|t| self.compile_expr(t)).transpose()?;
-                let attribute = perspective
-                    .as_ref()
-                    .map(|p| self.compile_expr(p))
-                    .transpose()?;
+                let value = self.compile_expr(value);
+                let r#type = r#type.as_ref().map(|t| self.compile_expr(t));
+                let attribute = perspective.as_ref().map(|p| self.compile_expr(p));
                 let id = self.alloc(
                     ExprKind::Annotation {
                         value,
@@ -450,8 +462,8 @@ impl Compiler {
                 id
             }
             Expr::Index { array, index, span } => {
-                let array = self.compile_expr(array)?;
-                let index = self.compile_expr(index)?;
+                let array = self.compile_expr(array);
+                let index = self.compile_expr(index);
                 self.alloc(ExprKind::Index { array, index }, span)
             }
             Expr::TableFind {
@@ -459,8 +471,8 @@ impl Compiler {
                 key,
                 span,
             } => {
-                let container = self.compile_expr(container)?;
-                let key = self.compile_expr(key)?;
+                let container = self.compile_expr(container);
+                let key = self.compile_expr(key);
                 self.alloc(ExprKind::Find { container, key }, span)
             }
             Expr::FieldRead {
@@ -468,8 +480,8 @@ impl Compiler {
                 key,
                 span,
             } => {
-                let container = self.compile_expr(container)?;
-                let key = self.compile_expr(key)?;
+                let container = self.compile_expr(container);
+                let key = self.compile_expr(key);
                 self.alloc(ExprKind::Field { container, key }, span)
             }
             Expr::Arrow {
@@ -477,8 +489,8 @@ impl Compiler {
                 r#return,
                 span,
             } => {
-                let parameter = self.compile_expr(parameter)?;
-                let r#return = self.compile_expr(r#return)?;
+                let parameter = self.compile_expr(parameter);
+                let r#return = self.compile_expr(r#return);
                 self.alloc(
                     ExprKind::TypeFunction {
                         parameter,
@@ -488,15 +500,15 @@ impl Compiler {
                 )
             }
             Expr::Tuple(elements, span) => {
-                let ids = self.compile_all(elements)?;
+                let ids = self.compile_all(elements);
                 self.ir.alloc_tuple(&ids, Some(*span))
             }
             Expr::TypeTuple(elements, span) => {
-                let ids = self.compile_all(elements)?;
+                let ids = self.compile_all(elements);
                 self.ir.alloc_type_tuple(&ids, Some(*span))
             }
             Expr::StructType(fields, span) => {
-                let ids = self.compile_all(fields)?;
+                let ids = self.compile_all(fields);
                 self.ir.alloc_type_struct(&ids, Some(*span))
             }
             Expr::Array(elements, span) => {
@@ -509,11 +521,11 @@ impl Compiler {
                 for element in elements {
                     match element {
                         Expr::Shallow(inner, depth, _) => {
-                            ids.push(self.compile_expr(inner)?);
+                            ids.push(self.compile_expr(inner));
                             depths.push(*depth);
                         }
                         _ => {
-                            ids.push(self.compile_expr(element)?);
+                            ids.push(self.compile_expr(element));
                             depths.push(0);
                         }
                     }
@@ -531,7 +543,7 @@ impl Compiler {
                 // the dedicated `ExprKind::Table`.
                 let mut pairs = Vec::with_capacity(entries.len());
                 for (key, value) in entries {
-                    pairs.push((self.compile_expr(key)?, self.compile_expr(value)?));
+                    pairs.push((self.compile_expr(key), self.compile_expr(value)));
                 }
                 self.ir.alloc_table(&pairs, Some(*span))
             }
@@ -539,15 +551,15 @@ impl Compiler {
                 // Unreachable through the parser (`~` is accepted only as an
                 // array element, which the `Array` arm unwraps); compile the
                 // inner expression defensively so the match stays total.
-                self.compile_expr(inner)?
+                self.compile_expr(inner)
             }
             Expr::TypeArray {
                 element_type,
                 length,
                 span,
             } => {
-                let element_type = self.compile_expr(element_type)?;
-                let length = self.compile_expr(length)?;
+                let element_type = self.compile_expr(element_type);
+                let length = self.compile_expr(length);
                 self.alloc(
                     ExprKind::TypeArray {
                         element_type,
@@ -567,17 +579,15 @@ impl Compiler {
                 // block compiles to its final expression's own node (wired
                 // through the statement wrapper like a program's).
                 let scope_len = self.scopes.len();
-                let stmts = self.compile_scope_statements(statements)?;
+                let stmts = self.compile_scope_statements(statements);
                 let body = self.compile_expr(expr);
                 self.scopes.truncate(scope_len);
-                let body = body?;
                 self.wrap(stmts, body, span)
             }
-        };
-        Ok(id)
+    }
     }
 
-    fn compile_all(&mut self, elements: &[Expr]) -> Result<Vec<ExprId>, Diag> {
+    fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {
         elements.iter().map(|e| self.compile_expr(e)).collect()
     }
 

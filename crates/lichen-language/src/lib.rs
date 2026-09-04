@@ -11,8 +11,10 @@
 //! parser *recovers* (a broken statement is skipped and reported, and the
 //! partial program still compiles), and the checker runs on the partial
 //! program — so one pass reports every problem it can find, and a bad input
-//! never panics.  Only an unresolved name (the resolve stage) still stops
-//! the pipeline.
+//! never panics.  Even an *unresolved name* is absorbed at the resolve layer
+//! (it lowers to the same inert [`ExprKind::ErrorBlock`] a parse error uses and
+//! its diagnostic is reported), so the lowering is total and the checker runs
+//! on the effective content.
 //!
 //! See `docs/language-spec.md` for the language spec.
 
@@ -29,6 +31,7 @@ pub mod program;
 pub mod readme;
 pub mod render;
 pub mod run;
+pub mod session;
 
 use std::sync::{Arc, RwLock};
 
@@ -99,8 +102,22 @@ pub fn compile_with_imports_at(
 ) -> Report {
     let Frontend {
         ir,
-        mut diagnostics,
+        diagnostics,
     } = frontend_at(code, base, line_starts, imports);
+    build_report(ir, diagnostics, registry, native_ops)
+}
+
+/// The shared tail of the pipeline: run the checker on an [`IR`] (if the
+/// frontend resolved one) and render the checker's diagnostics (only when the
+/// build fails).  [`compile_with_imports_at`] and the incremental
+/// [`BufferSession`] both end here — the session reuses this for its cached
+/// rebuild path, so the rendering is centralized.
+pub fn build_report(
+    ir: Option<IR<program::Perspective>>,
+    mut diagnostics: Vec<Diag>,
+    registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
+    native_ops: NativeOps<LangProgram>,
+) -> Report {
     let Some(ir) = ir else {
         return Report {
             build: None,
@@ -155,9 +172,10 @@ pub fn compile_with_imports_at(
 }
 
 /// The frontend only: text → IR (lex, parse, resolve).  The checker does not
-/// run.  The frontend recovers: `ir` is `Some` unless the resolve stage
-/// failed (an unresolved name); `diagnostics` holds every lex and parse
-/// error encountered.
+/// run.  The frontend recovers from every frontend error — lex, parse, *and*
+/// resolve: an unresolved name lowers to the same inert `ErrorBlock` the parse
+/// layer uses, so `ir` is always `Some` and `diagnostics` carries every lex,
+/// parse, and resolve error encountered.
 pub struct Frontend {
     pub ir: Option<IR<program::Perspective>>,
     pub diagnostics: Vec<Diag>,
@@ -193,17 +211,13 @@ pub fn frontend_at(
         errors: parse_errors,
     } = parse::parse(&tokens);
     diagnostics.extend(parse_errors);
-    match compile::compile_with_imports(&program, imports) {
-        Ok(ir) => Frontend {
-            ir: Some(ir),
-            diagnostics,
-        },
-        Err(resolve) => {
-            diagnostics.push(resolve);
-            Frontend {
-                ir: None,
-                diagnostics,
-            }
-        }
+    // The lowering is total: an unresolved name lowers to the same inert
+    // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
+    // and the resolve errors ride in `diagnostics`.
+    let (ir, resolve_errors) = compile::compile_with_imports(&program, imports);
+    diagnostics.extend(resolve_errors);
+    Frontend {
+        ir: Some(ir),
+        diagnostics,
     }
 }

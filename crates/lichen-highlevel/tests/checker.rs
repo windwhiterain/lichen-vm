@@ -132,6 +132,11 @@ fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
 fn hole(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Placeholder, None)
 }
+/// A recovered-error region — an opaque leaf the checker must skip.  Distinct
+/// from [`hole`], so the frontend can identify it for a diff / mask.
+fn err_block(ir: &mut IR) -> ExprId {
+    ir.alloc(ExprKind::ErrorBlock, None)
+}
 
 fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build<ProgramImpl> {
     ir.set_root(root);
@@ -253,6 +258,53 @@ fn the_type_universe_is_self_referential() {
         ids[1], b.type_expr,
         "the universe's type slot cycles back to itself"
     );
+}
+
+#[test]
+fn an_error_block_is_skipped_and_never_cascades() {
+    // A recovered-error region lowers to `ExprKind::ErrorBlock` (distinct from
+    // a real `_` = Placeholder).  The checker's *skip* path compiles it to a
+    // pair of fresh, never-unified cells: the masked region carries no grammar,
+    // so it is not checked and cannot introduce a type-level "expected X, found
+    // Y" from inside a region the user is still typing.
+    let mut ir = IR::new();
+    let e = err_block(&mut ir);
+    let b = build(e, ir);
+    assert!(b.ok, "a masked error region is not a check failure");
+    // The skip path still records the pair's three slots, so every downstream
+    // read (`value_of`, `ty`) works and the expression is "done" (recompiles).
+    assert!(b.term[e].is_some(), "the skip path records the pair");
+    assert!(b.val[e].is_some(), "the skip path records the value slot");
+    assert!(b.ty[e].is_some(), "the skip path records the type slot");
+    // The two slots are fresh (unbound) cells — never unified by the
+    // surrounding context, so they have no value and no type conflict.
+    let ty_cell = b.ty[e].unwrap();
+    assert!(
+        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(ty_cell))),
+        "the type cell is a fresh, unbound cell"
+    );
+}
+
+#[test]
+fn an_error_block_as_a_child_does_not_cascade() {
+    // An error block embedded in real code must not poison it.  A homogeneous
+    // array unifies its element types; the error block's fresh type cell binds
+    // quietly to the int sibling instead of raising a conflict — the array
+    // still checks, and the masked region is never "expected X, found Y"ed.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let e = err_block(&mut ir);
+    let b = build(array(&mut ir, &[e, five]), ir);
+    assert!(b.ok, "the error block binds without a conflict");
+
+    // A heterogeneous tuple does not unify elements at all; the error block
+    // rides along and the whole thing checks.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let e = err_block(&mut ir);
+    let b = build(tuple(&mut ir, &[e, five]), ir);
+    assert!(b.ok, "a tuple with an error block checks");
+    assert!(b.term[e].is_some(), "the embedded error block still records its pair");
 }
 
 #[test]

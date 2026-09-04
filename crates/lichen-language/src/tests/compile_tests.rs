@@ -6,13 +6,15 @@ use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit};
 fn compile_ok(source: &str) -> IR<Perspective> {
     let tokens = lex(source).tokens;
     let ast = parse(&tokens).program;
-    compile(&ast).unwrap()
+    compile(&ast).0
 }
 
 fn compile_err(source: &str) -> Diag {
     let tokens = lex(source).tokens;
     let ast = parse(&tokens).program;
-    compile(&ast).unwrap_err()
+    // The lowering is total but collects its resolve errors; the tests check
+    // the first one (an unresolved-name program yields exactly one).
+    compile(&ast).1.into_iter().next().expect("expected a resolve diagnostic")
 }
 
 fn kind(ir: &IR<Perspective>, id: ExprId) -> ExprKind<HighProgramLiteral> {

@@ -612,10 +612,13 @@ where
             // Transparent: a `# p` on an annotated value is `value`'s own
             // attribute.
             ExprKind::Annotation { value, .. } => vec![value],
-            // Leaf kinds — the annotation binds the slot directly.
+            // Leaf kinds — the annotation binds the slot directly.  An
+            // `ErrorBlock` is a leaf too: a masked region carries no children
+            // to combine.
             ExprKind::Literal(_)
             | ExprKind::Parameter
             | ExprKind::Placeholder
+            | ExprKind::ErrorBlock
             | ExprKind::Static { .. } => Vec::new(),
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
@@ -986,6 +989,24 @@ where
             ExprKind::Array(_) => self.check_array_term(e),
             ExprKind::Table(_) => self.check_table_term(e),
             ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
+            ExprKind::ErrorBlock => {
+                // A recovered-error region, masked at the frontend: an
+                // opaque leaf.  Compile it to a pair of fresh, *never*
+                // unified cells — nothing inside the region is checked, so
+                // it cannot introduce a spurious *type*-level "expected X,
+                // found Y" from inside itself (the parser's own syntactic
+                // diagnostic still fires at the parse layer), and the region
+                // is distinct from a real `_` (`Placeholder`) so the frontend
+                // can mask it for a diff.  The fresh cells stay unbound, so
+                // they never cause a cascade.
+                let val = self.fresh_cell();
+                let ty_cell = self.fresh_cell();
+                let pair = self.pair_of(val, ty_cell);
+                self.term[e] = Some(pair);
+                self.val[e] = Some(val);
+                self.ty[e] = Some(ty_cell);
+                pair
+            }
             ExprKind::Placeholder => {
                 // `_` — an inferrable type position: two fresh unbound
                 // cells, one for the type's value slot and one for its

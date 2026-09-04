@@ -43,7 +43,8 @@
 //! (to the next separator) and parsed again as a fresh statement, a broken
 //! final expression becomes an error node, and the parse continues — every
 //! recovered error is reported, and the partial program still compiles and
-//! checks ([`Expr::Err`] lowers to an inference placeholder).  `parse`
+//! checks ([`Expr::Err`] lowers to a masked [`ExprKind::ErrorBlock`] the
+//! checker skips).  `parse`
 //! therefore produces a program (possibly with error nodes) for almost any
 //! input; only an input with no parseable statement at all fails outright.
 
@@ -53,7 +54,7 @@ use chumsky::prelude::*;
 
 use lichen_highlevel::ir::Span;
 
-use crate::ast::{BinOp, Binding, Expr, Program, Stmt, TypeConst};
+use crate::ast::{BinOp, Binding, ErrorBlock, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
 
@@ -118,7 +119,7 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
             errors.push((diag.span, diag.message, diag.stage));
         }
     }
-    let program = match output {
+    let mut program = match output {
         Some(program) => apply_type_mode(program),
         None => {
             let span = errors
@@ -130,12 +131,21 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
                 "the program could not be parsed".to_string(),
                 Stage::Parse,
             ));
+            // The whole (unparseable) stream is one masked error block.
+            let range = (
+                tokens.first().map(|t| t.range.0).unwrap_or(0),
+                tokens.last().map(|t| t.range.1).unwrap_or(0),
+            );
             Program {
                 statements: Vec::new(),
-                expr: Expr::Err(span),
+                expr: Expr::Err { range, start: span },
+                error_blocks: Vec::new(),
             }
         }
     };
+    // Surface the recovered error regions on the program, in source order, so
+    // the frontend can mask them out of a content signature / diff.
+    program.error_blocks = collect_error_blocks(&program);
     (program, errors)
 }
 
@@ -172,6 +182,52 @@ fn span_at(tokens: &[Token], index: usize) -> Span {
         .unwrap_or_else(|| tokens.last().map(|t| t.span).unwrap_or((1, 1)))
 }
 
+/// The byte offset at token-index `i`, or the end of the source when `i` is
+/// at or past the end (the lexer's Eof token sits there).
+fn token_byte(tokens: &[Token], index: usize) -> u32 {
+    tokens
+        .get(index)
+        .map(|t| t.range.0)
+        .or_else(|| tokens.last().map(|t| t.range.1))
+        .unwrap_or(0)
+}
+
+/// The byte range a token-index span `[start, end)` covers — the region the
+/// recovered construct's fallback consumed.  A zero-width range (the missing
+/// operand at `start`) or a past-the-end boundary collapses to a point.
+fn byte_range(tokens: &[Token], span: SimpleSpan<usize>) -> (u32, u32) {
+    let start = token_byte(tokens, span.start);
+    if span.end > span.start {
+        match tokens.get(span.end - 1) {
+            Some(last) => (start, last.range.1),
+            None => (start, start),
+        }
+    } else {
+        (start, start)
+    }
+}
+
+/// Build a recovered-error AST node from the token-index span a recovery
+/// produced: the byte `range` the fallback covered (the mask), plus the
+/// (line, col) where the broken construct began.
+fn err_node(tokens: &[Token], span: SimpleSpan<usize>) -> Expr {
+    Expr::Err {
+        range: byte_range(tokens, span),
+        start: span_at(tokens, span.start),
+    }
+}
+
+/// The byte offset of the first token at the given (line, col) span — the
+/// position a known-`Span` error node should mask (a zero-width point).
+fn byte_at_span(tokens: &[Token], span: Span) -> u32 {
+    tokens
+        .iter()
+        .find(|t| t.span == span)
+        .map(|t| t.range.0)
+        .or_else(|| tokens.last().map(|t| t.range.1))
+        .unwrap_or(0)
+}
+
 /// The program: the statement list, then the end of the input.  One
 /// expression parser is built here and threaded through the whole grammar —
 /// the statement list, the bindings, and the block bodies all recurse
@@ -182,7 +238,11 @@ fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E
     // token, not stream exhaustion — `end()` would fail with it unconsumed.
     statement_list(tokens, expr)
         .then_ignore(token(TokenKind::Eof).ignored())
-        .map(|(statements, expr)| Program { statements, expr })
+        .map(|(statements, expr)| Program {
+            statements,
+            expr,
+            error_blocks: Vec::new(),
+        })
 }
 
 /// The statement list: `elem (seps elem)*`, followed by trailing separators
@@ -243,15 +303,18 @@ fn statement_list<'a>(
                 ));
                 let span = binding.span;
                 elems.push(Stmt::Binding(binding));
-                (elems, Expr::Err(span))
+                // The trailing-binding error is a masked point at the
+                // binding's own position (a zero-width mask, stable across
+                // edits that grow an earlier region).
+                let pos = byte_at_span(tokens, span);
+                (elems, Expr::Err { range: (pos, pos), start: span })
             }
             None => {
                 emit.emit(Rich::custom(
                     me.span(),
                     "a program must end with an expression",
                 ));
-                let span = span_at(tokens, me.span().start);
-                (elems, Expr::Err(span))
+                (elems, err_node(tokens, me.span()))
             }
         })
 }
@@ -291,7 +354,7 @@ fn binding<'a>(
             .filter(|t: &Token| t.kind != TokenKind::Separator)
             .ignored()
             .repeated()
-            .map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
+            .map_with(move |_, me| err_node(tokens, me.span())),
     ));
     head.then(value)
         .map(|(((name, span), restrictive), value)| Binding {
@@ -313,7 +376,7 @@ fn operand<'a>(
     p: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     p.recover_with(via_parser(
-        empty::<In<'a>, E<'a>>().map_with(move |_, me| Expr::Err(span_at(tokens, me.span().start))),
+        empty::<In<'a>, E<'a>>().map_with(move |_, me| err_node(tokens, me.span())),
     ))
 }
 
@@ -792,8 +855,8 @@ fn table_literal<'a>(
                     "a table entry must be a `key :: value` pair",
                 ));
                 // Recover like any parse error: the entry's key compiles,
-                // its value is a compile-time leaf.
-                (key, Expr::Err(span_at(tokens, me.span().start)))
+                // its value is a masked error block.
+                (key, err_node(tokens, me.span()))
             }
         });
     token(TokenKind::KwTable)
@@ -1110,7 +1173,143 @@ fn apply_type_mode(program: Program) -> Program {
             .map(|s| stmt(s, false))
             .collect(),
         expr: expr(program.expr, false),
+        error_blocks: program.error_blocks,
     }
+}
+
+/// Collect the byte-range masks of every recovered-error node in the AST, in
+/// source order.  [`Program::error_blocks`] carries these so the frontend can
+/// exclude the error regions from a content signature / diff.
+fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
+    fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
+        match e {
+            Expr::Err { range, start } => out.push(ErrorBlock { range: *range, start: *start }),
+            Expr::Int(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) => {}
+            Expr::Lambda {
+                parameter_type,
+                parameter_perspective,
+                r#return,
+                ..
+            } => {
+                if let Some(t) = parameter_type {
+                    walk_expr(t, out);
+                }
+                if let Some(p) = parameter_perspective {
+                    walk_expr(p, out);
+                }
+                walk_expr(r#return, out);
+            }
+            Expr::Apply {
+                function,
+                argument,
+                ..
+            } => {
+                walk_expr(function, out);
+                walk_expr(argument, out);
+            }
+            Expr::BinOp { left, right, .. } => {
+                walk_expr(left, out);
+                walk_expr(right, out);
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                walk_expr(condition, out);
+                walk_expr(then_branch, out);
+                walk_expr(else_branch, out);
+            }
+            Expr::Assert { value, .. } => walk_expr(value, out),
+            Expr::NativeCall { args, .. } => {
+                for a in args {
+                    walk_expr(a, out);
+                }
+            }
+            Expr::Index { array, index, .. } => {
+                walk_expr(array, out);
+                walk_expr(index, out);
+            }
+            Expr::FieldRead { container, key, .. } => {
+                walk_expr(container, out);
+                walk_expr(key, out);
+            }
+            Expr::TableFind { container, key, .. } => {
+                walk_expr(container, out);
+                walk_expr(key, out);
+            }
+            Expr::Annotation {
+                value,
+                r#type,
+                perspective,
+                ..
+            } => {
+                walk_expr(value, out);
+                if let Some(t) = r#type {
+                    walk_expr(t, out);
+                }
+                if let Some(p) = perspective {
+                    walk_expr(p, out);
+                }
+            }
+            Expr::Arrow {
+                parameter,
+                r#return,
+                ..
+            } => {
+                walk_expr(parameter, out);
+                walk_expr(r#return, out);
+            }
+            Expr::Tuple(elems, _)
+            | Expr::TypeTuple(elems, _)
+            | Expr::StructType(elems, _)
+            | Expr::Array(elems, _) => {
+                for el in elems {
+                    walk_expr(el, out);
+                }
+            }
+            Expr::StructInst { callee, fields, .. } => {
+                walk_expr(callee, out);
+                for f in fields {
+                    walk_expr(f, out);
+                }
+            }
+            Expr::Table(entries, _) => {
+                for (k, v) in entries {
+                    walk_expr(k, out);
+                    walk_expr(v, out);
+                }
+            }
+            Expr::Shallow(inner, _, _) => walk_expr(inner, out),
+            Expr::TypeArray {
+                element_type,
+                length,
+                ..
+            } => {
+                walk_expr(element_type, out);
+                walk_expr(length, out);
+            }
+            Expr::Block { statements, expr, .. } => {
+                for s in statements {
+                    walk_stmt(s, out);
+                }
+                walk_expr(expr, out);
+            }
+        }
+    }
+    fn walk_stmt(s: &Stmt, out: &mut Vec<ErrorBlock>) {
+        match s {
+            Stmt::Binding(binding) => walk_expr(&binding.value, out),
+            Stmt::Expr(e) => walk_expr(e, out),
+        }
+    }
+    let mut out = Vec::new();
+    for s in &program.statements {
+        walk_stmt(s, &mut out);
+    }
+    walk_expr(&program.expr, &mut out);
+    out
 }
 
 // ---------------------------------------------------------------------------
