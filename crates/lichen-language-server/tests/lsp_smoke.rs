@@ -91,14 +91,15 @@ fn handshake_and_features() {
     let diag = wait_for(&mut stdout, "publishDiagnostics");
     assert!(diag.contains("unresolved name"), "diagnostics = {diag}");
 
-    // hover on the `a` use in `b = a + 1` (line 1, character 4).
+    // hover on the `a` use in `b = a + 1` (line 1, character 4): the binding
+    // hover renders the bound expr's `value : type` (`a = 1` → `1 : Int`).
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
     );
     let hover = read_frame(&mut stdout);
     assert!(hover.contains("\"id\":2"), "hover resp = {hover}");
-    assert!(hover.contains("defined at line"), "hover resp = {hover}");
+    assert!(hover.contains("1 : Int"), "hover resp = {hover}");
 
     // go-to-definition on the final `b` (line 2, character 0).
     send(

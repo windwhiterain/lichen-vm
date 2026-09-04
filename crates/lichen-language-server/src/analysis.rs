@@ -95,6 +95,10 @@ pub struct Doc {
     resolve: HashMap<Span, usize>,
     /// Span of a definition site → index into [`Doc::defs`].
     def_index: HashMap<Span, usize>,
+    /// Span of a binding name → index into [`Doc::statements`] for the
+    /// statement that defines it.  A name — the binding's own name or any use
+    /// of it — resolves to this statement's value/type for the hover.
+    stmt_by_span: HashMap<Span, usize>,
     /// Per top-level statement (source order): its checked type and, when
     /// concrete, its value.  See [`StatementValue`] for the read-only contract.
     statements: Vec<StatementValue>,
@@ -187,6 +191,14 @@ impl Doc {
         };
 
         let (defs, resolve, def_index) = index(&program);
+        // Map each statement's span (a binding's name span, or an
+        // expression's start span) to its statement index, so a name
+        // (resolved to a binding) can reach the binding's value/type.
+        let stmt_by_span: HashMap<Span, usize> = statements
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.span, i))
+            .collect();
         // `pre.code` borrows `source`, so copy the offset out before moving
         // `source` into the result.
         let code_base = pre.code_base;
@@ -201,6 +213,7 @@ impl Doc {
             defs,
             resolve,
             def_index,
+            stmt_by_span,
             statements,
             stmt_starts,
         }
@@ -269,20 +282,44 @@ impl Doc {
     }
 
     /// Hover at a cursor position: the token under it, and — for a name — the
-    /// definition it resolves to (or that it *is*).
+    /// definition it resolves to (or that it *is*).  For a *top-level binding*
+    /// the hover renders the bound expression's `value : type` from the
+    /// checked snapshot (e.g. `` `a` — `1 : Int` `` for `a = 1`); a definition
+    /// that is not a binding (a lambda parameter) and an unresolved name report
+    /// the definition's line / the unresolved-name message.
     pub fn hover_at(&self, position: Position) -> Option<(String, Range)> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
         let range = lsp::range_from_span(&self.source, &self.line_starts, token.span);
         let kind = &token.kind;
         if let TokenKind::Name(name) = kind {
-            let def = self
+            // Resolve the hovered name: a use to its binding, or the binding's
+            // own definition site.  Then, if it is a top-level binding, render
+            // the bound expression's `value : type` from the checked snapshot
+            // (the read-only `StatementValue` for that statement).
+            let def_idx = self
                 .resolve
                 .get(&token.span)
                 .or_else(|| self.def_index.get(&token.span))
-                .and_then(|i| self.defs.get(*i));
-            let msg = match def {
-                Some(d) => format!("`{name}` — defined at line `{}`", d.span.0),
+                .copied();
+            let msg = match def_idx {
+                Some(i) => {
+                    let def = &self.defs[i];
+                    match self.stmt_by_span.get(&def.span).copied() {
+                        Some(stmt_i) => {
+                            let sv = &self.statements[stmt_i];
+                            match (&sv.value, sv.ty.is_empty()) {
+                                // A concrete value: `value : type`.
+                                (Some(v), false) => format!("`{name}` — `{v} : {}`", sv.ty),
+                                // A lazy / recursive binding: type only.
+                                (None, false) => format!("`{name}` — `{}`", sv.ty),
+                                // No type either: fall back to the definition.
+                                _ => format!("`{name}` — defined at line `{}`", def.span.0),
+                            }
+                        }
+                        None => format!("`{name}` — defined at line `{}`", def.span.0),
+                    }
+                }
                 None => format!("`{name}` — unresolved name"),
             };
             return Some((msg, range));
@@ -859,8 +896,33 @@ mod tests {
     #[test]
     fn hover_resolves_a_use_to_its_binding() {
         let d = doc("a = 1\nb = a + 1\nb");
+        // A use of `a` resolves to the binding; its hover shows the bound
+        // expr's `value : type` (a = 1 → 1 : Int).
         let (msg, _range) = d.hover_at(Position { line: 1, character: 4 }).expect("hover on `a`");
+        assert!(msg.contains("1 : Int"), "hover msg = {msg}");
+    }
+
+    #[test]
+    fn hover_on_a_non_binding_definition_reports_its_line() {
+        // A lambda parameter is a definition but not a top-level statement, so
+        // there is no `value : type` snapshot — the hover falls back to the
+        // definition-site line.
+        let d = doc("f = x => x\nf 1\n");
+        let (msg, _) = d.hover_at(Position { line: 0, character: 4 }).expect("hover on `x`");
         assert!(msg.contains("defined at line `1`"), "hover msg = {msg}");
+    }
+
+    #[test]
+    fn hover_renders_a_binding_value_and_type() {
+        // A binding hover shows the bound expr's `value : type` — for the
+        // binding's own name and for any use of it.
+        let d = doc("x = 3\ny = x + 4\nx + y\n");
+        // On the definition site of `x`: value 3 : Int.
+        let (msg, _) = d.hover_at(Position { line: 0, character: 0 }).expect("hover on `x` def");
+        assert!(msg.contains("3 : Int"), "hover msg = {msg}");
+        // On the use of `y` in the final expression `x + y`: value 7 : Int.
+        let (msg, _) = d.hover_at(Position { line: 2, character: 4 }).expect("hover on `y` use");
+        assert!(msg.contains("7 : Int"), "hover msg = {msg}");
     }
 
     #[test]
