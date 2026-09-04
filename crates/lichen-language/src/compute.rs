@@ -47,16 +47,40 @@ use crate::program::{LangOperator, LangProgram, LangValue};
 /// re-homing or static freeze.
 pub type KernelId = usize;
 
-/// The process kernel registry: compiled wasm bytes, keyed by [`KernelId`].
-/// Kernels are immutable artifacts shared across modules in the process.
-static KERNELS: OnceLock<Mutex<HashMap<KernelId, Vec<u8>>>> = OnceLock::new();
-fn kernels() -> &'static Mutex<HashMap<KernelId, Vec<u8>>> {
+/// The process kernel registry: compiled kernel **fragments** (bytecode units),
+/// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
+/// modules in the process.  The fragment is the durable JIT output; the module
+/// bytes are derived on demand by [`link_fragment`].
+static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelFragment>>> = OnceLock::new();
+fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
     KERNELS.get_or_init(Default::default)
 }
 /// The next kernel id — process-global, so ids never collide across modules.
 static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
 fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
+/// module.
+///
+/// `jit` lowers one lichen function to a [`KernelFragment`]: the function's
+/// body as raw wasm, plus the domain shape signature a linker needs.  The
+/// fragment is stored (not the whole module); `launch` links the reachable
+/// fragment set into a module (today [`link_fragment`]'s degenerate
+/// single-fragment link) and runs it.  Splitting "emit bytecode" from "assemble
+/// a module" is what lets a later step link many fragments together (helper
+/// sharing, recursion) and emit cross-module imports for callees compiled
+/// elsewhere.
+#[derive(Debug, Clone)]
+struct KernelFragment {
+    /// The parameter domain shape — the wasm parameter types and the layout
+    /// the body emitter used for parameter reads.
+    param_shape: LowShape,
+    /// The lowered wasm function body: raw bytes (locals + opcodes, no
+    /// leading size prefix), as produced by
+    /// [`wasm_encoder::Function::into_raw_body`].
+    body: Vec<u8>,
 }
 
 /// The compute value vocabulary — injected as a sibling leaf into the
@@ -102,10 +126,10 @@ impl OperatorExt<LangProgram> for ComputeOperator {
                     // stay lazy rather than panicking.
                     return LangValue::from(LowValue::Parameterized);
                 };
-                match codegen_function(module, function) {
-                    Ok(bytes) => {
+                match compile_fragment(module, function) {
+                    Ok(fragment) => {
                         let id = alloc_kernel_id();
-                        kernels().lock().unwrap().insert(id, bytes);
+                        kernels().lock().unwrap().insert(id, fragment);
                         LangValue::from(ComputeValue::Kernel(id))
                     }
                     Err(err) => {
@@ -156,22 +180,25 @@ impl OperatorExt<LangProgram> for ComputeOperator {
     }
 }
 
-// --- Codegen: lichen graph → a scalar `(i64) -> i64` wasm module ----------
+// --- Codegen: lichen graph → a scalar `(i64) -> i64` wasm function body -----
 
 /// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
-/// arith over a scalar or a tuple of scalars) and emit a wasm module exporting
-/// `(func "main" (param i64)* (result i64))`.
+/// arith over a scalar or a tuple of scalars) into a [`KernelFragment`] — the
+/// function's **body**, not a module.  `jit` emits a fragment per function;
+/// module assembly is a separate step ([`link_fragment`]), so a later JIT can
+/// emit fragments lazily and a `launch` can link a reachable set of them into
+/// one module.
 ///
 /// The parameter's domain shape (scalar vs tuple of scalars) is derived from
 /// its *type* and recorded on the parameter's value cell — the level-3 shape
 /// marker a backend reads instead of re-deriving the type half.  The body
 /// emitter then reads that shape to distinguish a scalar parameter read
 /// (`local.get 0`) from a tuple-element read (`local.get k`).
-fn codegen_function(
+fn compile_fragment(
     module: &mut Module<LangProgram>,
     function: AnyFunctionId,
-) -> Result<Vec<u8>, String> {
-    use wasm_encoder::{CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module as WasmModule, TypeSection, ValType};
+) -> Result<KernelFragment, String> {
+    use wasm_encoder::{Function, Instruction};
 
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
@@ -185,24 +212,43 @@ fn codegen_function(
         _ => return Err("function return is not a [value, type] pair".into()),
     };
 
-    // The domain shape from the parameter's type cell.  Record it on the
-    // parameter's *value* cell so the body emitter reads the shape instead of
-    // re-deriving the type half.
+    // The domain shape from the parameter's type cell.
     let param_shape = kernel_param_shape(module, param_pair)?;
-    let arity = match &param_shape {
-        LowShape::USize | LowShape::Tuple(_) => flat_arity(&param_shape),
+    match &param_shape {
+        LowShape::USize | LowShape::Tuple(_) => {}
         _ => {
             return Err("kernel domain must be a scalar or a tuple of scalars".into());
         }
-    };
+    }
     // The parameter's value cell (element 0 of the `[value, type]` pair) is
     // where the domain shape is stored — the node the body emitter consults.
     let param_value = match module.array_items(param_pair).and_then(|items| items.first()) {
         Some(first) => dyn_node(first.node)?,
         None => return Err("parameter is not a [value, type] pair".into()),
     };
-    module.set_node_shape(param_value, Some(param_shape));
+    module.set_node_shape(param_value, Some(param_shape.clone()));
 
+    let mut body = Function::new([]);
+    emit_node(module, param_pair, param_value, ret_value, &mut body)?;
+    body.instruction(&Instruction::End);
+
+    Ok(KernelFragment {
+        param_shape,
+        body: body.into_raw_body(),
+    })
+}
+
+/// Lower a [`KernelFragment`] into a standalone wasm module exporting a single
+/// `main` function.  This is the degenerate link — one fragment = one module.
+/// A later step replaces it with a linker that assembles a kernel's whole
+/// reachable fragment set and emits imports for cross-module callees.
+fn link_fragment(fragment: &KernelFragment) -> Result<Vec<u8>, String> {
+    use wasm_encoder::{
+        CodeSection, ExportKind, ExportSection, FunctionSection, Module as WasmModule, TypeSection,
+        ValType,
+    };
+
+    let arity = flat_arity(&fragment.param_shape);
     let mut wasm = WasmModule::new();
     let mut types = TypeSection::new();
     types.ty().function(vec![ValType::I64; arity], vec![ValType::I64]);
@@ -213,12 +259,8 @@ fn codegen_function(
     let mut exports = ExportSection::new();
     exports.export("main", ExportKind::Func, 0);
     wasm.section(&exports);
-
     let mut code = CodeSection::new();
-    let mut body = Function::new([]);
-    emit_node(module, param_pair, param_value, ret_value, &mut body)?;
-    body.instruction(&Instruction::End);
-    code.function(&body);
+    code.raw(&fragment.body);
     wasm.section(&code);
     Ok(wasm.finish())
 }
@@ -549,12 +591,13 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
 /// of `i64` inputs, so a tuple-domain kernel (arity N) launches with N
 /// arguments and a scalar kernel (arity 1) with one.
 fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
-    let bytes = kernels()
+    let fragment = kernels()
         .lock()
         .unwrap()
         .get(&id)
         .cloned()
         .ok_or_else(|| "kernel id is not registered".to_string())?;
+    let bytes = link_fragment(&fragment)?;
     let engine = wasmi::Engine::default();
     let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
     let mut store = wasmi::Store::new(&engine, ());
