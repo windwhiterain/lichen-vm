@@ -28,8 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, RwLock};
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, Function, FunctionId, LowOperator, LowValue,
-    Module, NodeId, Operation, Registry, UnifyError,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Function, FunctionId, LowOperator,
+    LowValue, Module, NodeId, Operation, Registry, TableItem, UnifyError,
 };
 
 use lichen_utils::extend::AsEnum;
@@ -579,9 +579,9 @@ where
             ExprKind::Tuple(range)
             | ExprKind::TypeTuple(range)
             | ExprKind::Array(range)
-            | ExprKind::TypeStruct(range)
-            | ExprKind::Table(range)
-            | ExprKind::ShallowArray { range, .. } => range,
+            | ExprKind::ShallowArray { range, .. }
+            | ExprKind::Table(range) => range,
+            ExprKind::TypeStruct { fields, .. } => fields,
             ExprKind::NativeCall { args, .. } => args,
             _ => unreachable!("expected a variadic expression kind"),
         };
@@ -611,6 +611,7 @@ where
             ExprKind::Instantiate { type_expr, value } => vec![type_expr, value],
             ExprKind::Index { array, index } => vec![array, index],
             ExprKind::Field { container, key } => vec![container, key],
+            ExprKind::NamedField { container, .. } => vec![container],
             ExprKind::Find { container, key } => vec![container, key],
             ExprKind::TypeArray {
                 element_type,
@@ -620,9 +621,11 @@ where
             ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
             | ExprKind::Array(_)
-            | ExprKind::TypeStruct(_)
             | ExprKind::Table(_)
             | ExprKind::ShallowArray { .. } => self.range_children(e),
+            ExprKind::TypeStruct { fields, .. } => {
+                self.ir.children[fields.start as usize..fields.end as usize].to_vec()
+            }
             // Transparent: a `# p` on an annotated value is `value`'s own
             // attribute.
             ExprKind::Annotation { value, .. } => vec![value],
@@ -836,9 +839,10 @@ where
         self.is_function_type_any(AnyNodeId::Dynamic(ty))
     }
 
-    /// Whether `ty` is a struct type: `[shape, [id, [TypeStruct, K]]]`.  A
-    /// struct's nominal id lives in the kind slot's head; the `TypeStruct`
-    /// tag is the inner layer `[TypeStruct, K]` at `kind[1]`.
+    /// Whether `ty` is a struct type: `[shape, [TypeStruct{id, names}, K]]`.
+    /// The kind's marker slot holds the two-field `TypeStruct` value (the
+    /// nominal id + the optional name table), so the kind is a standard
+    /// `[marker, K]` pair whose marker is a 2-element array.
     fn is_struct_type_any(&mut self, ty: AnyNodeId) -> bool {
         let Some(items) = self.any_items(ty) else {
             return false;
@@ -850,7 +854,16 @@ where
             return false;
         };
         kind_items.len() == 2
-            && self.kind_marker_is_any(kind_items[1].node, P::Value::type_struct_marker())
+            && self.is_universe_any(kind_items[1].node)
+            && self.is_struct_marker_any(kind_items[0].node)
+    }
+
+    /// Whether a value is a struct marker: the two-field `TypeStruct{id, names}`
+    /// value, encoded as a 2-element array `[id, names]`.  No other kind's
+    /// marker is an array(the function/tuple/array/table markers are plain
+    /// type-constant values), so a 2-element array marker names a struct.
+    fn is_struct_marker_any(&self, marker: AnyNodeId) -> bool {
+        self.any_items(marker).is_some_and(|items| items.len() == 2)
     }
 
     /// Whether `ty` is a concrete positional type expression — a tuple type
@@ -904,7 +917,7 @@ where
                     | ExprKind::TypeFunction { .. }
                     | ExprKind::Tuple(_)
                     | ExprKind::TypeTuple(_)
-                    | ExprKind::TypeStruct(_)
+                    | ExprKind::TypeStruct { .. }
                     | ExprKind::Array(_)
                     | ExprKind::Table(_)
                     | ExprKind::ShallowArray { .. }
@@ -976,6 +989,7 @@ where
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),
+            ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation {
                 value,
@@ -999,7 +1013,7 @@ where
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
             ExprKind::TypeTuple(_) => self.check_tuple_type(e),
-            ExprKind::TypeStruct(_) => self.check_type_struct(e),
+            ExprKind::TypeStruct { .. } => self.check_type_struct(e),
             ExprKind::Array(_) => self.check_array_term(e),
             ExprKind::Table(_) => self.check_table_term(e),
             ExprKind::ShallowArray { .. } => self.check_shallow_array_term(e),
@@ -1589,6 +1603,201 @@ where
         pair
     }
 
+    /// A named field read `a.name`.  The field name is resolved against the
+    /// container type's struct name table (the `struct<a :: T, …>` names) to
+    /// the positional index, then read like a positional slot read
+    /// ([`Self::check_field`]): the value is the structural `Index` over the
+    /// container's value, the type is the shape slot at the resolved index.
+    ///
+    /// The index is derived **lazily** from the container type's names slot
+    /// (`Index(Index(ty,1),2)` — the name table — then a `TableGet`), so an
+    /// unbound container (a parameter, a call result) resolves when the call
+    /// binds it, the same laziness as the positional form.  A *concretely*
+    /// non-struct container, or a concrete struct whose name table has no such
+    /// field, is the guard's error below — never a runtime panic.
+    fn check_named_field(
+        &mut self,
+        e: ExprId,
+        container: ExprId,
+        name: &'static str,
+    ) -> NodeId {
+        self.check_expr(container);
+        let container_ty = self.ty[container].unwrap();
+        let concrete = self
+            .module
+            .node_value(AnyNodeId::Dynamic(container_ty))
+            .is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+                )
+            });
+        if concrete {
+            if !self.is_struct_type_any(AnyNodeId::Dynamic(container_ty)) {
+                self.record_index_target_error(container_ty, container, 1);
+            } else if self
+                .named_field_index_any(AnyNodeId::Dynamic(container_ty), name)
+                .is_none()
+            {
+                self.record_named_field_error(container_ty, container, 1);
+            }
+        }
+        let zero =
+            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
+        let one =
+            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(1))));
+        // names = Index(Index(kind, 0), 1) — the struct marker `[id, names]`
+        // at kind[0], then its name-table field at [1].
+        let kind_ops = self.array_node(self.current_block, &[container_ty, one]);
+        let kind_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(kind_ops),
+        );
+        let marker_ops = self.array_node(self.current_block, &[kind_node, zero]);
+        let marker_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(marker_ops),
+        );
+        let names_ops = self.array_node(self.current_block, &[marker_node, one]);
+        let names_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(names_ops),
+        );
+        // key = TableGet(names, name) — the field index.
+        let name_node = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Str(name))),
+        );
+        let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
+        let key = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::TableGet),
+            Some(key_ops),
+        );
+        self.node_edges.insert(key, self.loc(e, 0));
+        let container_value = self.value_of(container);
+        let value_ops = self.array_node(self.current_block, &[container_value, key]);
+        let value_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(value_ops),
+        );
+        let shape_ops = self.array_node(self.current_block, &[container_ty, zero]);
+        let shape = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(shape_ops),
+        );
+        let ty_ops = self.array_node(self.current_block, &[shape, key]);
+        let ty_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ty_ops),
+        );
+        let pair = self.pair_of(value_node, ty_node);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(ty_node);
+        pair
+    }
+
+    /// The struct's name→index table (the `struct<a :: T, …>` names) from a
+    /// struct type value, or `None` when it is an anonymous struct (no names).
+    fn struct_names_any(&mut self, ty: AnyNodeId) -> Option<AnyHandle<[TableItem]>> {
+        let items = self.any_items(ty)?;
+        if items.len() != 2 {
+            return None;
+        }
+        let kind_items = self.any_items(items[1].node)?;
+        if kind_items.len() != 2 || !self.is_universe_any(kind_items[1].node) {
+            return None;
+        }
+        // The struct marker `[id, names]`; its second field is the name table.
+        let marker_items = self.any_items(kind_items[0].node)?;
+        let Some(names_item) = marker_items.get(1) else {
+            return None;
+        };
+        match self
+            .module
+            .node_value(names_item.node)
+            .and_then(|v| v.as_enum())
+        {
+            Some(LowValue::Table(table)) => Some(table),
+            _ => None,
+        }
+    }
+
+    /// The positional index of a named struct field, read from the struct
+    /// type's name table at check time.  `None` when the type is not a
+    /// struct, is an anonymous struct, or has no such named field.
+    fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
+        let table = self.struct_names_any(ty)?;
+        for item in table.items() {
+            if self
+                .module
+                .node_value(item.key)
+                .and_then(|v| v.as_enum())
+                .is_some_and(|v| v == LowValue::Str(name))
+            {
+                if let Some(LowValue::USize(n)) =
+                    self.module.node_value(item.value).and_then(|v| v.as_enum())
+                {
+                    return Some(n);
+                }
+            }
+        }
+        None
+    }
+
+    /// Record an "index target" guard failure — a concretely invalid named
+    /// field read (a non-struct container, or a struct without that field) —
+    /// as a reported type error, not a runtime panic.
+    fn record_index_target_error(&mut self, ty: NodeId, e: ExprId, slot: usize) {
+        let error_index = self.module.unify_errors.len();
+        self.module.unify_errors.push(UnifyError {
+            root_a: ty,
+            root_b: ty,
+            steps: Vec::new(),
+            a: ty,
+            b: ty,
+            value_a: self.module.node_value(AnyNodeId::Dynamic(ty)),
+            value_b: self.module.node_value(AnyNodeId::Dynamic(ty)),
+        });
+        self.diary.push(DiaryEntry {
+            error_index,
+            a: ty,
+            b: ty,
+            loc: self.loc(e, slot),
+            kind: DiagKind::IndexTarget,
+        });
+    }
+
+    /// Record a "no such named field" failure — a `a.name` read on a struct
+    /// that has no field named `name` — as a reported type error.
+    fn record_named_field_error(&mut self, ty: NodeId, e: ExprId, slot: usize) {
+        let error_index = self.module.unify_errors.len();
+        self.module.unify_errors.push(UnifyError {
+            root_a: ty,
+            root_b: ty,
+            steps: Vec::new(),
+            a: ty,
+            b: ty,
+            value_a: self.module.node_value(AnyNodeId::Dynamic(ty)),
+            value_b: self.module.node_value(AnyNodeId::Dynamic(ty)),
+        });
+        self.diary.push(DiaryEntry {
+            error_index,
+            a: ty,
+            b: ty,
+            loc: self.loc(e, slot),
+            kind: DiagKind::NamedField,
+        });
+    }
+
     /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose
     /// stored key is deep-content-equal to `k`.  The frontend emits this
     /// form for the *adjacent* brace — the syntactic distinction from
@@ -1866,14 +2075,27 @@ where
     /// ```text
     /// pair = [ shape, kind ]
     /// shape = [ field types… ]
-    /// kind  = [ type_id, [ TypeStruct, K ] ]
+    /// kind  = [ TypeStruct{id, names}, K ]
     /// ```
     ///
-    /// The id is a per-compilation [`P::Operator::from(TypeOperator::Fresh)`] call, so
-    /// two occurrences keep distinct nominal ids.  Fields are positional
-    /// (no names in v1).
+    /// The `TypeStruct` marker is a **two-field value** `[id, names]` — the
+    /// nominal id (a per-compilation
+    /// [`P::Operator::from(TypeOperator::Fresh)`] call, so two occurrences keep
+    /// distinct ids) plus the optional name→index table.  It sits in the kind's
+    /// marker slot, exactly like a function/tuple/array/table kind's marker, so
+    /// a struct type's kind is a standard `[marker, K]` pair.  Fields are
+    /// positional unless a field carries a `name :: Ty` prefix, in which case
+    /// `names` maps each field name to its positional index (the map an
+    /// `a.name` read resolves through).
     fn check_type_struct(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
+        let (fields_range, names_range) = match self.ir[e].kind {
+            ExprKind::TypeStruct { fields, names } => (fields, names),
+            _ => unreachable!("check_type_struct on a non-struct expression"),
+        };
+        let elements: Vec<ExprId> =
+            self.ir.children[fields_range.start as usize..fields_range.end as usize].to_vec();
+        let names: Vec<Option<&'static str>> =
+            self.ir.struct_names[names_range.start as usize..names_range.end as usize].to_vec();
         let mut tys = Vec::new();
         for &el in &elements {
             tys.push(self.check_type_element(el));
@@ -1884,13 +2106,52 @@ where
             None,
         );
         let shape = self.array_node(self.current_block, &tys);
-        let inner_kind = self.kind_expr(self.current_block, self.type_struct_marker);
-        let kind = self.array_node(self.current_block, &[id, inner_kind]);
+        let names_node = self.build_struct_names(&names);
+        // TypeStruct{id, names} — the two-field struct marker.
+        let marker = self.array_node(self.current_block, &[id, names_node]);
+        let kind = self.kind_expr(self.current_block, marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);
         self.ty[e] = Some(kind);
         pair
+    }
+
+    /// The struct name→index table value for a field-name list: `None` when
+    /// every field is unnamed (an anonymous positional struct), otherwise a
+    /// constant `Table` mapping each field name to its positional index.  The
+    /// table's keys are the field names (string values), its values the field
+    /// indices — the map an `a.name` read resolves through.
+    fn build_struct_names(&mut self, names: &[Option<&'static str>]) -> NodeId {
+        if names.iter().all(|n| n.is_none()) {
+            return self.alloc_node(
+                self.current_block,
+                None,
+                Some(P::Value::from(LowValue::None)),
+            );
+        }
+        let mut entries = Vec::new();
+        for (i, name) in names.iter().enumerate() {
+            if let Some(name) = name {
+                let key = self.alloc_node(
+                    self.current_block,
+                    None,
+                    Some(P::Value::from(LowValue::Str(name))),
+                );
+                let value = self.alloc_node(
+                    self.current_block,
+                    None,
+                    Some(P::Value::from(LowValue::USize(i))),
+                );
+                entries.push((AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value)));
+            }
+        }
+        let handle = self.module.build_table(&entries, self.current_block);
+        self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Table(handle))),
+        )
     }
 
     /// An array instance `[v1, ..., vn]` — every element shares one type:

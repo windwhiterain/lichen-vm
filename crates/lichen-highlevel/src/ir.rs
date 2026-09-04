@@ -167,6 +167,10 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// [`ExprKind::TypeTuple`], [`ExprKind::Array`], [`ExprKind::TypeStruct`],
     /// [`ExprKind::ShallowArray`], [`ExprKind::Table`]).
     pub children: Vec<ExprId>,
+    /// One dense arena for struct **field names**, index-aligned with the
+    /// [`ExprKind::TypeStruct`] `fields` range: `None` for an unnamed
+    /// (positional) field, `Some(name)` for a `name :: Ty` field.
+    pub struct_names: Vec<Option<&'static str>>,
     /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
     /// — one `usize` per element: 0 = unmarked, `usize::MAX` = the bare `~`
     /// (the whole subtree shallow), n = the value slot at each of the first
@@ -274,6 +278,11 @@ pub enum ExprKind<L> {
     /// (`a(1,)`, `a(1,1)`, `a()`, `a(,)`) and from function application
     /// (a spaced paren).
     Field { container: ExprId, key: ExprId },
+    /// `{ container, name }` — a *named* field read `a.name`.  The checker
+    /// resolves `name` against the container type's struct name table to the
+    /// positional index, then reads like [`Self::Field`].  `name` is an
+    /// interned `&'static str` (the source's leaked field name).
+    NamedField { container: ExprId, name: &'static str },
     /// `{ container, key }` — a table lookup `t{k}`: the entry whose stored
     /// key is deep-content-equal to `k`.  The frontend emits it for the
     /// *adjacent* brace form — the syntactic distinction from positional
@@ -302,15 +311,13 @@ pub enum ExprKind<L> {
     /// `[[T1, ..., Tn], [TupleType, Type]]`.  Elements stored in
     /// [`IR::children`].
     TypeTuple(ChildRange),
-    /// A struct type expression `[T1, ..., Tn]` — the field types
-    /// (positional, no names in v1), kinded with a fixed `TypeStruct` marker
-    /// and shaped `[TypeId(n), [T1, ..., Tn]]`: a *fresh nominal* id bundled
-    /// with the field-type list (mirroring an array type's `[element type,
-    /// length]` shape).  Each occurrence's `Fresh` call allocates a new id,
-    /// so two occurrences never unify at the value level; a struct type is
-    /// reused by binding it once through a parameter.  Elements stored in
-    /// [`IR::children`].
-    TypeStruct(ChildRange),
+    /// A struct type expression.  `fields` is the field-type list; the
+    /// corresponding `names` range (into [`IR::struct_names`] holds each
+    /// field's optional name.  Kinded with a fixed `TypeStruct` marker and
+    /// shaped `[TypeId(n), [T1, …, Tn]]`: a *fresh nominal* id bundled with
+    /// the field-type list, plus an optional name table (see the checker).  A
+    /// struct type is reused by binding it once through a parameter.
+    TypeStruct { fields: ChildRange, names: ChildRange },
     /// An array instance `[v1, ..., vn]` — every element shares one type
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`IR::children`].
@@ -379,6 +386,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         IR {
             expr: Vec::new(),
             children: Vec::new(),
+            struct_names: Vec::new(),
             depths: Vec::new(),
             root: ExprId(0),
             block_roots: HashSet::new(),
@@ -426,8 +434,34 @@ impl<A: AttrSpec, L> IR<A, L> {
         self.alloc_variadic(elements, ExprKind::TypeTuple, span)
     }
 
-    pub fn alloc_type_struct(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::TypeStruct, span)
+    pub fn alloc_type_struct(
+        &mut self,
+        fields: &[(ExprId, Option<&'static str>)],
+        span: Option<Span>,
+    ) -> ExprId {
+        let start = self.children.len() as u32;
+        let nstart = self.struct_names.len() as u32;
+        let mut names = Vec::with_capacity(fields.len());
+        for &(element, name) in fields {
+            self.children.push(element);
+            names.push(name);
+        }
+        let field_range = ChildRange {
+            start,
+            end: self.children.len() as u32,
+        };
+        self.struct_names.extend_from_slice(&names);
+        let name_range = ChildRange {
+            start: nstart,
+            end: self.struct_names.len() as u32,
+        };
+        self.alloc(
+            ExprKind::TypeStruct {
+                fields: field_range,
+                names: name_range,
+            },
+            span,
+        )
     }
 
     pub fn alloc_instantiate(

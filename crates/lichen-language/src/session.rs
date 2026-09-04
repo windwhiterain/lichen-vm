@@ -491,6 +491,15 @@ impl Sig {
                 self.hash_expr(container);
                 self.hash_expr(key);
             }
+            Expr::NamedFieldRead {
+                container,
+                name,
+                ..
+            } => {
+                self.cur.update(&[24]);
+                self.hash_expr(container);
+                self.cur.update(name.as_bytes());
+            }
             Expr::TableFind { container, key, .. } => {
                 self.cur.update(&[15]);
                 self.hash_expr(container);
@@ -518,11 +527,23 @@ impl Sig {
             }
             Expr::Tuple(elems, _)
             | Expr::TypeTuple(elems, _)
-            | Expr::StructType(elems, _)
             | Expr::Array(elems, _) => {
                 self.cur.update(&[18]);
                 for el in elems {
                     self.hash_expr(el);
+                }
+            }
+            Expr::StructType(fields, _) => {
+                self.cur.update(&[18]);
+                for field in fields {
+                    // The field's optional name is part of its identity: a
+                    // named field is distinct from an unnamed one of the same
+                    // type.
+                    self.cur.update(&[field.name.is_some() as u8]);
+                    if let Some(name) = &field.name {
+                        self.cur.update(name.as_bytes());
+                    }
+                    self.hash_expr(&field.ty);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {

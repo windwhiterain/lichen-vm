@@ -305,8 +305,10 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
         panic!("expected a struct type")
     };
     assert_eq!(fields.len(), 2);
-    assert!(matches!(fields[0], Expr::TypeConst(TypeConst::Int, _)));
-    assert!(matches!(fields[1], Expr::Arrow { .. }));
+    assert!(matches!(fields[0].ty, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(fields[1].ty, Expr::Arrow { .. }));
+    // all fields are unnamed (positional).
+    assert!(fields.iter().all(|f| f.name.is_none()));
     // a single field is the newtype form.
     assert!(matches!(
         parse_ok("struct<Int>"),
@@ -322,7 +324,49 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
     let Expr::StructType(fields, _) = parse_ok("struct<(Int, Type)>") else {
         panic!("expected a struct type")
     };
-    assert!(matches!(fields[0], Expr::TypeTuple(..)));
+    assert!(matches!(fields[0].ty, Expr::TypeTuple(..)));
+}
+
+#[test]
+fn struct_types_carry_optional_field_names() {
+    // `struct<.a Int, .b Type>` — named fields.
+    let Expr::StructType(fields, _) = parse_ok("struct<.a Int, .b Type>") else {
+        panic!("expected a struct type")
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name.as_deref(), Some("a"));
+    assert!(matches!(fields[0].ty, Expr::TypeConst(TypeConst::Int, _)));
+    assert_eq!(fields[1].name.as_deref(), Some("b"));
+    assert!(matches!(fields[1].ty, Expr::TypeConst(TypeConst::Type, _)));
+    // a name is optional per field — a mixed struct parses.
+    let Expr::StructType(fields, _) = parse_ok("struct<.a Int, Type>") else {
+        panic!("expected a struct type")
+    };
+    assert_eq!(fields.len(), 2);
+    assert_eq!(fields[0].name.as_deref(), Some("a"));
+    assert!(fields[1].name.is_none());
+}
+
+#[test]
+fn named_field_read_is_dot_postfix() {
+    // `a.b` — a named field read over a struct instance.
+    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a.b") else {
+        panic!("expected a named field read")
+    };
+    assert!(matches!(*container, Expr::Name(n, _) if n == "a"));
+    assert_eq!(name, "b");
+    // `a.b.c` chains left.
+    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a.b.c") else {
+        panic!("expected a named field read")
+    };
+    assert_eq!(name, "c");
+    assert!(matches!(*container, Expr::NamedFieldRead { name: inner, .. } if inner == "b"));
+    // a dot postfix after an index folds left too: `a[0].b`.
+    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a[0].b") else {
+        panic!("expected a named field read")
+    };
+    assert_eq!(name, "b");
+    assert!(matches!(*container, Expr::Index { .. }));
 }
 
 #[test]

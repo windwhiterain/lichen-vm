@@ -58,14 +58,17 @@ primary  := int_literal
           | 'table' '{' pair (sep pair)* '}'        -- constant table literal
           | '{' (stmt sep)* expr '}'                -- block: scoped statements, then the block's value
           | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
-          | 'struct' '<' expr (sep expr)* '>'       -- struct type  (nominal, positional fields)
+          | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
           | 'if' expr 'then' expr 'else' expr       -- conditional
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '<' expr '>'                     -- array type  T<e>
                  | '{' expr '}'                     -- table lookup  t{k}
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
+           | '.' name                               -- named field read  a.name
 element  := '~'n? expr                              -- shallow marker (inside array literals only)
 pair     := expr '::' expr                          -- table entry: deep-equal key :: value
+sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
+           | expr                                   -- unnamed (positional) struct field
 fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read paren content
 ```
 
@@ -263,8 +266,16 @@ span back to the original file.
   conditional form — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
 - **Nominal struct types.**  `struct<T1, ..., Tn>` is a *new type* with
-  positional fields (no names in v1).  Its kind slot holds a **fresh nominal
-  id** — each occurrence of the syntax allocates a new id, so two
+  positional fields; a field may carry an optional name prefix (`.name`), so
+  `struct<.x Int, .y Type>` names its fields.  The leading `.` unambiguously
+  marks a named field — the language-server-friendly discriminator, since a
+  field name and a field-type expression (both identifiers) can never be
+  confused while the user is typing.  The names are stored on the struct type
+  as a name→index table, in the second field of the struct's **two-field
+  marker** (`TypeStruct{id, names}`, the kind's marker slot), which lets a
+  `a.name` read resolve a field by name.  Its kind is a standard `[marker, K]`
+  pair whose marker is that two-field value.  The kind also holds a **fresh
+  nominal id** — each occurrence of the syntax allocates a new id, so two
   occurrences never unify and a struct never unifies with a same-shape tuple
   type (nominal identity).  Bind one occurrence and it is reusable: the
   checker compiles each expression once, so a bound or parameter-passed
@@ -284,7 +295,11 @@ span back to the original file.
   non-function is a VM panic, not a diagnostic).  Indexing an instance reads
   its positional fields: `s(1, 2)[0]` is the first field, and its type is
   the corresponding field type (an out-of-bounds field index is an
-  `IndexOutOfBounds` diagnostic).  Values of struct type beyond the wrapped
+  `IndexOutOfBounds` diagnostic).  A struct instance with named fields also
+  reads by name: `a.x` resolves `x` through the struct's name→index table to
+  the field's positional index (a `a.x` on a struct without that field is a
+  `NamedField` diagnostic; a `a.x` on a non-struct is an `IndexTarget`
+  diagnostic).  Values of struct type beyond the wrapped
   tuple are future work.
 - **Dependent array types (pinning).**  The length of `T<e>` is an arbitrary
   expression, so `Int<n>` where `n` is bound is a legal dependent type.  When
@@ -328,7 +343,8 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |
-| `struct<T1, …, Tn>` | `TypeStruct(range)` — nominal, fresh id per occurrence |
+| `struct<T1, …, Tn>` / `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value |
+| `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads like `a(k)` |
 | `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
