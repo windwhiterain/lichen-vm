@@ -644,8 +644,18 @@ fn value_of_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
     if usize_value(module, index)? != 0 {
         return None;
     }
-    let items = module.array_items(target)?;
-    dyn_node(items.first()?.node).ok()
+    // A concrete `[value, type]` pair value → its value slot (element 0).
+    if let Some(items) = module.array_items(target) {
+        return dyn_node(items.first()?.node).ok();
+    }
+    // An *operator* node as the target — e.g. `Index(apply_op, 0)` where the
+    // checker peels a call result (`value_of` over an `Apply` expression).  The
+    // operator's result is the pair's value, so emit the operator directly; its
+    // codegen produces the scalar (a cross-kernel call, an arithmetic op, ...).
+    if module.nodes[target].operation.is_some() {
+        return Some(target);
+    }
+    None
 }
 
 /// The [`KernelId`] of a kernel-value node (`ComputeValue::Kernel`), looking

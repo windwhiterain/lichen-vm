@@ -257,3 +257,18 @@ compute(1) k1 5
     );
 }
 
+#[test]
+fn jit_cross_kernel_subexpr() {
+    // A cross-kernel call result used as a sub-expression: `k0 (x) + 1`.  The
+    // checker peels the call result via `Index(apply, 0)` (a `value_of`
+    // extraction), which the JIT now looks through to emit the kernel call
+    // directly:   launch k1 5 = k0(5) + 1 = 6 + 1 = 7.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute(0) (y => y + 1)
+k1 = compute(0) (x => k0 (x) + 1)
+compute(1) k1 5
+"#);
+    assert!(out.starts_with("7:"), "subexpr produced: {out:?}");
+}
+
