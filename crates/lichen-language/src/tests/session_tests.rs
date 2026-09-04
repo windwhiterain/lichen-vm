@@ -4,7 +4,7 @@
 
 use lichen_highlevel::ir::ExprKind;
 
-use super::{edit_span, splice_program};
+use super::{edit_span, signature_full, signature_reuse, splice_program};
 use crate::ast::{Expr, Stmt};
 use crate::diag::Stage;
 use crate::lex;
@@ -301,7 +301,8 @@ fn assert_splice_equals_full_parse(old: &str, new: &str) {
         parsed.is_some(),
         "the edit {old:?} -> {new:?} should be window-spliceable"
     );
-    let (program, errors) = parsed.unwrap();
+    let out = parsed.unwrap();
+    let (program, errors) = (out.program, out.errors);
     let full = parse::parse(&new_tokens);
     // The spliced statements/expr/ranges must equal a full parse's.
     assert_eq!(program.statements.len(), full.program.statements.len());
@@ -348,5 +349,41 @@ fn a_splice_that_ends_in_a_binding_falls_back() {
         splice_program(&old_tokens, &old_program, &new_tokens, a, b, delta).is_none(),
         "the trailing-binding edit falls back to a full parse"
     );
+}
+
+#[test]
+fn the_incremental_signature_equals_the_full_signature() {
+    // The incremental signature (`signature_reuse`, driven by the splice's
+    // window) must produce the SAME combined signature, per-statement hashes,
+    // and diagnostics as a whole-program `signature_full` walk — confirming the
+    // reuse is sound and that the loop actually reuses, not just falls back.
+    let base = "a = 1\nf = x => a + x\nf 2\n";
+    let bt = lex::lex(base).tokens;
+    let bp = parse::parse(&bt).program;
+    let bsig = signature_full(&bp);
+    for new in [
+        "a = 1\nf = x => a + x\nf 22\n",
+        "a = 1\nf = x => a + 1\nf 2\n",
+        "g = 1\nf = x => a + x\nf 2\n",
+        "a = 1\nf = x => a + x\nf 2\nner",
+        "a = 1\nz = 3\nf = x => a + x\nf 2\n",
+    ] {
+        let nt = lex::lex(new).tokens;
+        let (a, b, d) = edit_span(base, new);
+        let out = splice_program(&bt, &bp, &nt, a, b, d).unwrap_or_else(|| {
+            panic!("{new:?} should be spliceable");
+        });
+        // The window must actually be reused (a real incremental re-sign), not a
+        // whole-program fallback: verify the reuse path matches the full walk.
+        let reuse = signature_reuse(&out.program, &bsig, out.lo, out.hi, out.reuse);
+        let full = signature_full(&out.program);
+        assert_eq!(reuse.combined, full.combined, "combined for {new:?}");
+        assert_eq!(reuse.stmt_hashes, full.stmt_hashes, "per-statement hashes for {new:?}");
+        assert_eq!(
+            reuse.diagnostics.len(),
+            full.diagnostics.len(),
+            "diagnostics for {new:?}"
+        );
+    }
 }
 

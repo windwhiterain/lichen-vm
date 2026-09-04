@@ -78,6 +78,9 @@ struct LastState {
     source: String,
     tokens: Vec<lex::Token>,
     program: Program,
+    /// The name-resolved content signature (with its per-statement hashes) of
+    /// the snapshot's program — reused to sign the next compile incrementally.
+    sig: SignatureOut,
 }
 
 struct Cache {
@@ -184,26 +187,41 @@ impl BufferSession {
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
-        // whole buffer (the result is identical either way).
-        let (program, errors) = match (&self.last, edit) {
-            (Some(prev), Some((a, b, delta))) => splice_program(
-                &prev.tokens,
-                &prev.program,
-                &tokens,
-                a,
-                b,
-                delta,
-            )
-            .unwrap_or_else(|| full_parse(&tokens)),
-            _ => full_parse(&tokens),
+        // whole buffer (the result is identical either way).  The window extent
+        // feeds the incremental signature.
+        let (program, errors, window) = match (&self.last, edit) {
+            (Some(prev), Some((a, b, delta))) => {
+                match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
+                    Some(out) => {
+                        let SpliceOut { program, errors, lo, hi, reuse } = out;
+                        (program, errors, Some((lo, hi, reuse)))
+                    }
+                    None => {
+                        let p = full_parse(&tokens);
+                        (p.0, p.1, None)
+                    }
+                }
+            }
+            _ => {
+                let p = full_parse(&tokens);
+                (p.0, p.1, None)
+            }
         };
         diagnostics.extend(errors);
 
         // Resolution-aware signature of the *name-resolved* structure, plus the
         // current resolve diagnostics — computed from the parsed AST, without
-        // lowering.
-        let (signature, resolve_errors) = program_signature(&program);
-        diagnostics.extend(resolve_errors);
+        // lowering.  When the splice gave us a window and a previous signature,
+        // sign **incrementally** (reuse the untouched statements' hashes, re-sign
+        // only the window + any binding-shifted tail).
+        let sig_out = match (&self.last, window) {
+            (Some(prev), Some((lo, hi, reuse))) => {
+                signature_reuse(&program, &prev.sig, lo, hi, reuse)
+            }
+            _ => signature_full(&program),
+        };
+        let signature = sig_out.combined;
+        diagnostics.extend(sig_out.diagnostics.clone());
 
         // Reuse: the name-resolved structure is unchanged, so the established
         // build is exactly right.  Only the (fresh, above) frontend/resolve
@@ -218,6 +236,7 @@ impl BufferSession {
                     source: self.source.clone(),
                     tokens,
                     program,
+                    sig: sig_out,
                 });
                 return SessionReport {
                     build: Some(Arc::clone(build)),
@@ -249,6 +268,7 @@ impl BufferSession {
             source: self.source.clone(),
             tokens,
             program,
+            sig: sig_out,
         });
         SessionReport {
             build,
@@ -314,7 +334,7 @@ fn splice_program(
     a: usize,
     b: usize,
     delta: isize,
-) -> Option<(Program, Vec<Diag>)> {
+) -> Option<SpliceOut> {
     // Number of logical statements = `statements` + the final expression.
     let old_n = old_program.statements.len() + 1;
     if old_program.stmt_ranges.len() != old_n || old_n == 0 {
@@ -463,33 +483,104 @@ fn splice_program(
         stmt_ranges: ranges,
     };
     program.error_blocks = crate::parse::collect_error_blocks(&program);
-    Some((program, win_errors))
+    // The incremental signature may reuse the suffix hashes only when the window
+    // replaced the *same number* of logical statements (so the suffix indices
+    // still line up) AND no binding name changed (so its resolution is the same).
+    let old_window_end = hi.min(old_program.statements.len());
+    let reuse = win_stmts.len() == hi - lo
+        && splt_binding_names_unchanged(
+            &old_program.statements[lo..old_window_end],
+            &win_stmts,
+        );
+    Some(SpliceOut {
+        program,
+        errors: win_errors,
+        lo,
+        hi: lo + win_stmts.len(),
+        reuse,
+    })
 }
 
-/// The beyond-error content signature of a parsed program: a hash over its
-/// **name-resolved** structure.
-///
-/// The checker/IR is name-free, so what determines the lowering is (a) the
-/// tree *shape* and (b) each name's *resolution outcome* — the binding it
-/// points to, or none.  This signature therefore signs the structure with
-/// every `Name` replaced by the binding it resolves to (a stable slot, by
-/// declaration order, *not* its spelling) or a single **unresolved** sentinel.
-/// It is:
-///
-/// - **spelling-free**: a consistent rename (`f = 1; f` → `g = 1; g`) resolves
-///   to the same slots and hashes identically, so the established build is
-///   reused;
-/// - **stable while a name is unresolved**: `v`, `ve`, `very_long…` — all in
-///   flux but none yet bound — each resolve to the *unresolved* sentinel, so
-///   an edit that only extends an unresolved name (the editor's typing case)
-///   signs the same and reuses the build;
-/// - **faithful**: an edit that actually changes which binding a use points to
-///   (or adds/removes a binding) changes the slots and moves the signature.
-fn program_signature(program: &Program) -> (u64, Vec<Diag>) {
+/// Whether the window changed the *set/order of binding names* — the signal for
+/// whether reusing the prefix/suffix statement hashes is sound.  A binding name
+/// change (an insert/remove/reorder) shifts the global slot assignment and so
+/// can re-resolve statements outside the window; a value edit, name extension,
+/// or error-block growth does not.
+fn splt_binding_names_unchanged(old_window: &[Stmt], new_window: &[Stmt]) -> bool {
+    binding_names(old_window) == binding_names(new_window)
+}
+
+/// The ordered binding names of a statement slice (block-wide and restrictive).
+fn binding_names(stmts: &[Stmt]) -> Vec<&str> {
+    stmts
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Binding(b) => Some(b.name.as_str()),
+            Stmt::Expr(_) => None,
+        })
+        .collect()
+}
+
+/// The outcome of a window splice: the fresh frontend, plus the window extent
+/// (in the new program's logical-statement index space) and whether the
+/// window's binding-names are unchanged — the inputs for an incremental
+/// signature.
+struct SpliceOut {
+    program: Program,
+    errors: Vec<Diag>,
+    lo: usize,
+    hi: usize,
+    reuse: bool,
+}
+
+/// The outcome of a signature pass: the combined beyond-error content
+/// signature, the resolve-layer diagnostics, and (for reuse) the per-statement
+/// resolved hashes and whether each emitted a diagnostic.
+struct SignatureOut {
+    combined: u64,
+    diagnostics: Vec<Diag>,
+    stmt_hashes: Vec<u64>,
+    stmt_had_diag: Vec<bool>,
+}
+
+/// The full (whole-program) name-resolved content signature.
+fn signature_full(program: &Program) -> SignatureOut {
     let mut sig = Sig::new();
     sig.hash_program(program);
-    let signature = sig.combined();
-    (signature, sig.diagnostics)
+    SignatureOut {
+        combined: sig.combined(),
+        diagnostics: sig.diagnostics,
+        stmt_hashes: sig.stmt_hashes,
+        stmt_had_diag: sig.stmt_had_diag,
+    }
+}
+
+/// The **incremental** name-resolved content signature: reuse the previous
+/// per-statement hashes outside the re-sign window and re-sign only the window
+/// `[lo, hi)` (and, unless `reuse_suffix`, the tail after it).
+///
+/// `prev` is the previous compile's [`SignatureOut`].  A statement is reused
+/// only when it is outside the window, it is before the window or (with
+/// `reuse_suffix`) after it, and it emitted no resolve diagnostic (else its
+/// diagnostic would be dropped).  The scope state is re-derived for the whole
+/// program (block-wide pre-enter + per-statement restrictive frames), so the
+/// emitted hashes are identical to [`signature_full`], but the expensive
+/// expression walk runs only over the re-sign window and its tail.
+fn signature_reuse(
+    program: &Program,
+    prev: &SignatureOut,
+    lo: usize,
+    hi: usize,
+    reuse_suffix: bool,
+) -> SignatureOut {
+    let mut sig = Sig::new();
+    sig.hash_program_reuse(program, prev, lo, hi, reuse_suffix);
+    SignatureOut {
+        combined: sig.combined(),
+        diagnostics: sig.diagnostics,
+        stmt_hashes: sig.stmt_hashes,
+        stmt_had_diag: sig.stmt_had_diag,
+    }
 }
 
 /// The signature walk, carrying the hasher + the name-resolution state.  The
@@ -504,16 +595,22 @@ fn program_signature(program: &Program) -> (u64, Vec<Diag>) {
 /// reused and the lowering is skipped.
 ///
 /// The walk produces the signature as a **vector of per-statement resolved
-/// hashes** (one per program statement, plus the final expression) so that the
-/// session can re-derive *only* the statements a user edit touched and re-combine
-/// the rest — the incremental information the high (AST) layer owns.  The
-/// combined [`Sig::combined`] is an order-sensitive fold over those hashes.
+/// hashes** — one per *top-level* logical statement (each hashing its own
+/// subtree, including any nested block), plus the final expression — aligned
+/// with [`Program::stmt_ranges`], so the session can re-derive *only* the
+/// statements a user edit touched and re-combine the rest.  The combined
+/// [`Sig::combined`] is an order-sensitive fold over those hashes.
 struct Sig {
     /// The hasher for the statement currently being signed.
     cur: sha2::Sha256,
-    /// Per-statement resolved hashes, in source order; the last is the
-    /// program's final expression.
+    /// Per-statement resolved hashes (one per top-level logical statement,
+    /// plus the program's final expression), in source order.
     stmt_hashes: Vec<u64>,
+    /// Whether each corresponding statement emitted a resolve diagnostic (a
+    /// name that did not resolve).  Such a statement's *hash* is reusable but
+    /// its diagnostic is not — it must be re-signed to re-emit the error at
+    /// the current position.
+    stmt_had_diag: Vec<bool>,
     scopes: Vec<HashMap<String, usize>>,
     next_slot: usize,
     diagnostics: Vec<Diag>,
@@ -524,6 +621,7 @@ impl Sig {
         Sig {
             cur: sha2::Sha256::new(),
             stmt_hashes: Vec::new(),
+            stmt_had_diag: Vec::new(),
             scopes: Vec::new(),
             next_slot: 0,
             diagnostics: Vec::new(),
@@ -577,9 +675,12 @@ impl Sig {
     }
 
     /// A scope (a program, a `{ … }` block): pre-enter the block-wide
-    /// binding names, then hash the statements and the value.  Each statement
-    /// (and the final value) is signed into its own per-statement hash.
-    fn hash_scope(&mut self, statements: &[Stmt], expr: Option<&Expr>) {
+    /// binding names, then hash the statements and the value.  When `record`,
+    /// each top-level statement (and the final value) is signed into its own
+    /// per-statement hash; when not (a nested block), the content is folded
+    /// into the enclosing statement's hasher instead, so the enclosing hash
+    /// covers the whole subtree.
+    fn hash_scope(&mut self, statements: &[Stmt], expr: Option<&Expr>, record: bool) {
         let base = self.scopes.len();
         self.scopes.push(HashMap::new());
         for stmt in statements {
@@ -589,16 +690,29 @@ impl Sig {
                 }
             }
         }
-        self.begin_stmt();
         for stmt in statements {
-            self.hash_stmt(stmt);
-            self.record_stmt();
+            if record {
+                let diag_before = self.diagnostics.len();
+                self.begin_stmt();
+                self.hash_stmt(stmt);
+                self.record_stmt();
+                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+            } else {
+                self.hash_stmt(stmt);
+            }
         }
         if let Some(e) = expr {
-            self.begin_stmt();
-            self.cur.update(&[2]);
-            self.hash_expr(e);
-            self.record_stmt();
+            if record {
+                let diag_before = self.diagnostics.len();
+                self.begin_stmt();
+                self.cur.update(&[2]);
+                self.hash_expr(e);
+                self.record_stmt();
+                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+            } else {
+                self.cur.update(&[2]);
+                self.hash_expr(e);
+            }
         }
         self.scopes.truncate(base);
     }
@@ -646,7 +760,75 @@ impl Sig {
     }
 
     fn hash_program(&mut self, program: &Program) {
-        self.hash_scope(&program.statements, Some(&program.expr));
+        self.hash_scope(&program.statements, Some(&program.expr), true);
+    }
+
+    /// The incremental top-level walk: reuse [`prev`]'s per-statement hashes
+    /// outside the re-sign window and re-sign the rest.  See [`signature_reuse`].
+    fn hash_program_reuse(
+        &mut self,
+        program: &Program,
+        prev: &SignatureOut,
+        lo: usize,
+        hi: usize,
+        reuse_suffix: bool,
+    ) {
+        let n = program.statements.len() + 1;
+        let base = self.scopes.len();
+        self.scopes.push(HashMap::new());
+        for stmt in &program.statements {
+            if let Stmt::Binding(b) = stmt {
+                if !b.restrictive {
+                    self.slot(&b.name);
+                }
+            }
+        }
+        for i in 0..n {
+            let in_window = i >= lo && i < hi;
+            let before_window = i < lo;
+            let after_window = i >= hi;
+            let reusable = !in_window
+                && (before_window || (reuse_suffix && after_window))
+                && i < prev.stmt_hashes.len()
+                && !prev.stmt_had_diag[i];
+            if reusable {
+                self.advance_stmt(program, i);
+                self.stmt_hashes.push(prev.stmt_hashes[i]);
+                self.stmt_had_diag.push(false);
+            } else {
+                let diag_before = self.diagnostics.len();
+                self.begin_stmt();
+                self.hash_logical_stmt(program, i);
+                self.record_stmt();
+                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+            }
+        }
+        self.scopes.truncate(base);
+    }
+
+    /// After reusing a statement's hash, still advance the scope so later
+    /// statements resolve against its binding (a restrictive `let` becomes
+    /// visible to them; a block-wide name was already pre-entered).
+    fn advance_stmt(&mut self, program: &Program, i: usize) {
+        if let Some(stmt) = program.statements.get(i) {
+            if let Stmt::Binding(b) = stmt {
+                if b.restrictive {
+                    self.scopes.push(HashMap::new());
+                    self.slot(&b.name);
+                }
+            }
+        }
+    }
+
+    /// Sign logical statement `i`: `program.statements[i]`, or the program's
+    /// final expression (index `statements.len()`).
+    fn hash_logical_stmt(&mut self, program: &Program, i: usize) {
+        if let Some(stmt) = program.statements.get(i) {
+            self.hash_stmt(stmt);
+        } else {
+            self.cur.update(&[2]);
+            self.hash_expr(&program.expr);
+        }
     }
 
     fn hash_opt_expr(&mut self, e: &Option<Box<Expr>>) {
@@ -828,7 +1010,7 @@ impl Sig {
             }
             Expr::Block { statements, expr, .. } => {
                 self.cur.update(&[23]);
-                self.hash_scope(statements, Some(expr));
+                self.hash_scope(statements, Some(expr), false);
             }
         }
     }

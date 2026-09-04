@@ -62,8 +62,14 @@
 >   invariant cannot be confirmed — a degenerate program, a recovered error block
 >   lying outside the window (whose diagnostic must not be dropped), or a
 >   trailing binding (the whole-program parser owns that "must end with an
->   expression" error).  The per-statement signature is still recomputed as a
->   whole-program walk (the O(s0) scope-resume is the remaining residual).
+>   expression" error).
+> - The **signature is now incremental too**: `Sig` signs one hash per *top-level*
+>   logical statement (each covering its own subtree), aligned with
+>   `Program::stmt_ranges`.  `compile` re-signs **only** the spl
+>   window plus a binding-shifted tail, and reuses the untouched statements'
+>   hashes — so a keystroke re-hashes `O(edit)`, not the whole AST.  It
+>   re-signs everything when the window's binding names change (a slot shift) or
+>   the statement count changed, which keeps it sound.
 >
 > **Not yet wired / not implemented:**
 > - T3 memoized check (`done`/`check_into` resume) and T4 true
@@ -307,9 +313,10 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
    (`lex::lex_resume`, `parse::parse_statement_region`, `Program::stmt_ranges`),
    plus the per-statement signature. ✅ *wiring*: the `BufferSession::compile`
    splice re-parses only the touched statement window (falling back to a full
-   parse on the borderline cases) and re-combines the per-statement signature.
-   The remaining O(s0) cost is recomputing the signature as a whole-program walk
-   (a scope-snapshot / deltasonic sign is a further optimization, not required).
+   parse on the borderline cases) and re-signs the name-resolved signature
+   incrementally — reusing the untouched statements' hashes and re-hashing only
+   the window + a binding-shifted tail, so the whole-AST hash is gone.  A
+   binding-name change or a statement-count change re-signs the tail (sound).
 4. **T3**: memoized check (`done`/`term` skip, `check_into` resume).
 5. **Debounced re-check** as the fallback for edits that genuinely change code.
 
