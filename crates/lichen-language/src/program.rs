@@ -76,6 +76,9 @@ impl ValueType for LangValue {
     fn int_marker() -> Self {
         Self::TypeValue(TypeValue::TypeInt)
     }
+    fn string_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeString)
+    }
     fn type_marker() -> Self {
         Self::TypeValue(TypeValue::TypeType)
     }

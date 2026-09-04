@@ -215,7 +215,7 @@ impl BufferSession {
 fn program_signature(program: &Program) -> (u64, Vec<Diag>) {
     let mut sig = Sig::new();
     sig.hash_program(program);
-    let signature = sig.finish();
+    let signature = sig.combined();
     (signature, sig.diagnostics)
 }
 
@@ -229,8 +229,18 @@ fn program_signature(program: &Program) -> (u64, Vec<Diag>) {
 /// It also emits the resolve-layer diagnostics for every unresolved name,
 /// so the session reports the *current* name's error even when the build is
 /// reused and the lowering is skipped.
+///
+/// The walk produces the signature as a **vector of per-statement resolved
+/// hashes** (one per program statement, plus the final expression) so that the
+/// session can re-derive *only* the statements a user edit touched and re-combine
+/// the rest — the incremental information the high (AST) layer owns.  The
+/// combined [`Sig::combined`] is an order-sensitive fold over those hashes.
 struct Sig {
-    h: sha2::Sha256,
+    /// The hasher for the statement currently being signed.
+    cur: sha2::Sha256,
+    /// Per-statement resolved hashes, in source order; the last is the
+    /// program's final expression.
+    stmt_hashes: Vec<u64>,
     scopes: Vec<HashMap<String, usize>>,
     next_slot: usize,
     diagnostics: Vec<Diag>,
@@ -239,22 +249,21 @@ struct Sig {
 impl Sig {
     fn new() -> Self {
         Sig {
-            h: sha2::Sha256::new(),
+            cur: sha2::Sha256::new(),
+            stmt_hashes: Vec::new(),
             scopes: Vec::new(),
             next_slot: 0,
             diagnostics: Vec::new(),
         }
     }
 
-    fn finish(&self) -> u64 {
-        u64::from_le_bytes(
-            self.h
-                .clone()
-                .finalize()
-                .as_slice()[..8]
-                .try_into()
-                .expect("sha256 is at least 8 bytes"),
-        )
+    /// The order-sensitive combined signature over the per-statement hashes.
+    fn combined(&self) -> u64 {
+        let mut h = sha2::Sha256::new();
+        for sh in &self.stmt_hashes {
+            h.update(&sh.to_le_bytes());
+        }
+        u64::from_le_bytes(h.finalize().as_slice()[..8].try_into().unwrap())
     }
 
     fn slot(&mut self, name: &str) -> usize {
@@ -280,11 +289,11 @@ impl Sig {
     fn hash_name(&mut self, name: &str, span: &(u32, u32)) {
         match self.lookup(name) {
             Some(slot) => {
-                self.h.update(&[1]);
-                self.h.update(&slot.to_le_bytes());
+                self.cur.update(&[1]);
+                self.cur.update(&slot.to_le_bytes());
             }
             None => {
-                self.h.update(&[0]);
+                self.cur.update(&[0]);
                 self.diagnostics.push(Diag::new(
                     Stage::Resolve,
                     *span,
@@ -295,7 +304,8 @@ impl Sig {
     }
 
     /// A scope (a program, a `{ … }` block): pre-enter the block-wide
-    /// binding names, then hash the statements and the value.
+    /// binding names, then hash the statements and the value.  Each statement
+    /// (and the final value) is signed into its own per-statement hash.
     fn hash_scope(&mut self, statements: &[Stmt], expr: Option<&Expr>) {
         let base = self.scopes.len();
         self.scopes.push(HashMap::new());
@@ -306,14 +316,36 @@ impl Sig {
                 }
             }
         }
+        self.begin_stmt();
         for stmt in statements {
             self.hash_stmt(stmt);
+            self.record_stmt();
         }
         if let Some(e) = expr {
-            self.h.update(&[2]);
+            self.begin_stmt();
+            self.cur.update(&[2]);
             self.hash_expr(e);
+            self.record_stmt();
         }
         self.scopes.truncate(base);
+    }
+
+    /// Begin a new per-statement hash.
+    fn begin_stmt(&mut self) {
+        self.cur = sha2::Sha256::new();
+    }
+
+    /// Finalize the current statement's hash into the result list.
+    fn record_stmt(&mut self) {
+        let v = u64::from_le_bytes(
+            self.cur
+                .clone()
+                .finalize()
+                .as_slice()[..8]
+                .try_into()
+                .expect("sha256 is at least 8 bytes"),
+        );
+        self.stmt_hashes.push(v);
     }
 
     fn hash_stmt(&mut self, stmt: &Stmt) {
@@ -322,7 +354,7 @@ impl Sig {
             // fresh frame is pushed for the name (visible only to later
             // statements), mirroring the compiler.
             Stmt::Binding(b) if b.restrictive => {
-                self.h.update(&[0]);
+                self.cur.update(&[0]);
                 self.hash_expr(&b.value);
                 self.scopes.push(HashMap::new());
                 self.slot(&b.name);
@@ -330,11 +362,11 @@ impl Sig {
             // Block-wide binding — the name was pre-entered; only the value
             // (and its resolution) is signed.
             Stmt::Binding(b) => {
-                self.h.update(&[0]);
+                self.cur.update(&[0]);
                 self.hash_expr(&b.value);
             }
             Stmt::Expr(e) => {
-                self.h.update(&[1]);
+                self.cur.update(&[1]);
                 self.hash_expr(e);
             }
         }
@@ -347,10 +379,10 @@ impl Sig {
     fn hash_opt_expr(&mut self, e: &Option<Box<Expr>>) {
         match e {
             Some(inner) => {
-                self.h.update(&[1]);
+                self.cur.update(&[1]);
                 self.hash_expr(inner);
             }
-            None => self.h.update(&[0]),
+            None => self.cur.update(&[0]),
         }
     }
 
@@ -361,24 +393,29 @@ impl Sig {
     fn hash_expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(n, _) => {
-                self.h.update(&[0]);
-                self.h.update(&n.to_le_bytes());
+                self.cur.update(&[0]);
+                self.cur.update(&n.to_le_bytes());
+            }
+            Expr::Str(s, _) => {
+                self.cur.update(&[24]);
+                self.cur.update(s.as_bytes());
             }
             Expr::TypeConst(c, _) => {
-                self.h.update(&[1]);
-                self.h.update(&[match c {
+                self.cur.update(&[1]);
+                self.cur.update(&[match c {
                     TypeConst::Int => 0,
                     TypeConst::Type => 1,
+                    TypeConst::String => 2,
                 }]);
             }
             Expr::Name(name, span) => {
-                self.h.update(&[2]);
+                self.cur.update(&[2]);
                 self.hash_name(name, span);
             }
-            Expr::Placeholder(_) => self.h.update(&[3]),
+            Expr::Placeholder(_) => self.cur.update(&[3]),
             // The recovered-error region / an unresolved name: content-free,
             // position-only.
-            Expr::Err { .. } => self.h.update(&[4]),
+            Expr::Err { .. } => self.cur.update(&[4]),
             Expr::Lambda {
                 parameter,
                 parameter_type,
@@ -386,14 +423,14 @@ impl Sig {
                 r#return,
                 ..
             } => {
-                self.h.update(&[5]);
+                self.cur.update(&[5]);
                 let base = self.scopes.len();
                 self.scopes.push(HashMap::new());
                 self.slot(parameter);
                 self.hash_opt_expr(parameter_type);
-                self.h.update(&[6]);
+                self.cur.update(&[6]);
                 self.hash_opt_expr(parameter_perspective);
-                self.h.update(&[7]);
+                self.cur.update(&[7]);
                 self.hash_expr(r#return);
                 self.scopes.truncate(base);
             }
@@ -402,7 +439,7 @@ impl Sig {
                 argument,
                 ..
             } => {
-                self.h.update(&[8]);
+                self.cur.update(&[8]);
                 self.hash_expr(function);
                 self.hash_expr(argument);
             }
@@ -412,8 +449,8 @@ impl Sig {
                 right,
                 ..
             } => {
-                self.h.update(&[9]);
-                self.h.update(&[match operator {
+                self.cur.update(&[9]);
+                self.cur.update(&[match operator {
                     BinOp::Add => 0,
                     BinOp::Sub => 1,
                     BinOp::Leq => 2,
@@ -428,34 +465,34 @@ impl Sig {
                 else_branch,
                 ..
             } => {
-                self.h.update(&[10]);
+                self.cur.update(&[10]);
                 self.hash_expr(condition);
                 self.hash_expr(then_branch);
                 self.hash_expr(else_branch);
             }
             Expr::Assert { value, .. } => {
-                self.h.update(&[11]);
+                self.cur.update(&[11]);
                 self.hash_expr(value);
             }
             Expr::NativeCall { op, args, .. } => {
-                self.h.update(&[12]);
-                self.h.update(op.as_bytes());
+                self.cur.update(&[12]);
+                self.cur.update(op.as_bytes());
                 for a in args {
                     self.hash_expr(a);
                 }
             }
             Expr::Index { array, index, .. } => {
-                self.h.update(&[13]);
+                self.cur.update(&[13]);
                 self.hash_expr(array);
                 self.hash_expr(index);
             }
             Expr::FieldRead { container, key, .. } => {
-                self.h.update(&[14]);
+                self.cur.update(&[14]);
                 self.hash_expr(container);
                 self.hash_expr(key);
             }
             Expr::TableFind { container, key, .. } => {
-                self.h.update(&[15]);
+                self.cur.update(&[15]);
                 self.hash_expr(container);
                 self.hash_expr(key);
             }
@@ -465,7 +502,7 @@ impl Sig {
                 perspective,
                 ..
             } => {
-                self.h.update(&[16]);
+                self.cur.update(&[16]);
                 self.hash_expr(value);
                 self.hash_opt_expr(r#type);
                 self.hash_opt_expr(perspective);
@@ -475,7 +512,7 @@ impl Sig {
                 r#return,
                 ..
             } => {
-                self.h.update(&[17]);
+                self.cur.update(&[17]);
                 self.hash_expr(parameter);
                 self.hash_expr(r#return);
             }
@@ -483,28 +520,28 @@ impl Sig {
             | Expr::TypeTuple(elems, _)
             | Expr::StructType(elems, _)
             | Expr::Array(elems, _) => {
-                self.h.update(&[18]);
+                self.cur.update(&[18]);
                 for el in elems {
                     self.hash_expr(el);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
-                self.h.update(&[19]);
+                self.cur.update(&[19]);
                 self.hash_expr(callee);
                 for f in fields {
                     self.hash_expr(f);
                 }
             }
             Expr::Table(entries, _) => {
-                self.h.update(&[20]);
+                self.cur.update(&[20]);
                 for (k, v) in entries {
                     self.hash_expr(k);
                     self.hash_expr(v);
                 }
             }
             Expr::Shallow(inner, depth, _) => {
-                self.h.update(&[21]);
-                self.h.update(&depth.to_le_bytes());
+                self.cur.update(&[21]);
+                self.cur.update(&depth.to_le_bytes());
                 self.hash_expr(inner);
             }
             Expr::TypeArray {
@@ -512,12 +549,12 @@ impl Sig {
                 length,
                 ..
             } => {
-                self.h.update(&[22]);
+                self.cur.update(&[22]);
                 self.hash_expr(element_type);
                 self.hash_expr(length);
             }
             Expr::Block { statements, expr, .. } => {
-                self.h.update(&[23]);
+                self.cur.update(&[23]);
                 self.hash_scope(statements, Some(expr));
             }
         }

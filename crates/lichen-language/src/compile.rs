@@ -41,7 +41,9 @@
 use std::collections::HashMap;
 
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema, Span};
-use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit, TypeTypeLit};
+use lichen_highlevel::program::{
+    HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit, TypeTypeLit,
+};
 
 use crate::ast::{Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
@@ -262,8 +264,22 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(IntLit(*n))),
                 span,
             ),
+            // A string literal: the content is leaked once to a `&'static str`
+            // (the value node holds a `Copy` `LowValue::Str`), exactly as the
+            // native-operator names are interned.  The type is the shared
+            // `[string, Type]` expression the literal builds.
+            Expr::Str(s, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(StrLit(
+                    Box::leak(s.clone().into_boxed_str()),
+                ))),
+                span,
+            ),
             Expr::TypeConst(TypeConst::Int, span) => self.alloc(
                 ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)),
+                span,
+            ),
+            Expr::TypeConst(TypeConst::String, span) => self.alloc(
+                ExprKind::Literal(HighProgramLiteral::from(StringTypeLit)),
                 span,
             ),
             Expr::TypeConst(TypeConst::Type, span) => self.alloc(

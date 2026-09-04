@@ -391,6 +391,11 @@ fn write_value(
         }
         LangValue::LowValue(LowValue::None) => w.u8(3),
         LangValue::LowValue(LowValue::Parameterized) => w.u8(4),
+        LangValue::LowValue(LowValue::Str(s)) => {
+            w.u8(14);
+            w.u32(s.len() as u32);
+            w.bytes(s.as_bytes());
+        }
         LangValue::TypeValue(TypeValue::TypeInt) => w.u8(5),
         LangValue::TypeValue(TypeValue::TypeType) => w.u8(6),
         LangValue::TypeValue(TypeValue::TypeFunction) => w.u8(7),
@@ -398,6 +403,7 @@ fn write_value(
         LangValue::TypeValue(TypeValue::TypeArray) => w.u8(9),
         LangValue::TypeValue(TypeValue::TypeStruct) => w.u8(10),
         LangValue::TypeValue(TypeValue::TypeTable) => w.u8(13),
+        LangValue::TypeValue(TypeValue::TypeString) => w.u8(15),
         LangValue::TypeValue(TypeValue::TypeId(n)) => {
             w.u8(11);
             w.u64(n as u64);
@@ -629,6 +635,15 @@ fn read_value(
         }
         3 => LangValue::LowValue(LowValue::None),
         4 => LangValue::LowValue(LowValue::Parameterized),
+        14 => {
+            let len = r.u32()? as usize;
+            let bytes = r.take(len)?;
+            // The value is `Copy` and must outlive the artifact buffer, so the
+            // loaded bytes are leaked to a `&'static str` (like a source-built
+            // literal).  The content is UTF-8 by construction.
+            let s = std::str::from_utf8(bytes).map_err(|_| "string literal is not UTF-8")?;
+            LangValue::LowValue(LowValue::Str(Box::leak(s.to_string().into_boxed_str())))
+        }
         12 => {
             let owner = ModuleKey::from_raw(r.u64()?);
             let offset = r.u64()? as usize;

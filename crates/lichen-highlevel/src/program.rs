@@ -141,6 +141,12 @@ pub trait Ctx<P: Program> {
     fn int_type(&self) -> NodeId;
     /// The installed `int` marker node.
     fn int_marker_node(&self) -> NodeId;
+    /// The canonical, shared `[string, Type]` type expression — the type of
+    /// every `Str` value and the pair of the `string` type constant.  Shared
+    /// across occurrences like [`Self::int_type`].
+    fn string_type(&self) -> NodeId;
+    /// The installed `string` marker node.
+    fn string_marker_node(&self) -> NodeId;
     /// The installed `Type` marker node.
     fn type_marker_node(&self) -> NodeId;
     /// The installed `FunctionType` kind marker node.
@@ -211,6 +217,29 @@ where
     }
 }
 
+/// The built-in string literal: stores the (immutable) string content, a
+/// `&'static str` leaked once from the source.  `build` references the
+/// canonical, shared `[string, Type]` type expression for the type, exactly
+/// as [`IntLit`] mirrors `[int, Type]`.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct StrLit(pub &'static str);
+
+impl<P> LiteralExt<P> for StrLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.value_node(P::Value::from(LowValue::Str(self.0)));
+        let ty = ctx.string_type();
+        let pair = ctx.pair(value_node, ty);
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
 /// The built-in `Int` type constant — `Int : Type`.  A unit literal (the type
 /// constant carries no data).  `build` produces the value node `int_marker`
 /// and its type the canonical universe; the pair is the shared `[int, Type]`
@@ -226,6 +255,28 @@ where
         let value_node = ctx.int_marker_node();
         let ty = ctx.universe();
         let pair = ctx.int_type();
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
+/// The built-in `string` type constant — `string : Type`.  A unit literal.
+/// `build` produces the value node `string_marker` and its type the canonical
+/// universe; the pair is the shared `[string, Type]` type expression.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct StringTypeLit;
+
+impl<P> LiteralExt<P> for StringTypeLit
+where
+    P: Program,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.string_marker_node();
+        let ty = ctx.universe();
+        let pair = ctx.string_type();
         LiteralBuild {
             pair,
             value: value_node,
@@ -253,17 +304,18 @@ where
     }
 }
 
-// The highlevel program's literal vocabulary: the built-in int literal and the
-// `Int`/`Type` type-constant literals, as sibling carry variants — the same
-// composition a downstream uses for its own literal structs.  Each type
-// constant has its own literal; each `build` rebuilds its value/type nodes
-// fresh per occurrence.
+// The highlevel program's literal vocabulary: the built-in int & string
+// literals and the `Int`/`string`/`Type` type-constant literals, as sibling
+// carry variants.  Each type constant has its own literal; each `build`
+// rebuilds its value/type nodes fresh per occurrence.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum HighProgramLiteral {
     }
     + IntLit as Int;
+    + StrLit as Str;
     + IntTypeLit as IntType;
+    + StringTypeLit as StringType;
     + TypeTypeLit as TypeType;
 }
 
@@ -274,7 +326,9 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
         match self {
             HighProgramLiteral::Int(lit) => lit.build(ctx),
+            HighProgramLiteral::Str(lit) => lit.build(ctx),
             HighProgramLiteral::IntType(lit) => lit.build(ctx),
+            HighProgramLiteral::StringType(lit) => lit.build(ctx),
             HighProgramLiteral::TypeType(lit) => lit.build(ctx),
         }
     }
@@ -291,6 +345,8 @@ where
 pub enum TypeValue {
     /// The `int` type constant.
     TypeInt,
+    /// The `string` type constant — the builtin immutable string value.
+    TypeString,
     /// The `Type` constant — the canonical universe node itself
     /// (`Type : Type`).
     TypeType,
@@ -348,6 +404,8 @@ impl ValueExt for HighProgramValue {
 pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     /// The `int` type marker — `USize` literals pair with `[Self::int_marker(), K]`.
     fn int_marker() -> Self;
+    /// The `string` type marker — `Str` literals pair with `[Self::string_marker(), K]`.
+    fn string_marker() -> Self;
     /// The `Type` marker — the canonical universe node itself (`Type : Type`).
     fn type_marker() -> Self;
     /// The kind marker of function type expressions.
@@ -371,6 +429,9 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
 impl ValueType for HighProgramValue {
     fn int_marker() -> Self {
         Self::TypeValue(TypeValue::TypeInt)
+    }
+    fn string_marker() -> Self {
+        Self::TypeValue(TypeValue::TypeString)
     }
     fn type_marker() -> Self {
         Self::TypeValue(TypeValue::TypeType)

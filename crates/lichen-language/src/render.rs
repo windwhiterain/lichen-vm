@@ -193,6 +193,7 @@ where
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
+                LowValue::Str(s) => format!("\"{s}\""),
                 LowValue::Array(array) => self.elements(node, array.items()),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
@@ -211,6 +212,8 @@ where
     pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
         if value == &P::Value::int_marker() {
             Some("Int".to_string())
+        } else if value == &P::Value::string_marker() {
+            Some("string".to_string())
         } else if value == &P::Value::type_marker() {
             Some("Type".to_string())
         } else if value == &P::Value::function_type_marker() {
@@ -388,6 +391,7 @@ where
         let value = value.unwrap();
         let out = match value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
+            Some(LowValue::Str(s)) => format!("\"{s}\""),
             Some(LowValue::None | LowValue::Parameterized) => "?".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
@@ -817,6 +821,7 @@ where
         if let Some(structural) = value.as_enum() {
             return match structural {
                 LowValue::USize(n) => n.to_string(),
+                LowValue::Str(s) => format!("\"{s}\""),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::None => "none".to_string(),

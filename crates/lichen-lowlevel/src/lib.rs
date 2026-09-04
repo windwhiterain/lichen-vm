@@ -89,6 +89,12 @@ pub trait GlobalExt: Default {}
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LowValue {
     USize(usize),
+    /// An immutable string literal — the builtin `string` value.  The content
+    /// is a `&'static str` (the source-owned literal is leaked once), so the
+    /// variant is `Copy` like the other scalars and needs no arena relocation
+    /// or GC edge.  There is no mutation, indexing, or concatenation: a string
+    /// is an atomic value in this universe, exactly like `USize`.
+    Str(&'static str),
     Array(AnyHandle<[ArrayItem]>),
     /// A constant table value: the entries behind a [`Handle`] into the
     /// table's home block's arena (or a static module's shared arena), each

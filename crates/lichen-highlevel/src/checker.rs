@@ -134,6 +134,7 @@ where
     /// stays in place instead of cloning the function per application.
     recursive_func_nodes: Vec<NodeId>,
     int_marker: NodeId,
+    string_marker: NodeId,
     type_marker: NodeId,
     function_type_marker: NodeId,
     tuple_type_marker: NodeId,
@@ -146,6 +147,9 @@ where
     zero_marker: NodeId,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
+    /// The shared `[string, Type]` type expression every `Str` literal's pair
+    /// (and the `string` type constant) carries.
+    string_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
     type_expr: NodeId,
 }
@@ -183,9 +187,12 @@ where
     pub root_val: NodeId,
     pub root_ty: NodeId,
     pub int_marker: NodeId,
+    pub string_marker: NodeId,
     pub type_marker: NodeId,
     /// The shared `[int, Type]` type expression.
     pub int_type: NodeId,
+    /// The shared `[string, Type]` type expression.
+    pub string_type: NodeId,
     /// The canonical universe `[Type, ↺]`.
     pub type_expr: NodeId,
     /// The checker's attributed unification sequence (see [`DiaryEntry`]).
@@ -306,6 +313,7 @@ where
             user_asserts: HashSet::new(),
             recursive_func_nodes: Vec::new(),
             int_marker: NodeId::default(),
+            string_marker: NodeId::default(),
             type_marker: NodeId::default(),
             function_type_marker: NodeId::default(),
             tuple_type_marker: NodeId::default(),
@@ -314,6 +322,7 @@ where
             table_type_marker: NodeId::default(),
             zero_marker: NodeId::default(),
             int_type: NodeId::default(),
+            string_type: NodeId::default(),
             type_expr: NodeId::default(),
         };
         checker.install_constants();
@@ -325,6 +334,7 @@ where
         // conflict).
         checker.module.evaluate_node_deep(checker.type_expr, None);
         checker.module.evaluate_node_deep(checker.int_type, None);
+        checker.module.evaluate_node_deep(checker.string_type, None);
         let root = checker.ir.root;
         let root_term = checker.check_expr(root);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
@@ -412,8 +422,10 @@ where
             root_val,
             root_ty,
             int_marker: checker.int_marker,
+            string_marker: checker.string_marker,
             type_marker: checker.type_marker,
             int_type: checker.int_type,
+            string_type: checker.string_type,
             type_expr: checker.type_expr,
             diary: checker.diary,
             arrows: checker.arrows,
@@ -432,6 +444,7 @@ where
     fn install_constants(&mut self) {
         let root = self.current_block;
         self.int_marker = self.alloc_node(root, None, Some(P::Value::int_marker()));
+        self.string_marker = self.alloc_node(root, None, Some(P::Value::string_marker()));
         self.type_marker = self.alloc_node(root, None, Some(P::Value::type_marker()));
         self.function_type_marker = self.alloc_node(root, None, Some(P::Value::function_type_marker()));
         self.tuple_type_marker = self.alloc_node(root, None, Some(P::Value::tuple_type_marker()));
@@ -455,6 +468,7 @@ where
         );
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
+        self.string_type = self.array_node(root, &[self.string_marker, self.type_expr]);
     }
 
     // --- allocation ------------------------------------------------------
@@ -2187,6 +2201,8 @@ where
     fn value_node(&mut self, value: P::Value) -> NodeId {
         if value == P::Value::int_marker() {
             self.int_marker
+        } else if value == P::Value::string_marker() {
+            self.string_marker
         } else if value == P::Value::function_type_marker() {
             self.function_type_marker
         } else if value == P::Value::tuple_type_marker() {
@@ -2232,6 +2248,14 @@ where
 
     fn int_marker_node(&self) -> NodeId {
         self.int_marker
+    }
+
+    fn string_type(&self) -> NodeId {
+        self.string_type
+    }
+
+    fn string_marker_node(&self) -> NodeId {
+        self.string_marker
     }
 
     fn type_marker_node(&self) -> NodeId {

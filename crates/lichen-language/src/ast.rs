@@ -4,10 +4,11 @@
 
 use lichen_highlevel::ir::Span;
 
-/// The two type constants.
+/// The type constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeConst {
     Int,
+    String,
     Type,
 }
 
@@ -26,7 +27,9 @@ pub enum BinOp {
 pub enum Expr {
     /// An integer literal.
     Int(usize, Span),
-    /// One of the type constants `Int` / `Type`.
+    /// A string literal — the immutable builtin `string` value.
+    Str(String, Span),
+    /// One of the type constants `Int` / `string` / `Type`.
     TypeConst(TypeConst, Span),
     /// A use of a name — resolved by [`crate::compile`] to the binder's id.
     Name(String, Span),
@@ -262,6 +265,7 @@ impl Expr {
     pub fn span(&self) -> Span {
         match self {
             Expr::Int(_, s) => *s,
+            Expr::Str(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
             Expr::Name(_, s) => *s,
             Expr::Placeholder(s) => *s,

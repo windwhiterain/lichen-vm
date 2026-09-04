@@ -35,10 +35,14 @@ use crate::diag::{Diag, Stage};
 pub enum TokenKind {
     /// An integer literal.
     Int(usize),
+    /// A string literal — the immutable builtin `string` value's content.
+    Str(String),
     /// An identifier, never a keyword.
     Name(String),
     /// The Int type constant.
     KwInt,
+    /// The string type constant.
+    KwString,
     /// The Type type constant -- the universe.
     KwType,
     /// The struct keyword -- a nominal struct type.
@@ -110,8 +114,10 @@ impl TokenKind {
     pub fn describe(&self) -> String {
         match self {
             TokenKind::Int(_) => "an integer literal".to_string(),
+            TokenKind::Str(_) => "a string literal".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
             TokenKind::KwInt => "'Int'".to_string(),
+            TokenKind::KwString => "'string'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
             TokenKind::KwStruct => "'struct'".to_string(),
             TokenKind::KwTable => "'table'".to_string(),
@@ -179,8 +185,15 @@ enum RawToken {
     Separator,
     #[regex(r"[0-9]+")]
     IntLit,
+    /// A `"..."` string literal (no escapes; may span newlines).  The trailing
+    /// quote is optional so an unterminated string lexes as one unit and is
+    /// diagnosed as a whole, rather than as a run of single-char errors.
+    #[regex("\"[^\"]*\"?")]
+    StrLit,
     #[token("Int")]
     KwInt,
+    #[token("string")]
+    KwString,
     #[token("Type")]
     KwType,
     #[token("struct")]
@@ -525,8 +538,20 @@ fn raw_to_kind(
             }
             Some(TokenKind::Int(value))
         }
+        RawToken::StrLit => {
+            // The matched text is `"…"` (or a bare `"` / an unterminated
+            // `"…` when the closing quote is missing).  An unterminated
+            // string is a lex error and the token is dropped; a terminated
+            // one keeps its content (the quotes stripped).
+            if slice.len() < 2 || !slice.ends_with('"') {
+                errors.push(Diag::new(Stage::Lex, lc, "unterminated string literal"));
+                return None;
+            }
+            Some(TokenKind::Str(slice[1..slice.len() - 1].to_string()))
+        }
         RawToken::NameLit => Some(match slice {
             "Int" => TokenKind::KwInt,
+            "string" => TokenKind::KwString,
             "Type" => TokenKind::KwType,
             "struct" => TokenKind::KwStruct,
             "table" => TokenKind::KwTable,
@@ -550,6 +575,7 @@ fn raw_to_kind(
             Some(TokenKind::Tilde(n))
         }
         RawToken::KwInt => Some(TokenKind::KwInt),
+        RawToken::KwString => Some(TokenKind::KwString),
         RawToken::KwType => Some(TokenKind::KwType),
         RawToken::KwStruct => Some(TokenKind::KwStruct),
         RawToken::KwTable => Some(TokenKind::KwTable),

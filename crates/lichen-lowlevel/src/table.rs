@@ -121,6 +121,8 @@ impl<P: Program> Module<P> {
         });
         let h = match value.as_enum() {
             Some(LowValue::USize(n)) => mix(n as u64),
+            // A string key hashes by its byte content.
+            Some(LowValue::Str(s)) => mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64))),
             Some(LowValue::None) => NONE_TOKEN,
             Some(LowValue::Parameterized) => PARAM_TOKEN,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => mix(id_hash(function)),

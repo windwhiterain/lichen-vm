@@ -721,7 +721,14 @@ fn atom_parser<'a>(
                     TokenKind::Int(n) => Expr::Int(n, t.span),
                     _ => unreachable!("filtered for an int"),
                 }),
+            any::<In<'a>, E<'a>>()
+                .filter(|t: &Token| matches!(t.kind, TokenKind::Str(_)))
+                .map(|t| match t.kind {
+                    TokenKind::Str(s) => Expr::Str(s, t.span),
+                    _ => unreachable!("filtered for a string"),
+                }),
             token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
+            token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
             name().map(|(n, span)| Expr::Name(n, span)),
             native_call(tokens, expr.clone()),
@@ -1284,7 +1291,7 @@ fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {
             Expr::Err { range, start } => out.push(ErrorBlock { range: *range, start: *start }),
-            Expr::Int(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) => {}
+            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) => {}
             Expr::Lambda {
                 parameter_type,
                 parameter_perspective,
