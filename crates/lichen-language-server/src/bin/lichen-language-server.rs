@@ -15,6 +15,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tower_lsp::jsonrpc::Result;
@@ -45,18 +46,30 @@ impl Backend {
         }
     }
 
+    /// The file-system path a `file://` document URI points at, so relative
+    /// `@import` paths resolve against the file's directory.  `None` for a
+    /// non-file URI (an unsaved / untitled buffer) — the fallback behaviour is
+    /// to resolve imports against the current directory.
+    fn uri_base(uri: &Url) -> Option<PathBuf> {
+        uri.to_file_path().ok()
+    }
+
     /// Re-parse + check `text` off the async runtime and return the resulting
-    /// LSP diagnostics (a `Send` value).
-    async fn compile_diagnostics(text: String) -> Vec<Diagnostic> {
-        tokio::task::spawn_blocking(move || Doc::new(text).lsp_diagnostics())
-            .await
-            .expect("compile lichen source")
+    /// LSP diagnostics (a `Send` value).  `base` is the file's path (from the
+    /// document URI) used to resolve relative `@import` lines.
+    async fn compile_diagnostics(text: String, base: Option<PathBuf>) -> Vec<Diagnostic> {
+        tokio::task::spawn_blocking(move || {
+            Doc::new_with_base(text, base.as_deref()).lsp_diagnostics()
+        })
+        .await
+        .expect("compile lichen source")
     }
 
     /// Store the new source for `uri` and publish its diagnostics.
     async fn update_document(&self, uri: Url, text: String) {
+        let base = Self::uri_base(&uri);
         self.sources.lock().unwrap().insert(uri.clone(), text.clone());
-        let diagnostics = Self::compile_diagnostics(text).await;
+        let diagnostics = Self::compile_diagnostics(text, base).await;
         self.publish(uri, diagnostics, None).await;
     }
 
@@ -125,9 +138,12 @@ impl LanguageServer for Backend {
         let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
             return Ok(None);
         };
-        let result = tokio::task::spawn_blocking(move || Doc::new(text).hover_at(position))
-            .await
-            .expect("compile lichen source");
+        let base = Self::uri_base(&uri);
+        let result = tokio::task::spawn_blocking(move || {
+            Doc::new_with_base(text, base.as_deref()).hover_at(position)
+        })
+        .await
+        .expect("compile lichen source");
         let hover = result.map(|(contents, range)| Hover {
             contents: HoverContents::Scalar(MarkedString::String(contents)),
             range: Some(range),
@@ -141,9 +157,12 @@ impl LanguageServer for Backend {
         let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
             return Ok(None);
         };
-        let range = tokio::task::spawn_blocking(move || Doc::new(text).definition_at(position))
-            .await
-            .expect("compile lichen source");
+        let base = Self::uri_base(&uri);
+        let range = tokio::task::spawn_blocking(move || {
+            Doc::new_with_base(text, base.as_deref()).definition_at(position)
+        })
+        .await
+        .expect("compile lichen source");
         let response = range.map(|range| GotoDefinitionResponse::Scalar(Location {
             uri: uri.clone(),
             range,
@@ -159,9 +178,12 @@ impl LanguageServer for Backend {
         // The frontend classifies every token into a `SemanticTokens` payload
         // (delta-encoded, with the legend indices).  `Doc` is `!Send`, so the
         // `spawn_blocking` returns the fully-encoded (Send) exchange object.
-        let tokens = tokio::task::spawn_blocking(move || Doc::new(text).semantic_tokens_lsp())
-            .await
-            .expect("compile lichen source");
+        let base = Self::uri_base(&uri);
+        let tokens = tokio::task::spawn_blocking(move || {
+            Doc::new_with_base(text, base.as_deref()).semantic_tokens_lsp()
+        })
+        .await
+        .expect("compile lichen source");
         Ok(Some(SemanticTokensResult::Tokens(tokens)))
     }
 }

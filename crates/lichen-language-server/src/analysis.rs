@@ -15,6 +15,7 @@
 //! artifact for an editor, without forking the compiler.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use lichen_highlevel::ir::Span;
 use lichen_highlevel::no_native_ops;
@@ -113,15 +114,29 @@ impl Doc {
     /// its `import`/metadata directives) is cut out and resolved first, so a
     /// real lichen file compiles on the code that follows the block, with spans
     /// still absolute in the original file.
+    ///
+    /// Imports resolve against the current directory (`base = None`); use
+    /// [`Doc::new_with_base`] for a file whose `@import` lines should resolve
+    /// relative to the file (the LSP server's case).
     pub fn new(source: impl Into<String>) -> Doc {
+        Doc::new_with_base(source, None)
+    }
+
+    /// [`Doc::new`] with an explicit base path for import resolution.  `base` is
+    /// the source file's path (or a directory): `@import` paths resolve relative
+    /// to it — a relative import `"math.lichen"` in `dir/main.lichen` loads
+    /// `dir/math.lichen`.  `None` keeps the pre-LSP behavior (relative to the
+    /// current directory).
+    pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc {
         let source = source.into();
         let line_starts = lex::line_starts(&source);
 
         // Cut the leading `@{…@}` block (metadata + imports) off the frontend
         // input, resolving imports through a fresh in-memory package store so
-        // the shared registry can serve any loaded imports.
+        // the shared registry can serve any loaded imports.  `base` lets the
+        // store resolve relative `@import` paths against the file's directory.
         let mut store = PackageStore::new();
-        let (pre, mut diagnostics) = preprocess::preprocess(&source, None, &mut store);
+        let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
 
         // The frontend artifacts (for the editor index): tokens + AST in
         // absolute file coordinates (the lexer maps through `code_base` and the
@@ -858,9 +873,32 @@ impl Walk {
 mod tests {
     use super::*;
     use crate::lsp::Position;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn doc(source: &str) -> Doc {
         Doc::new(source)
+    }
+
+    /// A fresh temporary directory (mirrors the language crate's test helper).
+    fn temp_dir(name: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "lichen-server-{name}-{}-{nonce}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, contents).unwrap();
+        path
     }
 
     #[test]
@@ -1001,6 +1039,55 @@ mod tests {
         assert!(
             toks.iter().any(|t| t.token_type == crate::lsp::SemanticTokenType::NUMBER),
             "code numbers are classified past the block"
+        );
+    }
+
+    #[test]
+    fn relative_imports_resolve_against_the_files_directory() {
+        // The `import` example, as an editor would open it: the document's URI
+        // gives a base path, so `@import "math.lichen"` / `"geometry.lichen"`
+        // resolve in the file's own directory (not the process CWD).  This is
+        // the LSP path: `Doc` is built with the file path as `base`.
+        let dir = temp_dir("import");
+        write(
+            &dir,
+            "math.lichen",
+            "@{output = \"(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>\"@}\n{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+        );
+        write(
+            &dir,
+            "geometry.lichen",
+            "@{math = import \"math.lichen\"\noutput = \"(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>\"@}\n{\n  double = x => math.add x x\n  inc_twice = x => math.succ (math.succ x)\n}\n",
+        );
+        let main_path = write(
+            &dir,
+            "_.lichen",
+            "@{order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"@}\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
+        );
+
+        let d = Doc::new_with_base(
+            fs::read_to_string(&main_path).unwrap(),
+            Some(main_path.as_path()),
+        );
+        assert!(
+            d.diagnostics.is_empty(),
+            "relative imports should resolve; got {:?}",
+            d.diagnostics
+        );
+    }
+
+    #[test]
+    fn relative_imports_with_no_base_resolve_nowhere() {
+        // The pre-fix behaviour: with `base = None` the same relative imports
+        // resolve against the process CWD, which is almost never the file's
+        // directory, so they fail — this documents why the LSP must pass a base.
+        let d = doc("@{math = import \"math.lichen\"@}math\n");
+        assert!(
+            d.diagnostics
+                .iter()
+                .any(|x| x.message.contains("cannot load package 'math.lichen'")),
+            "expected a cannot-load diagnostic, got {:?}",
+            d.diagnostics
         );
     }
 }

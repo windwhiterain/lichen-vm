@@ -7,8 +7,13 @@
 //! The `server` feature is required (it provides the binary target); `cargo
 //! test -p lichen-language-server` runs with default features, so this builds.
 
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use lichen_language_server::lsp_types::Url;
 
 /// Encode one JSON-RPC message as an LSP stdio frame.
 fn frame(json: &str) -> Vec<u8> {
@@ -123,6 +128,127 @@ fn handshake_and_features() {
     send(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#);
     let shutdown = read_frame(&mut stdout);
     assert!(shutdown.contains("\"id\":5"), "shutdown resp = {shutdown}");
+    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    drop(stdin);
+    child.wait().expect("server exits cleanly");
+}
+
+/// A fresh temporary directory so a test's import files are isolated on disk.
+fn temp_dir(name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "lichen-lsp-{name}-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, contents).unwrap();
+    path
+}
+
+#[test]
+fn relative_imports_resolve_via_the_document_uri() {
+    // The LSP must resolve a relative `@import` against the document's own
+    // directory (derived from its `file://` URI).  Before this the server
+    // passed no base to the frontend, so `import "math.lichen"` resolved
+    // against the process CWD and failed with "cannot load package".
+    let dir = temp_dir("import");
+    write(&dir, "math.lichen", "x => x + 1\n");
+    let main_path = write(
+        &dir,
+        "main.lichen",
+        "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
+    );
+    let uri = Url::from_file_path(&main_path).unwrap();
+
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_lichen-language-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lichen-language-server");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
+    );
+    let _init = read_frame(&mut stdout);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+
+    let text = fs::read_to_string(&main_path).unwrap();
+    let did_open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"lichen","version":1,"text":{}}}}}}}"#,
+        uri.as_str(),
+        serde_json::to_string(&text).unwrap(),
+    );
+    send(&mut stdin, &did_open);
+
+    let diag = wait_for(&mut stdout, "publishDiagnostics");
+    assert!(
+        !diag.contains("cannot load package"),
+        "relative import should resolve; got diagnostics = {diag}"
+    );
+
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#);
+    let _shutdown = read_frame(&mut stdout);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    drop(stdin);
+    child.wait().expect("server exits cleanly");
+}
+
+#[test]
+fn the_repo_import_example_loads() {
+    // The living-spec program that first bit: `import/_.lichen` opens with
+    // `math = import "math.lichen"` / `geo = import "geometry.lichen"`, and
+    // `geometry.lichen` itself imports `math.lichen` (a transitive relative
+    // import).  Driving the real server against this file must resolve every
+    // import relative to the file's directory — no "cannot load package".
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../lichen-language/examples/programs/import");
+    let main_path = examples.join("_.lichen");
+    let uri = Url::from_file_path(&main_path).unwrap();
+
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_lichen-language-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lichen-language-server");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
+    );
+    let _init = read_frame(&mut stdout);
+    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+
+    let text = fs::read_to_string(&main_path).unwrap();
+    let did_open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"{}","languageId":"lichen","version":1,"text":{}}}}}}}"#,
+        uri.as_str(),
+        serde_json::to_string(&text).unwrap(),
+    );
+    send(&mut stdin, &did_open);
+
+    let diag = wait_for(&mut stdout, "publishDiagnostics");
+    assert!(
+        !diag.contains("cannot load package"),
+        "the repo import example's relative imports should resolve; got {diag}"
+    );
+
+    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#);
+    let _shutdown = read_frame(&mut stdout);
     send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
     drop(stdin);
     child.wait().expect("server exits cleanly");
