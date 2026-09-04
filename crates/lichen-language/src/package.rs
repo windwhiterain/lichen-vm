@@ -21,8 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
-use lichen_compute::{JitOp, LaunchOp, WRAPPER_SOURCE};
-use lichen_highlevel::native::{NativeOp, NativeOps};
+use lichen_compute::WRAPPER_SOURCE;
+use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::HighPackageMeta;
 use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
 
@@ -36,20 +36,14 @@ use crate::program::LangProgram;
 /// [`PackageStore::register_compute`]) rather than a source file on disk.
 const COMPUTE_PATH: &str = "compute.lichen";
 
-/// The `lichen-compute` plugin's private native registry, built over the
-/// host's concrete [`LangProgram`] marker.  Attached only to the compilation
-/// of `compute.lichen`, so `$jit`/`$launch` resolve privately — a second
-/// plugin registering its own `$jit` never collides.  The plugin itself is
-/// program-generic; only this composition site names [`LangProgram`].
-static JIT_OP: JitOp = JitOp;
-static LAUNCH_OP: LaunchOp = LaunchOp;
-static COMPUTE_OPS: [(&str, &dyn NativeOp<LangProgram>); 2] = [
-    ("jit", &JIT_OP),
-    ("launch", &LAUNCH_OP),
-];
-
+/// The `lichen-compute` plugin's private native registry, built by the
+/// plugin over the host's concrete [`LangProgram`] marker.  Attached only to
+/// the compilation of `compute.lichen`, so `$jit`/`$launch` resolve
+/// privately — a second plugin registering its own `$jit` never collides.
+/// The plugin itself is program-generic; only this composition site names
+/// [`LangProgram`].
 fn compute_native_ops() -> NativeOps<LangProgram> {
-    &COMPUTE_OPS
+    lichen_compute::compute_native_ops!(LangProgram)
 }
 
 /// A loaded package: the path, its registry key, and the static ref to the

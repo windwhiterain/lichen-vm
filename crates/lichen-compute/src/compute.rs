@@ -1049,6 +1049,40 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     Ok(result as usize)
 }
 
+// --- Native-op registry: the plugin's opt-in to the native-plugin contract --
+
+/// The `lichen-compute` native plugin marker — the nominal opt-in to the
+/// native-plugin contract ([`lichen_highlevel::plugin::NativePlugin`]).
+///
+/// A unit marker: the plugin contributes its [`ComputeValue`] /
+/// [`ComputeOperator`] leaves and its native op registry (via
+/// [`compute_native_ops!`]), and never names a concrete host program.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ComputePlugin;
+
+impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
+
+/// Assemble `lichen-compute`'s private native-operator registry for a host
+/// program `$program`, expanding to a `&'static` [`NativeOps`].
+///
+/// Invoked by a host that composes the plugin (see `liche-language`'s
+/// `package.rs`), so the `$jit`/`$launch` names stay private to the plugin's
+/// own embedded source.  The host names only the plugin crate and its program
+/// marker — never the plugin's op structs — so this is the composition point a
+/// package manager would generate.
+#[macro_export]
+macro_rules! compute_native_ops {
+    ($program:ty) => {{
+        static JIT: $crate::JitOp = $crate::JitOp;
+        static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
+        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 2] = [
+            ("jit", &JIT),
+            ("launch", &LAUNCH),
+        ];
+        &OPS[..] as $crate::NativeOps<$program>
+    }};
+}
+
 // --- Native operators: the private contract with the plugin's source -------
 
 /// `$jit(f)` — compile a function to a kernel.  The function-ness gate unifies
