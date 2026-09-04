@@ -93,6 +93,23 @@ fn a_region_parses_a_middle_window() {
 }
 
 #[test]
+fn a_traced_region_reports_absolute_token_ranges() {
+    let tokens = lex("a = 1\nb = 2\na + b").tokens;
+    // The region over the whole stream (everything before Eof) must produce the
+    // same per-statement ranges as the whole-program parser.
+    let (stmts, ranges, errors) = parse_statement_region_traced(&tokens, 0, tokens.len() - 1);
+    assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
+    assert_eq!(ranges, vec![(0, 3), (4, 7), (8, 11)]);
+    assert_eq!(stmts.len(), ranges.len(), "one range per statement");
+
+    // A middle window reports its ranges offset back into the whole stream
+    // (absolute token indices), not relative to the region slice.
+    let (stmts, ranges, _) = parse_statement_region_traced(&tokens, 4, 7);
+    assert_eq!(stmts.len(), 1);
+    assert_eq!(ranges, vec![(4, 7)]);
+}
+
+#[test]
 fn a_region_recovering_over_a_broken_window_still_produces_statements() {
     // An unclosed `(` makes the trailing *expression* statement an error block;
     // the region parser must still return that statement (recovered), like the

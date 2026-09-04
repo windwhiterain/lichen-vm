@@ -4,6 +4,7 @@
 
 use lichen_highlevel::ir::ExprKind;
 
+use super::{edit_span, splice_program};
 use crate::ast::{Expr, Stmt};
 use crate::diag::Stage;
 use crate::lex;
@@ -280,5 +281,72 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
             assert_eq!(sess.source(), *target);
         }
     }
+}
+
+/// Assert the window splice of `old` → `new` is actually taken (`Some`) and
+/// reproduces exactly a whole-buffer parse of the new source.
+fn assert_splice_equals_full_parse(old: &str, new: &str) {
+    let old_tokens = lex::lex(old).tokens;
+    let old_program = parse::parse(&old_tokens).program;
+    let new_tokens = lex::lex(new).tokens;
+    let parsed = splice_program(
+        &old_tokens,
+        &old_program,
+        &new_tokens,
+        edit_span(old, new).0,
+        edit_span(old, new).1,
+        edit_span(old, new).2,
+    );
+    assert!(
+        parsed.is_some(),
+        "the edit {old:?} -> {new:?} should be window-spliceable"
+    );
+    let (program, errors) = parsed.unwrap();
+    let full = parse::parse(&new_tokens);
+    // The spliced statements/expr/ranges must equal a full parse's.
+    assert_eq!(program.statements.len(), full.program.statements.len());
+    assert_eq!(format!("{:?}", program.statements), format!("{:?}", full.program.statements));
+    assert_eq!(format!("{:?}", program.expr), format!("{:?}", full.program.expr));
+    assert_eq!(program.stmt_ranges, full.program.stmt_ranges);
+    // The recovered error blocks are recomputed from the spliced AST.
+    assert_eq!(
+        format!("{:?}", program.error_blocks),
+        format!("{:?}", full.program.error_blocks)
+    );
+    assert_eq!(errors.len(), full.errors.len());
+}
+
+#[test]
+fn the_window_splice_reproduces_a_full_parse() {
+    // Edits the incremental parser must handle *without* falling back to a
+    // whole-buffer parse: a mid-statement insertion, a change inside a binding's
+    // value, an edit in the trailing expression, an append of a new trailing
+    // expression, a binding-name edit, and a mid-buffer statement insertion.
+    // For each, the spliced frontend is identical to a fresh parse.
+    let base = "a = 1\nf = x => a + x\nf 2\n";
+    assert_splice_equals_full_parse(base, "a = 1\nf = x => a + x\nf 22\n");
+    assert_splice_equals_full_parse(base, "a = 1\nf = x => a + 1\nf 2\n");
+    assert_splice_equals_full_parse(base, "a = 1\nf = x => a + x\nf 3\n");
+    assert_splice_equals_full_parse(base, "g = 1\nf = x => a + x\nf 2\n");
+    assert_splice_equals_full_parse(base, "a = 1\nf = x => a + x\nf 2\nner");
+    assert_splice_equals_full_parse(base, "a = 1\nz = 3\nf = x => a + x\nf 2\n");
+}
+
+#[test]
+fn a_splice_that_ends_in_a_binding_falls_back() {
+    // The splice does not try to replicate the whole-program parser's
+    // "a program must end with an expression" error; a trailing binding (the new
+    // value ends in `ner = (2`) makes it fall back to a full parse, which
+    // reports that error precisely.
+    let old = "a = 1\nf = x => a + x\nf 2\n";
+    let new = "a = 1\nf = x => a + x\nner = (2";
+    let old_tokens = lex::lex(old).tokens;
+    let old_program = parse::parse(&old_tokens).program;
+    let new_tokens = lex::lex(new).tokens;
+    let (a, b, delta) = edit_span(old, new);
+    assert!(
+        splice_program(&old_tokens, &old_program, &new_tokens, a, b, delta).is_none(),
+        "the trailing-binding edit falls back to a full parse"
+    );
 }
 

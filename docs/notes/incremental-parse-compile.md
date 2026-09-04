@@ -48,12 +48,24 @@
 >   plus an order-sensitive `combined()`, so the high (AST) layer can re-derive
 >   only the statements an edit touched instead of re-hashing the whole tree.
 >
+> **Implemented (the `BufferSession::compile` splice — T2's wiring):**
+> - `BufferSession` keeps a `LastState` snapshot (source, tokens, program) the
+>   previous compile ran under.  On an edit, `compile` computes the minimal
+>   byte span that differs (common-prefix/suffix), **re-lexes it with
+>   `lex_resume`** and **re-parses only the statement window** the edit touches
+>   (`parse::parse_statement_region_traced`, which also yields each statement's
+>   absolute token range), then **splices** the fresh statements into the
+>   snapshot's program — prefix kept, window replaced, suffix's token ranges
+>   shifted by the token-count delta.  The result is identical to a whole-buffer
+>   re-lex + re-parse; both the regex work and the parse window are `O(edit)`.
+> - The splice is **conservative**: it falls back to a whole-buffer parse when an
+>   invariant cannot be confirmed — a degenerate program, a recovered error block
+>   lying outside the window (whose diagnostic must not be dropped), or a
+>   trailing binding (the whole-program parser owns that "must end with an
+>   expression" error).  The per-statement signature is still recomputed as a
+>   whole-program walk (the O(s0) scope-resume is the remaining residual).
+>
 > **Not yet wired / not implemented:**
-> - The `BufferSession::compile` splice: map changed bytes → `stmt_ranges` →
->   re-parse only that window → splice the AST + recompute the per-statement
->   signature.  The lexer/lowerer still re-lexes and re-parses the whole buffer
->   today; the signature reuse is what keeps the expensive re-lower + re-check
->   out.
 > - T3 memoized check (`done`/`check_into` resume) and T4 true
 >   unification-state checkpoint/rollback.
 >
@@ -293,9 +305,11 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
    edits reuse everything. ✅ (name-resolved signature; the user-visible behavior).
 3. **T2**: suffix lex + statement-region parse. ✅ primitives landed
    (`lex::lex_resume`, `parse::parse_statement_region`, `Program::stmt_ranges`),
-   plus the per-statement signature. ⏳ *wiring*: the `BufferSession::compile`
-   splice that re-parses only the touched statement window and recomputes only
-   the changed per-statement hashes.
+   plus the per-statement signature. ✅ *wiring*: the `BufferSession::compile`
+   splice re-parses only the touched statement window (falling back to a full
+   parse on the borderline cases) and re-combines the per-statement signature.
+   The remaining O(s0) cost is recomputing the signature as a whole-program walk
+   (a scope-snapshot / deltasonic sign is a further optimization, not required).
 4. **T3**: memoized check (`done`/`term` skip, `check_into` resume).
 5. **Debounced re-check** as the fallback for edits that genuinely change code.
 

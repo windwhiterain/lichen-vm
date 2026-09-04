@@ -171,7 +171,26 @@ pub fn parse_statement_region(
     start: usize,
     end: usize,
 ) -> (Vec<Stmt>, Vec<Diag>) {
-    let (statements, errors) = std::thread::scope(|scope| {
+    let (statements, _ranges, errors) = parse_statement_region_traced(tokens, start, end);
+    (statements, errors)
+}
+
+/// Re-parse a contiguous statement *window* `tokens[start..end]` into its
+/// statements **and** the token-index range each covered, for incremental
+/// splicing.
+///
+/// This is [`parse_statement_region`] plus the ranges: the second element is
+/// one `(start, end)` per returned statement, absolute token indices into
+/// `tokens` (the region's spans are offset by `start` back into the whole
+/// stream).  The ranges let the session splice the window into a program and
+/// keep [`Program::stmt_ranges`] correct without re-parsing the untouched
+/// prefix and suffix.
+pub fn parse_statement_region_traced(
+    tokens: &[Token],
+    start: usize,
+    end: usize,
+) -> (Vec<Stmt>, Vec<(usize, usize)>, Vec<Diag>) {
+    let (statements, ranges, errors) = std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
             .spawn_scoped(scope, || region_inner(tokens, start, end))
@@ -187,12 +206,17 @@ pub fn parse_statement_region(
             check: None,
         })
         .collect();
-    (statements, errors)
+    (statements, ranges, errors)
 }
 
-/// The worker's result for a region: the statements plus their diagnostics in a
-/// `Send` form (the crate's `Diag` embeds the checker's, which is not `Send`).
-type RegionOut = (Vec<Stmt>, Vec<(Option<Span>, String, Stage)>);
+/// The worker's result for a region: the statements, their absolute
+/// token-index ranges, and the diagnostics in a `Send` form (the crate's `Diag`
+/// embeds the checker's, which is not `Send`).
+type RegionOut = (
+    Vec<Stmt>,
+    Vec<(usize, usize)>,
+    Vec<(Option<Span>, String, Stage)>,
+);
 
 fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let region = &tokens[start..end];
@@ -205,13 +229,15 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         .repeated()
         .at_least(1)
         .collect::<Vec<_>>();
-    let elem = statement(region, expr.clone()).recover_with(skip_then_retry_until(
-        any::<In<'_>, E<'_>>().ignored(),
-        choice((
-            token(TokenKind::Eof).ignored(),
-            token(TokenKind::RBrace).ignored(),
-        )),
-    ));
+    let elem = statement(region, expr.clone())
+        .recover_with(skip_then_retry_until(
+            any::<In<'_>, E<'_>>().ignored(),
+            choice((
+                token(TokenKind::Eof).ignored(),
+                token(TokenKind::RBrace).ignored(),
+            )),
+        ))
+        .map_with(|s, me| (s, (me.span().start, me.span().end)));
     let parser = seps
         .clone()
         .then(elem.clone())
@@ -224,7 +250,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         .map(|(((_, first), rest), _)| {
             std::iter::once(first)
                 .chain(rest.into_iter().map(|(_, e)| e))
-                .collect::<Vec<Stmt>>()
+                .collect::<Vec<(Stmt, (usize, usize))>>()
         });
     let stream = Stream::from_iter(region.iter().cloned());
     let (output, errs) = parser.parse(stream).into_output_errors();
@@ -238,17 +264,25 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
             errors.push((diag.span, diag.message, diag.stage));
         }
     }
-    // The region's tokens carry absolute positions, so the statements are
-    // spliceable as-is.  Apply the type-mode post-pass (top-level statements
-    // are in term mode), reusing the whole-program pass on a synthetic program.
+    // The region's tokens carry absolute *byte* positions, so the statements are
+    // spliceable as-is; only the *token-index* spans are region-relative, so
+    // offset them back by `start` into the whole stream.
+    let elems: Vec<(Stmt, (usize, usize))> = output.unwrap_or_default();
+    let statements: Vec<Stmt> = elems.iter().map(|(s, _)| s.clone()).collect();
+    let ranges: Vec<(usize, usize)> = elems
+        .iter()
+        .map(|(_, r)| (r.0 + start, r.1 + start))
+        .collect();
+    // Apply the type-mode post-pass (top-level statements are in term mode),
+    // reusing the whole-program pass on a synthetic program.
     let program = Program {
-        statements: output.unwrap_or_default(),
+        statements,
         expr: Expr::Int(0, (1, 1)),
         error_blocks: Vec::new(),
-        stmt_ranges: Vec::new(),
+        stmt_ranges: ranges.clone(),
     };
     let program = apply_type_mode(program);
-    (program.statements, errors)
+    (program.statements, ranges, errors)
 }
 
 // ---------------------------------------------------------------------------
@@ -1307,7 +1341,7 @@ fn apply_type_mode(program: Program) -> Program {
 /// Collect the byte-range masks of every recovered-error node in the AST, in
 /// source order.  [`Program::error_blocks`] carries these so the frontend can
 /// exclude the error regions from a content signature / diff.
-fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
+pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {
             Expr::Err { range, start } => out.push(ErrorBlock { range: *range, start: *start }),
