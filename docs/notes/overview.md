@@ -52,5 +52,8 @@ lichen-utils      shared extension plumbing (enum_ext!, disjoint, compose)
   [lowlevel-vm](lowlevel-vm.md).
 - Static modules and the shared registry: [static-modules](static-modules.md).
 - The schema / attribute extension (perspective): [attributes](attributes.md).
+- The compiler-plugin model (how a native package extends the vocabularies):
+  [compiler-plugin](compiler-plugin.md) — with [lichen-compute](lichen-compute.md) as the
+  worked example.
 - The source language and the `@{…@}` preprocessor block:
   [the spec](../language-spec.md) and [packages](packages.md).
