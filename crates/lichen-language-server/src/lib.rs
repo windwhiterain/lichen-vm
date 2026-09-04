@@ -24,5 +24,5 @@
 pub mod analysis;
 pub mod lsp;
 
-pub use analysis::{Definition, Doc};
+pub use analysis::{Definition, Doc, StatementValue};
 pub use lsp_types;

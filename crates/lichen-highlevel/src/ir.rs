@@ -186,6 +186,13 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// poison the apply-time unify (a placeholder reached through an
     /// index-typed apply would stay an unbound `?a`).
     pub block_roots: HashSet<ExprId>,
+    /// The top-level (outer-block) statement expression ids, in source order —
+    /// bindings and bare-expression statements, NOT including the final
+    /// expression.  The build's cascade deep pass already computed each one's
+    /// value/type; a reader (the language server) reads them by id rather than
+    /// re-deriving them from the root, and never re-evaluates (lazy/recursive
+    /// bindings stay a `Parameterized` cell and are not forced).
+    pub stmt_roots: Vec<ExprId>,
     /// The per-expression static schema, index-aligned with [`IR::expr`] — one
     /// [`SchemaId`] each.  `alloc` stamps the default (empty-`tail`) schema.
     pub schemas: Vec<SchemaId>,
@@ -410,6 +417,7 @@ impl<A: AttrSpec, L> IR<A, L> {
             depths: Vec::new(),
             root: ExprId(0),
             block_roots: HashSet::new(),
+            stmt_roots: Vec::new(),
             schemas: Vec::new(),
             // Slot 0 is always the default (empty-tail) schema, so a fresh
             // `alloc` (which stamps `SchemaId(0)`) needs no write.
@@ -583,6 +591,14 @@ impl<A: AttrSpec, L> IR<A, L> {
 
     pub fn set_root(&mut self, root: ExprId) {
         self.root = root;
+    }
+
+    /// Record the top-level statement expression ids, in source order.  The
+    /// build's cascade deep pass computes each one's value/type; a reader
+    /// (the language server) reads them by id instead of re-deriving them from
+    /// the root, and never re-evaluates.
+    pub fn set_stmt_roots(&mut self, stmt_roots: Vec<ExprId>) {
+        self.stmt_roots = stmt_roots;
     }
 }
 

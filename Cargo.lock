@@ -571,6 +571,7 @@ version = "0.1.0"
 dependencies = [
  "lichen-highlevel",
  "lichen-language",
+ "lichen-lowlevel",
  "lsp-types",
  "serde",
  "serde_json",

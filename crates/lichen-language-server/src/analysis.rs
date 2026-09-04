@@ -18,6 +18,8 @@ use std::collections::HashMap;
 
 use lichen_highlevel::ir::Span;
 use lichen_highlevel::no_native_ops;
+use lichen_language::program::LangValue;
+use lichen_language::render::{print_type, print_value};
 use lichen_language::ast::{Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
@@ -26,6 +28,7 @@ use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::{build_report, frontend_at};
+use lichen_lowlevel::{AnyNodeId, LowValue};
 
 use crate::lsp::{
     self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData, SemanticTokenModifier,
@@ -37,6 +40,29 @@ use crate::lsp::{
 pub struct Definition {
     pub name: String,
     pub span: Span,
+}
+
+/// The checked type and — when the build produced a concrete one — the value
+/// of one top-level (outer-block) statement.  A **read-only snapshot** taken at
+/// [`Doc::new`] time: the build's cascade deep pass already type-checked every
+/// statement and computed (or deliberately left lazy) each one's value.  The
+/// snapshot is taken by *reading* `build.ty`/`build.val`/`module.node_value`;
+/// it never re-evaluates a node, never forces a lazy cell, and never calls
+/// `evaluate_node`/`evaluate_node_deep`.  A lazy or recursive binding whose
+/// value the program defers (a `Parameterized` cell, e.g. `paradox` in the
+/// `Type : Type` encoding) reports `value: None` and its type only — forcing
+/// it would run the compiler-generated recursion clones, which are not
+/// user-written and are irrelevant to editor needs.
+#[derive(Clone, Debug)]
+pub struct StatementValue {
+    /// The statement's source span (its start position, 1-based `(line, col)`).
+    pub span: Span,
+    /// The statement's checked type, rendered in lichen's type syntax.
+    pub ty: String,
+    /// The statement's value, rendered when the cascade computed a concrete
+    /// one; `None` when the statement is lazy/recursive (its value is a
+    /// deferred `Parameterized` cell) or has no value node.
+    pub value: Option<String>,
 }
 
 /// A name *use* and (when it resolves) the [`Definition`] it points to.
@@ -69,6 +95,12 @@ pub struct Doc {
     resolve: HashMap<Span, usize>,
     /// Span of a definition site → index into [`Doc::defs`].
     def_index: HashMap<Span, usize>,
+    /// Per top-level statement (source order): its checked type and, when
+    /// concrete, its value.  See [`StatementValue`] for the read-only contract.
+    statements: Vec<StatementValue>,
+    /// The byte offset of each statement's start, source order (the span index
+    /// backing [`Doc::statement_at`]).
+    stmt_starts: Vec<u32>,
 }
 
 impl Doc {
@@ -103,6 +135,57 @@ impl Doc {
         let report = build_report(frontend.ir, diagnostics, Some(store.registry()), no_native_ops());
         let diagnostics = report.diagnostics;
 
+        // A read-only per-statement type/value snapshot.  It is computed here,
+        // once, by reading the built module's cached values — never by
+        // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
+        let (statements, stmt_starts) = match report.build {
+            Some(build) => {
+                let mut statements = Vec::new();
+                let mut starts = Vec::new();
+                for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
+                    // The IR statement's own span points at its *value*
+                    // expression; for the span index use the AST statement's
+                    // start (the binding name / bare-expression start), which
+                    // is where the statement begins in the source.  Statements
+                    // align 1:1 with `program.statements` in source order.
+                    let (span, start) = match program.statements.get(i) {
+                        Some(Stmt::Binding(b)) => {
+                            (b.span, lsp::offset_of_span(&line_starts, b.span))
+                        }
+                        Some(Stmt::Expr(e)) => {
+                            let s = e.span();
+                            (s, lsp::offset_of_span(&line_starts, s))
+                        }
+                        None => {
+                            let s = build.ir[id].span.unwrap_or((0, 0));
+                            (s, lsp::offset_of_span(&line_starts, s))
+                        }
+                    };
+                    let ty = match build.ty[id] {
+                        Some(t) => print_type(&build.module, t),
+                        None => String::new(),
+                    };
+                    let value = build.val[id].and_then(|vn| {
+                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                            // A `Parameterized` value is a deferred (lazy /
+                            // recursive) binding — report type only, never force.
+                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                            Some(v) => Some(print_value(
+                                &build.module,
+                                v,
+                                build.ty[id].unwrap_or_default(),
+                            )),
+                            None => None,
+                        }
+                    });
+                    statements.push(StatementValue { span, ty, value });
+                    starts.push(start as u32);
+                }
+                (statements, starts)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
+
         let (defs, resolve, def_index) = index(&program);
         // `pre.code` borrows `source`, so copy the offset out before moving
         // `source` into the result.
@@ -118,6 +201,8 @@ impl Doc {
             defs,
             resolve,
             def_index,
+            statements,
+            stmt_starts,
         }
     }
 
@@ -155,6 +240,32 @@ impl Doc {
 
     fn offset_of(&self, position: Position) -> Option<usize> {
         lsp::offset_from_position(&self.source, &self.line_starts, position)
+    }
+
+    /// Every top-level statement's checked type and (when the build produced a
+    /// concrete value) its value, in source order.
+    ///
+    /// This is a **read-only** snapshot already taken at [`Doc::new`].  It
+    /// never re-evaluates an expression, never forces a lazy cell, and never
+    /// calls `evaluate_node` / `evaluate_node_deep`: a statement the cascade
+    /// left lazy/recursive (a deferred `Parameterized` cell) reports
+    /// [`StatementValue::value`] as `None` and its type only.  The statement's
+    /// *value* is only present when the build actually computed a concrete one
+    /// for that user-written statement (a terminal binding, a literal).
+    pub fn statement_values(&self) -> &[StatementValue] {
+        &self.statements
+    }
+
+    /// The top-level statement whose source range contains byte `offset`, if
+    /// any.  Statements are disjoint and stored in source order, so the
+    /// containing statement is the last one whose start is not past `offset`.
+    pub fn statement_at(&self, offset: usize) -> Option<&StatementValue> {
+        let idx = self.stmt_starts.partition_point(|&s| (s as usize) <= offset);
+        if idx == 0 {
+            None
+        } else {
+            self.statements.get(idx - 1)
+        }
     }
 
     /// Hover at a cursor position: the token under it, and — for a name — the

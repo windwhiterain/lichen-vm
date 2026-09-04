@@ -194,7 +194,9 @@ fn a_block_scopes_its_bindings() {
 #[test]
 fn a_statement_expression_is_wired_into_the_root() {
     // 5; 7 — the bare statement and the final expression ride in a
-    // tuple; the root selects the final one.
+    // tuple; the root selects the final one, and the bare statement is
+    // recorded as a *statement root* so a reader can reach each statement's
+    // value by id.
     let ir = compile_ok("5; 7");
     let ExprKind::Field { container: array, key: index } = kind(&ir, ir.root) else {
         panic!("expected the statement wrapper")
@@ -211,25 +213,27 @@ fn a_statement_expression_is_wired_into_the_root() {
         kind(&ir, wrapped(&ir)),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(7)))
     ));
+    assert_eq!(ir.stmt_roots.len(), 1);
+    assert!(matches!(
+        kind(&ir, ir.stmt_roots[0]),
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(5)))
+    ));
     // A trailing statement identical to the final expression is not
-    // wrapped: `a = 1; a` stays the `1` node.
+    // wrapped: `a = 1; a` stays the `1` node, with the binding as a
+    // statement root.
     let ir = compile_ok("a = 1; a");
     assert!(matches!(
         kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
-    // A bare expression statement between bindings is compiled too.
+    assert_eq!(ir.stmt_roots.len(), 1);
+    // A bare expression statement between bindings is a statement root too.
     let ir = compile_ok("a = 1; 5; a");
-    let ExprKind::Tuple(range) = kind(
-        &ir,
-        match kind(&ir, ir.root) {
-            ExprKind::Field { container, .. } => container,
-            _ => panic!("expected the statement wrapper"),
-        },
-    ) else {
-        panic!("expected the wrapped tuple")
-    };
-    assert_eq!(range.end - range.start, 3);
+    assert!(matches!(
+        kind(&ir, wrapped(&ir)),
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
+    ));
+    assert_eq!(ir.stmt_roots.len(), 2);
 }
 
 #[test]

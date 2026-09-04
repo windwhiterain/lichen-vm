@@ -101,6 +101,14 @@ pub fn compile_with_imports(
     // expression) see every earlier binding.
     let statements = compiler.compile_scope_statements(&program.statements);
     let final_id = compiler.compile_expr(&program.expr);
+    // The statement ids are recorded as `stmt_roots` so a reader (the language
+    // server) can read each top-level statement's checked value/type by id,
+    // without re-deriving it from the root.  The build root keeps the tuple
+    // cascade: using the single ordered deep-pass entry point is what
+    // preserves both the compute JIT's unification order and the checker's
+    // lazy-branch handling (a lazily-referenced non-terminating binding stays
+    // a `Parameterized` cell and is never eagerly run).
+    compiler.ir.set_stmt_roots(statements.clone());
     let root = compiler.wrap(statements, final_id, &program.expr.span());
     compiler.ir.set_root(root);
     (compiler.ir, compiler.diagnostics)

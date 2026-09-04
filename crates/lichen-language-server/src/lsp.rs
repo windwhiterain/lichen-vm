@@ -29,7 +29,7 @@ use lichen_highlevel::ir::Span;
 // (`lichen_language::lex::line_starts`), so they are pure and reusable.
 
 /// The byte offset of a 1-based `(line, col)` span in `source`.
-fn offset_of_span(line_starts: &[usize], span: Span) -> usize {
+pub fn offset_of_span(line_starts: &[usize], span: Span) -> usize {
     let (line, col) = (span.0 as usize, span.1 as usize);
     if line == 0 || line > line_starts.len() {
         return line_starts.len().checked_sub(1).map(|i| line_starts[i]).unwrap_or(0);
