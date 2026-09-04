@@ -1180,6 +1180,7 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
             };
             format!("assertion failed: expected 1, found {value}")
         }
+        DiagKind::NonTerminating => "this binding never terminates (non-terminating recursion)".to_string(),
     }
 }
 

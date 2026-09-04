@@ -25,6 +25,7 @@
 //! is the checker's error channel.
 
 use std::collections::{HashMap, HashSet};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::{Arc, RwLock};
 
 use lichen_lowlevel::{
@@ -133,6 +134,13 @@ where
     /// the definition pass (proving them concrete), so a recursive reference
     /// stays in place instead of cloning the function per application.
     recursive_func_nodes: Vec<NodeId>,
+    /// The top-level statements the definition pass found **non-terminating**
+    /// (the VM's apply/depth guard fired while evaluating the statement's
+    /// value).  Each is recorded as a source-blind [`Loc`] so the diagnostics
+    /// layer can point at the binding the user wrote.  Option B: the build
+    /// evaluates every user-written top-level statement and reports a
+    /// non-terminating one as an error instead of panicking.
+    nonterminating: Vec<Loc>,
     int_marker: NodeId,
     string_marker: NodeId,
     type_marker: NodeId,
@@ -208,6 +216,10 @@ where
     pub node_edges: HashMap<NodeId, Loc>,
     /// The user-facing assert condition nodes (see [`Checker::user_asserts`]).
     pub user_asserts: HashSet<NodeId>,
+    /// The top-level statements the definition pass found non-terminating (see
+    /// [`Checker::nonterminating`]) — the source-blind locations of the
+    /// user-written bindings the build reports as non-termination errors.
+    pub nonterminating: Vec<Loc>,
     pub ok: bool,
 }
 
@@ -312,6 +324,7 @@ where
             node_edges: HashMap::new(),
             user_asserts: HashSet::new(),
             recursive_func_nodes: Vec::new(),
+            nonterminating: Vec::new(),
             int_marker: NodeId::default(),
             string_marker: NodeId::default(),
             type_marker: NodeId::default(),
@@ -336,6 +349,14 @@ where
         checker.module.evaluate_node_deep(checker.int_type, None);
         checker.module.evaluate_node_deep(checker.string_type, None);
         let root = checker.ir.root;
+        // Option B: the top-level statements are the "stack of user-written
+        // expressions" — type-check each one (so its term/value/type are
+        // built), then the final root.  This replaces the tuple cascade; the
+        // build drives the checker over every statement the user wrote.
+        let stmt_roots = checker.ir.stmt_roots.clone();
+        for &s in &stmt_roots {
+            checker.check_expr(s);
+        }
         let root_term = checker.check_expr(root);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
         // Prove the recursive bindings' function values concrete before the
@@ -386,8 +407,32 @@ where
                 }
             }
         }
+        // Option B: evaluate every user-written top-level statement, so each
+        // one's value is computed — and a non-terminating one (the VM's
+        // apply/depth guard fired) is caught here and reported as a
+        // diagnostic rather than panicking.  After a caught guard the module's
+        // depth/total counters are left inflated, so stop evaluating.
         if checker.module.unify_errors.is_empty() {
-            checker.module.evaluate_node_deep(root_term, None);
+            let mut fatal = false;
+            for &s in &stmt_roots {
+                let Some(term) = checker.term[s] else {
+                    continue;
+                };
+                let result =
+                    catch_unwind(AssertUnwindSafe(|| checker.module.evaluate_node_deep(term, None)));
+                if result.is_err() {
+                    checker.nonterminating.push(Loc { expr: s, path: Vec::new() });
+                    fatal = true;
+                    break;
+                }
+            }
+            if !fatal {
+                let result =
+                    catch_unwind(AssertUnwindSafe(|| checker.module.evaluate_node_deep(root_term, None)));
+                if result.is_err() {
+                    checker.nonterminating.push(Loc { expr: root, path: Vec::new() });
+                }
+            }
         }
         // The assert pass: drain the module's constraint worklist — the
         // originals and the clones the definition pass's applies produced —
@@ -397,13 +442,16 @@ where
         // an in-body assert whose parameter was never bound (the function was
         // never applied) is deferred instead of failing, and the clone
         // re-checks it per call.  Skipped when the definition pass was (the
-        // graph may be broken enough to panic on the forced evaluation).
-        if checker.module.unify_errors.is_empty() {
+        // graph may be broken enough to panic on the forced evaluation), or
+        // when a statement was already found non-terminating (the module state
+        // is inconsistent after the caught guard).
+        if checker.module.unify_errors.is_empty() && checker.nonterminating.is_empty() {
             checker.module.check_asserts();
         }
         let ok = checker.module.unify_errors.is_empty()
             && checker.module.eval_errors.is_empty()
-            && checker.module.assert_errors.is_empty();
+            && checker.module.assert_errors.is_empty()
+            && checker.nonterminating.is_empty();
         let root_val = checker.value_of(root);
         // The definition pass above evaluates the program's applies; each
         // apply's runtime evaluation syncs its result cell with the return
@@ -432,6 +480,7 @@ where
             apply_edges: checker.apply_edges,
             node_edges: checker.node_edges,
             user_asserts: checker.user_asserts,
+            nonterminating: checker.nonterminating,
             ok,
         }
     }

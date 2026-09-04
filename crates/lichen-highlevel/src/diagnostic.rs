@@ -76,6 +76,11 @@ pub enum DiagKind {
     TableMiss,
     /// A table build dropped a non-concrete key (see [`Diag::TableKeyUnbound`]).
     TableKeyUnbound,
+    /// A top-level binding whose value computation never terminates — the VM's
+    /// apply/depth guard fired while the build evaluated the user-written
+    /// statement.  The checker reports this as an error instead of panicking.
+    /// `a`/`b` are unused.
+    NonTerminating,
 }
 
 /// One checker-issued unification, attributed with where it came from.
@@ -148,6 +153,21 @@ where
     /// evaluation failures (deduplicated), then the user-facing asserts.
     pub fn diagnostics(&self) -> Vec<Diag<P>> {
         let mut out = Vec::new();
+        for loc in &self.nonterminating {
+            out.push(Diag {
+                loc: Some(loc.clone()),
+                kind: DiagKind::NonTerminating,
+                a: NodeId::default(),
+                b: NodeId::default(),
+                value_a: None,
+                value_b: None,
+                assert_value: None,
+                index: None,
+                length: None,
+                field: None,
+                error_index: None,
+            });
+        }
         for (i, err) in self.module.unify_errors.iter().enumerate() {
             out.push(self.mismatch(i, err));
         }

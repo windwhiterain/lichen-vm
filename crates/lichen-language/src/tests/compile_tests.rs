@@ -192,25 +192,13 @@ fn a_block_scopes_its_bindings() {
 }
 
 #[test]
-fn a_statement_expression_is_wired_into_the_root() {
-    // 5; 7 — the bare statement and the final expression ride in a
-    // tuple; the root selects the final one, and the bare statement is
-    // recorded as a *statement root* so a reader can reach each statement's
-    // value by id.
+fn a_statement_expression_is_a_statement_root() {
+    // Option B: the top-level program has no tuple cascade.  The bare
+    // statement is recorded as a *statement root* (so the checker evaluates
+    // it) and the final expression is the program root directly.
     let ir = compile_ok("5; 7");
-    let ExprKind::Field { container: array, key: index } = kind(&ir, ir.root) else {
-        panic!("expected the statement wrapper")
-    };
     assert!(matches!(
-        kind(&ir, array),
-        ExprKind::Tuple(range) if range.end - range.start == 2
-    ));
-    assert!(matches!(
-        kind(&ir, index),
-        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
-    ));
-    assert!(matches!(
-        kind(&ir, wrapped(&ir)),
+        kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(7)))
     ));
     assert_eq!(ir.stmt_roots.len(), 1);
@@ -218,9 +206,8 @@ fn a_statement_expression_is_wired_into_the_root() {
         kind(&ir, ir.stmt_roots[0]),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(5)))
     ));
-    // A trailing statement identical to the final expression is not
-    // wrapped: `a = 1; a` stays the `1` node, with the binding as a
-    // statement root.
+    // A trailing statement identical to the final expression is not wrapped:
+    // `a = 1; a` stays the `1` node, with the binding as a statement root.
     let ir = compile_ok("a = 1; a");
     assert!(matches!(
         kind(&ir, ir.root),
@@ -230,7 +217,7 @@ fn a_statement_expression_is_wired_into_the_root() {
     // A bare expression statement between bindings is a statement root too.
     let ir = compile_ok("a = 1; 5; a");
     assert!(matches!(
-        kind(&ir, wrapped(&ir)),
+        kind(&ir, ir.root),
         ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
     ));
     assert_eq!(ir.stmt_roots.len(), 2);
