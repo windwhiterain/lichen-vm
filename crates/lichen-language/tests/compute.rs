@@ -272,3 +272,34 @@ compute(1) k1 5
     assert!(out.starts_with("7:"), "subexpr produced: {out:?}");
 }
 
+#[test]
+fn jit_inline_lichen_function() {
+    // Style 1: a lichen-function call in a kernel body.  The checker's deep
+    // pass already *reduces* the same-module call (`helper x` → `x + 2`), so
+    // the JIT traces the reduced graph; a substituted parameter cell resolves
+    // to the enclosing kernel's parameter (via its unified equality class) and
+    // becomes a `local.get`.  `helper x + 1` → `(x + 2) + 1`:
+    //   launch k 5 = (5 + 2) + 1 = 8.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+helper = y => y + 2
+k = compute(0) (x => helper x + 1)
+compute(1) k 5
+"#);
+    assert!(out.starts_with("8:"), "inline produced: {out:?}");
+}
+
+#[test]
+fn jit_inline_nested_function() {
+    // Nested inline: the deep pass reduces `b x` (which calls `a`) through to
+    // the leaf arithmetic, so `b x + 1` → `(x + 1) + 1 + 1`:
+    //   a = y => y + 1;  b = y => a y + 1;  launch k 5 = (((5 + 1) + 1) + 1) = 8.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+a = y => y + 1
+b = y => a y + 1
+k = compute(0) (x => b x + 1)
+compute(1) k 5
+"#);
+    assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
+}

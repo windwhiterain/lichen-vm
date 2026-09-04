@@ -436,6 +436,18 @@ fn flat_arity(shape: &LowShape) -> usize {
     }
 }
 
+/// The disjoint-set representative of `node`, walked without path compression
+/// (a `&self` read) — used to compare whether two nodes were unified.  The
+/// lowlevel's `equality_representative` needs `&mut`; this is the read-only
+/// form for the emitter's `&Module`.
+fn equality_rep(module: &Module<LangProgram>, node: NodeId) -> NodeId {
+    let mut root = node;
+    while let Some(parent) = module.nodes[root].equality.parent {
+        root = parent;
+    }
+    root
+}
+
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
 /// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and the parameter value
 /// (`Index(param_pair, 0)` → `local.get 0`).
@@ -456,6 +468,20 @@ fn emit_node(
         }
     }
     let Some(operation) = module.nodes[node].operation else {
+        // A bare value cell (no value specialization, no operator).  If it is
+        // in the enclosing parameter's equality class, it is a whole-parameter
+        // read: the deep pass's apply-clone *unifies* a substituted parameter
+        // with the argument, so a reduced same-module call's parameter
+        // reference resolves to this kernel's parameter — emit a `local.get`
+        // for it instead of failing.
+        if equality_rep(module, node) == equality_rep(module, param_value) {
+            let domain = module
+                .node_shape(param_value)
+                .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
+            let offset = flatten_offset(domain, &[])?;
+            body.push(KernelInstr::LocalGet(offset as u32));
+            return Ok(());
+        }
         return Err(format!(
             "kernel body hits a node with neither value nor operation (node={node:?})"
         ));
