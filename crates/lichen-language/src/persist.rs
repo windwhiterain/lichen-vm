@@ -101,6 +101,14 @@ const ARENA_ALIGN: usize = std::mem::align_of::<ArrayItem>();
 /// and the operator encoding; this trait isolates them so a downstream
 /// program with extra value/operator variants can reuse the same artifact
 /// container by implementing a codec.
+///
+/// **Codec contract:** `write_value`/`read_value` (and `write_operator`/
+/// `read_operator`) must be exact inverses — every tag the writer emits, the
+/// reader must decode to the equal value, and nothing else.  Adding a variant
+/// to one side and not the other compiles but silently breaks every cache
+/// load (a stored artifact fails to deserialize and is recompiled).  This is
+/// enforced by the `codec_roundtrip` test below, which round-trips every
+/// value and operator variant; keep the two sides in sync with it.
 pub trait ArtifactCodec<P: Program> {
     /// Write one node value.
     fn write_value(
@@ -676,6 +684,7 @@ fn read_value(
         9 => LangValue::TypeValue(TypeValue::TypeArray),
         10 => LangValue::TypeValue(TypeValue::TypeStruct),
         13 => LangValue::TypeValue(TypeValue::TypeTable),
+        15 => LangValue::TypeValue(TypeValue::TypeString),
         11 => LangValue::TypeValue(TypeValue::TypeId(r.u64()? as usize)),
         tag => return Err(format!("unknown artifact value tag {tag}")),
     })
@@ -1258,5 +1267,98 @@ impl<'a> Reader<'a> {
     }
     pub fn done(&self) -> bool {
         self.pos == self.buf.len()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Codec-round-trip tests: enforce the write/read bijection contract.
+//
+// `write_value`/`read_value` and `write_operator`/`read_operator` are two
+// independent exhaustive `match`es — one over the value/operator *type*, one
+// over the *tag byte*.  The compiler can check each side is total, but it
+// cannot check that they name the same tag.  A variant added to the write
+// side but not the read side (exactly the `TypeString` asymmetry) compiles
+// and silently makes every stored artifact underivable.  These tests drive
+// every (arena-free) value and every operator through the codec and assert
+// the round trip is the identity, so an asymmetry fails the build.
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod codec_roundtrip {
+    use super::*;
+
+    /// Encode `v`, then decode it back and return the deserialized value.
+    /// Arena-free variants never touch the module map or the (dummy) self
+    /// arena/base, so the map is empty and the base is null.
+    fn roundtrip_value(v: LangValue) -> LangValue {
+        let modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
+        let mut w = Writer::new();
+        write_value(&mut w, v, &modules);
+        let bytes = w.into_bytes();
+        let mut r = Reader::new(&bytes);
+        let out = read_value(
+            &mut r,
+            ModuleKey::from_raw(0),
+            &[],
+            std::ptr::null(),
+            &modules,
+        )
+        .expect("deserializing a value the codec itself wrote");
+        assert!(r.done(), "the value codec left trailing bytes");
+        out
+    }
+
+    /// Every `LangValue` variant that round-trips without a module arena.  The
+    /// handle/function-ref variants (array/table/function tags) need a real
+    /// frozen module and are exercised at the artifact level by the `persist`
+    /// integration tests; this covers every scalar/type/string variant.
+    #[test]
+    fn every_arena_free_value_round_trips() {
+        let values: &[LangValue] = &[
+            LangValue::LowValue(LowValue::USize(41)),
+            LangValue::LowValue(LowValue::None),
+            LangValue::LowValue(LowValue::Parameterized),
+            LangValue::LowValue(LowValue::Str("hello")),
+            LangValue::TypeValue(TypeValue::TypeInt),
+            LangValue::TypeValue(TypeValue::TypeType),
+            LangValue::TypeValue(TypeValue::TypeFunction),
+            LangValue::TypeValue(TypeValue::TypeTuple),
+            LangValue::TypeValue(TypeValue::TypeArray),
+            LangValue::TypeValue(TypeValue::TypeStruct),
+            LangValue::TypeValue(TypeValue::TypeTable),
+            LangValue::TypeValue(TypeValue::TypeString),
+            LangValue::TypeValue(TypeValue::TypeId(7)),
+        ];
+        for &v in values {
+            assert_eq!(roundtrip_value(v), v, "value did not round-trip");
+        }
+    }
+
+    fn roundtrip_op(op: LangOperator) -> LangOperator {
+        let mut w = Writer::new();
+        write_operator(&mut w, op);
+        let bytes = w.into_bytes();
+        let mut r = Reader::new(&bytes);
+        let out = read_operator(&mut r).expect("deserializing an operator the codec itself wrote");
+        assert!(r.done(), "the operator codec left trailing bytes");
+        out
+    }
+
+    #[test]
+    fn every_operator_round_trips() {
+        use lichen_lowlevel::LowOperator;
+        let ops: &[LangOperator] = &[
+            LangOperator::LowOperator(LowOperator::Index),
+            LangOperator::LowOperator(LowOperator::Apply),
+            LangOperator::LowOperator(LowOperator::TableGet),
+            LangOperator::TypeOperator(TypeOperator::Fresh),
+            LangOperator::TypeOperator(TypeOperator::Add),
+            LangOperator::TypeOperator(TypeOperator::Sub),
+            LangOperator::TypeOperator(TypeOperator::Leq),
+            LangOperator::TypeOperator(TypeOperator::Eq),
+            LangOperator::GcdOp(GcdOp::Gcd),
+        ];
+        for &op in ops {
+            assert_eq!(roundtrip_op(op), op, "operator did not round-trip");
+        }
     }
 }

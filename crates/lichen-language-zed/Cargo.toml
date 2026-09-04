@@ -1,0 +1,22 @@
+[package]
+name = "lichen-language-zed"
+version = "0.1.0"
+edition = "2024"
+description = "A Zed editor extension for Lichen, built on the shared lichen-language frontend."
+
+[lib]
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = []
+# Turns this crate into an actual Zed WASM plugin (adds `zed_extension_api`).
+# Build it with:
+#   rustup target add wasm32-wasip1
+#   cargo build -p lichen-language-zed --features zed --target wasm32-wasip1
+#   (then package/install the wasm as the extension, per the Zed docs).
+zed = ["dep:zed_extension_api"]
+
+[dependencies]
+lichen-language = { path = "../lichen-language" }
+lichen-language-server = { path = "../lichen-language-server" }
+zed_extension_api = { version = "0.7.0", optional = true }

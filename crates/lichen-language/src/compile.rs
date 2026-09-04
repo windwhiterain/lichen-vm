@@ -73,6 +73,7 @@ pub fn compile_with_imports(
         scopes: Vec::new(),
         fn_depth: 0,
         op_names: HashMap::new(),
+        str_names: HashMap::new(),
         diagnostics: Vec::new(),
     };
     if !imports.is_empty() {
@@ -121,6 +122,10 @@ struct Compiler {
     /// `ExprKind::NativeCall`'s op field is a `&'static str` (the `ExprKind`
     /// must stay `Copy`).
     op_names: HashMap<String, &'static str>,
+    /// The interned struct field names / named-field-read names — leaked once
+    /// per unique string, so [`ExprKind::NamedField`] and the IR struct-name
+    /// arena can hold `&'static str` (the `ExprKind` must stay `Copy`).
+    str_names: HashMap<String, &'static str>,
     /// The frontend diagnostics the lowering accumulated (the resolve-layer
     /// errors for unresolved names).  The frontend surfaces these alongside
     /// the IR; lowering itself never fails on them.
@@ -256,6 +261,18 @@ impl Compiler {
         let s: &'static str = Box::leak(name.to_string().into_boxed_str());
         self.op_names.insert(name.to_string(), s);
         s
+    }
+
+    /// Intern an arbitrary source string to a `&'static str` (leaked once per
+    /// unique string), so an [`ExprKind::NamedField`]'s field name stays
+    /// `Copy`, and struct field names can be stored in the IR's name arena.
+    fn intern_str(&mut self, s: &str) -> &'static str {
+        if let Some(&leaked) = self.str_names.get(s) {
+            return leaked;
+        }
+        let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+        self.str_names.insert(s.to_string(), leaked);
+        leaked
     }
 
     fn compile_expr(&mut self, e: &Expr) -> ExprId {
@@ -500,6 +517,15 @@ impl Compiler {
                 let key = self.compile_expr(key);
                 self.alloc(ExprKind::Field { container, key }, span)
             }
+            Expr::NamedFieldRead {
+                container,
+                name,
+                span,
+            } => {
+                let container = self.compile_expr(container);
+                let name = self.intern_str(name);
+                self.alloc(ExprKind::NamedField { container, name }, span)
+            }
             Expr::Arrow {
                 parameter,
                 r#return,
@@ -524,8 +550,15 @@ impl Compiler {
                 self.ir.alloc_type_tuple(&ids, Some(*span))
             }
             Expr::StructType(fields, span) => {
-                let ids = self.compile_all(fields);
-                self.ir.alloc_type_struct(&ids, Some(*span))
+                let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
+                    .iter()
+                    .map(|field| {
+                        let ty = self.compile_expr(&field.ty);
+                        let name = field.name.as_deref().map(|n| self.intern_str(n));
+                        (ty, name)
+                    })
+                    .collect();
+                self.ir.alloc_type_struct(&field_ids, Some(*span))
             }
             Expr::Array(elements, span) => {
                 // A `~`-marked element (the parser accepts `~` only inside

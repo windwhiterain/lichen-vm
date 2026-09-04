@@ -233,7 +233,19 @@ fn render_entry(entry: &Entry, level: usize) -> String {
 /// [`sync_output_comments`] keeps it that way (and `tests/readme.rs` runs
 /// it before rendering).
 pub fn render_examples() -> String {
-    let root = example_dir();
+    render_examples_in(&example_dir())
+}
+
+/// Render every example program under `dir` as the markdown section between
+/// the markers.
+///
+/// [`render_examples`] renders the live `examples/programs/` tree; this takes
+/// a base directory so the unit tests drive the same rendering logic from a
+/// controlled fixture instead of the live example set (which is a moving spec,
+/// so asserting it in a unit test would force a test edit per add/rename/
+/// reorder).
+fn render_examples_in(dir: &Path) -> String {
+    let root = dir;
     let mut blocks = Vec::new();
     // A `_.lichen` directly in the example directory has no directory to
     // introduce (the section itself is the root's unit) — it renders as an

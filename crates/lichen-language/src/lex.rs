@@ -83,6 +83,8 @@ pub enum TokenKind {
     Plus,
     /// '-' -- subtraction.
     Minus,
+    /// '.' -- a named field read `a.b`.
+    Dot,
     /// '('.
     LParen,
     /// ')'.
@@ -137,6 +139,7 @@ impl TokenKind {
             TokenKind::Leq => "'<='".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
+            TokenKind::Dot => "'.'".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
             TokenKind::LBracket => "'['".to_string(),
@@ -234,6 +237,8 @@ enum RawToken {
     Plus,
     #[token("-")]
     Minus,
+    #[token(".")]
+    Dot,
     #[token("(")]
     LParen,
     #[token(")")]
@@ -595,6 +600,7 @@ fn raw_to_kind(
         RawToken::Leq => Some(TokenKind::Leq),
         RawToken::Plus => Some(TokenKind::Plus),
         RawToken::Minus => Some(TokenKind::Minus),
+        RawToken::Dot => Some(TokenKind::Dot),
         RawToken::LParen => Some(TokenKind::LParen),
         RawToken::RParen => Some(TokenKind::RParen),
         RawToken::LBracket => Some(TokenKind::LBracket),
