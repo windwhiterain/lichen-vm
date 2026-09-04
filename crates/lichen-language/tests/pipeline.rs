@@ -730,6 +730,39 @@ fn a_polymorphic_struct_constructor_shares_one_nominal_kind() {
 }
 
 #[test]
+fn a_named_struct_field_read_resolves_to_the_positional_index() {
+    // `A = struct<.x Int, .y Type>` carries a name→index table; `a.x`
+    // reads field `x` (index 0), `a.y` field `y` (index 1).
+    let v = evaluate("A = struct<.x Int, .y Type>; a = A(1, Int); a.x");
+    assert_eq!(v, LangValue::LowValue(LowValue::USize(1)));
+    let v = evaluate("A = struct<.x Int, .y Type>; a = A(1, Int); a.y");
+    assert_eq!(v, LangValue::TypeValue(TypeValue::TypeInt));
+}
+
+#[test]
+fn a_named_field_read_on_a_missing_field_is_rejected() {
+    // `a.z` on a struct that has no field `z` is a reported type error (a
+    // named-field miss), not a runtime panic.
+    let d = diags("A = struct<.x Int>; a = A(1,); a.z");
+    let check = d[0]
+        .check
+        .as_ref()
+        .expect("a named-field miss is a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::NamedField);
+}
+
+#[test]
+fn a_named_field_read_on_a_non_struct_is_rejected() {
+    // reading `a.b` on a non-struct (an int) is an index-target error.
+    let d = diags("a = 1; a.b");
+    let check = d[0]
+        .check
+        .as_ref()
+        .expect("a named-field read on an int is a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::IndexTarget);
+}
+
+#[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Two functions each contain their own struct occurrence — each body's
     // `Fresh` node is its own, so the nominal ids stay distinct across the

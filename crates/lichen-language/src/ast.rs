@@ -113,6 +113,16 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
+    /// `a.name` — a *named* field read over a struct field.  The field name
+    /// is resolved against the struct type's name table (the
+    /// `struct<a :: Int, …>` names) to the field's positional index, then
+    /// read like [`Expr::FieldRead`].  The name is a plain identifier,
+    /// distinct from `a(k)` (a positional index expression).
+    NamedFieldRead {
+        container: Box<Expr>,
+        name: String,
+        span: Span,
+    },
     /// `t{k}` — a table lookup: the entry whose stored key is deep-content
     /// equal to `k`.  The `{` is *adjacent* to the container — no space
     /// between — which is the syntactic distinction from a block (a spaced
@@ -142,8 +152,10 @@ pub enum Expr {
     Tuple(Vec<Expr>, Span),
     /// `(T1, ..., Tn)` in type position — a tuple type.
     TypeTuple(Vec<Expr>, Span),
-    /// `struct<T1, ..., Tn>` — a nominal struct type, positional fields.
-    StructType(Vec<Expr>, Span),
+    /// `struct<T1, ..., Tn>` — a nominal struct type.  Each field may carry
+    /// an optional name (`<name> :: T`), so the syntax is `struct<a :: Int, b`
+    /// where the name is the syntactic prefix `<name> ::`.
+    StructType(Vec<StructField>, Span),
     /// `C(e1, ..., en)` — struct instantiation: a callee (a struct type or a
     /// generic struct constructor) applied to a positional field list.  The
     /// callee and the `(` are *adjacent* — no space between them — which is
@@ -229,6 +241,15 @@ pub struct Binding {
     pub restrictive: bool,
 }
 
+/// One field of a `struct<…>` type: an optional name plus the field's type
+/// expression.  `name` is `Some` for a `name :: Ty` field and `None` for a
+/// positional (`Ty`) field.
+#[derive(Clone, Debug)]
+pub struct StructField {
+    pub name: Option<String>,
+    pub ty: Expr,
+}
+
 /// A recovered-error region the parser masked: `range` is the byte span it
 /// covers in the source, `start` the position where the broken construct began.
 /// The frontend surfaces these so a content signature / diff can exclude the
@@ -283,6 +304,7 @@ impl Expr {
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
+            Expr::NamedFieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
             Expr::Arrow { span, .. } => *span,

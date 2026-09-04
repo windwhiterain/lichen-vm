@@ -54,7 +54,9 @@ use chumsky::prelude::*;
 
 use lichen_highlevel::ir::Span;
 
-use crate::ast::{BinOp, Binding, ErrorBlock, Expr, Program, Stmt, TypeConst};
+use crate::ast::{
+    BinOp, Binding, ErrorBlock, Expr, Program, Stmt, StructField, TypeConst,
+};
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
 
@@ -771,6 +773,9 @@ fn atom_parser<'a>(
     // either as an argument, never this postfix.
     let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
+        token(TokenKind::Dot)
+            .ignore_then(name())
+            .map(|(field_name, _)| Postfix::DotName(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LBracket))
             .ignore_then(expr.clone())
@@ -799,6 +804,11 @@ fn atom_parser<'a>(
             postfixes.into_iter().fold(atom, |acc, p| {
                 let span = acc.span();
                 match p {
+                    Postfix::DotName(name) => Expr::NamedFieldRead {
+                        container: Box::new(acc),
+                        name,
+                        span,
+                    },
                     Postfix::Index(index) => Expr::Index {
                         array: Box::new(acc),
                         index: Box::new(index),
@@ -843,6 +853,7 @@ fn atom_parser<'a>(
 /// A postfix form's payload, folded left over the atom.
 #[derive(Clone, Debug)]
 enum Postfix {
+    DotName(String),
     Index(Expr),
     TableFind(Expr),
     TypeArray(Expr),
@@ -1054,20 +1065,41 @@ fn angle_tuple<'a>(
         })
 }
 
-/// `struct<T1, …, Tn>` — a nominal struct type, positional fields.  The
-/// fields are type expressions (applied by the mode post-pass), at least
-/// one.
+/// One `struct<…>` field: a `.name` prefix followed by the field's type
+/// expression, or a bare type expression.  The leading `.` is the
+/// language-server-friendly discriminator — it unambiguously marks a named
+/// field, so a field name can never be confused with a field type while the
+/// user is typing.  A bare type is an unnamed (positional) field; a
+/// `.name Type` is a named field.
+fn struct_field<'a>(
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, StructField, E<'a>> + Clone {
+    let named = token(TokenKind::Dot)
+        .ignore_then(name())
+        .then(expr.clone())
+        .map(|((n, _span), ty)| StructField {
+            name: Some(n),
+            ty,
+        });
+    let unnamed = expr.map(|ty| StructField { name: None, ty });
+    choice((named, unnamed))
+}
+
+/// `struct<T1, …, Tn>` — a nominal struct type.  Each field may carry an
+/// optional name (`.name type`); a bare field is positional.  At least one
+/// field.
 fn struct_type<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    let field = struct_field(expr.clone());
     token(TokenKind::KwStruct)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LAngle))
-        .ignore_then(expr.clone())
+        .ignore_then(field.clone())
         .then(
             token(TokenKind::Separator)
-                .ignore_then(expr.clone())
+                .ignore_then(field)
                 .repeated()
                 .collect::<Vec<_>>(),
         )
@@ -1205,6 +1237,15 @@ fn apply_type_mode(program: Program) -> Program {
                 key: Box::new(expr(*key, type_mode)),
                 span,
             },
+            Expr::NamedFieldRead {
+                container,
+                name,
+                span,
+            } => Expr::NamedFieldRead {
+                container: Box::new(expr(*container, type_mode)),
+                name,
+                span,
+            },
             Expr::Annotation {
                 value,
                 r#type,
@@ -1235,9 +1276,16 @@ fn apply_type_mode(program: Program) -> Program {
                 elements.into_iter().map(|e| expr(e, type_mode)).collect(),
                 span,
             ),
-            Expr::StructType(fields, span) => {
-                Expr::StructType(fields.into_iter().map(|e| expr(e, true)).collect(), span)
-            }
+            Expr::StructType(fields, span) => Expr::StructType(
+                fields
+                    .into_iter()
+                    .map(|field| StructField {
+                        name: field.name,
+                        ty: expr(field.ty, true),
+                    })
+                    .collect(),
+                span,
+            ),
             Expr::StructInst {
                 callee,
                 fields,
@@ -1362,6 +1410,9 @@ fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(container, out);
                 walk_expr(key, out);
             }
+            Expr::NamedFieldRead { container, .. } => {
+                walk_expr(container, out);
+            }
             Expr::TableFind { container, key, .. } => {
                 walk_expr(container, out);
                 walk_expr(key, out);
@@ -1388,12 +1439,14 @@ fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(parameter, out);
                 walk_expr(r#return, out);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::StructType(elems, _)
-            | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
                 for el in elems {
                     walk_expr(el, out);
+                }
+            }
+            Expr::StructType(fields, _) => {
+                for field in fields {
+                    walk_expr(&field.ty, out);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {

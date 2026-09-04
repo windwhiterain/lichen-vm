@@ -35,6 +35,9 @@ pub enum DiagKind {
     /// Indexing a concretely non-indexable type (a function, an atomic
     /// type) — expected = a tuple, array, or struct type.
     IndexTarget,
+    /// A named field read `a.name` on a struct that has no such field —
+    /// expected = a field of that name, found = a struct without it.
+    NamedField,
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,

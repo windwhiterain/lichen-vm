@@ -112,7 +112,15 @@ fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 }
 /// A struct type expression: `struct<T1, ..., Tn>` — positional fields.
 fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
-    ir.alloc_type_struct(fields, None)
+    let fields: Vec<(ExprId, Option<&'static str>)> =
+        fields.iter().map(|&e| (e, None)).collect();
+    ir.alloc_type_struct(&fields, None)
+}
+/// A struct type expression with field names: `struct<a :: T1, b :: T2>`.
+fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
+    let fields: Vec<(ExprId, Option<&'static str>)> =
+        fields.iter().map(|&(e, name)| (e, Some(name))).collect();
+    ir.alloc_type_struct(&fields, None)
 }
 /// An array literal: `[1, 2]` — all elements share one type.
 fn array(ir: &mut IR, elements: &[ExprId]) -> ExprId {
@@ -1276,26 +1284,75 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
     assert!(is_int_type(&b, shape_ids[0]));
-    // the kind slot is [type_id, [TypeStruct, K]]
+    // the kind slot is a standard [marker, K] pair; its marker is the
+    // two-field TypeStruct value [id, names].
     let kind = b.ty[s].unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
+    assert_eq!(kind_ids[1], b.type_expr);
+    let marker = kind_ids[0];
+    let marker_ids = array_ids(&b, marker);
+    assert_eq!(marker_ids.len(), 2);
     assert!(matches!(
-        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
+        b.module.node_value(AnyNodeId::Dynamic(marker_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
-    let inner = array_ids(&b, kind_ids[1]);
-    assert_eq!(inner.len(), 2);
-    assert_eq!(inner[1], b.type_expr);
+    // an anonymous struct carries no name table — the marker's second field
+    // is `None`.
     assert_eq!(
-        b.module.node_value(AnyNodeId::Dynamic(inner[0])),
-        Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
+        b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
+        Some(HighProgramValue::LowValue(LowValue::None))
     );
     // one source occurrence consumed exactly one fresh id
     assert_eq!(
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
         1
     );
+}
+
+#[test]
+fn a_named_struct_carries_a_name_to_index_table() {
+    // struct<a :: Int, b :: Type> — the struct marker `[id, names]` (in the
+    // kind's marker slot) holds a table mapping each field name to its
+    // positional index.
+    let mut ir = IR::new();
+    let t1 = int_t(&mut ir);
+    let t2 = ty(&mut ir);
+    let s = named_type_struct(&mut ir, &[(t1, "a"), (t2, "b")]);
+    let b = build(s, ir);
+    assert!(b.ok);
+    let kind = b.ty[s].unwrap();
+    let kind_ids = array_ids(&b, kind);
+    assert_eq!(kind_ids.len(), 2);
+    let marker = kind_ids[0];
+    let marker_ids = array_ids(&b, marker);
+    assert_eq!(marker_ids.len(), 2);
+    // the names field (marker[1]) is a constant table: "a" -> 0, "b" -> 1.
+    let names_node = marker_ids[1];
+    let Some(HighProgramValue::LowValue(LowValue::Table(table))) = b
+        .module
+        .node_value(AnyNodeId::Dynamic(names_node))
+    else {
+        panic!("the names field must be a table");
+    };
+    let items = table.items();
+    assert_eq!(items.len(), 2);
+    let mut found: Vec<(&str, usize)> = items
+        .iter()
+        .map(|item| {
+            let name = match b.module.node_value(item.key) {
+                Some(HighProgramValue::LowValue(LowValue::Str(s))) => s,
+                other => panic!("a field-name key must be a string: {other:?}"),
+            };
+            let index = match b.module.node_value(item.value) {
+                Some(HighProgramValue::LowValue(LowValue::USize(n))) => n,
+                other => panic!("a field-name value must be an index: {other:?}"),
+            };
+            (name, index)
+        })
+        .collect();
+    found.sort_by_key(|&(_, i)| i);
+    assert_eq!(found, vec![("a", 0), ("b", 1)]);
 }
 
 #[test]
@@ -1311,8 +1368,9 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
         AsField::<HighGlobal>::get(&b.module.global_ext).type_id_counter,
         2
     );
-    let id1 = array_ids(&b, b.ty[s1].unwrap())[0];
-    let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
+    // the nominal id is the marker's slot 0: kind = [marker, K], marker = [id, names].
+    let id1 = array_ids(&b, array_ids(&b, b.ty[s1].unwrap())[0])[0];
+    let id2 = array_ids(&b, array_ids(&b, b.ty[s2].unwrap())[0])[0];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id1)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
@@ -1360,23 +1418,17 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     module.unify(b.term[s].unwrap(), b.term[t].unwrap());
     assert_eq!(module.unify_errors.len(), 1);
     // The struct and tuple shapes are both the field-type list (same arity),
-    // so the nominal distinction now lives in the kind slot: the struct
-    // kind's `[TypeId(n), …]` head clashes with the tuple kind's
-    // `[TupleType, …]` head.
+    // so the nominal distinction now lives at the kind's marker: a struct
+    // marker is the 2-element `TypeStruct{id, names}` array, while a tuple
+    // marker is the `TupleType` type constant — they clash at the marker
+    // slot of the `[marker, K]` kind.
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
     assert!(
-        matches!(
-            (a, b),
-            (
-                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_))),
-                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
-            ) | (
-                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
-                Some(HighProgramValue::TypeValue(TypeValue::TypeId(_)))
-            )
-        ),
-        "kind-level nominal clash: got {a:?} vs {b:?}"
+        matches!((&a, &b),
+            (Some(HighProgramValue::LowValue(LowValue::Array(_))), Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)))
+            | (Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)), Some(HighProgramValue::LowValue(LowValue::Array(_))))),
+        "marker-level nominal clash: got {a:?} vs {b:?}"
     );
 }
 

@@ -234,29 +234,21 @@ where
     }
 
     fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
+        // A bare struct kind `[TypeStruct{id, names}, K]` (a struct type
+        // pair's type slot): render its tag `TypeStruct`.  Detected before the
+        // `[head, K]` atomic branch, since its marker is a 2-element array
+        // (not a plain type constant).
+        if is_struct_kind(self.module, node) {
+            return "TypeStruct".to_string();
+        }
         // `[head, K]` — an atomic type: the kind slot is the self-looping
         // universe, so render the head (`int`, `Type`, …).
         if elements.len() == 2 && self.is_universe_any(elements[1].node) {
             return self.any_node(elements[0].node);
         }
-        // A bare struct kind `[id, [TypeStruct, K]]` (a struct type pair's
-        // type slot): render its tag `TypeStruct`.
-        if is_struct_kind(self.module, node)
-            && let Some(LowValue::Array(kind)) = self
-                .module
-                .node_value(AnyNodeId::Dynamic(node))
-                .and_then(|v| v.as_enum())
-            && let Some(LowValue::Array(inner)) = self
-                .module
-                .node_value(kind.items()[1].node)
-                .and_then(|v| v.as_enum())
-        {
-            return self.any_node(inner.items()[0].node);
-        }
-        // A struct type: `[shape, [id, [TypeStruct, K]]]` — the nominal id
-        // heads the kind and the `TypeStruct` tag is the inner
-        // `[TypeStruct, K]` layer, so it is detected beside the `[marker, K]`
-        // compound kinds.  The id renders as `#n` so two structs with the
+        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
+        // standard `[marker, K]` pair whose marker is the two-field struct
+        // value `[id, names]`.  The id renders as `#n` so two structs with the
         // same field shape stay distinguishable (their nominal types differ).
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
@@ -264,10 +256,9 @@ where
             && self.kind_is_struct_any(kind.items())
         {
             let fields = self.fields_any(elements[0].node);
-            let id = self
-                .module
-                .node_value(kind.items()[0].node)
-                .and_then(|v| v.type_id());
+            let names = struct_field_names(self.module, kind.items(), fields.len());
+            let fields = struct_fields_with_names(&fields, &names);
+            let id = struct_kind_id(self.module, kind.items());
             return match (self.show_struct_id, id) {
                 (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
                 _ => format!("struct<{}>", fields.join(", ")),
@@ -410,24 +401,27 @@ where
         elements: &[ArrayItem],
         visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
     ) -> String {
+        // A bare struct kind `[TypeStruct{id, names}, K]`: render its tag.
+        if kind_is_struct(self.module, elements) {
+            return "TypeStruct".to_string();
+        }
         // `[head, K]` — an atomic type: the kind slot is the self-looping
         // universe, so render the head (`int`, `Type`, …).
         if elements.len() == 2 && self.is_static_universe(elements[1].node) {
             return self.static_any(elements[0].node, visiting);
         }
-        // A struct type: `[shape, [id, [TypeStruct, K]]]` — the nominal id
-        // heads the kind and the `TypeStruct` tag is the inner
-        // `[TypeStruct, K]` layer.
+        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
+        // standard `[marker, K]` pair whose marker is the two-field struct
+        // value `[id, names]`; a name table rides at the marker's slot 1.
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
             && self.kind_is_struct_any(kind.items())
         {
             let fields = self.static_fields(elements[0].node, visiting);
-            let id = self
-                .module
-                .node_value(kind.items()[0].node)
-                .and_then(|v| v.type_id());
+            let names = struct_field_names(self.module, kind.items(), fields.len());
+            let fields = struct_fields_with_names(&fields, &names);
+            let id = struct_kind_id(self.module, kind.items());
             return match (self.show_struct_id, id) {
                 (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
                 _ => format!("struct<{}>", fields.join(", ")),
@@ -537,20 +531,8 @@ where
 
     fn kind_is_struct_any(&self, kind_items: &[ArrayItem]) -> bool {
         kind_items.len() == 2
-            && self
-                .module
-                .node_value(kind_items[1].node)
-                .and_then(|v| v.as_enum())
-                .is_some_and(|v| match v {
-                    LowValue::Array(inner) => {
-                        let items = inner.items();
-                        items.len() == 2
-                            && self.module.node_value(items[0].node)
-                                == Some(P::Value::type_struct_marker())
-                            && self.is_universe_any(items[1].node)
-                    }
-                    _ => false,
-                })
+            && self.is_universe_any(kind_items[1].node)
+            && marker_is_struct(self.module, kind_items[0].node)
     }
 }
 
@@ -614,8 +596,9 @@ where
         };
         let tys = ty_array.items();
         // A struct type itself: the value's type is the struct kind
-        // `[id, [TypeStruct, K]]` (not a `[shape, [marker, K]]` pair), and the
-        // value is the field-type list — render `struct<T1, ..., Tn>`.
+        // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
+        // and the value is the field-type list — render
+        // `struct<T1, ..., Tn>` (or `struct<a :: T1, ...>` when named).
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
@@ -624,6 +607,8 @@ where
                 .iter()
                 .map(|item| self.printer.any_node(item.node))
                 .collect();
+            let names = struct_field_names(self.module, tys, fields.len());
+            let fields = struct_fields_with_names(&fields, &names);
             return format!("struct<{}>", fields.join(", "));
         }
         // A kind `[marker, K]`: the value is a compound type — render its
@@ -635,11 +620,13 @@ where
             return out;
         }
         // A struct instance: the value reads against the struct's
-        // field-type list (the shape); its kind is `[id, [TypeStruct, K]]`,
-        // so it is detected beside the `[marker, K]` kinds.
+        // field-type list (the shape); its kind is `[TypeStruct{id, names}, K]`
+        // (a standard `[marker, K]` pair), so it is detected beside the
+        // `[marker, K]` kinds.
         if tys.len() == 2
             && self.is_struct_kind_any(tys[1].node)
-            && let Some(out) = self.instance(value, tys[0].node, P::Value::type_struct_marker())
+            && let Some(marker) = self.struct_marker_value(tys[1].node)
+            && let Some(out) = self.instance(value, tys[0].node, marker)
         {
             return out;
         }
@@ -701,9 +688,10 @@ where
                 self.printer.any_node(shape[1].node)
             ));
         }
-        // A struct type's kind is `[shape, [id, [TypeStruct, K]]]`, not a
-        // `[marker, K]` pair, so it never reaches `compound_type` — it is
-        // handled by the struct branch in `value` / `elements`.
+        // A struct type never reaches `compound_type` — its kind is a standard
+        // `[marker, K]` pair whose marker is the two-field `TypeStruct`
+        // value, and the struct branch in `value` / `elements` handles it
+        // before this falls through.
         None
     }
 
@@ -741,9 +729,12 @@ where
             }
             return Some(format!("[{}]", out.join(", ")));
         }
-        if marker == P::Value::type_struct_marker() {
+        // A struct marker is the two-field `TypeStruct{id, names}` value, a
+        // 2-element array.  No other kind's marker is an array, so an array
+        // marker names a struct.
+        if marker.as_enum().is_some_and(|m| matches!(m, LowValue::Array(_))) {
             // The shape is the positional field-type list (the nominal id
-            // lives in the kind), so the element types are the fields.
+            // lives in the struct marker), so the element types are the fields.
             let fields = shape;
             if fields.len() != values.len() {
                 return None;
@@ -806,6 +797,26 @@ where
                 LowValue::Array(kind) => kind_is_struct(self.module, kind.items()),
                 _ => false,
             })
+    }
+
+    /// The struct marker value (`TypeStruct{id, names}` = `[id, names]`) from
+    /// a struct type's kind node (`[marker, K]`), or `None` when the kind is
+    /// not a struct kind.  Used to render a struct instance whose value reads
+    /// against the field-type shape.
+    fn struct_marker_value(&self, kind_node: AnyNodeId) -> Option<P::Value> {
+        let Some(LowValue::Array(kind)) = self
+            .module
+            .node_value(kind_node)
+            .and_then(|v| v.as_enum())
+        else {
+            return None;
+        };
+        let marker = self.module.node_value(kind.items()[0].node)?;
+        if marker.as_enum().is_some_and(|m| matches!(m, LowValue::Array(_))) {
+            Some(marker)
+        } else {
+            None
+        }
     }
 
     /// The raw value layout — the fallback when the type chain cannot guide
@@ -938,27 +949,122 @@ where
     }
 }
 
+/// Whether a value is a struct marker — the two-field `TypeStruct{id, names}`
+/// value, encoded as a 2-element array `[id, names]`.  No other kind's marker
+/// is an array, so a 2-element array marker names a struct.
+fn marker_is_struct<P: HighProgram>(module: &Module<P>, marker: AnyNodeId) -> bool
+where
+    P::Value: ValueType,
+{
+    module
+        .node_value(marker)
+        .and_then(|v| v.as_enum())
+        .is_some_and(|v| match v {
+            LowValue::Array(m) => m.items().len() == 2,
+            _ => false,
+        })
+}
+
 /// Whether `kind_items` (the element items of a kind value) describe a struct
-/// kind: `[id, [TypeStruct, K]]`.  The nominal id heads the kind and the
-/// `TypeStruct` tag is the inner `[TypeStruct, K]` layer, so it cannot be
-/// detected the way the `[marker, K]` kinds are.
+/// kind: `[TypeStruct{id, names}, K]`.  The kind is a standard `[marker, K]`
+/// pair whose marker is the two-field `TypeStruct` value.
 fn kind_is_struct<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> bool
 where
     P::Value: ValueType,
 {
     kind_items.len() == 2
-        && module
-            .node_value(kind_items[1].node)
+        && is_universe_any(module, kind_items[1].node)
+        && marker_is_struct(module, kind_items[0].node)
+}
+
+/// The per-field names of a struct type, read from its marker `[id, names]`
+/// (the marker sits at the kind's slot 0): `None` for an unnamed (positional)
+/// field, `Some(name)` for a `name :: Ty` field.  Sized to `field_count`; a
+/// name whose index maps outside the field list is dropped (defensive).
+fn struct_field_names<P: HighProgram>(
+    module: &Module<P>,
+    kind_items: &[ArrayItem],
+    field_count: usize,
+) -> Vec<Option<&'static str>>
+where
+    P::Value: ValueType,
+{
+    let mut out = vec![None; field_count];
+    let marker_items = module
+        .node_value(kind_items[0].node)
+        .and_then(|v| v.as_enum())
+        .and_then(|v| match v {
+            LowValue::Array(m) => Some(m.items()),
+            _ => None,
+        });
+    let Some(marker_items) = marker_items else {
+        return out;
+    };
+    let Some(names_item) = marker_items.get(1) else {
+        return out;
+    };
+    let Some(LowValue::Table(table)) = module
+        .node_value(names_item.node)
+        .and_then(|v| v.as_enum())
+    else {
+        return out;
+    };
+    for item in table.items() {
+        let name = module
+            .node_value(item.key)
             .and_then(|v| v.as_enum())
-            .is_some_and(|v| match v {
-                LowValue::Array(inner) => {
-                    let items = inner.items();
-                    items.len() == 2
-                        && module.node_value(items[0].node) == Some(P::Value::type_struct_marker())
-                        && is_universe_any(module, items[1].node)
-                }
-                _ => false,
-            })
+            .and_then(|v| match v {
+                LowValue::Str(s) => Some(s),
+                _ => None,
+            });
+        let index = module
+            .node_value(item.value)
+            .and_then(|v| v.as_enum())
+            .and_then(|v| match v {
+                LowValue::USize(n) => Some(n),
+                _ => None,
+            });
+        if let (Some(name), Some(index)) = (name, index) {
+            if index < field_count {
+                out[index] = Some(name);
+            }
+        }
+    }
+    out
+}
+
+/// The nominal id of a struct type, read from its kind's marker `[id, names]`
+/// (the marker sits at the kind's slot 0, the id at the marker's slot 0).
+fn struct_kind_id<P: HighProgram>(module: &Module<P>, kind_items: &[ArrayItem]) -> Option<usize>
+where
+    P::Value: ValueType,
+{
+    let marker_items = module
+        .node_value(kind_items[0].node)
+        .and_then(|v| v.as_enum())
+        .and_then(|v| match v {
+            LowValue::Array(m) => Some(m.items()),
+            _ => None,
+        })?;
+    let id_item = marker_items.get(0)?;
+    module.node_value(id_item.node).and_then(|v| v.type_id())
+}
+
+/// Render a struct field list with per-field names (`name :: T` for a named
+/// field, `T` for an unnamed one).
+fn struct_fields_with_names(
+    fields: &[String],
+    names: &[Option<&'static str>],
+) -> Vec<String> {
+    fields
+        .iter()
+        .enumerate()
+        .map(|(i, ty)| match names.get(i).copied().flatten() {
+            // The canonical spelling is the `.name type` prefix marker.
+            Some(name) => format!(".{name} {ty}"),
+            None => ty.clone(),
+        })
+        .collect()
 }
 
 // --- the caret shell ---------------------------------------------------------
@@ -1023,6 +1129,10 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
                 printer.node(d.a)
             )
         }
+        DiagKind::NamedField => format!(
+            "no field with this name in the struct type {}",
+            printer.node(d.a)
+        ),
         DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).
