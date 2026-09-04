@@ -611,6 +611,7 @@ where
             ExprKind::Instantiate {
                 type_expr, value, ..
             } => vec![type_expr, value],
+            ExprKind::Record { value, .. } => vec![value],
             ExprKind::Index { array, index } => vec![array, index],
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
@@ -995,6 +996,11 @@ where
                 let arg_names: Vec<Option<&'static str>> =
                     self.ir.struct_names[names.start as usize..names.end as usize].to_vec();
                 self.check_instantiate(e, type_expr, value, &arg_names)
+            }
+            ExprKind::Record { value, names } => {
+                let field_names: Vec<Option<&'static str>> =
+                    self.ir.struct_names[names.start as usize..names.end as usize].to_vec();
+                self.check_record(e, value, &field_names)
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
@@ -1929,6 +1935,44 @@ where
     /// the nominal id; the tuple's own kind marker is discarded).  A
     /// non-tuple value fails the list check — a literal is not a struct
     /// value.
+    fn check_record(
+        &mut self,
+        e: ExprId,
+        value: ExprId,
+        field_names: &[Option<&'static str>],
+    ) -> NodeId {
+        // A struct-returning block: the value is a positional tuple of the
+        // emitted field values.  The checker builds an anonymous struct type
+        // whose shape is the value's element-type list and whose name table
+        // maps each field name to its position, then wraps the value in it.
+        // The instance is a fresh nominal type per occurrence, exactly like
+        // an in-place `struct<…>` expression.
+        self.check_expr(value);
+        let elements = self.range_children(value);
+        let mut vals = Vec::with_capacity(elements.len());
+        let mut tys = Vec::with_capacity(elements.len());
+        for &el in &elements {
+            vals.push(self.value_of(el));
+            tys.push(self.ty[el].unwrap());
+        }
+        let id = self.op_node(
+            self.current_block,
+            P::Operator::from(TypeOperator::Fresh),
+            None,
+        );
+        let shape = self.array_node(self.current_block, &tys);
+        let names_node = self.build_struct_names(field_names);
+        let marker = self.array_node(self.current_block, &[id, names_node]);
+        let kind = self.kind_expr(self.current_block, marker);
+        let struct_ty = self.array_node(self.current_block, &[shape, kind]);
+        let value_node = self.array_node(self.current_block, &vals);
+        let pair = self.pair_of(value_node, struct_ty);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(struct_ty);
+        pair
+    }
+
     fn check_instantiate(
         &mut self,
         e: ExprId,

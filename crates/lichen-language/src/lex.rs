@@ -57,6 +57,10 @@ pub enum TokenKind {
     KwThen,
     /// The else keyword -- the if's else-branch delimiter.
     KwElse,
+    /// The return keyword -- a block's explicit tail expression marker.
+    KwReturn,
+    /// The pub keyword -- a block statement marked as a struct field.
+    KwPub,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -127,6 +131,8 @@ impl TokenKind {
             TokenKind::KwIf => "'if'".to_string(),
             TokenKind::KwThen => "'then'".to_string(),
             TokenKind::KwElse => "'else'".to_string(),
+            TokenKind::KwReturn => "'return'".to_string(),
+            TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -211,6 +217,10 @@ enum RawToken {
     KwThen,
     #[token("else")]
     KwElse,
+    #[token("return")]
+    KwReturn,
+    #[token("pub")]
+    KwPub,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -564,6 +574,8 @@ fn raw_to_kind(
             "if" => TokenKind::KwIf,
             "then" => TokenKind::KwThen,
             "else" => TokenKind::KwElse,
+            "return" => TokenKind::KwReturn,
+            "pub" => TokenKind::KwPub,
             _ => TokenKind::Name(slice.to_string()),
         }),
         RawToken::TildeLit => {
@@ -588,6 +600,8 @@ fn raw_to_kind(
         RawToken::KwIf => Some(TokenKind::KwIf),
         RawToken::KwThen => Some(TokenKind::KwThen),
         RawToken::KwElse => Some(TokenKind::KwElse),
+        RawToken::KwReturn => Some(TokenKind::KwReturn),
+        RawToken::KwPub => Some(TokenKind::KwPub),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),

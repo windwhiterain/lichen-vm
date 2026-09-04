@@ -343,7 +343,7 @@ impl Walk {
             Expr::StructInst { callee, fields, .. } => {
                 self.expr(callee);
                 for f in fields {
-                    self.expr(f);
+                    self.expr(&f.value);
                 }
             }
             Expr::Table(entries, _) => {
@@ -362,6 +362,11 @@ impl Walk {
                 self.expr(length);
             }
             Expr::Block { statements, expr, .. } => self.scope(statements, Some(expr)),
+            Expr::RecordBlock { fields, .. } => {
+                for f in fields {
+                    self.expr(&f.value);
+                }
+            }
         }
     }
 }
