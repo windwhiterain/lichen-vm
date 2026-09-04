@@ -1,0 +1,44 @@
+# Zed extension manifest for the Lichen language and its language server.
+#
+# Install as a dev extension:  Zed → Extensions → "Install Dev Extension",
+# then select THIS directory (`crates/lichen-language-zed/`). Zed builds the
+# extension WASM from the `Cargo.toml` in this directory (see the `zed` feature).
+#
+# For the official registry, this whole `lichen-vm` repository would be added as
+# a public submodule of `zed-industries/extensions` with `path = "crates/lichen-language-zed"`
+# (so the `../lichen-language*` path dependencies resolve during the build).
+
+id = "lichen"
+name = "Lichen"
+version = "0.1.0"
+schema_version = 1
+authors = ["Lichen Developers"]
+description = "Lichen language support and language server for Zed."
+repository = "https://github.com/lichen-lang/lichen-vm" # TODO: set to the real repository
+
+# The language server Zed should launch for Lichen buffers. It is *not* bundled
+# with the extension (per Zed's publishing rules); the extension's
+# `language_server_command` supplies the command, and the `lichen-language-server`
+# binary is expected to be on the user's PATH (locating/downloading it is a
+# follow-up).
+[language_servers.lichen-language-server]
+name = "Lichen Language Server"
+languages = ["Lichen"]
+
+# Map Zed's "Lichen" language to the LSP `languageId` our server receives in
+# `textDocument/didOpen`.
+[language_servers.lichen-language-server.language_ids]
+"Lichen" = "lichen"
+
+# Tree-sitter grammar for syntax highlighting.
+#
+# Lichen's lexer/parser is hand-rolled (in `crates/lichen-language`); there is no
+# `tree-sitter-lichen` yet. Until one exists, Zed loads the language and the
+# language server, but nothing is syntax-highlighted. Author the grammar (a
+# separate `tree-sitter-lichen` repo), then add an entry here:
+#
+#   [grammars.lichen]
+#   repository = "https://github.com/<user>/tree-sitter-lichen"
+#   rev = "<commit sha>"
+#
+# and keep `grammar = "lichen"` in `languages/lichen/config.toml`.

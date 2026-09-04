@@ -4,12 +4,28 @@ version = "0.1.0"
 edition = "2024"
 default-run = "lichen-language-server"
 
+[features]
+default = ["server"]
+# `server` powers the stdio `LanguageServer` binary (tower-lsp + tokio). It is a
+# non-default feature for the *library* so that the `lichen-language-zed` WASM
+# plugin — which depends on this crate's library — does not pull the tokio/tower
+# async stack into the extension build. The `zed` extension depends on this
+# crate with `default-features = false`.
+server = ["dep:tower-lsp", "dep:tokio"]
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Must match the `lsp-types` line that `tower-lsp@0.20` uses (`^0.94.1`) so the
+# canonical protocol types here and those in `tower_lsp::lsp_types` unify to the
+# same crate.
+lsp-types = "0.94"
 lichen-language = { path = "../lichen-language" }
 lichen-highlevel = { path = "../lichen-highlevel" }
+tokio = { version = "1", features = ["full"], optional = true }
+tower-lsp = { version = "0.20", optional = true }
 
 [[bin]]
 name = "lichen-language-server"
 path = "src/bin/lichen-language-server.rs"
+required-features = ["server"]

@@ -17,14 +17,17 @@
 use std::collections::HashMap;
 
 use lichen_highlevel::ir::Span;
+use lichen_highlevel::no_native_ops;
 use lichen_language::ast::{Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
 use lichen_language::lex::{Token, TokenKind};
+use lichen_language::package::PackageStore;
 use lichen_language::parse;
-use lichen_language::session::BufferSession;
+use lichen_language::preprocess;
+use lichen_language::{build_report, frontend_at};
 
-use crate::lsp::{self, Diagnostic, Position, Range};
+use crate::lsp::{self, Diagnostic, DiagnosticSeverity, Position, Range};
 
 /// A definition site: a binding name or a lambda parameter.
 #[derive(Clone, Debug)]
@@ -63,18 +66,34 @@ pub struct Doc {
 
 impl Doc {
     /// Parse, lower and check `source`, keeping the frontend artifacts and
-    /// indexing name resolution.
+    /// indexing name resolution.  The leading `@{…@}` preprocessor block (with
+    /// its `import`/metadata directives) is cut out and resolved first, so a
+    /// real lichen file compiles on the code that follows the block, with spans
+    /// still absolute in the original file.
     pub fn new(source: impl Into<String>) -> Doc {
         let source = source.into();
         let line_starts = lex::line_starts(&source);
-        let lexed = lex::lex_with(&source, &line_starts, 0);
+
+        // Cut the leading `@{…@}` block (metadata + imports) off the frontend
+        // input, resolving imports through a fresh in-memory package store so
+        // the shared registry can serve any loaded imports.
+        let mut store = PackageStore::new();
+        let (pre, mut diagnostics) = preprocess::preprocess(&source, None, &mut store);
+
+        // The frontend artifacts (for the editor index): tokens + AST in
+        // absolute file coordinates (the lexer maps through `code_base` and the
+        // full line starts).
+        let lexed = lex::lex_with(pre.code, &line_starts, pre.code_base);
         let tokens = lexed.tokens;
         let parsed = parse::parse(&tokens);
         let program = parsed.program;
 
-        // The full pipeline diagnostics (incremental, diff-gated internally).
-        let mut session = BufferSession::new(source.clone());
-        let report = session.compile();
+        // The full pipeline diagnostics (lex + parse + resolve + check):
+        // preprocess first, then the frontend over the preprocessed code, then
+        // the checker over the IR.  All spans are absolute.
+        let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
+        diagnostics.extend(frontend.diagnostics);
+        let report = build_report(frontend.ir, diagnostics, Some(store.registry()), no_native_ops());
         let diagnostics = report.diagnostics;
 
         let (defs, resolve, def_index) = index(&program);
@@ -105,9 +124,14 @@ impl Doc {
                     });
                 Diagnostic {
                     range,
-                    severity: severity_for(d.stage),
-                    source: "lichen".to_string(),
+                    severity: Some(severity_for(d.stage)),
+                    code: None,
+                    code_description: None,
+                    source: Some("lichen".to_string()),
                     message: d.message.clone(),
+                    tags: None,
+                    related_information: None,
+                    data: None,
                 }
             })
             .collect()
@@ -161,12 +185,12 @@ impl Doc {
     }
 }
 
-fn severity_for(stage: Stage) -> u32 {
+fn severity_for(stage: Stage) -> DiagnosticSeverity {
     // The frontend/checker report only errors; keep the mapping explicit so a
     // future warning stage slots in.
     match stage {
         Stage::Preprocess | Stage::Lex | Stage::Parse | Stage::Resolve | Stage::Check => {
-            lsp::severity::ERROR
+            DiagnosticSeverity::ERROR
         }
     }
 }
@@ -310,6 +334,7 @@ impl Walk {
                 self.expr(container);
                 self.expr(key);
             }
+            Expr::NamedFieldRead { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -332,18 +357,20 @@ impl Walk {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::StructType(elems, _)
-            | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
                 for el in elems {
                     self.expr(el);
+                }
+            }
+            Expr::StructType(fields, _) => {
+                for field in fields {
+                    self.expr(&field.ty);
                 }
             }
             Expr::StructInst { callee, fields, .. } => {
                 self.expr(callee);
                 for f in fields {
-                    self.expr(f);
+                    self.expr(&f.value);
                 }
             }
             Expr::Table(entries, _) => {
@@ -363,5 +390,75 @@ impl Walk {
             }
             Expr::Block { statements, expr, .. } => self.scope(statements, Some(expr)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::Position;
+
+    fn doc(source: &str) -> Doc {
+        Doc::new(source)
+    }
+
+    #[test]
+    fn unresolved_name_is_reported() {
+        let d = doc("a = 1\nb = unknown\nb");
+        let msgs: Vec<String> = d
+            .lsp_diagnostics()
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("unresolved name 'unknown'")),
+            "expected an unresolved-name diagnostic, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn clean_source_has_no_diagnostics_and_one_binding() {
+        let d = doc("a = 1\n(a, a)");
+        assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
+        assert_eq!(d.defs.len(), 1, "one binding");
+    }
+
+    #[test]
+    fn preprocessor_block_is_cut_out() {
+        // A real lichen file opens with an `@{…@}` metadata block; it must not
+        // leak into the lexer/parser as code, and the file after it compiles.
+        let d = doc("@{ order = \"1\"\noutput = \"3: Int\"\n@}\na = 1\nb = 2\na + b\n");
+        assert!(d.diagnostics.is_empty(), "got {:?}", d.diagnostics);
+        assert_eq!(d.defs.len(), 2, "two bindings (a, b)");
+    }
+
+    #[test]
+    fn hover_resolves_a_use_to_its_binding() {
+        let d = doc("a = 1\nb = a + 1\nb");
+        let (msg, _range) = d.hover_at(Position { line: 1, character: 4 }).expect("hover on `a`");
+        assert!(msg.contains("defined at line `1`"), "hover msg = {msg}");
+    }
+
+    #[test]
+    fn hover_on_unresolved_name_says_so() {
+        let d = doc("a = 1\nb = unknown");
+        let (msg, _) = d.hover_at(Position { line: 1, character: 4 }).expect("hover on `unknown`");
+        assert!(msg.contains("unresolved name"), "hover msg = {msg}");
+    }
+
+    #[test]
+    fn definition_jumps_to_the_binding() {
+        let d = doc("a = 1\nb = a + 1\nb");
+        let range = d
+            .definition_at(Position { line: 2, character: 0 })
+            .expect("definition for the final `b`");
+        assert_eq!(range.start, Position { line: 1, character: 0 });
+    }
+
+    #[test]
+    fn definition_is_none_on_a_non_name() {
+        let d = doc("a = 1\na + 1\n");
+        // Cursor on the `1` literal in `a + 1` (line index 1, char 4).
+        assert!(d.definition_at(Position { line: 1, character: 4 }).is_none());
     }
 }

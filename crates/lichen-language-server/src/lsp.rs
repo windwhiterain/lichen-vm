@@ -1,4 +1,4 @@
-//! A minimal LSP type set plus the source-position ↔ LSP-position conversion.
+//! Source-position ↔ LSP-position conversion, and the canonical LSP types.
 //!
 //! The frontend reports positions as [`lichen_highlevel::ir::Span`] — a
 //! `(line, col)` pair, 1-based, where `col` counts **bytes** from the line's
@@ -8,52 +8,15 @@
 //! the shared span — a language server and a Zed extension must agree on it, so
 //! it lives once, here.
 //!
-//! The JSON-RPC envelope and the handful of LSP message shapes the server
-//! sends/handles are also defined here (serde-backed), keeping the server
-//! binary free of any LSP framework dependency.
+//! The protocol *types* are the canonical ones from `lsp-types` (re-exported
+//! here and by the crate root), so the server and any extension speak the same
+//! types the editor does. The JSON-RPC framing, request dispatch, cancellation
+//! and error handling are provided by `tower-lsp` in the server binary; the
+//! library only needs the span math and the protocol type set.
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+pub use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 use lichen_highlevel::ir::Span;
-
-/// A source position: 0-based line, `character` in UTF-16 code units.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Position {
-    pub line: u32,
-    pub character: u32,
-}
-
-/// A half-open source range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Range {
-    pub start: Position,
-    pub end: Position,
-}
-
-/// LSP diagnostic severities (the protocol's numbers).
-pub mod severity {
-    pub const ERROR: u32 = 1;
-    pub const WARNING: u32 = 2;
-    pub const INFORMATION: u32 = 3;
-    pub const HINT: u32 = 4;
-}
-
-/// A rendered diagnostic ready to publish.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Diagnostic {
-    pub range: Range,
-    pub severity: u32,
-    pub source: String,
-    pub message: String,
-}
-
-/// A `(uri, range)` definition/hover location target.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Location {
-    pub uri: String,
-    pub range: Range,
-}
 
 // ---------------------------------------------------------------------------
 // Span ↔ position conversion
@@ -146,68 +109,27 @@ pub fn range_from_byte_range(source: &str, line_starts: &[usize], range: (u32, u
     }
 }
 
-// ---------------------------------------------------------------------------
-// JSON-RPC / LSP wire shapes
-//
-// A deliberately small, serde-backed subset of the protocol. The server parses
-// the JSON body into these; everything unrecognized is dropped.
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// An inbound request/notification envelope.
-#[derive(Debug, Deserialize)]
-pub struct Envelope {
-    #[serde(rename = "jsonrpc")]
-    #[allow(dead_code)]
-    pub jsonrpc: String,
-    /// `None` for a notification (no response expected).
-    #[serde(default)]
-    pub id: Option<Value>,
-    pub method: String,
-    #[serde(default)]
-    pub params: Value,
-}
+    #[test]
+    fn position_offset_round_trips() {
+        let source = "a = 1\nb = a + 1\nb";
+        let starts = lichen_language::lex::line_starts(source);
+        // The `a` use in `b = a + 1` is at line 1, byte column 4 (0-based col 4).
+        let pos = position_at_offset(source, &starts, starts[1] + 4);
+        assert_eq!(pos, Position { line: 1, character: 4 });
+        let back = offset_from_position(source, &starts, pos).expect("position in source");
+        assert_eq!(back, starts[1] + 4);
+    }
 
-/// The `textDocument` object carried by most requests.
-#[derive(Debug, Deserialize)]
-pub struct TextDocumentItem {
-    pub uri: String,
-    #[serde(rename = "languageId", default)]
-    #[allow(dead_code)]
-    pub language_id: Option<String>,
-    #[serde(default)]
-    pub version: Option<u32>,
-    pub text: String,
-}
-
-/// A single content change in a `didChange` `contentChanges` array. Under full
-/// sync the change has no `range` and replaces the whole document.
-#[derive(Debug, Deserialize)]
-pub struct ContentChange {
-    #[serde(default)]
-    pub range: Option<Range>,
-    pub text: String,
-}
-
-/// The `TextDocumentPositionParams`: where the cursor is.
-#[derive(Debug, Deserialize)]
-pub struct TextDocumentPositionParams {
-    pub textDocument: TextDocumentIdentifier,
-    pub position: Position,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TextDocumentIdentifier {
-    pub uri: String,
-}
-
-/// Build a `textDocument/publishDiagnostics` notification.
-pub fn publish_diagnostics(uri: &str, version: Option<u32>, diagnostics: Vec<Diagnostic>) -> Value {
-    serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "textDocument/publishDiagnostics",
-        "params": {
-            "uri": uri,
-            "version": version,
-            "diagnostics": diagnostics,
-        }
-    })
+    #[test]
+    fn span_of_offset_round_trips_to_1_based_span() {
+        let source = "a = 1\nb";
+        let starts = lichen_language::lex::line_starts(source);
+        // Byte offset of the `b` on line 2 (col 1).
+        let offset = starts[1];
+        assert_eq!(span_of_offset(&starts, offset), (2, 1));
+    }
 }

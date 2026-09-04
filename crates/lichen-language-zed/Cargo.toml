@@ -11,12 +11,16 @@ crate-type = ["lib", "cdylib"]
 default = []
 # Turns this crate into an actual Zed WASM plugin (adds `zed_extension_api`).
 # Build it with:
-#   rustup target add wasm32-wasip1
-#   cargo build -p lichen-language-zed --features zed --target wasm32-wasip1
-#   (then package/install the wasm as the extension, per the Zed docs).
+#   rustup target add wasm32-wasip2
+#   cargo build -p lichen-language-zed --features zed --target wasm32-wasip2
+# then install the built `target/wasm32-wasip2/release/lichen_language_zed.wasm`
+# as a dev extension (Zed reads `extension.toml` in this directory).
 zed = ["dep:zed_extension_api"]
 
 [dependencies]
 lichen-language = { path = "../lichen-language" }
-lichen-language-server = { path = "../lichen-language-server" }
+# The extension uses only the server's *library* (span math + name resolution);
+# disable the `server` feature so the async tower-lsp/tokio stack is not pulled
+# into the WASM build.
+lichen-language-server = { path = "../lichen-language-server", default-features = false }
 zed_extension_api = { version = "0.7.0", optional = true }

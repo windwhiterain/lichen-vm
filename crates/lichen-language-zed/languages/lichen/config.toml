@@ -1,0 +1,10 @@
+# Zed language config for Lichen.
+#
+# `grammar` references the Tree-sitter grammar registered in `extension.toml`
+# under `[grammars.lichen]`. Lichen does not have a Tree-sitter grammar yet, so
+# this language currently loads with the language server but without syntax
+# highlighting until `tree-sitter-lichen` exists (see `extension.toml`).
+
+name = "Lichen"
+grammar = "lichen"
+path_suffixes = ["lichen"]

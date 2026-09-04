@@ -12,6 +12,11 @@
 //! plain `cargo build` stays green). With the `zed` feature it becomes the
 //! extension: it declares the `lichen-language-server` command that Zed launches
 //! from `extension.toml`'s `language_servers` table.
+//!
+//! The installable extension is this directory (`extension.toml` + the `zed`
+//! feature). Build the WASM for the current Zed target (`wasm32-wasip2`) and
+//! install it as a dev extension. A Tree-sitter `tree-sitter-lichen` grammar is
+//! the one piece still missing for syntax highlighting (see `extension.toml`).
 
 pub const LANGUAGE_NAME: &str = "Lichen";
 pub const LANGUAGE_ID: &str = "lichen";
