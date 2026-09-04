@@ -293,9 +293,9 @@ t = table{ [1, 2] :: 10, [3, 4] :: 20 }
   order = "5"
   math = import "math.lichen"
   geo = import "geometry.lichen"
-  output = "(42, 12): <Int, Int>"
+  output = "(42, 10, 7): <Int, Int, Int>"
 @}
-(math 41, geo 5)
+(math.succ 41, geo.double 5, geo.inc_twice 5)
 ```
 
 #### `import/math.lichen`
@@ -303,11 +303,12 @@ t = table{ [1, 2] :: 10, [3, 4] :: 20 }
 ```text
 @{
   order = "0"
-  output = "Function: Int -> Int"
+  output = "(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>"
 @}
-succ = x => x + 1
-add = x => y => x + y
-succ
+{
+  succ = x => x + 1
+  add = x => y => x + y
+}
 ```
 
 #### `import/geometry.lichen`
@@ -316,10 +317,12 @@ succ
 @{
   order = "1"
   math = import "math.lichen"
-  output = "Function: Int -> Int"
+  output = "(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>"
 @}
-double = x => math x + math x
-double
+{
+  double = x => math.add x x
+  inc_twice = x => math.succ (math.succ x)
+}
 ```
 
 ### `perspective.lichen`
@@ -362,9 +365,9 @@ f 5
   compute = import "compute.lichen"
   output = "8: Int"
 @}
-k_double = compute(0) (y => y + y)
-k_outer  = compute(0) (x => compute(1) k_double (x + 1))
-compute(1) k_outer 3
+k_double = compute.jit (y => y + y)
+k_outer  = compute.jit (x => compute.launch k_double (x + 1))
+compute.launch k_outer 3
 ```
 
 <!-- end: examples -->

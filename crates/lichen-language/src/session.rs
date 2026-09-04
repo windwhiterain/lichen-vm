@@ -1040,6 +1040,18 @@ impl Sig {
                 self.cur.update(&[23]);
                 self.hash_scope(statements, Some(expr), false);
             }
+            Expr::RecordBlock { fields, .. } => {
+                self.cur.update(&[25]);
+                for f in fields {
+                    // The field's name, its `let`-vs-field nature, and its
+                    // `pub` mark are part of its identity.
+                    self.cur.update(&[f.name.is_some() as u8, f.field as u8, f.public as u8]);
+                    if let Some(name) = &f.name {
+                        self.cur.update(name.as_bytes());
+                    }
+                    self.hash_expr(&f.value);
+                }
+            }
         }
     }
 }

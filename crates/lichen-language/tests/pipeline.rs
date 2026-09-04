@@ -976,6 +976,113 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
 }
 
 #[test]
+fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
+    // { x = 1; y = Int } — a block whose last statement is a binding has no
+    // tail expression, so it returns an anonymous struct instance with fields
+    // x and y (readable by name or position).
+    let (module, root) = run("a = { x = 1; y = Int }; (a.x, a.y, a(0), a(1))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 4);
+    assert_eq!(
+        usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()),
+        1,
+        "a.x"
+    );
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(ids[1])),
+        Some(LangValue::TypeValue(TypeValue::TypeInt)),
+        "a.y"
+    );
+    assert_eq!(
+        usize_of(module.node_value(AnyNodeId::Dynamic(ids[2])).as_ref().unwrap()),
+        1,
+        "a(0)"
+    );
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(ids[3])),
+        Some(LangValue::TypeValue(TypeValue::TypeInt)),
+        "a(1)"
+    );
+}
+
+#[test]
+fn a_struct_block_with_pub_only_exposes_the_pub_fields() {
+    // { pub x = 1; y = 2 } — a `pub` statement is a field; `y` is a
+    // block-local, still compiled but not exposed.
+    let (module, root) = run("a = { pub x = 1; y = 2 }; (a.x, a(0))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1, "a.x");
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 1, "a(0)");
+    // y is not exposed: reading it is a named-field error.
+    let d = diags("a = { pub x = 1; y = 2 }; a.y");
+    assert!(
+        d.iter().any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NamedField)),
+        "a.y must be a named-field miss: {:?}",
+        d
+    );
+}
+
+#[test]
+fn a_let_in_a_struct_block_is_a_local_not_a_field() {
+    // { let x = 1; y = x + 1 } — `x` is a `let` local (never a field); `y` is
+    // a field that references it.
+    let (module, root) = run("a = { let x = 1; y = x + 1 }; (a.y, a(0))");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 2, "a.y = x + 1");
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 2, "a(0)");
+    // x is not exposed: reading it is a named-field miss.
+    let d = diags("a = { let x = 1; y = x + 1 }; a.x");
+    assert!(
+        d.iter().any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NamedField)),
+        "a.x must be a named-field miss: {:?}",
+        d
+    );
+}
+
+#[test]
+fn a_struct_block_can_have_a_positional_expression_field() {
+    // { 1; x = 2 } — a bare expression is a positional field, a binding a
+    // named one.  With no `pub`, every statement is a field.
+    let (module, root) = run("a = { 1; x = 2 }; (a(0), a.x)");
+    let mut module = module;
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 2);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1, "a(0)");
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 2, "a.x");
+}
+
+#[test]
+fn pub_let_is_a_parse_error() {
+    // `pub` and `let` cannot co-exist.
+    let d = diags("{ pub let x = 1; y = 2 }");
+    assert!(
+        d.iter().any(|d| d.message.contains("pub cannot mark a let binding")),
+        "expected a pub/let parse error: {:?}",
+        d
+    );
+}
+
+#[test]
+fn a_block_with_a_trailing_expression_is_still_its_value() {
+    // { x = 1; x } — a trailing bare expression (no separator after it) is the
+    // block's value, not a struct field.
+    assert_eq!(usize_of(&evaluate("a = { x = 1; x }; a")), 1);
+}
+
+#[test]
+fn a_return_statement_enforces_the_block_value_anywhere() {
+    // { x = 1; return 2; y = 3 } — `return` designates the tail expression no
+    // matter where it appears; the other statements are block-locals.
+    let value = evaluate("a = { x = 1; return 2; y = 3 }; a");
+    assert_eq!(usize_of(&value), 2, "the block's value is the return expression");
+}
+
+#[test]
 fn mutually_recursive_structs_check_and_evaluate() {
     // A = struct<Int, B>; B = struct<Type, A>; a = A(1, b); b = B(Int, a) —
     // two struct types that reference each other *as types*, plus a pair of

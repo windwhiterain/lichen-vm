@@ -714,10 +714,14 @@ fn block_errors_carry_spans() {
     // An empty block is not a block: the value expression is missing.
     let err = parse_err("{}");
     assert!(err.message.contains("found '}'"));
-    // A block binding requires `;` — a binding followed by `}` leaves no
-    // final expression.
-    let err = parse_err("{a = 1}");
-    assert!(err.message.contains("must end with an expression"));
+    // A block whose last statement is a binding has no tail expression; it
+    // parses as a struct-returning block (an anonymous struct instance).
+    let Expr::RecordBlock { fields, .. } = parse_ok("{a = 1}") else {
+        panic!("expected a struct-returning block");
+    };
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].name.as_deref(), Some("a"));
+    assert!(fields[0].field, "a block-wide binding is a field");
     // A stray `}` after the program.
     let err = parse_err("x }");
     assert_eq!(err.span, Some((1, 3)));

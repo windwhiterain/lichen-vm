@@ -596,7 +596,7 @@ fn emit_node(
             );
         }
         LangOperator::ComputeOperator(op) => match op {
-            // The wrapper's `launch`/`$launch` (`compute(1) k x`) — the *typed*
+            // The wrapper's `launch`/`$launch` (`compute.launch k x`) — the *typed*
             // cross-kernel call form (its codomain is resolved by `LaunchOp`,
             // unlike a bare `k x`).  Lower it exactly like a kernel `Apply`.
             ComputeOperator::Launch => {
@@ -623,7 +623,7 @@ fn emit_node(
 /// Emit a cross-kernel call (style 2): the (scalar) argument expression, then a
 /// [`KernelInstr::CallKernel`] the launch-time assembler resolves.  Both a
 /// direct kernel `Apply` (`k x`) and the wrapper's `launch`/`$launch`
-/// (`compute(1) k x`) lower here — the latter is the typed form (its codomain
+/// (`compute.launch k x`) lower here — the latter is the typed form (its codomain
 /// is resolved by [`LaunchOp`]), the former the untyped-form gap.
 fn emit_cross_kernel_call(
     module: &Module<LangProgram>,
@@ -1023,11 +1023,8 @@ impl NativeOp<LangProgram> for LaunchOp {
 }
 
 /// The `lichen-compute` plugin's embedded lichen source — the real `compute`
-/// plugin file.  It defines the user-facing `jit`/`launch` functions as
+/// plugin file, kept as a `.lichen` source file and embedded with
+/// [`include_str!`].  It defines the user-facing `jit`/`launch` functions as
 /// ordinary typed lichen (whose bodies call the native `$jit`/`$launch`), and
-/// exports them as the positional namespace tuple `compute`.
-pub const WRAPPER_SOURCE: &str = "\
-jit = f => $jit(f)
-launch = k => a => $launch(k, a)
-(jit, launch)
-";
+/// exports them as a **named struct** (`compute.jit`, `compute.launch`).
+pub const WRAPPER_SOURCE: &str = include_str!("compute.lichen");

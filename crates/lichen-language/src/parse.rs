@@ -55,7 +55,8 @@ use chumsky::prelude::*;
 use lichen_highlevel::ir::Span;
 
 use crate::ast::{
-    BinOp, Binding, ErrorBlock, Expr, Program, Stmt, StructField, StructInstArg, TypeConst,
+    BinOp, Binding, BlockStmt, ErrorBlock, Expr, Program, RecordField, Stmt, StructField,
+    StructInstArg, TypeConst,
 };
 use crate::diag::{Diag, Stage};
 use crate::lex::{Token, TokenKind};
@@ -1209,12 +1210,156 @@ fn block<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
     token(TokenKind::LBrace)
-        .ignore_then(statement_list(tokens, expr))
+        .ignore_then(block_body(tokens, expr))
         .then_ignore(token(TokenKind::RBrace))
-        .map_with(|(statements, expr, _ranges), me| Expr::Block {
-            statements,
-            expr: Box::new(expr),
-            span: span_at(tokens, me.span().start),
+        .map_with(|(statements, tail), me| {
+            let span = span_at(tokens, me.span().start);
+            match tail {
+                Some(e) => Expr::Block {
+                    statements: statements.into_iter().map(|b| b.stmt).collect(),
+                    expr: Box::new(e),
+                    span,
+                },
+                None => Expr::RecordBlock {
+                    fields: statements
+                        .into_iter()
+                        .map(|b| {
+                            let public = b.public;
+                            let span = b.stmt.span();
+                            let (name, value, field) = match b.stmt {
+                                Stmt::Binding(binding) => (
+                                    Some(binding.name),
+                                    binding.value,
+                                    // A `let` binding is a block-local, never a
+                                    // struct field.
+                                    !binding.restrictive,
+                                ),
+                                Stmt::Expr(e) => (None, e, true),
+                            };
+                            RecordField {
+                                name,
+                                value,
+                                public,
+                                field,
+                                span,
+                            }
+                        })
+                        .collect(),
+                    span,
+                },
+            }
+        })
+}
+
+/// A block-body item: either a (possibly `pub`) statement, or a `return
+/// <expr>` tail marker.
+enum BlockItem {
+    Stmt(BlockStmt),
+    Return(Expr),
+}
+
+/// A block body: a statement sequence whose last element may be a trailing
+/// expression (the block's value).  Each statement may be `pub`-prefixed; an
+/// explicit `return <expr>` anywhere designates the block's tail (a `return`
+/// may appear before or after the statements).  With neither a `return` nor a
+/// trailing expression, the returned tail is `None` — the block is a
+/// struct-returning block.
+type BlockBody = (Vec<BlockStmt>, Option<Expr>);
+
+fn block_body<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, BlockBody, E<'a>> + Clone {
+    let seps = token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .collect::<Vec<_>>();
+    let seps1 = token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .at_least(1)
+        .collect::<Vec<_>>();
+    let item = choice((
+        token(TokenKind::KwReturn).ignore_then(expr.clone()).map(BlockItem::Return),
+        block_statement(tokens, expr.clone()).map(BlockItem::Stmt),
+    ));
+    seps.clone()
+        .then(item.clone())
+        .then(
+            (seps1.clone().then(item.clone()))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(seps)
+        .map(|(((_, first), rest), _trailing)| {
+            let mut all = std::iter::once(first)
+                .chain(rest.into_iter().map(|(_, e)| e))
+                .collect::<Vec<BlockItem>>();
+            // An explicit `return <expr>` anywhere designates the block's
+            // tail; every other item is a statement (a second `return` is
+            // dropped).
+            if all.iter().any(|i| matches!(i, BlockItem::Return(..))) {
+                let mut tail = None;
+                let statements = all
+                    .into_iter()
+                    .filter_map(|i| match i {
+                        BlockItem::Return(e) => {
+                            if tail.is_none() {
+                                tail = Some(e);
+                            }
+                            None
+                        }
+                        BlockItem::Stmt(b) => Some(b),
+                    })
+                    .collect();
+                return (statements, tail);
+            }
+            // No `return`: the last bare expression is the block's tail value;
+            // a trailing binding (or an empty body) leaves no tail, making the
+            // block a struct-returning block.
+            let statements = |all: Vec<BlockItem>| {
+                all.into_iter()
+                    .map(|i| match i {
+                        BlockItem::Stmt(b) => b,
+                        BlockItem::Return(..) => unreachable!(),
+                    })
+                    .collect()
+            };
+            match all.pop() {
+                Some(BlockItem::Stmt(BlockStmt {
+                    stmt: Stmt::Expr(e), ..
+                })) => (statements(all), Some(e)),
+                Some(other) => {
+                    all.push(other);
+                    (statements(all), None)
+                }
+                None => (Vec::new(), None),
+            }
+        })
+}
+
+/// A statement inside a `{ … }` block: an optional `pub` prefix plus the
+/// statement.  `pub` and `let` cannot co-exist — a `pub` mark on a `let`
+/// (restrictive) binding is a parse error.
+fn block_statement<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, BlockStmt, E<'a>> + Clone {
+    token(TokenKind::KwPub)
+        .ignored()
+        .or_not()
+        .then(statement(tokens, expr.clone()))
+        .validate(|(public, stmt), me, emit| {
+            if public.is_some() && matches!(&stmt, Stmt::Binding(b) if b.restrictive) {
+                emit.emit(Rich::custom(
+                    me.span(),
+                    "pub cannot mark a let binding",
+                ));
+            }
+            BlockStmt {
+                stmt,
+                public: public.is_some(),
+            }
         })
 }
 
@@ -1422,6 +1567,16 @@ fn apply_type_mode(program: Program) -> Program {
                 expr: Box::new(expr(*inner, type_mode)),
                 span,
             },
+            Expr::RecordBlock { fields, span } => Expr::RecordBlock {
+                fields: fields
+                    .into_iter()
+                    .map(|f| RecordField {
+                        value: expr(f.value, type_mode),
+                        ..f
+                    })
+                    .collect(),
+                span,
+            },
             // Int, TypeConst, Placeholder, Err — mode-insensitive.
             e => e,
         }
@@ -1570,6 +1725,11 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                     walk_stmt(s, out);
                 }
                 walk_expr(expr, out);
+            }
+            Expr::RecordBlock { fields, .. } => {
+                for f in fields {
+                    walk_expr(&f.value, out);
+                }
             }
         }
     }

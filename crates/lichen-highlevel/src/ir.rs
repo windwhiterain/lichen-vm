@@ -265,6 +265,15 @@ pub enum ExprKind<L> {
         value: ExprId,
         names: ChildRange,
     },
+    /// `{ value, names }` — a struct-returning block (`RecordBlock`): `value`
+    /// is a positional tuple of the emitted field values, and `names` is a
+    /// range into [`IR::struct_names`] holding each field's optional name
+    /// (parallel to the tuple elements).  The checker builds an anonymous
+    /// struct type from the value's element types and wraps the value in it,
+    /// so the block's value is a struct instance whose fields read
+    /// positionally or by name.  A `let` field does not make it here — it is
+    /// a block-local.
+    Record { value: ExprId, names: ChildRange },
     /// `assert(condition)` — an explicit constraint, not a unify: the
     /// condition's value node is registered as an assert point.  The
     /// checker force-evaluates every assert after the definition pass
@@ -496,6 +505,21 @@ impl<A: AttrSpec, L> IR<A, L> {
             },
             span,
         )
+    }
+
+    pub fn alloc_record(
+        &mut self,
+        value: ExprId,
+        names: &[Option<&'static str>],
+        span: Option<Span>,
+    ) -> ExprId {
+        let nstart = self.struct_names.len() as u32;
+        self.struct_names.extend_from_slice(names);
+        let name_range = ChildRange {
+            start: nstart,
+            end: self.struct_names.len() as u32,
+        };
+        self.alloc(ExprKind::Record { value, names: name_range }, span)
     }
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {

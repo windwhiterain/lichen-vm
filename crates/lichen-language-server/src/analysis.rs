@@ -389,6 +389,11 @@ impl Walk {
                 self.expr(length);
             }
             Expr::Block { statements, expr, .. } => self.scope(statements, Some(expr)),
+            Expr::RecordBlock { fields, .. } => {
+                for f in fields {
+                    self.expr(&f.value);
+                }
+            }
         }
     }
 }

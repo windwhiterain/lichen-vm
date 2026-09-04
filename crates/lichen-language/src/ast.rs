@@ -202,6 +202,15 @@ pub enum Expr {
         expr: Box<Expr>,
         span: Span,
     },
+    /// `{ stmt; …; stmt }` with no trailing expression — a struct-returning
+    /// block.  Its value is an anonymous struct instance; each statement is
+    /// a field (a `name = value` binding is a named field, a bare expression
+    /// a positional one).  A `pub`-marked statement becomes a field, and when
+    /// any statement is `pub`, only the `pub` statements are fields.
+    RecordBlock {
+        fields: Vec<RecordField>,
+        span: Span,
+    },
     /// A syntactic error recovered by the parser — an opaque error block,
     /// carried by the frontend only and never consumed by the lower layers as
     /// real code (it lowers to a distinct [`ExprKind::ErrorBlock`], not an
@@ -260,6 +269,29 @@ pub struct StructField {
 pub struct StructInstArg {
     pub name: Option<String>,
     pub value: Expr,
+}
+
+/// One field of a [`Expr::RecordBlock`]: an optional field name (from a
+/// `name = value` binding), the field's value expression, whether it is
+/// `pub`-marked, and whether it is a field at all — a `let` (restrictive)
+/// statement is a block-local and is `field: false`, never a struct field.
+#[derive(Clone, Debug)]
+pub struct RecordField {
+    pub name: Option<String>,
+    pub value: Expr,
+    pub public: bool,
+    /// `false` for a `let` binding (a block-local, never a struct field).
+    pub field: bool,
+    pub span: Span,
+}
+
+/// One statement inside a `{ … }` block: the statement plus whether it is
+/// `pub`-prefixed (a `pub` statement becomes a struct field when the block is
+/// a [`Expr::RecordBlock`]).
+#[derive(Clone, Debug)]
+pub struct BlockStmt {
+    pub stmt: Stmt,
+    pub public: bool,
 }
 
 /// A recovered-error region the parser masked: `range` is the byte span it
@@ -329,7 +361,19 @@ impl Expr {
             Expr::Shallow(_, _, s) => *s,
             Expr::TypeArray { span, .. } => *span,
             Expr::Block { span, .. } => *span,
+            Expr::RecordBlock { span, .. } => *span,
             Expr::Err { start, .. } => *start,
+        }
+    }
+}
+
+impl Stmt {
+    /// The statement's start position — its leftmost token (a binding's name
+    /// span, or the expression's).
+    pub fn span(&self) -> Span {
+        match self {
+            Stmt::Binding(binding) => binding.span,
+            Stmt::Expr(e) => e.span(),
         }
     }
 }

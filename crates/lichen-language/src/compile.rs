@@ -45,7 +45,7 @@ use lichen_highlevel::program::{
     HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit, TypeTypeLit,
 };
 
-use crate::ast::{Expr, Program, Stmt, TypeConst};
+use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
 use crate::program::Perspective;
@@ -641,6 +641,44 @@ impl Compiler {
                 let body = self.compile_expr(expr);
                 self.scopes.truncate(scope_len);
                 self.wrap(stmts, body, span)
+            }
+            Expr::RecordBlock { fields, span } => {
+                // A struct-returning block: the statements are scoped exactly
+                // like a block's, but the block's value is an anonymous struct
+                // instance built from the field statements.  A `let` field is a
+                // block-local (restrictive) and is never emitted; only the
+                // `pub` subset is emitted when any field is `pub`.
+                let scope_len = self.scopes.len();
+                let stmts: Vec<Stmt> = fields
+                    .iter()
+                    .map(|f| match &f.name {
+                        Some(name) => Stmt::Binding(Binding {
+                            name: name.clone(),
+                            value: f.value.clone(),
+                            span: f.span,
+                            restrictive: !f.field,
+                        }),
+                        None => Stmt::Expr(f.value.clone()),
+                    })
+                    .collect();
+                let ids = self.compile_scope_statements(&stmts);
+                self.scopes.truncate(scope_len);
+                let any_pub = fields.iter().any(|f| f.public);
+                let mut emitted = Vec::with_capacity(fields.len());
+                for (f, id) in fields.iter().zip(ids) {
+                    // A `let` local is never a struct field; when any field is
+                    // `pub`, only the `pub` fields are emitted.
+                    if !f.field || (any_pub && !f.public) {
+                        continue;
+                    }
+                    let name = f.name.as_deref().map(|n| self.intern_str(n));
+                    emitted.push((name, id));
+                }
+                let field_ids: Vec<ExprId> = emitted.iter().map(|(_, v)| *v).collect();
+                let names: Vec<Option<&'static str>> =
+                    emitted.iter().map(|(n, _)| *n).collect();
+                let value = self.ir.alloc_tuple(&field_ids, Some(*span));
+                self.ir.alloc_record(value, &names, Some(*span))
             }
     }
     }

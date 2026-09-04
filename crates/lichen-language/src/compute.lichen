@@ -1,0 +1,4 @@
+{
+  jit = f => $jit(f)
+  launch = k => a => $launch(k, a)
+}

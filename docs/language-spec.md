@@ -56,10 +56,13 @@ primary  := int_literal
           | '(' expr (sep expr)* sep? ')'           -- tuple  (TypeTuple in type position)
           | '[' element (sep element)* ']'          -- array literal
           | 'table' '{' pair (sep pair)* '}'        -- constant table literal
-          | '{' (stmt sep)* expr '}'                -- block: scoped statements, then the block's value
+          | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
           | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
           | 'if' expr 'then' expr 'else' expr       -- conditional
+block    := (bstmt sep)* ['return' expr]            -- statements + an explicit tail (`return` anywhere)
+          | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
+bstmt    := ['pub'] stmt                            -- a block statement (`pub` marks one as a struct field)
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '<' expr '>'                     -- array type  T<e>
                  | '{' expr '}'                     -- table lookup  t{k}
@@ -73,7 +76,8 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `table`, `let`, `if`, `then`, `else`,
-  `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`, `~`, `!`, and the
+  `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`,
+  `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
   it may reference and recurse with the block's other bindings) and gets the
@@ -242,6 +246,16 @@ span back to the original file.
   IR, so a bound lambda inside a block stays polymorphic and a block never
   monomorphizes its contents.  `{}` (no final expression) is a parse error,
   like a program without one.
+  The block's value is its **tail expression**.  A trailing expression (a bare
+  statement whose next token is the `}`) is the tail; an explicit `return
+  expr` anywhere in the block is also the tail, so a value can be pinned
+  before or among the statements (`{ a = 1; return 2 }`).  A block whose last
+  statement is a binding (and with no `return` anywhere) has **no tail**, and
+  instead parses as a **struct-returning block**: its value is an anonymous
+  struct instance whose fields are the block's statements — a `name = value`
+  binding is a named field, a bare expression a positional one, a `let`
+  binding is a block-local and never a field, and a `pub`-marked statement is
+  a field (when any statement is `pub`, only the `pub` ones are).
 - **Every lambda is automatically let-polymorphic.**  Each application
   instantiates the parameter fresh — the lowlevel apply machinery clones the
   parameter per call site — so `(x => x) 5 : Int` and `(x => x) Type : Type`
@@ -349,6 +363,8 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `[e1, …, en]` | `Array(range)` |
 | `T<e>` | `TypeArray { element_type, length }` |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
+| `{ x = 1; …; y = 2 }` (no tail) | `RecordBlock { fields }` — a struct-returning block; each field carries an optional name, its value, a `pub` mark, and a `field` flag (false for a `let` local) |
+| `{ …; return e }` | `Block { statements, expr: e }` — the `return` expression is the block's tail |
 
 There is no desugar step: bindings are graph sharing, and a block-wide
 binding reserves a placeholder id, compiles its value, then fills the id with
