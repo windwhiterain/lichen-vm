@@ -159,8 +159,9 @@ where
         if self.path.contains(&node) {
             return "…".to_string();
         }
-        let value = self.module.nodes[node]
-            .value
+        let value = self
+            .module
+            .node_value(AnyNodeId::Dynamic(node))
             .unwrap_or_else(|| P::Value::from(LowValue::None));
         if matches!(
             value.as_enum(),
@@ -238,8 +239,10 @@ where
         // A bare struct kind `[id, [TypeStruct, K]]` (a struct type pair's
         // type slot): render its tag `TypeStruct`.
         if is_struct_kind(self.module, node)
-            && let Some(LowValue::Array(kind)) =
-                self.module.nodes[node].value.and_then(|v| v.as_enum())
+            && let Some(LowValue::Array(kind)) = self
+                .module
+                .node_value(AnyNodeId::Dynamic(node))
+                .and_then(|v| v.as_enum())
             && let Some(LowValue::Array(inner)) = self
                 .module
                 .node_value(kind.items()[1].node)
@@ -771,8 +774,9 @@ where
                 }
                 self.path.push(id);
                 self.tpath.push(ty);
-                let value = self.module.nodes[id]
-                    .value
+                let value = self
+                    .module
+                    .node_value(AnyNodeId::Dynamic(id))
                     .unwrap_or_else(|| P::Value::from(LowValue::None));
                 let out = self.value(value, ty);
                 self.tpath.pop();
@@ -885,9 +889,7 @@ where
     P::Value: ValueType,
 {
     module
-        .nodes
-        .get(node)
-        .and_then(|n| n.value)
+        .node_value(AnyNodeId::Dynamic(node))
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
             LowValue::Array(kind) => kind_is_struct(module, kind.items()),
@@ -900,7 +902,7 @@ where
     P::Value: ValueType,
 {
     let rep = representative(module, node);
-    matches!(module.nodes[node].value, Some(value)
+    matches!(module.node_value(AnyNodeId::Dynamic(node)), Some(value)
     if matches!(value.as_enum(), Some(LowValue::Array(array))
         if array.items().iter().any(|item| match item.node {
             AnyNodeId::Dynamic(item) => representative(module, item) == rep,

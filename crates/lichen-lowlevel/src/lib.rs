@@ -508,7 +508,14 @@ pub struct EvaluatedDeep {
 
 #[derive(Debug)]
 pub struct Node<P: Program> {
-    pub value: Option<P::Value>,
+    /// The node's value — **private**.  Read through [`Module::node_value`]
+    /// (the node's own slot) or [`Module::class_value`] (through the class
+    /// representative); written only through the controlled
+    /// [`Module::write_node_value`] API, which maintains the class-consistency
+    /// invariant (a concrete value replicates to the class's unbound
+    /// pure-cell members).  External crates must never touch the field
+    /// directly.
+    value: Option<P::Value>,
     pub operation: Option<Operation<P>>,
     /// The function whose body owns this node — the template membership
     /// back-pointer ([`None`] for top-level and runtime-created nodes whose

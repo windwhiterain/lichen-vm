@@ -30,9 +30,9 @@ fn recursive_function_applies_itself_lazily() {
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
     assert_eq!(m.equality_representative(ids[0]), rep_five);
-    assert!(matches!(m.nodes[ids[0]].value, Some(TestValue::U128(_))));
+    assert!(matches!(m.node_value(AnyNodeId::Dynamic(ids[0])), Some(TestValue::U128(_))));
     let c1 = ids[1];
-    assert!(m.nodes[c1].value.is_none()); // unevaluated until forced
+    assert!(m.node_value(AnyNodeId::Dynamic(c1)).is_none()); // unevaluated until forced
     assert!(matches!(
         m.nodes[c1].operation,
         Some(Operation {
@@ -41,7 +41,7 @@ fn recursive_function_applies_itself_lazily() {
         })
     ));
     let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -53,7 +53,7 @@ fn recursive_function_applies_itself_lazily() {
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -61,14 +61,14 @@ fn recursive_function_applies_itself_lazily() {
     let ids2 = array_ids(level2);
     assert_eq!(ids2.len(), 2);
     assert_eq!(m.equality_representative(ids2[0]), rep_five);
-    assert!(m.nodes[ids2[1]].value.is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(ids2[1])).is_none());
 
     // The recursion never cloned the function: the same template recursed
     // three times, referenced in place.
     assert_eq!(m.functions.len(), 1);
     assert_eq!(m.functions[f_id].block, m.nodes[f_node].block);
     assert!(matches!(
-        m.nodes[f_node].value,
+        m.node_value(AnyNodeId::Dynamic(f_node)),
         Some(TestValue::LowValue(LowValue::Function(_)))
     ));
 }
@@ -93,8 +93,8 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     let c1 = ids[1];
 
     let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
-    let cloned = dyn_function(m.nodes[operand_ids[0]].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let cloned = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_ne!(cloned, f_id);
     assert_eq!(m.functions[cloned].block, root);
     assert_eq!(m.functions[cloned].nodes.len(), 5);
@@ -106,8 +106,8 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     let c2 = ids1[1];
     assert_ne!(c2, c1);
     let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
-    let cloned2 = dyn_function(m.nodes[operand_ids[0]].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
+    let cloned2 = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_ne!(cloned2, cloned);
     assert_eq!(m.functions.len(), 3); // the original plus one clone per level
 }
@@ -129,7 +129,7 @@ fn mutually_recursive_functions_call_each_other() {
     assert_eq!(m.equality_representative(ids[0]), rep_five);
     let g_app = ids[1];
     let ops = m.nodes[g_app].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], g_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
 
@@ -141,7 +141,7 @@ fn mutually_recursive_functions_call_each_other() {
     let f_app = ids[1];
     assert_ne!(f_app, g_app);
     let ops = m.nodes[f_app].operation.unwrap().operand.unwrap();
-    let operand_ids = array_ids(m.nodes[ops].value.unwrap());
+    let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
     assert_eq!(m.functions.len(), 2); // cross-references stay in place
@@ -356,12 +356,18 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
         ],
     );
     m.blocks[body].functions.extend([even, odd]);
-    m.nodes[e_func].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(even),
-    )));
-    m.nodes[o_func].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(odd),
-    )));
+    m.write_node_value(
+        e_func,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(even),
+        ))),
+    );
+    m.write_node_value(
+        o_func,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(odd),
+        ))),
+    );
 
     // Both bodies are definable: a marker condition keeps the Index arm
     // lazy, so the cross-call is never forced.

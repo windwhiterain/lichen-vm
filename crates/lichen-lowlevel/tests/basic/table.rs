@@ -108,7 +108,7 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     let t = table_value(&mut m, root, &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))]);
 
     // The entry never made it into the payload.
-    let TestValue::LowValue(LowValue::Table(payload)) = m.nodes[t].value.unwrap() else {
+    let TestValue::LowValue(LowValue::Table(payload)) = m.node_value(AnyNodeId::Dynamic(t)).unwrap() else {
         panic!("the table value")
     };
     assert_eq!(payload.items().len(), 0, "the unbound entry is dropped");
@@ -137,9 +137,12 @@ fn cyclic_keys_hash_and_compare_equal() {
             ArrayItem::new(AnyNodeId::Dynamic(one)),
             ArrayItem::new(AnyNodeId::Dynamic(node)),
         ];
-        m.nodes[node].value = Some(TestValue::LowValue(LowValue::Array(
-            m.alloc_array(&items, root),
-        )));
+        m.write_node_value(
+            node,
+            Some(TestValue::LowValue(LowValue::Array(
+                m.alloc_array(&items, root),
+            ))),
+        );
         node
     };
     let key1 = mk_cycle(&mut m);
@@ -199,7 +202,7 @@ fn table_values_stay_lazy_until_read() {
     );
 
     assert!(
-        m.nodes[lazy_value].value.is_none(),
+        m.node_value(AnyNodeId::Dynamic(lazy_value)).is_none(),
         "the value stays lazy until the read"
     );
     let get = table_get(&mut m, root, t, key);
@@ -226,7 +229,7 @@ fn the_payload_is_stored_sorted_by_hash() {
         ],
     );
 
-    let TestValue::LowValue(LowValue::Table(payload)) = m.nodes[t].value.unwrap() else {
+    let TestValue::LowValue(LowValue::Table(payload)) = m.node_value(AnyNodeId::Dynamic(t)).unwrap() else {
         panic!("the table value")
     };
     let items = payload.items();

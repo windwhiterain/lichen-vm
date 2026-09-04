@@ -371,7 +371,7 @@ fn assert_u128_array(m: &Module<TestProgram>, value: TestValue, expected: &[u128
     let ids = array_ids(value);
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected) {
-        assert_eq!(u128_of(m.nodes[id].value.unwrap()), n);
+        assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(id)).unwrap()), n);
     }
 }
 
@@ -396,7 +396,7 @@ fn wrap_function_asserts(
 ) -> (NodeId, FunctionId) {
     let nodes = m.blocks[block].nodes.clone();
     let func_node = m.add_function(block, ret, param, nodes, asserts);
-    let TestValue::LowValue(LowValue::Function(func)) = m.nodes[func_node].value.unwrap() else {
+    let TestValue::LowValue(LowValue::Function(func)) = m.node_value(AnyNodeId::Dynamic(func_node)).unwrap() else {
         unreachable!("add_function always wraps a function value")
     };
     let AnyFunctionId::Dynamic(func) = func else {
@@ -479,9 +479,12 @@ fn finish_function(
     });
     tag_scope(m, function, nodes);
     m.blocks[block].functions.push(function);
-    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(function),
-    )));
+    m.write_node_value(
+        func_node,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(function),
+        ))),
+    );
     function
 }
 
@@ -518,9 +521,12 @@ fn recursive_function(m: &mut Module<TestProgram>) -> (NodeId, FunctionId) {
     });
     tag_scope(m, function, vec![param, func_node, operands, apply, ret]);
     m.blocks[body].functions.push(function);
-    m.nodes[func_node].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(function),
-    )));
+    m.write_node_value(
+        func_node,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(function),
+        ))),
+    );
     (func_node, function)
 }
 
@@ -580,12 +586,18 @@ fn mutually_recursive_functions(m: &mut Module<TestProgram>) -> (NodeId, NodeId)
     });
     tag_scope(m, g, vec![g_param, g_func, g_ops, g_apply, g_ret]);
     m.blocks[body].functions.extend([f, g]);
-    m.nodes[f_func].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(f),
-    )));
-    m.nodes[g_func].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(g),
-    )));
+    m.write_node_value(
+        f_func,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(f),
+        ))),
+    );
+    m.write_node_value(
+        g_func,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(g),
+        ))),
+    );
     (f_func, g_func)
 }
 

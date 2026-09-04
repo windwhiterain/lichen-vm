@@ -134,7 +134,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
     assert!(matches!(
-        m.nodes[ids[1]].value,
+        m.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(HighProgramValue::LowValue(LowValue::USize(1)))
     ));
 
@@ -145,7 +145,7 @@ fn dependent_type_resolves_per_argument_via_laziness() {
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
     assert!(matches!(
-        m.nodes[ids[1]].value,
+        m.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(HighProgramValue::LowValue(LowValue::USize(0)))
     ));
 }
@@ -230,7 +230,7 @@ fn a_resolvable_computation_is_forced_and_compared() {
         m.equality_representative(pick_five)
     );
     assert!(matches!(
-        m.nodes[pick_five].value,
+        m.node_value(AnyNodeId::Dynamic(pick_five)),
         Some(HighProgramValue::LowValue(LowValue::USize(5)))
     ));
 }
@@ -259,7 +259,7 @@ fn a_resolvable_index_read_pins_its_element() {
         "the read aliased the element"
     );
     assert!(matches!(
-        m.nodes[read].value,
+        m.node_value(AnyNodeId::Dynamic(read)),
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert!(
@@ -298,11 +298,11 @@ fn two_resolvable_computations_are_compared_after_forcing() {
     );
     // each kept its own computed value — neither was erased onto the other
     assert!(matches!(
-        m.nodes[pick5].value,
+        m.node_value(AnyNodeId::Dynamic(pick5)),
         Some(HighProgramValue::LowValue(LowValue::USize(5)))
     ));
     assert!(matches!(
-        m.nodes[pick4].value,
+        m.node_value(AnyNodeId::Dynamic(pick4)),
         Some(HighProgramValue::LowValue(LowValue::USize(4)))
     ));
 

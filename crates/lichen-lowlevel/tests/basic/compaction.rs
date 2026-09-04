@@ -105,9 +105,9 @@ fn nested_array_return_relocates_data_twice() {
     // all node ids survive unchanged.
     let ids = array_ids(value);
     assert_eq!(ids.len(), 1);
-    let ids = array_ids(m.nodes[ids[0]].value.unwrap());
+    let ids = array_ids(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap());
     assert_eq!(ids.len(), 1);
-    assert_eq!(u128_of(m.nodes[ids[0]].value.unwrap()), 7);
+    assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()), 7);
     assert_eq!(m.nodes.len(), 4); // root_node + outer_ret + inner_ret + c
     assert!(m.nodes.contains_key(c));
 }
@@ -130,7 +130,7 @@ fn compact_preserves_the_shallow_mask() {
     assert_eq!(array_mask(value), [false, true]);
 
     m.garbage_collect(ret);
-    let value = m.nodes[ret].value.unwrap();
+    let value = m.node_value(AnyNodeId::Dynamic(ret)).unwrap();
     assert_eq!(
         array_mask(value),
         [false, true],
@@ -139,7 +139,7 @@ fn compact_preserves_the_shallow_mask() {
     assert_eq!(array_ids(value).len(), 2);
     assert_eq!(m.nodes[ret].block, root, "compacted into the parent");
     assert!(
-        m.nodes[array_ids(value)[1]].value.is_none(),
+        m.node_value(AnyNodeId::Dynamic(array_ids(value)[1])).is_none(),
         "shallow element stays lazy"
     );
 }
@@ -197,7 +197,7 @@ fn deep_never_run_block_chain_releases_stack_safely() {
     // Running first releases its whole never-run subtree, 100_000 blocks deep.
     m.evaluate_node_deep(x, Some(top));
 
-    assert_eq!(u128_of(m.nodes[x].value.unwrap()), 1);
+    assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(x)).unwrap()), 1);
     assert_eq!(m.nodes.len(), 1); // only x survived, moved to top
     assert!(m.blocks.contains_key(top));
     assert!(!m.blocks.contains_key(first));
@@ -333,7 +333,7 @@ fn garbage_collect_hoists_unevaluated_scalar_operand() {
     // the vacated subtree; only the orphan, which no edge reaches, dies.
     assert!(m.garbage_collect(ret).is_none());
     assert_eq!(m.nodes[ret].block, root);
-    assert!(m.nodes[ret].value.is_none());
+    assert!(m.node_value(AnyNodeId::Dynamic(ret)).is_none());
     assert_eq!(m.nodes[x].block, root); // operand hoisted, not dropped
     assert!(!m.blocks.contains_key(child));
     assert!(!m.blocks.contains_key(grandchild));

@@ -92,9 +92,12 @@ fn static_apply_bakes_constants_in_place() {
         Some(TestValue::LowValue(LowValue::Parameterized)),
     );
     let forty_two = u128_node(&mut m, body, 42);
-    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
-        m.alloc_array(&[item(param), item(forty_two)], body),
-    )));
+    m.write_node_value(
+        ret,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&[item(param), item(forty_two)], body),
+        ))),
+    );
     let (func_node, _) = wrap_function(&mut m, body, ret, param);
     m.evaluate_node_deep(ret, None);
     let mut imp = Module::new();
@@ -219,9 +222,12 @@ fn registry_resolves_artifacts_by_device_key() {
         Some(TestValue::LowValue(LowValue::Parameterized)),
     );
     let seven = u128_node(&mut m, body, 7);
-    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
-        m.alloc_array(&[item(param), item(seven)], body),
-    )));
+    m.write_node_value(
+        ret,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&[item(param), item(seven)], body),
+        ))),
+    );
     let (func_node, _) = wrap_function(&mut m, body, ret, param);
     m.evaluate_node_deep(ret, None);
 
@@ -406,9 +412,12 @@ fn static_assert_rechecks_per_call() {
     let eq_ops = array_node(&mut m, body, &[param, one], None);
     let condition = op_node(&mut m, body, TestOperator::Eq, Some(eq_ops));
     m.add_assert(condition);
-    m.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
-        m.alloc_array(&[item(param)], body),
-    )));
+    m.write_node_value(
+        ret,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&[item(param)], body),
+        ))),
+    );
     let (func_node, _) = wrap_function_asserts(&mut m, body, ret, param, [condition]);
     m.evaluate_node_deep(ret, None);
     let mut imp = Module::new();
@@ -502,10 +511,13 @@ fn static_closure_value_applies_from_dynamic_context() {
         Some(TestValue::LowValue(LowValue::Parameterized)),
     );
     let g_value = m.add_node(f_body, None, None); // placeholder: g's value node
-    m.nodes[g_value].value = m.nodes[g_func_node].value;
-    m.nodes[f_ret].value = Some(TestValue::LowValue(LowValue::Array(
-        m.alloc_array(&[item(f_param), item(g_value)], f_body),
-    )));
+    m.write_node_value(g_value, m.node_value(AnyNodeId::Dynamic(g_func_node)));
+    m.write_node_value(
+        f_ret,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&[item(f_param), item(g_value)], f_body),
+        ))),
+    );
     let (f_func_node, _) = wrap_function(&mut m, f_body, f_ret, f_param);
     // Solve both bodies.
     m.evaluate_node_deep(g_add, None);
@@ -541,7 +553,7 @@ fn from_module_dedupes_shared_payloads() {
     let block = m.add_block(None);
     let a = u128_node(&mut m, block, 42);
     let b = m.add_node(block, None, None);
-    m.nodes[b].value = m.nodes[a].value; // the same handle
+    m.write_node_value(b, m.node_value(AnyNodeId::Dynamic(a))); // the same handle
     let mut imp = Module::new();
     let _root = imp.add_block(None);
     let key = freeze(&mut imp, &m, 1);
@@ -600,8 +612,8 @@ fn static_array_cache_survives_block_release_verbatim() {
     imp.evaluate_node_deep(inner, None);
 
     // The Index node's cached value is the module's own [3,4] payload.
-    let cached = imp.nodes[inner]
-        .value
+    let cached = imp
+        .node_value(AnyNodeId::Dynamic(inner))
         .expect("the index cached the element");
     let TestValue::LowValue(LowValue::Array(AnyHandle::Static(_))) = cached else {
         panic!("the cached element must be the module's own static payload")
@@ -615,8 +627,8 @@ fn static_array_cache_survives_block_release_verbatim() {
         !imp.blocks.contains_key(child),
         "the child block was released"
     );
-    let moved = imp.nodes[inner]
-        .value
+    let moved = imp
+        .node_value(AnyNodeId::Dynamic(inner))
         .expect("the value survived compaction");
     let TestValue::LowValue(LowValue::Array(AnyHandle::Static(_))) = moved else {
         panic!("compaction must keep a static payload verbatim")
@@ -814,12 +826,15 @@ fn static_apply_keeps_foreign_items_in_place() {
         Some(TestValue::LowValue(LowValue::Parameterized)),
     );
     let ret = b.add_node(body, None, None);
-    b.nodes[ret].value = Some(TestValue::LowValue(LowValue::Array(
-        b.alloc_array(
-            &[item(param), ArrayItem::new(AnyNodeId::Static(arr_sref))],
-            body,
-        ),
-    )));
+    b.write_node_value(
+        ret,
+        Some(TestValue::LowValue(LowValue::Array(
+            b.alloc_array(
+                &[item(param), ArrayItem::new(AnyNodeId::Static(arr_sref))],
+                body,
+            ),
+        ))),
+    );
     let (func_node, _) = wrap_function(&mut b, body, ret, param);
     b.evaluate_node_deep(ret, None);
     let freeze_b = registry.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);

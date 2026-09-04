@@ -115,7 +115,7 @@ fn unbound_binds_to_the_other_side() {
     let rep = m.unify(x, one);
     assert!(m.unify_errors.is_empty());
     assert!(matches!(
-        m.nodes[rep].value,
+        m.node_value(AnyNodeId::Dynamic(rep)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert_eq!(m.equality_representative(x), m.equality_representative(one));
@@ -135,7 +135,7 @@ fn two_unbound_nodes_unify_into_one_class() {
     assert_eq!(m.equality_representative(t), rep);
     assert_eq!(m.equality_representative(b), rep);
     // still unbound: the class carries no value yet
-    assert!(is_unbound_value(m.nodes[rep].value));
+    assert!(is_unbound_value(m.node_value(AnyNodeId::Dynamic(rep))));
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn binding_one_member_binds_the_whole_class() {
     assert!(m.unify_errors.is_empty());
     let rep = m.equality_representative(b);
     assert!(matches!(
-        m.nodes[rep].value,
+        m.node_value(AnyNodeId::Dynamic(rep)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     // ...so the second field's instantiation with float conflicts
@@ -267,11 +267,11 @@ fn arrays_unify_elementwise() {
     let rep_x = m.equality_representative(x);
     let rep_y = m.equality_representative(y);
     assert!(matches!(
-        m.nodes[rep_x].value,
+        m.node_value(AnyNodeId::Dynamic(rep_x)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[rep_y].value,
+        m.node_value(AnyNodeId::Dynamic(rep_y)),
         Some(TestValue::LowValue(LowValue::USize(2)))
     ));
     assert_eq!(
@@ -323,7 +323,7 @@ fn array_element_conflict_records_an_error_without_merging_the_arrays() {
     // the non-conflicting element still bound
     let rep_x = m.equality_representative(x);
     assert!(matches!(
-        m.nodes[rep_x].value,
+        m.node_value(AnyNodeId::Dynamic(rep_x)),
         Some(TestValue::LowValue(LowValue::USize(2)))
     ));
 }
@@ -335,7 +335,7 @@ fn same_function_value_merges() {
     let param = unbound_node(&mut m, block);
     let ret = usize_node(&mut m, block, 1);
     let f = m.add_function(block, ret, param, [ret, param], []);
-    let fid = dyn_function(m.nodes[f].value.unwrap());
+    let fid = dyn_function(m.node_value(AnyNodeId::Dynamic(f)).unwrap());
     let alias = m.add_node(
         block,
         None,
@@ -374,10 +374,10 @@ fn mutually_self_referential_arrays_record_an_error_instead_of_looping() {
     let b = unbound_node(&mut m, block);
     let arr_a = array_node(&mut m, block, &[a], None);
     let arr_b = array_node(&mut m, block, &[b], None);
-    let val_a = m.nodes[arr_a].value;
-    let val_b = m.nodes[arr_b].value;
-    m.nodes[a].value = val_a;
-    m.nodes[b].value = val_b;
+    let val_a = m.node_value(AnyNodeId::Dynamic(arr_a));
+    let val_b = m.node_value(AnyNodeId::Dynamic(arr_b));
+    m.write_node_value(a, val_a);
+    m.write_node_value(b, val_b);
     m.unify(a, b);
     assert_eq!(m.unify_errors.len(), 1);
     assert_ne!(m.equality_representative(a), m.equality_representative(b));
@@ -424,19 +424,19 @@ fn binding_reaches_every_member_of_the_class() {
     assert!(m.unify_errors.is_empty());
     // every member's own slot carries the binding, not just the rep's
     assert!(matches!(
-        m.nodes[a].value,
+        m.node_value(AnyNodeId::Dynamic(a)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[b].value,
+        m.node_value(AnyNodeId::Dynamic(b)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[t].value,
+        m.node_value(AnyNodeId::Dynamic(t)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[int].value,
+        m.node_value(AnyNodeId::Dynamic(int)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
 }
@@ -453,15 +453,15 @@ fn a_newcomer_joining_a_bound_class_carries_the_value() {
     m.unify(a, b); // an unbound node joins the bound class
     assert!(m.unify_errors.is_empty());
     assert!(matches!(
-        m.nodes[a].value,
+        m.node_value(AnyNodeId::Dynamic(a)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[b].value,
+        m.node_value(AnyNodeId::Dynamic(b)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[int].value,
+        m.node_value(AnyNodeId::Dynamic(int)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
 }
@@ -484,7 +484,7 @@ fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     m.unify(x, int);
     assert!(m.unify_errors.is_empty());
     assert!(matches!(
-        m.nodes[y].value,
+        m.node_value(AnyNodeId::Dynamic(y)),
         Some(TestValue::LowValue(LowValue::USize(7)))
     ));
 
@@ -494,7 +494,7 @@ fn garbage_collecting_a_block_splices_its_members_out_of_the_class() {
     let rep = m.equality_representative(x);
     assert_eq!(m.equality_representative(int), rep);
     assert!(matches!(
-        m.nodes[rep].value,
+        m.node_value(AnyNodeId::Dynamic(rep)),
         Some(TestValue::LowValue(LowValue::USize(7)))
     ));
     // the member list holds exactly the two survivors, in join order
@@ -529,7 +529,7 @@ fn garbage_collect_re_elects_a_representative_when_the_old_one_dies() {
     assert_eq!(m.equality_representative(int), rep);
     assert_ne!(rep, y1);
     assert!(matches!(
-        m.nodes[rep].value,
+        m.node_value(AnyNodeId::Dynamic(rep)),
         Some(TestValue::LowValue(LowValue::USize(7)))
     ));
     let members: Vec<_> = disjoint::members(&m.nodes, rep).collect();
@@ -595,11 +595,11 @@ fn apply_unifies_array_parameters_elementwise() {
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2);
     assert!(matches!(
-        m.nodes[ids[0]].value,
+        m.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
     assert!(matches!(
-        m.nodes[ids[1]].value,
+        m.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(TestValue::LowValue(LowValue::USize(2)))
     ));
 }
@@ -650,7 +650,7 @@ fn apply_unify_binds_an_unbound_argument_into_the_param_class() {
     assert!(m.unify_errors.is_empty());
     // the argument node itself now carries the parameter's value
     assert!(matches!(
-        m.nodes[unbound].value,
+        m.node_value(AnyNodeId::Dynamic(unbound)),
         Some(TestValue::LowValue(LowValue::USize(1)))
     ));
 }

@@ -78,7 +78,7 @@ fn assert_on_an_unbound_condition_is_not_triggered() {
     );
     assert!(
         matches!(
-            m.nodes[x].value,
+            m.node_value(AnyNodeId::Dynamic(x)),
             Some(TestValue::LowValue(LowValue::Parameterized))
         ),
         "the unbound cell was not bound by the assert"
@@ -99,7 +99,7 @@ fn applied_equality_assert(arg: usize) -> Module<TestProgram> {
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
         m.add_assert(eq);
         let pair = array_node(m, block, &[eq, one], None);
-        m.nodes[ret].value = Some(m.nodes[pair].value.unwrap());
+        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(pair)).unwrap()));
     });
     let arg = u128_node(&mut m, root, arg as u128);
     let call = call_node(&mut m, root, func_node, arg);
@@ -146,7 +146,7 @@ fn never_called_function_assert_stays_pending() {
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
         m.add_assert(eq);
         let pair = array_node(m, block, &[eq, one], None);
-        m.nodes[ret].value = Some(m.nodes[pair].value.unwrap());
+        m.write_node_value(ret, Some(m.node_value(AnyNodeId::Dynamic(pair)).unwrap()));
     });
     // The function value is proven concrete (referenced, never applied).
     m.evaluate_node_deep(func_node, None);
@@ -217,7 +217,7 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
     // Later unification binds through the cell's class (outside the drain;
     // here we bind directly), so the next drain resolves it.
     let p = m.blocks[root].arena.alloc(1u128);
-    m.nodes[x].value = Some(TestValue::U128(dyn_handle(p as *const u128)));
+    m.write_node_value(x, Some(TestValue::U128(dyn_handle(p as *const u128))));
 
     m.check_asserts();
 
@@ -334,9 +334,12 @@ fn gc_moves_an_assert_condition_with_its_function() {
     });
     tag_scope(&mut m, function, nodes);
     m.blocks[body].functions.push(function);
-    m.nodes[func_placeholder].value = Some(TestValue::LowValue(LowValue::Function(
-        AnyFunctionId::Dynamic(function),
-    )));
+    m.write_node_value(
+        func_placeholder,
+        Some(TestValue::LowValue(LowValue::Function(
+            AnyFunctionId::Dynamic(function),
+        ))),
+    );
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(func_placeholder));
 
     m.evaluate_node_deep(root_node, None);

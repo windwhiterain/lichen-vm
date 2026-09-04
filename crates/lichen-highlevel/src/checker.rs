@@ -32,7 +32,6 @@ use lichen_lowlevel::{
     Module, NodeId, Operation, Registry, UnifyError,
 };
 
-use lichen_utils::disjoint::Node as _;
 use lichen_utils::extend::AsEnum;
 
 use crate::attr::AttrExt;
@@ -448,9 +447,12 @@ where
             ArrayItem::new(AnyNodeId::Dynamic(self.type_marker)),
             ArrayItem::new(AnyNodeId::Dynamic(universe)),
         ];
-        self.module.nodes[universe].value = Some(P::Value::from(LowValue::Array(
-            self.module.alloc_array(&items, root),
-        )));
+        self.module.write_node_value(
+            universe,
+            Some(P::Value::from(LowValue::Array(
+                self.module.alloc_array(&items, root),
+            ))),
+        );
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
     }
@@ -658,11 +660,7 @@ where
     /// [`AttrExt::is_subtype`] uses this to compare two slot values after a
     /// failed equality unify.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
-        let mut root = node;
-        while let Some(parent) = self.module.nodes[root].meta().parent {
-            root = parent;
-        }
-        self.module.nodes[root].value
+        self.module.class_value(node)
     }
 
     /// The canonical universe node `[Type, ↺]` (`Type : Type`) — the kind slip a
@@ -1241,9 +1239,12 @@ where
         if !self.module.functions[function].nodes.contains(&ret) {
             self.module.functions[function].nodes.push(ret);
         }
-        self.module.nodes[func_node].value = Some(P::Value::from(LowValue::Function(
-            AnyFunctionId::Dynamic(function),
-        )));
+        self.module.write_node_value(
+            func_node,
+            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
+                function,
+            )))),
+        );
         self.recursive_func_nodes.push(func_node);
         // The function's own type: the arrow shape `[parameter type, return
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
@@ -1299,12 +1300,15 @@ where
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
         let function_ty = self.ty[function].unwrap();
-        let concrete = self.module.nodes[function_ty].value.is_some_and(|value| {
-            matches!(
-                value.as_enum(),
-                None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-            )
-        });
+        let concrete = self
+            .module
+            .node_value(AnyNodeId::Dynamic(function_ty))
+            .is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+                )
+            });
         if concrete && !self.is_function_type(function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
@@ -1492,12 +1496,15 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.ty[container].unwrap();
-        let concrete = self.module.nodes[container_ty].value.is_some_and(|value| {
-            matches!(
-                value.as_enum(),
-                None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-            )
-        });
+        let concrete = self
+            .module
+            .node_value(AnyNodeId::Dynamic(container_ty))
+            .is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+                )
+            });
         if concrete && !self.is_positional_type(container_ty) {
             let error_index = self.module.unify_errors.len();
             self.module.unify_errors.push(UnifyError {
@@ -1506,8 +1513,8 @@ where
                 steps: Vec::new(),
                 a: container_ty,
                 b: container_ty,
-                value_a: self.module.nodes[container_ty].value,
-                value_b: self.module.nodes[container_ty].value,
+                value_a: self.module.node_value(AnyNodeId::Dynamic(container_ty)),
+                value_b: self.module.node_value(AnyNodeId::Dynamic(container_ty)),
             });
             self.diary.push(DiaryEntry {
                 error_index,

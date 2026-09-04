@@ -57,10 +57,12 @@ impl<P: Program> Module<P> {
 
     /// The raw value behind `id` — no evaluation.  A static ref reads its
     /// solved value (which may be `Parameterized`); refs are absolute, so
-    /// the raw value is safe to store anywhere.
+    /// the raw value is safe to store anywhere.  A dynamic ref that names a
+    /// released node reads `None` (via `SlotMap::get`), so the read API is
+    /// safe for a node the executor may have dropped.
     pub fn node_value(&self, id: AnyNodeId) -> Option<P::Value> {
         match id {
-            Dyn(node) => self.nodes[node].value,
+            Dyn(node) => self.nodes.get(node).and_then(|node| node.value),
             AnyNodeId::Static(sref) => {
                 self.static_module(sref.module).nodes[sref.index.index].value
             }
@@ -191,7 +193,8 @@ impl<P: Program> Module<P> {
             });
             if operation.is_none() {
                 let value = ctx.module.read(local);
-                self.nodes[clone].value = Some(self.static_remap_value(value, ctx));
+                let value = self.static_remap_value(value, ctx);
+                self.write_node_value(clone, Some(value));
             }
             self.nodes[clone].operation = operation;
         } else {
@@ -200,7 +203,8 @@ impl<P: Program> Module<P> {
             // made one; untouched items stay inline absolute static refs.
             // The residual operation (if any) is dead — the value is final.
             let value = ctx.module.read(local);
-            self.nodes[clone].value = Some(self.static_remap_value(value, ctx));
+            let value = self.static_remap_value(value, ctx);
+            self.write_node_value(clone, Some(value));
         }
         clone
     }

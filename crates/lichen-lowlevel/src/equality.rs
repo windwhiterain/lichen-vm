@@ -64,6 +64,48 @@ impl<P: Program> Module<P> {
         disjoint::find(&mut self.nodes, node)
     }
 
+    /// The class's value, read through its representative — the value the
+    /// unification machinery sees (`bind`/`unify` read the representative's
+    /// slot).  `&self`, no path compression, so a read never mutates the
+    /// union-find tree.
+    pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
+        let mut root = node;
+        while let Some(parent) = self.nodes[root].equality.parent {
+            root = parent;
+        }
+        self.nodes[root].value
+    }
+
+    /// The controlled value-write API: write `value` onto `node`, then — if
+    /// the value is concrete — replicate it to every unbound *pure-cell*
+    /// member of `node`'s class, so a read of any member (or a later
+    /// `bind`/`unify`, which reads the representative's slot) sees it
+    /// regardless of which member resolved it.
+    ///
+    /// This is the single choke-point for value writes: every place a value
+    /// lands on a node that might be a member of a unified class goes through
+    /// here, so the class-consistency invariant (the linked-list replication
+    /// `bind`/`force_pending` perform) is maintained at exactly one site.  A
+    /// `None`/`Parameterized` value only sets the node's own slot — a marker is
+    /// not a fact to propagate.  A singleton class is a no-op (the walk visits
+    /// only the node itself).  Only operation-free (pure) cells are touched,
+    /// matching `force_pending`, so a pending computation is never overridden.
+    pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
+        self.nodes[node].value = value;
+        if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+            let rep = self.equality_representative(node);
+            let mut member = rep;
+            loop {
+                let next = self.nodes[member].meta().next;
+                if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
+                    self.nodes[member].value = Some(value);
+                }
+                let Some(next) = next else { break };
+                member = next;
+            }
+        }
+    }
+
     /// Structurally unify the classes of `a` and `b`.
     ///
     /// Unification is over values: a class holding no value and no pending
@@ -337,18 +379,14 @@ impl<P: Program> Module<P> {
     fn bind(&mut self, ra: NodeId, rb: NodeId, va: Option<P::Value>, vb: Option<P::Value>) {
         let concrete = if is_unbound(va) { vb } else { va };
         let rep = self.add_equality(ra, rb);
-        if let Some(value) = concrete
-            && !is_unbound(Some(value))
-        {
-            let mut member = rep;
-            loop {
-                let next = self.nodes[member].meta().next;
-                if is_unbound(self.nodes[member].value) {
-                    self.nodes[member].value = Some(value);
-                }
-                let Some(next) = next else { break };
-                member = next;
-            }
+        // Route the value through the single write API, which already
+        // replicates a concrete value to the class's unbound pure-cell
+        // members.  Only a *concrete* value is written: an unbound class stays
+        // unbound and keeps its existing marker (`None`/`Parameterized`), so
+        // the merge never flips a `Parameterized` cell to `None` (which reads
+        // as an unevaluated-`operation` panic on a re-read).
+        if let Some(value) = concrete.filter(|v| !is_unbound(Some(*v))) {
+            self.write_node_value(rep, Some(value));
         }
     }
 
@@ -561,7 +599,7 @@ impl<P: Program> Module<P> {
             self.add_equality(op, indexed);
             self.nodes[op].operation = None;
             if self.nodes[op].value.is_none() {
-                self.nodes[op].value = Some(P::Value::from(LowValue::Parameterized));
+                self.write_node_value(op, Some(P::Value::from(LowValue::Parameterized)));
             }
         }
         true
@@ -607,16 +645,10 @@ impl<P: Program> Module<P> {
         if is_unbound(Some(value)) {
             return None;
         }
-        let mut m = rep;
-        loop {
-            if self.nodes[m].operation.is_none() && is_unbound(self.nodes[m].value) {
-                self.nodes[m].value = Some(value);
-            }
-            let Some(next) = self.nodes[m].meta().next else {
-                break;
-            };
-            m = next;
-        }
+        // Route through the single write API: it replicates the value to the
+        // class's unbound pure-cell members (the same set the loop below
+        // visited) and to the representative itself.
+        self.write_node_value(rep, Some(value));
         Some(value)
     }
 

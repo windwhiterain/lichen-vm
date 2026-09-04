@@ -98,10 +98,10 @@ fn the_polymorphic_identity_checks() {
     let value = module.evaluate_node_deep(root, None);
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2, "the tuple has two elements");
-    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
     assert!(
         matches!(
-            module.nodes[ids[1]].value,
+            module.node_value(AnyNodeId::Dynamic(ids[1])),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -119,7 +119,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
-            module.nodes[id].value,
+            module.node_value(AnyNodeId::Dynamic(id)),
             Some(LangValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );
@@ -240,8 +240,8 @@ fn a_binding_used_twice_shares_one_node() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
-    assert_eq!(usize_of(module.nodes[ids[1]].value.as_ref().unwrap()), 5);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 5);
 }
 
 #[test]
@@ -253,10 +253,10 @@ fn a_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
     assert!(
         matches!(
-            module.nodes[ids[1]].value,
+            module.node_value(AnyNodeId::Dynamic(ids[1])),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -339,10 +339,10 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 5);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
     assert!(
         matches!(
-            module.nodes[ids[1]].value,
+            module.node_value(AnyNodeId::Dynamic(ids[1])),
             Some(LangValue::TypeValue(TypeValue::TypeType))
         ),
         "the second element is the Type constant"
@@ -666,7 +666,7 @@ fn a_bound_struct_type_is_reusable() {
     assert_eq!(ids.len(), 2);
     for id in ids {
         assert!(matches!(
-            module.nodes[id].value,
+            module.node_value(AnyNodeId::Dynamic(id)),
             Some(LangValue::LowValue(LowValue::Array(_)))
         ));
     }
@@ -803,9 +803,9 @@ fn a_struct_instance_indexes_its_fields() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.nodes[ids[0]].value.as_ref().unwrap()), 1);
+    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1);
     assert_eq!(
-        module.nodes[ids[1]].value,
+        module.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
         "the second field is the `Int` type constant"
     );

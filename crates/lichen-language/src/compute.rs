@@ -200,7 +200,7 @@ fn emit_node(
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
 
-    if let Some(value) = module.nodes[node].value {
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match value.as_enum() {
             Some(LowValue::USize(n)) => {
                 body.instruction(&Instruction::I64Const(n as i64));
@@ -242,8 +242,8 @@ fn emit_node(
             // The parameter value: `Index(parameter_pair, 0)` → `local.get 0`.
             let (target, index) = operand_pair(module, operation.operand)?;
             if target == param_pair
-                && module.nodes[index]
-                    .value
+                && module
+                    .node_value(AnyNodeId::Dynamic(index))
                     .and_then(|v| v.as_enum())
                     .is_some_and(|v| matches!(v, LowValue::USize(0)))
             {

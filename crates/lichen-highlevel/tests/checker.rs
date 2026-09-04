@@ -177,7 +177,7 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
 fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[NodeId]) -> bool {
     ids.len() == 2
         && matches!(
-            b.module.nodes[ids[0]].value,
+            b.module.node_value(AnyNodeId::Dynamic(ids[0])),
             Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
         )
         && ids[1] == b.type_expr
@@ -212,7 +212,7 @@ fn int_literal_checks() {
     let ids = array_ids(&b, b.ty[five].unwrap());
     assert_eq!(ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
     ));
     assert_eq!(
@@ -246,7 +246,7 @@ fn the_type_universe_is_self_referential() {
     let ids = array_ids(&b, b.type_expr);
     assert_eq!(ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeType))
     ));
     assert_eq!(
@@ -282,7 +282,7 @@ fn lambda_has_arrow_type() {
     let kind_ids = array_ids(&b, ids[1]);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[kind_ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeFunction))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
@@ -341,7 +341,7 @@ fn typed_tuple_is_a_kinded_tuple() {
     let kind_ids = array_ids(&b, ids[1]);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[kind_ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
@@ -362,7 +362,7 @@ fn real_array_type_is_type_and_length() {
     let kind_ids = array_ids(&b, ty);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[kind_ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
@@ -373,7 +373,7 @@ fn real_array_type_is_type_and_length() {
     assert!(is_int_type(&b, shape_ids[0]), "instance[0] is the element type");
     assert!(
         matches!(
-            b.module.nodes[shape_ids[1]].value,
+            b.module.node_value(AnyNodeId::Dynamic(shape_ids[1])),
             Some(HighProgramValue::LowValue(LowValue::USize(3)))
         ),
         "instance[1] is the length"
@@ -465,7 +465,7 @@ fn array_literal_is_homogeneous() {
     );
     assert!(
         matches!(
-            b.module.nodes[shape_ids[1]].value,
+            b.module.node_value(AnyNodeId::Dynamic(shape_ids[1])),
             Some(HighProgramValue::LowValue(LowValue::USize(2)))
         ),
         "instance[1] is the element count"
@@ -473,7 +473,7 @@ fn array_literal_is_homogeneous() {
     let kind_ids = array_ids(&b, ids[1]);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[kind_ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeArray))
     ));
     assert_eq!(kind_ids[1], b.type_expr);
@@ -940,7 +940,8 @@ fn a_tuples_unbound_element_types_sync_from_the_return_types() {
         "element 0's cell syncs to int"
     );
     assert_eq!(
-        b.module.nodes[shape[1]].value, b.module.nodes[b.type_expr].value,
+        b.module.node_value(AnyNodeId::Dynamic(shape[1])),
+        b.module.node_value(AnyNodeId::Dynamic(b.type_expr)),
         "element 1's cell syncs to Type's"
     );
 }
@@ -1048,7 +1049,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     assert_eq!(ids.len(), expected.len());
     for (&id, &n) in ids.iter().zip(expected.iter()) {
         assert_eq!(
-            b.module.nodes[id].value,
+            b.module.node_value(AnyNodeId::Dynamic(id)),
             Some(HighProgramValue::LowValue(LowValue::USize(n))),
             "element {n} must be a bound value, not the leaked parameter"
         );
@@ -1228,14 +1229,14 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
-        b.module.nodes[kind_ids[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(kind_ids[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     let inner = array_ids(&b, kind_ids[1]);
     assert_eq!(inner.len(), 2);
     assert_eq!(inner[1], b.type_expr);
     assert_eq!(
-        b.module.nodes[inner[0]].value,
+        b.module.node_value(AnyNodeId::Dynamic(inner[0])),
         Some(HighProgramValue::TypeValue(TypeValue::TypeStruct))
     );
     // one source occurrence consumed exactly one fresh id
@@ -1261,11 +1262,11 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
     let id1 = array_ids(&b, b.ty[s1].unwrap())[0];
     let id2 = array_ids(&b, b.ty[s2].unwrap())[0];
     assert!(matches!(
-        b.module.nodes[id1].value,
+        b.module.node_value(AnyNodeId::Dynamic(id1)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     assert!(matches!(
-        b.module.nodes[id2].value,
+        b.module.node_value(AnyNodeId::Dynamic(id2)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(1)))
     ));
 }
@@ -1603,7 +1604,7 @@ fn an_underscore_annotation_binds_a_function_type() {
     // The parameter type cell stays unbound.
     let shape_ids = array_ids(&b, shape);
     assert!(
-        lichen_lowlevel::is_unbound(b.module.nodes[shape_ids[0]].value),
+        lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(shape_ids[0]))),
         "the parameter type must not be guessed"
     );
 }
@@ -1650,7 +1651,7 @@ fn an_underscore_in_the_array_length_position() {
     let arr_shape = array_ids(&b, b.ty[arr].unwrap())[0];
     let len3 = array_ids(&b, arr_shape)[1];
     assert!(matches!(
-        b.module.nodes[len3].value,
+        b.module.node_value(AnyNodeId::Dynamic(len3)),
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert_eq!(
@@ -1705,7 +1706,7 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
         panic!("expected a kind expression");
     };
     assert_eq!(
-        b.module.nodes[dyn_node(kind.items()[0].node)].value,
+        b.module.node_value(AnyNodeId::Dynamic(dyn_node(kind.items()[0].node))),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
         "typed like a tuple"
     );
@@ -1737,7 +1738,7 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
     let ids = array_ids(&b, b.val[arr].unwrap());
     assert_eq!(ids.len(), 2);
     assert!(
-        b.module.nodes[ids[1]].value.is_none(),
+        b.module.node_value(AnyNodeId::Dynamic(ids[1])).is_none(),
         "the masked apply never ran in the deep pass"
     );
 }

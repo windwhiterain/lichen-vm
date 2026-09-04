@@ -122,7 +122,7 @@ impl<P: Program> Module<P> {
         match (cell, result.as_enum()) {
             (Some(cell), Some(LowValue::Array(array))) if array.items().len() >= 2 => {
                 let items = array.items();
-                self.nodes[node].value = Some(result);
+                self.write_node_value(node, Some(result));
                 self.unify(node, applied);
                 // Resolve the return type before binding the cell: the deep
                 // pass resolves the node later but does not replicate to

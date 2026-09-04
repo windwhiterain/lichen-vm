@@ -124,7 +124,7 @@ impl<P: Program> Module<P> {
             None => Self::copy_ext(self, value, target),
             _ => value,
         });
-        self.nodes[node].value = value;
+        self.write_node_value(node, value);
         value
     }
 

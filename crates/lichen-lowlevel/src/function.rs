@@ -361,7 +361,7 @@ impl<P: Program> Module<P> {
                 .map(|operand| self.node_apply(operand, ctx)),
             ..operation
         });
-        self.nodes[clone].value = value;
+        self.write_node_value(clone, value);
         self.nodes[clone].operation = operation;
         clone
     }

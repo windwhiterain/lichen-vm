@@ -1,4 +1,5 @@
 use lichen_language::compile;
+use lichen_lowlevel::AnyNodeId;
 use lichen_utils::disjoint;
 
 #[test]
@@ -21,7 +22,7 @@ fn annotated_rec_scratch() {
             for m in disjoint::members(&build.module.nodes, rep) {
                 println!(
                     "    {m:?} value={:?} op={:?}",
-                    build.module.nodes[m].value, build.module.nodes[m].operation
+                    build.module.node_value(AnyNodeId::Dynamic(m)), build.module.nodes[m].operation
                 );
             }
         }

@@ -172,7 +172,7 @@ fn the_checker_runs_on_an_extended_union() {
     let float_pair = build.term[float_ty.0 as usize].unwrap();
     let float_value = build.val[float_ty.0 as usize].unwrap();
     assert_eq!(
-        build.module.nodes[float_value].value,
+        build.module.node_value(AnyNodeId::Dynamic(float_value)),
         Some(ProbeValue::FloatType)
     );
     assert_eq!(build.ty[float_ty.0 as usize], Some(build.type_expr));

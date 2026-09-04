@@ -150,11 +150,11 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
 
     assert_eq!(m.eval_errors.len(), 1);
     assert!(matches!(
-        m.nodes[oob].value,
+        m.node_value(AnyNodeId::Dynamic(oob)),
         Some(TestValue::LowValue(LowValue::None))
     ));
     assert!(matches!(
-        m.nodes[param].value,
+        m.node_value(AnyNodeId::Dynamic(param)),
         Some(TestValue::LowValue(LowValue::Parameterized))
     ));
 }
@@ -189,9 +189,12 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
         ArrayItem::new(AnyNodeId::Dynamic(marker)),
         ArrayItem::new(AnyNodeId::Dynamic(k)),
     ];
-    m.nodes[k].value = Some(TestValue::LowValue(LowValue::Array(
-        m.alloc_array(&items, root),
-    )));
+    m.write_node_value(
+        k,
+        Some(TestValue::LowValue(LowValue::Array(
+            m.alloc_array(&items, root),
+        ))),
+    );
 
     let value = m.evaluate_node_deep(k, None);
 
@@ -280,7 +283,7 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     let value = m.evaluate_node_deep(arr, None);
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
 
-    assert!(m.nodes[add].value.is_none(), "shallow position stays lazy");
+    assert!(m.node_value(AnyNodeId::Dynamic(add)).is_none(), "shallow position stays lazy");
     assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
     assert_eq!(
         m.nodes[three].evaluated_deep,
