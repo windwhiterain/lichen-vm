@@ -305,9 +305,14 @@ impl<P: Program> Module<P> {
         // *containing* such a function value (a function's pair, a tuple of
         // closures): the proof cannot see through the function's body
         // either.
-        let (value, operation, evaluated_deep) = {
+        let (value, operation, evaluated_deep, low_shape) = {
             let source = &self.nodes[node];
-            (source.value, source.operation, source.evaluated_deep)
+            (
+                source.value,
+                source.operation,
+                source.evaluated_deep,
+                source.low_shape.clone(),
+            )
         };
         // A node the deep pass proved concrete can be baked (referenced in
         // place); one it never ran on (`None`) or flagged parameterized is
@@ -363,6 +368,7 @@ impl<P: Program> Module<P> {
         });
         self.write_node_value(clone, value);
         self.nodes[clone].operation = operation;
+        self.nodes[clone].low_shape = low_shape;
         clone
     }
 

@@ -38,6 +38,7 @@ Every note opens with a `> Status:` line:
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
+| [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
 | [Packages & import](notes/packages.md) | `lichen-language` (`preprocess`/`package`/`persist`/`run`) | current |
 | [Build performance](notes/build-performance.md) | `lichen-language` (`parse`) | historical |

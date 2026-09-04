@@ -34,7 +34,7 @@ use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
 use lichen_highlevel::program::{Ctx, TypeOperator, ValueType};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowValue, Module, NodeId,
+    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module, NodeId,
     OperatorExt,
 };
 use lichen_utils::extend::AsEnum;
@@ -131,13 +131,29 @@ impl OperatorExt<LangProgram> for ComputeOperator {
                 else {
                     return LangValue::from(LowValue::Parameterized);
                 };
-                let Some(LowValue::USize(arg)) = module
-                    .node_value(operands[1].node)
-                    .and_then(|v| v.as_enum())
-                else {
-                    return LangValue::from(LowValue::Parameterized);
-                };
-                match run_kernel(id, arg) {
+                // The argument is a scalar `USize` for an arity-1 kernel, or
+                // an `Array` of `USize` for a tuple-domain kernel.  Anything
+                // else (a non-literal element, e.g. a computed scalar) stays
+                // lazy — the definition pass reports the unbound result.
+                let args: Vec<i64> =
+                    match module.node_value(operands[1].node).and_then(|v| v.as_enum()) {
+                        Some(LowValue::USize(n)) => vec![n as i64],
+                        Some(LowValue::Array(arr)) => {
+                            let mut out = Vec::with_capacity(arr.items().len());
+                            for item in arr.items() {
+                                let Some(LowValue::USize(n)) = module
+                                    .node_value(item.node)
+                                    .and_then(|v| v.as_enum())
+                                else {
+                                    return LangValue::from(LowValue::Parameterized);
+                                };
+                                out.push(n as i64);
+                            }
+                            out
+                        }
+                        _ => return LangValue::from(LowValue::Parameterized),
+                    };
+                match run_kernel(id, &args) {
                     Ok(result) => LangValue::from(LowValue::USize(result)),
                     Err(..) => LangValue::from(LowValue::Parameterized),
                 }
@@ -148,11 +164,17 @@ impl OperatorExt<LangProgram> for ComputeOperator {
 
 // --- Codegen: lichen graph → a scalar `(i64) -> i64` wasm module ----------
 
-/// Lower `[param_pair] → function.return` for the scalar `Int -> Int` kernel
-/// subset and emit a wasm module exporting `(func "main" (param i64)
-/// (result i64))`.
+/// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
+/// arith over a scalar or a tuple of scalars) and emit a wasm module exporting
+/// `(func "main" (param i64)* (result i64))`.
+///
+/// The parameter's domain shape (scalar vs tuple of scalars) is derived from
+/// its *type* and recorded on the parameter's value cell — the level-3 shape
+/// marker a backend reads instead of re-deriving the type half.  The body
+/// emitter then reads that shape to distinguish a scalar parameter read
+/// (`local.get 0`) from a tuple-element read (`local.get k`).
 fn codegen_function(
-    module: &Module<LangProgram>,
+    module: &mut Module<LangProgram>,
     function: AnyFunctionId,
 ) -> Result<Vec<u8>, String> {
     use wasm_encoder::{CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction, Module as WasmModule, TypeSection, ValType};
@@ -169,9 +191,28 @@ fn codegen_function(
         _ => return Err("function return is not a [value, type] pair".into()),
     };
 
+    // The domain shape from the parameter's type cell.  Record it on the
+    // parameter's *value* cell so the body emitter reads the shape instead of
+    // re-deriving the type half.
+    let param_shape = kernel_param_shape(module, param_pair)?;
+    let arity = match &param_shape {
+        LowShape::USize => 1,
+        LowShape::Tuple(items) => items.len(),
+        _ => {
+            return Err("kernel domain must be a scalar or a tuple of scalars".into());
+        }
+    };
+    // The parameter's value cell (element 0 of the `[value, type]` pair) is
+    // where the domain shape is stored — the node the body emitter consults.
+    let param_value = match module.array_items(param_pair).and_then(|items| items.first()) {
+        Some(first) => dyn_node(first.node)?,
+        None => return Err("parameter is not a [value, type] pair".into()),
+    };
+    module.set_node_shape(param_value, Some(param_shape));
+
     let mut wasm = WasmModule::new();
     let mut types = TypeSection::new();
-    types.ty().function([ValType::I64], [ValType::I64]);
+    types.ty().function(vec![ValType::I64; arity], vec![ValType::I64]);
     wasm.section(&types);
     let mut funcs = FunctionSection::new();
     funcs.function(0);
@@ -182,11 +223,51 @@ fn codegen_function(
 
     let mut code = CodeSection::new();
     let mut body = Function::new([]);
-    emit_node(module, param_pair, ret_value, &mut body)?;
+    emit_node(module, param_pair, param_value, ret_value, &mut body)?;
     body.instruction(&Instruction::End);
     code.function(&body);
     wasm.section(&code);
     Ok(wasm.finish())
+}
+
+/// The [`LowShape`] of a function's parameter, from its type cell: a tuple
+/// parameter `(T0, .., Tn)` yields `Tuple(..)` with arity `n + 1`; an
+/// (annotated or unannotated) scalar `Int` yields `USize`.  This is the one
+/// place the codegen reads the type half — once, to seed the parameter's
+/// shape marker; afterwards the body emitter reads only [`LowShape`]s.
+fn kernel_param_shape(
+    module: &Module<LangProgram>,
+    param_pair: NodeId,
+) -> Result<LowShape, String> {
+    let pair = module
+        .array_items(param_pair)
+        .ok_or_else(|| "parameter is not a [value, type] pair".to_string())?;
+    let Some(type_cell) = pair.get(1) else {
+        return Ok(LowShape::USize);
+    };
+    let type_cell = dyn_node(type_cell.node)?;
+    let Some(type_items) = module.array_items(type_cell) else {
+        return Ok(LowShape::USize);
+    };
+    if type_items.len() < 2 {
+        return Ok(LowShape::USize);
+    }
+    let shape = dyn_node(type_items[0].node)?;
+    match module
+        .node_value(AnyNodeId::Dynamic(shape))
+        .and_then(|v| v.as_enum())
+    {
+        // A tuple type's shape is an array of its element types — its length
+        // is the arity.  The kernel-safe subset treats every element as a
+        // scalar `Int`, so the tuple shape is `[USize; n]`.
+        Some(LowValue::Array(shape_array)) => {
+            Ok(LowShape::Tuple(vec![LowShape::USize; shape_array.items().len()]))
+        }
+        // A scalar `Int` type's element 0 is the `Int` marker (a leaf) →
+        // arity 1.  The `_` fallback keeps an unannotated `x => x + 1`
+        // compiling (its type cell ends up `[Int, k]`, element 0 a leaf).
+        _ => Ok(LowShape::USize),
+    }
 }
 
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
@@ -195,6 +276,7 @@ fn codegen_function(
 fn emit_node(
     module: &Module<LangProgram>,
     param_pair: NodeId,
+    param_value: NodeId,
     node: NodeId,
     body: &mut wasm_encoder::Function,
 ) -> Result<(), String> {
@@ -216,8 +298,8 @@ fn emit_node(
         LangOperator::TypeOperator(op) => match op {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 let (left, right) = operand_pair(module, operation.operand)?;
-                emit_node(module, param_pair, left, body)?;
-                emit_node(module, param_pair, right, body)?;
+                emit_node(module, param_pair, param_value, left, body)?;
+                emit_node(module, param_pair, param_value, right, body)?;
                 match op {
                     TypeOperator::Add => {
                         body.instruction(&Instruction::I64Add);
@@ -239,18 +321,50 @@ fn emit_node(
             _ => return Err(format!("unsupported highlevel operator in kernel body: {op:?}")),
         },
         LangOperator::LowOperator(LowOperator::Index) => {
-            // The parameter value: `Index(parameter_pair, 0)` → `local.get 0`.
             let (target, index) = operand_pair(module, operation.operand)?;
-            if target == param_pair
-                && module
+            // The parameter's domain shape — the stored marker that decides
+            // whether a parameter read is a scalar (`local.get 0`) or a
+            // tuple-element read (`local.get k`).
+            let param_is_tuple = matches!(
+                module.node_shape(param_value),
+                Some(LowShape::Tuple(_))
+            );
+            // Scalar parameter read: `Index(param_pair, 0)` → `local.get 0`.
+            if target == param_pair {
+                if param_is_tuple {
+                    return Err(
+                        "tuple-domain kernel cannot read the parameter value directly".into()
+                    );
+                }
+                let index_is_zero = module
                     .node_value(AnyNodeId::Dynamic(index))
                     .and_then(|v| v.as_enum())
-                    .is_some_and(|v| matches!(v, LowValue::USize(0)))
-            {
+                    .is_some_and(|v| matches!(v, LowValue::USize(0)));
+                if !index_is_zero {
+                    return Err("parameter value index must be 0".into());
+                }
                 body.instruction(&Instruction::LocalGet(0));
                 return Ok(());
             }
-            return Err("unsupported index in kernel body (only `Index(param, 0)`)".into());
+            // Tuple-element parameter read: `Index(Index(param_pair, 0), k)`
+            // → `local.get k`.  `target` is the parameter's *value* node iff
+            // its operation is `Index(param_pair, 0)`.
+            if is_param_value(module, param_pair, target) {
+                if !param_is_tuple {
+                    return Err("scalar-domain kernel cannot index the parameter".into());
+                }
+                let Some(LowValue::USize(k)) = module
+                    .node_value(AnyNodeId::Dynamic(index))
+                    .and_then(|v| v.as_enum())
+                else {
+                    return Err("tuple element index must be a constant usize".into());
+                };
+                body.instruction(&Instruction::LocalGet(k as u32));
+                return Ok(());
+            }
+            return Err(
+                "unsupported index in kernel body (only parameter reads)".into(),
+            );
         }
         other => {
             return Err(format!(
@@ -259,6 +373,29 @@ fn emit_node(
         }
     }
     Ok(())
+}
+
+/// Is `node` the parameter's *value* node — `Index(param_pair, 0)`?  The
+/// scalar `Int -> Int` kernel reads the value directly; the tuple-domain
+/// kernel reads element `k` through `Index(Index(param_pair, 0), k)`, whose
+/// target is this node.
+fn is_param_value(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId) -> bool {
+    let Some(operation) = module.nodes[node].operation else {
+        return false;
+    };
+    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+        return false;
+    }
+    let Ok((target, index)) = operand_pair(module, operation.operand) else {
+        return false;
+    };
+    if target != param_pair {
+        return false;
+    }
+    module
+        .node_value(AnyNodeId::Dynamic(index))
+        .and_then(|v| v.as_enum())
+        .is_some_and(|v| matches!(v, LowValue::USize(0)))
 }
 
 /// Read a binary op/Index operand array `[a, b]` as two dynamic node ids.
@@ -284,9 +421,11 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
     }
 }
 
-/// Execute a compiled kernel on a scalar argument with wasmi, returning the
-/// `usize` result.
-fn run_kernel(id: KernelId, arg: usize) -> Result<usize, String> {
+/// Execute a compiled kernel on an argument vector with wasmi, returning the
+/// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number
+/// of `i64` inputs, so a tuple-domain kernel (arity N) launches with N
+/// arguments and a scalar kernel (arity 1) with one.
+fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     let bytes = kernels()
         .lock()
         .unwrap()
@@ -301,11 +440,15 @@ fn run_kernel(id: KernelId, arg: usize) -> Result<usize, String> {
         .instantiate_and_start(&mut store, &module)
         .map_err(|e| e.to_string())?;
     let main = instance
-        .get_typed_func::<i64, i64>(&store, "main")
+        .get_func(&store, "main")
+        .ok_or_else(|| "kernel has no export `main`".to_string())?;
+    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a as i64)).collect();
+    let mut outputs = [wasmi::Val::I64(0)];
+    main.call(&mut store, &inputs, &mut outputs)
         .map_err(|e| e.to_string())?;
-    let result = main
-        .call(&mut store, arg as i64)
-        .map_err(|e| e.to_string())?;
+    let result = outputs[0]
+        .i64()
+        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
     Ok(result as usize)
 }
 

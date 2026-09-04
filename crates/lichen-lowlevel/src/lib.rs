@@ -103,6 +103,43 @@ pub enum LowValue {
     Parameterized,
 }
 
+/// A host-side, **optional** static shape of a node's eventual value.
+///
+/// This closes the gap that blocks emitting bytecode directly from the
+/// lowlevel: a [`Node`] carries a value (possibly still [`LowValue::Parameterized`])
+/// and an operator, but has no compile-time notion of *what shape* the value
+/// will take.  A layer above the lowlevel — the checker, or a compute
+/// frontend that *has* the type — generates a [`LowShape`] for exactly the
+/// nodes a backend will **trace**, and stores it in [`Module::shapes`].  The
+/// backend reads the shape and emits code without consulting the type half,
+/// without forcing the value, and without waiting for evaluation.
+///
+/// Shape generation is optional and per-node, by design:
+/// - a node with **no** entry in [`Module::shapes`] has no traced shape —
+///   it is either *type-check-only* scaffolding the backend never reaches,
+///   or it is *materialized before the backend runs* (so the backend sees a
+///   concrete leaf, not a traceable computation);
+/// - only the nodes that form the traceable value-graph spine are annotated.
+///
+/// A [`LowShape`] is never a lichen value — it is host metadata, sibling to
+/// [`ArrayItem::shallow`] and [`Node::evaluated_deep`] — so "a type is just a
+/// value" (`Type : Type`) is untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LowShape {
+    /// A machine scalar (`USize`; the kernel-safe scalar subset) — `i64` in
+    /// the wasm backend.
+    USize,
+    /// A heterogeneous fixed-arity tuple.  A kernel whose domain is a tuple
+    /// has shape `Tuple(..)` and arity = `self.len()`.
+    Tuple(Vec<LowShape>),
+    /// A homogeneous fixed-length array: the element shape and the length.
+    Array(Box<LowShape>, usize),
+    /// A function: parameter → result.
+    Function(Box<LowShape>, Box<LowShape>),
+    /// A table: key → value.
+    Table(Box<LowShape>, Box<LowShape>),
+}
+
 /// One element of a structural array value: the element's node plus its
 /// shallow marker.  `shallow` is inert metadata — structure and unification
 /// ignore it — but it travels with the node through GC and apply clones, and
@@ -516,6 +553,15 @@ pub struct Node<P: Program> {
     /// pure-cell members).  External crates must never touch the field
     /// directly.
     value: Option<P::Value>,
+    /// The node's optional [`LowShape`] — stored *with* the value, behind the
+    /// same private gate.  A layer above the lowlevel (which *has* the type)
+    /// sets it via [`Module::set_node_shape`], and a backend reads it via
+    /// [`Module::node_shape`].  It is an **analysis result, not a checker
+    /// stamp**: the checker cannot know a value's shape at lowering (types are
+    /// lazy); the shape comes from the graph after it is resolved, and is
+    /// absent for any node the backend will not trace (type-check-only
+    /// scaffolding, or a node materialized before the backend runs).
+    low_shape: Option<LowShape>,
     pub operation: Option<Operation<P>>,
     /// The function whose body owns this node — the template membership
     /// back-pointer ([`None`] for top-level and runtime-created nodes whose
@@ -541,6 +587,10 @@ pub struct Node<P: Program> {
 
 pub struct StaticNode<P: Program> {
     pub value: Option<P::Value>,
+    /// The optional [`LowShape`] copied from the source dynamic node by
+    /// [`StaticModule::from_module`] — a frozen node keeps its shape so an
+    /// importer's backend can still derive bytecode.
+    pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
     /// The solved concreteness flag, copied from the source's
@@ -924,6 +974,7 @@ impl<P: Program> Module<P> {
         let node = self.nodes.insert(Node {
             value,
             operation,
+            low_shape: None,
             function: None,
             block,
             visiting: false,

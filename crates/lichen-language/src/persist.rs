@@ -29,9 +29,9 @@ use std::time::{Duration, Instant};
 
 use lichen_highlevel::program::{TypeOperator, TypeValue};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowValue, ModuleKey, Program, StaticFunction,
-    StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode, StaticOperation,
-    TableItem,
+    AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowShape, LowValue, ModuleKey, Program,
+    StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
+    StaticOperation, TableItem,
 };
 use sha2::Digest as _;
 
@@ -75,7 +75,7 @@ pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
 //
 // A node:  value_flag u8, [value], op_flag u8, [op_tag u8, operand_flag u8,
 // operand u64], equality (parent/next/tail: flag+u64, size u32),
-// parameterized u8.
+// parameterized u8, low_shape u8 [shape].
 //
 // Refs (node items, function values, array handles) are written as their
 // module's device key plus the local index (or the arena-relative offset
@@ -228,6 +228,7 @@ where
         }
         w.u32(node.equality.size);
         w.u8(node.parameterized as u8);
+        write_low_shape_opt(&mut w, &node.low_shape);
     }
     w.u64(module.functions.len() as u64);
     for function in &module.functions {
@@ -270,6 +271,81 @@ impl ArtifactCodec<LangProgram> for HighProgramCodec {
 
     fn read_operator(r: &mut Reader<'_>) -> Result<LangOperator, String> {
         read_operator(r)
+    }
+}
+
+/// Write an optional [`LowShape`] (the node's stored shape marker).
+fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
+    match shape {
+        None => w.u8(0),
+        Some(shape) => {
+            w.u8(1);
+            write_low_shape(w, shape);
+        }
+    }
+}
+
+fn write_low_shape(w: &mut Writer, shape: &LowShape) {
+    match shape {
+        LowShape::USize => w.u8(0),
+        LowShape::Tuple(items) => {
+            w.u8(1);
+            w.u64(items.len() as u64);
+            for item in items {
+                write_low_shape(w, item);
+            }
+        }
+        LowShape::Array(elem, len) => {
+            w.u8(2);
+            write_low_shape(w, elem);
+            w.u64(*len as u64);
+        }
+        LowShape::Function(param, result) => {
+            w.u8(3);
+            write_low_shape(w, param);
+            write_low_shape(w, result);
+        }
+        LowShape::Table(key, value) => {
+            w.u8(4);
+            write_low_shape(w, key);
+            write_low_shape(w, value);
+        }
+    }
+}
+
+fn read_low_shape_opt(r: &mut Reader<'_>) -> Result<Option<LowShape>, String> {
+    match r.u8()? {
+        0 => Ok(None),
+        1 => Ok(Some(read_low_shape(r)?)),
+        _ => Err("bad low_shape option tag".into()),
+    }
+}
+
+fn read_low_shape(r: &mut Reader<'_>) -> Result<LowShape, String> {
+    match r.u8()? {
+        0 => Ok(LowShape::USize),
+        1 => {
+            let len = r.u64()? as usize;
+            let mut items = Vec::with_capacity(len);
+            for _ in 0..len {
+                items.push(read_low_shape(r)?);
+            }
+            Ok(LowShape::Tuple(items))
+        }
+        2 => {
+            let elem = Box::new(read_low_shape(r)?);
+            let len = r.u64()? as usize;
+            Ok(LowShape::Array(elem, len))
+        }
+        3 => Ok(LowShape::Function(
+            Box::new(read_low_shape(r)?),
+            Box::new(read_low_shape(r)?),
+        )),
+        4 => Ok(LowShape::Table(
+            Box::new(read_low_shape(r)?),
+            Box::new(read_low_shape(r)?),
+        )),
+        _ => Err("bad low_shape tag".into()),
     }
 }
 
@@ -448,9 +524,11 @@ where
         };
         let size = r.u32()?;
         let parameterized = r.u8()? != 0;
+        let low_shape = read_low_shape_opt(&mut r)?;
         nodes.push(StaticNode {
             value,
             operation,
+            low_shape,
             equality: lichen_utils::disjoint::Meta {
                 parent,
                 next,

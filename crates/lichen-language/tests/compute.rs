@@ -85,3 +85,67 @@ compute(1) (x => x + 1) 5
         "launch of a non-kernel must be a type error, got: {diags:?}"
     );
 }
+
+#[test]
+fn jit_multi_arg_tuple() {
+    // A tuple-domain kernel: `(p : (Int, Int) => p(0) + p(1))` compiles to
+    // a wasm `(i64, i64) -> i64` and launches with a 2-tuple argument.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : (Int, Int) => p(0) + p(1))
+compute(1) k (5, 3)
+"#,
+    );
+    assert_eq!(out, "8: Int", "tuple-domain jit+launch produced: {out:?}");
+}
+
+#[test]
+fn jit_multi_arg_ternary() {
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : (Int, Int, Int) => p(0) + p(1) + p(2))
+compute(1) k (5, 3, 2)
+"#,
+    );
+    assert_eq!(out, "10: Int", "ternary jit+launch produced: {out:?}");
+}
+
+#[test]
+fn jit_multi_arg_sub() {
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : (Int, Int) => p(0) - p(1))
+compute(1) k (10, 3)
+"#,
+    );
+    assert_eq!(out, "7: Int", "tuple subtraction produced: {out:?}");
+}
+
+#[test]
+fn launch_rejects_wrong_arity() {
+    // Launching a `(Int, Int) -> Int` kernel with a single scalar is a check
+    // error: the `launch` gate unifies the argument against the domain
+    // `(Int, Int)`, so a scalar `Int` fails.
+    let diags = fail(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : (Int, Int) => p(0) + p(1))
+compute(1) k 5
+"#,
+    );
+    assert!(
+        !diags.is_empty(),
+        "launch of a 2-arg kernel with 1 arg must be a type error, got: {diags:?}"
+    );
+}
