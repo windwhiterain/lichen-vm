@@ -69,7 +69,7 @@ pass, copied by the static freeze, and serialized by the artifact codec (see
 
 ## What the compute JIT now does
 
-`crates/lichen-language/src/compute.rs`:
+`crates/lichen-compute/src/compute.rs`:
 
 - `kernel_param_shape` / `element_shape` recurse the parameter's type cell into a
   nested `LowShape::Tuple` (scalar `Int` → `USize`), and `codegen_function`

@@ -5,7 +5,7 @@
 > `crates/lichen-lowlevel/src/lib.rs` (`Program`, `OperatorExt`, `ValueExt`, `LowShape`),
 > `crates/lichen-highlevel/src/program.rs` (`Ctx`, `ProgramImpl`, `TypeValue`/`TypeOperator`),
 > `crates/lichen-highlevel/src/native.rs` (`NativeOp`/`NativeOps`/`NativeArg`/`NativeApply`),
-> and `crates/lichen-language/src/compute.rs` (the worked example: `lichen-compute`).
+> and `crates/lichen-compute/src/compute.rs` (the worked example: `lichen-compute`).
 
 A **compiler plugin** here is a compile-time *composition*, not a loadable ABI. A
 plugin extends the lichen system by three separable means, and the whole thing is glued
@@ -113,16 +113,20 @@ process-global `static`s) omits this.
 
 ## What a plugin looks like (the worked example: `lichen-compute`)
 
-The whole plugin is a handful of items in one file:
+The whole plugin lives in the `lichen-compute` crate (`crates/lichen-compute/src/compute.rs`);
+it is program-generic, so it never names a concrete host `Program`.  Its pieces:
 
 - two `Copy` enums — `ComputeValue` (`Kernel`/`TypeKernel`), `ComputeOperator` (`Jit`/`Launch`);
-- an `OperatorExt::run` impl (the wasm compile/execute, a process-global kernel registry);
-- two `NativeOp` impls — `JitOp`, `LaunchOp` (the gates + typed result through `Ctx`);
-- a `native_ops()` registry + `WRAPPER_SOURCE` (the lichen source that calls them);
+- an `OperatorExt<P>` `run` impl (the wasm compile/execute, a process-global kernel registry),
+  bounded by the same associated-type constraints a host's `enum_ext!` vocabulary satisfies;
+- two `NativeOp<P>` impls — `JitOp`, `LaunchOp` (the gates + typed result through `Ctx`);
+- the `WRAPPER_SOURCE` (the lichen source that calls `$jit`/`$launch`);
 - no `GlobalExt` (registry is process-global).
 
-Then `program.rs` composes `ComputeValue`/`ComputeOperator` into `LangValue`/`LangOperator`,
-and `package.rs` registers the `compute.lichen` import.
+Then a host composes it: `lichen-language`'s `program.rs` composes
+`ComputeValue`/`ComputeOperator` into `LangValue`/`LangOperator`, and `package.rs` builds the
+plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
+`compute.lichen` import.
 
 ## The shape of the contract
 

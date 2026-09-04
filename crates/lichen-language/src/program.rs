@@ -23,7 +23,7 @@ use lichen_lowlevel::{LowOperator, LowValue, Module, NodeId, OperatorExt, ValueE
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-use crate::compute::{ComputeOperator, ComputeValue};
+use lichen_compute::{ComputeOperator, ComputeValue};
 
 /// The language's own operators: the perspective combine.
 ///

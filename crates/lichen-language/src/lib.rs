@@ -20,7 +20,6 @@
 
 pub mod ast;
 pub mod compile;
-pub mod compute;
 pub mod diag;
 pub mod lex;
 pub mod package;

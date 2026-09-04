@@ -12,9 +12,18 @@
 //! Operators are bound to source as **values** (Option B): `jit` and `launch`
 //! are values whose *type* tags them; when the checker sees an `Apply` whose
 //! callee has one of those types, it delegates to the matching
-//! [`NativeExt`] (see [`native`](crate::compute::native_registry)), which
-//! emits the [`ComputeOperator`] and does that operator's type check.  The
-//! runtime `LowOperator::Apply` never sees them.
+//! [`NativeExt`] (see [`native_registry`]), which emits the
+//! [`ComputeOperator`] and does that operator's type check.  The runtime
+//! `LowOperator::Apply` never sees them.
+//!
+//! The plugin is **program-generic**: it never names a concrete host
+//! `Program`.  Every entry point is bounded by the same set of
+//! associated-type constraints a host program satisfies automatically when
+//! its composed value/operator vocabularies carry [`ComputeValue`],
+//! [`ComputeOperator`], [`LowOperator`], and [`TypeOperator`] (all leaves of
+//! `LangProgram`'s `enum_ext!` composition).  A host composes those leaves
+//! and wires the plugin's native registry itself (see the `liche-language`
+//! crate's `package.rs`).
 //!
 //! ## Type-checking coverage
 //!
@@ -31,16 +40,27 @@ use std::sync::{Mutex, OnceLock};
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
-use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp, NativeOps};
-use lichen_highlevel::program::{Ctx, TypeOperator, ValueType};
+use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
+use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module, NodeId,
-    OperatorExt,
+    OperatorExt, Program,
 };
 use lichen_utils::extend::AsEnum;
 
-use crate::program::{LangOperator, LangProgram, LangValue};
-
+/// The program-generic bounds the kernel-safe JIT requires.
+///
+/// A value vocabulary that composes [`ComputeValue`] (so a `Kernel` value
+/// fits as a sibling leaf) and an operator vocabulary that composes the
+/// structural [`LowOperator`], the highlevel's [`TypeOperator`] (the scalar
+/// arithmetic the kernel-safe subset lowers), and [`ComputeOperator`]
+/// (`Jit`/`Launch`).
+///
+/// A host program satisfies these automatically whenever its `enum_ext!`
+/// vocabulary carries those leaves (as `LangProgram` does).  Every codegen
+/// entry point carries this same associated-type bound set as its `where`
+/// clause, so all of them share one canonical constraint.
+///
 /// A compiled kernel artifact's identity — a compact index into the process
 /// kernel registry (the compiled wasm bytes).  A kernel value is host-owned
 /// (a small `Copy` scalar), so it is never an arena payload and never needs GC
@@ -102,12 +122,11 @@ enum KernelInstr {
 ///
 /// `jit` lowers one lichen function to a [`KernelFragment`]: the function's
 /// body as abstract instructions, plus the domain shape signature a linker
-/// needs.  The fragment is stored (not the whole module); `launch` assembles the
-/// reachable fragment set into one module ([`assemble_module`]) and runs it.
-/// Splitting "emit bytecode" from "assemble
-/// a module" is what lets a later step link many fragments together (helper
-/// sharing, recursion) and emit cross-module imports for callees compiled
-/// elsewhere.
+/// needs.  The fragment is stored (not the whole module); `launch` assembles
+/// the reachable fragment set into one module ([`assemble_module`]) and runs
+/// it.  Splitting "emit bytecode" from "assemble a module" is what lets a
+/// later step link many fragments together (helper sharing, recursion) and
+/// emit cross-module imports for callees compiled elsewhere.
 #[derive(Debug, Clone)]
 struct KernelFragment {
     /// The parameter domain shape — the wasm parameter types and the layout
@@ -118,9 +137,9 @@ struct KernelFragment {
     body: Vec<KernelInstr>,
 }
 
-/// The compute value vocabulary — injected as a sibling leaf into the
-/// language's value union (see [`crate::program`]).  A plain enum of exactly
-/// this extension's variants, composed with [`lichen_utils::enum_ext!`].
+/// The compute value vocabulary — injected as a sibling leaf into a host's
+/// value union (see a host `program` module).  A plain enum of exactly this
+/// extension's variants, composed with [`lichen_utils::enum_ext!`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComputeValue {
     /// A compiled, runnable kernel artifact.
@@ -131,8 +150,8 @@ pub enum ComputeValue {
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
-/// by the VM through [`OperatorExt::run`].  Composed into the language's
-/// operator union (see [`crate::program`]).
+/// by the VM through [`OperatorExt::run`].  Composed into a host's operator
+/// union (see a host `program` module).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComputeOperator {
     /// Compile a function value to wasm bytecode → a `Kernel` value.
@@ -143,52 +162,53 @@ pub enum ComputeOperator {
 
 // --- OperatorExt::run (the VM dispatch for the injected operators) ---------
 
-impl OperatorExt<LangProgram> for ComputeOperator {
-    fn run(
-        &self,
-        operand: LangValue,
-        _block: BlockId,
-        module: &mut Module<LangProgram>,
-    ) -> LangValue {
+impl<P> OperatorExt<P> for ComputeOperator
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
+    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             ComputeOperator::Jit => {
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return LangValue::from(LowValue::Parameterized);
+                if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
-                let Some(LowValue::Function(function)) = operand.as_enum() else {
+                let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
+                else {
                     // A non-function jit target is a *reported* type error (the
                     // checker's function-ness gate), not an invariant violation —
                     // stay lazy rather than panicking.
-                    return LangValue::from(LowValue::Parameterized);
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
                 match compile_fragment(module, function) {
                     Ok(fragment) => {
                         let id = alloc_kernel_id();
                         kernels().lock().unwrap().insert(id, fragment);
-                        LangValue::from(ComputeValue::Kernel(id))
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
                     }
                     Err(err) => {
                         // The body uses an operator outside the kernel-safe
                         // subset — record nothing and stay lazy; the definition
                         // pass's error channel reports the unbound result.
                         let _ = err;
-                        LangValue::from(LowValue::Parameterized)
+                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
                     }
                 }
             }
             ComputeOperator::Launch => {
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return LangValue::from(LowValue::Parameterized);
+                if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
-                let Some(LowValue::Array(operands)) = operand.as_enum() else {
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Launch expects an operand array of [kernel, arg]")
                 };
                 let operands = operands.items();
                 let Some(ComputeValue::Kernel(id)) = module
                     .node_value(operands[0].node)
-                    .and_then(|v| v.as_enum())
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 else {
-                    return LangValue::from(LowValue::Parameterized);
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
                 // The argument is a scalar `USize` for an arity-1 kernel, or
                 // an `Array` (possibly nested for a tuple-of-tuples domain)
@@ -197,18 +217,18 @@ impl OperatorExt<LangProgram> for ComputeOperator {
                 // computed scalar) stays lazy — the definition pass reports
                 // the unbound result.
                 let mut args: Vec<i64> = Vec::new();
-                match module.node_value(operands[1].node).and_then(|v| v.as_enum()) {
+                match module.node_value(operands[1].node).and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
                     Some(LowValue::USize(n)) => args.push(n as i64),
                     Some(LowValue::Array(_)) => {
                         if !collect_args(module, operands[1].node, &mut args) {
-                            return LangValue::from(LowValue::Parameterized);
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                         }
                     }
-                    _ => return LangValue::from(LowValue::Parameterized),
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
                 match run_kernel(id, &args) {
-                    Ok(result) => LangValue::from(LowValue::USize(result)),
-                    Err(..) => LangValue::from(LowValue::Parameterized),
+                    Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
+                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 }
             }
         }
@@ -220,19 +240,21 @@ impl OperatorExt<LangProgram> for ComputeOperator {
 /// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
 /// arith over a scalar or a tuple of scalars) into a [`KernelFragment`] — the
 /// function's **body**, not a module.  `jit` emits a fragment per function;
-/// module assembly is a separate step ([`assemble_module`]), so a later JIT can
-/// emit fragments lazily and a `launch` assembles a reachable set of them into
-/// one module.
+/// module assembly is a separate step ([`assemble_module`]), so a later JIT
+/// can emit fragments lazily and a `launch` assembles a reachable set of them
+/// into one module.
 ///
 /// The parameter's domain shape (scalar vs tuple of scalars) is derived from
 /// its *type* and recorded on the parameter's value cell — the level-3 shape
 /// marker a backend reads instead of re-deriving the type half.  The body
 /// emitter then reads that shape to distinguish a scalar parameter read
 /// (`local.get 0`) from a tuple-element read (`local.get k`).
-fn compile_fragment(
-    module: &mut Module<LangProgram>,
-    function: AnyFunctionId,
-) -> Result<KernelFragment, String> {
+fn compile_fragment<P>(module: &mut Module<P>, function: AnyFunctionId) -> Result<KernelFragment, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
     };
@@ -276,8 +298,8 @@ fn compile_fragment(
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
 ///
 /// `ordered[i]` becomes wasm function index `i`; `index` maps each callee
-/// [`KernelId`] to its function index, so a cross-kernel `CallKernel` lowers to
-/// an in-module `call`.  The root (index 0) is exported as `main`.  For a
+/// [`KernelId`] to its function index, so a cross-kernel `CallKernel` lowers
+/// to an in-module `call`.  The root (index 0) is exported as `main`.  For a
 /// single-kernel set this is the degenerate link — one fragment = one module;
 /// for a kernel that cross-calls others it is the launch-time assembly that
 /// pulls the relative kernel set into one module.
@@ -382,10 +404,12 @@ fn lower_body(
 /// (annotated or unannotated) scalar `Int` yields `USize`.  This is the one
 /// place the codegen reads the type half — once, to seed the parameter's
 /// shape marker; afterwards the body emitter reads only [`LowShape`]s.
-fn kernel_param_shape(
-    module: &Module<LangProgram>,
-    param_pair: NodeId,
-) -> Result<LowShape, String> {
+fn kernel_param_shape<P>(module: &Module<P>, param_pair: NodeId) -> Result<LowShape, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let pair = module
         .array_items(param_pair)
         .ok_or_else(|| "parameter is not a [value, type] pair".to_string())?;
@@ -401,7 +425,12 @@ fn kernel_param_shape(
 /// types (each recursed), a scalar `Int`'s `shape` is the `Int` marker (a
 /// leaf → `USize`).  The `_` fallback keeps an unannotated `x => x + 1`
 /// compiling (its type cell ends up `[Int, k]`, element 0 a leaf).
-fn element_shape(module: &Module<LangProgram>, type_node: AnyNodeId) -> Result<LowShape, String> {
+fn element_shape<P>(module: &Module<P>, type_node: AnyNodeId) -> Result<LowShape, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let type_node = dyn_node(type_node)?;
     let Some(type_items) = module.array_items(type_node) else {
         return Ok(LowShape::USize);
@@ -412,7 +441,7 @@ fn element_shape(module: &Module<LangProgram>, type_node: AnyNodeId) -> Result<L
     let shape = dyn_node(type_items[0].node)?;
     match module
         .node_value(AnyNodeId::Dynamic(shape))
-        .and_then(|v| v.as_enum())
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
     {
         Some(LowValue::Array(shape_array)) => {
             let mut items = Vec::with_capacity(shape_array.items().len());
@@ -440,7 +469,12 @@ fn flat_arity(shape: &LowShape) -> usize {
 /// (a `&self` read) — used to compare whether two nodes were unified.  The
 /// lowlevel's `equality_representative` needs `&mut`; this is the read-only
 /// form for the emitter's `&Module`.
-fn equality_rep(module: &Module<LangProgram>, node: NodeId) -> NodeId {
+fn equality_rep<P>(module: &Module<P>, node: NodeId) -> NodeId
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let mut root = node;
     while let Some(parent) = module.nodes[root].equality.parent {
         root = parent;
@@ -456,14 +490,19 @@ fn equality_rep(module: &Module<LangProgram>, node: NodeId) -> NodeId {
 /// (a kernel call's result, a `launch` argument); the emitter reaches the
 /// computation through the class.  Returns `None` when the class has no such
 /// member — the value is genuinely opaque (an uncomputable leaf).
-fn class_computation_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+fn class_computation_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let root = equality_rep(module, node);
     for (n, nd) in &module.nodes {
         if equality_rep(module, n) != root {
             continue;
         }
         if let Some(op) = nd.operation.as_ref() {
-            if !matches!(op.operator, LangOperator::LowOperator(LowOperator::Index)) {
+            if !matches!(AsEnum::<LowOperator>::as_enum(&op.operator), Some(LowOperator::Index)) {
                 return Some(n);
             }
         }
@@ -474,15 +513,20 @@ fn class_computation_node(module: &Module<LangProgram>, node: NodeId) -> Option<
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
 /// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and the parameter value
 /// (`Index(param_pair, 0)` → `local.get 0`).
-fn emit_node(
-    module: &Module<LangProgram>,
+fn emit_node<P>(
+    module: &Module<P>,
     param_pair: NodeId,
     param_value: NodeId,
     node: NodeId,
     body: &mut Vec<KernelInstr>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        match value.as_enum() {
+        match AsEnum::<LowValue>::as_enum(&value) {
             Some(LowValue::USize(n)) => {
                 body.push(KernelInstr::Const(n as i64));
                 return Ok(());
@@ -517,13 +561,100 @@ fn emit_node(
             "kernel body hits a node with neither value nor operation (node={node:?})"
         ));
     };
-    match &operation.operator {
-        LangOperator::TypeOperator(op) => match op {
+
+    let op = &operation.operator;
+    // The structural core: dispatched through `AsEnum<LowOperator>` (the
+    // lowlevel never falls through to `run` for these).
+    if let Some(low) = AsEnum::<LowOperator>::as_enum(op) {
+        match low {
+            LowOperator::Index => {
+                let (target, index) = operand_pair(module, operation.operand)?;
+                // A parameter read at some index path → a wasm `local.get`.
+                // (This must run before the value_of defuse: `Index(param_pair,
+                // 0)` is a node's value slot, not a general extraction.)
+                if let Some(path) = param_path(module, param_pair, node) {
+                    let domain = module
+                        .node_shape(param_value)
+                        .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
+                    let offset = flatten_offset(domain, &path)?;
+                    body.push(KernelInstr::LocalGet(offset as u32));
+                    return Ok(());
+                }
+                // A `value_of` extraction — `Index(pair, 0)` with a constant
+                // `0` index and `pair` a `[value, type]` pair.  Emit the
+                // pair's value slot instead of treating the extraction as a
+                // real index.
+                if usize_value(module, index) == Some(0) {
+                    if let Some(value_node) = value_of_node(module, node) {
+                        return emit_node(module, param_pair, param_value, value_node, body);
+                    }
+                }
+                // A conditional `if c then a else b` lowers to `[b, a][c]` — a
+                // 2-element array value indexed by a *computed* (non-constant)
+                // selector, a wasm `select`.  The array may be reached through
+                // a value_of extraction; look through it.
+                if usize_value(module, index).is_none() {
+                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
+                        if let Some(items) = module.array_items(array_value) {
+                            if items.len() == 2 {
+                                let then_node = dyn_node(items[1].node)?;
+                                let else_node = dyn_node(items[0].node)?;
+                                emit_node(module, param_pair, param_value, then_node, body)?;
+                                emit_node(module, param_pair, param_value, else_node, body)?;
+                                emit_node(module, param_pair, param_value, index, body)?;
+                                body.push(KernelInstr::I32WrapI64);
+                                body.push(KernelInstr::Select);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                return Err(
+                    "unsupported index in kernel body (only parameter reads, value_of extractions, and 2-element conditionals)"
+                        .into(),
+                );
+            }
+            LowOperator::Apply => {
+                let (callee, arg) = apply_pair(module, operation.operand)?;
+                // Style 2: a cross-kernel call — the callee is a kernel value
+                // (the result of an earlier `jit`).  Emit the (scalar)
+                // argument, then a call the launch-time assembler resolves to
+                // the callee's function index once the kernel's relative launch
+                // set is laid out.
+                if kernel_id_of(module, callee).is_some() {
+                    return emit_cross_kernel_call(
+                        module,
+                        param_pair,
+                        param_value,
+                        callee,
+                        arg,
+                        body,
+                    );
+                }
+                // Style 1: a full lichen-function call (inline its body) —
+                // deferred.
+                return Err(
+                    "kernel body Apply is supported only for a cross-kernel (kernel-value) callee v1; inline lichen-function calls are not yet supported"
+                        .into(),
+                );
+            }
+            LowOperator::TableGet => {
+                return Err(
+                    "unsupported tableget operator in kernel body (kernel-safe subset is scalar arith)"
+                        .into(),
+                )
+            }
+        }
+    }
+    // The highlevel's type-level arithmetic: `Add`/`Sub`/`Leq`/`Eq` over
+    // `[left, right]`.
+    if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op) {
+        match ty_op {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 let (left, right) = operand_pair(module, operation.operand)?;
                 emit_node(module, param_pair, param_value, left, body)?;
                 emit_node(module, param_pair, param_value, right, body)?;
-                let bin = match op {
+                let bin = match ty_op {
                     TypeOperator::Add => KernelBin::Add,
                     TypeOperator::Sub => KernelBin::Sub,
                     TypeOperator::Leq => KernelBin::Leq,
@@ -531,74 +662,19 @@ fn emit_node(
                     _ => unreachable!(),
                 };
                 body.push(KernelInstr::Bin(bin));
-            }
-            _ => return Err(format!("unsupported highlevel operator in kernel body: {op:?}")),
-        },
-        LangOperator::LowOperator(LowOperator::Index) => {
-            let (target, index) = operand_pair(module, operation.operand)?;
-            // A parameter read at some index path → a wasm `local.get`.  (This
-            // must run before the value_of defuse: `Index(param_pair, 0)` is
-            // a node's value slot, not a general extraction.)
-            if let Some(path) = param_path(module, param_pair, node) {
-                let domain = module
-                    .node_shape(param_value)
-                    .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
-                let offset = flatten_offset(domain, &path)?;
-                body.push(KernelInstr::LocalGet(offset as u32));
                 return Ok(());
             }
-            // A `value_of` extraction — `Index(pair, 0)` with a constant `0`
-            // index and `pair` a `[value, type]` pair.  Emit the pair's value
-            // slot instead of treating the extraction as a real index.
-            if usize_value(module, index) == Some(0) {
-                if let Some(value_node) = value_of_node(module, node) {
-                    return emit_node(module, param_pair, param_value, value_node, body);
-                }
+            _ => {
+                return Err(format!(
+                    "unsupported highlevel operator in kernel body: {ty_op:?}"
+                ))
             }
-            // A conditional `if c then a else b` lowers to `[b, a][c]` — a
-            // 2-element array value indexed by a *computed* (non-constant)
-            // selector, a wasm `select`.  The array may be reached through a
-            // value_of extraction; look through it.
-            if usize_value(module, index).is_none() {
-                if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                    if let Some(items) = module.array_items(array_value) {
-                        if items.len() == 2 {
-                            let then_node = dyn_node(items[1].node)?;
-                            let else_node = dyn_node(items[0].node)?;
-                            emit_node(module, param_pair, param_value, then_node, body)?;
-                            emit_node(module, param_pair, param_value, else_node, body)?;
-                            emit_node(module, param_pair, param_value, index, body)?;
-                            body.push(KernelInstr::I32WrapI64);
-                            body.push(KernelInstr::Select);
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            return Err(
-                "unsupported index in kernel body (only parameter reads, value_of extractions, and 2-element conditionals)"
-                    .into(),
-            );
         }
-        LangOperator::LowOperator(LowOperator::Apply) => {
-            let (callee, arg) = apply_pair(module, operation.operand)?;
-            // Style 2: a cross-kernel call — the callee is a kernel value (the
-            // result of an earlier `jit`).  Emit the (scalar) argument, then a
-            // call the launch-time assembler resolves to the callee's function
-            // index once the kernel's relative launch set is laid out.
-            if kernel_id_of(module, callee).is_some() {
-                return emit_cross_kernel_call(module, param_pair, param_value, callee, arg, body);
-            }
-            // Style 1: a full lichen-function call (inline its body) — deferred.
-            return Err(
-                "kernel body Apply is supported only for a cross-kernel (kernel-value) callee v1; inline lichen-function calls are not yet supported"
-                    .into(),
-            );
-        }
-        LangOperator::ComputeOperator(op) => match op {
-            // The wrapper's `launch`/`$launch` (`compute.launch k x`) — the *typed*
-            // cross-kernel call form (its codomain is resolved by `LaunchOp`,
-            // unlike a bare `k x`).  Lower it exactly like a kernel `Apply`.
+    }
+    // The compute plugin's own operators: `Launch` inside a kernel body is the
+    // wrapper/`$launch` cross-kernel call form.
+    if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
+        match compute_op {
             ComputeOperator::Launch => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
                 return emit_cross_kernel_call(module, param_pair, param_value, kernel, arg, body);
@@ -610,29 +686,31 @@ fn emit_node(
                     "unsupported compute operator in kernel body: {other:?}"
                 ))
             }
-        },
-        other => {
-            return Err(format!(
-                "unsupported operation in kernel body: {other:?} (kernel-safe subset is scalar arith)"
-            ))
         }
     }
-    Ok(())
+    Err(format!(
+        "unsupported operation in kernel body: {op:?} (kernel-safe subset is scalar arith)"
+    ))
 }
 
-/// Emit a cross-kernel call (style 2): the (scalar) argument expression, then a
-/// [`KernelInstr::CallKernel`] the launch-time assembler resolves.  Both a
+/// Emit a cross-kernel call (style 2): the (scalar) argument expression, then
+/// a [`KernelInstr::CallKernel`] the launch-time assembler resolves.  Both a
 /// direct kernel `Apply` (`k x`) and the wrapper's `launch`/`$launch`
-/// (`compute.launch k x`) lower here — the latter is the typed form (its codomain
-/// is resolved by [`LaunchOp`]), the former the untyped-form gap.
-fn emit_cross_kernel_call(
-    module: &Module<LangProgram>,
+/// (`compute.launch k x`) lower here — the latter is the typed form (its
+/// codomain is resolved by [`LaunchOp`]), the former the untyped-form gap.
+fn emit_cross_kernel_call<P>(
+    module: &Module<P>,
     param_pair: NodeId,
     param_value: NodeId,
     kernel: NodeId,
     arg: NodeId,
     body: &mut Vec<KernelInstr>,
-) -> Result<(), String> {
+) -> Result<(), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let kid = kernel_id_of(module, kernel)
         .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
     // v1 restricts the callee domain to a scalar (arity 1): the argument is one
@@ -656,11 +734,16 @@ fn emit_cross_kernel_call(
 /// scalar `Int -> Int` kernel reads the value directly; the tuple-domain
 /// kernel reads element `k` through `Index(Index(param_pair, 0), k)`, whose
 /// target is this node.
-fn is_param_value(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId) -> bool {
+fn is_param_value<P>(module: &Module<P>, param_pair: NodeId, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let Some(operation) = module.nodes[node].operation else {
         return false;
     };
-    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
         return false;
     }
     let Ok((target, index)) = operand_pair(module, operation.operand) else {
@@ -671,16 +754,21 @@ fn is_param_value(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId
     }
     module
         .node_value(AnyNodeId::Dynamic(index))
-        .and_then(|v| v.as_enum())
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
         .is_some_and(|v| matches!(v, LowValue::USize(0)))
 }
 
 /// The constant `USize` value behind `node`, if it is one (an `Index`'s
 /// selector must be a compile-time constant in a kernel body).
-fn usize_value(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
+fn usize_value<P>(module: &Module<P>, node: NodeId) -> Option<usize>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     match module
         .node_value(AnyNodeId::Dynamic(node))
-        .and_then(|v| v.as_enum())
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
     {
         Some(LowValue::USize(n)) => Some(n),
         _ => None,
@@ -692,9 +780,14 @@ fn usize_value(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
 /// value slot.  The checker accesses most values through such an extraction,
 /// so the JIT must look through it to reach the actual value (a constant, a
 /// parameter read, or a computation).
-fn value_of_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+fn value_of_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let operation = module.nodes[node].operation?;
-    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
         return None;
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
@@ -719,9 +812,14 @@ fn value_of_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
 /// through any `value_of` extractions.  Returns `None` for a node that is not
 /// (or does not reach) a kernel value — e.g. a lichen function, used by the
 /// style-1 inline path instead.
-fn kernel_id_of(module: &Module<LangProgram>, node: NodeId) -> Option<KernelId> {
+fn kernel_id_of<P>(module: &Module<P>, node: NodeId) -> Option<KernelId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        if let Some(ComputeValue::Kernel(kid)) = value.as_enum() {
+        if let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value) {
             return Some(kid);
         }
     }
@@ -734,7 +832,12 @@ fn kernel_id_of(module: &Module<LangProgram>, node: NodeId) -> Option<KernelId> 
 /// checker stores some argument values as such pairs (whereas [`value_of_node`]
 /// handles the `Index(pair, 0)` extraction form); the JIT must look through to
 /// the value before emitting.  Returns `None` when `node` is not such a pair.
-fn pair_value_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId> {
+fn pair_value_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let items = module.array_items(node)?;
     dyn_node(items.first()?.node).ok()
 }
@@ -747,9 +850,14 @@ fn pair_value_node(module: &Module<LangProgram>, node: NodeId) -> Option<NodeId>
 ///
 /// Any other `Index` (a structured-array conditional, an out-of-domain
 /// index) is `None`.
-fn param_path(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId) -> Option<Vec<usize>> {
+fn param_path<P>(module: &Module<P>, param_pair: NodeId, node: NodeId) -> Option<Vec<usize>>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let operation = module.nodes[node].operation?;
-    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
         return None;
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
@@ -802,8 +910,13 @@ fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
 /// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
 /// argument vector.  Returns `false` if any element is not a scalar `USize`
 /// leaf — the definition pass reports the unbound result.
-fn collect_args(module: &Module<LangProgram>, node: AnyNodeId, out: &mut Vec<i64>) -> bool {
-    match module.node_value(node).and_then(|v| v.as_enum()) {
+fn collect_args<P>(module: &Module<P>, node: AnyNodeId, out: &mut Vec<i64>) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
+    match module.node_value(node).and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
         Some(LowValue::USize(n)) => {
             out.push(n as i64);
             true
@@ -821,7 +934,12 @@ fn collect_args(module: &Module<LangProgram>, node: AnyNodeId, out: &mut Vec<i64
 }
 
 /// Read a binary op/Index operand array `[a, b]` as two dynamic node ids.
-fn operand_pair(module: &Module<LangProgram>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String> {
+fn operand_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let Some(operand) = operand else {
         return Err("binary operator/Index operand is missing".into());
     };
@@ -832,15 +950,27 @@ fn operand_pair(module: &Module<LangProgram>, operand: Option<NodeId>) -> Result
     Ok((dyn_node(items[0].node)?, dyn_node(items[1].node)?))
 }
 
-fn operand_items(module: &Module<LangProgram>, node: NodeId) -> Result<&'static [ArrayItem], String> {
-    module.array_items(node).ok_or_else(|| "operand is not an array value".into())
+fn operand_items<P>(module: &Module<P>, node: NodeId) -> Result<&'static [ArrayItem], String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
+    module
+        .array_items(node)
+        .ok_or_else(|| "operand is not an array value".into())
 }
 
 /// The `[function, argument]` of an `Apply` operand array.  The checker's
 /// apply operands are `[function, argument, result_cell]` (the result cell is
 /// a checker-wired value that does not participate in codegen), so unlike
 /// [`operand_pair`] this tolerates extra elements and takes the first two.
-fn apply_pair(module: &Module<LangProgram>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String> {
+fn apply_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+{
     let Some(operand) = operand else {
         return Err("Apply operand is missing".into());
     };
@@ -925,31 +1055,26 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
 /// the argument's type with an arrow shape (the *gate*); the kernel type
 /// `[sig, [TypeKernel, Type]]` carries the arrow's `[in, out]` shape as its
 /// signature, so `launch` reads the domain/codomain out of the type.
-struct JitOp;
-static JIT_OP: JitOp = JitOp;
+///
+/// The program marker is generic: a host composes this op into its own
+/// `NativeOps` registry (a `&'static [(&str, &dyn NativeOp<P>)]`), so the
+/// `$jit`/`$launch` names stay private to the plugin's own embedded source.
+pub struct JitOp;
 
 /// `$launch(k, a)` — run kernel `k` on `a`.  The kernel-ness gate unifies `k`'s
 /// type with a kernel type (binding the domain/codomain to fresh cells); the
 /// argument is unified against the domain and the result typed as the codomain.
-struct LaunchOp;
-static LAUNCH_OP: LaunchOp = LaunchOp;
+pub struct LaunchOp;
 
-/// The `lichen-compute` plugin's private native registry: the ops its embedded
-/// source calls with `$jit`/`$launch`.  Attached only to the compilation of
-/// `compute.lichen`, so the names resolve privately — no global string
-/// namespace, so a second plugin registering its own `$jit` never collides.
-pub fn native_ops() -> NativeOps<LangProgram> {
-    &NATIVE_OPS
-}
-static NATIVE_OPS: [(&str, &dyn NativeOp<LangProgram>); 2] = [
-    ("jit", &JIT_OP),
-    ("launch", &LAUNCH_OP),
-];
-
-impl NativeOp<LangProgram> for JitOp {
+impl<P> NativeOp<P> for JitOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
     fn build(
         &self,
-        ctx: &mut dyn Ctx<LangProgram>,
+        ctx: &mut dyn Ctx<P>,
         _e: ExprId,
         args: &[NativeArg],
         loc: Loc,
@@ -960,7 +1085,7 @@ impl NativeOp<LangProgram> for JitOp {
         let d = ctx.fresh();
         let c = ctx.fresh();
         let shape = ctx.array_node(&[d, c]);
-        let fn_marker = ctx.value_node(LangValue::function_type_marker());
+        let fn_marker = ctx.value_node(P::Value::function_type_marker());
         let universe = ctx.universe();
         let kind = ctx.array_node(&[fn_marker, universe]);
         let fn_ty = ctx.array_node(&[shape, kind]);
@@ -971,12 +1096,12 @@ impl NativeOp<LangProgram> for JitOp {
         // from.  It references the cells the gate just bound, so a concrete
         // function signature flows into the kernel's type.
         let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
+        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(ComputeValue::TypeKernel));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
         let kernel_ty = ctx.array_node(&[sig, k_kind]);
 
-        let op = ctx.op_node(LangOperator::from(ComputeOperator::Jit), Some(f.value));
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(f.value));
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
         let pair = ctx.array_node(&[op, kernel_ty]);
@@ -988,10 +1113,15 @@ impl NativeOp<LangProgram> for JitOp {
     }
 }
 
-impl NativeOp<LangProgram> for LaunchOp {
+impl<P> NativeOp<P> for LaunchOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
     fn build(
         &self,
-        ctx: &mut dyn Ctx<LangProgram>,
+        ctx: &mut dyn Ctx<P>,
         _e: ExprId,
         args: &[NativeArg],
         loc: Loc,
@@ -1003,7 +1133,7 @@ impl NativeOp<LangProgram> for LaunchOp {
         let d = ctx.fresh();
         let c = ctx.fresh();
         let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(LangValue::from(ComputeValue::TypeKernel));
+        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(ComputeValue::TypeKernel));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
         let kernel_ty = ctx.array_node(&[sig, k_kind]);
@@ -1012,7 +1142,7 @@ impl NativeOp<LangProgram> for LaunchOp {
         ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
         // Emit the `Launch` operator over `[k, a]`, typed as the codomain.
         let operands = ctx.array_node(&[k.value, a.value]);
-        let op = ctx.op_node(LangOperator::from(ComputeOperator::Launch), Some(operands));
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
         let pair = ctx.array_node(&[op, c]);
         NativeApply {
             node: pair,

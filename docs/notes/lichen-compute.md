@@ -1,7 +1,7 @@
 # lichen-compute: the JIT package (compile functions to wasm, launch them)
 
-> Status: current (implemented; the live contract is the `crates/lichen-language/src/compute.rs` rustdoc)
-> Points at: `crates/lichen-language/src/compute.rs` (the native core),
+> Status: current (implemented; the live contract is the `crates/lichen-compute/src/compute.rs` rustdoc)
+> Points at: `crates/lichen-compute/src/compute.rs` (the native core),
 > `crates/lichen-language/src/program.rs` (`LangValue`/`LangOperator`/`LangProgram` composition),
 > `crates/lichen-highlevel/src/native.rs` (the `NativeOp`/`NativeOps` extension point),
 > `crates/lichen-language/src/package.rs` (`register_compute`, the virtual `compute.lichen`),

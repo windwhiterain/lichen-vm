@@ -1,18 +1,11 @@
 [package]
-name = "lichen-language"
+name = "lichen-compute"
 version = "0.1.0"
 edition = "2024"
-default-run = "lichen"
 
 [dependencies]
-chumsky = "0.13.0"
-logos = "0.16"
-sha2 = "0.10"
-lichen-compute = { path = "../lichen-compute" }
+wasmi = "2.0.0"
+wasm-encoder = "0.258.0"
 lichen-highlevel = { path = "../lichen-highlevel" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
 lichen-utils = { path = "../lichen-utils" }
-
-[[bin]]
-name = "lichen"
-path = "src/main.rs"

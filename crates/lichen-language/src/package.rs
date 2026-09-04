@@ -21,6 +21,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
+use lichen_compute::{JitOp, LaunchOp, WRAPPER_SOURCE};
+use lichen_highlevel::native::{NativeOp, NativeOps};
 use lichen_highlevel::program::HighPackageMeta;
 use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
 
@@ -33,6 +35,22 @@ use crate::program::LangProgram;
 /// `compute.lichen`, it is served from a registered native module (see
 /// [`PackageStore::register_compute`]) rather than a source file on disk.
 const COMPUTE_PATH: &str = "compute.lichen";
+
+/// The `lichen-compute` plugin's private native registry, built over the
+/// host's concrete [`LangProgram`] marker.  Attached only to the compilation
+/// of `compute.lichen`, so `$jit`/`$launch` resolve privately — a second
+/// plugin registering its own `$jit` never collides.  The plugin itself is
+/// program-generic; only this composition site names [`LangProgram`].
+static JIT_OP: JitOp = JitOp;
+static LAUNCH_OP: LaunchOp = LaunchOp;
+static COMPUTE_OPS: [(&str, &dyn NativeOp<LangProgram>); 2] = [
+    ("jit", &JIT_OP),
+    ("launch", &LAUNCH_OP),
+];
+
+fn compute_native_ops() -> NativeOps<LangProgram> {
+    &COMPUTE_OPS
+}
 
 /// A loaded package: the path, its registry key, and the static ref to the
 /// exported final `[value, type]` pair (the package's final expression).
@@ -185,7 +203,7 @@ impl PackageStore {
     /// *private* native registry — the only compilation that resolves its
     /// `$jit`/`$launch` calls.
     fn register_compute(&mut self) -> Result<PackageHandle, String> {
-        let source = crate::compute::WRAPPER_SOURCE;
+        let source = WRAPPER_SOURCE;
         let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
         if !diags.is_empty() {
             return Err(diags.drain(..).map(|d| d.message).collect::<Vec<_>>().join("\n"));
@@ -197,7 +215,7 @@ impl PackageStore {
             Some(self.registry()),
             preprocessed.code_base,
             &line_starts,
-            crate::compute::native_ops(),
+            compute_native_ops(),
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(
