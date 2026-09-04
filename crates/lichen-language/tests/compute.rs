@@ -213,3 +213,20 @@ compute(1) k 5
     );
     assert_eq!(out, "20: Int", "conditional (else) produced: {out:?}");
 }
+
+#[test]
+fn jit_nested_tuple_domain() {
+    // A nested tuple domain `((Int, Int), Int)`: the parameter flattens to
+    // three wasm i64 locals, and `p(0)(0) + p(0)(1) + p(1)` reads them at
+    // their flattened offsets (0, 1, 2).  Exercises recursive LowShape.
+    let out = run(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute(0) (p : ((Int, Int), Int) => p(0)(0) + p(0)(1) + p(1))
+compute(1) k ((2, 3), 4)
+"#,
+    );
+    assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
+}

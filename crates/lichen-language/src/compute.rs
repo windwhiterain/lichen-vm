@@ -132,27 +132,21 @@ impl OperatorExt<LangProgram> for ComputeOperator {
                     return LangValue::from(LowValue::Parameterized);
                 };
                 // The argument is a scalar `USize` for an arity-1 kernel, or
-                // an `Array` of `USize` for a tuple-domain kernel.  Anything
-                // else (a non-literal element, e.g. a computed scalar) stays
-                // lazy — the definition pass reports the unbound result.
-                let args: Vec<i64> =
-                    match module.node_value(operands[1].node).and_then(|v| v.as_enum()) {
-                        Some(LowValue::USize(n)) => vec![n as i64],
-                        Some(LowValue::Array(arr)) => {
-                            let mut out = Vec::with_capacity(arr.items().len());
-                            for item in arr.items() {
-                                let Some(LowValue::USize(n)) = module
-                                    .node_value(item.node)
-                                    .and_then(|v| v.as_enum())
-                                else {
-                                    return LangValue::from(LowValue::Parameterized);
-                                };
-                                out.push(n as i64);
-                            }
-                            out
+                // an `Array` (possibly nested for a tuple-of-tuples domain)
+                // for a tuple-domain kernel.  Flatten it to the wasm argument
+                // vector.  Anything else (a non-literal element, e.g. a
+                // computed scalar) stays lazy — the definition pass reports
+                // the unbound result.
+                let mut args: Vec<i64> = Vec::new();
+                match module.node_value(operands[1].node).and_then(|v| v.as_enum()) {
+                    Some(LowValue::USize(n)) => args.push(n as i64),
+                    Some(LowValue::Array(_)) => {
+                        if !collect_args(module, operands[1].node, &mut args) {
+                            return LangValue::from(LowValue::Parameterized);
                         }
-                        _ => return LangValue::from(LowValue::Parameterized),
-                    };
+                    }
+                    _ => return LangValue::from(LowValue::Parameterized),
+                };
                 match run_kernel(id, &args) {
                     Ok(result) => LangValue::from(LowValue::USize(result)),
                     Err(..) => LangValue::from(LowValue::Parameterized),
@@ -196,8 +190,7 @@ fn codegen_function(
     // re-deriving the type half.
     let param_shape = kernel_param_shape(module, param_pair)?;
     let arity = match &param_shape {
-        LowShape::USize => 1,
-        LowShape::Tuple(items) => items.len(),
+        LowShape::USize | LowShape::Tuple(_) => flat_arity(&param_shape),
         _ => {
             return Err("kernel domain must be a scalar or a tuple of scalars".into());
         }
@@ -245,8 +238,18 @@ fn kernel_param_shape(
     let Some(type_cell) = pair.get(1) else {
         return Ok(LowShape::USize);
     };
-    let type_cell = dyn_node(type_cell.node)?;
-    let Some(type_items) = module.array_items(type_cell) else {
+    element_shape(module, type_cell.node)
+}
+
+/// The [`LowShape`] of a type value node — recursive, so a tuple whose
+/// element is itself a tuple yields a nested [`LowShape::Tuple`].  A type's
+/// value is `[shape, kind]`; a tuple type's `shape` is an array of element
+/// types (each recursed), a scalar `Int`'s `shape` is the `Int` marker (a
+/// leaf → `USize`).  The `_` fallback keeps an unannotated `x => x + 1`
+/// compiling (its type cell ends up `[Int, k]`, element 0 a leaf).
+fn element_shape(module: &Module<LangProgram>, type_node: AnyNodeId) -> Result<LowShape, String> {
+    let type_node = dyn_node(type_node)?;
+    let Some(type_items) = module.array_items(type_node) else {
         return Ok(LowShape::USize);
     };
     if type_items.len() < 2 {
@@ -257,16 +260,25 @@ fn kernel_param_shape(
         .node_value(AnyNodeId::Dynamic(shape))
         .and_then(|v| v.as_enum())
     {
-        // A tuple type's shape is an array of its element types — its length
-        // is the arity.  The kernel-safe subset treats every element as a
-        // scalar `Int`, so the tuple shape is `[USize; n]`.
         Some(LowValue::Array(shape_array)) => {
-            Ok(LowShape::Tuple(vec![LowShape::USize; shape_array.items().len()]))
+            let mut items = Vec::with_capacity(shape_array.items().len());
+            for item in shape_array.items() {
+                items.push(element_shape(module, item.node)?);
+            }
+            Ok(LowShape::Tuple(items))
         }
-        // A scalar `Int` type's element 0 is the `Int` marker (a leaf) →
-        // arity 1.  The `_` fallback keeps an unannotated `x => x + 1`
-        // compiling (its type cell ends up `[Int, k]`, element 0 a leaf).
         _ => Ok(LowShape::USize),
+    }
+}
+
+/// The number of scalar `i64` locals a domain shape flattens to — the wasm
+/// parameter count.  A scalar is one local; a tuple is the sum of its
+/// elements' arities (so `((Int,Int), Int)` is `1 + 1 + 1 = 3`).
+fn flat_arity(shape: &LowShape) -> usize {
+    match shape {
+        LowShape::USize => 1,
+        LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
+        LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
     }
 }
 
@@ -322,51 +334,24 @@ fn emit_node(
         },
         LangOperator::LowOperator(LowOperator::Index) => {
             let (target, index) = operand_pair(module, operation.operand)?;
-            // The parameter's domain shape — the stored marker that decides
-            // whether a parameter read is a scalar (`local.get 0`) or a
-            // tuple-element read (`local.get k`).
-            let param_is_tuple = matches!(
-                module.node_shape(param_value),
-                Some(LowShape::Tuple(_))
-            );
-            // Scalar parameter read: `Index(param_pair, 0)` → `local.get 0`.
-            if target == param_pair {
-                if param_is_tuple {
-                    return Err(
-                        "tuple-domain kernel cannot read the parameter value directly".into()
-                    );
-                }
-                let index_is_zero = module
-                    .node_value(AnyNodeId::Dynamic(index))
-                    .and_then(|v| v.as_enum())
-                    .is_some_and(|v| matches!(v, LowValue::USize(0)));
-                if !index_is_zero {
-                    return Err("parameter value index must be 0".into());
-                }
-                body.instruction(&Instruction::LocalGet(0));
-                return Ok(());
-            }
-            // Tuple-element parameter read: `Index(Index(param_pair, 0), k)`
-            // → `local.get k`.  `target` is the parameter's *value* node iff
-            // its operation is `Index(param_pair, 0)`.
-            if is_param_value(module, param_pair, target) {
-                if !param_is_tuple {
-                    return Err("scalar-domain kernel cannot index the parameter".into());
-                }
-                let Some(LowValue::USize(k)) = module
-                    .node_value(AnyNodeId::Dynamic(index))
-                    .and_then(|v| v.as_enum())
-                else {
-                    return Err("tuple element index must be a constant usize".into());
-                };
-                body.instruction(&Instruction::LocalGet(k as u32));
+            // A read of the parameter at some index path → a wasm `local.get`.
+            // `param_path` returns `Some(..)` for `Index(param_pair, k)`
+            // (scalar domain) and for `Index(Index(param_pair, 0).., k)` (a
+            // flat or nested tuple element); `None` for a structured-array
+            // index (the `if` conditional).
+            if let Some(path) = param_path(module, param_pair, node) {
+                let domain = module
+                    .node_shape(param_value)
+                    .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
+                let offset = flatten_offset(domain, &path)?;
+                body.instruction(&Instruction::LocalGet(offset as u32));
                 return Ok(());
             }
             // Conditional branch: `if c then a else b` lowers to `[b, a][c]`
-            // — a 2-element array indexed by a 0/1 selector, which is a
-            // wasm `select`.  Push the then-branch, the else-branch, then the
-            // selector (wrapped to i32), and `select` picks the then-branch
-            // when the selector is non-zero.
+            // — a 2-element array indexed by a 0/1 selector, a wasm `select`.
+            // Push the then-branch, the else-branch, then the selector
+            // (wrapped to i32); `select` picks the then-branch when the
+            // selector is non-zero.
             if let Some(items) = module.array_items(target) {
                 if items.len() == 2 {
                     let then_node = dyn_node(items[1].node)?;
@@ -414,6 +399,99 @@ fn is_param_value(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId
         .node_value(AnyNodeId::Dynamic(index))
         .and_then(|v| v.as_enum())
         .is_some_and(|v| matches!(v, LowValue::USize(0)))
+}
+
+/// The constant `USize` value behind `node`, if it is one (an `Index`'s
+/// selector must be a compile-time constant in a kernel body).
+fn usize_value(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
+    match module
+        .node_value(AnyNodeId::Dynamic(node))
+        .and_then(|v| v.as_enum())
+    {
+        Some(LowValue::USize(n)) => Some(n),
+        _ => None,
+    }
+}
+
+/// The index *path* from the parameter to the value `node` reads, if `node` is
+/// a parameter read:
+/// - `Index(param_pair, 0)` (a scalar domain value) → `[]`,
+/// - `Index(param_value, k)` (a flat tuple element) → `[k]`,
+/// - `Index(Index(param_value, a), b)` (a nested tuple element) → `[a, b]`.
+///
+/// Any other `Index` (a structured-array conditional, an out-of-domain
+/// index) is `None`.
+fn param_path(module: &Module<LangProgram>, param_pair: NodeId, node: NodeId) -> Option<Vec<usize>> {
+    let operation = module.nodes[node].operation?;
+    if !matches!(operation.operator, LangOperator::LowOperator(LowOperator::Index)) {
+        return None;
+    }
+    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    let k = usize_value(module, index)?;
+    if target == param_pair {
+        // `Index(param_pair, k)`: the parameter's value node.  Read directly
+        // only for a scalar domain (`k == 0`), i.e. the empty path.
+        return Some(if k == 0 { vec![] } else { vec![k] });
+    }
+    if is_param_value(module, param_pair, target) {
+        // `Index(param_value, k)` — a direct tuple element read.
+        return Some(vec![k]);
+    }
+    // `target` is itself a deeper parameter read (a nested tuple element).
+    let mut path = param_path(module, param_pair, target)?;
+    path.push(k);
+    Some(path)
+}
+
+/// Flatten a parameter index `path` to a wasm local index, using the domain
+/// `shape`: a tuple's element `i` starts at the sum of its `[..i]` elements'
+/// flattened arities.  A scalar domain (empty path) is `local 0`.
+fn flatten_offset(domain: &LowShape, path: &[usize]) -> Result<usize, String> {
+    let mut offset = 0;
+    let mut cur = domain;
+    for &i in path {
+        match cur {
+            LowShape::Tuple(items) => {
+                if i >= items.len() {
+                    return Err(format!("parameter index {i} out of bounds"));
+                }
+                for item in &items[..i] {
+                    offset += flat_arity(item);
+                }
+                cur = &items[i];
+            }
+            LowShape::USize => {
+                // Descending into a scalar (a non-empty path) is a type error
+                // the checker should have caught; a scalar domain is only ever
+                // read as the empty path.
+                return Err("index into a scalar parameter".into());
+            }
+            _ => return Err("unsupported parameter domain shape".into()),
+        }
+    }
+    Ok(offset)
+}
+
+/// Flatten a kernel argument value (a scalar `USize` leaf, or a possibly
+/// nested `Array` of them, as a tuple-of-tuples domain needs) into the wasm
+/// argument vector.  Returns `false` if any element is not a scalar `USize`
+/// leaf — the definition pass reports the unbound result.
+fn collect_args(module: &Module<LangProgram>, node: AnyNodeId, out: &mut Vec<i64>) -> bool {
+    match module.node_value(node).and_then(|v| v.as_enum()) {
+        Some(LowValue::USize(n)) => {
+            out.push(n as i64);
+            true
+        }
+        Some(LowValue::Array(arr)) => {
+            for item in arr.items() {
+                if !collect_args(module, item.node, out) {
+                    return false;
+                }
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Read a binary op/Index operand array `[a, b]` as two dynamic node ids.
