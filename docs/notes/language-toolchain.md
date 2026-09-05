@@ -100,12 +100,14 @@ wants tokens+AST would be pulling in more than it prints. For now the tools
 depend on `lichen-language` directly — the sharing wins matter far more than the
 weight, and `wasmi`/`wasm-encoder` are already compiled into any tool that
 evaluates a program. If the weight ever matters, the *clean* seam is to lift the
-syntax-only modules (`lex`, `ast`, `parse`, and the syntactic half of `diag`)
-into a `lichen-language-frontend` crate and `pub use` them back through
+syntax-only modules out of `lichen-language` — the lexer into a `lichen-language-lex`
+crate (which owns `Span`), the parser into a `lichen-language-parser` crate (which
+consumes the lex crate's `Token`/`Span`) — and `pub use` them back through
 `lichen-language`, so existing module paths (`lichen_language::lex::…`) never
-change. That is a refactor, not a redesign; the artifact contract above is
-unchanged by it. The concrete design — the crate layout, the `Span` and
-`Diag`/`Stage` decoupling seams, and the step-by-step migration — is
+change. `lichen-highlevel` becomes span-free in the same move (the source-position
+index moves to `lichen-language`). That is a refactor, not a redesign; the artifact
+contract above is unchanged by it. The concrete design — the crate layout, the `Span`
+and `Diag`/`Stage` decoupling seams, and the step-by-step migration — is
 [frontend-syntax-separation](frontend-syntax-separation.md).
 
 ### What about cross-process sharing?
@@ -238,6 +240,18 @@ not pull the tokio/tower async stack.
   LSP, so the extension neither needs the grammar for color nor needs any extra
   client-side config — Zed requests `textDocument/semanticTokens/full` because
   the server advertises the capability.
+- **The LSP binary must be on `$PATH`.** The extension does not bundle
+  `lichen-language-server` (per Zed's publishing rules); `language_server_command`
+  resolves it with `Worktree::which`, which searches `$PATH`. Build and install it
+  from this checkout (this puts it on `~/.cargo/bin`, on a stock Cargo `$PATH`),
+  then restart Zed:
+
+  ```text
+  cargo install --path crates/lichen-language-server
+  ```
+
+  Without it Zed reports "`lichen-language-server` not found on `$PATH`" when a
+  `.lichen` buffer is opened.
 
 ## Fitting future tools into the model
 

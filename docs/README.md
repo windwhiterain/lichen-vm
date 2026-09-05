@@ -46,7 +46,8 @@ Every note opens with a `> Status:` line:
 | [README example sync](notes/readme-sync.md) | `lichen-language` (`readme`) | current |
 | [Build performance](notes/build-performance.md) | `lichen-language` (`parse`) | historical |
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language` (`lex`/`parse`/`compile`), `lichen-highlevel` (`checker`) | proposed |
-| [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language` (`lex`/`parse`/`ast`/`diag`/`preprocess`), `lichen-language-frontend` (proposed) | proposed |
+| [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language` (`lex`/`parse`/`ast`/`diag`/`compile`), `lichen-language-lex` / `lichen-language-parser` (proposed) | proposed |
+| [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
 
 ## The language spec
 
