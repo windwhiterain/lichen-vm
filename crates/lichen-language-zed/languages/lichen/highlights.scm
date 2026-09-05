@@ -19,6 +19,11 @@
 (placeholder) @variable
 (type_constant) @type.builtin
 
+; named fields (`.name` reads, struct field / argument names)
+(field_read name: (identifier) @property)
+(struct_field (identifier) @property)
+(parenthesized name: (identifier) @property)
+
 ; bindings / definitions
 (binding name: (identifier) @variable)
 
@@ -30,6 +35,9 @@
 "struct" @keyword
 "table" @keyword
 "import" @keyword
+"return" @keyword
+"pub" @keyword
+(type_of) @keyword
 
 ; operators
 "->" @operator
@@ -37,6 +45,7 @@
 "::" @operator
 ":" @operator
 "#" @operator
+"?" @operator
 "!" @operator
 "$" @operator
 "==" @operator

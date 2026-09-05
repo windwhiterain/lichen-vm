@@ -43,6 +43,10 @@
           {
             "type": ":",
             "named": false
+          },
+          {
+            "type": "?",
+            "named": false
           }
         ]
       },
@@ -127,6 +131,10 @@
         },
         {
           "type": "type_constant",
+          "named": true
+        },
+        {
+          "type": "type_of",
           "named": true
         }
       ]
@@ -308,11 +316,37 @@
       "required": false,
       "types": [
         {
-          "type": "separator",
+          "type": "block_stmt",
           "named": true
         },
         {
-          "type": "statements",
+          "type": "separator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block_stmt",
+    "named": true,
+    "fields": {
+      "value": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": false,
+      "types": [
+        {
+          "type": "statement",
           "named": true
         }
       ]
@@ -468,15 +502,32 @@
   {
     "type": "parenthesized",
     "named": true,
-    "fields": {},
+    "fields": {
+      "name": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "value": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
     "children": {
       "multiple": true,
       "required": false,
       "types": [
-        {
-          "type": "expression",
-          "named": true
-        },
         {
           "type": "separator",
           "named": true
@@ -798,6 +849,10 @@
     "named": false
   },
   {
+    "type": "?",
+    "named": false
+  },
+  {
     "type": "@{",
     "named": false
   },
@@ -850,6 +905,14 @@
     "named": true
   },
   {
+    "type": "pub",
+    "named": false
+  },
+  {
+    "type": "return",
+    "named": false
+  },
+  {
     "type": "string",
     "named": false
   },
@@ -868,6 +931,10 @@
   {
     "type": "then",
     "named": false
+  },
+  {
+    "type": "type_of",
+    "named": true
   },
   {
     "type": "{",

@@ -99,7 +99,7 @@ module.exports = grammar({
 
     annotation: $ => prec.right(PREC.annotation, seq(
       field('value', $.expression),
-      field('operator', choice(':', '#')),
+      field('operator', choice(':', '#', '?')),
       field('annotation', $.expression),
     )),
 
@@ -143,6 +143,7 @@ module.exports = grammar({
       $.string_literal,
       $.placeholder,
       $.type_constant,
+      $.type_of,
       $.parenthesized,
       $.array,
       $.angle_tuple,
@@ -165,11 +166,28 @@ module.exports = grammar({
 
     type_constant: $ => choice('Int', 'string', 'Type'),
 
-    // `( e )` grouping / `(e1, e2, ...)` tuple.
+    // `type_of` — an ordinary first-class function value applied by
+    // juxtaposition (`type_of e`); kept as its own atom so it highlights as a
+    // keyword rather than a variable.
+    type_of: $ => 'type_of',
+
+    // `( e )` grouping / `(e1, e2, ...)` tuple.  An element may be a named
+    // struct-field argument `.field value` (struct instantiation / field
+    // read) or a bare expression; the grammar is lenient and accepts either
+    // everywhere.
     parenthesized: $ => seq(
       '(',
-      optional(seq($.expression, repeat(seq($.separator, $.expression)), optional($.separator))),
+      optional(seq(
+        $._paren_element,
+        repeat(seq($.separator, $._paren_element)),
+        optional($.separator),
+      )),
       ')'
+    ),
+
+    _paren_element: $ => seq(
+      optional(seq('.', field('name', $.identifier))),
+      field('value', $.expression),
     ),
 
     // `[e1, e2, ...]` array literal.  Elements may be `~`-marked; a bare
@@ -223,12 +241,24 @@ module.exports = grammar({
       field('value', $.expression),
     ),
 
-    // `{ stmt; ...; expr }` block.
+    // `{ stmt; ...; expr }` block.  A statement may be `pub`-marked (a block
+    // struct field); an explicit `return expr` anywhere is the block's tail.
     block: $ => seq(
       '{',
       optional($.separator),
-      optional($.statements),
+      optional(seq(
+        $.block_stmt,
+        repeat(seq($.separator, $.block_stmt)),
+        optional($.separator),
+      )),
       '}',
+    ),
+
+    // A block-body item.  The language only permits `pub`/`return` inside a
+    // block, so they are reserved here (not at the top level).
+    block_stmt: $ => choice(
+      seq('return', field('value', $.expression)),
+      seq(optional('pub'), $.statement),
     ),
 
     // `if <cond> then <then> else <else>`.

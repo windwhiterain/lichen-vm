@@ -76,6 +76,9 @@ fn edge_cases_parse_without_error_nodes() {
         "let a = 1\na",                   // restrictive binding
         "T = struct<.x Int, .y Type>\nT", // named struct fields
         "t = table{}\nt",                 // empty constant table
+        "f = type_of\ng = x => type_of x\nf 1", // `type_of` first-class function
+        "v = 5 # 8 ? doc\n{ return v }\nv",     // `?` doc annotation + `return` block tail
+        "b = { pub a = 1; a }\nb",               // `pub`-marked block statement
     ];
 
     for (idx, src) in cases.iter().enumerate() {
