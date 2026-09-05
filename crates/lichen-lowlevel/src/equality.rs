@@ -307,6 +307,23 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                     return true;
                 }
+                // A pending *field/positional read* over an (ultimately)
+                // unbound container, unified against a *type value*, is
+                // deferred by joining the classes.  The read's own type is a
+                // `[value,type]`-shaped pair too, so once the container binds
+                // to a concrete struct the read resolves to the field's actual
+                // type and the join pins it — a genuine mismatch is caught
+                // then, at apply time, not masked here.  The deferral is
+                // deliberately narrow: only an `Index` read (neither a
+                // resolved read nor e.g. arithmetic or a dependent-type
+                // branch) and only against a type value (not a scalar), so an
+                // unresolvable real computation still records an error.
+                if (pending_a && self.is_pending_index_read(ra) && self.class_holds_type(rb))
+                    || (pending_b && self.is_pending_index_read(rb) && self.class_holds_type(ra))
+                {
+                    self.add_equality(ra, rb);
+                    return true;
+                }
                 self.record_error(ra, rb, steps, root);
                 return false;
             }
@@ -544,6 +561,50 @@ impl<P: Program> Module<P> {
             return None;
         };
         container_ptr.items().get(index).map(|item| item.node)
+    }
+
+    /// Whether `rep`'s class holds a *pending field/positional read*: an
+    /// `Index` operation whose operand container (or index) is not yet
+    /// concrete, so the read is a lazy reference that resolves once the
+    /// container binds.  Distinct from a resolved read (handled by
+    /// [`Self::alias_index`]) and from a non-`Index` pending computation
+    /// (arithmetic, a dependent-type branch), which must not be deferred.
+    fn is_pending_index_read(&self, rep: NodeId) -> bool {
+        let Some(op) = self.pending_op(rep) else {
+            return false;
+        };
+        let Some(Operation { operator, .. }) = self.nodes[op].operation else {
+            return false;
+        };
+        if !matches!(operator.as_enum(), Some(LowOperator::Index)) {
+            return false;
+        }
+        self.index_target(op).is_none()
+    }
+
+    /// Whether `rep`'s class holds a *type value* — a `[shape, kind]` pair
+    /// whose kind is `[marker, universe]` (an arrow, tuple, struct, atomic
+    /// type, …).  A field/positional read's TYPE is such a pair, so unifying
+    /// the pending read against a plain type is the safe deferral in
+    /// [`Self::unify_inner`]; unifying against a *scalar* (an `Int` value as
+    /// opposed to its type) is not a type round-trip and is left to fail.
+    fn class_holds_type(&mut self, rep: NodeId) -> bool {
+        let Some(value) = self.nodes[rep].value else {
+            return false;
+        };
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return false;
+        };
+        let items = array.items();
+        if items.len() != 2 {
+            return false;
+        }
+        let Some(LowValue::Array(kind)) = self.node_value(items[1].node).and_then(|v| v.as_enum())
+        else {
+            return false;
+        };
+        let kind_items = kind.items();
+        kind_items.len() == 2 && self.is_universe_id(kind_items[1].node)
     }
 
     /// The first pending operation node in `rep`'s class, if any.

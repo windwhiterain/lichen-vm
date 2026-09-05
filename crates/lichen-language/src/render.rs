@@ -71,9 +71,10 @@ where
     &lang_value_render::<P>
 }
 
-/// [`print_type`] with the language's extension vocabulary: a kernel type
-/// (`[sig, [TypeKernel, K]]`, which mirrors a function type) renders as
-/// `in -> out` and its kind marker as `Kernel`.
+/// [`print_type`] with the language's extension vocabulary: a kernel value's
+/// signature rides in its struct's `.sig` field, so its type renders as the
+/// struct `struct<.native _, .sig in -> out>` and the artifact value
+/// (`Kernel`/`ParKernel`/`Buffer`) by name.
 pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
 where
     P: HighProgram + 'static,

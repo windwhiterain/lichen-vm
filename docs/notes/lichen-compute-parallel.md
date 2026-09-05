@@ -2,8 +2,8 @@
 
 > Status: current — implemented as an extension of the `lichen-compute` native
 > plugin (see [lichen-compute.md](lichen-compute.md)).  Companion to
-> [compute-kernel-struct.md](compute-kernel-struct.md) (a separate, not-yet-merged
-> change to split call/launch/run for *scalar* kernels).
+> [compute-kernel-struct.md](compute-kernel-struct.md) (kernels — scalar and
+> parallel — are `.native`/`.sig` structs).
 > Points at: `crates/lichen-compute/src/compute.lichen` (the wrapper),
 > `crates/lichen-compute/src/compute.rs` (`ComputeValue`/`ComputeOperator`,
 > `compile_parallel_fragment`, `run_parallel_kernel`, the four new native ops),
@@ -27,9 +27,10 @@ compute.pcollect p                    -- collect → [10, 11, 12, 13]
 
 ## 1. Vocabulary additions
 
-- **`ComputeValue`** gains `ParKernel(KernelId)`, `TypeParKernel`,
-  `Buffer(BufferId)`, `TypeBuffer` — all `Copy` host-owned scalars (ids into the
-  process registries), so no arena/GC change, exactly like `Kernel(KernelId)`.
+- **`ComputeValue`** gains `ParKernel(KernelId)`, `Buffer(BufferId)`, `TypeBuffer` —
+  all `Copy` host-owned scalars (ids into the process registries), so no arena/GC
+  change, exactly like `Kernel(KernelId)`.  There is **no** `TypeParKernel` kind
+  marker: a parallel kernel is a `.native`/`.sig` struct, like a scalar kernel.
 - **`ComputeOperator`** gains `Parallel`, `ParLaunch`, `BufferGet`,
   `BufferCollect`.
 
@@ -45,12 +46,12 @@ A `ParKernel` reuses the kernel registry (`kernels()`/`NEXT_KERNEL_ID`); a
 
 ```
 {
-  jit      = f => $jit(f)
-  launch   = k => a => $launch(k, a)
-  parallel = f => $parallel(f)          -- (?a -> USize -> ?b) -> ParKernel
-  plrun    = k => a => $plrun(k, a)     -- ParKernel -> (?a, USize) -> Buffer
-  pget     = b => i => $pget(b, i)      -- Buffer -> USize -> ?b
-  pcollect = b => $pcollect(b)          -- Buffer -> [?b]
+  jit      = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
+  launch   = k => a => $launch(k.native, k.sig, a)
+  parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f), .sig _)
+  plrun    = k => a => $plrun(k.native, k.sig, a)   -- ParKernel -> (?a, USize) -> Buffer
+  pget     = b => i => $pget(b, i)                  -- Buffer -> USize -> ?b
+  pcollect = b => $pcollect(b)                      -- Buffer -> [?b]
 }
 ```
 
@@ -62,10 +63,9 @@ operand array and makes the launcher read a lazily-`Parameterized` operand; the
 
 ## 3. Type encodings
 
-- **ParKernel type** = `[sig, [TypeParKernel, Type]]`, `sig = [?a, Int -> ?b]`
-  (the *lifted* `?a -> USize -> ?b`, re-headed by `TypeParKernel`).  Keeping the
-  codomain a *full* function type is what makes the renderer spell the whole
-  thing `?a -> Int -> ?b` (`is_function_kind` on `TypeParKernel`).
+- **ParKernel type** = a `.native`/`.sig` struct, `struct<.native _, .sig ?a -> Int -> ?b>`
+  (the *lifted* `?a -> USize -> ?b` in the `.sig` field).  The codomain is a full
+  function type, so the renderer spells the `.sig` as `?a -> Int -> ?b`.
 - **Buffer type** = `[?b, [TypeBuffer, Type]]` — the element type `?b` is read by
   `pget`/`pcollect`.
 - `parallel`'s **curried-arrow gate**: unify `f` with `?a -> r0`, then `r0` with
@@ -123,5 +123,5 @@ reassembled in index order.  The results are stored under a fresh `BufferId` and
 
 `tests/compute.rs` covers the scalar config (`plrun`/`pget`), `pcollect` to an
 array, a **tuple config** (`(Int, Int) -> Int` domain), and the `ParKernel`
-value/type render (`ParKernel: Int -> Int -> Int`).  The full file (25 tests)
-passes alongside the original `jit`/`launch` suite.
+value/type render (`(ParKernel, parameterized): struct<.native [?a, ?b], .sig Int -> Int -> Int>`).
+The full file (25 tests) passes alongside the original `jit`/`launch` suite.

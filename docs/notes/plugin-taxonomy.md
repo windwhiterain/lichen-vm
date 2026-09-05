@@ -66,7 +66,7 @@ one manifest line** (and one op-registry line).
 `lang_compose_vocabulary!` generates the *whole* composed program, not just the
 enums: for a plugin set it also emits the `ValueExt` / `ValueType` /
 `OperatorExt` impls (the type-constant markers delegated to the core
-`TypeValue` leaf, function-kind markers via each leaf's `FunctionKind`, and the
+`TypeValue` leaf and the
 operator union's `run` dispatching every leaf).  So a composed program marker is
 a live, executable `Program` — its operators actually run, and a plugin compiler
 can be driven over it.
