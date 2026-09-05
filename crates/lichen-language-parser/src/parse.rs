@@ -537,19 +537,20 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
 
         // Application: juxtaposition, left-associative, binds tighter than
         // every operator.
-        let application =
-            atom.clone()
-                .then(atom.repeated().collect::<Vec<_>>())
-                .map(|(f, args)| {
-                    args.into_iter().fold(f, |acc, arg| {
-                        let span = acc.span();
-                        Expr::Apply {
-                            function: Box::new(acc),
-                            argument: Box::new(arg),
-                            span,
-                        }
-                    })
-                });
+        let application = atom
+            .clone()
+            .then(atom.repeated().collect::<Vec<_>>())
+            .map(|(f, args)| {
+                args.into_iter().fold(f, |acc, arg| {
+                    let span = acc.span();
+                    Expr::Apply {
+                        function: Box::new(acc),
+                        argument: Box::new(arg),
+                        span,
+                    }
+                })
+            })
+            .boxed();
 
         // `+` / `-`, left-associative.
         let arith = choice((
@@ -691,6 +692,7 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                     }
                 },
             })
+            .boxed()
     })
 }
 
