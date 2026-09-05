@@ -5,12 +5,13 @@ edition = "2024"
 default-run = "lichen"
 
 [dependencies]
-chumsky = "0.13.0"
 logos = "0.16"
 sha2 = "0.10"
 lichen-compute = { path = "../lichen-compute" }
 lichen-doc = { path = "../lichen-doc" }
 lichen-highlevel = { path = "../lichen-highlevel" }
+lichen-language-lex = { path = "../lichen-language-lex" }
+lichen-language-parser = { path = "../lichen-language-parser" }
 lichen-perspective = { path = "../lichen-perspective" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
 lichen-render = { path = "../lichen-render" }

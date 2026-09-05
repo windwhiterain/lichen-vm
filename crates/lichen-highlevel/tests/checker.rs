@@ -25,25 +25,18 @@ fn dyn_node(id: AnyNodeId) -> NodeId {
 }
 
 fn int(ir: &mut IR, n: u64) -> ExprId {
-    ir.alloc(
-        ExprKind::Literal(HighProgramLiteral::from(IntLit(n as usize))),
-        None,
-    )
+    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntLit(
+        n as usize,
+    ))))
 }
 fn ty(ir: &mut IR) -> ExprId {
-    ir.alloc(
-        ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
-        None,
-    )
+    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)))
 }
 fn int_t(ir: &mut IR) -> ExprId {
-    ir.alloc(
-        ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)),
-        None,
-    )
+    ir.alloc(ExprKind::Literal(HighProgramLiteral::from(IntTypeLit)))
 }
 fn param(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Parameter, None)
+    ir.alloc(ExprKind::Parameter)
 }
 fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
     lam_at(ir, b, body, 0)
@@ -56,99 +49,81 @@ fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, depth: u32) -> ExprId {
 }
 /// A lambda whose parameter carries its annotated type — `x : T => e`.
 fn lam_at_typed(ir: &mut IR, b: ExprId, t: Option<ExprId>, body: ExprId, depth: u32) -> ExprId {
-    ir.alloc(
-        ExprKind::Function {
-            parameter: b,
-            parameter_type: t,
-            parameter_attribute: None,
-            r#return: body,
-            depth,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::Function {
+        parameter: b,
+        parameter_type: t,
+        parameter_attribute: None,
+        r#return: body,
+        depth,
+    })
 }
 fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::Apply {
-            function: f,
-            argument: x,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::Apply {
+        function: f,
+        argument: x,
+    })
 }
 /// `a[i]` — an array-element read (the container is pinned to an array).
 fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Index { array: a, index: i }, None)
+    ir.alloc(ExprKind::Index { array: a, index: i })
 }
 /// `a(k)` — a positional slot read over a tuple element or struct field.
 fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::Field {
-            container: c,
-            key: k,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::Field {
+        container: c,
+        key: k,
+    })
 }
 fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::Annotation {
-            value: e,
-            r#type: Some(t),
-            attributes: ChildRange::EMPTY,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::Annotation {
+        value: e,
+        r#type: Some(t),
+        attributes: ChildRange::EMPTY,
+    })
 }
 fn arrow(ir: &mut IR, d: ExprId, c: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::TypeFunction {
-            parameter: d,
-            r#return: c,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::TypeFunction {
+        parameter: d,
+        r#return: c,
+    })
 }
 fn tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_tuple(elements, None)
+    ir.alloc_tuple(elements)
 }
 /// A tuple type expression: `[int, int]`.
 fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_type_tuple(elements, None)
+    ir.alloc_type_tuple(elements)
 }
 /// A struct type expression: `struct<T1, ..., Tn>` — positional fields.
 fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> = fields.iter().map(|&e| (e, None)).collect();
-    ir.alloc_type_struct(&fields, None)
+    ir.alloc_type_struct(&fields)
 }
 /// A struct type expression with field names: `struct<a :: T1, b :: T2>`.
 fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> =
         fields.iter().map(|&(e, name)| (e, Some(name))).collect();
-    ir.alloc_type_struct(&fields, None)
+    ir.alloc_type_struct(&fields)
 }
 /// An array literal: `[1, 2]` — all elements share one type.
 fn array(ir: &mut IR, elements: &[ExprId]) -> ExprId {
-    ir.alloc_array(elements, None)
+    ir.alloc_array(elements)
 }
 /// The real array type: `Array(int, 3)` = `int[3]`.
 fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::TypeArray {
-            element_type,
-            length,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::TypeArray {
+        element_type,
+        length,
+    })
 }
 /// `_` — an inference placeholder in type position.
 fn hole(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::Placeholder, None)
+    ir.alloc(ExprKind::Placeholder)
 }
 /// A recovered-error region — an opaque leaf the checker must skip.  Distinct
 /// from [`hole`], so the frontend can identify it for a diff / mask.
 fn err_block(ir: &mut IR) -> ExprId {
-    ir.alloc(ExprKind::ErrorBlock, None)
+    ir.alloc(ExprKind::ErrorBlock)
 }
 
 fn build(root: ExprId, mut ir: IR) -> lichen_highlevel::checker::Build<ProgramImpl> {
@@ -709,7 +684,7 @@ fn types_are_first_class() {
 /// one-parameter lambda whose body is `ExprKind::TypeOf` over the parameter.
 fn type_of_fn(ir: &mut IR) -> ExprId {
     let b = param(ir);
-    let body = ir.alloc(ExprKind::TypeOf { value: b }, None);
+    let body = ir.alloc(ExprKind::TypeOf { value: b });
     lam(ir, b, body)
 }
 
@@ -749,7 +724,7 @@ fn a_value_annotates_against_its_own_type_of() {
     // exactly as `5 : int` does.
     let mut ir = IR::new();
     let five = int(&mut ir, 5);
-    let read = ir.alloc(ExprKind::TypeOf { value: five }, None);
+    let read = ir.alloc(ExprKind::TypeOf { value: five });
     let a = ann(&mut ir, five, read);
     let mut b = build(a, ir);
     assert!(b.ok, "5 : type_of 5 should check like 5 : int");
@@ -849,16 +824,12 @@ fn annotation_mismatch_reports_expected_found() {
     let five = int(&mut ir, 5);
     let t = ty(&mut ir);
     let a = ann(&mut ir, five, t);
-    ir.expr[five.0 as usize].span = Some((3, 7));
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Annotation);
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((3, 7))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
@@ -877,17 +848,12 @@ fn applying_a_non_function_reports_expected_function() {
     let five = int(&mut ir, 5);
     let six = int(&mut ir, 6);
     let call = app(&mut ir, five, six);
-    ir.expr[five.0 as usize].span = Some((2, 1));
-    ir.expr[call.0 as usize].span = Some((2, 3));
     let b = build(call, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((2, 3))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(call));
     assert_eq!(
         diags[0].value_a,
         Some(HighProgramValue::TypeValue(TypeValue::TypeInt))
@@ -909,16 +875,12 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     let l = lam(&mut ir, x, x);
     let zero = int(&mut ir, 0);
     let idx = index(&mut ir, l, zero);
-    ir.expr[l.0 as usize].span = Some((3, 7));
     let b = build(idx, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((3, 7))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(l));
     assert_eq!(diags[0].a, b.ty[l].unwrap());
 }
 
@@ -947,16 +909,12 @@ fn runtime_apply_mismatch_is_attributed_to_the_argument() {
     let l = lam(&mut ir, x, body);
     let five = int(&mut ir, 5);
     let call = app(&mut ir, l, five);
-    ir.expr[five.0 as usize].span = Some((5, 17));
     let b = build(call, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Runtime);
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((5, 17))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
     // runtime direction is reversed: a = the parameter's expected type,
     // b = the argument's found type
     assert_eq!(
@@ -981,7 +939,6 @@ fn annotating_a_lambda_with_a_mixed_tuple_type_reports_expected_found() {
     let t2 = int_t(&mut ir);
     let t = type_tuple(&mut ir, &[t1, t2]);
     let a = ann(&mut ir, l, t);
-    ir.expr[t1.0 as usize].span = Some((4, 9));
     let b = build(a, ir);
     assert!(!b.ok);
     let diags = b.diagnostics();
@@ -1262,7 +1219,6 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
     let tup = tuple(&mut ir, &[one, two]);
     let five = int(&mut ir, 5);
     let idx = field(&mut ir, tup, five);
-    ir.expr[five.0 as usize].span = Some((3, 9));
     let b = build(idx, ir);
     assert!(!b.ok, "(1, 2)[5] must fail");
     let diags = b.diagnostics();
@@ -1278,10 +1234,7 @@ fn tuple_index_out_of_bounds_renders_a_diagnostic() {
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::USize(2)))
     );
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((3, 9))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
 }
 
 #[test]
@@ -1295,7 +1248,6 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
     let arr = array(&mut ir, &[e1, e2, e3]);
     let five = int(&mut ir, 5);
     let idx = index(&mut ir, arr, five);
-    ir.expr[five.0 as usize].span = Some((4, 11));
     let b = build(idx, ir);
     assert!(!b.ok, "[1, 2, 3][5] must fail");
     let diags = b.diagnostics();
@@ -1311,10 +1263,7 @@ fn array_index_out_of_bounds_renders_a_diagnostic() {
         diags[0].value_b,
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     );
-    assert_eq!(
-        diags[0].loc().and_then(|loc| b.ir[loc.expr].span),
-        Some((4, 11))
-    );
+    assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(five));
 }
 
 #[test]
@@ -1542,7 +1491,6 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
     let f = int_t(&mut ir);
     let s = type_struct(&mut ir, &[f]);
     let a = ann(&mut ir, five, s);
-    ir.expr[s.0 as usize].span = Some((7, 8));
     let b = build(a, ir);
     assert!(!b.ok, "5 : struct {{ Int }} must fail");
     let diags = b.diagnostics();
@@ -1641,7 +1589,7 @@ fn a_shared_expression_compiles_once_with_one_nominal_id() {
 
 /// Struct instantiation: `s(1, 2)` — the struct type applied to a tuple.
 fn instantiate(ir: &mut IR, type_expr: ExprId, value: ExprId) -> ExprId {
-    ir.alloc_instantiate(type_expr, value, &[], None)
+    ir.alloc_instantiate(type_expr, value, &[])
 }
 
 // --- struct instantiation ----------------------------------------------------
@@ -1878,7 +1826,7 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
     let mut ir = IR::new();
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)], None);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)]);
     let mut b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
     let value = b.module.evaluate_node_deep(b.val[arr].unwrap(), None);
@@ -1915,17 +1863,14 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
     let five = int(&mut ir, 5);
     let x = param(&mut ir);
     let one2 = int(&mut ir, 1);
-    let add = ir.alloc(
-        ExprKind::BinOp {
-            operator: lichen_highlevel::ir::BinOp::Add,
-            left: x,
-            right: one2,
-        },
-        None,
-    );
+    let add = ir.alloc(ExprKind::BinOp {
+        operator: lichen_highlevel::ir::BinOp::Add,
+        left: x,
+        right: one2,
+    });
     let lam = lam(&mut ir, x, add);
     let call = app(&mut ir, lam, five);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)], None);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)]);
     let b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
     let ids = array_ids(&b, b.val[arr].unwrap());
@@ -1945,17 +1890,14 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     let five = int(&mut ir, 5);
     let x = param(&mut ir);
     let one2 = int(&mut ir, 1);
-    let add = ir.alloc(
-        ExprKind::BinOp {
-            operator: lichen_highlevel::ir::BinOp::Add,
-            left: x,
-            right: one2,
-        },
-        None,
-    );
+    let add = ir.alloc(ExprKind::BinOp {
+        operator: lichen_highlevel::ir::BinOp::Add,
+        left: x,
+        right: one2,
+    });
     let lam = lam(&mut ir, x, add);
     let call = app(&mut ir, lam, five);
-    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)], None);
+    let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)]);
     let one_idx = int(&mut ir, 1);
     let read = field(&mut ir, arr, one_idx);
     let mut b = build(read, ir);
@@ -1971,14 +1913,11 @@ fn a_read_of_a_shallow_position_forces_the_element() {
 
 /// `a == b` as an IR BinOp.
 fn eq_binop(ir: &mut IR, a: ExprId, b: ExprId) -> ExprId {
-    ir.alloc(
-        ExprKind::BinOp {
-            operator: lichen_highlevel::ir::BinOp::Eq,
-            left: a,
-            right: b,
-        },
-        None,
-    )
+    ir.alloc(ExprKind::BinOp {
+        operator: lichen_highlevel::ir::BinOp::Eq,
+        left: a,
+        right: b,
+    })
 }
 
 #[test]
@@ -1988,7 +1927,7 @@ fn top_level_assert_passes_when_the_condition_is_one() {
     let one = int(&mut ir, 1);
     let one2 = int(&mut ir, 1);
     let cond = eq_binop(&mut ir, one, one2);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
     let b = build(asserted, ir);
     assert!(b.ok, "assert(1 == 1) should check");
     assert!(b.module.assert_errors.is_empty());
@@ -2002,7 +1941,7 @@ fn top_level_assert_fails_when_the_condition_is_not_one() {
     let one = int(&mut ir, 1);
     let two = int(&mut ir, 2);
     let cond = eq_binop(&mut ir, one, two);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
     let b = build(asserted, ir);
     assert!(!b.ok, "assert(1 == 2) must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
@@ -2022,7 +1961,7 @@ fn in_function_assert_passes_for_a_satisfying_argument() {
     let n = param(&mut ir);
     let one = int(&mut ir, 1);
     let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
     let f = lam(&mut ir, n, asserted);
     let one_arg = int(&mut ir, 1);
     let root = app(&mut ir, f, one_arg);
@@ -2043,7 +1982,7 @@ fn in_function_assert_fails_for_a_violating_argument() {
     let n = param(&mut ir);
     let one = int(&mut ir, 1);
     let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
     let f = lam(&mut ir, n, asserted);
     let two_arg = int(&mut ir, 2);
     let root = app(&mut ir, f, two_arg);
@@ -2069,7 +2008,7 @@ fn never_called_function_assert_is_not_triggered() {
     let n = param(&mut ir);
     let one = int(&mut ir, 1);
     let cond = eq_binop(&mut ir, n, one);
-    let asserted = ir.alloc(ExprKind::Assert { condition: cond }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: cond });
     let f = lam(&mut ir, n, asserted);
     let b = build(f, ir);
     assert!(b.ok, "an untriggered assert is no failure");
@@ -2083,7 +2022,7 @@ fn assert_on_a_literal_checks_the_value_itself() {
     // not 1, so the assert fails.
     let mut ir = IR::new();
     let three = int(&mut ir, 3);
-    let asserted = ir.alloc(ExprKind::Assert { condition: three }, None);
+    let asserted = ir.alloc(ExprKind::Assert { condition: three });
     let b = build(asserted, ir);
     assert!(!b.ok, "assert(3) must fail");
     assert_eq!(b.module.assert_errors.len(), 1);

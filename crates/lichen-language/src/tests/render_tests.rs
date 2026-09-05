@@ -302,7 +302,7 @@ fn an_extended_value_renders_through_the_hook() {
     // vocabulary) reads it as an atomic type constant; the extension's
     // own spelling comes from the render hook.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
-    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)), None);
+    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)));
     ir.set_root(float_ty);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok);
@@ -323,7 +323,7 @@ fn an_extended_value_without_a_hook_prints_a_placeholder() {
     // Without a hook the base renderer cannot know the extension's own
     // variant — it degrades to `?` rather than panicking.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
-    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)), None);
+    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)));
     ir.set_root(float_ty);
     let build = Checker::<ProbeProgram>::build(ir);
     let mut module = build.module;

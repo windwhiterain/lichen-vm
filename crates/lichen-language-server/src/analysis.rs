@@ -17,11 +17,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use lichen_highlevel::ir::{ExprId, Span};
+use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
 use lichen_language::ast::{Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
+use lichen_language::lex::Span;
 use lichen_language::lex::{Token, TokenKind};
 use lichen_language::package::PackageStore;
 use lichen_language::parse;
@@ -191,11 +192,14 @@ impl Doc {
         diagnostics.extend(frontend.diagnostics);
         let report = build_report(
             frontend.ir,
+            Some(frontend.span_index),
             diagnostics,
             Some(store.registry()),
             no_native_ops(),
         );
         let diagnostics = report.diagnostics;
+        // The frontend's `ExprId → span` index (highlevel is span-free).
+        let span_index = report.span_index;
 
         // The imported module's checked type, per `@import` directive span: the
         // compiler allocates a `Static` node at the directive's span, so we
@@ -204,10 +208,15 @@ impl Doc {
         let mut import_ty: HashMap<Span, String> = HashMap::new();
         if let Some(build) = &report.build {
             for imp in &pre.imports {
-                let eid = build.ir.expr.iter().enumerate().find_map(|(i, e)| {
-                    (e.span == Some(imp.span)
-                        && matches!(e.kind, lichen_highlevel::ir::ExprKind::Static { .. }))
-                    .then_some(ExprId(i as u32))
+                let eid = span_index.as_ref().and_then(|s| {
+                    s.iter().enumerate().find_map(|(i, sp)| {
+                        (sp == &Some(imp.span)
+                            && matches!(
+                                build.ir.expr[i].kind,
+                                lichen_highlevel::ir::ExprKind::Static { .. }
+                            ))
+                        .then_some(ExprId(i as u32))
+                    })
                 });
                 if let Some(eid) = eid
                     && let Some(t) = build.ty[eid]
@@ -247,7 +256,10 @@ impl Doc {
                             (s, lsp::offset_of_span(&line_starts, s))
                         }
                         None => {
-                            let s = build.ir[id].span.unwrap_or((0, 0));
+                            let s = span_index
+                                .as_ref()
+                                .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
+                                .unwrap_or((0, 0));
                             (s, lsp::offset_of_span(&line_starts, s))
                         }
                     };
@@ -341,7 +353,10 @@ impl Doc {
                     else {
                         continue;
                     };
-                    let Some(container_span) = build.ir[container].span else {
+                    let Some(container_span) = span_index
+                        .as_ref()
+                        .and_then(|idx| idx.get(container.0 as usize).copied().flatten())
+                    else {
                         continue;
                     };
                     let Some(&module_name) = import_name_by_span.get(&container_span) else {

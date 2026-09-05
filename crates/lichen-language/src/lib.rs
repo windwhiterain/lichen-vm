@@ -18,12 +18,18 @@
 //!
 //! See `docs/language-spec.md` for the language spec.
 
-pub mod ast;
+// The lexer and parser live in their own crates; re-export them here so
+// existing module paths (`lichen_language::lex::Token`, `lichen_language::ast::Expr`,
+// `lichen_language::parse::parse`) resolve unchanged.
+pub use lichen_language_lex as lex;
+pub use lichen_language_lex::{LexDiag, Span};
+pub use lichen_language_parser as parse;
+pub use lichen_language_parser::ast;
+pub use lichen_language_parser::{ParseDiag, Parsed};
+
 pub mod compile;
 pub mod diag;
-pub mod lex;
 pub mod package;
-pub mod parse;
 pub mod persist;
 pub mod preprocess;
 pub mod program;
@@ -54,6 +60,10 @@ use program::{LangProgram, lang_attr_ext};
 pub struct Report {
     pub build: Option<Build<LangProgram>>,
     pub diagnostics: Vec<Diag>,
+    /// The source span of each IR node, keyed by [ExprId] — the frontend's own
+    /// position index (highlevel is span-free).  Present whenever `build` is
+    /// `Some`; the caller maps a checker `Loc` back to a source caret through it.
+    pub span_index: Option<compile::SpanIndex>,
 }
 
 impl Report {
@@ -99,8 +109,12 @@ pub fn compile_with_imports_at(
     line_starts: &[usize],
     native_ops: NativeOps<LangProgram>,
 ) -> Report {
-    let Frontend { ir, diagnostics } = frontend_at(code, base, line_starts, imports);
-    build_report(ir, diagnostics, registry, native_ops)
+    let Frontend {
+        ir,
+        span_index,
+        diagnostics,
+    } = frontend_at(code, base, line_starts, imports);
+    build_report(ir, Some(span_index), diagnostics, registry, native_ops)
 }
 
 /// The shared tail of the pipeline: run the checker on an [`IR`] (if the
@@ -110,6 +124,7 @@ pub fn compile_with_imports_at(
 /// rebuild path, so the rendering is centralized.
 pub fn build_report(
     ir: Option<IR<program::LangAttr>>,
+    span_index: Option<compile::SpanIndex>,
     mut diagnostics: Vec<Diag>,
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
     native_ops: NativeOps<LangProgram>,
@@ -118,6 +133,7 @@ pub fn build_report(
         return Report {
             build: None,
             diagnostics,
+            span_index,
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
@@ -149,8 +165,12 @@ pub fn build_report(
                     // The highlevel is source-blind: a diagnostic carries a
                     // structured `Loc` (an IR expression + position), and the
                     // frontend maps that back to a source span through its own
-                    // IR (which still carries spans at this stage).
-                    let span = d.loc().and_then(|loc| build.ir[loc.expr].span);
+                    // `span_index` (highlevel nodes carry none).
+                    let span = d.loc().and_then(|loc| {
+                        span_index
+                            .as_ref()
+                            .and_then(|s| s.get(loc.expr.0 as usize).copied().flatten())
+                    });
                     Diag {
                         span,
                         message: crate::render::checker_message(&mut printer, &d),
@@ -164,6 +184,7 @@ pub fn build_report(
     Report {
         build: Some(build),
         diagnostics,
+        span_index,
     }
 }
 
@@ -174,6 +195,8 @@ pub fn build_report(
 /// parse, and resolve error encountered.
 pub struct Frontend {
     pub ir: Option<IR<program::LangAttr>>,
+    /// The `ExprId → span` index built during lowering (highlevel is span-free).
+    pub span_index: compile::SpanIndex,
     pub diagnostics: Vec<Diag>,
 }
 
@@ -200,20 +223,22 @@ pub fn frontend_at(
 ) -> Frontend {
     let lex::Lexed {
         tokens,
-        errors: mut diagnostics,
+        errors: lex_errors,
     } = lex::lex_with(code, line_starts, base);
+    let mut diagnostics: Vec<Diag> = lex_errors.into_iter().map(Diag::from_lex).collect();
     let parse::Parsed {
         program,
         errors: parse_errors,
     } = parse::parse(&tokens);
-    diagnostics.extend(parse_errors);
+    diagnostics.extend(parse_errors.into_iter().map(Diag::from_parse));
     // The lowering is total: an unresolved name lowers to the same inert
     // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
     // and the resolve errors ride in `diagnostics`.
-    let (ir, resolve_errors) = compile::compile_with_imports(&program, imports);
+    let (ir, span_index, resolve_errors) = compile::compile_with_imports(&program, imports);
     diagnostics.extend(resolve_errors);
     Frontend {
         ir: Some(ir),
+        span_index,
         diagnostics,
     }
 }

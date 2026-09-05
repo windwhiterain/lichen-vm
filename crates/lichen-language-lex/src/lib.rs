@@ -1,5 +1,12 @@
 //! The lexer: source text -> tokens, each with a (line, column) span.
 //!
+//! This crate is the source-position authority: it defines [`Span`] (a
+//! `(line, column)` pair), the byte→(line, col) mapping ([`line_starts`],
+//! [`line_col`]), and the token stream.  Nothing above it (the parser, the
+//! language crate) needs its own span type — the parser consumes
+//! [`Token::span`], and the language crate stores spans in its own map keyed by
+//! the IR id it gets back from the checker.
+//!
 //! Whitespace (space/tab/cr) is trivia and never reaches the token stream.
 //! There are no comments at all in the language -- prose lives in the
 //! preprocessor's `@{...@}` block as metadata strings.  A newline, comma, or
@@ -28,9 +35,18 @@
 
 use logos::Logos;
 
-use lichen_highlevel::ir::Span;
+/// A source span: 1-based `(line, column)`.  Defined here — the lexer is the
+/// one thing that turns raw bytes into a source position, so it owns the type.
+pub type Span = (u32, u32);
 
-use crate::diag::{Diag, Stage};
+/// A lex diagnostic: a message plus the source position it is grounded in.
+/// Check-free (no checker payload), so it is `Send` and stays entirely in this
+/// crate; the language crate widens it into its own [`Diag`] at `Stage::Lex`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LexDiag {
+    pub span: Option<Span>,
+    pub message: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TokenKind {
@@ -190,7 +206,7 @@ impl std::fmt::Display for Token {
 /// lexing continues.
 pub struct Lexed {
     pub tokens: Vec<Token>,
-    pub errors: Vec<Diag>,
+    pub errors: Vec<LexDiag>,
 }
 
 /// The token kinds logos recognizes.  Payloads are read from the matched
@@ -305,7 +321,7 @@ pub fn lex(source: &str) -> Lexed {
 /// preprocessor block).
 pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
     let mut tokens: Vec<Token> = Vec::new();
-    let mut errors: Vec<Diag> = Vec::new();
+    let mut errors: Vec<LexDiag> = Vec::new();
     let mut lexer = RawToken::lexer(code);
     // End of the last real token (not a Separator/Glue).  Used to decide
     // whether the next delimiter is glued to it.  Reset to None at a boundary
@@ -354,11 +370,10 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                 let start = base + span.start as u32;
                 let lc = line_col(line_starts, start);
                 let ch = lexer.slice().chars().next().unwrap_or('?');
-                errors.push(Diag::new(
-                    Stage::Lex,
-                    lc,
-                    format!("unexpected character '{ch}'"),
-                ));
+                errors.push(LexDiag {
+                    span: Some(lc),
+                    message: format!("unexpected character '{ch}'"),
+                });
                 prev_end = None;
             }
         }
@@ -404,7 +419,7 @@ pub fn lex_resume(
 ) -> Lexed {
     let delta = new_source.len() as isize - old_source.len() as isize;
     let mut tokens: Vec<Token> = Vec::new();
-    let mut errors: Vec<Diag> = Vec::new();
+    let mut errors: Vec<LexDiag> = Vec::new();
 
     // The first old token that could be affected: the one whose byte range
     // ends at or after `a`.  This is the token that would absorb an insertion
@@ -491,11 +506,10 @@ pub fn lex_resume(
                 let start_abs = s + span.start as u32;
                 let lc = line_col(line_starts, start_abs);
                 let ch = lexer.slice().chars().next().unwrap_or('?');
-                errors.push(Diag::new(
-                    Stage::Lex,
-                    lc,
-                    format!("unexpected character '{ch}'"),
-                ));
+                errors.push(LexDiag {
+                    span: Some(lc),
+                    message: format!("unexpected character '{ch}'"),
+                });
                 prev_end = None;
             }
         }
@@ -570,7 +584,12 @@ fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> O
 
 /// Map a raw token plus its matched slice to a TokenKind.  Integer literals
 /// are parsed here: overflow records an error and returns None (no token).
-fn raw_to_kind(raw: &RawToken, slice: &str, lc: Span, errors: &mut Vec<Diag>) -> Option<TokenKind> {
+fn raw_to_kind(
+    raw: &RawToken,
+    slice: &str,
+    lc: Span,
+    errors: &mut Vec<LexDiag>,
+) -> Option<TokenKind> {
     match raw {
         RawToken::IntLit => {
             let mut value: usize = 0;
@@ -579,7 +598,10 @@ fn raw_to_kind(raw: &RawToken, slice: &str, lc: Span, errors: &mut Vec<Diag>) ->
                 match value.checked_mul(10).and_then(|v| v.checked_add(digit)) {
                     Some(v) => value = v,
                     None => {
-                        errors.push(Diag::new(Stage::Lex, lc, "integer literal out of range"));
+                        errors.push(LexDiag {
+                            span: Some(lc),
+                            message: "integer literal out of range".to_string(),
+                        });
                         return None;
                     }
                 }
@@ -592,7 +614,10 @@ fn raw_to_kind(raw: &RawToken, slice: &str, lc: Span, errors: &mut Vec<Diag>) ->
             // string is a lex error and the token is dropped; a terminated
             // one keeps its content (the quotes stripped).
             if slice.len() < 2 || !slice.ends_with('"') {
-                errors.push(Diag::new(Stage::Lex, lc, "unterminated string literal"));
+                errors.push(LexDiag {
+                    span: Some(lc),
+                    message: "unterminated string literal".to_string(),
+                });
                 return None;
             }
             Some(TokenKind::Str(slice[1..slice.len() - 1].to_string()))

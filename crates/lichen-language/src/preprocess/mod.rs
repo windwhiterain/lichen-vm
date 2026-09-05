@@ -19,7 +19,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lichen_highlevel::ir::Span;
+use lichen_language_lex::Span;
 use lichen_lowlevel::StaticNodeId;
 
 use crate::diag::{Diag, Stage};

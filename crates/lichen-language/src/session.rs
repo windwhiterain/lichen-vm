@@ -31,7 +31,7 @@ use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
 use crate::program::LangProgram;
-use crate::{Report, build_report};
+use crate::{ParseDiag, Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
 /// is cheap to hold) plus every diagnostic, and the content signature the
@@ -173,7 +173,7 @@ impl BufferSession {
 
         // Lex: resume from the snapshot's token stream over the edit span; on the
         // first compile (or a reset without an edit) lex the whole buffer.
-        let (tokens, mut diagnostics) = match (&self.last, edit) {
+        let (tokens, lex_errors) = match (&self.last, edit) {
             (Some(prev), Some((a, b, _delta))) => {
                 let lexed =
                     lex::lex_resume(&prev.tokens, &prev.source, &self.source, &line_starts, a, b);
@@ -184,6 +184,7 @@ impl BufferSession {
                 (lexed.tokens, lexed.errors)
             }
         };
+        let mut diagnostics: Vec<Diag> = lex_errors.into_iter().map(Diag::from_lex).collect();
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
@@ -213,7 +214,7 @@ impl BufferSession {
                 (p.0, p.1, None)
             }
         };
-        diagnostics.extend(errors);
+        diagnostics.extend(errors.into_iter().map(Diag::from_parse));
 
         // Resolution-aware signature of the *name-resolved* structure, plus the
         // current resolve diagnostics — computed from the parsed AST, without
@@ -256,8 +257,14 @@ impl BufferSession {
         // Rebuild: lower (total) and check.  The resolve diagnostics were
         // already produced by the signature pass (the frontend source of truth
         // for the session), so the lowering's own are discarded.
-        let (ir, _) = crate::compile::compile_with_imports(&program, &[]);
-        let report: Report = build_report(Some(ir), diagnostics, None, no_native_ops());
+        let (ir, span_index, _) = crate::compile::compile_with_imports(&program, &[]);
+        let report: Report = build_report(
+            Some(ir),
+            Some(span_index),
+            diagnostics,
+            None,
+            no_native_ops(),
+        );
         let check_diagnostics: Vec<Diag> = report
             .diagnostics
             .iter()
@@ -312,7 +319,7 @@ fn edit_span(old: &str, new: &str) -> (usize, usize, isize) {
 
 /// The full frontend for `tokens`: `parse` the whole stream (the fallback used
 /// when a window cannot be spliced incrementally).
-fn full_parse(tokens: &[lex::Token]) -> (Program, Vec<Diag>) {
+fn full_parse(tokens: &[lex::Token]) -> (Program, Vec<ParseDiag>) {
     let parsed = parse::parse(tokens);
     (parsed.program, parsed.errors)
 }
@@ -534,7 +541,7 @@ fn binding_names(stmts: &[Stmt]) -> Vec<&str> {
 /// signature.
 struct SpliceOut {
     program: Program,
-    errors: Vec<Diag>,
+    errors: Vec<ParseDiag>,
     lo: usize,
     hi: usize,
     reuse: bool,

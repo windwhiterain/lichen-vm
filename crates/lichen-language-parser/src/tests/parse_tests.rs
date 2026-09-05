@@ -1,5 +1,5 @@
 use super::*;
-use crate::lex::lex;
+use lichen_language_lex::lex;
 
 /// The final expression of a program (bindings aside), asserting the
 /// parse is clean.
@@ -11,7 +11,7 @@ fn parse_ok(source: &str) -> Expr {
 }
 
 /// The first parse error.
-fn parse_err(source: &str) -> Diag {
+fn parse_err(source: &str) -> ParseDiag {
     let tokens = lex(source).tokens;
     let Parsed { errors, .. } = parse(&tokens);
     assert!(!errors.is_empty(), "expected a parse error for {source:?}");
@@ -133,7 +133,6 @@ fn a_region_recovering_over_a_broken_window_still_produces_statements() {
 fn statement_errors_carry_spans() {
     // A binding-only program has no final expression.
     let err = parse_err("a = 5");
-    assert_eq!(err.stage, Stage::Parse);
     assert!(err.message.contains("must end with an expression"));
     let err = parse_err("5; a = 1");
     assert!(err.message.contains("must end with an expression"));
@@ -573,7 +572,6 @@ fn a_single_element_angle_bracket_is_a_parse_error() {
 #[test]
 fn parse_errors_carry_spans() {
     let err = parse_err("x =>");
-    assert_eq!(err.stage, Stage::Parse);
     assert_eq!(
         err.message,
         "expected '!' or an expression, found the end of the program"
@@ -592,7 +590,6 @@ fn a_name_before_arrow_is_not_a_lambda_operand() {
     // `f x => e` — the lambda only starts in prefix position, so the
     // arrow is left dangling.
     let err = parse_err("f x => e");
-    assert_eq!(err.stage, Stage::Parse);
     assert!(err.message.contains("=>"));
 }
 
@@ -730,7 +727,6 @@ fn a_block_is_an_atom() {
 #[test]
 fn block_errors_carry_spans() {
     let err = parse_err("{a = 1; a");
-    assert_eq!(err.stage, Stage::Parse);
     assert_eq!(err.span, Some((1, 10)));
     // An empty block is not a block: the value expression is missing.
     let err = parse_err("{}");

@@ -40,10 +40,11 @@
 
 use std::collections::HashMap;
 
-use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema, Span};
+use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
     HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit, TypeTypeLit,
 };
+use lichen_language_lex::Span;
 
 use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
@@ -51,7 +52,13 @@ use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, Perspective};
 use lichen_doc::Doc;
 
-pub fn compile(program: &Program) -> (IR<LangAttr>, Vec<Diag>) {
+/// `ExprId` → the source span the expr lowers from.  Built here, exactly where
+/// each highlevel node is created via the IR alloc API; parallel to `IR.expr`.
+/// Highlevel is span-free, so this secondary map — owned by this crate — is the
+/// only record of source positions for IR nodes.
+pub type SpanIndex = Vec<Option<Span>>;
+
+pub fn compile(program: &Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag>) {
     compile_with_imports(program, &[])
 }
 
@@ -68,7 +75,7 @@ pub fn compile(program: &Program) -> (IR<LangAttr>, Vec<Diag>) {
 pub fn compile_with_imports(
     program: &Program,
     imports: &[ResolvedImport],
-) -> (IR<LangAttr>, Vec<Diag>) {
+) -> (IR<LangAttr>, SpanIndex, Vec<Diag>) {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
@@ -76,6 +83,7 @@ pub fn compile_with_imports(
         op_names: HashMap::new(),
         str_names: HashMap::new(),
         diagnostics: Vec::new(),
+        spans: Vec::new(),
     };
     if !imports.is_empty() {
         let mut frame = HashMap::new();
@@ -110,7 +118,7 @@ pub fn compile_with_imports(
     // cascade.  (Nested blocks still use the tuple wrap.)
     compiler.ir.set_stmt_roots(statements);
     compiler.ir.set_root(final_id);
-    (compiler.ir, compiler.diagnostics)
+    (compiler.ir, compiler.spans, compiler.diagnostics)
 }
 
 struct Compiler {
@@ -137,6 +145,9 @@ struct Compiler {
     /// errors for unresolved names).  The frontend surfaces these alongside
     /// the IR; lowering itself never fails on them.
     diagnostics: Vec<Diag>,
+    /// The source span of each IR node, keyed by [ExprId] — the crate's own
+    /// position index; highlevel itself is span-free.
+    spans: Vec<Option<Span>>,
 }
 
 impl Compiler {
@@ -198,7 +209,7 @@ impl Compiler {
                         value
                     } else {
                         self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
-                        self.ir.expr[p.0 as usize].span = self.ir.expr[value.0 as usize].span;
+                        self.spans[p.0 as usize] = self.spans[value.0 as usize];
                         // The schema (an attribute tail, e.g. `# p` or `? e`)
                         // rides the *expression*, not the kind, so the
                         // transplant must carry it too — otherwise a bound
@@ -251,17 +262,17 @@ impl Compiler {
         // statements may be heterogeneous), and the wrapper reads the final
         // one with the positional slot form, whose type extraction indexes
         // the shape list at the key.
-        let tuple = self.ir.alloc_tuple(&statements, Some(*span));
-        let index = self.ir.alloc(
+        let tuple = self.alloc_tuple(&statements, span);
+        let index = self.alloc(
             ExprKind::Literal(HighProgramLiteral::from(IntLit(statements.len() - 1))),
-            Some(*span),
+            span,
         );
-        self.ir.alloc(
+        self.alloc(
             ExprKind::Field {
                 container: tuple,
                 key: index,
             },
-            Some(*span),
+            span,
         )
     }
 
@@ -437,9 +448,8 @@ impl Compiler {
                     .iter()
                     .map(|f| f.name.as_deref().map(|n| self.intern_str(n)))
                     .collect();
-                let value = self.ir.alloc_tuple(&field_ids, Some(*span));
-                self.ir
-                    .alloc_instantiate(type_expr, value, &names, Some(*span))
+                let value = self.alloc_tuple(&field_ids, span);
+                self.alloc_instantiate(type_expr, value, &names, span)
             }
             Expr::BinOp {
                 operator,
@@ -478,9 +488,7 @@ impl Compiler {
                 let condition = self.compile_expr(condition);
                 let then_branch = self.compile_expr(then_branch);
                 let else_branch = self.compile_expr(else_branch);
-                let branches = self
-                    .ir
-                    .alloc_array(&[else_branch, then_branch], Some(*span));
+                let branches = self.alloc_array(&[else_branch, then_branch], span);
                 self.alloc(
                     ExprKind::Index {
                         array: branches,
@@ -539,7 +547,7 @@ impl Compiler {
                     attrs.push(self.compile_expr(d));
                     tail.push(LangAttr::Doc(Doc));
                 }
-                let id = self.ir.alloc_annotation(value, r#type, &attrs, Some(*span));
+                let id = self.alloc_annotation(value, r#type, &attrs, span);
                 // The attribute tail stamps the annotated node's static
                 // schema — the one asymmetry with `:` (the slots come into
                 // existence by being annotated).
@@ -597,11 +605,11 @@ impl Compiler {
             }
             Expr::Tuple(elements, span) => {
                 let ids = self.compile_all(elements);
-                self.ir.alloc_tuple(&ids, Some(*span))
+                self.alloc_tuple(&ids, span)
             }
             Expr::TypeTuple(elements, span) => {
                 let ids = self.compile_all(elements);
-                self.ir.alloc_type_tuple(&ids, Some(*span))
+                self.alloc_type_tuple(&ids, span)
             }
             Expr::StructType(fields, span) => {
                 let field_ids: Vec<(ExprId, Option<&'static str>)> = fields
@@ -612,7 +620,7 @@ impl Compiler {
                         (ty, name)
                     })
                     .collect();
-                self.ir.alloc_type_struct(&field_ids, Some(*span))
+                self.alloc_type_struct(&field_ids, span)
             }
             Expr::Array(elements, span) => {
                 // A `~`-marked element (the parser accepts `~` only inside
@@ -635,9 +643,9 @@ impl Compiler {
                 }
                 if depths.iter().any(|&d| d != 0) {
                     let elements: Vec<(ExprId, usize)> = ids.into_iter().zip(depths).collect();
-                    self.ir.alloc_shallow_array(&elements, Some(*span))
+                    self.alloc_shallow_array(&elements, span)
                 } else {
-                    self.ir.alloc_array(&ids, Some(*span))
+                    self.alloc_array(&ids, span)
                 }
             }
             Expr::Table(entries, span) => {
@@ -648,7 +656,7 @@ impl Compiler {
                 for (key, value) in entries {
                     pairs.push((self.compile_expr(key), self.compile_expr(value)));
                 }
-                self.ir.alloc_table(&pairs, Some(*span))
+                self.alloc_table(&pairs, span)
             }
             Expr::Shallow(inner, _, _) => {
                 // Unreachable through the parser (`~` is accepted only as an
@@ -721,8 +729,8 @@ impl Compiler {
                 }
                 let field_ids: Vec<ExprId> = emitted.iter().map(|(_, v)| *v).collect();
                 let names: Vec<Option<&'static str>> = emitted.iter().map(|(n, _)| *n).collect();
-                let value = self.ir.alloc_tuple(&field_ids, Some(*span));
-                self.ir.alloc_record(value, &names, Some(*span))
+                let value = self.alloc_tuple(&field_ids, span);
+                self.alloc_record(value, &names, span)
             }
         }
     }
@@ -739,7 +747,79 @@ impl Compiler {
     }
 
     fn alloc(&mut self, kind: ExprKind<HighProgramLiteral>, span: &Span) -> ExprId {
-        self.ir.alloc(kind, Some(*span))
+        let id = self.ir.alloc(kind);
+        self.spans.push(Some(*span));
+        id
+    }
+
+    // The variadic/struct allocs don't go through `Self::alloc` (they are
+    // distinct `IR` methods), so wrap each here to record the span in our index
+    // at exactly the point the node is created.
+    fn alloc_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
+        let id = self.ir.alloc_tuple(elements);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_type_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
+        let id = self.ir.alloc_type_tuple(elements);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_type_struct(
+        &mut self,
+        fields: &[(ExprId, Option<&'static str>)],
+        span: &Span,
+    ) -> ExprId {
+        let id = self.ir.alloc_type_struct(fields);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_instantiate(
+        &mut self,
+        type_expr: ExprId,
+        value: ExprId,
+        names: &[Option<&'static str>],
+        span: &Span,
+    ) -> ExprId {
+        let id = self.ir.alloc_instantiate(type_expr, value, names);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_record(
+        &mut self,
+        value: ExprId,
+        names: &[Option<&'static str>],
+        span: &Span,
+    ) -> ExprId {
+        let id = self.ir.alloc_record(value, names);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_array(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
+        let id = self.ir.alloc_array(elements);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: &Span) -> ExprId {
+        let id = self.ir.alloc_table(entries);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)], span: &Span) -> ExprId {
+        let id = self.ir.alloc_shallow_array(elements);
+        self.spans.push(Some(*span));
+        id
+    }
+    fn alloc_annotation(
+        &mut self,
+        value: ExprId,
+        r#type: Option<ExprId>,
+        attrs: &[ExprId],
+        span: &Span,
+    ) -> ExprId {
+        let id = self.ir.alloc_annotation(value, r#type, attrs);
+        self.spans.push(Some(*span));
+        id
     }
 }
 

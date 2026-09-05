@@ -216,7 +216,6 @@ fn braces_lex_as_their_own_tokens() {
 fn an_unexpected_character_is_a_lex_error() {
     let Lexed { errors, .. } = lex("x @ y");
     assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].stage, Stage::Lex);
     assert_eq!(errors[0].message, "unexpected character '@'");
     assert_eq!(errors[0].span, Some((1, 3)));
     assert_eq!(

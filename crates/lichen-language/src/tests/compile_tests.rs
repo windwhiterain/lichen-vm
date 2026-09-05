@@ -15,7 +15,7 @@ fn compile_err(source: &str) -> Diag {
     // The lowering is total but collects its resolve errors; the tests check
     // the first one (an unresolved-name program yields exactly one).
     compile(&ast)
-        .1
+        .2
         .into_iter()
         .next()
         .expect("expected a resolve diagnostic")
@@ -100,10 +100,14 @@ fn shadowing_resolves_to_the_inner_binder() {
 
 #[test]
 fn every_expression_carries_a_span() {
-    let ir = compile_ok("x => x");
-    for expr in &ir.expr {
-        assert!(expr.span.is_some(), "expression {expr:?} lost its span");
-    }
+    let tokens = lex("x => x").tokens;
+    let ast = parse(&tokens).program;
+    let (ir, spans, _) = compile(&ast);
+    assert_eq!(spans.len(), ir.expr.len(), "one span entry per expression");
+    assert!(
+        spans.iter().all(|s| s.is_some()),
+        "an expression lost its span"
+    );
 }
 
 #[test]
@@ -133,7 +137,9 @@ fn a_type_position_underscore_compiles_to_a_placeholder() {
 #[test]
 fn a_bang_prefix_compiles_to_an_assert() {
     // !(1 == 1) — the highlevel Assert form, whose condition is the operand.
-    let ir = compile_ok("!(1 == 1)");
+    let tokens = lex("!(1 == 1)").tokens;
+    let ast = parse(&tokens).program;
+    let (ir, spans, _) = compile(&ast);
     let ExprKind::Assert { condition } = kind(&ir, ir.root) else {
         panic!("expected an assert")
     };
@@ -145,7 +151,7 @@ fn a_bang_prefix_compiles_to_an_assert() {
         }
     ));
     // The assert node carries the `!`'s span (the caret points at the `!`).
-    assert_eq!(ir[ir.root].span, Some((1, 1)));
+    assert_eq!(spans[ir.root.0 as usize], Some((1, 1)));
 }
 
 #[test]
