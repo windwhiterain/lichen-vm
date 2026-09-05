@@ -42,12 +42,16 @@ recorded dependency graph. When the whole graph is up to date, the artifact is
 deserialized and registered under its device key and the compile is skipped; only the
 changed chain recompiles, and each compiled package is serialized back.
 
-## CLI (`lichen`)
+## CLI (`lichen-compiler`)
 
-- `lichen run <file|dir>` (or the bare `lichen <file|dir>`) — compile and run.
-- `lichen build <file>` — load/freeze a package and print its exported type.
-- `lichen cache gc` — reclaim unreachable artifacts from the device cache.
+- `lichen-compiler run <file|dir>` (or the bare `lichen-compiler <file|dir>`) — compile and run.
+- `lichen-compiler build <file>` — load/freeze a package and print its exported type.
+- `lichen-compiler cache gc` — reclaim unreachable artifacts from the device cache.
 - `-h/--help`, `-V/--version`.
+
+The compiler binary is `lichen-compiler` (it was `lichen` before the package
+manager took the name).  The git-dependency workflow that drives this CLI is
+[package-manager](package-manager.md) (`lichen` in `crates/lichen-package`).
 
 ## Where the block metadata goes
 

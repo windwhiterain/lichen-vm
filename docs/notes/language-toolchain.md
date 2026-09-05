@@ -61,8 +61,9 @@ So the tools are **not split by tool**. They are split by *package kind*:
 
 ```
 crates/
-  lichen-language/           the frontend + the `lichen` CLI (this c't is the
-                             single home of lex / ast / parse / compile / diag)
+  lichen-language/           the frontend + the `lichen-compiler` CLI (this
+                             c't is the single home of lex / ast / parse /
+                             compile / diag)
   lichen-language-server/    the TOOLING crate: lib.rs = the shared editor-view
                              (span↔position, node index, diagnostics→LSP), and
                              the LSP server as a [[bin]].

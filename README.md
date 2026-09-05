@@ -76,7 +76,7 @@ cargo run -p lichen-language -- crates/lichen-language/examples/programs/binding
 # 1
 ```
 
-Install the CLI (a binary named `lichen`):
+Install the compiler (a binary named `lichen-compiler`, formerly `lichen`):
 
 ```bash
 cargo install --path crates/lichen-language  # from a checkout of this repo
@@ -86,9 +86,14 @@ cargo install --git git@github.com:windwhiterain/lichen-vm.git lichen-language
 then run it directly:
 
 ```bash
-lichen crates/lichen-language/examples/programs/bindings.lichen
+lichen-compiler crates/lichen-language/examples/programs/bindings.lichen
 # 1
 ```
+
+The package manager (a binary named `lichen`, in `crates/lichen-package`)
+fetches git dependencies, downloads the `lichen-compiler` and
+`lichen-language-server` binaries, and rebuilds the compiler when a native
+plugin is imported: see [`crates/lichen-package`](crates/lichen-package/README.md).
 
 ## Examples
 

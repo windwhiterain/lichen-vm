@@ -1,16 +1,19 @@
-//! The language CLI. `lichen <program.lichen>` compiles and runs one program,
-//! printing its output; a directory path runs every `.lichen` file in it,
-//! printing `file: output` per program.  Newer-style `lichen run`/`build`
-//! subcommands are also accepted.
+//! The language compiler CLI. `lichen-compiler <program.lichen>` compiles and
+//! runs one program, printing its output; a directory path runs every
+//! `.lichen` file in it, printing `file: output` per program.  Newer-style
+//! `lichen-compiler run`/`build` subcommands are also accepted.
 //!
 //! Install it with `cargo install --path crates/lichen-language` (from a
 //! checkout of this repo) or `cargo install --git <repo-url> lichen-language`.
+//! The binary is named `lichen-compiler`; the package manager
+//! (`crates/lichen-package`, binary `lichen`) is the tool that fetches and
+//! drives it.
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: lichen [run|build] <program.lichen | directory>";
+const USAGE: &str = "usage: lichen-compiler [run|build] <program.lichen | directory>";
 
 fn main() -> ExitCode {
     let mut args = std::env::args();
@@ -25,12 +28,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "-V" | "--version" => {
-            println!("lichen {}", env!("CARGO_PKG_VERSION"));
+            println!("lichen-compiler {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
         "cache" => {
             if args.next().as_deref() != Some("gc") || args.next().is_some() {
-                eprintln!("usage: lichen cache gc");
+                eprintln!("usage: lichen-compiler cache gc");
                 return ExitCode::FAILURE;
             }
             cache_gc()
@@ -75,7 +78,7 @@ fn run_path(path: &Path) -> ExitCode {
     }
 }
 
-/// `lichen cache gc`: explicitly reclaim every artifact in the device cache
+/// `lichen-compiler cache gc`: explicitly reclaim every artifact in the device cache
 /// that no live source chain references.
 fn cache_gc() -> ExitCode {
     let dir = lichen_language::persist::lichendir();

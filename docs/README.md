@@ -43,6 +43,7 @@ Every note opens with a `> Status:` line:
 | [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
 | [Packages & import](notes/packages.md) | `lichen-language` (`preprocess`/`package`/`persist`/`run`) | current |
+| [Package manager](notes/package-manager.md) | `lichen-package` | current |
 | [README example sync](notes/readme-sync.md) | `lichen-language` (`readme`) | current |
 | [Build performance](notes/build-performance.md) | `lichen-language` (`parse`) | historical |
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language` (`lex`/`parse`/`compile`), `lichen-highlevel` (`checker`) | proposed |

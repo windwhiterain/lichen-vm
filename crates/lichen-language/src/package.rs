@@ -76,6 +76,13 @@ pub struct PackageStore {
     /// keyed by the import path (`compute.lichen`).  See
     /// [`Self::register_compute`].
     native: HashMap<PathBuf, PackageHandle>,
+    /// Vendored dependencies, keyed by the import alias the package manager
+    /// resolves `import "alias"` / `import "alias/rest"` through.  A vendored
+    /// alias maps to a directory of `.lichen` package files (a git-fetched
+    /// dependency); the bare alias resolves to the directory's entry package,
+    /// and a suffixed path resolves relative to it.  See
+    /// [`Self::register_vendored`] and [`Self::resolve_import`].
+    vendored: HashMap<String, PathBuf>,
     /// The device's cache directory (`None` = in-memory only).
     cache_dir: Option<PathBuf>,
     device: Option<DeviceRegistry>,
@@ -101,6 +108,7 @@ impl PackageStore {
             packages: HashMap::new(),
             loading: Vec::new(),
             native: HashMap::new(),
+            vendored: HashMap::new(),
             cache_dir: None,
             device: None,
             next_key: 0,
@@ -515,6 +523,29 @@ impl PackageStore {
         base: Option<&Path>,
         import_path: &str,
     ) -> Result<PackageHandle, Diag> {
+        // A vendored dependency alias: `import "alias"` or `import "alias/rest"`
+        // resolves against the vendored directory registered under `alias`
+        // (see [`Self::register_vendored`]).  A bare `alias` names the
+        // dependency's entry package; `alias/rest` resolves `rest` relative to
+        // the vendored directory.  Only tried when the alias is registered and
+        // is not a file-like path (a leading segment ending in `.lichen`).
+        if let Some((alias, rest)) = vendored_alias(import_path) {
+            if let Some(dir) = self.vendored.get(alias) {
+                let resolved = match rest {
+                    Some(rest) => dir.join(rest),
+                    None => vendored_entry_file(dir, alias)?,
+                };
+                return self.load_package(&resolved).map_err(|mut diags| {
+                    diags.drain(..).next().unwrap_or_else(|| {
+                        Diag::new(
+                            Stage::Preprocess,
+                            (0, 0),
+                            format!("cannot resolve vendored import '{}'", import_path),
+                        )
+                    })
+                });
+            }
+        }
         let path = Path::new(import_path);
         let resolved = if path.is_absolute() {
             path.to_path_buf()
@@ -543,14 +574,165 @@ impl PackageStore {
         })
     }
 
+    /// Register a vendored dependency directory under an import alias, so
+    /// `import "alias"` / `import "alias/rest"` resolve into it.  The package
+    /// manager registers one alias per git-fetched dependency before compiling.
+    pub fn register_vendored(&mut self, alias: impl Into<String>, dir: PathBuf) {
+        self.vendored.insert(alias.into(), dir);
+    }
+
+    /// Whether `alias` is a registered vendored dependency.
+    pub fn is_vendored(&self, alias: &str) -> bool {
+        self.vendored.contains_key(alias)
+    }
+
     /// The shared registry, for the importer's checker.
     pub fn registry(&self) -> Arc<RwLock<Registry<LangProgram>>> {
         self.registry.clone()
     }
 }
 
+/// Split a potential vendored alias from an import path: `"foo"` →
+/// `("foo", None)`, `"foo/rest"` → `("foo", Some("rest"))`.  A leading
+/// segment that ends in `.lichen` is a file name, not an alias (so a relative
+/// import like `"math.lichen"` never hits the vendored map).
+fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> {
+    let (first, rest) = match import_path.find('/') {
+        Some(i) => (&import_path[..i], Some(&import_path[i + 1..])),
+        None => (import_path, None),
+    };
+    if first.is_empty() || first.ends_with(".lichen") {
+        return None;
+    }
+    Some((first, rest))
+}
+
+/// The entry package file of a vendored dependency directory: a `lib.lichen`,
+/// then `<alias>.lichen`, then the directory's sole `.lichen` file.  An
+/// ambiguous (many) or absent package is a diagnostic, not a guess.
+fn vendored_entry_file(dir: &Path, alias: &str) -> Result<PathBuf, Diag> {
+    let lib = dir.join("lib.lichen");
+    if lib.is_file() {
+        return Ok(lib);
+    }
+    let aliased = dir.join(format!("{alias}.lichen"));
+    if aliased.is_file() {
+        return Ok(aliased);
+    }
+    let mut files = match std::fs::read_dir(dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
+            .collect::<Vec<_>>(),
+        Err(_) => Vec::new(),
+    };
+    files.sort();
+    match files.len() {
+        1 => Ok(files.into_iter().next().expect("one file")),
+        0 => Err(Diag::new(
+            Stage::Preprocess,
+            (0, 0),
+            format!(
+                "vendored dependency '{alias}' has no .lichen entry package (no lib.lichen, \
+                 {alias}.lichen, or a single .lichen file)"
+            ),
+        )),
+        _ => {
+            let names = files
+                .into_iter()
+                .map(|f| {
+                    f.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(Diag::new(
+                Stage::Preprocess,
+                (0, 0),
+                format!(
+                    "vendored dependency '{alias}' is ambiguous: pick one of {names} (or add a lib.lichen)"
+                ),
+            ))
+        }
+    }
+}
+
 impl Default for PackageStore {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod vendored_tests {
+    use super::*;
+
+    fn tempdir(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("lichen-vendored-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn vendored_alias_resolves_to_entry_package() {
+        let dir = tempdir("entry");
+        let foo = dir.join("deps").join("foo");
+        std::fs::create_dir_all(&foo).unwrap();
+        std::fs::write(foo.join("lib.lichen"), "42").unwrap();
+        let mut store = PackageStore::new();
+        store.register_vendored("foo", foo.clone());
+        let handle = store.resolve_import(None, "foo").unwrap();
+        assert_eq!(
+            handle.path,
+            std::fs::canonicalize(foo.join("lib.lichen")).unwrap()
+        );
+    }
+
+    #[test]
+    fn vendored_alias_resolves_subpath() {
+        let dir = tempdir("sub");
+        let foo = dir.join("deps").join("foo");
+        std::fs::create_dir_all(&foo).unwrap();
+        std::fs::write(foo.join("lib.lichen"), "1").unwrap();
+        std::fs::write(foo.join("other.lichen"), "2").unwrap();
+        let mut store = PackageStore::new();
+        store.register_vendored("foo", foo.clone());
+        let handle = store.resolve_import(None, "foo/other.lichen").unwrap();
+        assert_eq!(
+            handle.path,
+            std::fs::canonicalize(foo.join("other.lichen")).unwrap()
+        );
+    }
+
+    #[test]
+    fn non_vendored_relative_import_does_not_hit_alias() {
+        let dir = tempdir("plain");
+        std::fs::write(dir.join("math.lichen"), "3").unwrap();
+        let mut store = PackageStore::new();
+        store.register_vendored("foo", dir.join("deps").join("foo"));
+        let base = dir.join("main.lichen");
+        let handle = store.resolve_import(Some(&base), "math.lichen").unwrap();
+        assert_eq!(
+            handle.path,
+            std::fs::canonicalize(dir.join("math.lichen")).unwrap()
+        );
+    }
+
+    #[test]
+    fn ambiguous_vendored_dir_is_diagnosed() {
+        let dir = tempdir("ambig");
+        let foo = dir.join("deps").join("foo");
+        std::fs::create_dir_all(&foo).unwrap();
+        std::fs::write(foo.join("a.lichen"), "1").unwrap();
+        std::fs::write(foo.join("b.lichen"), "2").unwrap();
+        let mut store = PackageStore::new();
+        store.register_vendored("foo", foo);
+        let err = store.resolve_import(None, "foo").unwrap_err();
+        assert!(err.message.contains("ambiguous"), "{}", err.message);
     }
 }

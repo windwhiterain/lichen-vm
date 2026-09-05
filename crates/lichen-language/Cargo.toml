@@ -2,7 +2,7 @@
 name = "lichen-language"
 version = "0.1.0"
 edition = "2024"
-default-run = "lichen"
+default-run = "lichen-compiler"
 
 [dependencies]
 logos = "0.16"
@@ -18,5 +18,5 @@ lichen-render = { path = "../lichen-render" }
 lichen-utils = { path = "../lichen-utils" }
 
 [[bin]]
-name = "lichen"
+name = "lichen-compiler"
 path = "src/main.rs"

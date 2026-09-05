@@ -39,5 +39,5 @@ jobs:
           name: lichen-${{ matrix.name }}
           if-no-files-found: error
           path: |
-            target/release/lichen${{ matrix.suffix }}
+            target/release/lichen-compiler${{ matrix.suffix }}
             target/release/lichen-language-server${{ matrix.suffix }}

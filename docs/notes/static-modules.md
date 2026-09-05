@@ -53,7 +53,7 @@ runtime map; the device registry owns the keys.
 - **Incremental load:** verify the recorded dependency graph (one source-file hash per
   node plus key lookups); recompile only the chain that changed; otherwise deserialize
   and register, skipping the compile.
-- **CLI:** `lichen cache gc` mark-sweeps the recorded dependency graph and deletes every
+- **CLI:** `lichen-compiler cache gc` mark-sweeps the recorded dependency graph and deletes every
   unreachable entry, its artifact file, and its key.
 
 ## Reads & materialize
