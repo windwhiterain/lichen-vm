@@ -47,9 +47,9 @@ use lichen_highlevel::program::{
 
 use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
-use crate::doc::Doc;
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, Perspective};
+use lichen_doc::Doc;
 
 pub fn compile(program: &Program) -> (IR<LangAttr>, Vec<Diag>) {
     compile_with_imports(program, &[])

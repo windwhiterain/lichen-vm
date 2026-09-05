@@ -117,8 +117,21 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
 - `lichen-perspective` is a compiler plugin (its own crate): the program-generic
   semantic core (`AttrExt<P>`, `OperatorExt<P> for GcdOp`, `gcd`/`divides`,
   `persp_attr_ext::<P>()`).
-- `lichen-language` composes both: the native plugin's leaves and op registry
-  via `lang_compose_vocabulary!` / `compute_native_ops!`, and the compiler
-  plugin's leaves (`Perspective`, `GcdOp`) via `lang_compose_vocabulary!`.
-- `Perspective`'s codesign sites (grammar `# p`, AST fields, `IR<Perspective>`
-  schema tails, the `GcdOp` persist discriminator) stay in `lichen-language`.
+- `lichen-doc` is a compiler plugin (its own crate): the program-generic
+  semantic core of the doc attribute (`AttrExt<P>`, `doc_attr_ext::<P>()`) —
+  the `? expr` **label** that attaches struct metadata to an expression.
+- `lichen-render` is a **shared** program-generic printer crate (not a plugin):
+  the `TypePrinter` / `ValuePrinter` / `print_type` / `print_value` /
+  `render_attributes` / `render_struct_fields_named` pretty-view of the
+  generic core.  A plugin that spells its own attribute slot in a host's
+  syntax (e.g. `lichen-doc`'s `? name = "…"`) reuses it instead of carrying
+  its own printer.
+- `lichen-language` composes the plugins: the native plugin's leaves and op
+  registry via `lang_compose_vocabulary!` / `compute_native_ops!`, and the
+  compiler plugins' leaves (`Perspective` + `GcdOp`, `Doc`) via
+  `lang_compose_vocabulary!`.  Its `render` module re-exports `lichen-render`
+  and layers the host-specific shells (the caret diagnostic, the
+  checker-message wording) on top.
+- `Perspective` and `Doc`'s codesign sites (grammar `# p` / `? expr`, AST
+  fields, `IR<…>` schema tails, the `GcdOp` persist discriminator) stay in
+  `lichen-language`.
