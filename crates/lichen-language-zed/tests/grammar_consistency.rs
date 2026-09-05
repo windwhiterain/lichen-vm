@@ -91,7 +91,9 @@ fn pinned_rev() -> String {
                 .strip_suffix('"')
                 .map(str::to_string)
         })
-        .unwrap_or_else(|| panic!("no active `rev = \"…\"` under [grammars.lichen] in extension.toml"))
+        .unwrap_or_else(|| {
+            panic!("no active `rev = \"…\"` under [grammars.lichen] in extension.toml")
+        })
 }
 
 fn git(args: &[&str]) -> Output {
@@ -116,7 +118,9 @@ fn grammar_rev_is_not_stale() {
 
     let mut hinted = vec!["log", "-1", "--format=%H", "HEAD", "--"];
     hinted.extend_from_slice(GRAMMAR_PATHS);
-    let correct = String::from_utf8_lossy(&git(&hinted).stdout).trim().to_string();
+    let correct = String::from_utf8_lossy(&git(&hinted).stdout)
+        .trim()
+        .to_string();
 
     panic!(
         "the grammar `rev` in extension.toml is stale: `{rev}` is behind the current \

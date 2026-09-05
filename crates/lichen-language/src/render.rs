@@ -44,11 +44,16 @@ pub use lichen_render::{
 /// The compute plugin's value-variant spelling: a `Kernel` value and the
 /// `TypeKernel` kind marker both read as `Kernel` — the marker's are internal
 /// (the kernel's *signature* is what the type's arrow carries), and the value
-/// is an opaque compiled artifact, so one name suffices.
+/// is an opaque compiled artifact, so one name suffices.  The parallel-kernel
+/// and buffer leaves spell by name too (`ParKernel`, `Buffer`).
 fn lang_value_render(value: &LangValue) -> Option<String> {
     match value {
         LangValue::ComputeValue(ComputeValue::Kernel(_))
         | LangValue::ComputeValue(ComputeValue::TypeKernel) => Some("Kernel".to_string()),
+        LangValue::ComputeValue(ComputeValue::ParKernel(_))
+        | LangValue::ComputeValue(ComputeValue::TypeParKernel) => Some("ParKernel".to_string()),
+        LangValue::ComputeValue(ComputeValue::Buffer(_))
+        | LangValue::ComputeValue(ComputeValue::TypeBuffer) => Some("Buffer".to_string()),
         _ => None,
     }
 }

@@ -357,3 +357,75 @@ compute.launch
         "launch wrapper value/type"
     );
 }
+
+#[test]
+fn parallel_plrun_pget_scalar() {
+    // `compute.parallel` lifts a curried `?a -> USize -> ?b` index function into
+    // a parallel kernel; `plrun k cfg n` runs it over the index range `[0, n)`
+    // with `cfg` fixed and returns a `Buffer`; `pget buf i` reads element `i`.
+    //   f = cfg => i => cfg + i  ⇒  f 10 i = 10 + i
+    //   plrun k 10 4  ⇒  [10, 11, 12, 13];  pget p 2 = 12.
+    let out = run(r#"
+@{
+  compute = import "compute.lichen"
+@}
+k = compute.parallel (cfg => i => cfg + i)
+p = compute.plrun k (10, 4)
+compute.pget p 2
+"#);
+    assert_eq!(out, "12: Int", "parallel plrun/pget produced: {out:?}");
+}
+
+#[test]
+fn parallel_plrun_pcollect_array() {
+    // `pcollect buf` collects the whole buffer into a lichen array.  The array
+    // value is `[10, 11, 12]`; its length cell is a runtime count, so the type
+    // renders with an unbound length marker.
+    let out = run(r#"
+@{
+  compute = import "compute.lichen"
+@}
+f = cfg => i => cfg + i
+k = compute.parallel f
+p = compute.plrun k (10, 3)
+compute.pcollect p
+"#);
+    assert!(
+        out.starts_with("[10, 11, 12]:"),
+        "parallel pcollect produced: {out:?}"
+    );
+}
+
+#[test]
+fn parallel_tuple_config() {
+    // A tuple config: the kernel's domain is `((Int, Int), USize)` flattened to
+    // three wasm locals — `cfg(0) + cfg(1) + i` reads the two config scalars and
+    // the index.  `plrun k ((3, 4), 2)` ⇒ [3+4+0, 3+4+1] = [7, 8].
+    let out = run(r#"
+@{
+  compute = import "compute.lichen"
+@}
+f = (cfg : (Int, Int)) => i => cfg(0) + cfg(1) + i
+k = compute.parallel f
+p = compute.plrun k ((3, 4), 2)
+compute.pget p 1
+"#);
+    assert_eq!(out, "8: Int", "tuple-config parallel produced: {out:?}");
+}
+
+#[test]
+fn parallel_kernel_renders_by_name() {
+    // A `parallel` result is an opaque parallel-kernel artifact whose type
+    // mirrors the lifted `?a -> USize -> ?b` — so it spells `ParKernel` with
+    // an arrow, not the raw layout.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => i => cfg + i
+k = compute.parallel f
+k
+"#);
+    assert_eq!(
+        out, "ParKernel: Int -> Int -> Int",
+        "parallel value/type: {out:?}"
+    );
+}

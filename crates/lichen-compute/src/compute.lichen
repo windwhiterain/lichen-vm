@@ -1,4 +1,8 @@
 {
   jit = f => $jit(f)
   launch = k => a => $launch(k, a)
+  parallel = f => $parallel(f)
+  plrun = k => a => $plrun(k, a)
+  pget = b => i => $pget(b, i)
+  pcollect = b => $pcollect(b)
 }

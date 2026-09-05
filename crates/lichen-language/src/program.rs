@@ -181,8 +181,13 @@ impl ValueType for LangValue {
     fn is_function_kind(&self) -> bool {
         // `TypeKernel` re-heads the universe to form a kernel type
         // `[signature, [TypeKernel, Type]]`, which mirrors a function type —
-        // the generic renderer spells that kind as `in -> out`.
-        matches!(self, Self::ComputeValue(ComputeValue::TypeKernel))
+        // the generic renderer spells that kind as `in -> out`.  A parallel
+        // kernel mirrors the lifted `?a -> USize -> ?b` the same way.
+        matches!(
+            self,
+            Self::ComputeValue(ComputeValue::TypeKernel)
+                | Self::ComputeValue(ComputeValue::TypeParKernel)
+        )
     }
 }
 

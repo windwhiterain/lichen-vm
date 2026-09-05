@@ -43,8 +43,8 @@ use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module, NodeId,
-    OperatorExt, Program,
+    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowShape, LowValue,
+    Module, NodeId, OperatorExt, Program,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -67,6 +67,11 @@ use lichen_utils::extend::AsEnum;
 /// re-homing or static freeze.
 pub type KernelId = usize;
 
+/// A runtime parallel-buffer artifact's identity — a compact index into the
+/// process buffer registry (the `n` collected element results).  Like
+/// [`KernelId`], it is a `Copy` host-owned scalar, never an arena payload.
+pub type BufferId = usize;
+
 /// The process kernel registry: compiled kernel **fragments** (bytecode units),
 /// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
 /// modules in the process.  The fragment is the durable JIT output; the module
@@ -79,6 +84,27 @@ fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
 static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
 fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The process buffer registry: the element results a `plrun` collected,
+/// keyed by [`BufferId`].  A buffer is an immutable, host-owned vector of
+/// scalar `i64` results (the `?b` values of a `?a -> USize -> ?b` kernel).
+/// It lives process-global like the kernel registry, so a `Buffer` value is a
+/// small `Copy` scalar and reads/collects stay arena-free.
+static BUFFERS: OnceLock<Mutex<HashMap<BufferId, Vec<i64>>>> = OnceLock::new();
+fn buffers() -> &'static Mutex<HashMap<BufferId, Vec<i64>>> {
+    BUFFERS.get_or_init(Default::default)
+}
+/// The next buffer id — process-global, so ids never collide across modules.
+static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
+fn alloc_buffer_id() -> BufferId {
+    NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+/// The element results of a buffer — a cloned snapshot, so the caller does not
+/// hold the buffer registry lock while materializing nodes.
+fn buffer_results(id: BufferId) -> Option<Vec<i64>> {
+    buffers().lock().unwrap().get(&id).cloned()
 }
 
 /// A binary arithmetic/comparison operator of the kernel-safe subset.
@@ -147,6 +173,21 @@ pub enum ComputeValue {
     /// The kind marker of kernel types — a kernel's type is
     /// `[signature, [TypeKernel, Type]]`.
     TypeKernel,
+    /// A compiled **parallel** kernel artifact: a curried `?a -> USize -> ?b`
+    /// function flattened to a `(?a, USize) -> ?b` wasm function (the config
+    /// is the first group of parameters, the *index* the last scalar).
+    ParKernel(KernelId),
+    /// The kind marker of parallel-kernel types — a parallel kernel's type is
+    /// `[signature, [TypeParKernel, Type]]`.
+    TypeParKernel,
+    /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
+    /// index range `[0, n)` and collected the `n` `?b` results here, host-owned
+    /// (a `Copy` scalar into the process buffer registry, exactly like
+    /// [`Kernel`]'s [`KernelId`]).
+    Buffer(BufferId),
+    /// The kind marker of buffer types — a buffer's type is
+    /// `[element_type, [TypeBuffer, Type]]`.
+    TypeBuffer,
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -158,6 +199,16 @@ pub enum ComputeOperator {
     Jit,
     /// `[kernel, arg]` operand — run the kernel on the arg → the result.
     Launch,
+    /// Compile a curried `?a -> USize -> ?b` function to a parallel kernel
+    /// (flattened `(?a, USize) -> ?b`) → a `ParKernel` value.
+    Parallel,
+    /// `[parallel_kernel, cfg, count]` operand — run the parallel kernel over
+    /// the index range `[0, count)` → a `Buffer` value.
+    ParLaunch,
+    /// `[buffer, index]` operand — read one buffer element → `?b`.
+    BufferGet,
+    /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
+    BufferCollect,
 }
 
 // --- OperatorExt::run (the VM dispatch for the injected operators) ---------
@@ -168,7 +219,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
+    fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             ComputeOperator::Jit => {
                 if matches!(
@@ -240,11 +291,206 @@ where
                     Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 }
             }
+            ComputeOperator::Parallel => {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
+                else {
+                    // A non-function parallel target is the checker's
+                    // function-ness gate; stay lazy rather than panicking.
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                match compile_parallel_fragment(module, function) {
+                    Ok(fragment) => {
+                        let id = alloc_kernel_id();
+                        kernels().lock().unwrap().insert(id, fragment);
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id))
+                    }
+                    Err(err) => {
+                        let _ = err;
+                        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                    }
+                }
+            }
+            ComputeOperator::ParLaunch => {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    unreachable!("ParLaunch expects an operand array of [kernel, (cfg, count)]")
+                };
+                let operands = operands.items();
+                let Some(ComputeValue::ParKernel(id)) = module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                // The tuple argument `(cfg, count)`: element 0 is the config
+                // (a scalar `USize` or a (nested) tuple of scalars, flattened
+                // like a `Launch` argument), element 1 is the `USize` count.
+                let Ok(tuple_node) = dyn_node(operands[1].node) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let Some(tuple_items) = module.array_items(tuple_node) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let mut cfg_args: Vec<i64> = Vec::new();
+                match tuple_items
+                    .first()
+                    .and_then(|item| module.node_value(item.node))
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                {
+                    Some(LowValue::USize(n)) => cfg_args.push(n as i64),
+                    Some(LowValue::Array(_)) => {
+                        if !collect_args(module, tuple_items[0].node, &mut cfg_args) {
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                    }
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                };
+                let count = match tuple_items
+                    .get(1)
+                    .and_then(|item| module.node_value(item.node))
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                {
+                    Some(LowValue::USize(n)) => n,
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                };
+                match run_parallel_kernel(id, &cfg_args, count) {
+                    Ok(results) => {
+                        let bid = alloc_buffer_id();
+                        buffers().lock().unwrap().insert(bid, results);
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(bid))
+                    }
+                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                }
+            }
+            ComputeOperator::BufferGet => {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    unreachable!("BufferGet expects an operand array of [buffer, index]")
+                };
+                let operands = operands.items();
+                let Some(ComputeValue::Buffer(id)) = module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let index = match module
+                    .node_value(operands[1].node)
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                {
+                    Some(LowValue::USize(n)) => n,
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                };
+                let results = buffers().lock().unwrap();
+                match results.get(&id).and_then(|v| v.get(index)) {
+                    Some(&value) => {
+                        <P::Value as From<LowValue>>::from(LowValue::USize(value as usize))
+                    }
+                    None => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                }
+            }
+            ComputeOperator::BufferCollect => {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    unreachable!("BufferCollect expects an operand array of [buffer]")
+                };
+                let operands = operands.items();
+                let Some(ComputeValue::Buffer(id)) = module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let results = buffer_results(id);
+                let Some(results) = results else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                // Materialize each element as a fresh scalar node and build a
+                // real lichen array value over them, so `collect` yields an
+                // ordinary array the user can index/treat as `Int<n>`.
+                let items: Vec<ArrayItem> = results
+                    .iter()
+                    .map(|value| {
+                        let node = module.add_node(
+                            block,
+                            None,
+                            Some(<P::Value as From<LowValue>>::from(LowValue::USize(
+                                *value as usize,
+                            ))),
+                        );
+                        ArrayItem::new(AnyNodeId::Dynamic(node))
+                    })
+                    .collect();
+                let handle = module.alloc_array(&items, block);
+                <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+            }
         }
     }
 }
 
 // --- Codegen: lichen graph → a scalar `(i64) -> i64` wasm function body -----
+
+/// One parameter group of a kernel being emitted.
+///
+/// A scalar `jit` kernel has one slot (its single parameter).  A **parallel**
+/// kernel (`?a -> USize -> ?b` flattened to `(?a, USize) -> ?b`) has two: the
+/// config group (the domain `?a`, a scalar or tuple of scalars) followed by
+/// the index slot (the last scalar `USize`).  Each slot carries the
+/// `[value, type]` parameter pair, the parameter's value node (where the shape
+/// marker is stored), its flattened domain shape, and the wasm local base
+/// offset it starts at (the sum of the earlier slots' arities).
+#[derive(Clone)]
+struct ParamSlot {
+    /// The `[value, type]` parameter pair node.
+    pair: NodeId,
+    /// The parameter's value node (`Index(pair, 0)`), where the shape marker is.
+    value: NodeId,
+    /// The flattened domain shape this slot reads as.
+    shape: LowShape,
+    /// The wasm local base offset — `0` for the first slot, the running sum of
+    /// the earlier slots' [`flat_arity`] for a later one.
+    base: usize,
+}
+
+/// The wasm local offset of `node`, if it is a parameter read of one of
+/// `params` — the slot's base plus the flattened index path within the slot's
+/// domain.  `None` when `node` is not a parameter read of any slot.
+fn param_read_offset<P>(module: &Module<P>, params: &[ParamSlot], node: NodeId) -> Option<u32>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    for slot in params {
+        if let Some(path) = param_path(module, slot.pair, node) {
+            if let Ok(offset) = flatten_offset(&slot.shape, &path) {
+                return Some((slot.base + offset) as u32);
+            }
+        }
+    }
+    None
+}
 
 /// Lower `[param_pair] → function.return` for the kernel-safe subset (scalar
 /// arith over a scalar or a tuple of scalars) into a [`KernelFragment`] — the
@@ -301,10 +547,114 @@ where
     };
     module.set_node_shape(param_value, Some(param_shape.clone()));
 
+    let params = vec![ParamSlot {
+        pair: param_pair,
+        value: param_value,
+        shape: param_shape.clone(),
+        base: 0,
+    }];
+
     let mut body: Vec<KernelInstr> = Vec::new();
-    emit_node(module, param_pair, param_value, ret_value, &mut body)?;
+    emit_node(module, &params, ret_value, &mut body)?;
 
     Ok(KernelFragment { param_shape, body })
+}
+
+/// The [`FunctionId`] of the value `node` denotes, if it is (or reaches) a
+/// function value.  Looks through a `[value, type]` pair and a `value_of`
+/// extraction before reading the `LowValue::Function`.
+fn inner_function_id<P>(module: &Module<P>, node: NodeId) -> Result<FunctionId, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let value_node = pair_value_node(module, node)
+        .or_else(|| value_of_node(module, node))
+        .unwrap_or(node);
+    match module
+        .node_value(AnyNodeId::Dynamic(value_node))
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+    {
+        Some(LowValue::Function(AnyFunctionId::Dynamic(fid))) => Ok(fid),
+        _ => Err("parallel kernel's outer body must be an index function `i => ?b`".into()),
+    }
+}
+
+/// Lower a curried `?a -> USize -> ?b` function into a **parallel kernel** — a
+/// [`KernelFragment`] whose domain is the flattened tuple `(?a, USize)` and
+/// whose body is the inner function's body, traced with two parameter slots
+/// (the config group then the index scalar).
+///
+/// `parallel` is the data-parallel lift: running it over the index range
+/// `[0, n)` computes `f cfg i` for each `i` into a [`Buffer`], so the index
+/// (the inner function's parameter) is the *last* scalar of the domain and the
+/// config `?a` is the first group.
+fn compile_parallel_fragment<P>(
+    module: &mut Module<P>,
+    function: AnyFunctionId,
+) -> Result<KernelFragment, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let AnyFunctionId::Dynamic(fid) = function else {
+        return Err("static (imported) functions are not kernel-compilable v1".into());
+    };
+    let cfg_pair = module.functions[fid].parameter;
+    let cfg_shape = kernel_param_shape(module, cfg_pair)?;
+    match &cfg_shape {
+        LowShape::USize | LowShape::Tuple(_) => {}
+        _ => {
+            return Err(
+                "parallel kernel config domain must be a scalar or a tuple of scalars".into(),
+            );
+        }
+    }
+    // The outer body is the inner index function `i => ?b`.
+    let inner_fid = inner_function_id(module, module.functions[fid].r#return)?;
+    let inner = &module.functions[inner_fid];
+    let i_pair = inner.parameter;
+    let body = inner.r#return;
+    let i_shape = kernel_param_shape(module, i_pair)?;
+    match &i_shape {
+        LowShape::USize => {}
+        _ => return Err("parallel kernel index parameter must be a scalar USize".into()),
+    }
+    // The kernel's result is the inner body's value (through a `[value,type]`
+    // pair, or a bare value node).
+    let ret_value = match module.array_items(body) {
+        Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
+        _ => body,
+    };
+    let cfg_value = pair_value_node(module, cfg_pair)
+        .ok_or_else(|| "parallel config parameter is not a [value, type] pair".to_string())?;
+    let i_value = pair_value_node(module, i_pair)
+        .ok_or_else(|| "parallel index parameter is not a [value, type] pair".to_string())?;
+    module.set_node_shape(cfg_value, Some(cfg_shape.clone()));
+    module.set_node_shape(i_value, Some(i_shape.clone()));
+    let cfg_arity = flat_arity(&cfg_shape);
+    let params = vec![
+        ParamSlot {
+            pair: cfg_pair,
+            value: cfg_value,
+            shape: cfg_shape.clone(),
+            base: 0,
+        },
+        ParamSlot {
+            pair: i_pair,
+            value: i_value,
+            shape: i_shape.clone(),
+            base: cfg_arity,
+        },
+    ];
+    let mut body_instr: Vec<KernelInstr> = Vec::new();
+    emit_node(module, &params, ret_value, &mut body_instr)?;
+    Ok(KernelFragment {
+        param_shape: LowShape::Tuple(vec![cfg_shape, i_shape]),
+        body: body_instr,
+    })
 }
 
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
@@ -528,12 +878,13 @@ where
 }
 
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
-/// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and the parameter value
-/// (`Index(param_pair, 0)` → `local.get 0`).
+/// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and parameter reads
+/// (`Index(param_pair, 0)` → `local.get k`).  `params` is the kernel's
+/// parameter-slot list (one for a scalar `jit` kernel, two — config then index
+/// — for a parallel kernel).
 fn emit_node<P>(
     module: &Module<P>,
-    param_pair: NodeId,
-    param_value: NodeId,
+    params: &[ParamSlot],
     node: NodeId,
     body: &mut Vec<KernelInstr>,
 ) -> Result<(), String>
@@ -553,18 +904,17 @@ where
     }
     let Some(operation) = module.nodes[node].operation else {
         // A bare value cell (no value specialization, no operator).  If it is
-        // in the enclosing parameter's equality class, it is a whole-parameter
-        // read: the deep pass's apply-clone *unifies* a substituted parameter
-        // with the argument, so a reduced same-module call's parameter
-        // reference resolves to this kernel's parameter — emit a `local.get`
-        // for it instead of failing.
-        if equality_rep(module, node) == equality_rep(module, param_value) {
-            let domain = module
-                .node_shape(param_value)
-                .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
-            let offset = flatten_offset(domain, &[])?;
-            body.push(KernelInstr::LocalGet(offset as u32));
-            return Ok(());
+        // in one of the enclosing parameters' equality classes, it is a
+        // whole-parameter read: the deep pass's apply-clone *unifies* a
+        // substituted parameter with the argument, so a reduced same-module
+        // call's parameter reference resolves to this kernel's parameter —
+        // emit a `local.get` for it instead of failing.
+        for slot in params {
+            if equality_rep(module, node) == equality_rep(module, slot.value) {
+                let offset = flatten_offset(&slot.shape, &[])?;
+                body.push(KernelInstr::LocalGet((slot.base + offset) as u32));
+                return Ok(());
+            }
         }
         // A value collapsed to a bare `Parameterized` cell resolves through its
         // equality class to the computation that defines it — a kernel call's
@@ -572,7 +922,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, param_pair, param_value, definer, body);
+            return emit_node(module, params, definer, body);
         }
         return Err(format!(
             "kernel body hits a node with neither value nor operation (node={node:?})"
@@ -589,12 +939,8 @@ where
                 // A parameter read at some index path → a wasm `local.get`.
                 // (This must run before the value_of defuse: `Index(param_pair,
                 // 0)` is a node's value slot, not a general extraction.)
-                if let Some(path) = param_path(module, param_pair, node) {
-                    let domain = module
-                        .node_shape(param_value)
-                        .ok_or_else(|| "kernel parameter has no domain shape".to_string())?;
-                    let offset = flatten_offset(domain, &path)?;
-                    body.push(KernelInstr::LocalGet(offset as u32));
+                if let Some(offset) = param_read_offset(module, params, node) {
+                    body.push(KernelInstr::LocalGet(offset));
                     return Ok(());
                 }
                 // A `value_of` extraction — `Index(pair, 0)` with a constant
@@ -603,7 +949,7 @@ where
                 // real index.
                 if usize_value(module, index) == Some(0) {
                     if let Some(value_node) = value_of_node(module, node) {
-                        return emit_node(module, param_pair, param_value, value_node, body);
+                        return emit_node(module, params, value_node, body);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -616,9 +962,9 @@ where
                             if items.len() == 2 {
                                 let then_node = dyn_node(items[1].node)?;
                                 let else_node = dyn_node(items[0].node)?;
-                                emit_node(module, param_pair, param_value, then_node, body)?;
-                                emit_node(module, param_pair, param_value, else_node, body)?;
-                                emit_node(module, param_pair, param_value, index, body)?;
+                                emit_node(module, params, then_node, body)?;
+                                emit_node(module, params, else_node, body)?;
+                                emit_node(module, params, index, body)?;
                                 body.push(KernelInstr::I32WrapI64);
                                 body.push(KernelInstr::Select);
                                 return Ok(());
@@ -639,14 +985,7 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(
-                        module,
-                        param_pair,
-                        param_value,
-                        callee,
-                        arg,
-                        body,
-                    );
+                    return emit_cross_kernel_call(module, params, callee, arg, body);
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -667,8 +1006,8 @@ where
         match ty_op {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 let (left, right) = operand_pair(module, operation.operand)?;
-                emit_node(module, param_pair, param_value, left, body)?;
-                emit_node(module, param_pair, param_value, right, body)?;
+                emit_node(module, params, left, body)?;
+                emit_node(module, params, right, body)?;
                 let bin = match ty_op {
                     TypeOperator::Add => KernelBin::Add,
                     TypeOperator::Sub => KernelBin::Sub,
@@ -692,10 +1031,11 @@ where
         match compute_op {
             ComputeOperator::Launch => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(module, param_pair, param_value, kernel, arg, body);
+                return emit_cross_kernel_call(module, params, kernel, arg, body);
             }
             // Jitting another function from *inside* a kernel body is not a v1
-            // cross-kernel call.
+            // cross-kernel call; launching a parallel kernel from inside a body
+            // is likewise deferred.
             other => {
                 return Err(format!(
                     "unsupported compute operator in kernel body: {other:?}"
@@ -715,8 +1055,7 @@ where
 /// codomain is resolved by [`LaunchOp`]), the former the untyped-form gap.
 fn emit_cross_kernel_call<P>(
     module: &Module<P>,
-    param_pair: NodeId,
-    param_value: NodeId,
+    params: &[ParamSlot],
     kernel: NodeId,
     arg: NodeId,
     body: &mut Vec<KernelInstr>,
@@ -740,7 +1079,7 @@ where
         return Err("cross-kernel call supports only a scalar-domain callee in v1".into());
     }
     let arg = pair_value_node(module, arg).unwrap_or(arg);
-    emit_node(module, param_pair, param_value, arg, body)?;
+    emit_node(module, params, arg, body)?;
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
 }
@@ -1078,6 +1417,67 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     Ok(result as usize)
 }
 
+/// Run a **parallel** kernel over the index range `[0, count)`, computing the
+/// flattened-kernel `(?a, USize) -> ?b` once per index with the (already
+/// flattened) config argument vector fixed, and collect the `?b` results into a
+/// `Vec<i64>`.
+///
+/// The indices are distributed across a bounded pool of scoped threads (one
+/// chunk per worker, so a large range is genuinely concurrent — the "parallel"
+/// of the data-parallel lift), each worker running its own [`run_kernel`] on the
+/// kernel's relative launch set.  Results are placed back in index order, so the
+/// buffer is deterministic regardless of scheduling.
+fn run_parallel_kernel(id: KernelId, cfg_args: &[i64], count: usize) -> Result<Vec<i64>, String> {
+    // Warm the kernel once: this validates the fragment, the assembly, and the
+    // config arity, so a broken parallel kernel fails fast (before threads).
+    let _ = run_kernel(id, &[cfg_args, &[0]].concat())?;
+    let mut results = vec![0i64; count];
+    let workers = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(count.max(1));
+    if workers <= 1 || count <= 1 {
+        for i in 0..count {
+            let args = [cfg_args, &[i as i64]].concat();
+            results[i] = run_kernel(id, &args)? as i64;
+        }
+        return Ok(results);
+    }
+    std::thread::scope(|scope| {
+        let chunk = count.div_ceil(workers);
+        let cfg = cfg_args.to_vec();
+        let mut handles: Vec<(usize, std::thread::ScopedJoinHandle<'_, Vec<i64>>)> = Vec::new();
+        for w in 0..workers {
+            let lo = w * chunk;
+            if lo >= count {
+                break;
+            }
+            let hi = (lo + chunk).min(count);
+            let cfg = cfg.clone();
+            handles.push((
+                lo,
+                scope.spawn(move || {
+                    let mut out = Vec::with_capacity(hi - lo);
+                    for i in lo..hi {
+                        let args = [cfg.as_slice(), &[i as i64]].concat();
+                        match run_kernel(id, &args) {
+                            Ok(value) => out.push(value as i64),
+                            Err(e) => eprintln!("parallel kernel index {i} failed: {e}"),
+                        }
+                    }
+                    out
+                }),
+            ));
+        }
+        // Join in index order and copy into the result vector.
+        for (lo, handle) in handles {
+            let vals = handle.join().expect("parallel worker panicked");
+            results[lo..lo + vals.len()].copy_from_slice(&vals);
+        }
+    });
+    Ok(results)
+}
+
 // --- Native-op registry: the plugin's opt-in to the native-plugin contract --
 
 /// The `lichen-compute` native plugin marker — the nominal opt-in to the
@@ -1104,8 +1504,18 @@ macro_rules! compute_native_ops {
     ($program:ty) => {{
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
-        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 2] =
-            [("jit", &JIT), ("launch", &LAUNCH)];
+        static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
+        static PARLAUNCH: $crate::ParLaunchOp = $crate::ParLaunchOp;
+        static PGET: $crate::BufferGetOp = $crate::BufferGetOp;
+        static PCOLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
+        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 6] = [
+            ("jit", &JIT),
+            ("launch", &LAUNCH),
+            ("parallel", &PARALLEL),
+            ("plrun", &PARLAUNCH),
+            ("pget", &PGET),
+            ("pcollect", &PCOLLECT),
+        ];
         &OPS[..] as $crate::NativeOps<$program>
     }};
 }
@@ -1201,6 +1611,190 @@ where
             node: pair,
             val: None,
             ty: c,
+        }
+    }
+}
+
+/// `$parallel(f)` — compile a curried `?a -> USize -> ?b` index function into a
+/// parallel kernel.  The curried-arrow gate verifies `f` is a two-argument
+/// function whose first argument is the config and whose second is a `USize`
+/// index (bound through the `Int` type cell), binding the config `?a` and
+/// element `?b` to fresh cells for the buffer ops to read.
+pub struct ParallelOp;
+
+/// `$plrun(pk, cfg, n)` — run a parallel kernel over the index range `[0, n)`
+/// with config `cfg` fixed, collecting the `n` element results into a `Buffer`.
+pub struct ParLaunchOp;
+
+/// `$pget(buf, i)` — read element `i` of a buffer.
+pub struct BufferGetOp;
+
+/// `$pcollect(buf)` — collect a whole buffer into a lichen array `[?b]`.
+pub struct BufferCollectOp;
+
+impl<P> NativeOp<P> for ParallelOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let f = &args[0];
+        // Curried-arrow gate: `f : ?a -> r0`.
+        let d0 = ctx.fresh();
+        let r0 = ctx.fresh();
+        let outer_shape = ctx.array_node(&[d0, r0]);
+        let fn_kind = ctx.kind_expr(ctx.function_type_marker_node());
+        let fn_ty = ctx.array_node(&[outer_shape, fn_kind]);
+        ctx.check_unify(f.ty, fn_ty, loc.clone(), DiagKind::Guard);
+        // Inner-arrow gate: `r0 : Int -> ?b` — the index is a `USize`/`Int`.
+        let b = ctx.fresh();
+        let inner_shape = ctx.array_node(&[ctx.int_type(), b]);
+        let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
+        let inner_ty = ctx.array_node(&[inner_shape, inner_kind]);
+        ctx.check_unify(r0, inner_ty, loc.clone(), DiagKind::Guard);
+        // ParKernel type: `[sig, [TypeParKernel, Type]]`, `sig = [?a, Int -> ?b]` —
+        // the lifted `?a -> USize -> ?b` signature `plrun` reads the config and
+        // element type from.  The codomain is the *full* inner function type, so
+        // the generic renderer spells the whole thing as `?a -> Int -> ?b`.
+        let sig = ctx.array_node(&[d0, inner_ty]);
+        let par_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeParKernel,
+        ));
+        let par_kind = ctx.kind_expr(par_marker);
+        let par_ty = ctx.array_node(&[sig, par_kind]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(f.value));
+        let pair = ctx.array_node(&[op, par_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: par_ty,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for ParLaunchOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let k = &args[0];
+        let a = &args[1];
+        // ParKernel gate: `k : [?a, Int -> ?b] → [sig, [TypeParKernel, Type]]`.
+        // The sig's codomain is the inner *function* type; its shape gives the
+        // element cell `?b`.
+        let d0 = ctx.fresh();
+        let b = ctx.fresh();
+        let mid = ctx.fresh();
+        let inner_shape = ctx.array_node(&[mid, b]);
+        let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
+        let inner_ty = ctx.array_node(&[inner_shape, inner_kind]);
+        let sig = ctx.array_node(&[d0, inner_ty]);
+        let par_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeParKernel,
+        ));
+        let par_kind = ctx.kind_expr(par_marker);
+        let par_ty = ctx.array_node(&[sig, par_kind]);
+        ctx.check_unify(k.ty, par_ty, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(mid, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        // The argument is a `(config, count)` tuple: unify `a`'s type with a
+        // 2-tuple, binding the config cell to the domain `?a` and the count to a
+        // `USize`.
+        let cfg_cell = ctx.fresh();
+        let n_cell = ctx.fresh();
+        let tuple_shape = ctx.array_node(&[cfg_cell, n_cell]);
+        let tuple_kind = ctx.kind_expr(ctx.tuple_type_marker_node());
+        let tuple_ty = ctx.array_node(&[tuple_shape, tuple_kind]);
+        ctx.check_unify(a.ty, tuple_ty, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(cfg_cell, d0, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(n_cell, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        // Buffer result type: `[?b, [TypeBuffer, Type]]`.
+        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeBuffer,
+        ));
+        let buf_kind = ctx.kind_expr(buf_marker);
+        let buf_ty = ctx.array_node(&[b, buf_kind]);
+        let operands = ctx.array_node(&[k.value, a.value]);
+        let op = ctx.op_node(
+            P::Operator::from(ComputeOperator::ParLaunch),
+            Some(operands),
+        );
+        let pair = ctx.array_node(&[op, buf_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: buf_ty,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for BufferGetOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let b = &args[0];
+        let i = &args[1];
+        // Buffer gate: `b : [?b, [TypeBuffer, Type]]`, binding the element type.
+        let elem = ctx.fresh();
+        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeBuffer,
+        ));
+        let buf_kind = ctx.kind_expr(buf_marker);
+        let buf_ty = ctx.array_node(&[elem, buf_kind]);
+        ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        let operands = ctx.array_node(&[b.value, i.value]);
+        let op = ctx.op_node(
+            P::Operator::from(ComputeOperator::BufferGet),
+            Some(operands),
+        );
+        let pair = ctx.array_node(&[op, elem]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: elem,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for BufferCollectOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let b = &args[0];
+        // Buffer gate: `b : [?b, [TypeBuffer, Type]]`, binding the element type.
+        let elem = ctx.fresh();
+        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeBuffer,
+        ));
+        let buf_kind = ctx.kind_expr(buf_marker);
+        let buf_ty = ctx.array_node(&[elem, buf_kind]);
+        ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
+        // Array result type: `[[?b, len], [TypeArray, Type]]` with a fresh
+        // length cell (the array's length is a runtime count, so it stays a
+        // `?`-length type until observed).
+        let len = ctx.fresh();
+        let arr_shape = ctx.array_node(&[elem, len]);
+        let arr_kind = ctx.kind_expr(ctx.array_type_marker_node());
+        let arr_ty = ctx.array_node(&[arr_shape, arr_kind]);
+        let operands = ctx.array_node(&[b.value]);
+        let op = ctx.op_node(
+            P::Operator::from(ComputeOperator::BufferCollect),
+            Some(operands),
+        );
+        let pair = ctx.array_node(&[op, arr_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: arr_ty,
         }
     }
 }
