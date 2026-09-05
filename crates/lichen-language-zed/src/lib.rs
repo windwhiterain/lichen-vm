@@ -50,10 +50,16 @@ mod zed_impl {
             // name relative to the extension's work directory (not `$PATH`), so
             // a relative name fails with "file not found" on launch. Resolve the
             // LSP binary the same way Zed's built-in languages do — via
-            // `Worktree::which`, which searches `$PATH`.
-            let server = worktree
-                .which(LANGUAGE_SERVER_BINARY)
-                .ok_or_else(|| format!("`{LANGUAGE_SERVER_BINARY}` not found on `$PATH`"))?;
+            // `Worktree::which`, which searches `$PATH`. It is *not* bundled
+            // with the extension, so the user installs it (see `extension.toml`).
+            let server = worktree.which(LANGUAGE_SERVER_BINARY).ok_or_else(|| {
+                format!(
+                    "`{LANGUAGE_SERVER_BINARY}` not found on `$PATH`. \
+                     Build and install it from the lichen-vm checkout with \
+                     `cargo install --path crates/lichen-language-server`, \
+                     then restart Zed."
+                )
+            })?;
             Ok(Command {
                 command: server,
                 args: Vec::new(),
