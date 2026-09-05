@@ -680,9 +680,13 @@ where
             ExprKind::TypeStruct { fields, .. } => {
                 self.ir.children[fields.start as usize..fields.end as usize].to_vec()
             }
-            // Transparent: a `# p` on an annotated value is `value`'s own
-            // attribute.
-            ExprKind::Annotation { value, .. } => vec![value],
+            // An annotated value contributes no sub-expression to a parent's
+            // combine: its attribute is its OWN slot (read via
+            // `self.attr[value]` in `check_ann`), never the value beneath it
+            // (`a # q` re-annotated keeps `q`; a `? doc` on a value writes the
+            // new doc).  A doc-only annotation (no perspective) therefore
+            // reads as a leaf.
+            ExprKind::Annotation { .. } => Vec::new(),
             // Leaf kinds — the annotation binds the slot directly.  An
             // `ErrorBlock` is a leaf too: a masked region carries no children
             // to combine.
@@ -1937,17 +1941,17 @@ where
         };
         let value_node = self.value_of(value);
         // One schema-tail entry per attribute slot, paired — by position —
-        // with the annotation's attribute value expressions.  A *label*
-        // attribute (e.g. `Doc`) carries no constraint, so its annotation
-        // value *replaces* any existing value outright — no combine, no
-        // unify, and two differing labels never conflict (`? b` over doc `a`
-        // yields `b`).  A *constraint* attribute (e.g. `Perspective`)
-        // combines over its children as before (a leaf's slot is its own
-        // value; a compound's is the meet over its direct sub-expressions'
-        // slots, then unifies with the annotation value).  The checker asks
-        // the registry for each attribute's `AttrExt` — it never names a
-        // concrete attribute, so the mechanism is generic over the attribute
-        // set.
+        // with the annotation's attribute value expressions.  A *constraint*
+        // attribute (e.g. `Perspective`) drops the annotation value into the
+        // slot and unifies it against the value's EXISTING attribute (the
+        // provider): the annotation is the *requirement*, so it must be a
+        // subtype of what the value already provides.  A *label* attribute
+        // (e.g. `Doc`) carries no constraint, so its annotation value
+        // *replaces* any existing value outright — no combine, no unify, and
+        // two differing labels never conflict (`? b` over doc `a` yields
+        // `b`).  The checker asks the registry for each attribute's
+        // `AttrExt` — it never names a concrete attribute, so the mechanism
+        // is generic over the attribute set.
         let tail = self.ir.schema(e).clone().tail;
         let attrs = self.ir.annotation_attrs(e).to_vec();
         let mut slots: Vec<NodeId> = Vec::with_capacity(tail.len());
@@ -1964,39 +1968,59 @@ where
                 // well-formed annotation) reads the missing marker.
                 None => self.zero_marker,
             };
-            let slot = if ext.is_label() {
-                attr_val
-            } else {
-                let children = self.persp_combine_children(value);
-                if children.is_empty() {
-                    attr_val
-                } else {
-                    let child_attrs: Vec<NodeId> =
-                        children.iter().map(|&c| self.attr_or_missing(c)).collect();
-                    let combined = ext.combine(self, &child_attrs);
-                    let loc2 = self.loc(e, 2);
-                    ext.unify_slots(self, combined, attr_val, loc2);
-                    combined
-                }
-            };
-            if !ext.is_label() {
-                constraint_slot = Some(slot);
-            }
-            // The runtime pair's render slot.  A label references the
-            // annotation value expression's `[value, type]` term pair, so the
-            // renderer can walk the value's *whole type chain* (e.g. a doc
-            // struct's field names come from the type, not a hardcoded shape).
-            // A constraint keeps its bare lifted value (the lattice machinery
-            // reads `attr[e]`, never this render slot).
-            let render_slot = if ext.is_label() {
-                match pe {
+            if ext.is_label() {
+                // A label (metadata, e.g. `Doc`) carries no constraint: it
+                // contributes no apply-time slot, and its runtime slot is the
+                // annotation value's `[value, type]` term pair, so the
+                // renderer can walk the value's *whole type chain* (a doc
+                // struct's field names come from the type, not a hardcoded
+                // shape).  The attribute's own `is_subtype` (doc → always
+                // `true`) is what permits `? b` to override `? a` without
+                // conflict — the checker never has to special-case a label's
+                // unification, only its metadata slot.
+                let render_slot = match pe {
                     Some(pe) => self.term[pe].expect("an annotation value expr is compiled"),
                     None => attr_val,
-                }
+                };
+                slots.push(render_slot);
             } else {
-                slot
-            };
-            slots.push(render_slot);
+                // A *constraint* unifies the annotation against the value's
+                // EXISTING attribute and keeps that existing value as the
+                // slot.  The annotation (`expr2`) is the *requirement*: it
+                // must be a subtype of the provider (the value's actual
+                // attribute) — `(x # 8) # 4` is legal (uniform-8 entails
+                // uniform-4), `(x # 4) # 8` is not (uniform-4 does not entail
+                // uniform-8).  The provider is the value's own attribute slot
+                // (a value that is itself annotated, or a bound name carrying
+                // an attribute) or, for a compound, the combine of its
+                // sub-expressions' slots.  A value with no attribute of its
+                // own (a plain leaf, or a doc-only annotation) is the
+                // degenerate case: no provider, so the annotation is the slot.
+                let provider = if self.attr[value].is_some() {
+                    Some(self.attr_or_missing(value))
+                } else {
+                    let children = self.persp_combine_children(value);
+                    if children.is_empty() {
+                        None
+                    } else {
+                        let child_attrs: Vec<NodeId> =
+                            children.iter().map(|&c| self.attr_or_missing(c)).collect();
+                        Some(ext.combine(self, &child_attrs))
+                    }
+                };
+                let slot = match provider {
+                    Some(p) => {
+                        let loc2 = self.loc(e, 2);
+                        ext.unify_slots(self, p, attr_val, loc2);
+                        p
+                    }
+                    None => attr_val,
+                };
+                // The constraint slot is what the apply-time attribute check
+                // reads; the runtime pair keeps the same bare lifted value.
+                constraint_slot = Some(slot);
+                slots.push(slot);
+            }
         }
         // The constraint slot (e.g. the perspective) is what the apply-time
         // attribute check reads; a label slot is metadata only.

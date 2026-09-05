@@ -87,6 +87,26 @@ The `perspective.rs` integration tests encode this table.
 | `f = x # 2 => x; f (5 # 4)` | `2 \| 4` ✓ (real subtype relaxation) |
 | `f = x # 4 => x; f (5 # 2)` | `4 ∤ 2` ✗ |
 
+### Annotation over an existing attribute (requirements & providers)
+
+An `expr # p ? d` over a value that **already carries** a constraint unifies the
+annotation against the value's *existing* attribute and keeps that existing value as
+the slot. The annotation is the **requirement** (a subtype); the value's own/existing
+attribute is the **provider** (a supertype). So the check is `requirement ⊑ provider`
+(`requirement | provider`):
+
+| program | result |
+|---|---|
+| `(5 # 8) # 4` | provider `8` kept, `4 \| 8` ✓ → slot `8` |
+| `(5 # 4) # 8` | `8 ∤ 4` ✗ → "expected 8, found 4" |
+| `x = 1 # 8; x # 4` | provider `8` kept, `4 \| 8` ✓ → slot `8` |
+| `x = 1 # 8; x # 16` | `16 ∤ 8` ✗ |
+
+The provider is the value's own attribute slot (a value that is itself annotated, or a
+bound name carrying an attribute) or, for a compound, the `gcd`-meet of its
+sub-expressions' slots. A plain leaf with no attribute of its own has no provider, so
+the annotation *is* the slot (`1 # 4` → `4`).
+
 ## Syntax
 
 `expr [: expr] [# expr] [? expr]` — `:` fills the type slot, `#` fills the
@@ -101,10 +121,13 @@ an optimization on `ExprKind::Function.parameter_attribute`. See the
 `?` is the **label** attribute slot — metadata that attaches to an expression but
 carries no constraint (see [`Doc`](doc-attribute-rework-plan.md)). Unlike `#`
 (a constraint a compound lives with and that the apply-time check enforces), a label
-is exempt from combine-over-children and never conflicts: an annotation's `? b`
-replaces any existing `? a`. A label's value is any first-class lichen value (by
-convention a struct instance); the renderer reads the value's field *names* from its
-**type chain**, so nothing about a label's shape is hardcoded.
+contributes no apply-time constraint slot, and the attribute's own `is_subtype` (a doc
+returns `true`) is what permits `? b` to override an existing `? a` without conflict —
+the checker never special-cases a label's *unification*, only its metadata slot. A
+label's value is any first-class lichen value (by convention a struct instance); the
+renderer reads the value's field *names* from its **type chain** (the label's runtime
+slot carries the annotation value's `[value, type]` term pair), so nothing about a
+label's shape is hardcoded.
 
 ## Non-goals (currently)
 

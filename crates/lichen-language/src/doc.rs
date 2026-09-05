@@ -13,9 +13,13 @@
 //!   binds to the concrete doc — the doc *passes from one to another*), and
 //!   when two already-concrete docs differ, [`AttrExt::is_subtype`] is `true`
 //!   so the mismatch is suppressed (the existing doc is kept — the override
-//!   case).
-//! - [`AttrExt::is_label`] is `true`, so an annotation's `? b` **replaces** any
-//!   existing doc `a` outright (the `check_ann` label branch).
+//!   case).  `is_subtype` is the attribute's *only* lever for "never
+//!   conflicts" — the checker never special-cases a label's unification.
+//! - [`AttrExt::is_label`] is `true`, so `Doc` contributes no constraint slot;
+//!   the label's runtime slot is the annotation value's `[value, type]` term
+//!   pair (so the renderer can walk the value's type chain).  Because a label
+//!   is metadata, the `?` expression *is* the value that rides the expression,
+//!   so a later `? b` overrides an earlier `? a` naturally.
 //!
 //! The doc value is just any first-class lichen value (a struct instance), so
 //! the type system validates it like any other value.  The checker's label
@@ -79,7 +83,11 @@ where
     /// `is_subtype` is `true` so two differing concrete docs never conflict
     /// (the existing doc is kept — the override case).
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
-        ctx.check_unify_relaxed(a, b, loc, DiagKind::Attribute, &|_ctx, _value, _declared| true);
+        ctx.check_unify_relaxed(a, b, loc, DiagKind::Attribute, &|ctx, value, declared| {
+            // `is_subtype` is always `true` for a doc, so the relaxed unify
+            // never reports a mismatch — the existing doc is kept (override).
+            self.is_subtype(ctx, value, declared)
+        });
     }
 
     /// A doc is a label: an annotation's value replaces, never merges.

@@ -81,15 +81,18 @@ where
     }
 
     /// Whether this attribute is a **label**: metadata that attaches to an
-    /// expression but carries no constraint.  A label attribute is exempt
-    /// from the combine-over-children step and from unify failure — two
-    /// differing label values never conflict (an annotation's value replaces,
-    /// never merges).  A constraint attribute (e.g. `Perspective`) returns
+    /// expression but carries no constraint.  A label contributes no apply-time
+    /// constraint slot, and its runtime pair slot is the annotation value's
+    /// `[value, type]` term pair (so its renderer can walk the value's type
+    /// chain).  Whether a label *conflicts* is decided solely by
+    /// [`Self::is_subtype`] — a metadata attribute overrides it to `true`, so
+    /// the checker never has to special-case a label's unification, only its
+    /// metadata slot.  A constraint attribute (e.g. `Perspective`) returns
     /// `false`, keeping its lattice combine/unify behaviour.
     ///
     /// Default `false` — only a metadata attribute overrides it.  The checker
     /// consults this in [`crate::checker::Checker::check_ann`] to choose the
-    /// replace path (label) over the combine path (constraint).
+    /// metadata-slot path (label) over the provider/unify path (constraint).
     fn is_label(&self) -> bool {
         false
     }

@@ -118,7 +118,13 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.  `?` is the **label** (doc) slot:
   metadata that never constrains, so `e ? d` attaches a value (a user struct
   instance) and — unlike `#`, which a compound lives with and the apply-time
-  check enforces — a later `? d'` replaces any earlier `? d`.  A comparison
+  check enforces — the attribute's own `is_subtype` (a doc returns `true`)
+  allows a later `? d'` to override an earlier `? d` without conflict (a label
+  contributes no apply-time constraint slot).  A constraint annotation (`# p`)
+  over a value that already carries one unifies `p` (the *requirement*, a
+  subtype) against the value's existing attribute (the *provider*, a
+  supertype), keeping the existing value as the slot: `(x # 8) # 4` checks,
+  `(x # 4) # 8` does not.  A comparison
   (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
   is a prefix assert: `!e` compiles to the highlevel `assert(e)` — the checker
   force-evaluates `e` and requires `USize(1)`.  It binds tighter than the binary
