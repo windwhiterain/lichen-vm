@@ -241,13 +241,13 @@ f2
 ```text
 @{
   order = "3"
-  output = "(struct<Int, Type>, (1, Int), 1, Int, struct<Int>, (1,), 1): <TypeStruct, struct<Int, Type>, Int, Type, TypeStruct, struct<Int>, Int>"
+  output = "(struct<.x Int, .y Type>, (1, Int), 1, Int, struct<.x Int>, (1,), 1): <TypeStruct, struct<.x Int, .y Type>, Int, Type, TypeStruct, struct<.x Int>, Int>"
 @}
-A = struct<Int, Type>
-a = A(1, Int)
-B = struct<Int>
-b = B(1,)
-(A, a, a(0), a(1), B, b, b(0))
+A = struct<.x Int, .y Type>
+a = A(.x 1, .y Int)
+B = struct<.x Int>
+b = B(.x 1,)
+(A, a, a.x, a.y, B, b, b.x)
 ```
 
 ### `struct_recursion.lichen`
