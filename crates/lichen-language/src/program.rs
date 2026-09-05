@@ -6,15 +6,16 @@
 //! here from the plugin set.  The **perspective compiler plugin**
 //! (`lichen-perspective`) supplies the [`Perspective`] attribute (a
 //! divisibility lattice) and its combine operator [`GcdOp::Gcd`] (an n-ary gcd
-//! meet); the **`lichen-compute` native plugin** supplies the
-//! `ComputeValue`/`ComputeOperator` leaves.  This module re-exports those
-//! leaves and composes them with the highlevel's `LowValue`/`TypeValue`/
-//! `LowOperator`/`TypeOperator` leaves into one flat vocabulary via the
-//! [`lang_compose_vocabulary!`] manifest.
+//! meet); the **doc compiler plugin** (`lichen-doc`) supplies the [`Doc`]
+//! attribute (a label that attaches struct metadata); the **`lichen-compute`
+//! native plugin** supplies the `ComputeValue`/`ComputeOperator` leaves.  This
+//! module re-exports those leaves and composes them with the highlevel's
+//! `LowValue`/`TypeValue`/`LowOperator`/`TypeOperator` leaves into one flat
+//! vocabulary via the [`lang_compose_vocabulary!`] manifest.
 //!
 //! [`LangProgram`] is the program marker the whole frontend checks with — the
 //! `P` of `Module<P>`/`Registry<P>`/`Checker<P>`, with `Value = LangValue`,
-//! `Operator = LangOperator`, and `Attr = Perspective`.
+//! `Operator = LangOperator`, and `Attr = LangAttr` (`Perspective` + `Doc`).
 
 use lichen_highlevel::program::{HighGlobal, TypeOperator, TypeValue, ValueType};
 use lichen_lowlevel::{LowOperator, LowValue, Module, OperatorExt, ValueExt};
@@ -23,8 +24,8 @@ use lichen_utils::extend::AsEnum;
 
 pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 
-use crate::doc::Doc;
-pub use crate::doc::doc_attr_ext;
+use lichen_doc::Doc;
+pub use lichen_doc::doc_attr_ext;
 
 /// Compose the language's concrete program marker from a manifest of its
 /// vocabulary leaves and attribute set.

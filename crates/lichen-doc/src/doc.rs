@@ -27,16 +27,16 @@
 //! slot shape shared with a constraint (a perspective's lattice value sits in
 //! the same pair's element 0) — so the renderer can walk the value's whole
 //! type chain: a doc's *field names* come from the struct type, not a
-//! hardcoded shape.
+//! hardcoded shape.  That spelling renders through the program-generic
+//! [`lichen_render::render_struct_fields_named`].
 
 use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
 use lichen_lowlevel::{LowValue, Module, NodeId};
+use lichen_render::render_struct_fields_named;
 use lichen_utils::extend::AsEnum;
-
-use crate::render::render_struct_fields_named;
 
 /// The doc attribute marker.  Carries no data — the doc's *value* is a
 /// runtime node (a user-made struct instance).

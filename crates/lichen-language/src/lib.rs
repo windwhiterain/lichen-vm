@@ -21,7 +21,6 @@
 pub mod ast;
 pub mod compile;
 pub mod diag;
-pub mod doc;
 pub mod lex;
 pub mod package;
 pub mod parse;

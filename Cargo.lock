@@ -542,6 +542,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "lichen-doc"
+version = "0.1.0"
+dependencies = [
+ "lichen-highlevel",
+ "lichen-lowlevel",
+ "lichen-render",
+ "lichen-utils",
+]
+
+[[package]]
 name = "lichen-highlevel"
 version = "0.1.0"
 dependencies = [
@@ -557,9 +567,11 @@ version = "0.1.0"
 dependencies = [
  "chumsky",
  "lichen-compute",
+ "lichen-doc",
  "lichen-highlevel",
  "lichen-lowlevel",
  "lichen-perspective",
+ "lichen-render",
  "lichen-utils",
  "logos",
  "sha2",
@@ -600,6 +612,15 @@ dependencies = [
 
 [[package]]
 name = "lichen-perspective"
+version = "0.1.0"
+dependencies = [
+ "lichen-highlevel",
+ "lichen-lowlevel",
+ "lichen-utils",
+]
+
+[[package]]
+name = "lichen-render"
 version = "0.1.0"
 dependencies = [
  "lichen-highlevel",
