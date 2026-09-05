@@ -199,10 +199,10 @@ impl Compiler {
                     } else {
                         self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
                         self.ir.expr[p.0 as usize].span = self.ir.expr[value.0 as usize].span;
-                        // The schema (an attribute tail, e.g. `# p` or `? doc`)
+                        // The schema (an attribute tail, e.g. `# p` or `? e`)
                         // rides the *expression*, not the kind, so the
                         // transplant must carry it too — otherwise a bound
-                        // annotated value (`a = 5 ? doc{…}`) drops its tail and
+                        // annotated value (`a = 5 ? doc`) drops its tail and
                         // the checker panics reading `schema(p).tail[0]`.
                         self.ir.set_schema(p, self.ir.schema(value).clone());
                         p

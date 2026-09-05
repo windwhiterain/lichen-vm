@@ -95,9 +95,9 @@ where
     }
 
     /// Render this attribute's slot value in the language's own syntax
-    /// (`# 4`, `? doc{…}`), or `None` when it cannot be spelled (an unbound
-    /// or runtime-dependent value, or an attribute with no display).  The
-    /// output printers use it to show the attributes an expression actually
+    /// (`# 4`, `? name = "five"`), or `None` when it cannot be spelled (an
+    /// unbound or runtime-dependent value, or an attribute with no display).
+    /// The output printers use it to show the attributes an expression actually
     /// carries: they iterate the expression's schema tail and render every
     /// *present* attribute, so an un-annotated expression spells nothing.
     ///

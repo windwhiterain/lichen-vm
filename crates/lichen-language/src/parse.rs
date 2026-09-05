@@ -717,7 +717,7 @@ where
     combine(first, acc)
 }
 
-/// One `: T`, `# p`, or `? doc` partner of an annotation chain.
+/// One `: T`, `# p`, or `? e` partner of an annotation chain.
 #[derive(Clone, Debug)]
 enum AnnPiece {
     Type(Expr),
@@ -725,13 +725,15 @@ enum AnnPiece {
     Doc(Expr),
 }
 
-/// Accumulate a `: T` / `# p` / `? doc` chain into one [`Expr::Annotation`],
+/// Accumulate a `: T` / `# p` / `? e` chain into one [`Expr::Annotation`],
 /// carrying whichever of the three annotations are present (at most one of
 /// each — a later one of the same kind overwrites, matching the
 /// `expr [: expr] [# expr] [? expr]` grammar).  `e : A : B` keeps `B`
 /// (rightmost wins), as before.  An expression with no annotation (`rest`
 /// empty) is returned unchanged — it is not wrapped in a no-op
 /// `Annotation`, so the grammar stays faithful.
+/// `? e` is the label slot: a metadata value (a user-made struct instance),
+/// never a constraint.
 fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
     if rest.is_empty() {
         return first;
@@ -800,7 +802,6 @@ fn atom_parser<'a>(
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
             table_literal(tokens, expr.clone()),
-            doc_literal(tokens, expr.clone()),
             block(tokens, expr.clone()),
             angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
@@ -1115,57 +1116,6 @@ fn table_literal<'a>(
             }
             entries.append(&mut rest);
             Expr::Table(entries, span_at(tokens, me.span().start))
-        })
-}
-
-/// Convert a struct-returning block's statements into an
-/// [`Expr::RecordBlock`] — an anonymous struct instance carrying the block's
-/// named/positional fields.
-fn to_record_block(statements: Vec<BlockStmt>, span: Span) -> Expr {
-    Expr::RecordBlock {
-        fields: statements
-            .into_iter()
-            .map(|b| {
-                let public = b.public;
-                let span = b.stmt.span();
-                let (name, value, field) = match b.stmt {
-                    Stmt::Binding(binding) => (
-                        Some(binding.name),
-                        binding.value,
-                        // A `let` binding is a block-local, never a struct field.
-                        !binding.restrictive,
-                    ),
-                    Stmt::Expr(e) => (None, e, true),
-                };
-                RecordField {
-                    name,
-                    value,
-                    public,
-                    field,
-                    span,
-                }
-            })
-            .collect(),
-        span,
-    }
-}
-
-/// `doc { name = "…", description = "…" }` — a doc literal.  A struct-returning
-/// block, so its value is a `Doc`-shaped struct instance (named fields
-/// `.name`, `.description`); `doc` is a keyword.  A tail expression isn't a
-/// doc; the literal recovers to the record block (the statements win).
-fn doc_literal<'a>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
-    token(TokenKind::KwDoc)
-        .ignore_then(token(TokenKind::Glue).ignored().or_not())
-        .ignore_then(token(TokenKind::LBrace))
-        .ignore_then(block_body(tokens, expr))
-        .then_ignore(token(TokenKind::RBrace))
-        .map_with(|(statements, _tail), me| {
-            let span = span_at(tokens, me.span().start);
-            to_record_block(statements, span)
         })
 }
 

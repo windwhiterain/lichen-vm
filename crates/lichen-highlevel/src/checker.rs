@@ -1954,7 +1954,8 @@ where
         let mut constraint_slot: Option<NodeId> = None;
         for (i, marker) in tail.into_iter().enumerate() {
             let ext = (self.attr_ext)(&marker);
-            let attr_val = match attrs.get(i).copied() {
+            let pe = attrs.get(i).copied();
+            let attr_val = match pe {
                 Some(pe) => {
                     self.check_expr(pe);
                     self.value_of(pe)
@@ -1981,7 +1982,21 @@ where
             if !ext.is_label() {
                 constraint_slot = Some(slot);
             }
-            slots.push(slot);
+            // The runtime pair's render slot.  A label references the
+            // annotation value expression's `[value, type]` term pair, so the
+            // renderer can walk the value's *whole type chain* (e.g. a doc
+            // struct's field names come from the type, not a hardcoded shape).
+            // A constraint keeps its bare lifted value (the lattice machinery
+            // reads `attr[e]`, never this render slot).
+            let render_slot = if ext.is_label() {
+                match pe {
+                    Some(pe) => self.term[pe].expect("an annotation value expr is compiled"),
+                    None => attr_val,
+                }
+            } else {
+                slot
+            };
+            slots.push(render_slot);
         }
         // The constraint slot (e.g. the perspective) is what the apply-time
         // attribute check reads; a label slot is metadata only.

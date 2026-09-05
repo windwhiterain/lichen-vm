@@ -1,6 +1,6 @@
-//! The `Doc` attribute: a **label** that attaches a metadata value (a `Doc`
-//! struct instance — `struct<.name string, .description string>`) to any
-//! expression, spelled `? doc{…}`.
+//! The `Doc` attribute: a **label** that attaches a metadata value (a struct
+//! instance the user builds — by convention a `Doc` struct with `.name` and
+//! `.description` fields) to any expression, spelled `? expr`.
 //!
 //! `Doc` is a label, not a constraint.  Unlike `Perspective` (whose slot value
 //! unifies under the divisibility lattice and is checked at every apply), a
@@ -17,8 +17,11 @@
 //! - [`AttrExt::is_label`] is `true`, so an annotation's `? b` **replaces** any
 //!   existing doc `a` outright (the `check_ann` label branch).
 //!
-//! A `Doc` value is just a `Doc`-shaped struct instance, so unlike a scalar
-//! perspective it is first-class lichen data that the type system validates.
+//! The doc value is just any first-class lichen value (a struct instance), so
+//! the type system validates it like any other value.  The checker's label
+//! slot stores the `?` expression's `[value, type]` term pair, so the
+//! renderer can walk the value's whole type chain — a doc's *field names* come
+//! from the struct type, not a hardcoded shape.
 
 use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
@@ -27,8 +30,10 @@ use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
 use lichen_lowlevel::{LowValue, Module, NodeId};
 use lichen_utils::extend::AsEnum;
 
+use crate::render::render_struct_fields_named;
+
 /// The doc attribute marker.  Carries no data — the doc's *value* is a
-/// runtime node (a `Doc` struct instance).
+/// runtime node (a user-made struct instance).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Doc;
 
@@ -87,22 +92,19 @@ where
         true
     }
 
-    /// A doc spells `? doc{ … }` with its field values (a `Doc` struct
-    /// instance's positional field tuple).
+    /// A doc spells `? <named fields>` — the slot is the annotation value
+    /// expression's `[value, type]` term pair, so the field *names* come from
+    /// the value's struct type chain (never a hardcoded shape).
     fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
-        let value = self.slot_value(module, slot)?;
-        let LowValue::Array(items) = value else {
+        // The render slot is the `?` expression's `[value, type]` pair.
+        let pair = self.slot_value(module, slot)?;
+        let LowValue::Array(items) = pair else {
             return None;
         };
-        let fields: Vec<String> = items
-            .items()
-            .iter()
-            .filter_map(|item| match module.node_value(item.node).and_then(|v| v.as_enum()) {
-                Some(LowValue::Str(s)) => Some(format!("\"{s}\"")),
-                Some(LowValue::USize(n)) => Some(n.to_string()),
-                _ => None,
-            })
-            .collect();
-        Some(format!("? doc{{ {} }}", fields.join(", ")))
+        let items = items.items();
+        let value = items.first()?.node;
+        let ty = items.get(1)?.node;
+        let fields = render_struct_fields_named(module, value, ty)?;
+        Some(format!("? {fields}"))
     }
 }

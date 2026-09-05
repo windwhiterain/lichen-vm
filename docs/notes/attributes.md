@@ -89,18 +89,30 @@ The `perspective.rs` integration tests encode this table.
 
 ## Syntax
 
-`expr [: expr] [# expr]` — `:` fills the type slot, `#` fills the attribute slot. A
+`expr [: expr] [# expr] [? expr]` — `:` fills the type slot, `#` fills the
+perspective (constraint) slot, `?` fills the doc (label) slot. A
 `x # n => e` parameter (and `x : T # n => e`) is accepted; the frontend desugars a
 parameter annotation to a leading body statement (`x => { x # n; e }`) and keeps it as
 an optimization on `ExprKind::Function.parameter_attribute`. See the
 [language spec](../language-spec.md) for the grammar and `#` precedence.
 
+### Labels (`?`)
+
+`?` is the **label** attribute slot — metadata that attaches to an expression but
+carries no constraint (see [`Doc`](doc-attribute-rework-plan.md)). Unlike `#`
+(a constraint a compound lives with and that the apply-time check enforces), a label
+is exempt from combine-over-children and never conflicts: an annotation's `? b`
+replaces any existing `? a`. A label's value is any first-class lichen value (by
+convention a struct instance); the renderer reads the value's field *names* from its
+**type chain**, so nothing about a label's shape is hardcoded.
+
 ## Non-goals (currently)
 
 - The apply **checks** an attribute (equality + subtype) but does not yet *flow* it out
   through a function (auto-derivation); the return value reads the body's slot.
-- A second attribute in the same program (only `Perspective` ships; `Schema::tail` is a
-  `Vec`, so one could be added).
+- A second *constraint* attribute in the same program (only `Perspective` ships;
+  `Schema::tail` is a `Vec`, so one could be added). Labels like `Doc` already share
+  the tail.
 - Observing the perspective slot in the CLI / spec output.
 
 ## Decision log
@@ -112,3 +124,6 @@ an optimization on `ExprKind::Function.parameter_attribute`. See the
   `TypeOperator`, so the core only provides the mechanism.
 - Subtype relaxation was originally a stage-2 non-goal; it is now implemented via
   `check_unify_relaxed` + `AttrExt::is_subtype`.
+- A label's runtime render slot carries the annotation expression's `[value, type]`
+  pair, so the renderer walks the value's whole type chain; a constraint slot keeps its
+  bare lifted value (the lattice machinery reads `attr[e]`, never the render slot).

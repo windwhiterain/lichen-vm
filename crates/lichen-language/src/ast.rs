@@ -133,9 +133,9 @@ pub enum Expr {
         key: Box<Expr>,
         span: Span,
     },
-    /// `e : T`, `e # p`, and/or `e ? doc` — a type, perspective, and/or doc
-    /// annotation.  `: T` fills `r#type`, `# p` fills `perspective`,
-    /// `? doc` fills `doc`.  Any may be absent (`e # p`, `e : T`, `e ? d`);
+    /// `e : T`, `e # p`, and/or `e ? d` — a type, perspective, and/or doc
+    /// (label) annotation.  `: T` fills `r#type`, `# p` fills `perspective`,
+    /// `? d` fills `doc`.  Any may be absent (`e # p`, `e : T`, `e ? d`);
     /// at most one of each.
     Annotation {
         value: Box<Expr>,

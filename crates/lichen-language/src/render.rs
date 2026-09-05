@@ -1110,6 +1110,69 @@ fn struct_fields_with_names(
         .collect()
 }
 
+/// Render a struct-instance value's **named fields** (`name = value, …`) —
+/// the doc label's spelling — reading the *names* from the struct type's name
+/// table and each value against its field type.  `None` when the value/type
+/// does not form a struct instance.
+///
+/// `value_node` is the struct value (a field-tuple array) and `ty_node` its
+/// struct type (a `[shape, [TypeStruct{id, names}, K]]` pair).  The renderer
+/// walks the *type chain*, so the names come from the type, never a hardcoded
+/// shape.
+pub(crate) fn render_struct_fields_named<P: HighProgram>(
+    module: &Module<P>,
+    value_node: AnyNodeId,
+    ty_node: AnyNodeId,
+) -> Option<String>
+where
+    P::Value: ValueType,
+{
+    // The struct instance value: a field-tuple array.
+    let value = module.node_value(value_node)?.as_enum()?;
+    let LowValue::Array(value_arr) = value else {
+        return None;
+    };
+    let field_values = value_arr.items();
+
+    // The struct type: `[shape, kind]` where kind is `[marker, K]`.
+    let ty = module.node_value(ty_node)?.as_enum()?;
+    let LowValue::Array(ty_arr) = ty else {
+        return None;
+    };
+    let tys = ty_arr.items();
+    if tys.len() != 2 {
+        return None;
+    }
+    let kind = module.node_value(tys[1].node)?.as_enum()?;
+    let LowValue::Array(kind_items) = kind else {
+        return None;
+    };
+    if !kind_is_struct(module, kind_items.items()) {
+        return None;
+    }
+    // The shape is the positional field-type list.
+    let shape = module.node_value(tys[0].node)?.as_enum()?;
+    let LowValue::Array(shape_items) = shape else {
+        return None;
+    };
+    let field_types = shape_items.items();
+    let names = struct_field_names(module, kind_items.items(), field_values.len());
+
+    let mut vp = ValuePrinter::new(module);
+    let mut fields = Vec::with_capacity(field_values.len());
+    for (i, value_item) in field_values.iter().enumerate() {
+        let rendered = match field_types.get(i) {
+            Some(ty) => vp.element_any(value_item.node, ty.node),
+            None => "?".to_string(),
+        };
+        match names.get(i).copied().flatten() {
+            Some(name) => fields.push(format!("{name} = {rendered}")),
+            None => fields.push(rendered),
+        }
+    }
+    Some(fields.join(", "))
+}
+
 // --- the caret shell ---------------------------------------------------------
 
 /// Render a diagnostic with its source line and a caret.
