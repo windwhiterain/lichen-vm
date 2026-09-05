@@ -16,6 +16,7 @@ pub use crate::function::ApplyError;
 
 mod apply;
 mod assert;
+pub mod codec;
 mod equality;
 mod evaluation;
 mod function;

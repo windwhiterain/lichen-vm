@@ -11,14 +11,14 @@
 //! (the package manager's compiler cache under the lichen home — see
 //! [`crate::compiler_cache`]) that depends on the plugin (from git or a local
 //! path) and composes its vocabulary with the shipping leaves via
-//! `liche_language::lang_compose_vocabulary!`, then run `cargo build` and
+//! `lichen_language::lang_compose_vocabulary!`, then run `cargo build` and
 //! report the produced `lichen-compiler` binary.
 //!
 //! **Status:** the *composition* scaffold is real — the generated crate
 //! `cargo check`s once the plugin's leaves exist.  The language layer's
 //! tooling (package store, run, render, CLI) is generic over a program's
-//! value/operator vocabularies (see `liche_language::CompiledProgram`), so a
-//! generated compiler routes through the shared [`liche_language::cli`] over
+//! value/operator vocabularies (see `lichen_language::CompiledProgram`), so a
+//! generated compiler routes through the shared [`lichen_language::cli`] over
 //! its own composed vocabulary.  The one open piece is the plugin's **artifact
 //! codec**: a built compiler currently runs in memory only (`NoPersist` — no
 //! `~/.lichen` device cache) because a per-leaf codec protocol that lets the
@@ -49,19 +49,19 @@ impl Leaves {
     pub fn shipping() -> Self {
         Leaves {
             values: vec![
-                ("liche_lowlevel::LowValue", "LowValue"),
-                ("liche_highlevel::program::TypeValue", "TypeValue"),
-                ("liche_compute::ComputeValue", "ComputeValue"),
+                ("lichen_lowlevel::LowValue", "LowValue"),
+                ("lichen_highlevel::program::TypeValue", "TypeValue"),
+                ("lichen_compute::ComputeValue", "ComputeValue"),
             ],
             operators: vec![
-                ("liche_lowlevel::LowOperator", "LowOperator"),
-                ("liche_highlevel::program::TypeOperator", "TypeOperator"),
-                ("liche_perspective::GcdOp", "GcdOp"),
-                ("liche_compute::ComputeOperator", "ComputeOperator"),
+                ("lichen_lowlevel::LowOperator", "LowOperator"),
+                ("lichen_highlevel::program::TypeOperator", "TypeOperator"),
+                ("lichen_perspective::GcdOp", "GcdOp"),
+                ("lichen_compute::ComputeOperator", "ComputeOperator"),
             ],
             attrs: vec![
-                ("liche_perspective::Perspective", "Perspective"),
-                ("liche_doc::Doc", "Doc"),
+                ("lichen_perspective::Perspective", "Perspective"),
+                ("lichen_doc::Doc", "Doc"),
             ],
         }
     }
@@ -175,13 +175,13 @@ edition = "2024"
 {core_doc}
 {core_utils}
 {plugin_lines}"#,
-        core_language = core_dep("liche-language"),
-        core_lowlevel = core_dep("liche-lowlevel"),
-        core_highlevel = core_dep("liche-highlevel"),
-        core_compute = core_dep("liche-compute"),
-        core_perspective = core_dep("liche-perspective"),
-        core_doc = core_dep("liche-doc"),
-        core_utils = core_dep("liche-utils"),
+        core_language = core_dep("lichen-language"),
+        core_lowlevel = core_dep("lichen-lowlevel"),
+        core_highlevel = core_dep("lichen-highlevel"),
+        core_compute = core_dep("lichen-compute"),
+        core_perspective = core_dep("lichen-perspective"),
+        core_doc = core_dep("lichen-doc"),
+        core_utils = core_dep("lichen-utils"),
     );
     std::fs::write(dir.join("Cargo.toml"), toml).map_err(|e| format!("write Cargo.toml: {e}"))
 }
@@ -225,10 +225,10 @@ fn write_lib_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), S
 // from the shipping leaves plus each plugin's own leaf macro (the
 // `plugins = [<crate> as <crate>_leaves; ...]` arm stitches their leaves in —
 // no config file).
-liche_language::lang_compose_vocabulary! {{
+lichen_language::lang_compose_vocabulary! {{
     attrs = [
 {attrs}    ]
-    [ P::Operator: From<liche_perspective::GcdOp> ];
+    [ P::Operator: From<lichen_perspective::GcdOp> ];
     values = [
 {values}    ];
     operators = [
@@ -249,21 +249,19 @@ pub type Program = LangProgram;
 }
 
 /// The generated crate's `src/main.rs`: a thin compiler CLI over the language
-/// crate's library.  It shares [`liche_language::cli`], so a plugin-built
+/// crate's library.  It shares [`lichen_language::cli`], so a plugin-built
 /// compiler speaks the same dialect as the shipped `lichen-compiler` and is
 /// already depend-aware (resolving `depend` directives against the source
 /// cache).
 fn write_main_rs(dir: &Path) -> Result<(), String> {
-    // The generated compiler routes the shared `liche_language::cli` over its
-    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  It
-    // uses `NoPersist` as the artifact codec: the plugin program's extra
-    // value/operator variants have no generated codec yet, so the CLI drives
-    // an in-memory store (no `~/.lichen` device cache), and compiled packages
-    // are recompiled fresh rather than persisted.  (A per-leaf artifact-codec
-    // protocol that lets the composition macro emit `ProgramCodec` for a
-    // persistent plugin cache is the tracked follow-up.)
+    // The generated compiler routes the shared `lichen_language::cli` over its
+    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  The
+    // composition macro emits a `ProgramCodec` for that vocabulary (per-leaf
+    // value/operator codecs), so the CLI drives a real `~/.lichen` device
+    // cache: the plugin's own leaves serialize through their codecs, exactly
+    // like the shipping compiler's leaves do.
     let lines = r#"fn main() -> std::process::ExitCode {
-    liche_language::cli::main::<crate::LangValue, crate::LangOperator, liche_language::persist::NoPersist>()
+    lichen_language::cli::main::<crate::LangValue, crate::LangOperator, crate::ProgramCodec>()
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))

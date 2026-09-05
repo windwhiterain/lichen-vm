@@ -12,6 +12,7 @@
 //! (the plugin's `lichen_std_native_leaves!` macro contributes the `SortOp` leaf),
 //! then drives the produced compiler.
 
+use lichen_lowlevel::codec::{OperatorCodec, Reader, Writer};
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt, Program};
 use lichen_utils::extend::AsEnum;
 
@@ -26,6 +27,27 @@ impl lichen_highlevel::plugin::NativePlugin for StdNativePlugin {}
 pub enum SortOp {
     /// Ascending sort of the operand array's `usize` values.
     Sort,
+}
+
+/// The plugin leaf's per-leaf artifact codec: the single `Sort` operator.
+///
+/// A native plugin that wants its built compiler to keep a persistent
+/// `~/.lichen` cache implements [`OperatorCodec`] (and [`ValueCodec`] for any
+/// value leaf) for its leaves; this one is a scalar operator, so the codec is
+/// a one-tag identical round-trip.
+impl OperatorCodec for SortOp {
+    fn write_operator(w: &mut Writer, op: Self) {
+        match op {
+            SortOp::Sort => w.u8(0),
+        }
+    }
+
+    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+        match r.u8()? {
+            0 => Ok(SortOp::Sort),
+            tag => Err(format!("unknown sort-operator tag {tag}")),
+        }
+    }
 }
 
 /// The program-generic VM dispatch for [`SortOp`]: read the operand array's

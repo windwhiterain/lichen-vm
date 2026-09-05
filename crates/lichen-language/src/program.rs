@@ -223,6 +223,162 @@ macro_rules! lang_compose_vocabulary {
                 }
             }
         }
+
+        // ── The per-leaf artifact codec for the composed vocabulary.
+        //
+        // `ProgramCodec` implements [`$crate::persist::ArtifactCodec`] by
+        // dispatching each carry variant to its leaf's [`ValueCodec`]/
+        // [`OperatorCodec`]: a leaf discriminator byte (the leaf's position in
+        // the composition — `0`/`1` are the structural leaves, `2 3 …` each
+        // plugin in order), then the leaf's own payload.  Self-consistent per
+        // compiler; a plugin-built compiler's `cli` uses it for a real
+        // `~/.lichen` device cache.
+        #[derive(Default)]
+        pub struct ProgramCodec;
+
+        impl $crate::persist::ArtifactCodec<LangProgram> for ProgramCodec {
+            const PERSISTENT: bool = true;
+
+            fn write_value(
+                w: &mut $crate::persist::Writer,
+                value: LangValue,
+                modules: &std::collections::HashMap<
+                    ::lichen_lowlevel::ModuleKey,
+                    std::sync::Arc<::lichen_lowlevel::StaticModule<LangProgram>>,
+                >,
+            ) {
+                if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(&value)
+                {
+                    w.leaf(stringify!($low_name));
+                    <$low as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
+                    return;
+                }
+                if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(&value)
+                {
+                    w.leaf(stringify!($tyv_name));
+                    <$tyv as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
+                    return;
+                }
+                $(
+                    if let Some(v) =
+                        <LangValue as ::lichen_utils::extend::AsEnum<$extra_v>>::as_enum(&value)
+                    {
+                        w.leaf(stringify!($extra_v_name));
+                        <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::write_value(
+                            w, v, modules,
+                        );
+                        return;
+                    }
+                )*
+                unreachable!("a composed value always carries a leaf")
+            }
+
+            fn read_value(
+                r: &mut $crate::persist::Reader<'_>,
+                self_key: ::lichen_lowlevel::ModuleKey,
+                self_arena: &[u8],
+                self_base: *const u8,
+                modules: &std::collections::HashMap<
+                    ::lichen_lowlevel::ModuleKey,
+                    std::sync::Arc<::lichen_lowlevel::StaticModule<LangProgram>>,
+                >,
+            ) -> Result<LangValue, String> {
+                let name = r.leaf_name()?;
+                if name == stringify!($low_name).as_bytes() {
+                    return Ok(LangValue::$low_name(
+                        <$low as ::lichen_lowlevel::codec::ValueCodec>::read_value(
+                            r,
+                            self_key,
+                            self_arena,
+                            self_base,
+                            modules,
+                        )?,
+                    ));
+                }
+                if name == stringify!($tyv_name).as_bytes() {
+                    return Ok(LangValue::$tyv_name(
+                        <$tyv as ::lichen_lowlevel::codec::ValueCodec>::read_value(
+                            r,
+                            self_key,
+                            self_arena,
+                            self_base,
+                            modules,
+                        )?,
+                    ));
+                }
+                $(
+                    if name == stringify!($extra_v_name).as_bytes() {
+                        return Ok(LangValue::$extra_v_name(
+                            <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::read_value(
+                                r,
+                                self_key,
+                                self_arena,
+                                self_base,
+                                modules,
+                            )?,
+                        ));
+                    }
+                )*
+                Err(format!(
+                    "unknown value leaf '{}'",
+                    String::from_utf8_lossy(name)
+                ))
+            }
+
+            fn write_operator(w: &mut $crate::persist::Writer, operator: LangOperator) {
+                if let Some(op) =
+                    <LangOperator as ::lichen_utils::extend::AsEnum<$lowop>>::as_enum(&operator)
+                {
+                    w.leaf(stringify!($lowop_name));
+                    <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                    return;
+                }
+                if let Some(op) =
+                    <LangOperator as ::lichen_utils::extend::AsEnum<$tyop>>::as_enum(&operator)
+                {
+                    w.leaf(stringify!($tyop_name));
+                    <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                    return;
+                }
+                $(
+                    if let Some(op) =
+                        <LangOperator as ::lichen_utils::extend::AsEnum<$extra_op>>::as_enum(&operator)
+                    {
+                        w.leaf(stringify!($extra_op_name));
+                        <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
+                        return;
+                    }
+                )*
+                unreachable!("a composed operator always carries a leaf")
+            }
+
+            fn read_operator(r: &mut $crate::persist::Reader<'_>) -> Result<LangOperator, String> {
+                let name = r.leaf_name()?;
+                if name == stringify!($lowop_name).as_bytes() {
+                    return Ok(LangOperator::$lowop_name(
+                        <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::read_operator(r)?,
+                    ));
+                }
+                if name == stringify!($tyop_name).as_bytes() {
+                    return Ok(LangOperator::$tyop_name(
+                        <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::read_operator(r)?,
+                    ));
+                }
+                $(
+                    if name == stringify!($extra_op_name).as_bytes() {
+                        return Ok(LangOperator::$extra_op_name(
+                            <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::read_operator(
+                                r,
+                            )?,
+                        ));
+                    }
+                )*
+                Err(format!(
+                    "unknown operator leaf '{}'",
+                    String::from_utf8_lossy(name)
+                ))
+            }
+        }
     };
 
     // Thread the next plugin's leaf macro, passing the accumulator.
@@ -249,6 +405,7 @@ macro_rules! lang_compose_vocabulary {
             [ $( $rest )* ] ;
         }
     };
+
 }
 
 // The language program's value/operator vocabulary and program marker: a flat

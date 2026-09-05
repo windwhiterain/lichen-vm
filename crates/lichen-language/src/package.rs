@@ -90,7 +90,7 @@ pub struct PackageStore<
         + std::fmt::Debug
         + Copy
         + PartialEq,
-    C = persist::HighProgramCodec,
+    C = crate::program::ProgramCodec,
 > {
     pub registry: Arc<RwLock<Registry<CompiledProgram<V, O>>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,

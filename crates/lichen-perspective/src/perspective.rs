@@ -13,6 +13,7 @@ use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
+use lichen_lowlevel::codec::{OperatorCodec, Reader, Writer};
 use lichen_lowlevel::{AnyNodeId, BlockId, LowValue, Module, NodeId, OperatorExt, Program};
 use lichen_utils::extend::AsEnum;
 
@@ -27,6 +28,22 @@ pub enum GcdOp {
     /// so `gcd(n, 0) = n` makes it neutral.  A lazy operand yields
     /// `Parameterized`, like `Add`/`Sub`.
     Gcd,
+}
+
+// The perspective leaf's per-leaf artifact codec: the single `Gcd` operator.
+impl OperatorCodec for GcdOp {
+    fn write_operator(w: &mut Writer, op: Self) {
+        match op {
+            GcdOp::Gcd => w.u8(0),
+        }
+    }
+
+    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+        match r.u8()? {
+            0 => Ok(GcdOp::Gcd),
+            tag => Err(format!("unknown gcd-operator tag {tag}")),
+        }
+    }
 }
 
 /// The perspective attribute marker: a plain non-negative integer whose

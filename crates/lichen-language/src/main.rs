@@ -22,6 +22,6 @@ fn main() -> ExitCode {
     lichen_language::cli::main::<
         lichen_language::program::LangValue,
         lichen_language::program::LangOperator,
-        lichen_language::persist::HighProgramCodec,
+        lichen_language::program::ProgramCodec,
     >()
 }

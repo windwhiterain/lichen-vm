@@ -11,10 +11,14 @@
 //! (`HighProgramValue::LowValue(..)`), the highlevel's type values sit in
 //! theirs, and nothing nests.
 
+use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::sync::Arc;
 
+use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    BlockId, GlobalExt, LowOperator, LowValue, Module, NodeId, OperatorExt, Program, ValueExt,
+    BlockId, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program,
+    StaticModule, ValueExt,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -500,6 +504,79 @@ pub enum TypeOperator {
     Sub,
     Leq,
     Eq,
+}
+
+// --- the highlevel leaves' per-leaf artifact codec --------------------------
+//
+// `TypeValue` and `TypeOperator` have no arena payload, so their codecs ignore
+// the relocation context and are the smallest leaf-codec implementations: an
+// exhaustive tag write and an inverse read.
+
+impl ValueCodec for TypeValue {
+    fn write_value<P: Program>(
+        w: &mut Writer,
+        value: Self,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) {
+        match value {
+            TypeValue::TypeInt => w.u8(0),
+            TypeValue::TypeType => w.u8(1),
+            TypeValue::TypeFunction => w.u8(2),
+            TypeValue::TypeTuple => w.u8(3),
+            TypeValue::TypeArray => w.u8(4),
+            TypeValue::TypeStruct => w.u8(5),
+            TypeValue::TypeTable => w.u8(6),
+            TypeValue::TypeString => w.u8(7),
+            TypeValue::TypeId(n) => {
+                w.u8(8);
+                w.u64(n as u64);
+            }
+        }
+    }
+
+    fn read_value<P: Program>(
+        r: &mut Reader<'_>,
+        _self_key: ModuleKey,
+        _self_arena: &[u8],
+        _self_base: *const u8,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) -> Result<Self, String> {
+        Ok(match r.u8()? {
+            0 => TypeValue::TypeInt,
+            1 => TypeValue::TypeType,
+            2 => TypeValue::TypeFunction,
+            3 => TypeValue::TypeTuple,
+            4 => TypeValue::TypeArray,
+            5 => TypeValue::TypeStruct,
+            6 => TypeValue::TypeTable,
+            7 => TypeValue::TypeString,
+            8 => TypeValue::TypeId(r.u64()? as usize),
+            tag => return Err(format!("unknown type-value tag {tag}")),
+        })
+    }
+}
+
+impl OperatorCodec for TypeOperator {
+    fn write_operator(w: &mut Writer, op: Self) {
+        match op {
+            TypeOperator::Fresh => w.u8(0),
+            TypeOperator::Add => w.u8(1),
+            TypeOperator::Sub => w.u8(2),
+            TypeOperator::Leq => w.u8(3),
+            TypeOperator::Eq => w.u8(4),
+        }
+    }
+
+    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+        Ok(match r.u8()? {
+            0 => TypeOperator::Fresh,
+            1 => TypeOperator::Add,
+            2 => TypeOperator::Sub,
+            3 => TypeOperator::Leq,
+            4 => TypeOperator::Eq,
+            tag => return Err(format!("unknown type-operator tag {tag}")),
+        })
+    }
 }
 
 // The highlevel program's operator vocabulary: a flat union of the

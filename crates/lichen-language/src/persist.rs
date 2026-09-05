@@ -27,15 +27,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use lichen_highlevel::program::{TypeOperator, TypeValue};
+pub use lichen_lowlevel::codec::{ARENA_ALIGN, Reader, Writer, arena_base};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, ArrayItem, LocalNodeId, LowShape, LowValue, ModuleKey, Program,
-    StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
-    StaticOperation, TableItem,
+    LocalNodeId, LowShape, ModuleKey, Program, StaticFunction, StaticModule, StaticNode,
+    StaticOperation,
 };
 use sha2::Digest as _;
 
-use crate::program::{GcdOp, LangOperator, LangProgram, LangValue};
+use crate::program::{LangProgram, ProgramCodec};
 
 /// The content hash of an artifact — 32 bytes of SHA-256.
 pub type Hash = [u8; 32];
@@ -100,13 +99,6 @@ pub fn is_lichen_file_id(file_id: &str) -> bool {
 // formula the freeze used ([`arena_base`]).
 // ---------------------------------------------------------------------------
 
-/// The payload alignment of the frozen arena: array item slices (the only
-/// payload kind of this vocabulary — `LangValue` carries no ext
-/// handle variants).  `StaticModule::from_module` lays out payloads aligned
-/// to `max(align_of::<ArrayItem>, P::Value::alignment())`; for the
-/// highlevel vocabulary that maximum is `align_of::<ArrayItem>()`.
-const ARENA_ALIGN: usize = std::mem::align_of::<ArrayItem>();
-
 /// The vocabulary-specific half of the artifact format.
 ///
 /// The artifact header, node/function frames, arena layout and equality data
@@ -152,10 +144,6 @@ pub trait ArtifactCodec<P: Program> {
     fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
 }
 
-/// The codec for the shipped highlevel language vocabulary.
-#[derive(Default)]
-pub struct HighProgramCodec;
-
 /// A marker codec for a program that is compiled in memory only and never
 /// serialized to the device cache (the package store's in-memory path, and a
 /// plugin program whose artifact codec has not been generated yet).  Every
@@ -200,26 +188,6 @@ impl Default for NoPersist {
     }
 }
 
-/// The aligned base of a module's arena — the same formula
-/// `StaticModule::from_module` used to lay the payloads out, so offsets
-/// round-trip exactly.
-fn arena_base(arena: &[u8]) -> *const u8 {
-    let ptr = arena.as_ptr() as usize;
-    let base = (ptr + ARENA_ALIGN - 1) & !(ARENA_ALIGN - 1);
-    base as *const u8
-}
-
-/// The base-relative offset of a handle's payload pointer.
-fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) -> usize {
-    let base = arena_base(&module.arena) as usize;
-    let relative = offset as usize - base;
-    assert!(
-        relative <= module.arena.len(),
-        "a handle offset outside its module's arena — broken frozen module"
-    );
-    relative
-}
-
 /// Serialize `module` (and the arenas its refs point into, via `modules`)
 /// into the portable artifact format.  `hash` and `export` are the package
 /// metadata the store records alongside the module data.
@@ -229,7 +197,7 @@ pub fn serialize_artifact(
     hash: Hash,
     export: LocalNodeId,
 ) -> Vec<u8> {
-    serialize_artifact_with(module, modules, hash, export, HighProgramCodec)
+    serialize_artifact_with(module, modules, hash, export, ProgramCodec)
 }
 
 /// [`Self::serialize_artifact`] with an explicit [`ArtifactCodec`], for
@@ -318,34 +286,6 @@ where
     w.into_bytes()
 }
 
-impl ArtifactCodec<LangProgram> for HighProgramCodec {
-    fn write_value(
-        w: &mut Writer,
-        value: LangValue,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-    ) {
-        write_value(w, value, modules);
-    }
-
-    fn read_value(
-        r: &mut Reader<'_>,
-        self_key: ModuleKey,
-        self_arena: &[u8],
-        self_base: *const u8,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-    ) -> Result<LangValue, String> {
-        read_value(r, self_key, self_arena, self_base, modules)
-    }
-
-    fn write_operator(w: &mut Writer, operator: LangOperator) {
-        write_operator(w, operator);
-    }
-
-    fn read_operator(r: &mut Reader<'_>) -> Result<LangOperator, String> {
-        read_operator(r)
-    }
-}
-
 /// Write an optional [`LowShape`] (the node's stored shape marker).
 fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
     match shape {
@@ -421,92 +361,6 @@ fn read_low_shape(r: &mut Reader<'_>) -> Result<LowShape, String> {
     }
 }
 
-fn write_value(
-    w: &mut Writer,
-    value: LangValue,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-) {
-    match value {
-        LangValue::LowValue(LowValue::USize(n)) => {
-            w.u8(0);
-            w.u64(n as u64);
-        }
-        LangValue::LowValue(LowValue::Array(AnyHandle::Static(handle))) => {
-            w.u8(1);
-            w.u64(handle.module.as_raw());
-            let module = &modules[&handle.module];
-            let slice = unsafe { &*handle.offset };
-            w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
-            w.u64(slice.len() as u64);
-        }
-        LangValue::LowValue(LowValue::Array(AnyHandle::Dynamic(_))) => {
-            panic!("serializing a frozen module that carries a dynamic array payload")
-        }
-        LangValue::LowValue(LowValue::Table(AnyHandle::Static(handle))) => {
-            w.u8(12);
-            w.u64(handle.module.as_raw());
-            let module = &modules[&handle.module];
-            let slice = unsafe { &*handle.offset };
-            w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
-            w.u64(slice.len() as u64);
-        }
-        LangValue::LowValue(LowValue::Table(AnyHandle::Dynamic(_))) => {
-            panic!("serializing a frozen module that carries a dynamic table payload")
-        }
-        LangValue::LowValue(LowValue::Function(AnyFunctionId::Static(function))) => {
-            w.u8(2);
-            w.u64(function.module.as_raw());
-            w.u64(function.index.0 as u64);
-        }
-        LangValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(_))) => {
-            panic!("serializing a frozen module that carries a dynamic function ref")
-        }
-        LangValue::LowValue(LowValue::None) => w.u8(3),
-        LangValue::LowValue(LowValue::Parameterized) => w.u8(4),
-        LangValue::LowValue(LowValue::Str(s)) => {
-            w.u8(14);
-            w.u32(s.len() as u32);
-            w.bytes(s.as_bytes());
-        }
-        LangValue::TypeValue(TypeValue::TypeInt) => w.u8(5),
-        LangValue::TypeValue(TypeValue::TypeType) => w.u8(6),
-        LangValue::TypeValue(TypeValue::TypeFunction) => w.u8(7),
-        LangValue::TypeValue(TypeValue::TypeTuple) => w.u8(8),
-        LangValue::TypeValue(TypeValue::TypeArray) => w.u8(9),
-        LangValue::TypeValue(TypeValue::TypeStruct) => w.u8(10),
-        LangValue::TypeValue(TypeValue::TypeTable) => w.u8(13),
-        LangValue::TypeValue(TypeValue::TypeString) => w.u8(15),
-        LangValue::TypeValue(TypeValue::TypeId(n)) => {
-            w.u8(11);
-            w.u64(n as u64);
-        }
-        // A compute value (a kernel artifact, a native operator, or the
-        // kernel/launch type markers) is runtime-only and never serialized
-        // into a frozen, persistent package.
-        LangValue::ComputeValue(_) => {
-            panic!("serializing a compute value (Kernel/Launch are runtime-only)")
-        }
-    }
-}
-
-fn write_operator(w: &mut Writer, operator: LangOperator) {
-    use lichen_lowlevel::LowOperator;
-    match operator {
-        LangOperator::LowOperator(LowOperator::Index) => w.u8(0),
-        LangOperator::LowOperator(LowOperator::Apply) => w.u8(1),
-        LangOperator::LowOperator(LowOperator::TableGet) => w.u8(8),
-        LangOperator::TypeOperator(TypeOperator::Fresh) => w.u8(3),
-        LangOperator::TypeOperator(TypeOperator::Add) => w.u8(4),
-        LangOperator::TypeOperator(TypeOperator::Sub) => w.u8(5),
-        LangOperator::TypeOperator(TypeOperator::Leq) => w.u8(6),
-        LangOperator::TypeOperator(TypeOperator::Eq) => w.u8(7),
-        LangOperator::GcdOp(GcdOp::Gcd) => w.u8(9),
-        LangOperator::ComputeOperator(_) => {
-            panic!("serializing a compute operator (Jit/Launch) into a persistent package");
-        }
-    }
-}
-
 /// Deserialize an artifact.  `key` and `hash` are the expected identity of
 /// the file (verified against the header); `modules` supplies the arenas of
 /// the artifact's dependencies, which must already be registered — foreign
@@ -518,7 +372,7 @@ pub fn deserialize_artifact(
     hash: Hash,
     modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
 ) -> Result<(StaticModule<LangProgram>, LocalNodeId), String> {
-    deserialize_artifact_with(bytes, key, hash, modules, HighProgramCodec)
+    deserialize_artifact_with(bytes, key, hash, modules, ProgramCodec)
 }
 
 /// [`Self::deserialize_artifact`] with an explicit [`ArtifactCodec`], for
@@ -659,111 +513,6 @@ where
         },
         export,
     ))
-}
-
-fn read_value(
-    r: &mut Reader,
-    self_key: ModuleKey,
-    self_arena: &[u8],
-    self_base: *const u8,
-    modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-) -> Result<LangValue, String> {
-    Ok(match r.u8()? {
-        0 => LangValue::LowValue(LowValue::USize(r.u64()? as usize)),
-        1 => {
-            let owner = ModuleKey::from_raw(r.u64()?);
-            let offset = r.u64()? as usize;
-            let len = r.u64()? as usize;
-            let (owner_arena, owner_base) = if owner == self_key {
-                (self_arena, self_base)
-            } else {
-                let module = modules.get(&owner).ok_or_else(|| {
-                    format!("artifact references unregistered dependency key {owner:?}")
-                })?;
-                let arena: &[u8] = &module.arena;
-                (arena, arena_base(arena))
-            };
-            let gap = owner_base as usize - owner_arena.as_ptr() as usize;
-            if offset + len > owner_arena.len() - gap {
-                return Err("artifact handle out of its arena's bounds".into());
-            }
-            let payload = unsafe { owner_base.add(offset) as *const ArrayItem };
-            LangValue::LowValue(LowValue::Array(AnyHandle::Static(StaticHandle {
-                module: owner,
-                offset: std::ptr::slice_from_raw_parts(payload, len),
-            })))
-        }
-        2 => {
-            let module = ModuleKey::from_raw(r.u64()?);
-            let index = r.u64()? as usize;
-            LangValue::LowValue(LowValue::Function(AnyFunctionId::Static(
-                StaticFunctionRef {
-                    module,
-                    index: StaticFunctionId(index),
-                },
-            )))
-        }
-        3 => LangValue::LowValue(LowValue::None),
-        4 => LangValue::LowValue(LowValue::Parameterized),
-        14 => {
-            let len = r.u32()? as usize;
-            let bytes = r.take(len)?;
-            // The value is `Copy` and must outlive the artifact buffer, so the
-            // loaded bytes are leaked to a `&'static str` (like a source-built
-            // literal).  The content is UTF-8 by construction.
-            let s = std::str::from_utf8(bytes).map_err(|_| "string literal is not UTF-8")?;
-            LangValue::LowValue(LowValue::Str(Box::leak(s.to_string().into_boxed_str())))
-        }
-        12 => {
-            let owner = ModuleKey::from_raw(r.u64()?);
-            let offset = r.u64()? as usize;
-            let len = r.u64()? as usize;
-            let (owner_arena, owner_base) = if owner == self_key {
-                (self_arena, self_base)
-            } else {
-                let module = modules.get(&owner).ok_or_else(|| {
-                    format!("artifact references unregistered dependency key {owner:?}")
-                })?;
-                let arena: &[u8] = &module.arena;
-                (arena, arena_base(arena))
-            };
-            let gap = owner_base as usize - owner_arena.as_ptr() as usize;
-            if offset + len > owner_arena.len() - gap {
-                return Err("artifact handle out of its arena's bounds".into());
-            }
-            let payload = unsafe { owner_base.add(offset) as *const TableItem };
-            LangValue::LowValue(LowValue::Table(AnyHandle::Static(StaticHandle {
-                module: owner,
-                offset: std::ptr::slice_from_raw_parts(payload, len),
-            })))
-        }
-        5 => LangValue::TypeValue(TypeValue::TypeInt),
-        6 => LangValue::TypeValue(TypeValue::TypeType),
-        7 => LangValue::TypeValue(TypeValue::TypeFunction),
-        8 => LangValue::TypeValue(TypeValue::TypeTuple),
-        9 => LangValue::TypeValue(TypeValue::TypeArray),
-        10 => LangValue::TypeValue(TypeValue::TypeStruct),
-        13 => LangValue::TypeValue(TypeValue::TypeTable),
-        15 => LangValue::TypeValue(TypeValue::TypeString),
-        11 => LangValue::TypeValue(TypeValue::TypeId(r.u64()? as usize)),
-        tag => return Err(format!("unknown artifact value tag {tag}")),
-    })
-}
-
-fn read_operator(r: &mut Reader) -> Result<LangOperator, String> {
-    use lichen_lowlevel::LowOperator;
-    Ok(match r.u8()? {
-        0 => LangOperator::LowOperator(LowOperator::Index),
-        1 => LangOperator::LowOperator(LowOperator::Apply),
-        3 => LangOperator::TypeOperator(TypeOperator::Fresh),
-        4 => LangOperator::TypeOperator(TypeOperator::Add),
-        5 => LangOperator::TypeOperator(TypeOperator::Sub),
-        6 => LangOperator::TypeOperator(TypeOperator::Leq),
-        7 => LangOperator::TypeOperator(TypeOperator::Eq),
-        8 => LangOperator::LowOperator(LowOperator::TableGet),
-        9 => LangOperator::GcdOp(GcdOp::Gcd),
-        tag => return Err(format!("unknown artifact operator tag {tag}")),
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1184,7 +933,7 @@ fn serialize_registry(registry: &DeviceRegistry) -> Vec<u8> {
             w.u64(dep_key.as_raw());
         }
     }
-    w.buf
+    w.into_bytes()
 }
 
 fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
@@ -1231,80 +980,6 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Reader / writer
-// ---------------------------------------------------------------------------
-
-pub struct Writer {
-    buf: Vec<u8>,
-}
-
-impl Writer {
-    pub fn new() -> Writer {
-        Writer { buf: Vec::new() }
-    }
-    pub fn u8(&mut self, value: u8) {
-        self.buf.push(value);
-    }
-    pub fn u32(&mut self, value: u32) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
-    }
-    pub fn u64(&mut self, value: u64) {
-        self.buf.extend_from_slice(&value.to_le_bytes());
-    }
-    pub fn bytes(&mut self, bytes: &[u8]) {
-        self.buf.extend_from_slice(bytes);
-    }
-    pub fn path(&mut self, path: &Path) {
-        let bytes = path.to_string_lossy();
-        self.u32(bytes.len() as u32);
-        self.buf.extend_from_slice(bytes.as_bytes());
-    }
-    pub fn into_bytes(self) -> Vec<u8> {
-        self.buf
-    }
-}
-
-pub struct Reader<'a> {
-    buf: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> Reader<'a> {
-    pub fn new(buf: &'a [u8]) -> Reader<'a> {
-        Reader { buf, pos: 0 }
-    }
-    pub fn u8(&mut self) -> Result<u8, String> {
-        let byte = *self.buf.get(self.pos).ok_or("truncated artifact")?;
-        self.pos += 1;
-        Ok(byte)
-    }
-    pub fn u32(&mut self) -> Result<u32, String> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_le_bytes(bytes.try_into().expect("4 bytes")))
-    }
-    pub fn u64(&mut self) -> Result<u64, String> {
-        let bytes = self.take(8)?;
-        Ok(u64::from_le_bytes(bytes.try_into().expect("8 bytes")))
-    }
-    pub fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
-        if self.pos + len > self.buf.len() {
-            return Err("truncated artifact".into());
-        }
-        let bytes = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
-        Ok(bytes)
-    }
-    pub fn path(&mut self) -> Result<PathBuf, String> {
-        let len = self.u32()? as usize;
-        let bytes = self.take(len)?;
-        Ok(PathBuf::from(String::from_utf8_lossy(bytes).into_owned()))
-    }
-    pub fn done(&self) -> bool {
-        self.pos == self.buf.len()
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Codec-round-trip tests: enforce the write/read bijection contract.
 //
 // `write_value`/`read_value` and `write_operator`/`read_operator` are two
@@ -1319,6 +994,9 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod codec_roundtrip {
     use super::*;
+    use crate::program::{LangOperator, LangValue};
+    use lichen_highlevel::program::{TypeOperator, TypeValue};
+    use lichen_lowlevel::{LowOperator, LowValue};
 
     /// Encode `v`, then decode it back and return the deserialized value.
     /// Arena-free variants never touch the module map or the (dummy) self
@@ -1326,10 +1004,10 @@ mod codec_roundtrip {
     fn roundtrip_value(v: LangValue) -> LangValue {
         let modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
         let mut w = Writer::new();
-        write_value(&mut w, v, &modules);
+        ProgramCodec::write_value(&mut w, v, &modules);
         let bytes = w.into_bytes();
         let mut r = Reader::new(&bytes);
-        let out = read_value(
+        let out = ProgramCodec::read_value(
             &mut r,
             ModuleKey::from_raw(0),
             &[],
@@ -1361,6 +1039,7 @@ mod codec_roundtrip {
             LangValue::TypeValue(TypeValue::TypeTable),
             LangValue::TypeValue(TypeValue::TypeString),
             LangValue::TypeValue(TypeValue::TypeId(7)),
+            LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeBuffer),
         ];
         for &v in values {
             assert_eq!(roundtrip_value(v), v, "value did not round-trip");
@@ -1369,17 +1048,17 @@ mod codec_roundtrip {
 
     fn roundtrip_op(op: LangOperator) -> LangOperator {
         let mut w = Writer::new();
-        write_operator(&mut w, op);
+        ProgramCodec::write_operator(&mut w, op);
         let bytes = w.into_bytes();
         let mut r = Reader::new(&bytes);
-        let out = read_operator(&mut r).expect("deserializing an operator the codec itself wrote");
+        let out = ProgramCodec::read_operator(&mut r)
+            .expect("deserializing an operator the codec itself wrote");
         assert!(r.done(), "the operator codec left trailing bytes");
         out
     }
 
     #[test]
     fn every_operator_round_trips() {
-        use lichen_lowlevel::LowOperator;
         let ops: &[LangOperator] = &[
             LangOperator::LowOperator(LowOperator::Index),
             LangOperator::LowOperator(LowOperator::Apply),
@@ -1389,7 +1068,7 @@ mod codec_roundtrip {
             LangOperator::TypeOperator(TypeOperator::Sub),
             LangOperator::TypeOperator(TypeOperator::Leq),
             LangOperator::TypeOperator(TypeOperator::Eq),
-            LangOperator::GcdOp(GcdOp::Gcd),
+            LangOperator::GcdOp(crate::program::GcdOp::Gcd),
         ];
         for &op in ops {
             assert_eq!(roundtrip_op(op), op, "operator did not round-trip");

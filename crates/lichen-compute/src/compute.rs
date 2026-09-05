@@ -42,15 +42,16 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
+use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowShape, LowValue,
-    Module, NodeId, OperatorExt, Program,
+    Module, ModuleKey, NodeId, OperatorExt, Program, StaticModule,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -212,6 +213,64 @@ pub enum ComputeOperator {
     BufferGet,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
+}
+
+// --- the compute leaves' per-leaf artifact codec ----------------------------
+//
+// A kernel/par-kernel/buffer value and every compute operator are **runtime
+// only**: they are process-local registry handles/operations with no stable
+// on-disk identity, so a persistent artifact must never carry them (a frozen
+// module is a *type* artifact, not a runnable kernel).  `TypeBuffer` is a pure
+// type-constant marker and is serializable like the other kind markers.  The
+// panic arms keep the byte format total while staying honest: a compute value
+// in a frozen module is an invariant violation.
+
+impl ValueCodec for ComputeValue {
+    fn write_value<P: Program>(
+        w: &mut Writer,
+        value: Self,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) {
+        match value {
+            ComputeValue::TypeBuffer => w.u8(0),
+            ComputeValue::Kernel(_) | ComputeValue::ParKernel(_) | ComputeValue::Buffer(_) => {
+                panic!("serializing a compute value (Kernel/ParKernel/Buffer are runtime-only)")
+            }
+        }
+    }
+
+    fn read_value<P: Program>(
+        r: &mut Reader<'_>,
+        _self_key: ModuleKey,
+        _self_arena: &[u8],
+        _self_base: *const u8,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) -> Result<Self, String> {
+        Ok(match r.u8()? {
+            0 => ComputeValue::TypeBuffer,
+            tag => return Err(format!("unknown compute-value tag {tag}")),
+        })
+    }
+}
+
+impl OperatorCodec for ComputeOperator {
+    fn write_operator(_w: &mut Writer, op: Self) {
+        match op {
+            ComputeOperator::Jit
+            | ComputeOperator::Launch
+            | ComputeOperator::Call
+            | ComputeOperator::Parallel
+            | ComputeOperator::ParLaunch
+            | ComputeOperator::BufferGet
+            | ComputeOperator::BufferCollect => {
+                panic!("serializing a compute operator (Jit/Launch/... are runtime-only)")
+            }
+        }
+    }
+
+    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+        Err(format!("unknown compute-operator tag {}", r.u8()?))
+    }
 }
 
 // --- OperatorExt::run (the VM dispatch for the injected operators) ---------
