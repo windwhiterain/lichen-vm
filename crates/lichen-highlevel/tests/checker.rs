@@ -694,6 +694,77 @@ fn types_are_first_class() {
     assert!(b.ok, "(\\T. \\x. (x : T)) int should check");
 }
 
+/// The first-class `type_of` function as the frontend lowers it — a generic
+/// one-parameter lambda whose body is `ExprKind::TypeOf` over the parameter.
+fn type_of_fn(ir: &mut IR) -> ExprId {
+    let b = param(ir);
+    let body = ir.alloc(ExprKind::TypeOf { value: b }, None);
+    lam(ir, b, body)
+}
+
+#[test]
+fn type_of_a_literal_yields_its_type() {
+    // (\x. type_of x) 5 — the apply clones the body; the read is element 1
+    // of the argument's pair, so the run's value is the int type's shape
+    // (the TypeInt marker — rendered as `Int`) and its own type the
+    // universe (a type's type is Type).
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let t_of = type_of_fn(&mut ir);
+    let whole = app(&mut ir, t_of, five);
+    let mut b = build(whole, ir);
+    assert!(b.ok, "type_of 5 should check");
+    let value = b.module.evaluate_node_deep(b.root_val, None);
+    assert!(
+        matches!(value, HighProgramValue::TypeValue(TypeValue::TypeInt)),
+        "type_of 5 is the int type marker, got {value:?}"
+    );
+    // The read's own type is element 1 of the int type — the universe.
+    let read = b.ty[whole].unwrap();
+    let kind = b.module.evaluate_node_deep(read, None);
+    let ids = array_ids_from(kind);
+    assert_eq!(ids[1], b.type_expr, "the type of the type is Type");
+    assert!(matches!(
+        b.module.node_value(AnyNodeId::Dynamic(ids[0])),
+        Some(HighProgramValue::TypeValue(TypeValue::TypeType))
+    ));
+}
+
+#[test]
+fn a_value_annotates_against_its_own_type_of() {
+    // 5 : type_of 5 — `type_of` in a type position IS the operand's type
+    // expression (its term is element 1 of the pair, shaped [shape, kind]
+    // like any type expression), so the annotation unifies elementwise,
+    // exactly as `5 : int` does.
+    let mut ir = IR::new();
+    let five = int(&mut ir, 5);
+    let read = ir.alloc(ExprKind::TypeOf { value: five }, None);
+    let a = ann(&mut ir, five, read);
+    let mut b = build(a, ir);
+    assert!(b.ok, "5 : type_of 5 should check like 5 : int");
+    // The annotation's type is the int type expression itself.
+    let ty = b.module.evaluate_node_deep(b.ty[a].unwrap(), None);
+    assert!(is_int_type_value(&b, ty));
+}
+
+#[test]
+fn type_of_the_type_constant_is_the_universe() {
+    // type_of Int — element 1 of the type constant's pair is the universe
+    // itself (`Int : Type`); the read's value is the Type marker and its
+    // type the self-referential universe (`Type : Type`).
+    let mut ir = IR::new();
+    let t = ty(&mut ir);
+    let t_of = type_of_fn(&mut ir);
+    let whole = app(&mut ir, t_of, t);
+    let mut b = build(whole, ir);
+    assert!(b.ok, "type_of Int should check");
+    let value = b.module.evaluate_node_deep(b.root_val, None);
+    assert!(
+        matches!(value, HighProgramValue::TypeValue(TypeValue::TypeType)),
+        "type_of Int is the Type marker, got {value:?}"
+    );
+}
+
 // --- check-then-run round-trips -------------------------------------------
 
 #[test]

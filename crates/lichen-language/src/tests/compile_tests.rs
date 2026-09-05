@@ -260,3 +260,49 @@ fn an_unresolved_name_inside_a_block_is_a_resolve_diagnostic() {
     let err = compile_err("{a = 1; a} a");
     assert_eq!(err.message, "unresolved name 'a'");
 }
+
+#[test]
+fn type_of_compiles_to_a_generic_function() {
+    // The bare `type_of` atom: a one-parameter function whose body is the
+    // highlevel `TypeOf` over the parameter — no special form, application
+    // is the whole story.
+    let ir = compile_ok("type_of");
+    let ExprKind::Function {
+        parameter,
+        parameter_type,
+        r#return,
+        ..
+    } = kind(&ir, wrapped(&ir))
+    else {
+        panic!("expected a function")
+    };
+    assert!(parameter_type.is_none(), "the type_of parameter is generic");
+    let ExprKind::TypeOf { value } = kind(&ir, r#return) else {
+        panic!("expected a type read")
+    };
+    assert_eq!(value, parameter, "the read's operand is the parameter");
+    assert!(matches!(kind(&ir, parameter), ExprKind::Parameter));
+}
+
+#[test]
+fn a_type_of_use_is_an_ordinary_application() {
+    // `type_of (1)` — parsed by the plain juxtaposition rule (a spaced paren
+    // is an argument); the callee is the bare atom.  The adjacent spelling
+    // `type_of(1)` is a positional slot read, exactly as after any name.
+    // (A single-expression program's root is the expression itself — no
+    // statement wrapper — so both roots are read directly.)
+    let ir = compile_ok("type_of (1)");
+    let ExprKind::Apply { function, argument } = kind(&ir, ir.root) else {
+        panic!("expected an apply")
+    };
+    assert!(matches!(kind(&ir, function), ExprKind::Function { .. }));
+    assert!(matches!(
+        kind(&ir, argument),
+        ExprKind::Literal(HighProgramLiteral::Int(IntLit(1)))
+    ));
+    let ir = compile_ok("type_of(1)");
+    let ExprKind::Field { container, .. } = kind(&ir, ir.root) else {
+        panic!("the adjacent paren is a slot read")
+    };
+    assert!(matches!(kind(&ir, container), ExprKind::Function { .. }));
+}

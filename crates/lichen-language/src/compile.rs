@@ -316,6 +316,27 @@ impl Compiler {
                 ExprKind::Literal(HighProgramLiteral::from(TypeTypeLit)),
                 span,
             ),
+            // The bare `type_of` atom: an ordinary generic function — the
+            // parameter's pair `[value, type]` is the argument's pair at each
+            // apply, and the body reads element 1 of it (the argument's
+            // type).  No scope is pushed: the parameter has no name, its
+            // single use is the body's `TypeOf` itself.  The depth matches a
+            // lambda written at this position.
+            Expr::TypeOf(span) => {
+                let depth = self.fn_depth as u32;
+                let parameter = self.alloc(ExprKind::Parameter, span);
+                let body = self.alloc(ExprKind::TypeOf { value: parameter }, span);
+                self.alloc(
+                    ExprKind::Function {
+                        parameter,
+                        parameter_type: None,
+                        parameter_attribute: None,
+                        r#return: body,
+                        depth,
+                    },
+                    span,
+                )
+            }
             Expr::Name(name, span) => match self.lookup(name) {
                 Some(id) => id,
                 None => {

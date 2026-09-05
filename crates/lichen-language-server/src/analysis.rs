@@ -832,7 +832,8 @@ fn classify_token_kind(kind: &TokenKind) -> Option<(SemanticTokenType, Vec<Seman
         | TokenKind::KwThen
         | TokenKind::KwElse
         | TokenKind::KwReturn
-        | TokenKind::KwPub => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        | TokenKind::KwPub
+        | TokenKind::KwTypeOf => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
         // Operators: arrows, annotations, separators-of-fields, and math.
@@ -929,7 +930,7 @@ impl<'a> NameClass<'a> {
                 self.expr(function);
                 self.expr(argument);
             }
-            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) | Expr::Err { .. } => {}
+            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) | Expr::Err { .. } | Expr::TypeOf(..) => {}
             Expr::BinOp { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
@@ -1119,7 +1120,8 @@ impl Walk {
             | Expr::Str(..)
             | Expr::TypeConst(..)
             | Expr::Placeholder(..)
-            | Expr::Err { .. } => {}
+            | Expr::Err { .. }
+            | Expr::TypeOf(..) => {}
             Expr::Name(name, span) => {
                 if let Some(idx) = self.lookup(name) {
                     self.resolve.insert(*span, idx);

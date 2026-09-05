@@ -871,6 +871,8 @@ impl Sig {
             // The recovered-error region / an unresolved name: content-free,
             // position-only.
             Expr::Err { .. } => self.cur.update(&[4]),
+            // The bare `type_of` atom — content-free (it is a keyword form).
+            Expr::TypeOf(_) => self.cur.update(&[26]),
             Expr::Lambda {
                 parameter,
                 parameter_type,

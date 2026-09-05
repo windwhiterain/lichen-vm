@@ -692,6 +692,9 @@ where
             // A lambda is a leaf for stage 1 (its own `# p` binds a slot).
             ExprKind::Function { .. } => Vec::new(),
             ExprKind::Assert { .. } => Vec::new(),
+            // A `type_of` read is a leaf: the type it yields is its own
+            // value, carrying nothing of the operand's value-attribute.
+            ExprKind::TypeOf { .. } => Vec::new(),
             ExprKind::NativeCall { .. } => self.range_children(e),
         }
     }
@@ -759,6 +762,39 @@ where
         index
     }
 
+    /// `type_of e` — the operand's type expression, read lazily: the term
+    /// IS element 1 of the operand's `[value, type]` pair, extracted with
+    /// the raw lowlevel `Index` op (the mirror of [`Self::value_of`],
+    /// element 0).  The expression's own halves are the type expression's —
+    /// the value is its shape (element 0, left to the lazy `value_of` memo
+    /// like a parameter use) and the type its kind (element 1) — so
+    /// `type_of e` in a type position is exactly the operand's type, and
+    /// `e : type_of e` unifies elementwise like `e : T`.  Nothing is forced
+    /// here: a read over an unbound parameter resolves at the apply (the
+    /// clone rewrites the parameter pair to the argument's).
+    fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
+        self.check_expr(value);
+        let one = self
+            .module
+            .add_node(self.current_block, None, Some(P::Value::from(LowValue::USize(1))));
+        let operands = self.array_node(self.current_block, &[self.term[value].unwrap(), one]);
+        let pair = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(operands),
+        );
+        let ty_operands = self.array_node(self.current_block, &[pair, one]);
+        let ty = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ty_operands),
+        );
+        self.term[e] = Some(pair);
+        self.val[e] = None;
+        self.ty[e] = Some(ty);
+        pair
+    }
+
     /// The attribute slot of an expression for `marker` — its own slot when it
     /// carries the attribute, else the attribute's *missing* slot (built as a
     /// `[missing_value, int]` term pair, the uniform slot shape).  Only
@@ -778,6 +814,7 @@ where
     /// where the *declared* side of a check is the absent value.
     fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
         (self.attr_ext)(marker).missing_slot(self)
+
     }
 
     /// The value currently held by `node`'s equality class — the
@@ -1030,6 +1067,7 @@ where
                     | ExprKind::Table(_)
                     | ExprKind::ShallowArray { .. }
                     | ExprKind::TypeArray { .. }
+                    | ExprKind::TypeOf { .. }
                     | ExprKind::NativeCall { .. }
             ) {
             let vc = self.fresh_cell();
@@ -1170,6 +1208,7 @@ where
                 element_type,
                 length,
             } => self.check_array_type(e, element_type, length),
+            ExprKind::TypeOf { value } => self.check_type_of(e, value),
             ExprKind::Static { export } => {
                 // Imported package export: the static ref names the package's
                 // final `[value, type]` pair.  Materialize that pair leaf,

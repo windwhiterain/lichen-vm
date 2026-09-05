@@ -294,6 +294,15 @@ pub enum ExprKind<L> {
     /// re-checks the instantiated condition per call.  The expression
     /// compiles to the condition itself — the assert is a side constraint.
     Assert { condition: ExprId },
+    /// `type_of e` — the body of the first-class `type_of` function: the
+    /// term IS element 1 of the operand's `[value, type]` pair (its type
+    /// expression), read lazily through the raw lowlevel `Index` op — the
+    /// mirror of the checker's own `value_of` (element 0).  The expression's
+    /// own halves are the type expression's: the value is its shape, the
+    /// type its kind, so `type_of e` in a type position is exactly the
+    /// operand's type.  Nothing is forced: a type read of an unbound
+    /// parameter resolves at the apply.
+    TypeOf { value: ExprId },
     /// `{ array, index }` — an element read `a[i]`; the container is *pinned*
     /// to an array type (its element type is the pinned shape's element cell
     /// and the read registers an `i < length` bounds assert), so this form
