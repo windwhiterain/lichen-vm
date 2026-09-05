@@ -271,7 +271,10 @@ fn spawn_compiler(bin: &Path, sub: &str, target: &Path) -> ExitCode {
 /// live `.lichen` (or `virtual:`) source slot.
 fn cmd_clean(_args: &mut Args) -> ExitCode {
     let dir = lichen_language::persist::lichendir();
-    let mut store = lichen_language::package::PackageStore::with_cache_dir(dir.clone());
+    let mut store = lichen_language::package::PackageStore::<
+        lichen_language::program::LangValue,
+        lichen_language::program::LangOperator,
+    >::with_cache_dir(dir.clone());
     let removed = store.gc();
     println!(
         "reclaimed {removed} cached artifact(s) from {}",

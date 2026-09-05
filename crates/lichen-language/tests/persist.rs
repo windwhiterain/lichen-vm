@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use lichen_language::package::PackageStore;
 use lichen_language::persist::DeviceRegistry;
+use lichen_language::program::{LangOperator, LangValue};
 use lichen_language::run::evaluate_raw;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -33,7 +34,10 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
 }
 
 /// The handle of the loaded package whose path ends with `name`.
-fn handle_of(store: &PackageStore, name: &str) -> lichen_language::package::PackageHandle {
+fn handle_of(
+    store: &PackageStore<LangValue, LangOperator>,
+    name: &str,
+) -> lichen_language::package::PackageHandle {
     store
         .packages
         .values()
@@ -61,7 +65,7 @@ fn cache_round_trip_across_stores() {
     );
     let cache = dir.join("cache");
 
-    let mut store1 = PackageStore::with_cache_dir(cache.clone());
+    let mut store1 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let source = fs::read_to_string(&main_path).unwrap();
     let out1 = evaluate_raw(&source, Some(&dir), &mut store1).unwrap();
     assert_eq!(out1, "42: Int");
@@ -71,7 +75,7 @@ fn cache_round_trip_across_stores() {
     );
     assert_eq!(store1.loaded_from_cache, 0);
 
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let out2 = evaluate_raw(&source, Some(&dir), &mut store2).unwrap();
     assert_eq!(out2, "42: Int");
     assert_eq!(store2.compiled, 0, "a cache hit compiles nothing");
@@ -101,13 +105,13 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     let a_path = write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b + 1\n");
     let cache = dir.join("cache");
 
-    let mut store1 = PackageStore::with_cache_dir(cache.clone());
+    let mut store1 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let a1 = store1.load_package(&a_path).unwrap();
     assert_eq!(store1.compiled, 3);
     let c_key = handle_of(&store1, "c.lichen").key;
 
     write(&dir, "b.lichen", "@{c = import \"c.lichen\"@}c + 2\n");
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let a2 = store2.load_package(&a_path).unwrap();
     assert_eq!(store2.compiled, 2, "only B and A recompile");
     assert_eq!(store2.loaded_from_cache, 1, "C loads from the cache");
@@ -129,13 +133,13 @@ fn recompile_reuses_the_device_key() {
     let dir = temp_dir("rekey");
     write(&dir, "pkg.lichen", "42\n");
     let cache = dir.join("cache");
-    let mut store1 = PackageStore::with_cache_dir(cache.clone());
+    let mut store1 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h1 = store1.load_package(&dir.join("pkg.lichen")).unwrap();
 
     for entry in fs::read_dir(cache.join("artifacts")).unwrap() {
         fs::remove_file(entry.unwrap().path()).unwrap();
     }
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h2 = store2.load_package(&dir.join("pkg.lichen")).unwrap();
     assert_eq!(store2.compiled, 1, "the missing artifact recompiles");
     assert_eq!(h1.key, h2.key, "the device key is stable across recompiles");
@@ -148,19 +152,19 @@ fn corrupt_artifact_rebuilds_cleanly() {
     let dir = temp_dir("corrupt");
     write(&dir, "pkg.lichen", "x => x + 1\n");
     let cache = dir.join("cache");
-    let mut store1 = PackageStore::with_cache_dir(cache.clone());
+    let mut store1 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h1 = store1.load_package(&dir.join("pkg.lichen")).unwrap();
 
     for entry in fs::read_dir(cache.join("artifacts")).unwrap() {
         fs::write(entry.unwrap().path(), b"LCHN\x00\x00\x00\x01garbage").unwrap();
     }
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h2 = store2.load_package(&dir.join("pkg.lichen")).unwrap();
     assert_eq!(store2.compiled, 1, "the corrupt artifact recompiles");
     assert_eq!(h1.key, h2.key);
 
     // The chain is usable again: a third store loads the healed cache.
-    let mut store3 = PackageStore::with_cache_dir(cache.clone());
+    let mut store3 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     store3.load_package(&dir.join("pkg.lichen")).unwrap();
     assert_eq!(store3.compiled, 0, "the healed artifact loads from cache");
 }
@@ -173,7 +177,7 @@ fn identical_content_gets_separate_file_id_slots() {
     write(&dir, "a.lichen", "7\n");
     write(&dir, "b.lichen", "7\n");
     let cache = dir.join("cache");
-    let mut store = PackageStore::with_cache_dir(cache.clone());
+    let mut store = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let a = store.load_package(&dir.join("a.lichen")).unwrap();
     let b = store.load_package(&dir.join("b.lichen")).unwrap();
     assert_eq!(store.compiled, 2, "each file compiles separately");
@@ -201,7 +205,7 @@ fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
     assert!(is_new);
     drop(device);
 
-    let mut store = PackageStore::with_cache_dir(cache.clone());
+    let mut store = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let keep = store.load_package(&keep_path).unwrap();
     assert_eq!(store.compiled, 1);
     assert_eq!(fs::read_dir(cache.join("artifacts")).unwrap().count(), 1);
@@ -216,7 +220,7 @@ fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
 
     // A fresh store reuses the cleaned key.
     let c_path = write(&dir, "c.lichen", "9\n");
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h = store2.load_package(&c_path).unwrap();
     assert_eq!(h.key, junk_key, "the cleaned key is reused");
     drop(keep);
@@ -229,7 +233,7 @@ fn non_lichen_package_is_rejected_at_load() {
     // holds by construction.
     let dir = temp_dir("extension");
     let txt_path = write(&dir, "data.txt", "7\n");
-    let mut store = PackageStore::with_cache_dir(dir.join("cache"));
+    let mut store = PackageStore::<LangValue, LangOperator>::with_cache_dir(dir.join("cache"));
     let err = store.load_package(&txt_path).unwrap_err();
     assert!(
         err.iter().any(|d| d.message.contains("only .lichen files")),
@@ -246,7 +250,7 @@ fn remove_drops_one_package_and_recompiles_on_demand() {
     let dir = temp_dir("remove");
     let pkg_path = write(&dir, "pkg.lichen", "42\n");
     let cache = dir.join("cache");
-    let mut store = PackageStore::with_cache_dir(cache.clone());
+    let mut store = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h = store.load_package(&pkg_path).unwrap();
     let artifacts_before = fs::read_dir(cache.join("artifacts")).unwrap().count();
 
@@ -257,7 +261,7 @@ fn remove_drops_one_package_and_recompiles_on_demand() {
         "the artifact file is removed"
     );
 
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h2 = store2.load_package(&pkg_path).unwrap();
     assert_eq!(store2.compiled, 1, "a removed package recompiles");
     assert_eq!(h.key, h2.key, "its key is reclaimed and reused");
@@ -280,7 +284,7 @@ fn a_crash_between_alloc_and_publish_recovers() {
     assert!(is_new);
     drop(device); // no publish, no artifact file
 
-    let mut store = PackageStore::with_cache_dir(cache.clone());
+    let mut store = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
     let h = store.load_package(&pkg_path).unwrap();
     assert_eq!(store.compiled, 1, "the pending record recompiles");
     assert_eq!(h.key, key, "the pending key is completed, not reallocated");
@@ -295,8 +299,8 @@ fn two_stores_share_the_device_registry() {
     write(&dir, "a.lichen", "1\n");
     write(&dir, "b.lichen", "2\n");
     let cache = dir.join("cache");
-    let mut store1 = PackageStore::with_cache_dir(cache.clone());
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let mut store1 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
+    let mut store2 = PackageStore::<LangValue, LangOperator>::with_cache_dir(cache.clone());
 
     let ha = store1.load_package(&dir.join("a.lichen")).unwrap();
     let hb = store2.load_package(&dir.join("b.lichen")).unwrap();
@@ -312,7 +316,7 @@ fn cache_only_when_a_cache_dir_is_configured() {
     // The default store is purely in-memory: no directory, no files.
     let dir = temp_dir("nocache");
     write(&dir, "pkg.lichen", "42\n");
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     store.load_package(&dir.join("pkg.lichen")).unwrap();
     assert_eq!(store.compiled, 1);
     assert_eq!(store.loaded_from_cache, 0);

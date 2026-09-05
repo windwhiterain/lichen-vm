@@ -15,14 +15,16 @@
 //! report the produced `lichen-compiler` binary.
 //!
 //! **Status:** the *composition* scaffold is real — the generated crate
-//! `cargo check`s once the plugin's leaves exist.  The *tooling* of a
-//! generated compiler (its package store, persist codec, CLI, and `run`
-//! path) is currently monomorphic over the shipped `LangProgram`, so a
-//! compiler built with an *additional* plugin cannot yet route through the
-//! language crate's store/run machinery; that generalization — turning the
-//! language layer's tooling generic over the `Program` marker — is the
-//! tracked follow-up in [`docs/notes/plugin-taxonomy.md`].  A rebuild over the
-//! shipping plugin set produces a fully working compiler.
+//! `cargo check`s once the plugin's leaves exist.  The language layer's
+//! tooling (package store, run, render, CLI) is generic over a program's
+//! value/operator vocabularies (see `liche_language::CompiledProgram`), so a
+//! generated compiler routes through the shared [`liche_language::cli`] over
+//! its own composed vocabulary.  The one open piece is the plugin's **artifact
+//! codec**: a built compiler currently runs in memory only (`NoPersist` — no
+//! `~/.lichen` device cache) because a per-leaf codec protocol that lets the
+//! composition macro emit a `ProgramCodec` is the tracked follow-up in
+//! [`docs/notes/plugin-taxonomy.md`].  A rebuild over the shipping plugin set
+//! produces a fully working compiler.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -250,12 +252,18 @@ pub type Program = LangProgram;
 /// crate's library.  It shares [`liche_language::cli`], so a plugin-built
 /// compiler speaks the same dialect as the shipped `lichen-compiler` and is
 /// already depend-aware (resolving `depend` directives against the source
-/// cache).  A compiler built with an *additional* plugin keeps this shell; the
-/// plugin's leaves are declared in `lib.rs` and the tooling generalization is
-/// the tracked follow-up.
+/// cache).
 fn write_main_rs(dir: &Path) -> Result<(), String> {
+    // The generated compiler routes the shared `liche_language::cli` over its
+    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  It
+    // uses `NoPersist` as the artifact codec: the plugin program's extra
+    // value/operator variants have no generated codec yet, so the CLI drives
+    // an in-memory store (no `~/.lichen` device cache), and compiled packages
+    // are recompiled fresh rather than persisted.  (A per-leaf artifact-codec
+    // protocol that lets the composition macro emit `ProgramCodec` for a
+    // persistent plugin cache is the tracked follow-up.)
     let lines = r#"fn main() -> std::process::ExitCode {
-    liche_language::cli::main()
+    liche_language::cli::main::<crate::LangValue, crate::LangOperator, liche_language::persist::NoPersist>()
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))

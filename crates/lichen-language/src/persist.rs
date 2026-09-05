@@ -123,6 +123,12 @@ const ARENA_ALIGN: usize = std::mem::align_of::<ArrayItem>();
 /// enforced by the `codec_roundtrip` test below, which round-trips every
 /// value and operator variant; keep the two sides in sync with it.
 pub trait ArtifactCodec<P: Program> {
+    /// Whether this codec actually persists to a device cache directory.  A
+    /// codec that is in-memory only (`NoPersist`) sets this to `false` so the
+    /// CLI drives the package store without a cache directory (and so never
+    /// reaches a serialize/deserialize path that would panic).
+    const PERSISTENT: bool = true;
+
     /// Write one node value.
     fn write_value(
         w: &mut Writer,
@@ -147,7 +153,52 @@ pub trait ArtifactCodec<P: Program> {
 }
 
 /// The codec for the shipped highlevel language vocabulary.
+#[derive(Default)]
 pub struct HighProgramCodec;
+
+/// A marker codec for a program that is compiled in memory only and never
+/// serialized to the device cache (the package store's in-memory path, and a
+/// plugin program whose artifact codec has not been generated yet).  Every
+/// method is unreachable — the codec is only ever selected when the store has
+/// no cache directory, so `try_reuse`/`build_package` never reach the
+/// serialize/deserialize path.
+pub struct NoPersist;
+
+impl<P: Program> ArtifactCodec<P> for NoPersist {
+    const PERSISTENT: bool = false;
+
+    fn write_value(
+        _w: &mut Writer,
+        _value: P::Value,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) {
+        unreachable!("NoPersist cannot write values — the store has no device cache")
+    }
+
+    fn read_value(
+        _r: &mut Reader<'_>,
+        _self_key: ModuleKey,
+        _self_arena: &[u8],
+        _self_base: *const u8,
+        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) -> Result<P::Value, String> {
+        unreachable!("NoPersist cannot read values — the store has no device cache")
+    }
+
+    fn write_operator(_w: &mut Writer, _operator: P::Operator) {
+        unreachable!("NoPersist cannot write operators — the store has no device cache")
+    }
+
+    fn read_operator(_r: &mut Reader<'_>) -> Result<P::Operator, String> {
+        unreachable!("NoPersist cannot read operators — the store has no device cache")
+    }
+}
+
+impl Default for NoPersist {
+    fn default() -> Self {
+        NoPersist
+    }
+}
 
 /// The aligned base of a module's arena — the same formula
 /// `StaticModule::from_module` used to lay the payloads out, so offsets
@@ -914,17 +965,22 @@ impl DeviceRegistry {
     }
 
     /// Load and deserialize a file ID's artifact.  `modules` must hold every
-    /// dependency the artifact's refs name (they are loaded first).
-    pub fn load_artifact(
+    /// dependency the artifact's refs name (they are loaded first).  The codec
+    /// `C` decodes the value/operator variants of the program `P`.
+    pub fn load_artifact<P, C>(
         &self,
         file_id: &str,
         key: ModuleKey,
         hash: Hash,
-        modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
-    ) -> Result<(StaticModule<LangProgram>, LocalNodeId), String> {
+        modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    ) -> Result<(StaticModule<P>, LocalNodeId), String>
+    where
+        P: Program,
+        C: ArtifactCodec<P> + Default,
+    {
         let bytes = std::fs::read(self.artifact_path(file_id))
             .map_err(|e| format!("cannot read cached artifact: {e}"))?;
-        deserialize_artifact(&bytes, key, hash, modules)
+        deserialize_artifact_with::<P, C>(&bytes, key, hash, modules, C::default())
     }
 
     /// Incremental verification: is the artifact for `file_id` up to date

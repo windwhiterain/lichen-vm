@@ -1111,11 +1111,17 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 #[macro_export]
 macro_rules! compute_native_ops {
     ($program:ty) => {{
+        // The registry is a `&'static [(&str, &dyn NativeOp<P>)]`.  A `static`
+        // of that type cannot reference a *generic* `$program` (statics are
+        // never generic), so build it per call and leak it — once per host
+        // `register_compute`, a handful of small allocations.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
-        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 2] =
-            [("jit", &JIT), ("launch", &LAUNCH)];
-        &OPS[..] as $crate::NativeOps<$program>
+        let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
+            ("jit", &JIT as &dyn $crate::NativeOp<$program>),
+            ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
+        ];
+        Box::leak(ops.into_boxed_slice()) as $crate::NativeOps<$program>
     }};
 }
 

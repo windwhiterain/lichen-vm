@@ -28,7 +28,7 @@ use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
-use lichen_language::program::LangValue;
+use lichen_language::program::{LangOperator, LangValue};
 use lichen_language::render::{print_type_lang, print_value_lang};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
@@ -110,7 +110,7 @@ pub struct Doc {
     /// The parsed AST — the frontend's parser output.
     pub program: Program,
     /// The full diagnostic set (lex + parse + resolve + check).
-    pub diagnostics: Vec<Diag>,
+    pub diagnostics: Vec<Diag<lichen_language::program::LangProgram>>,
     /// Every definition site, in declaration order.
     pub defs: Vec<Definition>,
     /// Span of a name *use* → index into [`Doc::defs`].
@@ -174,7 +174,7 @@ impl Doc {
         // input, resolving imports through a fresh in-memory package store so
         // the shared registry can serve any loaded imports.  `base` lets the
         // store resolve relative `@import` paths against the file's directory.
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
 
         // The frontend artifacts (for the editor index): tokens + AST in

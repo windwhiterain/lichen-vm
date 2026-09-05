@@ -148,6 +148,17 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   `lang_compose_vocabulary!`.  Its `render` module re-exports `lichen-render`
   and layers the host-specific shells (the caret diagnostic, the
   checker-message wording) on top.
+- **The language layer's tooling is generic over the program**: the package
+  store, run, render, and CLI are parameterized by a program's value/operator
+  vocabularies (`liche_language::CompiledProgram<V, O>`), with the attr type
+  fixed to the language's `LangAttr`.  So a compiler built over an additional
+  native plugin routes through the shared `liche_language::cli` over its own
+  composed vocabulary.  The one open piece is the plugin's **artifact codec**:
+  a plugin-built compiler currently runs in memory only (`NoPersist`), and the
+  tracked follow-up is a per-leaf codec protocol under which each value/
+  operator leaf exposes an encode/decode and `lang_compose_vocabulary!` emits a
+  `ProgramCodec` for the composed set — giving a plugin-built compiler a real
+  `~/.lichen` device cache.
 - `Perspective` and `Doc`'s codesign sites (grammar `# p` / `? expr`, AST
   fields, `IR<…>` schema tails, the `GcdOp` persist discriminator) stay in
   `lichen-language`.

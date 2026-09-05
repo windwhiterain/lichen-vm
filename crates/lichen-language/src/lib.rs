@@ -43,12 +43,31 @@ use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
+use lichen_highlevel::program::{
+    HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
+};
 use lichen_highlevel::{NativeOps, no_native_ops};
-use lichen_lowlevel::Registry;
+use lichen_lowlevel::{LowOperator, OperatorExt, Registry};
+use lichen_utils::extend::AsEnum;
 
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
-use program::{LangProgram, lang_attr_ext};
+use program::{GcdOp, LangProgram, lang_attr_ext};
+
+/// The concrete program marker the language's tooling drives: the value and
+/// operator vocabularies vary (`V`, `O`), while the compile-time attribute set
+/// is fixed to the language's [`program::LangAttr`] and the literal /
+/// global-ext defaults are the highlevel's own.  A plugin-built compiler uses a
+/// `ProgramImpl` of exactly this shape, so the store/run/CLI machinery is
+/// generic over precisely these two vocabularies and the frontend / checker
+/// already agree on `IR<LangAttr>`.
+pub type CompiledProgram<V, O> = lichen_highlevel::program::ProgramImpl<
+    V,
+    O,
+    program::LangAttr,
+    HighProgramLiteral,
+    HighGlobalExt,
+>;
 
 /// The version of the lichen library (`liche-language`).  The package manager
 /// keys its compiler cache by this — a change to the library means any
@@ -63,16 +82,22 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// name), so no IR exists to check.  `diagnostics` holds the frontend's
 /// errors (which may be many — lex errors accumulate and parse errors are
 /// recovered) and the checker's rendered failures.
-pub struct Report {
-    pub build: Option<Build<LangProgram>>,
-    pub diagnostics: Vec<Diag>,
+pub struct Report<P: HighProgram>
+where
+    P::Value: ValueType,
+{
+    pub build: Option<Build<P>>,
+    pub diagnostics: Vec<Diag<P>>,
     /// The source span of each IR node, keyed by [ExprId] — the frontend's own
     /// position index (highlevel is span-free).  Present whenever `build` is
     /// `Some`; the caller maps a checker `Loc` back to a source caret through it.
     pub span_index: Option<compile::SpanIndex>,
 }
 
-impl Report {
+impl<P: HighProgram> Report<P>
+where
+    P::Value: ValueType,
+{
     /// No errors and the program checked: no diagnostics at all and the
     /// checker reported no unification failures.
     pub fn ok(&self) -> bool {
@@ -80,46 +105,72 @@ impl Report {
     }
 }
 
-/// Compile and check a source program: the full pipeline.
-pub fn compile(source: &str) -> Report {
+/// Compile and check a source program: the full pipeline (shipping vocabulary).
+pub fn compile(source: &str) -> Report<LangProgram> {
     compile_with_imports(source, &[])
 }
 
-/// Compile and check a source program with resolved package imports.
-pub fn compile_with_imports(source: &str, imports: &[ResolvedImport]) -> Report {
+/// Compile and check a source program with resolved package imports
+/// (shipping vocabulary).
+pub fn compile_with_imports(source: &str, imports: &[ResolvedImport]) -> Report<LangProgram> {
     compile_with_imports_in(source, imports, None)
 }
 
-/// [`compile_with_imports`] with an optional shared registry.  `None` uses a
-/// fresh private registry; `Some` binds the importer module to the package
-/// store's registry so `ExprKind::Static` refs resolve in place.
+/// [`compile_with_imports`] with an optional shared registry (shipping
+/// vocabulary).  `None` uses a fresh private registry; `Some` binds the
+/// importer module to the package store's registry so `ExprKind::Static` refs
+/// resolve in place.
 pub fn compile_with_imports_in(
     source: &str,
     imports: &[ResolvedImport],
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
-) -> Report {
+) -> Report<LangProgram> {
     let line_starts = lex::line_starts(source);
-    compile_with_imports_at(source, imports, registry, 0, &line_starts, no_native_ops())
+    compile_with_imports_at::<program::LangValue, program::LangOperator>(
+        source,
+        imports,
+        registry,
+        0,
+        &line_starts,
+        no_native_ops(),
+    )
 }
 
-/// Compile and check a program that is a slice of a larger source starting at
-/// byte `base`, whose line starts are `line_starts`.  Token spans are absolute
-/// positions in that larger source, so diagnostics point at the real file even
-/// when `code` is only a suffix of it (the code after a stripped `@{...@}`
-/// block).
-pub fn compile_with_imports_at(
+/// Compile and check a program over any value/operator vocabulary `V`/`O`
+/// (the language's attribute set is fixed to [`program::LangAttr`]).  The
+/// program is a slice of a larger source starting at byte `base`, whose line
+/// starts are `line_starts`.  Token spans are absolute positions in that
+/// larger source, so diagnostics point at the real file even when `code` is
+/// only a suffix of it (the code after a stripped `@{...@}` block).
+pub fn compile_with_imports_at<V, O>(
     code: &str,
     imports: &[ResolvedImport],
-    registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
+    registry: Option<Arc<RwLock<Registry<CompiledProgram<V, O>>>>>,
     base: u32,
     line_starts: &[usize],
-    native_ops: NativeOps<LangProgram>,
-) -> Report {
+    native_ops: NativeOps<CompiledProgram<V, O>>,
+) -> Report<CompiledProgram<V, O>>
+where
+    V: ValueType + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + 'static,
+{
     let Frontend {
         ir,
         span_index,
         diagnostics,
     } = frontend_at(code, base, line_starts, imports);
+    // The frontend diagnostics carry no checker build (they are program-blind),
+    // so re-type them onto the caller's program marker before the report.
+    let diagnostics: Vec<Diag<CompiledProgram<V, O>>> =
+        diagnostics.into_iter().map(|d| d.retype()).collect();
     build_report(ir, Some(span_index), diagnostics, registry, native_ops)
 }
 
@@ -128,13 +179,25 @@ pub fn compile_with_imports_at(
 /// build fails).  [`compile_with_imports_at`] and the incremental
 /// [`BufferSession`] both end here — the session reuses this for its cached
 /// rebuild path, so the rendering is centralized.
-pub fn build_report(
+pub fn build_report<V, O>(
     ir: Option<IR<program::LangAttr>>,
     span_index: Option<compile::SpanIndex>,
-    mut diagnostics: Vec<Diag>,
-    registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
-    native_ops: NativeOps<LangProgram>,
-) -> Report {
+    mut diagnostics: Vec<Diag<CompiledProgram<V, O>>>,
+    registry: Option<Arc<RwLock<Registry<CompiledProgram<V, O>>>>>,
+    native_ops: NativeOps<CompiledProgram<V, O>>,
+) -> Report<CompiledProgram<V, O>>
+where
+    V: ValueType + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + 'static,
+{
     let Some(ir) = ir else {
         return Report {
             build: None,
@@ -143,10 +206,10 @@ pub fn build_report(
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
-    let build = Checker::<LangProgram>::build_in_attr_native(
+    let build = Checker::<CompiledProgram<V, O>>::build_in_attr_native(
         ir,
         registry,
-        lang_attr_ext::<LangProgram>(),
+        lang_attr_ext::<CompiledProgram<V, O>>(),
         native_ops,
     );
     // The pretty rendering is shared across the whole report: one type
@@ -199,11 +262,15 @@ pub fn build_report(
 /// resolve: an unresolved name lowers to the same inert `ErrorBlock` the parse
 /// layer uses, so `ir` is always `Some` and `diagnostics` carries every lex,
 /// parse, and resolve error encountered.
+///
+/// The frontend is concrete over [`LangProgram`]: its diagnostics carry no
+/// checker build (so they are program-blind) and it feeds the shipping
+/// compiler unchanged.
 pub struct Frontend {
     pub ir: Option<IR<program::LangAttr>>,
     /// The `ExprId → span` index built during lowering (highlevel is span-free).
     pub span_index: compile::SpanIndex,
-    pub diagnostics: Vec<Diag>,
+    pub diagnostics: Vec<Diag<LangProgram>>,
 }
 
 /// The frontend: text → IR.  See [`Frontend`].
@@ -231,7 +298,8 @@ pub fn frontend_at(
         tokens,
         errors: lex_errors,
     } = lex::lex_with(code, line_starts, base);
-    let mut diagnostics: Vec<Diag> = lex_errors.into_iter().map(Diag::from_lex).collect();
+    let mut diagnostics: Vec<Diag<LangProgram>> =
+        lex_errors.into_iter().map(Diag::from_lex).collect();
     let parse::Parsed {
         program,
         errors: parse_errors,

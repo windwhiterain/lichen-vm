@@ -14,7 +14,11 @@ use lichen_lowlevel::{LowValue, Program, ValueExt};
 #[test]
 fn renders_the_offending_line_with_a_caret() {
     // `y` is at line 1, column 6 — the caret lands under it.
-    let diag = Diag::new(Stage::Resolve, (1, 6), "unresolved name 'y'".to_string());
+    let diag = crate::diag::Diag::<crate::program::LangProgram>::new(
+        Stage::Resolve,
+        (1, 6),
+        "unresolved name 'y'".to_string(),
+    );
     let out = render("x => y", &diag);
     assert_eq!(
         out,
@@ -24,7 +28,7 @@ fn renders_the_offending_line_with_a_caret() {
 
 #[test]
 fn a_spanless_diagnostic_has_no_caret() {
-    let diag = Diag {
+    let diag = crate::diag::Diag::<crate::program::LangProgram> {
         span: None,
         message: "internal".to_string(),
         stage: Stage::Check,

@@ -11,6 +11,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use lichen_language::package::PackageStore;
+use lichen_language::program::{LangOperator, LangValue};
 use lichen_language::readme;
 use lichen_language::run::evaluate_raw;
 
@@ -30,7 +31,7 @@ fn every_example_runs() {
     );
     for file in files {
         let source = fs::read_to_string(&file).unwrap();
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         evaluate_raw(&source, Some(&file), &mut store)
             .unwrap_or_else(|diags| panic!("{} failed: {diags:?}", file.display()));
     }

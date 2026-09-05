@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lichen_language::package::PackageStore;
+use lichen_language::program::{LangOperator, LangValue};
 use lichen_language::run::evaluate_raw;
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -32,7 +33,7 @@ fn imports_an_integer_package() {
     let dir = temp_dir("integer");
     write(&dir, "pkg.lichen", "42\n");
     let main = "@{x = import \"pkg.lichen\"@}x\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "42: Int");
 }
@@ -42,7 +43,7 @@ fn imports_and_applies_a_function_package() {
     let dir = temp_dir("function");
     write(&dir, "f.lichen", "x => x + 1\n");
     let main = "@{f = import \"f.lichen\"@}f 41\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "42: Int");
 }
@@ -52,7 +53,7 @@ fn imports_a_struct_type_and_instantiates_it() {
     let dir = temp_dir("struct");
     write(&dir, "s.lichen", "struct<Int>\n");
     let main = "@{s = import \"s.lichen\"@}s(5,)\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "(5,): struct<Int>");
 }
@@ -72,7 +73,7 @@ fn transitive_imports_apply_across_modules() {
         "@{inc = import \"inner.lichen\"@}x => inc x\n",
     );
     let main = "@{f = import \"middle.lichen\"@}f 41\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "42: Int");
     // Both packages loaded exactly once, into the one shared registry.
@@ -92,7 +93,7 @@ fn transitive_struct_types_flow_through_packages() {
         "@{S = import \"inner.lichen\"@}S(41,)\n",
     );
     let main = "@{v = import \"middle.lichen\"@}v(0)\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "41: Int");
 }
@@ -106,7 +107,7 @@ fn diamond_imports_load_each_package_once() {
     write(&dir, "b.lichen", "@{a = import \"a.lichen\"@}a + 1\n");
     write(&dir, "c.lichen", "@{a = import \"a.lichen\"@}a + 2\n");
     let main = "@{b = import \"b.lichen\"\nc = import \"c.lichen\"@}(b, c)\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "(43, 44): <Int, Int>");
     assert_eq!(
@@ -125,7 +126,7 @@ fn circular_imports_are_diagnosed() {
     write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b\n");
     write(&dir, "b.lichen", "@{a = import \"a.lichen\"@}a\n");
     let main = "@{x = import \"a.lichen\"@}x\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
         err.iter()
@@ -142,7 +143,7 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
     let dir = temp_dir("failing-dep");
     write(&dir, "inner.lichen", "42\ny\n");
     let main = "@{x = import \"inner.lichen\"@}x\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
         err.iter()
@@ -161,7 +162,7 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
 fn package_store_caches_loaded_packages() {
     let dir = temp_dir("cache");
     let pkg = write(&dir, "pkg.lichen", "42\n");
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let a = store.load_package(&pkg).unwrap();
     let b = store.load_package(&pkg).unwrap();
     assert_eq!(a.key, b.key);
@@ -175,7 +176,7 @@ fn two_importers_share_one_package_through_one_store() {
     // same registry key.
     let dir = temp_dir("shared");
     write(&dir, "pkg.lichen", "x => x + 1\n");
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let first = evaluate_raw(
         "@{f = import \"pkg.lichen\"@}f 41\n",
         Some(&dir),
@@ -198,7 +199,7 @@ fn imported_type_error_is_reported_without_panicking() {
     let dir = temp_dir("typeerror");
     write(&dir, "n.lichen", "42\n");
     let main = "@{n = import \"n.lichen\"@}n 1\n";
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
         err.iter().any(|d| d.message.contains("found Int")),
@@ -210,7 +211,7 @@ fn imported_type_error_is_reported_without_panicking() {
 fn exports_are_stored_on_the_registered_package() {
     let dir = temp_dir("exports");
     let pkg = write(&dir, "pkg.lichen", "42\n");
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let handle = store.load_package(&pkg).unwrap();
     let registered = store.registry.read().unwrap();
     let package = registered.get(handle.key).unwrap();

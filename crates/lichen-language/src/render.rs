@@ -22,12 +22,13 @@
 //!
 
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
+use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_lowlevel::{LowValue, Module, NodeId};
 
 use lichen_compute::ComputeValue;
+use lichen_utils::extend::AsEnum;
 
 use crate::diag::Diag;
-use crate::program::{LangProgram, LangValue};
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
@@ -45,31 +46,48 @@ pub use lichen_render::{
 /// `TypeKernel` kind marker both read as `Kernel` — the marker's are internal
 /// (the kernel's *signature* is what the type's arrow carries), and the value
 /// is an opaque compiled artifact, so one name suffices.
-fn lang_value_render(value: &LangValue) -> Option<String> {
-    match value {
-        LangValue::ComputeValue(ComputeValue::Kernel(_))
-        | LangValue::ComputeValue(ComputeValue::TypeKernel) => Some("Kernel".to_string()),
+fn lang_value_render<P>(value: &P::Value) -> Option<String>
+where
+    P: HighProgram,
+    P::Value: AsEnum<ComputeValue>,
+{
+    match value.as_enum() {
+        Some(ComputeValue::Kernel(_)) | Some(ComputeValue::TypeKernel) => {
+            Some("Kernel".to_string())
+        }
         _ => None,
     }
 }
 
 /// The `&'static` extension-vocabulary render hook, injected into the shared
 /// printers so a kernel's value/type spell correctly instead of degrading to `?`.
-pub fn lang_render_ext() -> &'static dyn Fn(&LangValue) -> Option<String> {
-    &lang_value_render
+pub fn lang_render_ext<P>() -> &'static dyn Fn(&P::Value) -> Option<String>
+where
+    P: HighProgram + 'static,
+    P::Value: AsEnum<ComputeValue> + 'static,
+{
+    &lang_value_render::<P>
 }
 
 /// [`print_type`] with the language's extension vocabulary: a kernel type
 /// (`[sig, [TypeKernel, K]]`, which mirrors a function type) renders as
 /// `in -> out` and its kind marker as `Kernel`.
-pub fn print_type_lang(module: &Module<LangProgram>, root: NodeId) -> String {
-    TypePrinter::new_with_ext(module, Some(lang_render_ext())).node(root)
+pub fn print_type_lang<P>(module: &Module<P>, root: NodeId) -> String
+where
+    P: HighProgram + 'static,
+    P::Value: ValueType + AsEnum<ComputeValue> + 'static,
+{
+    TypePrinter::new_with_ext(module, Some(lang_render_ext::<P>())).node(root)
 }
 
 /// [`print_value`] with the language's extension vocabulary: a `Kernel` value
 /// renders as `Kernel` instead of the raw-layout `?`.
-pub fn print_value_lang(module: &Module<LangProgram>, value: LangValue, ty: NodeId) -> String {
-    ValuePrinter::new_with_ext(module, Some(lang_render_ext())).print(value, ty)
+pub fn print_value_lang<P>(module: &Module<P>, value: P::Value, ty: NodeId) -> String
+where
+    P: HighProgram + 'static,
+    P::Value: ValueType + AsEnum<ComputeValue> + 'static,
+{
+    ValuePrinter::new_with_ext(module, Some(lang_render_ext::<P>())).print(value, ty)
 }
 
 // --- the caret shell ---------------------------------------------------------
@@ -83,7 +101,7 @@ pub fn print_value_lang(module: &Module<LangProgram>, value: LangValue, ty: Node
 ///  1 | x => y
 ///    |      ^
 /// ```
-pub fn render(source: &str, diag: &Diag) -> String {
+pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> String {
     let mut out = format!("error: {}\n", diag.message);
     if let Some((line, col)) = diag.span {
         out.push_str(&format!("  --> {line}:{col}\n"));
@@ -99,7 +117,7 @@ pub fn render(source: &str, diag: &Diag) -> String {
 
 /// Render a whole diagnostic list back to back, exactly as the CLI prints
 /// them: one caret block per diagnostic, no separator.
-pub fn render_all(source: &str, diags: &[Diag]) -> String {
+pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
     diags.iter().map(|d| render(source, d)).collect()
 }
 
@@ -114,10 +132,11 @@ pub fn render_all(source: &str, diags: &[Diag]) -> String {
 /// from the highlevel's structured facts, in the language's own type syntax.
 /// `printer` is shared across a whole report, so a class keeps a single `?a`
 /// name across diagnostics.
-pub fn checker_message(
-    printer: &mut TypePrinter<'_, LangProgram>,
-    d: &CheckerDiag<LangProgram>,
-) -> String {
+pub fn checker_message<P>(printer: &mut TypePrinter<'_, P>, d: &CheckerDiag<P>) -> String
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
     match d.kind {
         DiagKind::Annotation
         | DiagKind::Attribute
@@ -180,9 +199,11 @@ pub fn checker_message(
                 .to_string()
         }
         DiagKind::Assert => {
-            let value = match d.assert_value {
-                Some(LangValue::LowValue(LowValue::USize(n))) => n.to_string(),
-                Some(LangValue::LowValue(LowValue::None)) => "none".to_string(),
+            // The assert's failed value, rendered generically through the
+            // structural `LowValue` view.
+            let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
+                Some(LowValue::USize(n)) => n.to_string(),
+                Some(LowValue::None) => "none".to_string(),
                 Some(other) => format!("{other:?}"),
                 None => "—".to_string(),
             };

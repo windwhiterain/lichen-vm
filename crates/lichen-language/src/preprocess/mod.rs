@@ -23,9 +23,11 @@ use std::path::{Path, PathBuf};
 use lichen_language_lex::Span;
 use lichen_lowlevel::StaticNodeId;
 
+use crate::CompiledProgram;
 use crate::diag::{Diag, Stage};
 use crate::lex::{line_col, line_starts};
 use crate::package::PackageStore;
+use crate::persist::ArtifactCodec;
 
 mod lex;
 mod parse;
@@ -137,11 +139,25 @@ pub struct Preprocessed<'a> {
 /// import bindings through the shared store, and collect its metadata.  The
 /// code to compile is the source after the block.  Diagnostics (lex/parse/
 /// resolve) are reported with spans against the original file.
-pub fn preprocess<'a>(
+pub fn preprocess<'a, V, O, C>(
     raw: &'a str,
     base: Option<&Path>,
-    store: &mut PackageStore,
-) -> (Preprocessed<'a>, Vec<Diag>) {
+    store: &mut PackageStore<V, O, C>,
+) -> (Preprocessed<'a>, Vec<Diag<CompiledProgram<V, O>>>)
+where
+    V: lichen_highlevel::program::ValueType + From<lichen_compute::ComputeValue> + 'static,
+    O: lichen_lowlevel::OperatorExt<CompiledProgram<V, O>>
+        + lichen_utils::extend::AsEnum<lichen_lowlevel::LowOperator>
+        + From<lichen_lowlevel::LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<crate::program::GcdOp>
+        + From<lichen_highlevel::program::TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+{
     let mut diags = Vec::new();
 
     let Some((interior_start, interior_end, code_start)) = scan_block(raw) else {
@@ -363,7 +379,24 @@ pub fn depend_of(dir: Directive) -> Option<Depend> {
 /// fetched by the package manager (`lichen fetch`) is reported as a preprocess
 /// diagnostic naming the missing dir — the compiler never fetches git sources
 /// itself, it only reads what the package manager put in the cache.
-pub fn stage_depends(store: &mut PackageStore, source: &str) -> Vec<Diag> {
+pub fn stage_depends<V, O, C>(
+    store: &mut PackageStore<V, O, C>,
+    source: &str,
+) -> Vec<Diag<CompiledProgram<V, O>>>
+where
+    V: lichen_highlevel::program::ValueType + From<lichen_compute::ComputeValue> + 'static,
+    O: lichen_lowlevel::OperatorExt<CompiledProgram<V, O>>
+        + lichen_utils::extend::AsEnum<lichen_lowlevel::LowOperator>
+        + From<lichen_lowlevel::LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<crate::program::GcdOp>
+        + From<lichen_highlevel::program::TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+{
     let mut diags = Vec::new();
     let (interior, _) = split_block(source);
     let Some(interior) = interior else {
