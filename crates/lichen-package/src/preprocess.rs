@@ -1,8 +1,9 @@
 //! The package manager's preprocessor.
 //!
 //! This is the crate that **owns the preprocessor import path**: it is where
-//! a project's `@{…@}` block is cut out and its `import "…"` directives are
-//! resolved, with git-fetched dependencies staged onto that path.
+//! a project's `@{…@}` block is cut out, its `depend "url"` directives are
+//! fetched, and its `import "…"` directives are resolved, with the git
+//! dependencies staged onto that path.
 //!
 //! The byte scan and the block's mini-frontend live in
 //! `crates/lichen-language/src/preprocess/` (the language crate owns the
@@ -10,19 +11,19 @@
 //! of the workflow: it re-exports the block scanner / directive helpers a
 //! tool uses, and it drives the end-to-end preprocess for a project whose
 //! dependencies come from git.  Before the language crate's `preprocess` runs,
-//! [`crate::project::Project::stage`] registers every fetched dependency's
-//! vendored directory with the shared [`PackageStore`]
-//! ([`PackageStore::register_vendored`]), so `import "dep"` /
-//! `import "dep/rest"` resolves into the fetched clone
+//! [`crate::project::Project::stage`] fetches every `depend` into the
+//! lichen-home source cache and registers its vendored directory with the
+//! shared [`PackageStore`] ([`PackageStore::register_vendored`]), so
+//! `import "dep"` / `import "dep/rest"` resolves into the fetched clone
 //! ([`lichen_language::package::PackageStore::resolve_import`]).
 //!
 //! Re-exported here (from `lichen_language::preprocess`) so a consumer of the
 //! package manager never imports the language crate's module directly for the
 //! scanner: [`split_block`], [`block_directives`], [`block_metadata`],
-//! [`Directive`], [`Preprocessed`], [`ResolvedImport`].
+//! [`Directive`], [`Depend`], [`Preprocessed`], [`ResolvedImport`].
 
 pub use lichen_language::preprocess::{
-    Directive, Preprocessed, ResolvedImport, block_directives, block_metadata, split_block,
+    Depend, Directive, Preprocessed, ResolvedImport, block_directives, block_metadata, split_block,
 };
 
 use std::path::Path;

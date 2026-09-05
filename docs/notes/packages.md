@@ -6,14 +6,19 @@
 > CLI). The `@{…@}` block *syntax* is the spec's business: [language-spec.md §2.2](../language-spec.md).
 
 A program may open with a single `@{ … }@` **preprocessor block**. Inside it,
-`name = import "path"` loads a package bound to `name`, and `name = "value"` defines a
-string metadata entry. The block is cut out by a pure byte scan (independent of the
-lexer), so the language lexer/parser never see it; the code to compile is everything
-after the block.
+`name = import "path"` loads a package bound to `name`, `name = "value"` defines a
+string metadata entry, and `depend "url"` declares a git dependency (fetched by the
+package manager, [`package-manager`](package-manager.md), not by the compiler). The block
+is cut out by a pure byte scan (independent of the lexer), so the language lexer/parser
+never see it; the code to compile is everything after the block.
 
 ## Import
 
 - The block syntax is the only import form: `@{ _p = import "geometry.lichen" @}`.
+- A dependency is declared first (`depend "url" as geo sub = "liche-std"`),
+  fetched into the lichen-home source cache, and staged on the import path — then
+  `_geo = import "geo"` resolves into it (into the repo's `sub` subdirectory when
+  one is given).
 - A package is an ordinary lichen source file whose **final expression is the export** —
   a single frozen `[value, type]` ref.
 - The preprocessor resolves each import through the shared store. A package's own

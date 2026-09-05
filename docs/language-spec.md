@@ -204,6 +204,13 @@ it.  Inside the block is a set of statements, Separator-separated:
 - `name = import "path"` loads a package bound to `name` (the import namespace).
 - `name = "value"` defines a string metadata entry (the metadata namespace);
   the two namespaces are separate.
+- `depend "url" [as NAME] [rev = "…"] [branch = "…"] [tag = "…"]
+  [package = "…"] [sub = "…"] [plugin]` declares a git dependency.  The package
+  manager (`lichen`, in `crates/lichen-package`) fetches it into the lichen-home
+  source cache and stages it on the import path, so a `name = import "alias"`
+  resolves into the fetched source (or its `sub` subdirectory, for a monorepo
+  source).  The language compiler itself does not fetch — it only parses and
+  surfaces the directive.
 
 A string is `"…"` with no escape characters and may span newlines; its content
 is any character except `"` or `@`.  `@` is reserved for the block delimiters,

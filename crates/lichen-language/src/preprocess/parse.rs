@@ -17,6 +17,18 @@ pub enum Directive {
     Import { name: String, path: String },
     /// `name = "value"` -- a string metadata entry.
     Metadata { name: String, value: String },
+    /// `depend "url" [as NAME] [rev/branch/tag/package/sub = "x"] [plugin]` -- a
+    /// git dependency, fetched by the package manager (not resolved here).
+    Depend {
+        url: String,
+        name: Option<String>,
+        rev: Option<String>,
+        branch: Option<String>,
+        tag: Option<String>,
+        package: Option<String>,
+        sub: Option<String>,
+        plugin: bool,
+    },
 }
 
 /// Parse a block-interior token stream.  Returns each directive with the
@@ -33,8 +45,14 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
             continue;
         }
 
-        // A statement starts with a name.
+        // A statement starts either with `depend` (a dependency directive) or
+        // with a name (an import binding or a metadata entry).
         let stmt_start = tokens[i].range.0;
+        if matches!(tokens[i].kind, TokenKind::KwDepend) {
+            i += 1;
+            out.push((parse_depend(tokens, &mut i)?, stmt_start));
+            continue;
+        }
         let name = match &tokens[i].kind {
             TokenKind::Name(n) => n.clone(),
             k => {
@@ -85,6 +103,123 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
         }
     }
     Ok(out)
+}
+
+/// Parse `depend "url" [options...]` starting at `*i` (already past the
+/// `depend` keyword).  Reads a URL string then zero or more options: `as NAME`,
+/// `rev|branch|tag|package = "..."`, `plugin`.  Stops at a Separator (the
+/// outer loop consumes it) or the end of the block.
+fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, String)>> {
+    let url = match tokens.get(*i).map(|t| &t.kind) {
+        Some(TokenKind::String(u)) => u.clone(),
+        k => {
+            return Err(vec![err_at(
+                tokens,
+                *i,
+                format!("expected a url after depend, found {}", found(k)),
+            )]);
+        }
+    };
+    *i += 1;
+
+    let mut name = None;
+    let mut rev = None;
+    let mut branch = None;
+    let mut tag = None;
+    let mut package = None;
+    let mut sub = None;
+    let mut plugin = false;
+
+    while let Some(tok) = tokens.get(*i) {
+        if matches!(tok.kind, TokenKind::Separator) {
+            break;
+        }
+        let keyword = match &tok.kind {
+            TokenKind::Name(k) => k.clone(),
+            k => {
+                return Err(vec![err_at(
+                    tokens,
+                    *i,
+                    format!(
+                        "expected a depend option (as/rev/branch/tag/package/sub/plugin), found {}",
+                        k.describe()
+                    ),
+                )]);
+            }
+        };
+        *i += 1;
+        match keyword.as_str() {
+            "as" => name = Some(expect_name(tokens, i)?),
+            "rev" => rev = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "branch" => branch = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "tag" => tag = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "package" => package = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "sub" => sub = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "plugin" => plugin = true,
+            other => {
+                return Err(vec![err_at(
+                    tokens,
+                    *i - 1,
+                    format!("unknown depend option '{other}'"),
+                )]);
+            }
+        }
+    }
+
+    Ok(Directive::Depend {
+        url,
+        name,
+        rev,
+        branch,
+        tag,
+        package,
+        sub,
+        plugin,
+    })
+}
+
+/// Expect a `Name` token (an `as NAME` alias).
+fn expect_name(tokens: &[Token], i: &mut usize) -> Result<String, Vec<(u32, String)>> {
+    let n = match tokens.get(*i).map(|t| &t.kind) {
+        Some(TokenKind::Name(n)) => n.clone(),
+        k => {
+            return Err(vec![err_at(
+                tokens,
+                *i,
+                format!("expected a name after 'as', found {}", found(k)),
+            )]);
+        }
+    };
+    *i += 1;
+    Ok(n)
+}
+
+/// Expect `= "string"` following a keyword option, returning the string.
+fn expect_string_after_eq(
+    tokens: &[Token],
+    i: &mut usize,
+    keyword: &str,
+) -> Result<String, Vec<(u32, String)>> {
+    if tokens.get(*i).map(|t| &t.kind) != Some(&TokenKind::Equals) {
+        return Err(vec![err_at(
+            tokens,
+            *i,
+            format!("expected '=' after {keyword}"),
+        )]);
+    }
+    *i += 1;
+    match tokens.get(*i).map(|t| &t.kind) {
+        Some(TokenKind::String(v)) => {
+            let v = v.clone();
+            *i += 1;
+            Ok(v)
+        }
+        k => Err(vec![err_at(
+            tokens,
+            *i,
+            format!("expected a string after '{keyword} =', found {}", found(k)),
+        )]),
+    }
 }
 
 /// An error pointing at `idx` (or the end of the block when out of range).
@@ -142,6 +277,56 @@ mod tests {
                 name: "order".to_string(),
                 value: "3".to_string()
             }]
+        );
+    }
+
+    #[test]
+    fn a_depend_directive_parses() {
+        let dirs = parse_ok("depend \"https://example.com/foo.git\"");
+        assert_eq!(
+            dirs,
+            vec![Directive::Depend {
+                url: "https://example.com/foo.git".to_string(),
+                name: None,
+                rev: None,
+                branch: None,
+                tag: None,
+                package: None,
+                sub: None,
+                plugin: false,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_depend_directive_with_options_parses() {
+        let dirs = parse_ok(
+            "depend \"https://example.com/foo.git\" as foo rev = \"abc123\" \
+             branch = \"main\" package = \"foo-crate\" sub = \"lichen-std\" plugin",
+        );
+        assert_eq!(
+            dirs,
+            vec![Directive::Depend {
+                url: "https://example.com/foo.git".to_string(),
+                name: Some("foo".to_string()),
+                rev: Some("abc123".to_string()),
+                branch: Some("main".to_string()),
+                tag: None,
+                package: Some("foo-crate".to_string()),
+                sub: Some("lichen-std".to_string()),
+                plugin: true,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_depend_without_a_url_is_an_error() {
+        let lexed = tokenize("depend");
+        let errors = parse(&lexed.tokens).expect_err("expected an error");
+        assert!(
+            errors[0].1.contains("expected a url"),
+            "got: {}",
+            errors[0].1
         );
     }
 

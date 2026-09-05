@@ -91,9 +91,10 @@ lichen-compiler crates/lichen-language/examples/programs/bindings.lichen
 ```
 
 The package manager (a binary named `lichen`, in `crates/lichen-package`)
-fetches git dependencies, downloads the `lichen-compiler` and
-`lichen-language-server` binaries, and rebuilds the compiler when a native
-plugin is imported: see [`crates/lichen-package`](crates/lichen-package/README.md).
+fetches the git dependencies a file declares in its `@{…@}` block
+(`depend "url"`) into the lichen-home source cache, downloads the
+`lichen-compiler` and `lichen-language-server` binaries, and rebuilds the
+compiler when a native plugin is imported: see [`crates/lichen-package`](crates/lichen-package/README.md).
 
 ## Examples
 

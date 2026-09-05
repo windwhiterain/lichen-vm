@@ -48,9 +48,32 @@ pub struct ResolvedImport {
     pub direct: Vec<(String, StaticNodeId)>,
 }
 
+/// A git dependency declared by a `depend "url"` directive in the block.  The
+/// package manager fetches it (into the lichen-home source cache) and stages
+/// it as a vendored alias before resolving the block's `import` bindings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Depend {
+    /// The git repository URL.
+    pub url: String,
+    /// An explicit import alias (`as NAME`); defaults to the URL's repo name.
+    pub name: Option<String>,
+    /// A pinned revision, branch, or tag.
+    pub rev: Option<String>,
+    pub branch: Option<String>,
+    pub tag: Option<String>,
+    /// The Rust crate package name (a native-plugin dependency).
+    pub package: Option<String>,
+    /// A subdirectory of the fetched repository holding the package
+    /// (a monorepo dependency): the vendored alias resolves to
+    /// `<clone>/<sub>` instead of the clone root.
+    pub sub: Option<String>,
+    /// A native plugin: importing it requires the compiler to be rebuilt.
+    pub plugin: bool,
+}
+
 /// The preprocessor output: the borrowed code (a suffix of the source), the
 /// byte offset where it starts (so spans map back to the original file),
-/// resolved imports, and the block's string metadata.
+/// resolved imports, the block's string metadata, and its git dependency set.
 #[derive(Clone, Debug)]
 pub struct Preprocessed<'a> {
     /// The code to compile: the source after the `@{...@}` block (or the
@@ -62,6 +85,8 @@ pub struct Preprocessed<'a> {
     pub imports: Vec<ResolvedImport>,
     /// String metadata entries `(name, value)` from the block.
     pub metadata: Vec<(String, String)>,
+    /// The `depend "url"` directives from the block (git dependencies).
+    pub depends: Vec<Depend>,
 }
 
 /// Preprocess: cut out the leading `@{...@}` block (if any), resolve its
@@ -83,6 +108,7 @@ pub fn preprocess<'a>(
                 code_base: 0,
                 imports: Vec::new(),
                 metadata: Vec::new(),
+                depends: Vec::new(),
             },
             diags,
         );
@@ -94,6 +120,7 @@ pub fn preprocess<'a>(
 
     let mut imports = Vec::new();
     let mut metadata = Vec::new();
+    let mut depends = Vec::new();
 
     let lexed = lex::tokenize(interior);
     for err in &lexed.errors {
@@ -129,6 +156,25 @@ pub fn preprocess<'a>(
                             }
                         }
                         Directive::Metadata { name, value } => metadata.push((name, value)),
+                        Directive::Depend {
+                            url,
+                            name,
+                            rev,
+                            branch,
+                            tag,
+                            package,
+                            sub,
+                            plugin,
+                        } => depends.push(Depend {
+                            url,
+                            name,
+                            rev,
+                            branch,
+                            tag,
+                            package,
+                            sub,
+                            plugin,
+                        }),
                     }
                 }
             }
@@ -151,6 +197,7 @@ pub fn preprocess<'a>(
             code_base: code_start as u32,
             imports,
             metadata,
+            depends,
         },
         diags,
     )

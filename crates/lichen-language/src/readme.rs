@@ -316,6 +316,41 @@ fn replace_output_comment(source: &str, output: &str) -> String {
                     out.push_str(&format!("{name} = \"{value}\""));
                     out.push('\n');
                 }
+                Directive::Depend {
+                    url,
+                    name,
+                    rev,
+                    branch,
+                    tag,
+                    package,
+                    sub,
+                    plugin,
+                } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("depend \"{url}\""));
+                    if let Some(name) = name {
+                        out.push_str(&format!(" as {name}"));
+                    }
+                    if let Some(rev) = rev {
+                        out.push_str(&format!(" rev = \"{rev}\""));
+                    }
+                    if let Some(branch) = branch {
+                        out.push_str(&format!(" branch = \"{branch}\""));
+                    }
+                    if let Some(tag) = tag {
+                        out.push_str(&format!(" tag = \"{tag}\""));
+                    }
+                    if let Some(package) = package {
+                        out.push_str(&format!(" package = \"{package}\""));
+                    }
+                    if let Some(sub) = sub {
+                        out.push_str(&format!(" sub = \"{sub}\""));
+                    }
+                    if plugin {
+                        out.push_str(" plugin");
+                    }
+                    out.push('\n');
+                }
             }
         }
     }

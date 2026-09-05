@@ -1,0 +1,8 @@
+{
+  id = x => x
+  succ = x => x + 1
+  add = x => y => x + y
+  double = x => x + x
+  compose = f => g => x => f (g x)
+  inc_twice = x => succ (succ x)
+}

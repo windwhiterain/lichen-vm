@@ -26,7 +26,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::manifest::Dependency;
+use lichen_language::preprocess::Depend;
+
+use crate::git;
 
 /// The compiler-build dir name, under the project's `.lichen` dir.
 pub const BUILD_DIR: &str = "compiler";
@@ -80,7 +82,7 @@ pub fn rebuild(
     project_dir: &Path,
     name: &str,
     core_repo: &str,
-    plugins: &[(&str, &Dependency)],
+    plugins: &[Depend],
     leaves: &Leaves,
 ) -> Result<CompilerBuild, String> {
     if !cargo_available() {
@@ -141,21 +143,20 @@ fn write_cargo_toml(
     dir: &Path,
     name: &str,
     core_repo: &str,
-    plugins: &[(&str, &Dependency)],
+    plugins: &[Depend],
 ) -> Result<(), String> {
     let mut plugin_lines = String::new();
-    for (alias, dep) in plugins {
-        let crate_name = dep.crate_name(alias);
-        if std::path::Path::new(&dep.git).exists() {
-            plugin_lines.push_str(&format!("{crate_name} = {{ path = \"{}\" }}\n", dep.git));
+    for dep in plugins {
+        let crate_name = git::crate_name(dep);
+        if std::path::Path::new(&dep.url).exists() {
+            plugin_lines.push_str(&format!("{crate_name} = {{ path = \"{}\" }}\n", dep.url));
         } else {
-            let rev = dep
-                .checkout()
+            let rev = git::checkout(dep)
                 .map(|r| format!(", rev = \"{r}\""))
                 .unwrap_or_default();
             plugin_lines.push_str(&format!(
                 "{crate_name} = {{ git = \"{}\"{rev} }}\n",
-                dep.git
+                dep.url
             ));
         }
     }

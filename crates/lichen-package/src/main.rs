@@ -1,35 +1,35 @@
 //! The lichen package manager CLI.
 //!
-//! `lichen` manages a project: its git dependencies (add / rm / fetch / list),
-//! its toolchain binaries (`install`), its builds (`run` / `build`), its
-//! native-plugin compiler rebuild (`rebuild-plugin`), and the device cache
-//! (`cache gc`).  The language compiler binary is `lichen-compiler`
-//! (in `crates/lichen-language`); this package manager drives it.  Commands
-//! operate on the project in the current directory.
+//! `lichen` manages a project whose dependencies are declared per-file as
+//! `depend "url"` directives in each `@{…@}` meta block: it fetches them
+//! (`fetch`), builds and runs (`run` / `build`), fetches the toolchain
+//! binaries (`install`), and rebuilds the compiler for a native plugin
+//! (`rebuild-plugin`), plus the device cache (`cache gc`).  The language
+//! compiler binary is `lichen-compiler` (in `crates/lichen-language`); this
+//! package manager drives it.
 
 use std::env::Args;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use lichen_package::{DEFAULT_REPO, Dependency, Project, plugin, toolchain};
+use lichen_language::preprocess::{Directive, block_directives, split_block};
+use lichen_package::{DEFAULT_REPO, Depend, Project, git, plugin, toolchain};
 
 const USAGE: &str = "\
 usage: lichen <command> [args]
 
 commands:
-  add <git-url> [--name <alias>] [--rev <rev>] [--branch <b>] [--tag <t>]
-                [--package <crate>] [--plugin]     add a git dependency
-  rm <alias>                                        remove a dependency
-  list                                              list dependencies
-  fetch                                             clone/update all git deps
-  run <file|dir>                                    fetch, then compile & run
-  build <file>                                      fetch, then load & print type
-  install <compiler|language-server|all>            fetch a toolchain binary
-  rebuild-plugin [--name <n>] [--repo <url>]        rebuild the compiler for
-                                                    the project's native plugins
-  cache gc                                          reclaim device-cache artifacts
-  --help, -h                                        print this help
-  --version, -V                                     print the version
+  fetch <file|dir>                                      fetch the git deps declared
+                                                        by the file(s)' `depend` block
+  run <file|dir>                                        fetch, then compile & run
+  build <file>                                          fetch, then load & print type
+  install <compiler|language-server|all>                fetch a toolchain binary
+  rebuild-plugin [<file|dir>] [--name <n>] [--repo <u>] rebuild the compiler for the
+                                                        native plugins declared in the
+                                                        file(s)' `depend` blocks
+  cache gc                                              reclaim device-cache artifacts
+  --help, -h                                            print this help
+  --version, -V                                         print the version
 ";
 
 fn main() -> ExitCode {
@@ -48,9 +48,6 @@ fn main() -> ExitCode {
             println!("lichen {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        "add" => cmd_add(&mut args),
-        "rm" => cmd_rm(&mut args),
-        "list" => cmd_list(&mut args),
         "fetch" => cmd_fetch(&mut args),
         "run" => cmd_run(&mut args),
         "build" => cmd_build(&mut args),
@@ -64,7 +61,7 @@ fn main() -> ExitCode {
     }
 }
 
-/// Load the project in the current directory (an empty manifest is allowed).
+/// Load the project rooted at the current directory.
 fn load_current() -> Result<Project, ExitCode> {
     let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     Project::load(&dir).map_err(|e| {
@@ -77,134 +74,111 @@ fn take(args: &mut Args) -> Option<String> {
     args.next()
 }
 
-fn cmd_add(args: &mut Args) -> ExitCode {
-    let Some(url) = take(args) else {
-        eprintln!("usage: lichen add <git-url> [--name <alias>] [options]");
+/// The dependencies declared by a source's `@{…@}` block.
+fn depends_of(source: &str) -> Vec<Depend> {
+    let (interior, _) = split_block(source);
+    let Some(interior) = interior else {
+        return Vec::new();
+    };
+    block_directives(interior)
+        .into_iter()
+        .filter_map(|dir| match dir {
+            Directive::Depend {
+                url,
+                name,
+                rev,
+                branch,
+                tag,
+                package,
+                sub,
+                plugin,
+            } => Some(Depend {
+                url,
+                name,
+                rev,
+                branch,
+                tag,
+                package,
+                sub,
+                plugin,
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every `.lichen` source under `target` (a file or a directory), as
+/// `(path, source)`.
+fn each_source(target: &Path) -> Vec<(PathBuf, String)> {
+    if target.is_dir() {
+        let mut files: Vec<PathBuf> = match std::fs::read_dir(target) {
+            Ok(entries) => entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        files.sort();
+        files
+            .into_iter()
+            .filter_map(|p| std::fs::read_to_string(&p).ok().map(|s| (p, s)))
+            .collect()
+    } else {
+        std::fs::read_to_string(target)
+            .ok()
+            .map(|s| vec![(target.to_path_buf(), s)])
+            .unwrap_or_default()
+    }
+}
+
+/// The union of the `depend` directives across all sources under `target`.
+fn collect_depends(target: &Path) -> Vec<Depend> {
+    let mut out = Vec::new();
+    for (_, source) in each_source(target) {
+        out.extend(depends_of(&source));
+    }
+    out
+}
+
+/// Fetch the `depend` directives of every source under `target` into the
+/// lichen-home source cache.
+fn cmd_fetch(args: &mut Args) -> ExitCode {
+    let project = match load_current() {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let Some(target) = take(args).map(PathBuf::from) else {
+        eprintln!("usage: lichen fetch <file|dir>");
         return ExitCode::FAILURE;
     };
-    let mut alias = None;
-    let mut rev = None;
-    let mut branch = None;
-    let mut tag = None;
-    let mut package = None;
-    let mut is_plugin = false;
-    while let Some(flag) = take(args) {
-        match flag.as_str() {
-            "--name" | "-n" => alias = take(args),
-            "--rev" => rev = take(args),
-            "--branch" => branch = take(args),
-            "--tag" => tag = take(args),
-            "--package" => package = take(args),
-            "--plugin" => is_plugin = true,
-            other => {
-                eprintln!("unknown flag: {other}");
+    if !target.exists() {
+        eprintln!("cannot fetch: {} does not exist", target.display());
+        return ExitCode::FAILURE;
+    }
+    let mut store = project.store();
+    let mut fetched = 0;
+    for dep in collect_depends(&target) {
+        let alias = git::alias_of(&dep);
+        match git::fetch(&dep) {
+            Ok(dir) => {
+                store.register_vendored(alias.clone(), dir.clone());
+                println!("fetched {alias} -> {}", dir.display());
+                fetched += 1;
+            }
+            Err(e) => {
+                eprintln!("failed to fetch {alias}: {e}");
                 return ExitCode::FAILURE;
             }
         }
     }
-    let alias = alias.unwrap_or_else(|| {
-        let name = url
-            .trim_end_matches('/')
-            .rsplit('/')
-            .next()
-            .unwrap_or("dep");
-        name.strip_suffix(".git").unwrap_or(name).to_string()
-    });
-    let dep = Dependency {
-        git: url,
-        rev,
-        branch,
-        tag,
-        package,
-        plugin: is_plugin,
-    };
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    let mut manifest = project.manifest.clone();
-    if manifest.deps.contains_key(&alias) {
-        eprintln!("dependency '{alias}' already exists");
-        return ExitCode::FAILURE;
-    }
-    manifest.deps.insert(alias.clone(), dep);
-    let path = match manifest.save(&project.dir) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    println!("added {alias} -> {}", path.display());
-    ExitCode::SUCCESS
-}
-
-fn cmd_rm(args: &mut Args) -> ExitCode {
-    let Some(alias) = take(args) else {
-        eprintln!("usage: lichen rm <alias>");
-        return ExitCode::FAILURE;
-    };
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    let mut manifest = project.manifest.clone();
-    if manifest.deps.remove(&alias).is_none() {
-        eprintln!("dependency '{alias}' not found");
-        return ExitCode::FAILURE;
-    }
-    match manifest.save(&project.dir) {
-        Ok(_) => {
-            println!("removed {alias}");
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::FAILURE
-        }
-    }
-}
-
-fn cmd_list(_args: &mut Args) -> ExitCode {
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    if project.deps().is_empty() {
-        println!("no dependencies");
-        return ExitCode::SUCCESS;
-    }
-    for (alias, dep) in project.deps() {
-        let rev = dep
-            .checkout()
-            .map(|r| format!(" @ {r}"))
-            .unwrap_or_default();
-        let plugin = if dep.is_plugin() { " (plugin)" } else { "" };
-        println!("{alias} = {}{rev}{plugin}", dep.git);
+    if fetched == 0 {
+        println!(
+            "nothing to fetch (no `depend` directives in {}",
+            target.display()
+        );
     }
     ExitCode::SUCCESS
-}
-
-fn cmd_fetch(_args: &mut Args) -> ExitCode {
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
-    match project.fetch_all() {
-        Ok(out) => {
-            if out.is_empty() {
-                println!("nothing to fetch");
-            }
-            for (alias, path) in out {
-                println!("fetched {alias} -> {}", path.display());
-            }
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::FAILURE
-        }
-    }
 }
 
 fn cmd_run(args: &mut Args) -> ExitCode {
@@ -299,19 +273,23 @@ fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
     };
     let mut name = "project".to_string();
     let mut repo = DEFAULT_REPO.to_string();
-    while let Some(flag) = take(args) {
-        match flag.as_str() {
-            "--name" | "-n" => name = take(args).unwrap_or(name),
-            "--repo" => repo = take(args).unwrap_or(repo),
-            other => {
-                eprintln!("unknown flag: {other}");
-                return ExitCode::FAILURE;
-            }
+    let mut target: Option<PathBuf> = None;
+    while let Some(v) = take(args) {
+        if v == "--name" || v == "-n" {
+            name = take(args).unwrap_or(name);
+        } else if v == "--repo" {
+            repo = take(args).unwrap_or(repo);
+        } else if v.starts_with('-') {
+            eprintln!("unknown flag: {v}");
+            return ExitCode::FAILURE;
+        } else {
+            target = Some(PathBuf::from(v));
         }
     }
-    let plugins: Vec<(&str, &Dependency)> = project
-        .plugin_deps()
-        .map(|(alias, dep)| (alias.as_str(), dep))
+    let target = target.unwrap_or_else(|| project.dir.clone());
+    let plugins: Vec<Depend> = collect_depends(&target)
+        .into_iter()
+        .filter(|dep| dep.plugin)
         .collect();
     if plugins.is_empty() {
         println!("no native-plugin dependencies; rebuilding over the shipping plugin set");
@@ -350,7 +328,7 @@ fn cmd_cache(args: &mut Args) -> ExitCode {
 
 /// Run every `.lichen` file in a directory, printing `file: output` per file.
 fn run_directory(project: &Project, dir: &Path) -> ExitCode {
-    let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
+    let files: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
             .flatten()
             .map(|e| e.path())
@@ -361,6 +339,7 @@ fn run_directory(project: &Project, dir: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let mut files = files;
     files.sort();
     let mut failed = 0;
     for file in files {

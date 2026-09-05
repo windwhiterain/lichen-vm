@@ -28,6 +28,10 @@ pub enum TokenKind {
     /// The `import` keyword: `name = import "path"`.
     #[token("import")]
     KwImport,
+    /// The `depend` keyword: `depend "url" [options...]` — declare a git
+    /// dependency fetched from `url` (handled by the package manager).
+    #[token("depend")]
+    KwDepend,
     /// A string literal (quotes stripped); no escapes, may be multiline.
     /// `@` is reserved, so it is excluded from the content.
     #[regex(r#""[^"@]*""#, |lex| {
@@ -47,6 +51,7 @@ impl TokenKind {
             TokenKind::Separator => "a separator".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::KwImport => "'import'".to_string(),
+            TokenKind::KwDepend => "'depend'".to_string(),
             TokenKind::String(_) => "a string".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
         }
@@ -133,6 +138,19 @@ mod tests {
                 TokenKind::Equals,
                 TokenKind::KwImport,
                 TokenKind::String("math.lichen".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_depend_directive_lexes() {
+        assert_eq!(
+            kinds("depend \"https://example.com/foo.git\" as foo"),
+            vec![
+                TokenKind::KwDepend,
+                TokenKind::String("https://example.com/foo.git".to_string()),
+                TokenKind::Name("as".to_string()),
+                TokenKind::Name("foo".to_string()),
             ]
         );
     }
