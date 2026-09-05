@@ -12,15 +12,13 @@
 //! binding at statement start is `name =` (or `let name =`); anything else
 //! is an expression — a bare expression is a statement anywhere, and only
 //! the last statement is the list's value.  Within an expression, one
-//! grammar covers terms and types (types are expressions); the *mode* — term
-//! or type — is applied by a post-pass ([`apply_type_mode`]): the
-//! annotation's right side (and a struct's fields) are type expressions,
-//! everywhere else a term, deciding whether `(a, b)` is a `Tuple` value or a
-//! `TypeTuple` type expression and whether `_` is a [`Expr::Placeholder`] or
-//! an ordinary name.  Angle brackets are exclusively type-level and need no
-//! mode: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>` always a
-//! `StructType`, and `T<e>` (a `<` directly after an expression) is always
-//! the array type.  Postfix forms are marked by a `Glue` token (the lexer
+//! grammar covers terms and types (types are expressions) with no *mode*
+//! flag: `(a, b)` is always a `Tuple` value, `<a, b>` always a `TypeTuple`
+//! type expression, and `_` always a [`Expr::Placeholder`] (never a name)
+//! — an annotated `expr : expr` parses both sides the same way.  Angle
+//! brackets are exclusively type-level: `<a, b>` is always a `TypeTuple`,
+//! `struct<T1, T2>` always a `StructType`, and `T<e>` (a `<` directly after
+//! an expression) is always the array type.  Postfix forms are marked by a `Glue` token (the lexer
 //! emits it when the delimiter is directly glued to the previous token): a
 //! glued `[` is an index `e[i]`, a glued `<` an array type.  A spaced `[` is
 //! a fresh array-literal atom (so `f ([1, 2])` applies `f` to the array) and
@@ -117,7 +115,7 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
         }
     }
     let mut program = match output {
-        Some(program) => apply_type_mode(program),
+        Some(program) => program,
         None => {
             let span = errors
                 .first()
@@ -152,9 +150,7 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
 /// The window must begin at a token-before-a-statement (it may open with
 /// leading separators and close with trailing ones, both dropped) — the caller
 /// chooses it to cover exactly the statements that a user edit touched.  The
-/// statements are produced with the [`apply_type_mode`] post-pass applied (a
-/// top-level statement is in term mode).  Like [`parse`], the window carries
-/// recovered errors rather than failing.
+/// Like [`parse`], the window carries recovered errors rather than failing.
 ///
 /// This is the incremental-parse primitive: the tokens it consumes already
 /// carry *absolute* byte ranges and (line, col) spans (the lexer emits them),
@@ -258,16 +254,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         .iter()
         .map(|(_, r)| (r.0 + start, r.1 + start))
         .collect();
-    // Apply the type-mode post-pass (top-level statements are in term mode),
-    // reusing the whole-program pass on a synthetic program.
-    let program = Program {
-        statements,
-        expr: Expr::Int(0, (1, 1)),
-        error_blocks: Vec::new(),
-        stmt_ranges: ranges.clone(),
-    };
-    let program = apply_type_mode(program);
-    (program.statements, ranges, errors)
+    (statements, ranges, errors)
 }
 
 // ---------------------------------------------------------------------------
@@ -282,8 +269,8 @@ fn token<'a>(kind: TokenKind) -> impl Parser<'a, In<'a>, Token, E<'a>> + Clone {
         .labelled(label)
 }
 
-/// A name token — an identifier, `_` included (the mode post-pass decides
-/// whether `_` is a placeholder).
+/// A name token — an identifier.  `_` is *not* a name: it lexes as its own
+/// [`TokenKind::Placeholder`] token and is always a placeholder.
 fn name<'a>() -> impl Parser<'a, In<'a>, (String, Span), E<'a>> + Clone {
     any::<In<'a>, E<'a>>()
         .filter(|t: &Token| matches!(t.kind, TokenKind::Name(_)))
@@ -995,9 +982,9 @@ fn paren_fields<'a>(
         })
 }
 
-/// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple (a
-/// `TypeTuple` in type position, applied by the mode post-pass).  A trailing
-/// comma is tolerated.
+/// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple value (always
+/// a [`Expr::Tuple`]; the [`Expr::TypeTuple`] form comes from angle brackets,
+/// see [`angle_tuple`]).  A trailing comma is tolerated.
 fn paren<'a>(
     tokens: &'a [Token],
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
@@ -1044,8 +1031,8 @@ fn native_call<'a>(
         })
 }
 
-/// `[e1, …, en]` — an array literal (in type position its elements are
-/// types, applied by the mode post-pass).  A trailing comma is tolerated.
+/// `[e1, …, en]` — an array literal (its elements are terms).  A trailing
+/// comma is tolerated.
 /// An element may be prefixed with the `~` shallow marker — the only place
 /// `~` is accepted.
 fn array_literal<'a>(
@@ -1394,225 +1381,6 @@ fn if_expr<'a>(
             else_branch: Box::new(else_branch),
             span: span_at(tokens, me.span().start),
         })
-}
-
-// ---------------------------------------------------------------------------
-// The mode post-pass
-
-/// Reinterpret the parser's single-mode AST in the language's two modes:
-/// the annotation's right side (and a struct's fields) are type expressions,
-/// everywhere else is a term.  The parser builds everything as a term
-/// (`(a, b)` a [`Expr::Tuple`]); this pass flips the mode-sensitive node —
-/// `Tuple` → `TypeTuple` — inside type positions.  `_` is *not* mode-sensitive:
-/// it lexes as its own token and is always a [`Expr::Placeholder`], in type
-/// and value positions alike.
-fn apply_type_mode(program: Program) -> Program {
-    fn expr(e: Expr, type_mode: bool) -> Expr {
-        match e {
-            Expr::Lambda {
-                parameter,
-                parameter_span,
-                parameter_type,
-                parameter_perspective,
-                r#return,
-                span,
-            } => Expr::Lambda {
-                parameter,
-                parameter_span,
-                parameter_type: parameter_type.map(|t| Box::new(expr(*t, true))),
-                parameter_perspective: parameter_perspective.map(|p| Box::new(expr(*p, false))),
-                r#return: Box::new(expr(*r#return, type_mode)),
-                span,
-            },
-            Expr::Apply {
-                function,
-                argument,
-                span,
-            } => Expr::Apply {
-                function: Box::new(expr(*function, type_mode)),
-                argument: Box::new(expr(*argument, type_mode)),
-                span,
-            },
-            Expr::BinOp {
-                operator,
-                left,
-                right,
-                span,
-            } => Expr::BinOp {
-                operator,
-                left: Box::new(expr(*left, type_mode)),
-                right: Box::new(expr(*right, type_mode)),
-                span,
-            },
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                span,
-            } => Expr::If {
-                condition: Box::new(expr(*condition, type_mode)),
-                then_branch: Box::new(expr(*then_branch, type_mode)),
-                else_branch: Box::new(expr(*else_branch, type_mode)),
-                span,
-            },
-            Expr::Assert { value, span } => Expr::Assert {
-                value: Box::new(expr(*value, type_mode)),
-                span,
-            },
-            Expr::Index { array, index, span } => Expr::Index {
-                array: Box::new(expr(*array, type_mode)),
-                index: Box::new(expr(*index, type_mode)),
-                span,
-            },
-            Expr::TableFind {
-                container,
-                key,
-                span,
-            } => Expr::TableFind {
-                container: Box::new(expr(*container, type_mode)),
-                key: Box::new(expr(*key, type_mode)),
-                span,
-            },
-            Expr::FieldRead {
-                container,
-                key,
-                span,
-            } => Expr::FieldRead {
-                container: Box::new(expr(*container, type_mode)),
-                key: Box::new(expr(*key, type_mode)),
-                span,
-            },
-            Expr::NamedFieldRead {
-                container,
-                name,
-                span,
-            } => Expr::NamedFieldRead {
-                container: Box::new(expr(*container, type_mode)),
-                name,
-                span,
-            },
-            Expr::Annotation {
-                value,
-                r#type,
-                perspective,
-                doc,
-                span,
-            } => Expr::Annotation {
-                value: Box::new(expr(*value, type_mode)),
-                r#type: r#type.map(|t| Box::new(expr(*t, true))),
-                perspective: perspective.map(|p| Box::new(expr(*p, false))),
-                doc: doc.map(|d| Box::new(expr(*d, false))),
-                span,
-            },
-            Expr::Arrow {
-                parameter,
-                r#return,
-                span,
-            } => Expr::Arrow {
-                parameter: Box::new(expr(*parameter, type_mode)),
-                r#return: Box::new(expr(*r#return, type_mode)),
-                span,
-            },
-            Expr::Tuple(elements, span) if type_mode => {
-                Expr::TypeTuple(elements.into_iter().map(|e| expr(e, true)).collect(), span)
-            }
-            Expr::Tuple(elements, span) => {
-                Expr::Tuple(elements.into_iter().map(|e| expr(e, false)).collect(), span)
-            }
-            Expr::TypeTuple(elements, span) => Expr::TypeTuple(
-                elements.into_iter().map(|e| expr(e, type_mode)).collect(),
-                span,
-            ),
-            Expr::StructType(fields, span) => Expr::StructType(
-                fields
-                    .into_iter()
-                    .map(|field| StructField {
-                        name: field.name,
-                        ty: expr(field.ty, true),
-                    })
-                    .collect(),
-                span,
-            ),
-            Expr::StructInst {
-                callee,
-                fields,
-                span,
-            } => Expr::StructInst {
-                callee: Box::new(expr(*callee, type_mode)),
-                fields: fields
-                    .into_iter()
-                    .map(|arg| StructInstArg {
-                        name: arg.name,
-                        value: expr(arg.value, type_mode),
-                    })
-                    .collect(),
-                span,
-            },
-            Expr::Array(elements, span) => Expr::Array(
-                elements.into_iter().map(|e| expr(e, type_mode)).collect(),
-                span,
-            ),
-            Expr::Table(entries, span) => Expr::Table(
-                entries
-                    .into_iter()
-                    .map(|(key, value)| (expr(key, false), expr(value, false)))
-                    .collect(),
-                span,
-            ),
-            Expr::Shallow(inner, depth, span) => {
-                Expr::Shallow(Box::new(expr(*inner, type_mode)), depth, span)
-            }
-            Expr::TypeArray {
-                element_type,
-                length,
-                span,
-            } => Expr::TypeArray {
-                element_type: Box::new(expr(*element_type, type_mode)),
-                length: Box::new(expr(*length, type_mode)),
-                span,
-            },
-            Expr::Block {
-                statements,
-                expr: inner,
-                span,
-            } => Expr::Block {
-                statements: statements.into_iter().map(|s| stmt(s, type_mode)).collect(),
-                expr: Box::new(expr(*inner, type_mode)),
-                span,
-            },
-            Expr::RecordBlock { fields, span } => Expr::RecordBlock {
-                fields: fields
-                    .into_iter()
-                    .map(|f| RecordField {
-                        value: expr(f.value, type_mode),
-                        ..f
-                    })
-                    .collect(),
-                span,
-            },
-            // Int, TypeConst, Placeholder, Err — mode-insensitive.
-            e => e,
-        }
-    }
-    fn stmt(s: Stmt, type_mode: bool) -> Stmt {
-        match s {
-            Stmt::Binding(binding) => Stmt::Binding(Binding {
-                value: expr(binding.value, type_mode),
-                ..binding
-            }),
-            Stmt::Expr(e) => Stmt::Expr(expr(e, type_mode)),
-        }
-    }
-    Program {
-        statements: program
-            .statements
-            .into_iter()
-            .map(|s| stmt(s, false))
-            .collect(),
-        expr: expr(program.expr, false),
-        error_blocks: program.error_blocks,
-        stmt_ranges: program.stmt_ranges,
-    }
 }
 
 /// Collect the byte-range masks of every recovered-error node in the AST, in

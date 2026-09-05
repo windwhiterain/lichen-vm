@@ -53,7 +53,7 @@ primary  := int_literal
           | '_'                                     -- inference placeholder (any position)
           | name
           | '(' expr ')'                            -- grouping (transparent)
-          | '(' expr (sep expr)* sep? ')'           -- tuple  (TypeTuple in type position)
+          | '(' expr (sep expr)* sep? ')'           -- tuple value (always a Tuple)
           | '[' element (sep element)* ']'          -- array literal
           | 'table' '{' pair (sep pair)* '}'        -- constant table literal
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
@@ -146,11 +146,12 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   apply against the argument's perspective.  The body still extends maximally:
   `x : T => e : U` is `x : T => (e : U)`.  `x : T` without a following `=>`
   stays an ordinary annotation.
-- **One grammar, one position flag.**  Types are expressions, so term and type
-  forms share one grammar.  The parser threads a *type-mode* flag that only
-  decides `(a, b)` — a `Tuple` value in term position, a `TypeTuple` type
-  expression in type position (after `:`).  Angle brackets need no flag:
-  `<a, b>` is always a `TypeTuple`, in both positions.
+- **One grammar, no type mode.**  Types are expressions, so term and type forms
+  share one grammar, and there is no *type-mode* flag: `expr : expr` parses both
+  sides the same way.  `(a, b)` is always a `Tuple` *value*; the tuple *type* is
+  always spelled with angle brackets — `<a, b>` is a `TypeTuple` in every
+  position — so a tuple type is written `x : <Int, Int>`, never `x : (Int, Int)`
+  (the latter is a tuple value whose elements are the type-values `Int`).
 
 - **Conditionals.**  `if cond then e1 else e2` is an expression: `cond` is any
   expression up to `then` (the keyword delimits it — it is neither an atom nor
@@ -193,7 +194,8 @@ delimiter is a fresh atom — an argument of an application:
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
   `(`) applies `f` to the tuple.  A glued `(` after a container is a field/
   slot read (`a(0)`).  A fresh atom may itself open with a glued delimiter,
-  e.g. the annotation `x :(Int, Type)`.
+  e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
+  `Int` and `Type` (a tuple type is `x : <Int, Type>`).
 - `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
   `{k}`.  A table literal (`table{…}`) and a struct type (`struct<…>`) are
   *keyword-led*, so their delimiter sits directly after the keyword.

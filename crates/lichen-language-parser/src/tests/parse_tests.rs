@@ -288,13 +288,13 @@ fn an_annotated_parameter_is_a_lambda() {
 }
 
 #[test]
-fn tuples_and_type_tuples_by_position() {
-    // `(Int, Int)` is a TypeTuple in type position, a Tuple value in term
-    // position.
+fn parens_are_always_tuple_values_and_angles_are_always_type_tuples() {
+    // `(a, b)` is a tuple *value* in every position — there is no type/value
+    // mode, so `expr : expr` parses both sides the same way.
     let Expr::Annotation { r#type, .. } = parse_ok("x : (Int, Int)") else {
         panic!("expected an annotation")
     };
-    assert!(matches!(*r#type.as_deref().unwrap(), Expr::TypeTuple(..)));
+    assert!(matches!(*r#type.as_deref().unwrap(), Expr::Tuple(..)));
     let Expr::Apply { argument, .. } = parse_ok("f (Int, Int)") else {
         panic!("expected an apply")
     };
@@ -338,12 +338,16 @@ fn struct_types_are_positional_fields_in_angle_brackets() {
         panic!("expected an apply")
     };
     assert!(matches!(*argument, Expr::StructType(..)));
-    // fields are type expressions, so `(Int, Type)` inside is a
-    // TypeTuple, not a Tuple.
-    let Expr::StructType(fields, _) = parse_ok("struct<(Int, Type)>") else {
+    // A tuple-type field is spelled with angle brackets (`<<Int, Type>>`);
+    // a paren tuple in a field is a tuple *value*, not a type.
+    let Expr::StructType(fields, _) = parse_ok("struct<<Int, Type>>") else {
         panic!("expected a struct type")
     };
     assert!(matches!(fields[0].ty, Expr::TypeTuple(..)));
+    let Expr::StructType(fields, _) = parse_ok("struct<(Int, Type)>") else {
+        panic!("expected a struct type")
+    };
+    assert!(matches!(fields[0].ty, Expr::Tuple(..)));
 }
 
 #[test]

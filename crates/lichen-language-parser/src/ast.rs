@@ -154,9 +154,9 @@ pub enum Expr {
         r#return: Box<Expr>,
         span: Span,
     },
-    /// `(e1, ..., en)` — a tuple value.
+    /// `(e1, ..., en)` — a tuple value (always; no type/value mode).
     Tuple(Vec<Expr>, Span),
-    /// `(T1, ..., Tn)` in type position — a tuple type.
+    /// `<T1, ..., Tn>` — a tuple type (angle brackets always produce one).
     TypeTuple(Vec<Expr>, Span),
     /// `struct<T1, ..., Tn>` — a nominal struct type.  Each field may carry
     /// an optional name (`<name> :: T`), so the syntax is `struct<a :: Int, b`

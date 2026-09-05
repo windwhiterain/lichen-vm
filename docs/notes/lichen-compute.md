@@ -134,7 +134,7 @@ snapshotting of a bound argument and no class-rep routing, so the launch-argumen
 typechecker" guarantee holds because the checker's gates run first; the JIT only lowers a
 graph the checker has already accepted.
 
-A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : (Int, Int) =>
+A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : <Int, Int> =>
 p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
 *type* cell (`kernel_param_shape`/`element_shape` yield `LowShape::Tuple(..)`), which
 drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element reads:

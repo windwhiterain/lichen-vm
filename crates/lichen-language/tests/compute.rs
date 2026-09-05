@@ -85,13 +85,13 @@ compute.launch (x => x + 1) 5
 
 #[test]
 fn jit_multi_arg_tuple() {
-    // A tuple-domain kernel: `(p : (Int, Int) => p(0) + p(1))` compiles to
+    // A tuple-domain kernel: `(p : <Int, Int> => p(0) + p(1))` compiles to
     // a wasm `(i64, i64) -> i64` and launches with a 2-tuple argument.
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : (Int, Int) => p(0) + p(1))
+k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.launch k (5, 3)
 "#);
     assert_eq!(out, "8: Int", "tuple-domain jit+launch produced: {out:?}");
@@ -103,7 +103,7 @@ fn jit_multi_arg_ternary() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : (Int, Int, Int) => p(0) + p(1) + p(2))
+k = compute.jit (p : <Int, Int, Int> => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
 "#);
     assert_eq!(out, "10: Int", "ternary jit+launch produced: {out:?}");
@@ -115,7 +115,7 @@ fn jit_multi_arg_sub() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : (Int, Int) => p(0) - p(1))
+k = compute.jit (p : <Int, Int> => p(0) - p(1))
 compute.launch k (10, 3)
 "#);
     assert_eq!(out, "7: Int", "tuple subtraction produced: {out:?}");
@@ -123,15 +123,15 @@ compute.launch k (10, 3)
 
 #[test]
 fn launch_rejects_wrong_arity() {
-    // Launching a `(Int, Int) -> Int` kernel with a single scalar is a check
+    // Launching a `<Int, Int> -> Int` kernel with a single scalar is a check
     // error: the `launch` gate unifies the argument against the domain
-    // `(Int, Int)`, so a scalar `Int` fails.
+    // `<Int, Int>`, so a scalar `Int` fails.
     let diags = fail(
         r#"
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : (Int, Int) => p(0) + p(1))
+k = compute.jit (p : <Int, Int> => p(0) + p(1))
 compute.launch k 5
 "#,
     );
@@ -165,7 +165,7 @@ fn jit_multi_arg_all_ops() {
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : (Int, Int) => (p(0) + p(1)) - (p(0) <= p(1)))
+k = compute.jit (p : <Int, Int> => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
 "#);
     assert_eq!(out, "8: Int", "mixed-op tuple produced: {out:?}");
@@ -199,14 +199,14 @@ compute.launch k 5
 
 #[test]
 fn jit_nested_tuple_domain() {
-    // A nested tuple domain `((Int, Int), Int)`: the parameter flattens to
+    // A nested tuple domain `<<Int, Int>, Int>`: the parameter flattens to
     // three wasm i64 locals, and `p(0)(0) + p(0)(1) + p(1)` reads them at
     // their flattened offsets (0, 1, 2).  Exercises recursive LowShape.
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-k = compute.jit (p : ((Int, Int), Int) => p(0)(0) + p(0)(1) + p(1))
+k = compute.jit (p : <<Int, Int>, Int> => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
 "#);
     assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
@@ -318,12 +318,12 @@ k
 
 #[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
-    // A tuple-domain kernel's signature is `[(Int, Int), Int]`; the kernel
+    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the kernel
     // type renders as the arrow `<Int, Int> -> Int`, mirroring the function
     // whose signature it carries.
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
-k = compute.jit (p : (Int, Int) => p(0) + p(1))
+k = compute.jit (p : <Int, Int> => p(0) + p(1))
 k
 "#);
     assert_eq!(
@@ -399,14 +399,14 @@ compute.pcollect p
 
 #[test]
 fn parallel_tuple_config() {
-    // A tuple config: the kernel's domain is `((Int, Int), USize)` flattened to
+    // A tuple config: the kernel's domain is `<<Int, Int>, USize>` flattened to
     // three wasm locals — `cfg(0) + cfg(1) + i` reads the two config scalars and
     // the index.  `plrun k ((3, 4), 2)` ⇒ [3+4+0, 3+4+1] = [7, 8].
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-f = (cfg : (Int, Int)) => i => cfg(0) + cfg(1) + i
+f = (cfg : <Int, Int>) => i => cfg(0) + cfg(1) + i
 k = compute.parallel f
 p = compute.plrun k ((3, 4), 2)
 compute.pget p 1

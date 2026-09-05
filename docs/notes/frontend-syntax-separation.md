@@ -86,7 +86,7 @@ source ──lex──▶ Token{ range, span: Span }     Span DEFINED IN lex
 |---|---|---|
 | `src/lex.rs` | `logos`, `lichen_highlevel::ir::Span`, `crate::diag` | tokens, `Lexed`, `lex`/`lex_with`/`lex_resume`, `line_starts`/`line_col` |
 | `src/ast.rs` | `lichen_highlevel::ir::Span` | AST node definitions (`Expr`/`Stmt`/`Program`…) |
-| `src/parse.rs` | `chumsky`, `lichen_highlevel::ir::Span`, `crate::ast`, `crate::lex`, `crate::diag` | parser, `apply_type_mode`, `collect_error_blocks`, `parse_statement_region*` |
+| `src/parse.rs` | `chumsky`, `lichen_highlevel::ir::Span`, `crate::ast`, `crate::lex`, `crate::diag` | parser, `collect_error_blocks`, `parse_statement_region*` (no type-mode pass — see [`no-type-mode.md`](no-type-mode.md)) |
 | `src/diag.rs` | `lichen_highlevel::ir::Span`, `lichen_highlevel::diagnostic::Diag<LangProgram>`, `crate::program::LangProgram` | `Diag { span, message, stage, check }`, `Stage { Preprocess,Lex,Parse,Resolve,Check }` |
 | `src/compile.rs` | `lichen_highlevel`, `crate::ast`, `crate::diag`, `crate::preprocess::ResolvedImport` | AST → IR lowering + name resolution; passes spans to `alloc*`, copies spans placeholder↔value |
 | `src/preprocess/{lex,parse}.rs` | `logos` (lex only) | directive-block body lexer/parser (byte `(u32,u32)` ranges, self-contained) |
@@ -127,7 +127,7 @@ crates/lichen-language-parser/
   Cargo.toml            # deps: chumsky, lichen-language-lex
   src/lib.rs            # pub mod ast: Expr/Stmt/Program/Binding/… (spans are lex::Span)
                         #        parse: parse, parse_statement_region*,
-                        #               apply_type_mode, collect_error_blocks
+                        #               collect_error_blocks
                         #        diag: ParseDiag{span,message}
 ```
 

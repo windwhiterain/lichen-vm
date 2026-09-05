@@ -27,9 +27,11 @@ value alike — and is **never** a name:
 `_` is now its own lexer token (`TokenKind::Placeholder`), not a `Name`.  The
 `name` parser never matches it, so it can never be a binder name or a lambda
 parameter; a bare `_` in an expression slot always parses to `Expr::Placeholder`
-and lowers to `ExprKind::Placeholder`.  The type-mode post-pass
-(`apply_type_mode`) no longer rewrites `_` — it only flips `Tuple` → `TypeTuple`
-in type position.
+and lowers to `ExprKind::Placeholder`.  There is no type-mode post-pass to
+rewrite `_` — the whole `apply_type_mode` / `type_mode` mechanism was removed
+(see [`no-type-mode.md`](no-type-mode.md)): `(a, b)` is always a tuple *value*
+and `<a, b>` always a tuple *type*, so `_` is a placeholder in both positions
+with no position-dependent treatment.
 
 Because `_` is a distinct token, the discard/binder uses are gone rather than
 semantically repurposed: there is no scope-dependent "unbound `_` is a hole,
@@ -38,8 +40,8 @@ bound `_` is a name" ambiguity (that was the rejected alternative, Design A).
 ## Files touched
 
 - `crates/lichen-language-lex/src/lib.rs` — `TokenKind::Placeholder`, `_` mapping.
-- `crates/lichen-language-parser/src/parse.rs` — placeholder primary; type-mode
-  pass no longer rewrites `_`.
+- `crates/lichen-language-parser/src/parse.rs` — placeholder primary; the
+  type-mode post-pass removed (see [`no-type-mode.md`](no-type-mode.md)).
 - `crates/lichen-language-parser/src/ast.rs` — `Expr::Placeholder` doc.
 - `crates/lichen-language-server/src/analysis.rs` — semantic-token
   classification for the new token.
