@@ -7,7 +7,7 @@ fn parse_ok(source: &str) -> Expr {
     let tokens = lex(source).tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
-    program.expr
+    program.expr.expect("a clean program has a tail expression")
 }
 
 /// The first parse error.
@@ -23,7 +23,7 @@ fn bindings(program: &Program) -> Vec<&Binding> {
     program
         .statements
         .iter()
-        .filter_map(|stmt| match stmt {
+        .filter_map(|bs| match &bs.stmt {
             Stmt::Binding(binding) => Some(binding),
             Stmt::Expr(_) => None,
         })
@@ -54,7 +54,7 @@ fn a_program_is_bindings_followed_by_the_final_expression() {
     assert_eq!(binds[0].name, "a");
     assert_eq!(binds[1].name, "b");
     assert!(matches!(binds[0].value, Expr::Array(..)));
-    assert!(matches!(program.expr, Expr::Index { .. }));
+    assert!(matches!(program.expr, Some(Expr::Index { .. })));
 }
 
 #[test]
@@ -63,10 +63,13 @@ fn a_region_over_the_whole_stream_equals_the_statement_sequence() {
     let tokens = lex("a = 1\nb = 2\na + b").tokens;
     let program = parse(&tokens).program;
     // The full logical statement list = the program's `statements` (all but the
-    // last) plus the final expression as its own statement.
+    // last) plus the final expression as its own block statement.
     let expected_full = {
         let mut v = program.statements.clone();
-        v.push(Stmt::Expr(program.expr.clone()));
+        v.push(BlockStmt {
+            stmt: Stmt::Expr(program.expr.clone().unwrap()),
+            public: false,
+        });
         v
     };
     // The region parser over the whole stream (everything before Eof) must
@@ -86,7 +89,7 @@ fn a_region_parses_a_middle_window() {
     let (region_stmts, errors) = parse_statement_region(&tokens, 4, 7);
     assert!(errors.is_empty(), "unexpected region errors: {errors:?}");
     assert_eq!(region_stmts.len(), 1);
-    match &region_stmts[0] {
+    match &region_stmts[0].stmt {
         Stmt::Binding(binding) => assert_eq!(binding.name, "b"),
         _ => panic!("expected a binding, got {:?}", region_stmts[0]),
     }
@@ -122,7 +125,10 @@ fn a_region_recovering_over_a_broken_window_still_produces_statements() {
     // appended as its own statement (the form the region parser produces).
     let expected_full = {
         let mut v = whole_program.statements.clone();
-        v.push(Stmt::Expr(whole_program.expr.clone()));
+        v.push(BlockStmt {
+            stmt: Stmt::Expr(whole_program.expr.clone().unwrap()),
+            public: false,
+        });
         v
     };
     assert_eq!(region_stmts.len(), expected_full.len());
@@ -130,16 +136,33 @@ fn a_region_recovering_over_a_broken_window_still_produces_statements() {
 }
 
 #[test]
+fn a_trailing_binding_program_is_a_record_program() {
+    // A program whose last statement is a binding has no tail expression — it
+    // is a record program (a module) whose value is a struct of the bindings.
+    let tokens = lex("a = 5").tokens;
+    let program = parse(&tokens).program;
+    assert!(program.expr.is_none(), "no tail on a record program");
+    assert_eq!(program.statements.len(), 1);
+    assert!(matches!(program.statements[0].stmt, Stmt::Binding(..)));
+    // A bare expression before a trailing binding is a positional field.
+    let tokens = lex("5; a = 1").tokens;
+    let program = parse(&tokens).program;
+    assert!(program.expr.is_none());
+    assert_eq!(program.statements.len(), 2);
+    // A multi-statement record program.
+    let tokens = lex("a = 1; 5; a = 2").tokens;
+    let program = parse(&tokens).program;
+    assert!(program.expr.is_none());
+    assert_eq!(program.statements.len(), 3);
+    // A trailing separator after a binding is still a record program.
+    let tokens = lex("a = 1;").tokens;
+    let program = parse(&tokens).program;
+    assert!(program.expr.is_none());
+    assert_eq!(program.statements.len(), 1);
+}
+
+#[test]
 fn statement_errors_carry_spans() {
-    // A binding-only program has no final expression.
-    let err = parse_err("a = 5");
-    assert!(err.message.contains("must end with an expression"));
-    let err = parse_err("5; a = 1");
-    assert!(err.message.contains("must end with an expression"));
-    let err = parse_err("a = 1; 5; a = 2");
-    assert!(err.message.contains("must end with an expression"));
-    let err = parse_err("a = 1;");
-    assert!(err.message.contains("must end with an expression"));
     // A binding without a value.
     let err = parse_err("a = ; 5");
     assert_eq!(
@@ -156,16 +179,16 @@ fn bare_expressions_are_statements_anywhere() {
     let tokens = lex("5; a = 1; 6; a").tokens;
     let program = parse(&tokens).program;
     assert_eq!(program.statements.len(), 3);
-    assert!(matches!(program.statements[0], Stmt::Expr(..)));
-    assert!(matches!(program.statements[1], Stmt::Binding(..)));
-    assert!(matches!(program.statements[2], Stmt::Expr(..)));
-    assert!(matches!(program.expr, Expr::Name(name, _) if name == "a"));
+    assert!(matches!(program.statements[0].stmt, Stmt::Expr(..)));
+    assert!(matches!(program.statements[1].stmt, Stmt::Binding(..)));
+    assert!(matches!(program.statements[2].stmt, Stmt::Expr(..)));
+    assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "a"));
     // 5; 6 — the last expression is the value.
     let tokens = lex("5; 6").tokens;
     let program = parse(&tokens).program;
     assert_eq!(program.statements.len(), 1);
-    assert!(matches!(program.statements[0], Stmt::Expr(..)));
-    assert!(matches!(program.expr, Expr::Int(6, _)));
+    assert!(matches!(program.statements[0].stmt, Stmt::Expr(..)));
+    assert!(matches!(program.expr, Some(Expr::Int(6, _))));
 }
 
 #[test]
@@ -176,7 +199,7 @@ fn newlines_separate_statements() {
     assert_eq!(binds.len(), 2);
     assert_eq!(binds[0].name, "a");
     assert_eq!(binds[1].name, "b");
-    assert!(matches!(program.expr, Expr::Index { .. }));
+    assert!(matches!(program.expr, Some(Expr::Index { .. })));
     // A trailing newline after the final expression is not an error.
     parse(&lex("a = 1\na\n").tokens);
     // `;` and newlines mix, and consecutive separators are empty
@@ -765,18 +788,18 @@ fn broken_statements_are_recovered() {
         "expected '!' or an expression, found a separator"
     );
     assert_eq!(program.statements.len(), 2);
-    assert!(matches!(program.expr, Expr::Int(5, _)));
+    assert!(matches!(program.expr, Some(Expr::Int(5, _))));
     // An unclosed paren in a value is recovered the same way.
     let tokens = lex("a = (x; 5").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
-    assert!(matches!(program.expr, Expr::Int(5, _)));
+    assert!(matches!(program.expr, Some(Expr::Int(5, _))));
     // A statement that cannot start is skipped entirely, and the parse
     // continues to the final expression.
     let tokens = lex("a = 1; -> ; b = 2; b").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
-    assert!(matches!(program.expr, Expr::Name(name, _) if name == "b"));
+    assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "b"));
 }
 
 #[test]
@@ -803,8 +826,8 @@ fn dangling_operators_are_recovered() {
             "{source}: at the missing operand"
         );
         assert_eq!(program.statements.len(), 2, "{source}: both statements");
-        assert!(matches!(program.expr, Expr::Name(name, _) if name == "b"));
-        let Stmt::Binding(binding) = &program.statements[0] else {
+        assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "b"));
+        let Stmt::Binding(binding) = &program.statements[0].stmt else {
             panic!("{source}: first statement is a binding");
         };
         // The dangling operator is consumed — the value keeps the

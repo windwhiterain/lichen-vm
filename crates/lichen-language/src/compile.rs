@@ -46,7 +46,7 @@ use lichen_highlevel::program::{
 };
 use lichen_language_lex::Span;
 
-use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
+use crate::ast::{Binding, Expr, Program, RecordField, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, LangProgram, Perspective};
@@ -108,8 +108,52 @@ pub fn compile_with_imports(
     // any value compiles, restrictive `let` bindings are entered as they're
     // seen; the scope is never popped, so later statements (and the final
     // expression) see every earlier binding.
-    let statements = compiler.compile_scope_statements(&program.statements);
-    let final_id = compiler.compile_expr(&program.expr);
+    let (statements, final_id) = match &program.expr {
+        Some(final_expr) => {
+            // An ordinary program: the top-level statements followed by the
+            // tail expression.  `pub` marks on the statements are irrelevant
+            // here (a tail program's value is its tail, not a module), so they
+            // are folded away, exactly as a `{ …; e }` tail block ignores them.
+            let stmts: Vec<Stmt> = program
+                .statements
+                .iter()
+                .map(|bs| bs.stmt.clone())
+                .collect();
+            let statements = compiler.compile_scope_statements(&stmts);
+            let final_id = compiler.compile_expr(final_expr);
+            (statements, final_id)
+        }
+        None => {
+            // A record program (a module): the top level has no tail
+            // expression, so its value is an anonymous struct built from the
+            // statements — the module's exported bindings.  `pub` marks which
+            // fields are exported (when any is `pub`, only the `pub` ones).
+            let fields: Vec<RecordField> = program
+                .statements
+                .iter()
+                .map(|bs| {
+                    let (name, value, field) = match &bs.stmt {
+                        Stmt::Binding(b) => (Some(b.name.clone()), b.value.clone(), !b.restrictive),
+                        Stmt::Expr(e) => (None, e.clone(), true),
+                    };
+                    RecordField {
+                        name,
+                        value,
+                        public: bs.public,
+                        field,
+                        span: bs.stmt.span(),
+                    }
+                })
+                .collect();
+            let span = program
+                .statements
+                .first()
+                .map(|bs| bs.stmt.span())
+                .unwrap_or((1, 1));
+            let (statements, root) = compiler.compile_record_fields(&fields, &span);
+            (statements, root)
+        }
+    };
     // Option B: no tuple cascade at the top level.  The statement ids are the
     // "stack of user-written expressions" — recorded as `stmt_roots`, which the
     // checker's `build_with` type-checks and evaluates one by one.  The build
@@ -702,38 +746,58 @@ impl Compiler {
                 // instance built from the field statements.  A `let` field is a
                 // block-local (restrictive) and is never emitted; only the
                 // `pub` subset is emitted when any field is `pub`.
-                let scope_len = self.scopes.len();
-                let stmts: Vec<Stmt> = fields
-                    .iter()
-                    .map(|f| match &f.name {
-                        Some(name) => Stmt::Binding(Binding {
-                            name: name.clone(),
-                            value: f.value.clone(),
-                            span: f.span,
-                            restrictive: !f.field,
-                        }),
-                        None => Stmt::Expr(f.value.clone()),
-                    })
-                    .collect();
-                let ids = self.compile_scope_statements(&stmts);
-                self.scopes.truncate(scope_len);
-                let any_pub = fields.iter().any(|f| f.public);
-                let mut emitted = Vec::with_capacity(fields.len());
-                for (f, id) in fields.iter().zip(ids) {
-                    // A `let` local is never a struct field; when any field is
-                    // `pub`, only the `pub` fields are emitted.
-                    if !f.field || (any_pub && !f.public) {
-                        continue;
-                    }
-                    let name = f.name.as_deref().map(|n| self.intern_str(n));
-                    emitted.push((name, id));
-                }
-                let field_ids: Vec<ExprId> = emitted.iter().map(|(_, v)| *v).collect();
-                let names: Vec<Option<&'static str>> = emitted.iter().map(|(n, _)| *n).collect();
-                let value = self.alloc_tuple(&field_ids, span);
-                self.alloc_record(value, &names, span)
+                let (_, root) = self.compile_record_fields(fields, span);
+                root
             }
         }
+    }
+
+    /// Compile a record (struct-returning) block's fields — shared by a
+    /// `{ … }` block with no tail (`Expr::RecordBlock`) and a record *program*.
+    ///
+    /// The field statements are entered in a fresh block scope (block-wide
+    /// bindings mutually visible), compiled, then the block's value is built:
+    /// an anonymous struct instance over the emitted field ids.  A `let` field
+    /// is a block-local (restrictive) and is never emitted; when any field is
+    /// `pub`, only the `pub` fields are emitted.  Returns the compiled
+    /// statement ids (the field values, in source order, including the
+    /// non-emitted `let` locals) and the record node itself.
+    fn compile_record_fields(
+        &mut self,
+        fields: &[RecordField],
+        span: &Span,
+    ) -> (Vec<ExprId>, ExprId) {
+        let scope_len = self.scopes.len();
+        let stmts: Vec<Stmt> = fields
+            .iter()
+            .map(|f| match &f.name {
+                Some(name) => Stmt::Binding(Binding {
+                    name: name.clone(),
+                    value: f.value.clone(),
+                    span: f.span,
+                    restrictive: !f.field,
+                }),
+                None => Stmt::Expr(f.value.clone()),
+            })
+            .collect();
+        let ids = self.compile_scope_statements(&stmts);
+        self.scopes.truncate(scope_len);
+        let any_pub = fields.iter().any(|f| f.public);
+        let mut emitted = Vec::with_capacity(fields.len());
+        for (f, id) in fields.iter().zip(ids.iter()) {
+            // A `let` local is never a struct field; when any field is
+            // `pub`, only the `pub` fields are emitted.
+            if !f.field || (any_pub && !f.public) {
+                continue;
+            }
+            let name = f.name.as_deref().map(|n| self.intern_str(n));
+            emitted.push((name, *id));
+        }
+        let field_ids: Vec<ExprId> = emitted.iter().map(|(_, v)| *v).collect();
+        let names: Vec<Option<&'static str>> = emitted.iter().map(|(n, _)| *n).collect();
+        let value = self.alloc_tuple(&field_ids, span);
+        let record = self.alloc_record(value, &names, span);
+        (ids, record)
     }
 
     fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {

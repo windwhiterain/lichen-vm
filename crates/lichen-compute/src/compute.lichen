@@ -1,9 +1,7 @@
-{
-  jit = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
-  launch = k => a => $launch(k.native, k.sig, a)
-  call = k => a => $call(k.native, a)
-  parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f), .sig _)
-  plrun = k => a => $plrun(k.native, k.sig, a)
-  pget = b => i => $pget(b, i)
-  pcollect = b => $pcollect(b)
-}
+jit = f => (struct<.native _, .sig (type_of f)>)(.native $jit(f), .sig _)
+launch = k => a => $launch(k.native, k.sig, a)
+call = k => a => $call(k.native, a)
+parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f), .sig _)
+plrun = k => a => $plrun(k.native, k.sig, a)
+pget = b => i => $pget(b, i)
+pcollect = b => $pcollect(b)

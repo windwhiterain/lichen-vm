@@ -2,7 +2,5 @@
   order = "0"
   output = "(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>"
 @}
-{
-  succ = x => x + 1
-  add = x => y => x + y
-}
+succ = x => x + 1
+add = x => y => x + y

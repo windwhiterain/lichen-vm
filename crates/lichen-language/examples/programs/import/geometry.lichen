@@ -3,7 +3,5 @@
   math = import "math.lichen"
   output = "(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>"
 @}
-{
-  double = x => math.add x x
-  inc_twice = x => math.succ (math.succ x)
-}
+double = x => math.add x x
+inc_twice = x => math.succ (math.succ x)

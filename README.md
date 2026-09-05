@@ -311,10 +311,8 @@ t = table{ [1, 2] :: 10, [3, 4] :: 20 }
   order = "0"
   output = "(Function, Function): struct<.succ Int -> Int, .add Int -> Int -> Int>"
 @}
-{
-  succ = x => x + 1
-  add = x => y => x + y
-}
+succ = x => x + 1
+add = x => y => x + y
 ```
 
 #### `import/geometry.lichen`
@@ -325,10 +323,8 @@ t = table{ [1, 2] :: 10, [3, 4] :: 20 }
   math = import "math.lichen"
   output = "(Function, Function): struct<.double Int -> Int, .inc_twice Int -> Int>"
 @}
-{
-  double = x => math.add x x
-  inc_twice = x => math.succ (math.succ x)
-}
+double = x => math.add x x
+inc_twice = x => math.succ (math.succ x)
 ```
 
 ### `type_of.lichen`

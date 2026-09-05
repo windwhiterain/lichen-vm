@@ -307,7 +307,17 @@ pub struct ErrorBlock {
     pub start: Span,
 }
 
-/// A program: `name = expr; …` statements followed by the final expression.
+/// A program — the top level is always a block, terminated by the end of the
+/// input (EOF acts as an implicit separating `Separator`).
+///
+/// The top level is exactly a `{ … }` block body: a list of (possibly
+/// `pub`-marked) statements, optionally followed by a tail expression.  With a
+/// tail, the program is an ordinary program whose value is that final
+/// expression (its root).  Without a tail, it is a **record program** — a
+/// module — whose value is an anonymous struct built from the statements (a
+/// `name = value` binding is a named field, a bare expression a positional
+/// one, a `let` binding is a block-local and never a field, and when any
+/// statement is `pub` only the `pub` statements are fields).
 ///
 /// The statements are *graph sharing*, not sugar for application: each
 /// binding's value compiles once into the IR arena and every use of its name
@@ -318,19 +328,24 @@ pub struct ErrorBlock {
 /// the program's value and its root.
 #[derive(Clone, Debug)]
 pub struct Program {
-    /// The non-final statements, in source order.
-    pub statements: Vec<Stmt>,
-    pub expr: Expr,
+    /// The top-level statements, in source order — the same (publically
+    /// markable) block statements a `{ … }` body holds.  With a tail these are
+    /// the non-final statements; without one, they are the module's fields.
+    pub statements: Vec<BlockStmt>,
+    /// The program's tail expression.  `Some` → an ordinary program whose
+    /// value is this final expression; `None` → a record program (a module).
+    pub expr: Option<Expr>,
     /// The error blocks the parser recovered, in source order.  These are the
     /// byte-range masks this program's `Expr::Err` nodes describe — the
     /// frontend excludes them from a content signature so an edit that only
     /// grows an error block reuses the established AST/IR/check.
     pub error_blocks: Vec<ErrorBlock>,
     /// The **token-index** range each logical statement covers, in source order.
-    /// There is one entry per statement in [`Program::statements`] plus one for
-    /// the final [`Program::expr`].  Tokens own byte ranges; the AST owns token
-    /// ranges, so the session can map a changed byte region to the statements it
-    /// touches (via the token stream) for incremental re-parsing.
+    /// There is one entry per statement in [`Program::statements`], plus one
+    /// for the program's tail [`Program::expr`] when there is one.  Tokens own
+    /// byte ranges; the AST owns token ranges, so the session can map a changed
+    /// byte region to the statements it touches (via the token stream) for
+    /// incremental re-parsing.
     pub stmt_ranges: Vec<(usize, usize)>,
 }
 

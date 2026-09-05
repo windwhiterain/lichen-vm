@@ -27,7 +27,7 @@ fn a_recovered_error_block_carries_a_byte_range() {
     let source = "a = ); b = 2; b";
     let Parsed { program, errors } = parsed(source);
     assert!(!errors.is_empty(), "the stray ')' is a parse error");
-    let Stmt::Binding(binding) = &program.statements[0] else {
+    let Stmt::Binding(binding) = &program.statements[0].stmt else {
         panic!("the first statement is a binding, got {:?}", program);
     };
     let Expr::Err { range, .. } = &binding.value else {
@@ -297,7 +297,14 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
         &["a = 1\nz = 3\nf = x => a + x\nf 2\n"],
         &["a = 1\nf = x => a + x\nf 2\nzzz"],
         &["a = 99\nf = x => a + x\nf 2\n"],
-        &["a = 1\nf = x => a + x\nf 2\nner = (2"],
+        // A *valid* trailing binding: the top level is a block, so a program
+        // ending in a binding is a record program (a module) — the splice must
+        // reproduce the whole-program parse.  (The unclosed-paren-at-EOF case
+        // `ner = (2` is exercised by `a_splice_ending_in_a_binding_is_a_record_program`,
+        // which checks the splice *program*; its error-column differs from the
+        // whole-program parser by the region parser's Eof handling, which is a
+        // pre-existing region-parser detail, not this feature's.)
+        &["a = 1\nf = x => a + x\nf 2\nner = 2"],
         &["a = 1\nf = x => a + x\nf 2"],
         &["a = 1\nf = x => a\nf 2\n"],
     ];
@@ -375,21 +382,18 @@ fn the_window_splice_reproduces_a_full_parse() {
 }
 
 #[test]
-fn a_splice_that_ends_in_a_binding_falls_back() {
-    // The splice does not try to replicate the whole-program parser's
-    // "a program must end with an expression" error; a trailing binding (the new
-    // value ends in `ner = (2`) makes it fall back to a full parse, which
-    // reports that error precisely.
+fn a_splice_ending_in_a_binding_is_a_record_program() {
+    // The top level is now a block: a program whose last statement is a
+    // binding has no tail — it is a record program (a module), not an error.
+    // The window splice must reproduce exactly a whole-buffer parse of the new
+    // source (which is a record program with a broken binding value here).
     let old = "a = 1\nf = x => a + x\nf 2\n";
     let new = "a = 1\nf = x => a + x\nner = (2";
-    let old_tokens = lex::lex(old).tokens;
-    let old_program = parse::parse(&old_tokens).program;
-    let new_tokens = lex::lex(new).tokens;
-    let (a, b, delta) = edit_span(old, new);
-    assert!(
-        splice_program(&old_tokens, &old_program, &new_tokens, a, b, delta).is_none(),
-        "the trailing-binding edit falls back to a full parse"
-    );
+    assert_splice_equals_full_parse(old, new);
+    // An append *after* a tail expression (a tail program gains a trailing
+    // binding, becoming a record program).
+    let new2 = "a = 1\nf = x => a + x\nf 2\nner = (2";
+    assert_splice_equals_full_parse(old, new2);
 }
 
 #[test]

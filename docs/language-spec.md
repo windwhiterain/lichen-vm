@@ -34,10 +34,11 @@ checker, which runs *unchanged*.
 ## 2. Syntax
 
 ```
-program  := (stmt sep)* expr                        -- statements, then the final expression
-stmt     := ['let'] name '=' expr                   -- binding (block-wide by default; `let` restrictive)
-          | expr                                    -- bare expression statement
-sep      := newline | ';' | ','                     -- one uniform Separator token
+program  := (bstmt sep)* [expr]                      -- a block body: statements, then an optional tail (the top level is a block)
+stmt     := ['let'] name '=' expr                    -- binding (block-wide by default; `let` restrictive)
+          | expr                                     -- bare expression statement
+bstmt    := ['pub'] stmt                             -- a (possibly `pub`) statement
+sep      := newline | ';' | ','                      -- one uniform Separator token
 
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
@@ -84,7 +85,10 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   it may reference and recurse with the block's other bindings) and gets the
   restrictive, sequential form with `let`.  A statement separator is any of
   newline, `;`, or `,` — they are interchangeable, the lexer produces the same
-  `Separator` token for all three, and the quantity never matters.  `{` `}`
+  `Separator` token for all three, and the quantity never matters.  **The top
+  level is itself a block**: a program is a block body (statements + an optional
+  tail expression), terminated by the end of the input — the end of the input is
+  *not* a separator, it just ends the body.  `{` `}`
   delimit a block (a program-shaped expression).  **There are no comments:** the
   lexer never skips any text, so prose lives in the file's leading `@{...@}`
   preprocessor block as metadata strings (see §2.2).  Whitespace (space/tab/cr)
@@ -234,13 +238,19 @@ span back to the original file.
   definition pass (so apply-time type checks fire), and the program's value is
   the evaluation of its root: an `Int`, a tuple, an array, a function, or a
   type expression.
-- **Statements and bindings.**  A program is a sequence of statements — a
-  `name = expr` binding or a bare expression — followed by a final expression,
-  each statement ended by a `Separator` (newline, `;`, or `,`).  A binding is *graph sharing*, not
-  sugar: its value compiles once into the IR arena, and every use of the name
-  is that same node id (the IR is a graph).  There is no `let` node and no
-  desugared lambda — the final expression stays the program's root, so its
-  type is determinable exactly like a bare program's.  A binding is
+- **Statements and bindings.**  A program is a **block body**: a list of
+  (possibly `pub`-marked) statements — a `name = expr` binding or a bare
+  expression — followed by an optional **tail** expression.  The top level is
+  itself a block, so it has exactly the shape of a `{ … }` body: statements are
+  separated by a `Separator` (newline, `;`, or `,`; any quantity, anywhere
+  between them, and the end of the input is *not* a separator — it just ends
+  the body), and the tail is the expression in the final position.  A program
+  that ends in a binding (no tail) is a **record program** — a module — whose
+  value is an anonymous struct built from the statements (see **Blocks**).  A
+  binding is *graph sharing*, not sugar: its value compiles once into the IR
+  arena, and every use of the name is that same node id (the IR is a graph).
+  There is no `let` node and no desugared lambda — the tail stays the program's
+  root, so its type is determinable exactly like a bare program's.  A binding is
   **block-wide** by default: its name is in scope throughout the block —
   forward *and* backward — so a value may reference its own name, a later
   binding, or any other binding of the block, and may recurse with them.  The
@@ -259,7 +269,7 @@ span back to the original file.
   statement** (`5; 7`, `f 5` before more statements) is no dead code: the
   frontend wires every statement into the root (`Index(Tuple([stmt₁, …,
   stmtₙ, final]), n)`), so each is checked and evaluated — the runtime *is*
-  the typechecker — and only the final expression is the program's value.
+  the typechecker — and only the tail is the program's value.
 - **Blocks.**  `{ stmt …; expr }` is an expression: the same
   statement list as a program (separators again a `Separator`, bare
   expression statements included), scoped to
@@ -272,18 +282,23 @@ span back to the original file.
   (`{ a = 5; a }` as a program, an argument, a nested block).  A block
   compiles to its final expression's own node: there is no block node in the
   IR, so a bound lambda inside a block stays polymorphic and a block never
-  monomorphizes its contents.  `{}` (no final expression) is a parse error,
-  like a program without one.
+  monomorphizes its contents.  `{}` (no statement and no tail) is a parse error,
+  like an empty program.
   The block's value is its **tail expression**.  A trailing expression (a bare
-  statement whose next token is the `}`) is the tail; an explicit `return
+  statement in the final position, whose next token is the `}` or the end of
+  the input) is the tail; an explicit `return
   expr` anywhere in the block is also the tail, so a value can be pinned
-  before or among the statements (`{ a = 1; return 2 }`).  A block whose last
+  before or among the statements (`{ a = 1; return 2 }`).  A body whose last
   statement is a binding (and with no `return` anywhere) has **no tail**, and
   instead parses as a **struct-returning block**: its value is an anonymous
-  struct instance whose fields are the block's statements — a `name = value`
+  struct instance whose fields are the statements — a `name = value`
   binding is a named field, a bare expression a positional one, a `let`
   binding is a block-local and never a field, and a `pub`-marked statement is
-  a field (when any statement is `pub`, only the `pub` ones are).
+  a field (when any statement is `pub`, only the `pub` ones are).  At the top
+  level this is a **record program**: a library file that ends in its bindings
+  is a module whose value is that anonymous struct — the exported bindings —
+  so `import "math.lichen"` gives back the module with no need to wrap the
+  body in a `{ … }` (the file's top level *already is* a block).
 - **Every lambda is automatically let-polymorphic.**  Each application
   instantiates the parameter fresh — the lowlevel apply machinery clones the
   parameter per call site — so `(x => x) 5 : Int` and `(x => x) Type : Type`

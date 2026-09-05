@@ -247,7 +247,7 @@ impl Doc {
                     // start (the binding name / bare-expression start), which
                     // is where the statement begins in the source.  Statements
                     // align 1:1 with `program.statements` in source order.
-                    let (span, start) = match program.statements.get(i) {
+                    let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
                         Some(Stmt::Binding(b)) => {
                             (b.span, lsp::offset_of_span(&line_starts, b.span))
                         }
@@ -911,8 +911,15 @@ fn classify_names(
 ) -> HashMap<Span, (SemanticTokenType, Vec<SemanticTokenModifier>)> {
     let mut map = HashMap::new();
     let mut w = NameClass { map: &mut map };
-    w.stmts(&program.statements);
-    w.expr(&program.expr);
+    let top_stmts: Vec<Stmt> = program
+        .statements
+        .iter()
+        .map(|bs| bs.stmt.clone())
+        .collect();
+    w.stmts(&top_stmts);
+    if let Some(e) = &program.expr {
+        w.expr(e);
+    }
     map
 }
 
@@ -1116,7 +1123,14 @@ fn index(
             walk.enter(&imp.name, imp.span);
         }
     }
-    walk.scope(&program.statements, Some(&program.expr));
+    // The top level is a block; `pub` is irrelevant to name resolution, so the
+    // statements are walked as plain statements (their `.stmt`).
+    let top_stmts: Vec<Stmt> = program
+        .statements
+        .iter()
+        .map(|bs| bs.stmt.clone())
+        .collect();
+    walk.scope(&top_stmts, program.expr.as_ref());
     (walk.defs, walk.resolve, walk.def_index)
 }
 

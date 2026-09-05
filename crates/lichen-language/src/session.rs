@@ -29,7 +29,7 @@ use lichen_lowlevel::{LowOperator, OperatorExt};
 use lichen_utils::extend::AsEnum;
 use sha2::Digest;
 
-use crate::ast::{BinOp, Expr, Program, Stmt, TypeConst};
+use crate::ast::{BinOp, BlockStmt, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
@@ -259,7 +259,17 @@ where
         // only the window + any binding-shifted tail).
         let sig_out = match (&self.last, window) {
             (Some(prev), Some((lo, hi, reuse))) => {
-                signature_reuse(&program, &prev.sig, lo, hi, reuse)
+                // A change in the program's shape (tail ↔ record) changes how
+                // *every* top-level statement is signed — a record program (a
+                // module) signs its statements with their `pub`/field identity,
+                // a tail program signs them as plain statements.  So the
+                // previous per-statement hashes are not reusable across the
+                // shape change; re-sign the whole program.
+                if program.expr.is_some() != prev.program.expr.is_some() {
+                    signature_full(&program)
+                } else {
+                    signature_reuse(&program, &prev.sig, lo, hi, reuse)
+                }
             }
             _ => signature_full(&program),
         };
@@ -384,8 +394,9 @@ fn splice_program(
     b: usize,
     delta: isize,
 ) -> Option<SpliceOut> {
-    // Number of logical statements = `statements` + the final expression.
-    let old_n = old_program.statements.len() + 1;
+    // Number of logical statements = `statements`, plus the tail expression
+    // when there is one (a record program has no tail).
+    let old_n = old_program.statements.len() + usize::from(old_program.expr.is_some());
     if old_program.stmt_ranges.len() != old_n || old_n == 0 {
         return None;
     }
@@ -496,17 +507,24 @@ fn splice_program(
     // but its token indices shift by `dk`, since the window's token count may
     // have changed (an insertion/removal before it).
     let dk = ne as isize - old_th as isize;
-    let mut stmts: Vec<Stmt> = Vec::new();
+    let mut stmts: Vec<BlockStmt> = Vec::new();
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     stmts.extend(old_program.statements[..lo].iter().cloned());
     ranges.extend(old_program.stmt_ranges[..lo].iter().copied());
     stmts.extend(win_stmts.iter().cloned());
     ranges.extend(win_ranges.iter().copied());
     for i in hi..old_n {
-        let stmt = if i < old_n - 1 {
+        let stmt = if i < old_program.statements.len() {
             old_program.statements[i].clone()
         } else {
-            Stmt::Expr(old_program.expr.clone())
+            // The tail expression (only in a tail program) — represented here
+            // as a bare-expression block statement so the pop below can pick
+            // it out like the whole-program parser does.
+            debug_assert!(old_program.expr.is_some());
+            BlockStmt {
+                stmt: Stmt::Expr(old_program.expr.clone().unwrap()),
+                public: false,
+            }
         };
         stmts.push(stmt);
         let (r0, r1) = old_program.stmt_ranges[i];
@@ -519,13 +537,17 @@ fn splice_program(
     }
 
     // Pop the final logical statement as the program's value, mirroring the
-    // whole-program parser: a trailing binding is itself an error, so the
-    // caller falls back to a full parse (which reports it precisely).
+    // whole-program parser: a trailing bare expression is the tail (the
+    // program's value); a trailing binding leaves no tail — the program is a
+    // record program (a module), so every statement is a field.
     let last_stmt = stmts.pop()?;
     let last_range = ranges.pop()?;
-    let (statements, expr) = match last_stmt {
-        Stmt::Expr(e) => (stmts, e),
-        Stmt::Binding(_) => return None,
+    let (statements, expr) = match last_stmt.stmt {
+        Stmt::Expr(e) => (stmts, Some(e)),
+        Stmt::Binding(_) => {
+            stmts.push(last_stmt);
+            (stmts, None)
+        }
     };
     let mut ranges = ranges;
     ranges.push(last_range);
@@ -556,15 +578,15 @@ fn splice_program(
 /// change (an insert/remove/reorder) shifts the global slot assignment and so
 /// can re-resolve statements outside the window; a value edit, name extension,
 /// or error-block growth does not.
-fn splt_binding_names_unchanged(old_window: &[Stmt], new_window: &[Stmt]) -> bool {
+fn splt_binding_names_unchanged(old_window: &[BlockStmt], new_window: &[BlockStmt]) -> bool {
     binding_names(old_window) == binding_names(new_window)
 }
 
 /// The ordered binding names of a statement slice (block-wide and restrictive).
-fn binding_names(stmts: &[Stmt]) -> Vec<&str> {
+fn binding_names(stmts: &[BlockStmt]) -> Vec<&str> {
     stmts
         .iter()
-        .filter_map(|s| match s {
+        .filter_map(|bs| match &bs.stmt {
             Stmt::Binding(b) => Some(b.name.as_str()),
             Stmt::Expr(_) => None,
         })
@@ -810,7 +832,85 @@ impl Sig {
     }
 
     fn hash_program(&mut self, program: &Program) {
-        self.hash_scope(&program.statements, Some(&program.expr), true);
+        self.hash_scope_program(&program.statements, program.expr.as_ref(), true);
+    }
+
+    /// Hash a top-level block statement list with an optional tail (the
+    /// program shape).  Mirrors [`hash_scope`] (a `{ … }` block) but keeps the
+    /// `pub`/`let`-vs-field identity of a statement, which matters for the
+    /// record-program (module) case.  When `record`, each statement (and the
+    /// tail) is signed into its own per-statement hash; when not, the content
+    /// folds into the enclosing hasher.
+    fn hash_scope_program(&mut self, statements: &[BlockStmt], expr: Option<&Expr>, record: bool) {
+        let base = self.scopes.len();
+        self.scopes.push(HashMap::new());
+        for bs in statements {
+            if let Stmt::Binding(b) = &bs.stmt {
+                if !b.restrictive {
+                    self.slot(&b.name);
+                }
+            }
+        }
+        // A record program (no tail) is a module: a statement's field identity
+        // (its `let`-vs-field nature and `pub` mark) is part of the signed
+        // content, exactly as for an `Expr::RecordBlock`.  A tail program
+        // drops `pub` (the compiler ignores it), so it signs statements like a
+        // block body would.
+        let module = expr.is_none();
+        for bs in statements {
+            if record {
+                let diag_before = self.diagnostics.len();
+                self.begin_stmt();
+                if module {
+                    self.hash_record_field(bs);
+                } else {
+                    self.hash_stmt(&bs.stmt);
+                }
+                self.record_stmt();
+                self.stmt_had_diag
+                    .push(self.diagnostics.len() > diag_before);
+            } else if module {
+                self.hash_record_field(bs);
+            } else {
+                self.hash_stmt(&bs.stmt);
+            }
+        }
+        if let Some(e) = expr {
+            if record {
+                let diag_before = self.diagnostics.len();
+                self.begin_stmt();
+                self.cur.update(&[2]);
+                self.hash_expr(e);
+                self.record_stmt();
+                self.stmt_had_diag
+                    .push(self.diagnostics.len() > diag_before);
+            } else {
+                self.cur.update(&[2]);
+                self.hash_expr(e);
+            }
+        }
+        self.scopes.truncate(base);
+    }
+
+    /// Hash a record field (a module's statement) — the field's name, its
+    /// `let`-vs-field nature, and its `pub` mark, then the value.  Mirrors the
+    /// [`Expr::RecordBlock`] hashing in [`hash_expr`], so a module's top-level
+    /// statements sign exactly like the fields of an equivalent `{ … }` block.
+    fn hash_record_field(&mut self, bs: &BlockStmt) {
+        let (name, field) = match &bs.stmt {
+            Stmt::Binding(b) => (Some(b.name.as_str()), !b.restrictive),
+            Stmt::Expr(_) => (None, true),
+        };
+        self.cur
+            .update(&[name.is_some() as u8, field as u8, bs.public as u8]);
+        if let Some(name) = name {
+            self.cur.update(name.as_bytes());
+        }
+        let value = match &bs.stmt {
+            Stmt::Binding(b) => &b.value,
+            Stmt::Expr(e) => e,
+        };
+        self.hash_expr(value);
     }
 
     /// The incremental top-level walk: reuse [`prev`]'s per-statement hashes
@@ -823,11 +923,11 @@ impl Sig {
         hi: usize,
         reuse_suffix: bool,
     ) {
-        let n = program.statements.len() + 1;
+        let n = program.statements.len() + usize::from(program.expr.is_some());
         let base = self.scopes.len();
         self.scopes.push(HashMap::new());
-        for stmt in &program.statements {
-            if let Stmt::Binding(b) = stmt {
+        for bs in &program.statements {
+            if let Stmt::Binding(b) = &bs.stmt {
                 if !b.restrictive {
                     self.slot(&b.name);
                 }
@@ -861,8 +961,8 @@ impl Sig {
     /// statements resolve against its binding (a restrictive `let` becomes
     /// visible to them; a block-wide name was already pre-entered).
     fn advance_stmt(&mut self, program: &Program, i: usize) {
-        if let Some(stmt) = program.statements.get(i) {
-            if let Stmt::Binding(b) = stmt {
+        if let Some(bs) = program.statements.get(i) {
+            if let Stmt::Binding(b) = &bs.stmt {
                 if b.restrictive {
                     self.scopes.push(HashMap::new());
                     self.slot(&b.name);
@@ -872,13 +972,19 @@ impl Sig {
     }
 
     /// Sign logical statement `i`: `program.statements[i]`, or the program's
-    /// final expression (index `statements.len()`).
+    /// tail expression (index `statements.len()`, only when there is one).
     fn hash_logical_stmt(&mut self, program: &Program, i: usize) {
-        if let Some(stmt) = program.statements.get(i) {
-            self.hash_stmt(stmt);
-        } else {
+        if let Some(bs) = program.statements.get(i) {
+            // A record program's statements are fields (pub-significant); a
+            // tail program's are plain statements (pub dropped).
+            if program.expr.is_none() {
+                self.hash_record_field(bs);
+            } else {
+                self.hash_stmt(&bs.stmt);
+            }
+        } else if let Some(e) = &program.expr {
             self.cur.update(&[2]);
-            self.hash_expr(&program.expr);
+            self.hash_expr(e);
         }
     }
 

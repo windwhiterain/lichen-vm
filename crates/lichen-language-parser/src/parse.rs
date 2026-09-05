@@ -1,8 +1,14 @@
 //! The parser: tokens → AST, with error recovery.
 //!
-//! A program is `name = expr; …` bindings and bare expressions followed by a
-//! final expression (see [`Program`]) — the same statement list, wrapped in
-//! `{ … }`, forms a block expression (see [`Expr::Block`]).  A binding
+//! The top level **is a block** — a program is a [`block_body`]: a `name =
+//! expr; …` binding / bare-expression statement list, `pub`-capable, followed
+//! by an optional tail expression (the end of the input acts as the closing
+//! `Separator`).  With a tail the program is an ordinary program whose value
+//! is that final expression; without one it is a *record program* — a module
+//! whose value is an anonymous struct built from the statements (see
+//! [`Program`]).  The identical body, wrapped in `{ … }`, forms a block
+//! expression (see [`Expr::Block`] / [`Expr::RecordBlock`]); the top level and
+//! a `{ … }` body share the one [`block_body`] grammar.  A binding
 //! without `let` is *block-wide*: its name is in scope throughout the block,
 //! so it may recurse with itself and with the block's other bindings.  A
 //! `let` before a binding (`let a = …`) is *restrictive*: the name is in
@@ -132,7 +138,7 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
             );
             Program {
                 statements: Vec::new(),
-                expr: Expr::Err { range, start: span },
+                expr: Some(Expr::Err { range, start: span }),
                 error_blocks: Vec::new(),
                 stmt_ranges: Vec::new(),
             }
@@ -151,6 +157,8 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
 /// leading separators and close with trailing ones, both dropped) — the caller
 /// chooses it to cover exactly the statements that a user edit touched.  The
 /// Like [`parse`], the window carries recovered errors rather than failing.
+/// Statements are the same (`pub`-capable) block statements a program's top
+/// level holds, so a spliced window preserves `pub` marks exactly.
 ///
 /// This is the incremental-parse primitive: the tokens it consumes already
 /// carry *absolute* byte ranges and (line, col) spans (the lexer emits them),
@@ -162,7 +170,7 @@ pub fn parse_statement_region(
     tokens: &[Token],
     start: usize,
     end: usize,
-) -> (Vec<Stmt>, Vec<ParseDiag>) {
+) -> (Vec<BlockStmt>, Vec<ParseDiag>) {
     let (statements, _ranges, errors) = parse_statement_region_traced(tokens, start, end);
     (statements, errors)
 }
@@ -181,7 +189,7 @@ pub fn parse_statement_region_traced(
     tokens: &[Token],
     start: usize,
     end: usize,
-) -> (Vec<Stmt>, Vec<(usize, usize)>, Vec<ParseDiag>) {
+) -> (Vec<BlockStmt>, Vec<(usize, usize)>, Vec<ParseDiag>) {
     let (statements, ranges, errors) = std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
@@ -194,13 +202,13 @@ pub fn parse_statement_region_traced(
 
 /// The worker's result for a region: the statements, their absolute
 /// token-index ranges, and the diagnostics.
-type RegionOut = (Vec<Stmt>, Vec<(usize, usize)>, Vec<ParseDiag>);
+type RegionOut = (Vec<BlockStmt>, Vec<(usize, usize)>, Vec<ParseDiag>);
 
 fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let region = &tokens[start..end];
     let expr = expression(region);
     // `seps elem (seps elem)* seps` — like the statement list, but without the
-    // final-expr pop.  Leading/trailing separators are consumed and dropped.
+    // tail pop.  Leading/trailing separators are consumed and dropped.
     let seps = token(TokenKind::Separator)
         .ignored()
         .repeated()
@@ -210,7 +218,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         .repeated()
         .at_least(1)
         .collect::<Vec<_>>();
-    let elem = statement(region, expr.clone())
+    let elem = block_statement(region, expr.clone())
         .recover_with(skip_then_retry_until(
             any::<In<'_>, E<'_>>().ignored(),
             choice((
@@ -231,7 +239,7 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         .map(|(((_, first), rest), _)| {
             std::iter::once(first)
                 .chain(rest.into_iter().map(|(_, e)| e))
-                .collect::<Vec<(Stmt, (usize, usize))>>()
+                .collect::<Vec<(BlockStmt, (usize, usize))>>()
         });
     let stream = Stream::from_iter(region.iter().cloned());
     let (output, errs) = parser.parse(stream).into_output_errors();
@@ -248,8 +256,8 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     // The region's tokens carry absolute *byte* positions, so the statements are
     // spliceable as-is; only the *token-index* spans are region-relative, so
     // offset them back by `start` into the whole stream.
-    let elems: Vec<(Stmt, (usize, usize))> = output.unwrap_or_default();
-    let statements: Vec<Stmt> = elems.iter().map(|(s, _)| s.clone()).collect();
+    let elems: Vec<(BlockStmt, (usize, usize))> = output.unwrap_or_default();
+    let statements: Vec<BlockStmt> = elems.iter().map(|(s, _)| s.clone()).collect();
     let ranges: Vec<(usize, usize)> = elems
         .iter()
         .map(|(_, r)| (r.0 + start, r.1 + start))
@@ -325,18 +333,8 @@ fn err_node(tokens: &[Token], span: SimpleSpan<usize>) -> Expr {
     }
 }
 
-/// The byte offset of the first token at the given (line, col) span — the
-/// position a known-`Span` error node should mask (a zero-width point).
-fn byte_at_span(tokens: &[Token], span: Span) -> u32 {
-    tokens
-        .iter()
-        .find(|t| t.span == span)
-        .map(|t| t.range.0)
-        .or_else(|| tokens.last().map(|t| t.range.1))
-        .unwrap_or(0)
-}
-
-/// The program: the statement list, then the end of the input.  One
+/// The program: the block body (the top level is itself a block, terminated
+/// by the end of the input), then the end of the input.  One
 /// expression parser is built here and threaded through the whole grammar —
 /// the statement list, the bindings, and the block bodies all recurse
 /// through the same [`expression`] recursion point.
@@ -344,113 +342,15 @@ fn program_parser<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Program, E
     let expr = expression(tokens);
     // The lexer appends a real `Eof` token, so the end of the input is that
     // token, not stream exhaustion — `end()` would fail with it unconsumed.
-    statement_list(tokens, expr)
+    block_body(tokens, expr)
         .then_ignore(token(TokenKind::Eof).ignored())
-        .map(|(statements, expr, stmt_ranges)| Program {
-            statements,
-            expr,
-            error_blocks: Vec::new(),
-            stmt_ranges,
-        })
-}
-
-/// The statement list: `elem (seps elem)*`, followed by trailing separators
-/// — every statement after the first must be preceded by a separator, and
-/// only the last statement is the list's value.  The last element is the
-/// final expression; a trailing binding (or an empty list) is an error, and
-/// the list's value becomes an error node.
-///
-/// Also yields the **token-index range** each logical statement covers, in
-/// source order — one per returned statement plus one for the final expression.
-fn statement_list<'a>(
-    tokens: &'a [Token],
-    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
-) -> impl Parser<'a, In<'a>, (Vec<Stmt>, Expr, Vec<(usize, usize)>), E<'a>> + Clone {
-    let seps = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .collect::<Vec<_>>();
-    let seps1 = token(TokenKind::Separator)
-        .ignored()
-        .repeated()
-        .at_least(1)
-        .collect::<Vec<_>>();
-
-    // A statement: a binding or a bare expression.  Broken statements are
-    // recovered by skipping tokens and retrying the statement parser, so a
-    // bad statement does not swallow the rest of the program.
-    // A statement: a binding or a bare expression.  Broken statements are
-    // recovered by skipping tokens and retrying the statement parser, so a
-    // bad statement does not swallow the rest of the program.  The retry
-    // stops at the end of the input *or* a block's closing brace — a block
-    // must not swallow the tokens after its `}`.
-    let elem = statement(tokens, expr)
-        .recover_with(skip_then_retry_until(
-            any::<In<'a>, E<'a>>().ignored(),
-            choice((
-                token(TokenKind::Eof).ignored(),
-                token(TokenKind::RBrace).ignored(),
-            )),
-        ))
-        .map_with(|s, me| (s, (me.span().start, me.span().end)));
-
-    seps.clone()
-        .then(elem.clone())
-        .then(
-            (seps1.clone().then(elem.clone()))
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(seps)
-        .map(|(((leading, first), rest), _trailing)| {
-            let _ = leading;
-            std::iter::once(first)
-                .chain(rest.into_iter().map(|(_, e)| e))
-                .collect::<Vec<(Stmt, (usize, usize))>>()
-        })
-        .validate(|mut elems, me, emit| match elems.pop() {
-            Some((Stmt::Expr(final_expr), last_range)) => {
-                let mut ranges: Vec<(usize, usize)> = elems.iter().map(|(_, r)| *r).collect();
-                ranges.push(last_range);
-                (
-                    elems.into_iter().map(|(s, _)| s).collect(),
-                    final_expr,
-                    ranges,
-                )
-            }
-            Some((Stmt::Binding(binding), last_range)) => {
-                emit.emit(Rich::custom(
-                    me.span(),
-                    "a program must end with an expression",
-                ));
-                let span = binding.span;
-                let mut ranges: Vec<(usize, usize)> = elems.iter().map(|(_, r)| *r).collect();
-                ranges.push(last_range);
-                let mut stmts: Vec<Stmt> = elems.into_iter().map(|(s, _)| s).collect();
-                stmts.push(Stmt::Binding(binding));
-                // The trailing-binding error is a masked point at the
-                // binding's own position (a zero-width mask, stable across
-                // edits that grow an earlier region).
-                let pos = byte_at_span(tokens, span);
-                (
-                    stmts,
-                    Expr::Err {
-                        range: (pos, pos),
-                        start: span,
-                    },
-                    ranges,
-                )
-            }
-            None => {
-                emit.emit(Rich::custom(
-                    me.span(),
-                    "a program must end with an expression",
-                ));
-                (
-                    vec![],
-                    err_node(tokens, me.span()),
-                    vec![(me.span().start, me.span().end)],
-                )
+        .map(|items| {
+            let (statements, stmt_ranges, expr) = split_block_items(items);
+            Program {
+                statements,
+                expr,
+                error_blocks: Vec::new(),
+                stmt_ranges,
             }
         })
 }
@@ -482,12 +382,14 @@ fn binding<'a>(
             .map(|n| (n, false)),
     ));
     // A broken binding value is recovered, not fatal: skip the offending
-    // tokens (stopping before the next separator, which the statement list
-    // still consumes) and substitute an error node, so the binding still
-    // parses and the rest of the program is reached.
+    // tokens (stopping before the next separator *or the end of the input*,
+    // which the program parser then consumes) and substitute an error node, so
+    // the binding still parses and the rest of the program is reached.  The
+    // Eof token is never a recoverable-skip target: it must stay for the
+    // program's `then_ignore(Eof)`.
     let value = expr.recover_with(via_parser(
         any::<In<'a>, E<'a>>()
-            .filter(|t: &Token| t.kind != TokenKind::Separator)
+            .filter(|t: &Token| t.kind != TokenKind::Separator && t.kind != TokenKind::Eof)
             .ignored()
             .repeated()
             .map_with(move |_, me| err_node(tokens, me.span())),
@@ -1210,7 +1112,8 @@ fn block<'a>(
     token(TokenKind::LBrace)
         .ignore_then(block_body(tokens, expr))
         .then_ignore(token(TokenKind::RBrace))
-        .map_with(|(statements, tail), me| {
+        .map_with(|items, me| {
+            let (statements, _ranges, tail) = split_block_items(items);
             let span = span_at(tokens, me.span().start);
             match tail {
                 Some(e) => Expr::Block {
@@ -1256,13 +1159,20 @@ enum BlockItem {
     Return(Expr),
 }
 
-/// A block body: a statement sequence whose last element may be a trailing
-/// expression (the block's value).  Each statement may be `pub`-prefixed; an
-/// explicit `return <expr>` anywhere designates the block's tail (a `return`
-/// may appear before or after the statements).  With neither a `return` nor a
-/// trailing expression, the returned tail is `None` — the block is a
-/// struct-returning block.
-type BlockBody = (Vec<BlockStmt>, Option<Expr>);
+/// A block body: a list of body items separated by separators.  Each item is a
+/// (possibly `pub`) statement, or a `return <expr>` tail marker.  This is the
+/// whole body *syntax* — a plain separator-separated list; separators may be
+/// any quantity and sit anywhere between items (leading, trailing, consecutive,
+/// or a bare newline), and the end of the input / a `}` is **not** a separator
+/// — it just terminates the list.  The body's tail (and whether it is a record)
+/// is resolved *later* by [`split_block_items`].
+///
+/// Shared by a `{ … }` block and the top level — the top level *is* a block
+/// body terminated by the end of the input.
+///
+/// Returns the raw item list, each paired with the token-index range it
+/// covered (so [`Program::stmt_ranges`] can be built once the tail is split).
+type BlockBody = Vec<(BlockItem, (usize, usize))>;
 
 fn block_body<'a>(
     tokens: &'a [Token],
@@ -1277,12 +1187,24 @@ fn block_body<'a>(
         .repeated()
         .at_least(1)
         .collect::<Vec<_>>();
+    // Each item: a `return <expr>` (the tail marker), or a (possibly `pub`)
+    // statement.  Broken items are recovered by skipping tokens and retrying —
+    // stopping at the end of the input *or* a block's closing brace, so a
+    // recovered statement never swallows the tokens after its terminator.
     let item = choice((
         token(TokenKind::KwReturn)
             .ignore_then(expr.clone())
             .map(BlockItem::Return),
         block_statement(tokens, expr.clone()).map(BlockItem::Stmt),
-    ));
+    ))
+    .recover_with(skip_then_retry_until(
+        any::<In<'a>, E<'a>>().ignored(),
+        choice((
+            token(TokenKind::Eof).ignored(),
+            token(TokenKind::RBrace).ignored(),
+        )),
+    ))
+    .map_with(|i, me| (i, (me.span().start, me.span().end)));
     seps.clone()
         .then(item.clone())
         .then(
@@ -1292,51 +1214,85 @@ fn block_body<'a>(
         )
         .then(seps)
         .map(|(((_, first), rest), _trailing)| {
-            let mut all = std::iter::once(first)
+            std::iter::once(first)
                 .chain(rest.into_iter().map(|(_, e)| e))
-                .collect::<Vec<BlockItem>>();
-            // An explicit `return <expr>` anywhere designates the block's
-            // tail; every other item is a statement (a second `return` is
-            // dropped).
-            if all.iter().any(|i| matches!(i, BlockItem::Return(..))) {
-                let mut tail = None;
-                let statements = all
-                    .into_iter()
-                    .filter_map(|i| match i {
-                        BlockItem::Return(e) => {
-                            if tail.is_none() {
-                                tail = Some(e);
-                            }
-                            None
-                        }
-                        BlockItem::Stmt(b) => Some(b),
-                    })
-                    .collect();
-                return (statements, tail);
-            }
-            // No `return`: the last bare expression is the block's tail value;
-            // a trailing binding (or an empty body) leaves no tail, making the
-            // block a struct-returning block.
-            let statements = |all: Vec<BlockItem>| {
-                all.into_iter()
-                    .map(|i| match i {
-                        BlockItem::Stmt(b) => b,
-                        BlockItem::Return(..) => unreachable!(),
-                    })
-                    .collect()
-            };
-            match all.pop() {
-                Some(BlockItem::Stmt(BlockStmt {
-                    stmt: Stmt::Expr(e),
-                    ..
-                })) => (statements(all), Some(e)),
-                Some(other) => {
-                    all.push(other);
-                    (statements(all), None)
-                }
-                None => (Vec::new(), None),
-            }
+                .collect::<Vec<(BlockItem, (usize, usize))>>()
         })
+}
+
+/// Resolve a parsed block body's **tail** — the later stage over the raw item
+/// list ([`BlockBody`]).  An explicit `return <expr>` anywhere designates the
+/// body's tail (a second `return` is dropped); otherwise the *last* bare
+/// expression is the tail, and a trailing binding (or an empty body) leaves no
+/// tail — the body is a record (a struct-returning block or a record program).
+///
+/// This is deliberately separate from [`block_body`] (which is only the
+/// separator-separated list *syntax*): the tail is identified by its position
+/// at the end of the body, not by the separator grammar.
+fn split_block_items(
+    items: Vec<(BlockItem, (usize, usize))>,
+) -> (Vec<BlockStmt>, Vec<(usize, usize)>, Option<Expr>) {
+    // An explicit `return <expr>` designates the body's tail; every other
+    // item is a statement (a second `return` is dropped).
+    if items
+        .iter()
+        .any(|(i, _)| matches!(i, BlockItem::Return(..)))
+    {
+        let mut tail = None;
+        let mut tail_range = None;
+        let mut out = Vec::new();
+        for (item, range) in items {
+            match item {
+                BlockItem::Return(e) => {
+                    if tail.is_none() {
+                        tail = Some(e);
+                        tail_range = Some(range);
+                    }
+                }
+                BlockItem::Stmt(b) => out.push((b, range)),
+            }
+        }
+        let (statements, mut ranges): (Vec<BlockStmt>, Vec<(usize, usize)>) =
+            out.into_iter().unzip();
+        if let Some(r) = tail_range {
+            ranges.push(r);
+        }
+        return (statements, ranges, tail);
+    }
+    // No `return`: the last bare expression is the body's tail value; a
+    // trailing binding (or an empty body) leaves no tail.
+    let mut items = items;
+    match items.pop() {
+        Some((
+            BlockItem::Stmt(BlockStmt {
+                stmt: Stmt::Expr(e),
+                ..
+            }),
+            range,
+        )) => {
+            let (statements, mut ranges): (Vec<BlockStmt>, Vec<(usize, usize)>) = items
+                .into_iter()
+                .map(|(i, r)| match i {
+                    BlockItem::Stmt(b) => (b, r),
+                    BlockItem::Return(..) => unreachable!("handled above"),
+                })
+                .unzip();
+            ranges.push(range);
+            (statements, ranges, Some(e))
+        }
+        Some(other) => {
+            items.push(other);
+            let (statements, ranges): (Vec<BlockStmt>, Vec<(usize, usize)>) = items
+                .into_iter()
+                .map(|(i, r)| match i {
+                    BlockItem::Stmt(b) => (b, r),
+                    BlockItem::Return(..) => unreachable!("handled above"),
+                })
+                .unzip();
+            (statements, ranges, None)
+        }
+        None => (Vec::new(), Vec::new(), None),
+    }
 }
 
 /// A statement inside a `{ … }` block: an optional `pub` prefix plus the
@@ -1529,10 +1485,12 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
         }
     }
     let mut out = Vec::new();
-    for s in &program.statements {
-        walk_stmt(s, &mut out);
+    for bs in &program.statements {
+        walk_stmt(&bs.stmt, &mut out);
     }
-    walk_expr(&program.expr, &mut out);
+    if let Some(e) = &program.expr {
+        walk_expr(e, &mut out);
+    }
     out
 }
 
