@@ -40,9 +40,9 @@ pub enum Expr {
     TypeOf(Span),
     /// A use of a name — resolved by [`crate::compile`] to the binder's id.
     Name(String, Span),
-    /// `_` in type position — an inference placeholder (the checker infers
-    /// the type from context).  In term position `_` parses as a
-    /// [`Expr::Name`] and stays an ordinary (possibly discard) name.
+    /// `_` — an inference placeholder hole, usable in *any* position (type or
+    /// value): the checker infers the type from context.  It is its own token
+    /// and never a name, so it cannot be bound or used as a lambda parameter.
     Placeholder(Span),
     /// `x => e`, `x : T => e`, `x # n => e`, or `x : T # n => e` — a
     /// lambda whose parameter is annotated.  The annotation(s) are desugared

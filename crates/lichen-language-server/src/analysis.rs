@@ -870,7 +870,9 @@ fn classify_token_kind(
         | TokenKind::KwElse
         | TokenKind::KwReturn
         | TokenKind::KwPub
-        | TokenKind::KwTypeOf => Some((SemanticTokenType::KEYWORD, Vec::new())),
+        | TokenKind::KwTypeOf
+        // `_` — a placeholder is a reserved inference form, never a name.
+        | TokenKind::Placeholder => Some((SemanticTokenType::KEYWORD, Vec::new())),
         // A `Name` is resolved by `classify_names` (or the `.` heuristic).
         TokenKind::Name(_) => None,
         // Operators: arrows, annotations, separators-of-fields, and math.

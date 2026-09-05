@@ -594,7 +594,7 @@ fn a_name_before_arrow_is_not_a_lambda_operand() {
 }
 
 #[test]
-fn an_underscore_in_type_position_is_a_placeholder() {
+fn an_underscore_is_a_placeholder_in_type_and_term_position() {
     let Expr::Annotation { r#type, .. } = parse_ok("x : _") else {
         panic!("expected an annotation")
     };
@@ -607,8 +607,13 @@ fn an_underscore_in_type_position_is_a_placeholder() {
         panic!("expected an arrow type")
     };
     assert!(matches!(*r#return, Expr::Placeholder(_)));
-    // In term position `_` stays an ordinary name.
-    assert!(matches!(parse_ok("_"), Expr::Name(name, _) if name == "_"));
+    // In term position `_` is the same placeholder, not an ordinary name.
+    assert!(matches!(parse_ok("_"), Expr::Placeholder(_)));
+    // As an annotated *value*, `_` is the placeholder in the value slot.
+    let Expr::Annotation { value, .. } = parse_ok("_ : Int") else {
+        panic!("expected an annotation")
+    };
+    assert!(matches!(*value, Expr::Placeholder(_)));
 }
 
 #[test]

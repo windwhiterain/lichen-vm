@@ -50,7 +50,7 @@ apply    := atom atom*                              -- application; left-assoc, 
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
           | 'Int' | 'Type'                          -- the two type constants
-          | '_'                                     -- inference placeholder (type position only)
+          | '_'                                     -- inference placeholder (any position)
           | name
           | '(' expr ')'                            -- grouping (transparent)
           | '(' expr (sep expr)* sep? ')'           -- tuple  (TypeTuple in type position)
@@ -102,11 +102,15 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   broken across lines without parens.
 - **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
   `Type`, and `struct` are reserved — they cannot be bound or used as names.
-- **The `_` placeholder.**  In type position (the right side of `:`, and the
-  components of the type forms under it), `_` is an inference placeholder:
-  the checker infers the type from context — `x : _`, `x : Int -> _`,
-  `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.  Outside type positions
-  `_` is an ordinary name, so `_ = 5; _` and `_ => _` stay legal.
+- **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
+  position — type and value alike.  In type position (the right side of `:`,
+  and the components of the type forms under it) it infers the type from
+  context — `x : _`, `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`,
+  `struct<Int, _>` — and in value position it is a typed hole: `_ : Int`
+  checks as an underdetermined value of type `Int`, and `f _` / `(1, _)`
+  leave a hole the context unifies.  `_` is **never a name**: it cannot be
+  bound (`_ = 5`) or used as a lambda parameter (`_ => e`) — both are parse
+  errors.  The discard idiom is gone; use a real name.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
 - **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` → `<=` / `==`
@@ -347,12 +351,15 @@ span back to the original file.
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
-- **The `_` placeholder.**  A `_` in type position compiles to an unbound
+- **The `_` placeholder.**  A `_` in any position compiles to an unbound
   cell: the annotation unifies the value's type against it, so the cell
   binds to that type — `5 : _` infers `int`, `x => x : _` the arrow
   `?a → ?a`, and `[1, 2, 3] : Int<_>` the length `3`.  Partial types infer
   the rest: `((x => x) : (Int -> _)) 5` fixes the input to `int` and infers
-  the output.  Kinding is deferred for `_` like any unbound type, so `_`
+  the output.  In value position the same hole is a *typed* hole: `_ : Int`
+  checks as an underdetermined `Int` value (its value cell stays unbound,
+  reading `Parameterized`), and `f _` / `(1, _)` unify the hole's type with
+  the context.  Kinding is deferred for `_` like any unbound type, so `_`
   never raises a kinding error; a `_` that never binds leaves the type
   underdetermined — not an error — and a mismatch against a
   partial type is still an error (`5 : Int -> _` fails).
@@ -375,7 +382,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `e[i]` | `Index { array, index }` |
 | `e : T` | `Annotation { value, type: Some(compile(T)), attribute: None }` |
 | `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attribute: Some(compile(p)) }` — the annotated node's schema gains the `[Perspective]` tail |
-| `_` (type position) | `Placeholder` |
+| `_` (any position — type or value) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
 | `<T1, …, Tn>` | `TypeTuple(range)` |

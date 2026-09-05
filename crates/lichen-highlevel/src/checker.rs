@@ -1205,10 +1205,10 @@ where
                 pair
             }
             ExprKind::Placeholder => {
-                // `_` — an inferrable type position: two fresh unbound
-                // cells, one for the type's value slot and one for its
-                // kind, so whatever the context unifies them with binds
-                // them.  The kind slot must be a cell too, not the
+                // `_` — an inference placeholder hole in any position (type or
+                // value): two fresh unbound cells, one for the value slot and
+                // one for the kind slot, so whatever the context unifies them
+                // with binds them.  The kind slot must be a cell too, not the
                 // universe: a compound type's kind slot holds a kind
                 // expression (`[FunctionType, Type]`), which would clash
                 // with `Type` itself.

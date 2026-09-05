@@ -390,9 +390,11 @@ pub enum ExprKind<L> {
         range: ChildRange,
         depths: ChildRange,
     },
-    /// `_` — an inferrable type position.  Compiles to a fresh unbound cell
-    /// that binds to whatever the context unifies it with: `x : _`,
-    /// `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`, `struct<Int, _>`.
+    /// `_` — an inference placeholder hole, usable in any position (type or
+    /// value).  Compiles to a fresh unbound cell that binds to whatever the
+    /// context unifies it with: `x : _`, `x : Int -> _`, `x : Int<_>`,
+    /// `x : <Int, _>`, `struct<Int, _>`, and the value holes `_ : Int`,
+    /// `f _`, `(1, _)`.
     Placeholder,
     /// A recovered-error region, masked at the frontend: an opaque leaf the
     /// checker *skips* (no cells, no unification, no cascade).  Distinct from

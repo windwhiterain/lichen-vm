@@ -1568,21 +1568,38 @@ fn a_mismatch_against_a_partial_type_is_reported() {
 }
 
 #[test]
-fn an_underscore_in_term_position_is_still_a_name() {
-    // `_` outside type positions is an ordinary name: a discard binding and
-    // a lambda parameter named `_`.
-    assert_eq!(usize_of(&evaluate("_ = 5; _")), 5);
-    assert_eq!(usize_of(&evaluate("(_ => _) 5 : Int")), 5);
+fn an_underscore_checks_as_a_value_hole() {
+    // `_` is a placeholder in *value* position too: `_ : Int` is a typed hole
+    // — it checks (the value's type slot unifies with Int) and its value is
+    // underdetermined (a `Parameterized` hole), never a resolve error.
+    let report = compile("_ : Int");
+    assert!(
+        report.ok(),
+        "_ : Int should check as a typed value hole, got: {:?}",
+        report.diagnostics
+    );
+    let (mut module, root) = run("_ : Int");
+    let value = module.evaluate_node_deep(root, None);
+    assert!(
+        matches!(value, LangValue::LowValue(LowValue::Parameterized)),
+        "the typed hole's value is underdetermined, got {value:?}"
+    );
 }
 
 #[test]
-fn an_underscore_as_a_value_is_unresolved() {
-    // `_ : Int` — the placeholder is type-position only; as a value `_` is an
-    // ordinary name and unresolved here.
-    let d = diags("_ : Int");
-    assert_eq!(d.len(), 1);
-    assert_eq!(d[0].stage, Stage::Resolve);
-    assert_eq!(d[0].message, "unresolved name '_'");
+fn an_underscore_cannot_be_bound() {
+    // `_` is never a name, so it cannot be a binding target — `_ = 5` is a
+    // parse error, not a discard binding.
+    let d = diags("_ = 5; _");
+    assert_eq!(d[0].stage, Stage::Parse);
+}
+
+#[test]
+fn an_underscore_cannot_be_a_lambda_parameter() {
+    // `_ => _` fails: a placeholder is not a name, so the lambda has no
+    // binder for its parameter.
+    let d = diags("(_ => _) 5");
+    assert_eq!(d[0].stage, Stage::Parse);
 }
 
 #[test]
