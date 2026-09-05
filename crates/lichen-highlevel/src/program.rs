@@ -373,6 +373,25 @@ pub enum TypeValue {
     TypeId(usize),
 }
 
+impl TypeValue {
+    /// The nominal type id carried by a `TypeId` value, if this is one.
+    ///
+    /// A composed value vocabulary's `ValueType::type_id` delegates here; the
+    /// leaf keeps the one place the id lives.
+    pub fn as_type_id(&self) -> Option<usize> {
+        match self {
+            TypeValue::TypeId(n) => Some(*n),
+            _ => None,
+        }
+    }
+}
+
+// The type-constant values are not themselves function-kind markers (the
+// `Function` kind marker is, but that is not an `is_function_kind` re-head —
+// the renderer already special-cases the `function_type_marker`).  Delegating
+// here keeps the composed vocabulary's classification complete.
+impl lichen_utils::extend::FunctionKind for TypeValue {}
+
 // The highlevel program's value vocabulary: a flat union of the lowlevel
 // structural values and the highlevel type values, each carried whole as
 // one sibling variant — one `lichen_utils::enum_ext!` invocation listing
@@ -533,13 +552,45 @@ where
             HighProgramOperator::LowOperator(_) => {
                 unreachable!("structural operators are dispatched by the VM")
             }
-            HighProgramOperator::TypeOperator(TypeOperator::Fresh) => {
+            // The type-level operators are the highlevel's own computation —
+            // delegated to the generic [`OperatorExt`] impl for [`TypeOperator`],
+            // so any composed union reuses the same semantics.
+            HighProgramOperator::TypeOperator(op) => op.run(operand, _block, module),
+        }
+    }
+}
+
+/// The highlevel's own type-level operators, dispatched as an extension
+/// operator by *any* composed program that carries them.  The run semantics
+/// live here, generic over the program's value vocabulary `V`, so the
+/// shipped `LangProgram`, a composed plugin compiler's program, and the
+/// highlevel's own default `HighProgramOperator` all share the same Fresh and
+/// integer operator behaviour (they differ only in which union wraps them).
+impl<V, O, A, L, G> OperatorExt<ProgramImpl<V, O, A, L, G>> for TypeOperator
+where
+    V: ValueType,
+    A: AttrSpec,
+    L: std::fmt::Debug + Copy + PartialEq,
+    G: GlobalExt + AsField<HighGlobal>,
+    O: OperatorExt<ProgramImpl<V, O, A, L, G>>
+        + From<LowOperator>
+        + AsEnum<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+{
+    fn run(
+        &self,
+        operand: V,
+        _block: BlockId,
+        module: &mut Module<ProgramImpl<V, O, A, L, G>>,
+    ) -> V {
+        match self {
+            TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 V::type_id_value(id)
             }
-            HighProgramOperator::TypeOperator(
-                TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq,
-            ) => {
+            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
@@ -576,18 +627,10 @@ where
                     return V::from(LowValue::Parameterized);
                 };
                 match self {
-                    HighProgramOperator::TypeOperator(TypeOperator::Add) => {
-                        V::from(LowValue::USize(left.wrapping_add(right)))
-                    }
-                    HighProgramOperator::TypeOperator(TypeOperator::Sub) => {
-                        V::from(LowValue::USize(left.wrapping_sub(right)))
-                    }
-                    HighProgramOperator::TypeOperator(TypeOperator::Leq) => {
-                        V::from(LowValue::USize((left <= right) as usize))
-                    }
-                    HighProgramOperator::TypeOperator(TypeOperator::Eq) => {
-                        V::from(LowValue::USize((left == right) as usize))
-                    }
+                    TypeOperator::Add => V::from(LowValue::USize(left.wrapping_add(right))),
+                    TypeOperator::Sub => V::from(LowValue::USize(left.wrapping_sub(right))),
+                    TypeOperator::Leq => V::from(LowValue::USize((left <= right) as usize)),
+                    TypeOperator::Eq => V::from(LowValue::USize((left == right) as usize)),
                     _ => unreachable!("all binary operators are handled above"),
                 }
             }

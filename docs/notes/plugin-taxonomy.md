@@ -63,6 +63,22 @@ and assembles each plugin's private per-module registry with its
 The frontend, checker, and VM are reused unchanged. **Adding a native plugin is
 one manifest line** (and one op-registry line).
 
+`lang_compose_vocabulary!` generates the *whole* composed program, not just the
+enums: for a plugin set it also emits the `ValueExt` / `ValueType` /
+`OperatorExt` impls (the type-constant markers delegated to the core
+`TypeValue` leaf, function-kind markers via each leaf's `FunctionKind`, and the
+operator union's `run` dispatching every leaf).  So a composed program marker is
+a live, executable `Program` — its operators actually run, and a plugin compiler
+can be driven over it.
+
+A native plugin contributes its leaves through a `#[macro_export]` leaf macro
+named `<crate_ident>_leaves` (e.g. `lichen_compute_leaves`,
+`lichen_std_native_leaves`), and the manifest lists it as
+`plugins = [ <crate_ident> as <crate_ident>_leaves; ... ]`.  The name is
+per-plugin and crate-derivable by design: two `#[macro_export]` macros named
+identically across the dependency graph collide in the extern prelude, so a
+shared `liche_leaves` name would break any host composing more than one plugin.
+
 This is the "package manager pulls a crate and builds a new compiler" story:
 the reusable layer is the generic core + the composition manifest, and a built
 compiler is just a particular plugin set substituted into that manifest.

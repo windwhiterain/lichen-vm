@@ -8,9 +8,9 @@
 //! program-generic [`OperatorExt`] `run` so a host can execute it.
 //!
 //! A host composes it with
-//! `liche_language::lang_compose_vocabulary! { … plugins = [ lichen_std_native; ]; }`
-//! (the plugin's [`liche_leaves!`] macro contributes the `SortOp` leaf), then
-//! drives the produced compiler.
+//! `liche_language::lang_compose_vocabulary! { … plugins = [ lichen_std_native as lichen_std_native_leaves; ]; }`
+//! (the plugin's `lichen_std_native_leaves!` macro contributes the `SortOp` leaf),
+//! then drives the produced compiler.
 
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt, Program};
 use lichen_utils::extend::AsEnum;
@@ -75,9 +75,17 @@ where
 /// Contribute this plugin's vocabulary leaves into a
 /// [`liche_language::lang_compose_vocabulary!`] composition (see the
 /// `lichen-compute` [`liche_leaves!`] protocol): it hands back the `SortOp`
+/// Contribute this plugin's vocabulary leaves into a
+/// [`liche_language::lang_compose_vocabulary!`] composition (see the
+/// `lichen-compute` [`liche_leaves!`] protocol): it hands back the `SortOp`
 /// operator leaf, threading the composition's accumulator.
+///
+/// The macro name is `<crate_ident>_leaves` (`lichen_std_native_leaves`), not
+/// a fixed `liche_leaves`: two `#[macro_export]` macros named identically in
+/// the dependency graph collide in the extern prelude, so each plugin's leaf
+/// macro has a distinct, crate-derivable name.
 #[macro_export]
-macro_rules! lichen_leaves {
+macro_rules! lichen_std_native_leaves {
     ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
         $next! {
             @absorb (

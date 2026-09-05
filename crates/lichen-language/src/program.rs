@@ -17,17 +17,13 @@
 //! `P` of `Module<P>`/`Registry<P>`/`Checker<P>`, with `Value = LangValue`,
 //! `Operator = LangOperator`, and `Attr = LangAttr` (`Perspective` + `Doc`).
 
-use lichen_highlevel::program::{HighGlobal, TypeOperator, TypeValue, ValueType};
-use lichen_lowlevel::{LowOperator, LowValue, Module, OperatorExt, ValueExt};
-use lichen_utils::compose::AsField;
-use lichen_utils::extend::AsEnum;
+use lichen_highlevel::program::{TypeOperator, TypeValue};
+use lichen_lowlevel::{LowOperator, LowValue};
 
 pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 
 use lichen_doc::Doc;
 pub use lichen_doc::doc_attr_ext;
-
-use lichen_compute::ComputeValue;
 
 /// Compose the language's concrete program marker from a manifest of its
 /// vocabulary leaves and attribute set.
@@ -50,17 +46,21 @@ use lichen_compute::ComputeValue;
 macro_rules! lang_compose_vocabulary {
     // With a plugin set (the package-manager-generated compiler): the shipping
     // leaves are spelled inline and each plugin contributes its own leaves via a
-    // `[#macro_export] macro_rules! lichen_leaves` the plugin crate exports.
+    // `[#macro_export] macro_rules! liche_leaves` the plugin crate exports.  The
+    // `plugins = [<crate> as <leaves>; ...]` spells each plugin's crate path AND
+    // the (uniquely-named) leaf macro it exports — a fixed name like
+    // `liche_leaves` across several plugins collides in the extern prelude, so
+    // each plugin's leaf macro has a distinct name.
     (
         attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         values = [ $( $value:path as $value_name:ident ; )* ];
         operators = [ $( $operator:path as $operator_name:ident ; )* ];
-        plugins = [ $( $plugin:ident ; )* ];
+        plugins = [ $( $plugin:ident as $leaves:ident ; )* ];
     ) => {
         $crate::lang_compose_vocabulary! {
             @run
             [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ];
-            [ $( $plugin ; )* ];
+            [ $( $plugin as $leaves ; )* ];
         }
     };
 
@@ -78,9 +78,19 @@ macro_rules! lang_compose_vocabulary {
     };
 
     // Terminal: every plugin's leaves have been absorbed; emit the program.
+    //
+    // The operator and value lists are decomposed positionally: the first two
+    // operator leaves must be the structural [`lichen_lowlevel::LowOperator`]
+    // and the highlevel `TypeOperator` (named `LowOperator`/`TypeOperator`),
+    // and the first two value leaves the structural [`lichen_lowlevel::LowValue`]
+    // and the highlevel `TypeValue` (named `LowValue`/`TypeValue`).  These are
+    // the language's core leaves, present in every composition; the generated
+    // `ValueType`/`OperatorExt` impls reference them.
     (
         @run
-        [ $( $operator:path as $operator_name:ident ; )* ] [ $( $value:path as $value_name:ident ; )* ] [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
+        [ $lowop:path as $lowop_name:ident ; $tyop:path as $tyop_name:ident ; $( $extra_op:path as $extra_op_name:ident ; )* ]
+        [ $low:path as $low_name:ident ; $tyv:path as $tyv_name:ident ; $( $extra_v:path as $extra_v_name:ident ; )* ]
+        [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         [ ] ;
     ) => {
         ::lichen_utils::enum_ext! {
@@ -91,7 +101,9 @@ macro_rules! lang_compose_vocabulary {
             #[derive(Debug, Clone, Copy, PartialEq)]
             pub enum LangOperator {
             }
-            $( + $operator as $operator_name ; )*
+            + $lowop as $lowop_name ;
+            + $tyop as $tyop_name ;
+            $( + $extra_op as $extra_op_name ; )*
         }
 
         ::lichen_utils::enum_ext! {
@@ -101,7 +113,9 @@ macro_rules! lang_compose_vocabulary {
             #[derive(Debug, Clone, Copy, PartialEq)]
             pub enum LangValue {
             }
-            $( + $value as $value_name ; )*
+            + $low as $low_name ;
+            + $tyv as $tyv_name ;
+            $( + $extra_v as $extra_v_name ; )*
         }
 
         /// The language's compile-time attributes, composed from the manifest:
@@ -135,15 +149,108 @@ macro_rules! lang_compose_vocabulary {
         /// The language's concrete program marker: `Value = LangValue`,
         /// `Operator = LangOperator`, `Attr = LangAttr`.
         pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>;
+
+        // ── The runtime-wiring impls the composed program needs to be a
+        //    `Program`/`HighProgram`: the structural value traits on the value
+        //    union and the operator dispatch on the operator union.  These are
+        //    what make a plugin-built compiler's vocabulary executable.
+
+        // The composed values are structurally inert (handle payloads are the
+        // lowlevel's own), so `is_handle` is always false.
+        impl ::lichen_lowlevel::ValueExt for LangValue {
+            fn is_handle(&self) -> bool {
+                false
+            }
+        }
+
+        // The type-constant markers all live in the core `TypeValue` leaf, so
+        // the composed vocabulary delegates every marker to that leaf.  The
+        // `<path>::Variant` qualified path bypasses the macro_rules rule that
+        // a `$path:path` fragment cannot be followed directly by `::`.
+        impl ::lichen_highlevel::program::ValueType for LangValue {
+            fn int_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeInt)
+            }
+            fn string_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeString)
+            }
+            fn type_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeType)
+            }
+            fn function_type_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeFunction)
+            }
+            fn tuple_type_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeTuple)
+            }
+            fn array_type_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeArray)
+            }
+            fn type_struct_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeStruct)
+            }
+            fn table_type_marker() -> Self {
+                Self::$tyv_name(<$tyv>::TypeTable)
+            }
+            fn type_id(&self) -> Option<usize> {
+                match self {
+                    Self::$tyv_name(inner) => inner.as_type_id(),
+                    _ => None,
+                }
+            }
+            fn type_id_value(n: usize) -> Self {
+                Self::$tyv_name(<$tyv>::TypeId(n))
+            }
+            // A leaf re-heads the universe (e.g. `lichen-compute`'s
+            // `TypeKernel`) to form a function-kind marker; delegate the
+            // classification to each leaf so a plugin-built compiler's
+            // renderer still spells those kinds as `in -> out`.
+            fn is_function_kind(&self) -> bool {
+                match self {
+                    LangValue::$low_name(v) => {
+                        <$low as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
+                    }
+                    LangValue::$tyv_name(v) => {
+                        <$tyv as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
+                    }
+                    $(
+                        LangValue::$extra_v_name(v) => {
+                            <$extra_v as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
+                        }
+                    )*
+                }
+            }
+        }
+
+        // The operator union's `run` is a uniform dispatch: each leaf handles
+        // itself (the structural lowlevel operator is unreachable — the VM
+        // routes it through `AsEnum` first; the type operators run through
+        // their own [`::lichen_lowlevel::OperatorExt`] impl; each plugin
+        // operator runs its own).  This is the arm that lets a composed
+        // program's operators actually execute.
+        impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
+            fn run(
+                &self,
+                operand: <LangProgram as ::lichen_lowlevel::Program>::Value,
+                block: ::lichen_lowlevel::BlockId,
+                module: &mut ::lichen_lowlevel::Module<LangProgram>,
+            ) -> <LangProgram as ::lichen_lowlevel::Program>::Value {
+                match self {
+                    LangOperator::$lowop_name(op) => op.run(operand, block, module),
+                    LangOperator::$tyop_name(op) => op.run(operand, block, module),
+                    $( LangOperator::$extra_op_name(op) => op.run(operand, block, module), )*
+                }
+            }
+        }
     };
 
-    // Thread the next plugin's `liche_leaves!`, passing the accumulator.
+    // Thread the next plugin's leaf macro, passing the accumulator.
     (
         @run
         [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ];
-        [ $plugin:ident ; $( $rest:tt )* ];
+        [ $plugin:ident as $leaves:ident ; $( $rest:tt )* ];
     ) => {
-        $plugin::liche_leaves! {
+        $plugin::$leaves! {
             $crate::lang_compose_vocabulary,
             [ $( $oa )* ] [ $( $va )* ] [ $( $aa )* ] [ $( $b )* ] ; [ $( $rest )* ] ;
         }
@@ -188,136 +295,6 @@ crate::lang_compose_vocabulary! {
         GcdOp as GcdOp;
         lichen_compute::ComputeOperator as ComputeOperator;
     ];
-}
-
-impl ValueExt for LangValue {
-    fn is_handle(&self) -> bool {
-        false
-    }
-}
-
-// The compute vocabulary's only new type-constant marker is `TypeKernel`
-// (a kernel's type mirror is `[signature, [TypeKernel, Type]]`); every other
-// marker delegates to the highlevel type values.
-impl ValueType for LangValue {
-    fn int_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeInt)
-    }
-    fn string_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeString)
-    }
-    fn type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeType)
-    }
-    fn function_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeFunction)
-    }
-    fn tuple_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTuple)
-    }
-    fn array_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeArray)
-    }
-    fn type_struct_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeStruct)
-    }
-    fn table_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTable)
-    }
-    fn type_id(&self) -> Option<usize> {
-        match self {
-            Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
-            _ => None,
-        }
-    }
-    fn type_id_value(n: usize) -> Self {
-        Self::TypeValue(TypeValue::TypeId(n))
-    }
-    fn is_function_kind(&self) -> bool {
-        // `TypeKernel` re-heads the universe to form a kernel type
-        // `[signature, [TypeKernel, Type]]`, which mirrors a function type —
-        // the generic renderer spells that kind as `in -> out`.
-        matches!(self, Self::ComputeValue(ComputeValue::TypeKernel))
-    }
-}
-
-impl OperatorExt<LangProgram> for LangOperator {
-    fn run(
-        &self,
-        operand: <LangProgram as lichen_lowlevel::Program>::Value,
-        block: lichen_lowlevel::BlockId,
-        module: &mut Module<LangProgram>,
-    ) -> <LangProgram as lichen_lowlevel::Program>::Value {
-        match self {
-            // The structural operators never reach `run`: the VM dispatches
-            // them through `AsEnum` before falling through.
-            LangOperator::LowOperator(_) => {
-                unreachable!("structural operators are dispatched by the VM")
-            }
-            LangOperator::TypeOperator(TypeOperator::Fresh) => {
-                let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                LangValue::type_id_value(id)
-            }
-            LangOperator::TypeOperator(
-                TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq,
-            ) => {
-                // The VM already deep-evaluates the operand and gates on its
-                // parameterized subtree, so an unbound operand is the lazy
-                // marker (the definition pass flags the node).
-                if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return LangValue::from(LowValue::Parameterized);
-                }
-                let Some(LowValue::Array(operands)) = operand.as_enum() else {
-                    unreachable!("binary operators expect an operand array of [left, right]")
-                };
-                let operands = operands.items();
-                // A non-USize operand is a *reported* type error, not an
-                // invariant violation: the checker pins both operands to
-                // `Int`, so a wrong shape only arrives here through an
-                // argument unify that already failed (recording the
-                // diagnostic) — stay lazy instead of panicking.
-                let Some(left) = module
-                    .node_value(operands[0].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return LangValue::from(LowValue::Parameterized);
-                };
-                let Some(right) = module
-                    .node_value(operands[1].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return LangValue::from(LowValue::Parameterized);
-                };
-                match self {
-                    LangOperator::TypeOperator(TypeOperator::Add) => {
-                        LangValue::from(LowValue::USize(left.wrapping_add(right)))
-                    }
-                    LangOperator::TypeOperator(TypeOperator::Sub) => {
-                        LangValue::from(LowValue::USize(left.wrapping_sub(right)))
-                    }
-                    LangOperator::TypeOperator(TypeOperator::Leq) => {
-                        LangValue::from(LowValue::USize((left <= right) as usize))
-                    }
-                    LangOperator::TypeOperator(TypeOperator::Eq) => {
-                        LangValue::from(LowValue::USize((left == right) as usize))
-                    }
-                    _ => unreachable!("all binary operators are handled above"),
-                }
-            }
-            // The perspective compiler plugin's operator: dispatched by the
-            // plugin's own `OperatorExt` impl.
-            LangOperator::GcdOp(op) => op.run(operand, block, module),
-            LangOperator::ComputeOperator(op) => op.run(operand, block, module),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -367,7 +344,7 @@ mod plugins_arm_tests {
             lichen_highlevel::program::TypeOperator as TypeOperator;
             lichen_perspective::GcdOp as GcdOp;
         ];
-        plugins = [ ic_probe_plugin; ic_probe_plugin; ];
+        plugins = [ ic_probe_plugin as liche_leaves; ic_probe_plugin as liche_leaves; ];
     }
 
     #[test]
@@ -379,5 +356,68 @@ mod plugins_arm_tests {
         // level only.
         let _ = std::any::type_name::<LangValue>();
         let _ = std::any::type_name::<LangOperator>();
+    }
+}
+
+#[cfg(test)]
+mod sort_op_tests {
+    //! Compose a program over the `lichen-std-native` native plugin and run its
+    //! `SortOp` leaf end-to-end: the composition macro now generates the
+    //! `ValueType`/`ValueExt`/`OperatorExt` impls, so a plugin vocabulary is a
+    //! real, executable `Program` — this pins that a plugin-built compiler can
+    //! actually *run* a plugin operator, not just type-check its composition.
+    #![allow(dead_code)]
+    use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
+    use lichen_std_native::SortOp;
+    use lichen_utils::extend::AsEnum;
+
+    lang_compose_vocabulary! {
+        attrs = [
+            lichen_perspective::Perspective as Perspective;
+            lichen_doc::Doc as Doc;
+        ]
+        [ P::Operator: From<lichen_perspective::GcdOp> ];
+        values = [
+            lichen_lowlevel::LowValue as LowValue;
+            lichen_highlevel::program::TypeValue as TypeValue;
+        ];
+        operators = [
+            lichen_lowlevel::LowOperator as LowOperator;
+            lichen_highlevel::program::TypeOperator as TypeOperator;
+        ];
+        plugins = [ lichen_std_native as lichen_std_native_leaves; ];
+    }
+
+    #[test]
+    fn sort_op_sorts_a_usize_array() {
+        let mut module = Module::<LangProgram>::new();
+        let block: BlockId = module.add_block(None);
+        let items: Vec<ArrayItem> = [3usize, 1, 2]
+            .iter()
+            .map(|&n| {
+                let node = module.add_node(block, None, Some(LangValue::from(LowValue::USize(n))));
+                ArrayItem::new(AnyNodeId::Dynamic(node))
+            })
+            .collect();
+        let array = module.alloc_array(&items, block);
+        let operand = LangValue::from(LowValue::Array(array));
+        let out = LangOperator::SortOp(SortOp::Sort).run(operand, block, &mut module);
+        let Some(LowValue::Array(array)) = out.as_enum() else {
+            panic!("Sort must yield a USize array");
+        };
+        let sorted: Vec<usize> = array
+            .items()
+            .iter()
+            .map(|item| {
+                module
+                    .node_value(item.node)
+                    .and_then(|v| match v.as_enum() {
+                        Some(LowValue::USize(n)) => Some(n),
+                        _ => None,
+                    })
+                    .expect("each sorted element is a USize node")
+            })
+            .collect();
+        assert_eq!(sorted, vec![1, 2, 3]);
     }
 }

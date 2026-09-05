@@ -149,6 +149,15 @@ pub enum ComputeValue {
     TypeKernel,
 }
 
+impl lichen_utils::extend::FunctionKind for ComputeValue {
+    fn is_function_kind(&self) -> bool {
+        // `TypeKernel` re-heads the universe to form a kernel type
+        // `[signature, [TypeKernel, Type]]`, which mirrors a function type —
+        // the generic renderer spells that kind as `in -> out`.
+        matches!(self, ComputeValue::TypeKernel)
+    }
+}
+
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
 /// by the VM through [`OperatorExt::run`].  Composed into a host's operator
 /// union (see a host `program` module).

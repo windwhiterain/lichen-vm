@@ -109,6 +109,11 @@ pub enum LowValue {
     Parameterized,
 }
 
+// The structural values never re-head the universe into a function kind — the
+// composed vocabulary's `is_function_kind` delegates to each leaf, and the
+// structural leaf is always just plain.
+impl lichen_utils::extend::FunctionKind for LowValue {}
+
 /// A host-side, **optional** static shape of a node's eventual value.
 ///
 /// This closes the gap that blocks emitting bytecode directly from the
@@ -278,6 +283,19 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+}
+
+// The structural operators implement [`OperatorExt`] so a composed program's
+// operator union can dispatch *every* leaf uniformly (a composed `run` matches
+// and calls `op.run` on each carry variant).  The VM routes the structural
+// leaves through [`AsEnum`] *before* `run` is ever reached — the `None` arm
+// of the dispatch is the extension fall-through — so a structural `run` is
+// genuinely unreachable: a structural operator is never an extension
+// computation.
+impl<P: Program> OperatorExt<P> for LowOperator {
+    fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> P::Value {
+        unreachable!("structural operators are dispatched by the VM")
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
