@@ -6,7 +6,7 @@
 //! ([`crate::render::checker_message`]); the boxed highlevel `Diag` in
 //! `check` stays raw for tests and tooling.
 
-use lichen_highlevel::ir::Span;
+use lichen_language_lex::Span;
 
 use crate::program::LangProgram;
 
@@ -41,6 +41,26 @@ impl Diag {
             span: Some(span),
             message: message.into(),
             stage,
+            check: None,
+        }
+    }
+
+    /// Widen a lexer diagnostic into the pipeline's [`Diag`] at `Stage::Lex`.
+    pub fn from_lex(d: crate::LexDiag) -> Self {
+        Diag {
+            span: d.span,
+            message: d.message,
+            stage: Stage::Lex,
+            check: None,
+        }
+    }
+
+    /// Widen a parser diagnostic into the pipeline's [`Diag`] at `Stage::Parse`.
+    pub fn from_parse(d: crate::ParseDiag) -> Self {
+        Diag {
+            span: d.span,
+            message: d.message,
+            stage: Stage::Parse,
             check: None,
         }
     }

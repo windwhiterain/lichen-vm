@@ -2,7 +2,7 @@
 //! position where it starts.  Terms and types share one `Expr` type — types
 //! are expressions (see `docs/language-spec.md` §2).
 
-use lichen_highlevel::ir::Span;
+use lichen_language_lex::Span;
 
 /// The type constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -565,16 +565,32 @@ dependencies = [
 name = "lichen-language"
 version = "0.1.0"
 dependencies = [
- "chumsky",
  "lichen-compute",
  "lichen-doc",
  "lichen-highlevel",
+ "lichen-language-lex",
+ "lichen-language-parser",
  "lichen-lowlevel",
  "lichen-perspective",
  "lichen-render",
  "lichen-utils",
  "logos",
  "sha2",
+]
+
+[[package]]
+name = "lichen-language-lex"
+version = "0.1.0"
+dependencies = [
+ "logos",
+]
+
+[[package]]
+name = "lichen-language-parser"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "lichen-language-lex",
 ]
 
 [[package]]

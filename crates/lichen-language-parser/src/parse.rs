@@ -52,14 +52,21 @@ use chumsky::error::RichReason;
 use chumsky::input::Stream;
 use chumsky::prelude::*;
 
-use lichen_highlevel::ir::Span;
+use lichen_language_lex::{Span, Token, TokenKind};
 
 use crate::ast::{
     BinOp, Binding, BlockStmt, ErrorBlock, Expr, Program, RecordField, Stmt, StructField,
     StructInstArg, TypeConst,
 };
-use crate::diag::{Diag, Stage};
-use crate::lex::{Token, TokenKind};
+
+/// A parse diagnostic: a message plus the source position it is grounded in.
+/// Check-free, so it is `Send` and stays entirely in this crate; the language
+/// crate widens it into its own `Diag` at `Stage::Parse`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParseDiag {
+    pub span: Option<Span>,
+    pub message: String,
+}
 
 /// The parser's input: the token stream, whose spans are token *indices*
 /// (each item is one token).
@@ -72,7 +79,7 @@ type E<'a> = extra::Err<Rich<'a, Token, SimpleSpan<usize>>>;
 /// encountered along the way.
 pub struct Parsed {
     pub program: Program,
-    pub errors: Vec<Diag>,
+    pub errors: Vec<ParseDiag>,
 }
 
 /// Parse a token stream.  See the module docs for the recovery behavior.
@@ -87,39 +94,23 @@ pub fn parse(tokens: &[Token]) -> Parsed {
             .spawn_scoped(scope, || parse_inner(tokens))
             .expect("spawn the parse worker");
         let (program, errors) = worker.join().expect("the parse worker panicked");
-        Parsed {
-            program,
-            // Parse diagnostics never carry a checker `Diag`, so the
-            // worker's stripped form is exactly reconstructible.
-            errors: errors
-                .into_iter()
-                .map(|(span, message, stage)| Diag {
-                    span,
-                    message,
-                    stage,
-                    check: None,
-                })
-                .collect(),
-        }
+        Parsed { program, errors }
     })
 }
 
-/// The worker's result: the program plus its diagnostics in a `Send` form
-/// (the crate's `Diag` embeds the checker's, which is not `Send`).
-type ParseOut = (Program, Vec<(Option<Span>, String, Stage)>);
+/// The worker's result: the program plus its diagnostics.  [`ParseDiag`] is
+/// `Send` (no checker payload), so no stripped-form workaround is needed.
+type ParseOut = (Program, Vec<ParseDiag>);
 
 fn parse_inner(tokens: &[Token]) -> ParseOut {
     let stream = Stream::from_iter(tokens.iter().cloned());
     let parser = program_parser(tokens);
     let (output, errs) = parser.parse(stream).into_output_errors();
-    let mut errors: Vec<(Option<Span>, String, Stage)> = Vec::new();
+    let mut errors: Vec<ParseDiag> = Vec::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
-        if !errors
-            .iter()
-            .any(|(span, message, _)| *span == diag.span && *message == diag.message)
-        {
-            errors.push((diag.span, diag.message, diag.stage));
+        if !errors.iter().any(|d| d.span == diag.span && d.message == diag.message) {
+            errors.push(diag);
         }
     }
     let mut program = match output {
@@ -127,13 +118,12 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
         None => {
             let span = errors
                 .first()
-                .and_then(|(span, ..)| *span)
+                .and_then(|d| d.span)
                 .unwrap_or_else(|| span_at(tokens, tokens.len().saturating_sub(1)));
-            errors.push((
-                Some(span),
-                "the program could not be parsed".to_string(),
-                Stage::Parse,
-            ));
+            errors.push(ParseDiag {
+                span: Some(span),
+                message: "the program could not be parsed".to_string(),
+            });
             // The whole (unparseable) stream is one masked error block.
             let range = (
                 tokens.first().map(|t| t.range.0).unwrap_or(0),
@@ -173,7 +163,7 @@ pub fn parse_statement_region(
     tokens: &[Token],
     start: usize,
     end: usize,
-) -> (Vec<Stmt>, Vec<Diag>) {
+) -> (Vec<Stmt>, Vec<ParseDiag>) {
     let (statements, _ranges, errors) = parse_statement_region_traced(tokens, start, end);
     (statements, errors)
 }
@@ -192,7 +182,7 @@ pub fn parse_statement_region_traced(
     tokens: &[Token],
     start: usize,
     end: usize,
-) -> (Vec<Stmt>, Vec<(usize, usize)>, Vec<Diag>) {
+) -> (Vec<Stmt>, Vec<(usize, usize)>, Vec<ParseDiag>) {
     let (statements, ranges, errors) = std::thread::scope(|scope| {
         let worker = std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
@@ -200,26 +190,12 @@ pub fn parse_statement_region_traced(
             .expect("spawn the region parse worker");
         worker.join().expect("the region parse worker panicked")
     });
-    let errors = errors
-        .into_iter()
-        .map(|(span, message, stage)| Diag {
-            span,
-            message,
-            stage,
-            check: None,
-        })
-        .collect();
     (statements, ranges, errors)
 }
 
 /// The worker's result for a region: the statements, their absolute
-/// token-index ranges, and the diagnostics in a `Send` form (the crate's `Diag`
-/// embeds the checker's, which is not `Send`).
-type RegionOut = (
-    Vec<Stmt>,
-    Vec<(usize, usize)>,
-    Vec<(Option<Span>, String, Stage)>,
-);
+/// token-index ranges, and the diagnostics.
+type RegionOut = (Vec<Stmt>, Vec<(usize, usize)>, Vec<ParseDiag>);
 
 fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let region = &tokens[start..end];
@@ -260,14 +236,11 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
         });
     let stream = Stream::from_iter(region.iter().cloned());
     let (output, errs) = parser.parse(stream).into_output_errors();
-    let mut errors: Vec<(Option<Span>, String, Stage)> = Vec::new();
+    let mut errors: Vec<ParseDiag> = Vec::new();
     for e in &errs {
         let diag = diag_from(region, e);
-        if !errors
-            .iter()
-            .any(|(span, message, _)| *span == diag.span && *message == diag.message)
-        {
-            errors.push((diag.span, diag.message, diag.stage));
+        if !errors.iter().any(|d| d.span == diag.span && d.message == diag.message) {
+            errors.push(diag);
         }
     }
     // The region's tokens carry absolute *byte* positions, so the statements are
@@ -1632,7 +1605,7 @@ fn apply_type_mode(program: Program) -> Program {
 /// Collect the byte-range masks of every recovered-error node in the AST, in
 /// source order.  [`Program::error_blocks`] carries these so the frontend can
 /// exclude the error regions from a content signature / diff.
-pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
+pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {
             Expr::Err { range, start } => out.push(ErrorBlock {
@@ -1786,8 +1759,8 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
 // Diagnostics
 
 /// Convert a chumsky error (token-index span, found token, expected labels)
-/// into the crate's diagnostic.
-fn diag_from(tokens: &[Token], e: &Rich<'_, Token, SimpleSpan<usize>>) -> Diag {
+/// into this crate's diagnostic.
+fn diag_from(tokens: &[Token], e: &Rich<'_, Token, SimpleSpan<usize>>) -> ParseDiag {
     let span = span_at(tokens, e.span().start);
     let message = match e.reason() {
         // A custom error (from the parser's own checks, e.g. a recovered
@@ -1811,7 +1784,10 @@ fn diag_from(tokens: &[Token], e: &Rich<'_, Token, SimpleSpan<usize>>) -> Diag {
             }
         }
     };
-    Diag::new(Stage::Parse, span, message)
+    ParseDiag {
+        span: Some(span),
+        message,
+    }
 }
 
 #[cfg(test)]

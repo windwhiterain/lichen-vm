@@ -18,12 +18,18 @@
 //!
 //! See `docs/language-spec.md` for the language spec.
 
-pub mod ast;
+// The lexer and parser live in their own crates; re-export them here so
+// existing module paths (`lichen_language::lex::Token`, `lichen_language::ast::Expr`,
+// `lichen_language::parse::parse`) resolve unchanged.
+pub use lichen_language_lex as lex;
+pub use lichen_language_lex::{LexDiag, Span};
+pub use lichen_language_parser as parse;
+pub use lichen_language_parser::{ParseDiag, Parsed};
+pub use lichen_language_parser::ast;
+
 pub mod compile;
 pub mod diag;
-pub mod lex;
 pub mod package;
-pub mod parse;
 pub mod persist;
 pub mod preprocess;
 pub mod program;
@@ -200,13 +206,14 @@ pub fn frontend_at(
 ) -> Frontend {
     let lex::Lexed {
         tokens,
-        errors: mut diagnostics,
+        errors: lex_errors,
     } = lex::lex_with(code, line_starts, base);
+    let mut diagnostics: Vec<Diag> = lex_errors.into_iter().map(Diag::from_lex).collect();
     let parse::Parsed {
         program,
         errors: parse_errors,
     } = parse::parse(&tokens);
-    diagnostics.extend(parse_errors);
+    diagnostics.extend(parse_errors.into_iter().map(Diag::from_parse));
     // The lowering is total: an unresolved name lowers to the same inert
     // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
     // and the resolve errors ride in `diagnostics`.
