@@ -104,7 +104,9 @@ syntax-only modules (`lex`, `ast`, `parse`, and the syntactic half of `diag`)
 into a `lichen-language-frontend` crate and `pub use` them back through
 `lichen-language`, so existing module paths (`lichen_language::lex::…`) never
 change. That is a refactor, not a redesign; the artifact contract above is
-unchanged by it.
+unchanged by it. The concrete design — the crate layout, the `Span` and
+`Diag`/`Stage` decoupling seams, and the step-by-step migration — is
+[frontend-syntax-separation](frontend-syntax-separation.md).
 
 ### What about cross-process sharing?
 
