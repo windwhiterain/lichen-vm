@@ -408,21 +408,21 @@ fn static_function_captures<P: Program>(
             return false;
         }
         let sn = &module.nodes[node.index];
-        if let Some(operation) = sn.operation {
-            if let Some(operand) = operation.operand {
-                if walk(module, operand, target, visited) {
-                    return true;
-                }
-            }
+        if let Some(operation) = sn.operation
+            && let Some(operand) = operation.operand
+            && walk(module, operand, target, visited)
+        {
+            return true;
         }
-        if let Some(value) = sn.value {
-            if let Some(LowValue::Array(array)) = value.as_enum() {
-                for item in array.items() {
-                    if let AnyNodeId::Static(sref) = item.node {
-                        if sref.module == module.key && walk(module, sref.index, target, visited) {
-                            return true;
-                        }
-                    }
+        if let Some(value) = sn.value
+            && let Some(LowValue::Array(array)) = value.as_enum()
+        {
+            for item in array.items() {
+                if let AnyNodeId::Static(sref) = item.node
+                    && sref.module == module.key
+                    && walk(module, sref.index, target, visited)
+                {
+                    return true;
                 }
             }
         }

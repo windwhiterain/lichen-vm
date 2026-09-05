@@ -231,24 +231,29 @@ Windows here):
 | build the WASM + section | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | **ok** (216 KB) |
 | run the crate's tests | `cargo test -p lichen-language -p lichen-language-server -p tree-sitter-lichen` | **348 passed** |
 | load grammar + validate `.scm` | `tree-sitter query languages/lichen/{highlights,outline}.scm <sample>.lichen` | **ok** |
-| `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` | **fails, not on the plugin** |
+| `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` | **fails at `lichen-highlevel` (not the plugin)** |
 
 The LSP stdio test and the grammar query check are the two that the manual "Install Dev
 Extension" flow never covers, and both run headless here.
 
-**Two pre-existing blockers** surface when you run the *strict* CI-style checks locally, and
-they are in this monorepo's **other** crates, not the plugin:
+**The strict `-D warnings` clippy check still fails further up the dependency tree** — a
+monorepo-wide lint backlog, not a problem in the plugin. Two of the original blockers are now
+fixed (the plugin source itself was never touched):
 
-- `cargo fmt -p tree-sitter-lichen -- --check` fails: `tests/samples.rs` is not rustfmt-clean
-  (comment alignment in the `cases` array). `cargo fmt` auto-fixes it (AGENTS.md's polish
-  step). The plugin and server crates are clean.
-- `cargo clippy … -- -D warnings` fails on the **transitive dependency `lichen-lowlevel`**
-  (`collapsible_if` in `static_module.rs`, `doc_lazy_continuation` in `lib.rs`). lichen-vm is
-  a monorepo with path deps, so clippy lints the whole tree under `-D warnings`; a plain
-  `cargo clippy -p lichen-language-zed --all-features` (no `-D warnings`) reports those as
-  *warnings* and exits 0. The CI `check_rust` job is built for self-contained extension repos
-  whose deps come from crates.io, so the strict `-D warnings` only becomes meaningful once
-  these monorepo lints are cleaned up.
+- `cargo fmt -p tree-sitter-lichen -- --check` was failing on `tests/samples.rs` (comment
+  alignment); `cargo fmt` fixed it, and that crate now passes `fmt --check` and its tests.
+- `cargo clippy -p lichen-lowlevel --all-features -- -D warnings` was failing
+  (`collapsible_if` in `static_module.rs`, `doc_lazy_continuation` in `lib.rs`); both are
+  clean now, and `cargo test -p lichen-lowlevel` (125 tests) still passes.
+
+What still blocks a fully-green
+`cargo clippy -p lichen-language-zed --all-features -- -D warnings` is **`lichen-highlevel`**
+(and likely `lichen-language` / `lichen-language-server` after it):
+`type_complexity`, `question_mark`, `collapsible_if`, `get_first`, `needless_range_loop`,
+`map_flatten` in `checker.rs` / `diagnostic.rs`. lichen-vm is a monorepo with path deps, so
+clippy lints the whole tree under `-D warnings`; a plain `cargo clippy -p lichen-language-zed
+--all-features` (no `-D warnings`) reports these as *warnings* and exits 0. That cleanup is
+independent of the Zed plugin and touches the checker, so it is a separate task.
 
 The `zed-extension` CLI is a prebuilt **Linux** binary (CI downloads it from
 `https://zed-extension-cli.nyc3.digitaloceanspaces.com/…`), so the *packaging* step is not
