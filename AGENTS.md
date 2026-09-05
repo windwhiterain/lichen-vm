@@ -15,4 +15,4 @@ make sure your are on your assigned worktree (usually you should create one for 
 ## Verify
 - `cargo check` for compilation pass.
 - `cargo tests` for behaviour correctness.
-- `cargo fix --allow-dirty`, `cargo fmt` for final commit.
+- `cargo fix --allow-dirty`, `cargo fmt` for final commit, no tests need after them.
