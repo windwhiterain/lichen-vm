@@ -9,6 +9,6 @@ pub mod ast;
 mod parser;
 
 pub use parser::{
-    collect_error_blocks, parse, parse_statement_region, parse_statement_region_traced,
-    ParseDiag, Parsed,
+    ParseDiag, Parsed, collect_error_blocks, parse, parse_statement_region,
+    parse_statement_region_traced,
 };

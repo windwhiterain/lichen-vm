@@ -257,8 +257,14 @@ impl BufferSession {
         // Rebuild: lower (total) and check.  The resolve diagnostics were
         // already produced by the signature pass (the frontend source of truth
         // for the session), so the lowering's own are discarded.
-        let (ir, _) = crate::compile::compile_with_imports(&program, &[]);
-        let report: Report = build_report(Some(ir), diagnostics, None, no_native_ops());
+        let (ir, span_index, _) = crate::compile::compile_with_imports(&program, &[]);
+        let report: Report = build_report(
+            Some(ir),
+            Some(span_index),
+            diagnostics,
+            None,
+            no_native_ops(),
+        );
         let check_diagnostics: Vec<Diag> = report
             .diagnostics
             .iter()

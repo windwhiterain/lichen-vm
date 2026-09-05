@@ -109,7 +109,10 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
     let mut errors: Vec<ParseDiag> = Vec::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
-        if !errors.iter().any(|d| d.span == diag.span && d.message == diag.message) {
+        if !errors
+            .iter()
+            .any(|d| d.span == diag.span && d.message == diag.message)
+        {
             errors.push(diag);
         }
     }
@@ -239,7 +242,10 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let mut errors: Vec<ParseDiag> = Vec::new();
     for e in &errs {
         let diag = diag_from(region, e);
-        if !errors.iter().any(|d| d.span == diag.span && d.message == diag.message) {
+        if !errors
+            .iter()
+            .any(|d| d.span == diag.span && d.message == diag.message)
+        {
             errors.push(diag);
         }
     }

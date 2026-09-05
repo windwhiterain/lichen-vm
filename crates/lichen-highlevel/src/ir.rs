@@ -81,15 +81,12 @@ impl ChildRange {
     pub const EMPTY: ChildRange = ChildRange { start: 0, end: 0 };
 }
 
-/// A source span, supplied by the language frontend: `(line, column)`.
-pub type Span = (u32, u32);
-
 /// A source-blind diagnostic location: the IR expression a check is about,
 /// plus a single **recursive** descent path through its `[value, type, …]`
 /// spine.
 ///
-/// The highlevel is deliberately source-blind — it never sees a [`Span`]
-/// (the source↔IR mapping is the frontend's own record), so a location must
+/// The highlevel is deliberately source-blind — it never sees a source span —
+/// so a location must
 /// be expressible purely in terms of the expression's structure.  The highlevel
 /// *does* parse each level of that structure, tagging it as either an
 /// expression's `[value, type]` pair (a [`LocStep::Value`]/[`LocStep::Type`]/
@@ -211,7 +208,6 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
 #[derive(Clone, Copy, Debug)]
 pub struct Expr<L> {
     pub kind: ExprKind<L>,
-    pub span: Option<Span>,
 }
 
 /// The expression kinds.  Generic over the literal vocabulary `L` — a literal
@@ -450,9 +446,9 @@ impl<A: AttrSpec, L> IR<A, L> {
         }
     }
 
-    pub fn alloc(&mut self, kind: ExprKind<L>, span: Option<Span>) -> ExprId {
+    pub fn alloc(&mut self, kind: ExprKind<L>) -> ExprId {
         let id = ExprId(self.expr.len() as u32);
-        self.expr.push(Expr { kind, span });
+        self.expr.push(Expr { kind });
         self.schemas.push(SchemaId(0));
         id
     }
@@ -466,7 +462,6 @@ impl<A: AttrSpec, L> IR<A, L> {
         value: ExprId,
         r#type: Option<ExprId>,
         attrs: &[ExprId],
-        span: Option<Span>,
     ) -> ExprId {
         let start = self.children.len() as u32;
         self.children.extend_from_slice(attrs);
@@ -474,14 +469,11 @@ impl<A: AttrSpec, L> IR<A, L> {
             start,
             end: self.children.len() as u32,
         };
-        self.alloc(
-            ExprKind::Annotation {
-                value,
-                r#type,
-                attributes,
-            },
-            span,
-        )
+        self.alloc(ExprKind::Annotation {
+            value,
+            r#type,
+            attributes,
+        })
     }
 
     /// The attribute value expressions of an [`ExprKind::Annotation`] — aligned,
@@ -516,19 +508,15 @@ impl<A: AttrSpec, L> IR<A, L> {
         &self.schema_table[self.schemas[e.0 as usize].0 as usize]
     }
 
-    pub fn alloc_tuple(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::Tuple, span)
+    pub fn alloc_tuple(&mut self, elements: &[ExprId]) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::Tuple)
     }
 
-    pub fn alloc_type_tuple(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::TypeTuple, span)
+    pub fn alloc_type_tuple(&mut self, elements: &[ExprId]) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::TypeTuple)
     }
 
-    pub fn alloc_type_struct(
-        &mut self,
-        fields: &[(ExprId, Option<&'static str>)],
-        span: Option<Span>,
-    ) -> ExprId {
+    pub fn alloc_type_struct(&mut self, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
         let start = self.children.len() as u32;
         let nstart = self.struct_names.len() as u32;
         let mut names = Vec::with_capacity(fields.len());
@@ -545,13 +533,10 @@ impl<A: AttrSpec, L> IR<A, L> {
             start: nstart,
             end: self.struct_names.len() as u32,
         };
-        self.alloc(
-            ExprKind::TypeStruct {
-                fields: field_range,
-                names: name_range,
-            },
-            span,
-        )
+        self.alloc(ExprKind::TypeStruct {
+            fields: field_range,
+            names: name_range,
+        })
     }
 
     pub fn alloc_instantiate(
@@ -559,7 +544,6 @@ impl<A: AttrSpec, L> IR<A, L> {
         type_expr: ExprId,
         value: ExprId,
         names: &[Option<&'static str>],
-        span: Option<Span>,
     ) -> ExprId {
         let nstart = self.struct_names.len() as u32;
         self.struct_names.extend_from_slice(names);
@@ -567,45 +551,34 @@ impl<A: AttrSpec, L> IR<A, L> {
             start: nstart,
             end: self.struct_names.len() as u32,
         };
-        self.alloc(
-            ExprKind::Instantiate {
-                type_expr,
-                value,
-                names: name_range,
-            },
-            span,
-        )
+        self.alloc(ExprKind::Instantiate {
+            type_expr,
+            value,
+            names: name_range,
+        })
     }
 
-    pub fn alloc_record(
-        &mut self,
-        value: ExprId,
-        names: &[Option<&'static str>],
-        span: Option<Span>,
-    ) -> ExprId {
+    pub fn alloc_record(&mut self, value: ExprId, names: &[Option<&'static str>]) -> ExprId {
         let nstart = self.struct_names.len() as u32;
         self.struct_names.extend_from_slice(names);
         let name_range = ChildRange {
             start: nstart,
             end: self.struct_names.len() as u32,
         };
-        self.alloc(
-            ExprKind::Record {
-                value,
-                names: name_range,
-            },
-            span,
-        )
+        self.alloc(ExprKind::Record {
+            value,
+            names: name_range,
+        })
     }
 
-    pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {
-        self.alloc_variadic(elements, ExprKind::Array, span)
+    pub fn alloc_array(&mut self, elements: &[ExprId]) -> ExprId {
+        self.alloc_variadic(elements, ExprKind::Array)
     }
 
     /// Allocate a constant table literal: each `(key, value)` pair is
     /// flattened into the children arena (interleaved, entry by entry), and
     /// the expression is an [`ExprKind::Table`] over that range.
-    pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: Option<Span>) -> ExprId {
+    pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)]) -> ExprId {
         let start = self.children.len() as u32;
         for &(key, value) in entries {
             self.children.push(key);
@@ -615,16 +588,12 @@ impl<A: AttrSpec, L> IR<A, L> {
             start,
             end: self.children.len() as u32,
         };
-        self.alloc(ExprKind::Table(range), span)
+        self.alloc(ExprKind::Table(range))
     }
 
     /// Allocate a shallow-marked array: each `(element, depth)` pair carries
     /// the element's `~` depth (0 = unmarked, `usize::MAX` = bare `~`).
-    pub fn alloc_shallow_array(
-        &mut self,
-        elements: &[(ExprId, usize)],
-        span: Option<Span>,
-    ) -> ExprId {
+    pub fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)]) -> ExprId {
         let start = self.children.len() as u32;
         let dstart = self.depths.len() as u32;
         for &(element, depth) in elements {
@@ -639,14 +608,13 @@ impl<A: AttrSpec, L> IR<A, L> {
             start: dstart,
             end: self.depths.len() as u32,
         };
-        self.alloc(ExprKind::ShallowArray { range, depths }, span)
+        self.alloc(ExprKind::ShallowArray { range, depths })
     }
 
     fn alloc_variadic(
         &mut self,
         elements: &[ExprId],
         make: fn(ChildRange) -> ExprKind<L>,
-        span: Option<Span>,
     ) -> ExprId {
         let start = self.children.len() as u32;
         self.children.extend_from_slice(elements);
@@ -654,7 +622,7 @@ impl<A: AttrSpec, L> IR<A, L> {
             start,
             end: self.children.len() as u32,
         };
-        self.alloc(make(range), span)
+        self.alloc(make(range))
     }
 
     pub fn set_root(&mut self, root: ExprId) {

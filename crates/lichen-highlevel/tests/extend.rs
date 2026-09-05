@@ -155,20 +155,17 @@ fn the_checker_runs_on_an_extended_union() {
     // pair is a fresh `[FloatType, Type]` with the canonical universe as its
     // type slot.  And `5 : Int` checks as usual on the extended vocabulary.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
-    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)), None);
-    let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))), None);
-    let int_t = ir.alloc(ExprKind::Literal(ProbeLiteral::IntType(IntTypeLit)), None);
-    let ann = ir.alloc(
-        ExprKind::Annotation {
-            value: five,
-            r#type: Some(int_t),
-            attributes: ChildRange::EMPTY,
-        },
-        None,
-    );
+    let float_ty = ir.alloc(ExprKind::Literal(ProbeLiteral::Float(FloatLit)));
+    let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))));
+    let int_t = ir.alloc(ExprKind::Literal(ProbeLiteral::IntType(IntTypeLit)));
+    let ann = ir.alloc(ExprKind::Annotation {
+        value: five,
+        r#type: Some(int_t),
+        attributes: ChildRange::EMPTY,
+    });
     // A tuple so every expression above is reachable from the root (the
     // checker only compiles what the root references).
-    let tuple = ir.alloc_tuple(&[float_ty, ann], None);
+    let tuple = ir.alloc_tuple(&[float_ty, ann]);
     ir.set_root(tuple);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok, "the extended-union program must check");
@@ -194,16 +191,13 @@ fn an_extended_union_reports_type_conflicts() {
     // `5 : Type` is an annotation conflict even on the extended union — the
     // generic checker's diagnostics carry the extended value type.
     let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
-    let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))), None);
-    let ty = ir.alloc(ExprKind::Literal(ProbeLiteral::TypeType(TypeTypeLit)), None);
-    let ann = ir.alloc(
-        ExprKind::Annotation {
-            value: five,
-            r#type: Some(ty),
-            attributes: ChildRange::EMPTY,
-        },
-        None,
-    );
+    let five = ir.alloc(ExprKind::Literal(ProbeLiteral::Int(IntLit(5))));
+    let ty = ir.alloc(ExprKind::Literal(ProbeLiteral::TypeType(TypeTypeLit)));
+    let ann = ir.alloc(ExprKind::Annotation {
+        value: five,
+        r#type: Some(ty),
+        attributes: ChildRange::EMPTY,
+    });
     ir.set_root(ann);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(!build.ok);

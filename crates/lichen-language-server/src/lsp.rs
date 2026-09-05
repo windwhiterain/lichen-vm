@@ -20,7 +20,7 @@ pub use lsp_types::{
     SemanticTokensResult,
 };
 
-use lichen_highlevel::ir::Span;
+use lichen_language::lex::Span;
 
 // ---------------------------------------------------------------------------
 // Span ↔ position conversion
