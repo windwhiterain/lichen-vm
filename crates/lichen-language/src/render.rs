@@ -42,23 +42,18 @@ pub use lichen_render::{
 // spells an unknown extension value `?`; these hooks spell the compute leaves a
 // kernel carries so the editor/CLI renders them by name.
 
-/// The compute plugin's value-variant spelling: a `Kernel` value and the
-/// `TypeKernel` kind marker both read as `Kernel` — the marker's are internal
-/// (the kernel's *signature* is what the type's arrow carries), and the value
-/// is an opaque compiled artifact, so one name suffices.  The parallel-kernel
-/// and buffer leaves spell by name too (`ParKernel`, `Buffer`).
+/// The compute plugin's value-variant spelling: a bare kernel artifact and a
+/// buffer both read by name (`Kernel`/`ParKernel`/`Buffer`) — a kernel value is
+/// an opaque compiled artifact (its *signature* rides in the struct's `.sig`
+/// field, not in a marker), so one name suffices.
 fn lang_value_render<P>(value: &P::Value) -> Option<String>
 where
     P: HighProgram,
     P::Value: AsEnum<ComputeValue>,
 {
     match value.as_enum() {
-        Some(ComputeValue::Kernel(_)) | Some(ComputeValue::TypeKernel) => {
-            Some("Kernel".to_string())
-        }
-        Some(ComputeValue::ParKernel(_)) | Some(ComputeValue::TypeParKernel) => {
-            Some("ParKernel".to_string())
-        }
+        Some(ComputeValue::Kernel(_)) => Some("Kernel".to_string()),
+        Some(ComputeValue::ParKernel(_)) => Some("ParKernel".to_string()),
         Some(ComputeValue::Buffer(_)) | Some(ComputeValue::TypeBuffer) => {
             Some("Buffer".to_string())
         }

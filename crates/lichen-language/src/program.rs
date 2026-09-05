@@ -201,25 +201,6 @@ macro_rules! lang_compose_vocabulary {
             fn type_id_value(n: usize) -> Self {
                 Self::$tyv_name(<$tyv>::TypeId(n))
             }
-            // A leaf re-heads the universe (e.g. `lichen-compute`'s
-            // `TypeKernel`) to form a function-kind marker; delegate the
-            // classification to each leaf so a plugin-built compiler's
-            // renderer still spells those kinds as `in -> out`.
-            fn is_function_kind(&self) -> bool {
-                match self {
-                    LangValue::$low_name(v) => {
-                        <$low as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
-                    }
-                    LangValue::$tyv_name(v) => {
-                        <$tyv as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
-                    }
-                    $(
-                        LangValue::$extra_v_name(v) => {
-                            <$extra_v as ::lichen_utils::extend::FunctionKind>::is_function_kind(v)
-                        }
-                    )*
-                }
-            }
         }
 
         // The operator union's `run` is a uniform dispatch: each leaf handles

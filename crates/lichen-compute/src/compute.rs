@@ -170,16 +170,10 @@ struct KernelFragment {
 pub enum ComputeValue {
     /// A compiled, runnable kernel artifact.
     Kernel(KernelId),
-    /// The kind marker of kernel types — a kernel's type is
-    /// `[signature, [TypeKernel, Type]]`.
-    TypeKernel,
     /// A compiled **parallel** kernel artifact: a curried `?a -> USize -> ?b`
     /// function flattened to a `(?a, USize) -> ?b` wasm function (the config
     /// is the first group of parameters, the *index* the last scalar).
     ParKernel(KernelId),
-    /// The kind marker of parallel-kernel types — a parallel kernel's type is
-    /// `[signature, [TypeParKernel, Type]]`.
-    TypeParKernel,
     /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
     /// index range `[0, n)` and collected the `n` `?b` results here, host-owned
     /// (a `Copy` scalar into the process buffer registry, exactly like
@@ -188,17 +182,6 @@ pub enum ComputeValue {
     /// The kind marker of buffer types — a buffer's type is
     /// `[element_type, [TypeBuffer, Type]]`.
     TypeBuffer,
-}
-
-impl lichen_utils::extend::FunctionKind for ComputeValue {
-    fn is_function_kind(&self) -> bool {
-        // `TypeKernel` (and its parallel twin `TypeParKernel`) re-head the
-        // universe to form a kernel type `[signature, [TypeKernel, Type]]`,
-        // which mirrors a function type — the generic renderer spells that
-        // kind as `in -> out`.  A parallel kernel mirrors the lifted
-        // `?a -> USize -> ?b` the same way.
-        matches!(self, ComputeValue::TypeKernel | ComputeValue::TypeParKernel)
-    }
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -210,6 +193,9 @@ pub enum ComputeOperator {
     Jit,
     /// `[kernel, arg]` operand — run the kernel on the arg → the result.
     Launch,
+    /// `[kernel, arg]` operand — a cross-kernel call: run kernel `k` (a
+    /// `.native` extracted from a kernel struct) on `arg` → the result.
+    Call,
     /// Compile a curried `?a -> USize -> ?b` function to a parallel kernel
     /// (flattened `(?a, USize) -> ?b`) → a `ParKernel` value.
     Parallel,
@@ -284,6 +270,41 @@ where
                 // vector.  Anything else (a non-literal element, e.g. a
                 // computed scalar) stays lazy — the definition pass reports
                 // the unbound result.
+                let mut args: Vec<i64> = Vec::new();
+                match module
+                    .node_value(operands[1].node)
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                {
+                    Some(LowValue::USize(n)) => args.push(n as i64),
+                    Some(LowValue::Array(_)) => {
+                        if !collect_args(module, operands[1].node, &mut args) {
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                    }
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                };
+                match run_kernel(id, &args) {
+                    Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
+                    Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                }
+            }
+            ComputeOperator::Call => {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    unreachable!("Call expects an operand array of [kernel, arg]")
+                };
+                let operands = operands.items();
+                let Some(ComputeValue::Kernel(id)) = module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
                 let mut args: Vec<i64> = Vec::new();
                 match module
                     .node_value(operands[1].node)
@@ -1036,11 +1057,12 @@ where
             }
         }
     }
-    // The compute plugin's own operators: `Launch` inside a kernel body is the
-    // wrapper/`$launch` cross-kernel call form.
+    // The compute plugin's own operators: `Launch`/`Call` inside a kernel body
+    // are the wrapper cross-kernel call forms (`compute.launch k x` /
+    // `call k x`, which lower to a cross-kernel `CallKernel`).
     if let Some(compute_op) = AsEnum::<ComputeOperator>::as_enum(op) {
         match compute_op {
-            ComputeOperator::Launch => {
+            ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
                 return emit_cross_kernel_call(module, params, kernel, arg, body);
             }
@@ -1180,9 +1202,10 @@ where
 }
 
 /// The [`KernelId`] of a kernel-value node (`ComputeValue::Kernel`), looking
-/// through any `value_of` extractions.  Returns `None` for a node that is not
-/// (or does not reach) a kernel value — e.g. a lichen function, used by the
-/// style-1 inline path instead.
+/// through any `value_of` extractions and a kernel struct's `.native` field read
+/// (`Index(struct, 0)`).  Returns `None` for a node that is not (or does not
+/// reach) a kernel value — e.g. a lichen function, used by the style-1 inline
+/// path instead.
 fn kernel_id_of<P>(module: &Module<P>, node: NodeId) -> Option<KernelId>
 where
     P: Program,
@@ -1194,8 +1217,24 @@ where
             return Some(kid);
         }
     }
-    let inner = value_of_node(module, node)?;
-    kernel_id_of(module, inner)
+    if let Some(inner) = value_of_node(module, node) {
+        if let Some(kid) = kernel_id_of(module, inner) {
+            return Some(kid);
+        }
+    }
+    // A kernel struct `.native` field read: `Index(struct, 0)`, where the
+    // struct value's element 0 is the bare kernel artifact.
+    if let Some(operation) = module.nodes[node].operation {
+        if let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
+            && let Ok((target, index)) = operand_pair(module, operation.operand)
+            && usize_value(module, index) == Some(0)
+            && let Some(items) = module.array_items(target)
+            && let Ok(first) = dyn_node(items.first()?.node)
+        {
+            return kernel_id_of(module, first);
+        }
+    }
+    None
 }
 
 /// The *value* node behind a `[value, type]` pair stored as a **concrete array
@@ -1519,6 +1558,7 @@ macro_rules! compute_native_ops {
         // `register_compute`, a handful of small allocations.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
+        static CALL: $crate::CallOp = $crate::CallOp;
         static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
         static PARLAUNCH: $crate::ParLaunchOp = $crate::ParLaunchOp;
         static PGET: $crate::BufferGetOp = $crate::BufferGetOp;
@@ -1526,6 +1566,7 @@ macro_rules! compute_native_ops {
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
             ("jit", &JIT as &dyn $crate::NativeOp<$program>),
             ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
+            ("call", &CALL as &dyn $crate::NativeOp<$program>),
             ("parallel", &PARALLEL as &dyn $crate::NativeOp<$program>),
             ("plrun", &PARLAUNCH as &dyn $crate::NativeOp<$program>),
             ("pget", &PGET as &dyn $crate::NativeOp<$program>),
@@ -1561,7 +1602,7 @@ where
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let f = &args[0];
         // Function-ness gate: the argument's type must be a function (an arrow),
-        // binding the domain/codomain to the fresh cells below.
+        // binding the domain/codomain the signature value carries.
         let d = ctx.fresh();
         let c = ctx.fresh();
         let shape = ctx.array_node(&[d, c]);
@@ -1571,19 +1612,11 @@ where
         let fn_ty = ctx.array_node(&[shape, kind]);
         ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
 
-        // Kernel type: `[sig, [TypeKernel, Type]]` where `sig = [d, c]` is the
-        // arrow's signature — this is what `launch` reads the domain/codomain
-        // from.  It references the cells the gate just bound, so a concrete
-        // function signature flows into the kernel's type.
-        let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeKernel,
-        ));
-        let universe = ctx.universe();
-        let k_kind = ctx.array_node(&[k_marker, universe]);
-        let kernel_ty = ctx.array_node(&[sig, k_kind]);
-
+        // The bare native kernel artifact — the lichen wrapper wraps this value
+        // into a `kernel` struct (`.native`).  It is opaque: its type is a fresh
+        // cell (the signature rides in the struct's `.sig` field, not here).
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Jit), Some(f.value));
+        let kernel_ty = ctx.fresh();
         // The expression's `term` must evaluate to a `[value, type]` pair, so
         // `value_of` can `Index` it; the op's own result is the bare `Kernel`.
         let pair = ctx.array_node(&[op, kernel_ty]);
@@ -1601,26 +1634,60 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
+    /// `$launch(native, sig, a)` — run kernel `native` on `a`.  The lichen
+    /// wrapper extracts `.native` (the bare kernel) and `.sig` (the signature
+    /// type) out of the kernel struct; the native op only gates the signature
+    /// (a function type, binding the domain/codomain) and the argument, and
+    /// never re-parses the struct.
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let native = &args[0];
+        let sig = &args[1];
+        let a = &args[2];
+        // The signature value is a function type `d -> c`: gate it, binding the
+        // domain/codomain to fresh cells.
+        let d = ctx.fresh();
+        let c = ctx.fresh();
+        let shape = ctx.array_node(&[d, c]);
+        let fn_marker = ctx.value_node(P::Value::function_type_marker());
+        let universe = ctx.universe();
+        let kind = ctx.array_node(&[fn_marker, universe]);
+        let fn_ty = ctx.array_node(&[shape, kind]);
+        ctx.check_unify(sig.ty, fn_ty, loc.clone(), DiagKind::Guard);
+        // Unify the argument against the kernel's domain.
+        ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
+        // Emit the `Launch` operator over `[native, a]`, typed as the codomain.
+        let operands = ctx.array_node(&[native.value, a.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
+        let pair = ctx.array_node(&[op, c]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: c,
+        }
+    }
+}
+
+/// `$call(k, a)` — a **cross-kernel call** on native kernel `k`.  The lichen
+/// wrapper extracts `.native` out of the kernel struct (`call = k => a =>
+/// $call(k.native, a)`); the native op only gates the *argument* against a
+/// fresh domain cell and types the result as a fresh codomain cell (the callee
+/// signature is read at launch-time assembly).  It never re-parses the struct.
+pub struct CallOp;
+
+impl<P> NativeOp<P> for CallOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let k = &args[0];
         let a = &args[1];
-        // Kernel-ness gate: `k`'s type must be a kernel type, binding the
-        // domain/codomain to the fresh signature cells.
         let d = ctx.fresh();
         let c = ctx.fresh();
-        let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeKernel,
-        ));
-        let universe = ctx.universe();
-        let k_kind = ctx.array_node(&[k_marker, universe]);
-        let kernel_ty = ctx.array_node(&[sig, k_kind]);
-        ctx.check_unify(k.ty, kernel_ty, loc.clone(), DiagKind::Guard);
-        // Unify the argument against the kernel's domain.
         ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
-        // Emit the `Launch` operator over `[k, a]`, typed as the codomain.
         let operands = ctx.array_node(&[k.value, a.value]);
-        let op = ctx.op_node(P::Operator::from(ComputeOperator::Launch), Some(operands));
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Call), Some(operands));
         let pair = ctx.array_node(&[op, c]);
         NativeApply {
             node: pair,
@@ -1668,17 +1735,10 @@ where
         let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
         let inner_ty = ctx.array_node(&[inner_shape, inner_kind]);
         ctx.check_unify(r0, inner_ty, loc.clone(), DiagKind::Guard);
-        // ParKernel type: `[sig, [TypeParKernel, Type]]`, `sig = [?a, Int -> ?b]` —
-        // the lifted `?a -> USize -> ?b` signature `plrun` reads the config and
-        // element type from.  The codomain is the *full* inner function type, so
-        // the generic renderer spells the whole thing as `?a -> Int -> ?b`.
-        let sig = ctx.array_node(&[d0, inner_ty]);
-        let par_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeParKernel,
-        ));
-        let par_kind = ctx.kind_expr(par_marker);
-        let par_ty = ctx.array_node(&[sig, par_kind]);
+        // The bare native parallel kernel artifact — the lichen wrapper wraps
+        // this value into a `kernel` struct (`.native`).  Opaque: typed `_`.
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(f.value));
+        let par_ty = ctx.fresh();
         let pair = ctx.array_node(&[op, par_ty]);
         NativeApply {
             node: pair,
@@ -1694,28 +1754,29 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
+    /// `$plrun(native, sig, a)` — run parallel kernel `native` over `a`.  The
+    /// lichen wrapper extracts `.native`/`.sig` out of the kernel struct; the
+    /// native op only gates the signature (a lifted `?d0 -> (Int -> ?b)`) and
+    /// the `(config, count)` argument, and never re-parses the struct.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
-        let k = &args[0];
-        let a = &args[1];
-        // ParKernel gate: `k : [?a, Int -> ?b] → [sig, [TypeParKernel, Type]]`.
-        // The sig's codomain is the inner *function* type; its shape gives the
-        // element cell `?b`.
+        let native = &args[0];
+        let sig = &args[1];
+        let a = &args[2];
+        // The signature value is the lifted `?d0 -> (Int -> ?b)` function type:
+        // gate it, binding the config cell and the element cell.
         let d0 = ctx.fresh();
         let b = ctx.fresh();
         let mid = ctx.fresh();
         let inner_shape = ctx.array_node(&[mid, b]);
         let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
         let inner_ty = ctx.array_node(&[inner_shape, inner_kind]);
-        let sig = ctx.array_node(&[d0, inner_ty]);
-        let par_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeParKernel,
-        ));
-        let par_kind = ctx.kind_expr(par_marker);
-        let par_ty = ctx.array_node(&[sig, par_kind]);
-        ctx.check_unify(k.ty, par_ty, loc.clone(), DiagKind::Guard);
+        let sig_shape = ctx.array_node(&[d0, inner_ty]);
+        let sig_kind = ctx.kind_expr(ctx.function_type_marker_node());
+        let sig_ty = ctx.array_node(&[sig_shape, sig_kind]);
+        ctx.check_unify(sig.ty, sig_ty, loc.clone(), DiagKind::Guard);
         ctx.check_unify(mid, ctx.int_type(), loc.clone(), DiagKind::Guard);
         // The argument is a `(config, count)` tuple: unify `a`'s type with a
-        // 2-tuple, binding the config cell to the domain `?a` and the count to a
+        // 2-tuple, binding the config cell to the domain `?d0` and the count to a
         // `USize`.
         let cfg_cell = ctx.fresh();
         let n_cell = ctx.fresh();
@@ -1731,7 +1792,7 @@ where
         ));
         let buf_kind = ctx.kind_expr(buf_marker);
         let buf_ty = ctx.array_node(&[b, buf_kind]);
-        let operands = ctx.array_node(&[k.value, a.value]);
+        let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::ParLaunch),
             Some(operands),
