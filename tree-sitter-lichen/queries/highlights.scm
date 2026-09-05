@@ -1,7 +1,7 @@
 ; highlight queries for Lichen (tree-sitter-lichen)
 ;
 ; Note: the same rules are mirrored in the Zed extension at
-; crates/lichen-language-zed/languages/lichen/highlights.scm because Zed reads
+; lichen-language-zed/languages/lichen/highlights.scm because Zed reads
 ; queries from the extension's language directory, not from the grammar repo.
 ; Keep the two in sync.
 

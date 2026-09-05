@@ -25,13 +25,11 @@ const GRAMMAR_PATHS: &[&str] = &[
     "tree-sitter-lichen/src",
     "tree-sitter-lichen/grammar.js",
     "tree-sitter-lichen/queries",
-    "crates/lichen-language-zed/languages/lichen",
+    "lichen-language-zed/languages/lichen",
 ];
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
         .parent()
         .unwrap()
         .to_owned()
@@ -55,7 +53,7 @@ fn every_query_compiles_against_the_current_grammar() {
     let language = Language::from(tree_sitter_lichen::language());
     let root = repo_root();
 
-    let mut files = scm_files(&root.join("crates/lichen-language-zed/languages/lichen"));
+    let mut files = scm_files(&root.join("lichen-language-zed/languages/lichen"));
     files.extend(scm_files(&root.join("tree-sitter-lichen/queries")));
     assert!(!files.is_empty(), "no .scm query files found");
 
@@ -75,7 +73,7 @@ fn every_query_compiles_against_the_current_grammar() {
 
 /// The active `rev` under `[grammars.lichen]` — the first non-comment line that assigns `rev`.
 fn pinned_rev() -> String {
-    let manifest = repo_root().join("crates/lichen-language-zed/extension.toml");
+    let manifest = repo_root().join("lichen-language-zed/extension.toml");
     let text = fs::read_to_string(&manifest).expect("read extension.toml");
     text.lines()
         .find_map(|line| {

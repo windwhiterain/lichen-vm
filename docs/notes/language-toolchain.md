@@ -69,10 +69,11 @@ crates/
                              the LSP server as a [[bin]].
                              Future tool binaries (formatter, …) are ADDED AS
                              MORE [[bin]] TARGETS HERE, not as new crates.
-  lichen-language-zed/       the Zed editor plugin. A separate crate because it
-                             is a different *package kind* (a WASM plugin that
-                             speaks `zed_extension_api`), not because it is a
-                             "different tool".
+
+lichen-language-zed/         the Zed editor plugin, at the repo root. A separate
+                             crate because it is a different *package kind*
+                             (a WASM plugin that speaks `zed_extension_api`),
+                             not because it is a "different tool".
 
 tree-sitter-lichen/          the Tree-sitter grammar, at the repo root so it can
                              be a *sub-directory grammar* of this monorepo for
@@ -217,7 +218,7 @@ not pull the tokio/tower async stack.
   --release` and install it as a dev extension from this directory.
 - **Distribution shape:** for the official registry, the extension does not need
   its own repo — the whole `lichen-vm` repository is added as a public submodule
-  with `path = "crates/lichen-language-zed"` (and `default-features = false` on
+  with `path = "lichen-language-zed"` (and `default-features = false` on
   the `lichen-language-server` dependency keeps the tower-lsp/tokio stack out of
   the WASM). Install-as-dev-extension needs no Git or registry at all.
 - **Grammar:** Lichen's lexer/parser is hand-rolled, so syntax highlighting needs

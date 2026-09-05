@@ -333,7 +333,7 @@ populated with exactly the spans the old node carried.
   and is assembled in `language`. Net effect: `Doc: Send` becomes reachable (the
   language-toolchain note flags this as the follow-up that would let the server cache a
   `Doc` per URI).
-- **The Zed vendor copy.** `crates/lichen-language-zed/grammars/lichen/crates/…` is a
+- **The Zed vendor copy.** `lichen-language-zed/grammars/lichen/crates/…` is a
   vendored snapshot of the whole workspace for the WASM build. The crate move *and* the
   `highlevel` span-free change must be mirrored there or the Zed build breaks.
 - **Public `Span` import churn.** `lichen_highlevel::ir::Span` disappears, so every

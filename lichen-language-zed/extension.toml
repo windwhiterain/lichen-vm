@@ -1,12 +1,12 @@
 # Zed extension manifest for the Lichen language and its language server.
 #
 # Install as a dev extension:  Zed → Extensions → "Install Dev Extension",
-# then select THIS directory (`crates/lichen-language-zed/`). Zed builds the
+# then select THIS directory (`lichen-language-zed/`). Zed builds the
 # extension WASM from the `Cargo.toml` in this directory (see the `zed` feature).
 #
 # For the official registry, this whole `lichen-vm` repository would be added as
-# a public submodule of `zed-industries/extensions` with `path = "crates/lichen-language-zed"`
-# (so the `../lichen-language*` path dependencies resolve during the build).
+# a public submodule of `zed-industries/extensions` with `path = "lichen-language-zed"`
+# (so the `../crates/lichen-language*` path dependencies resolve during the build).
 
 id = "lichen"
 name = "Lichen"

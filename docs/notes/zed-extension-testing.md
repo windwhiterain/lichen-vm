@@ -1,7 +1,7 @@
 # Zed extension: build & test workflow
 
 > Status: current
-> Points at: [`crates/lichen-language-zed/`](../../crates/lichen-language-zed/) (the WASM
+> Points at: [`lichen-language-zed/`](../../lichen-language-zed/) (the WASM
 > plugin, `extension.toml`, `languages/lichen/`), the LSP it launches
 > ([`lichen-language-server`](../../crates/lichen-language-server/)), and the highlighting
 > grammar ([`tree-sitter-lichen`](../../tree-sitter-lichen/)). Design:
@@ -69,8 +69,8 @@ are the API version. For `zed_extension_api = "0.7.0"` that is `00 00 00 07 00 0
 ### 3. Manifest validity
 
 ```bash
-python -c "import tomllib; tomllib.load(open('crates/lichen-language-zed/extension.toml','rb')); print('ok')"
-python -c "import tomllib; tomllib.load(open('crates/lichen-language-zed/languages/lichen/config.toml','rb')); print('ok')"
+python -c "import tomllib; tomllib.load(open('lichen-language-zed/extension.toml','rb')); print('ok')"
+python -c "import tomllib; tomllib.load(open('lichen-language-zed/languages/lichen/config.toml','rb')); print('ok')"
 ```
 
 Then confirm the grammar pin: `[grammars.lichen]` has `rev` (a real Git SHA in `lichen-vm`),
@@ -145,7 +145,7 @@ If it is missing, Zed reports "`lichen-language-server` not found on `$PATH`" wh
   of headroom. With the release WASM build and the debug suite both living in the same
   workspace `target`, the disk fills fast and the linker dies with
   `LLVM ERROR: IO failure on output stream: no space on device` — a *build* failure, not
-  a code failure. Free space (e.g. remove the stale crate-local `crates/lichen-language-zed/target/`,
+  a code failure. Free space (e.g. remove the stale crate-local `lichen-language-zed/target/`,
   a gitignored artifact left by Zed's in-place dev-extension build) and re-run.
 - **PowerShell exit codes lie.** Because `cargo` writes its progress lines to stderr, piping
   `cargo … 2>&1` under PowerShell reports the job as `exit code: 1` even on success. Read
@@ -283,7 +283,7 @@ The layers above prove the plugin compiles, advertises the right API version, la
 working LSP, and colors/outlines the buffer via a grammar that accepts the whole corpus.
 They do **not** prove Zed's host loads the extension or that `zed_extension_api 0.7.0` is
 accepted by the installed Zed. That is a one-time manual check: Zed → Extensions →
-**Install Dev Extension** → select `crates/lichen-language-zed/`, then open a `.lichen`
+**Install Dev Extension** → select `lichen-language-zed/`, then open a `.lichen`
 buffer and confirm (a) the extension loads, (b) diagnostics appear from the LSP, and
 (c) highlight/outline come from the grammar. The host-side `zed_extension_api` version
 must be compatible with the installed Zed; a mismatch surfaces there, not in `cargo`.

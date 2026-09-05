@@ -46,7 +46,7 @@ tree-sitter query queries/highlights.scm path/to/file.lichen
 ## Zed
 
 This grammar lives in the `lichen-vm` monorepo so the Zed extension
-(`crates/lichen-language-zed`) can reference it as a sub-directory grammar via
+(`lichen-language-zed`) can reference it as a sub-directory grammar via
 the `path` field:
 
 ```toml
