@@ -98,9 +98,9 @@ pub struct PackageStore<
     /// while still loading closes an import cycle.
     loading: Vec<PathBuf>,
     /// Native virtual packages — a package name served from a registered
-    /// native module (the `lichen-compute` package) instead of a disk file,
-    /// keyed by the import path (`compute.lichen`).  See
-    /// [`Self::register_compute`].
+    /// native module instead of a disk file, keyed by the import path
+    /// (`compute.lichen`, `std.lichen`, …).  See
+    /// [`Self::register_compute`] and [`Self::register_native`].
     native: HashMap<PathBuf, PackageHandle>,
     /// Vendored dependencies, keyed by the import alias the package manager
     /// resolves `import "alias"` / `import "alias/rest"` through.  A vendored
@@ -253,12 +253,19 @@ where
         &mut self,
         path: &Path,
     ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
-        // The `lichen-compute` native package: served from a registered
-        // module, not a disk file.
-        if path.file_name().is_some_and(|n| n == "compute.lichen") {
-            if let Some(handle) = self.native.get(Path::new(COMPUTE_PATH)) {
+        // A registered native virtual package (`compute.lichen`, `std.lichen`,
+        // …): served from the in-memory registry, never a disk file.  A host
+        // that registered one (the package-manager plug: a plugin's embedded
+        // source compiled against its private native registry) is served here
+        // by its file name.
+        if let Some(file_name) = path.file_name() {
+            if let Some(handle) = self.native.get(Path::new(file_name)) {
                 return Ok(handle.clone());
             }
+        }
+        // The `lichen-compute` native package: served from a registered
+        // module, not a disk file.  It self-registers on first import.
+        if path.file_name().is_some_and(|n| n == "compute.lichen") {
             let handle = self
                 .register_compute()
                 .map_err(|e| vec![Diag::new(Stage::Preprocess, (0, 0), e)])?;
@@ -671,6 +678,109 @@ where
                 )
             })
         })
+    }
+}
+
+// The native-package registration impl: compile a plugin's embedded lichen
+// source against its private native-op registry and serve it as a virtual
+// package.  It needs only the bounds `compile_with_imports_at` requires — the
+// store's compute/`ComputeValue` leaves are NOT needed — so the package-manager
+// plug (register any native plugin source) stays plugin-agnostic.
+impl<V, O, C> PackageStore<V, O, C>
+where
+    V: ValueType + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + 'static,
+{
+    /// Register a native virtual package: compile `source` (a plugin's
+    /// embedded lichen wrapper) against that plugin's *private* native-op
+    /// registry and serve it at `virtual_path` (its file name), so
+    /// `import "virtual_path"` resolves to it without a disk file.
+    ///
+    /// This is the package-manager plug: a host that pulls a native plugin
+    /// compiles the plugin's `WRAPPER_SOURCE` here and files it in the store's
+    /// native-package registry, exactly as `register_compute` does for
+    /// `lichen-compute` — but over a *caller-supplied* registry, so the plugin
+    /// stays program-generic and the caller names only the crate and its
+    /// program marker.
+    ///
+    /// The embedded source is a complete package (no `@{…@}` block, no
+    /// imports), so it compiles directly against the registry rather than
+    /// through [`preprocess`](crate::preprocess::preprocess) — which is
+    /// compute-bounded and would force a non-compute host to carry
+    /// [`lichen_compute::ComputeValue`]/[`lichen_compute::ComputeOperator`].
+    pub fn register_native(
+        &mut self,
+        virtual_path: &str,
+        source: &str,
+        native_ops: NativeOps<CompiledProgram<V, O>>,
+    ) -> Result<PackageHandle, String> {
+        let line_starts = crate::lex::line_starts(source);
+        let report = crate::compile_with_imports_at::<V, O>(
+            source,
+            &[],
+            Some(self.registry()),
+            0,
+            &line_starts,
+            native_ops,
+        );
+        if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
+            return Err(report
+                .diagnostics
+                .into_iter()
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+                .join("\n"));
+        }
+        let build = report.build.unwrap();
+
+        // Fully evaluate the exported value and type before freezing.
+        let mut module = build.module;
+        module.evaluate_node_deep(build.root_val, None);
+        module.evaluate_node_deep(build.root_ty, None);
+
+        let hash = persist::artifact_hash(source.as_bytes(), &[]);
+        let (key, _is_new) = self.alloc_key(&format!("virtual:{virtual_path}"));
+        let freeze = self
+            .registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .freeze_mapped(&module, key, hash);
+        let export = StaticNodeId {
+            module: freeze.key,
+            index: freeze.node_map[&build.root_term],
+        };
+        self.registry
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_package_meta(
+                freeze.key,
+                HighPackageMeta {
+                    export: Some(export),
+                },
+            );
+        // File it under its file name so `load_package` serves it by the name
+        // an `import "name"` resolves to (the path's own file name).
+        let name = Path::new(virtual_path)
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(virtual_path));
+        let handle = PackageHandle {
+            path: PathBuf::from(virtual_path),
+            key: freeze.key,
+            export,
+            direct: Vec::new(),
+        };
+        self.native.insert(name, handle.clone());
+        self.compiled += 1;
+        Ok(handle)
     }
 }
 

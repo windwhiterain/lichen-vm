@@ -2,10 +2,11 @@
 
 > Status: current
 > Points at: `crates/lichen-highlevel/src/plugin.rs` (`NativePlugin`),
-> `crates/lichen-compute` (the reference native plugin),
+> `crates/lichen-compute` and `lichen-std-native` (the reference native plugins),
 > `crates/lichen-perspective` (the established compiler plugin),
 > `crates/lichen-language/src/program.rs` (`lang_compose_vocabulary!`),
-> and `crates/lichen-language/src/package.rs` (`compute_native_ops!`).
+> and `crates/lichen-language/src/package.rs` (`compute_native_ops!` /
+> `register_native`).
 
 The lichen system extends itself through a compile-time composition, not a
 loadable ABI. There are **two kinds of extension**, split by one question:
@@ -130,6 +131,11 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
 
 - `lichen-compute` is a native plugin (its own crate; `NativePlugin` marker +
   `compute_native_ops!`).
+- `lichen-std-native` is a native plugin (its own crate; `NativePlugin` marker +
+  `SortOp` leaf, `native-op` impl, `lichen_std_native_ops!`, and an embedded
+  `std.lichen` wrapper source served through a native virtual package).  It is
+  **not** in the shipping compiler's vocabulary manifest; a host composes it
+  and drives it the way a package manager plugs a native plugin in.
 - `lichen-perspective` is a compiler plugin (its own crate): the program-generic
   semantic core (`AttrExt<P>`, `OperatorExt<P> for GcdOp`, `gcd`/`divides`,
   `persp_attr_ext::<P>()`).
