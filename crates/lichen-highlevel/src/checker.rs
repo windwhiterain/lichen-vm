@@ -37,7 +37,7 @@ use lichen_utils::extend::AsEnum;
 
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
-use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep};
+use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep, Schema};
 use crate::native::{no_native_ops, NativeArg, NativeOps};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 
@@ -700,6 +700,47 @@ where
             ExprKind::Assert { .. } => Vec::new(),
             ExprKind::NativeCall { .. } => self.range_children(e),
         }
+    }
+
+    /// The slot an attribute marker occupies below the `[value, type]` head,
+    /// dispatched through the attribute registry.
+    fn slot_of(&self, m: &P::Attr) -> usize {
+        (self.attr_ext)(m).slot()
+    }
+
+    /// Merge an annotation's *spelled* attribute slots into a value's existing
+    /// slot set, producing the resulting expression's full schema tail.  The
+    /// annotation **replaces** the slots it names (same `slot()`) and
+    /// **preserves** every slot it does not — so `(x # 8 ? doc) # 4` keeps the
+    /// doc while re-checking the perspective.  Ordered by `slot()` so the
+    /// runtime pair stays positionally consistent.
+    fn merge_slots(&self, value_tail: Vec<P::Attr>, own_tail: Vec<P::Attr>) -> Vec<P::Attr> {
+        let mut result = value_tail;
+        for m in own_tail {
+            let s = self.slot_of(&m);
+            match result.iter().position(|x| self.slot_of(x) == s) {
+                Some(pos) => result[pos] = m,
+                None => result.push(m),
+            }
+        }
+        result.sort_by_key(|m| self.slot_of(m));
+        result
+    }
+
+    /// The value expression's existing attribute slot for `marker` — the node
+    /// the value's runtime pair carries at that attribute's position (a
+    /// constraint's bare lattice value, a label's `[value, type]` pair).  Used
+    /// to *preserve* a slot an annotation does not spell (`(x # 8 ? doc) # 4`
+    /// keeps the doc).  `None` when the value's schema has no such slot.
+    fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
+        let value_tail = self.ir.schema(value).tail.clone();
+        let pos = value_tail.iter().position(|m| m == marker)?;
+        let pair = self.term[value]?;
+        let items = self.any_items(AnyNodeId::Dynamic(pair))?;
+        items.get(2 + pos).and_then(|item| match item.node {
+            AnyNodeId::Dynamic(n) => Some(n),
+            AnyNodeId::Static(_) => None,
+        })
     }
 
     /// The value of an expression: element 0 of its pair.  For expressions
@@ -1940,86 +1981,97 @@ where
             None => self.ty[value].unwrap(),
         };
         let value_node = self.value_of(value);
-        // One schema-tail entry per attribute slot, paired — by position —
-        // with the annotation's attribute value expressions.  A *constraint*
-        // attribute (e.g. `Perspective`) drops the annotation value into the
-        // slot and unifies it against the value's EXISTING attribute (the
-        // provider): the annotation is the *requirement*, so it must be a
-        // subtype of what the value already provides.  A *label* attribute
-        // (e.g. `Doc`) carries no constraint, so its annotation value
-        // *replaces* any existing value outright — no combine, no unify, and
-        // two differing labels never conflict (`? b` over doc `a` yields
-        // `b`).  The checker asks the registry for each attribute's
-        // `AttrExt` — it never names a concrete attribute, so the mechanism
-        // is generic over the attribute set.
-        let tail = self.ir.schema(e).clone().tail;
+        // The annotation *replaces* the attribute slots it spells and
+        // *preserves* every slot it does not — it is not a fresh, isolated
+        // attribute set.  So the resulting schema is the value's slots merged
+        // with the annotation's own: `(x # 8 ? doc) # 4` re-checks the
+        // perspective (unifying the requirement `4` against the provider `8`)
+        // and keeps the doc.  A spelled constraint unifies the annotation
+        // (the *requirement*) against the value's existing attribute (the
+        // *provider*; it must be a subtype of it); a spelled label carries no
+        // constraint.  The checker asks the registry for each attribute's
+        // `AttrExt` — it never names a concrete attribute, so the mechanism is
+        // generic over the attribute set.
+        let own_tail = self.ir.schema(e).clone().tail;
+        let value_tail = self.ir.schema(value).clone().tail;
+        let tail = self.merge_slots(value_tail, own_tail.clone());
+        // Re-stamp the node so every later reader (the apply-time attribute
+        // check, the renderer's attribute listing) sees the full slot set.
+        self.ir.set_schema(e, Schema { tail: tail.clone() });
         let attrs = self.ir.annotation_attrs(e).to_vec();
         let mut slots: Vec<NodeId> = Vec::with_capacity(tail.len());
         let mut constraint_slot: Option<NodeId> = None;
-        for (i, marker) in tail.into_iter().enumerate() {
-            let ext = (self.attr_ext)(&marker);
-            let pe = attrs.get(i).copied();
-            let attr_val = match pe {
-                Some(pe) => {
-                    self.check_expr(pe);
-                    self.value_of(pe)
-                }
-                // A tail entry with no value expression (unreachable for a
-                // well-formed annotation) reads the missing marker.
-                None => self.zero_marker,
-            };
-            if ext.is_label() {
-                // A label (metadata, e.g. `Doc`) carries no constraint: it
-                // contributes no apply-time slot, and its runtime slot is the
-                // annotation value's `[value, type]` term pair, so the
-                // renderer can walk the value's *whole type chain* (a doc
-                // struct's field names come from the type, not a hardcoded
-                // shape).  The attribute's own `is_subtype` (doc → always
-                // `true`) is what permits `? b` to override `? a` without
-                // conflict — the checker never has to special-case a label's
-                // unification, only its metadata slot.
-                let render_slot = match pe {
-                    Some(pe) => self.term[pe].expect("an annotation value expr is compiled"),
-                    None => attr_val,
-                };
-                slots.push(render_slot);
-            } else {
-                // A *constraint* unifies the annotation against the value's
-                // EXISTING attribute and keeps that existing value as the
-                // slot.  The annotation (`expr2`) is the *requirement*: it
-                // must be a subtype of the provider (the value's actual
-                // attribute) — `(x # 8) # 4` is legal (uniform-8 entails
-                // uniform-4), `(x # 4) # 8` is not (uniform-4 does not entail
-                // uniform-8).  The provider is the value's own attribute slot
-                // (a value that is itself annotated, or a bound name carrying
-                // an attribute) or, for a compound, the combine of its
-                // sub-expressions' slots.  A value with no attribute of its
-                // own (a plain leaf, or a doc-only annotation) is the
-                // degenerate case: no provider, so the annotation is the slot.
-                let provider = if self.attr[value].is_some() {
-                    Some(self.attr_or_missing(value))
+        let mut attr_idx = 0;
+        for marker in &tail {
+            let ext = (self.attr_ext)(marker);
+            // Does this annotation spell this slot?  (its own schema lists
+            // exactly the slots it replaces; everything else is preserved.)
+            let spelled = own_tail.iter().any(|m| self.slot_of(m) == self.slot_of(marker));
+            if spelled {
+                let pe = attrs
+                    .get(attr_idx)
+                    .copied()
+                    .expect("a spelled attribute slot has a value expression");
+                attr_idx += 1;
+                self.check_expr(pe);
+                let attr_val = self.value_of(pe);
+                if ext.is_label() {
+                    // A label (metadata, e.g. `Doc`) carries no constraint: it
+                    // contributes no apply-time slot, and its runtime slot is the
+                    // annotation value's `[value, type]` term pair, so the
+                    // renderer can walk the value's *whole type chain* (a doc
+                    // struct's field names come from the type, not a hardcoded
+                    // shape).  The attribute's own `is_subtype` (doc → always
+                    // `true`) is what permits `? b` to override `? a` without
+                    // conflict.
+                    slots.push(self.term[pe].expect("an annotation value expr is compiled"));
                 } else {
-                    let children = self.persp_combine_children(value);
-                    if children.is_empty() {
-                        None
+                    // A *constraint* unifies the annotation against the value's
+                    // EXISTING attribute and keeps that existing value as the
+                    // slot.  The annotation (`expr2`) is the *requirement*: it
+                    // must be a subtype of the provider (the value's actual
+                    // attribute) — `(x # 8) # 4` is legal (uniform-8 entails
+                    // uniform-4), `(x # 4) # 8` is not (uniform-4 does not entail
+                    // uniform-8).  The provider is the value's own attribute slot
+                    // (a value that is itself annotated, or a bound name carrying
+                    // an attribute) or, for a compound, the combine of its
+                    // sub-expressions' slots.  A value with no attribute of its
+                    // own (a plain leaf, or a doc-only annotation) is the
+                    // degenerate case: no provider, so the annotation is the slot.
+                    let provider = if self.attr[value].is_some() {
+                        Some(self.attr_or_missing(value))
                     } else {
-                        let child_attrs: Vec<NodeId> =
-                            children.iter().map(|&c| self.attr_or_missing(c)).collect();
-                        Some(ext.combine(self, &child_attrs))
-                    }
-                };
-                let slot = match provider {
-                    Some(p) => {
-                        let loc2 = self.loc(e, 2);
-                        ext.unify_slots(self, p, attr_val, loc2);
-                        p
-                    }
-                    None => attr_val,
-                };
-                // The constraint slot is what the apply-time attribute check
-                // reads; the runtime pair keeps the same bare lifted value.
-                constraint_slot = Some(slot);
-                slots.push(slot);
+                        let children = self.persp_combine_children(value);
+                        if children.is_empty() {
+                            None
+                        } else {
+                            let child_attrs: Vec<NodeId> =
+                                children.iter().map(|&c| self.attr_or_missing(c)).collect();
+                            Some(ext.combine(self, &child_attrs))
+                        }
+                    };
+                    let slot = match provider {
+                        Some(p) => {
+                            let loc2 = self.loc(e, 2);
+                            ext.unify_slots(self, p, attr_val, loc2);
+                            p
+                        }
+                        None => attr_val,
+                    };
+                    // The constraint slot is what the apply-time attribute check
+                    // reads; the runtime pair keeps the same bare lifted value.
+                    constraint_slot = Some(slot);
+                    slots.push(slot);
+                }
+            } else {
+                // A slot the annotation does not spell is *preserved*: carry the
+                // value's existing attribute for this marker over unchanged — a
+                // constraint's bare lattice value, a label's `[value, type]`.
+                let node = self.value_attr_node(value, marker).unwrap_or(self.zero_marker);
+                if !ext.is_label() {
+                    constraint_slot = Some(node);
+                }
+                slots.push(node);
             }
         }
         // The constraint slot (e.g. the perspective) is what the apply-time

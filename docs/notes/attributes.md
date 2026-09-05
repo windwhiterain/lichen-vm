@@ -89,11 +89,11 @@ The `perspective.rs` integration tests encode this table.
 
 ### Annotation over an existing attribute (requirements & providers)
 
-An `expr # p ? d` over a value that **already carries** a constraint unifies the
-annotation against the value's *existing* attribute and keeps that existing value as
-the slot. The annotation is the **requirement** (a subtype); the value's own/existing
-attribute is the **provider** (a supertype). So the check is `requirement ⊑ provider`
-(`requirement | provider`):
+An `expr # p ? d` over a value that **already carries** an attribute **replaces the
+slots it spells and preserves the rest**, unifying the spelled value against the
+value's existing attribute. The annotation is the **requirement** (a subtype); the
+value's own/existing attribute is the **provider** (a supertype). So the check is
+`requirement ⊑ provider` (`requirement | provider`), and the slot keeps the provider:
 
 | program | result |
 |---|---|
@@ -101,6 +101,8 @@ attribute is the **provider** (a supertype). So the check is `requirement ⊑ pr
 | `(5 # 4) # 8` | `8 ∤ 4` ✗ → "expected 8, found 4" |
 | `x = 1 # 8; x # 4` | provider `8` kept, `4 \| 8` ✓ → slot `8` |
 | `x = 1 # 8; x # 16` | `16 ∤ 8` ✗ |
+| `(5 # 8 ? doc) # 4` | perspective `8` kept, doc **preserved** |
+| `(5 # 8 ? docA) ? docB` | doc replaced by `docB`, perspective `8` preserved |
 
 The provider is the value's own attribute slot (a value that is itself annotated, or a
 bound name carrying an attribute) or, for a compound, the `gcd`-meet of its

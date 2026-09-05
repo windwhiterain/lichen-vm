@@ -102,6 +102,53 @@ fn a_perspective_and_a_doc_coexist_on_one_expression() {
     );
 }
 
+/// An annotation replaces only the slot it spells: re-annotating the
+/// perspective (`# 4` over a `# 8 ? doc` value) unifies the requirement `4`
+/// against the provider `8` and **preserves the doc**.
+#[test]
+fn reinterpret_the_perspective_preserves_the_doc() {
+    let out = evaluate(&format!(
+        "{DOC}(5 # 8 ? Doc(.name \"five\", .description \"a\")) # 4"
+    ))
+    .unwrap();
+    assert_eq!(out, "5 # 8 ? name = \"five\", description = \"a\": Int");
+}
+
+/// Re-annotating the doc (`? b` over a `# 8 ? a` value) replaces the doc and
+/// **preserves the perspective**.
+#[test]
+fn reinterpret_the_doc_preserves_the_perspective() {
+    let out = evaluate(&format!(
+        "{DOC}(5 # 8 ? Doc(.name \"a\", .description \"first\")) ? Doc(.name \"b\", .description \"second\")"
+    ))
+    .unwrap();
+    assert_eq!(out, "5 # 8 ? name = \"b\", description = \"second\": Int");
+}
+
+/// A `#` added to a doc-only value keeps the doc and adds the perspective.
+#[test]
+fn a_perspective_added_to_a_doc_value_keeps_the_doc() {
+    let out = evaluate(&format!(
+        "{DOC}(5 ? Doc(.name \"five\", .description \"a\")) # 4"
+    ))
+    .unwrap();
+    assert_eq!(out, "5 # 4 ? name = \"five\", description = \"a\": Int");
+}
+
+/// A perspective mismatch still fails when re-annotating over an existing
+/// perspective even with a doc attached — a label never weakens a constraint,
+/// and the requirement is checked against the provider.
+#[test]
+fn a_broader_perspective_requirement_does_not_weaken_a_doc() {
+    assert!(
+        !compile(&format!(
+            "{DOC}(5 # 4 ? Doc(.name \"five\", .description \"a\")) # 8"
+        ))
+        .ok(),
+        "the perspective constraint must still reject a mismatched requirement"
+    );
+}
+
 /// A perspective mismatch still fails even when a doc (a label) is attached —
 /// a label never weakens a constraint.
 #[test]
