@@ -1,8 +1,8 @@
 //! The package manager's preprocessor.
 //!
 //! This is the crate that **owns the preprocessor import path**: it is where
-//! a project's `@{…@}` block is cut out, its `depend "url"` directives are
-//! fetched, and its `import "…"` directives are resolved.
+//! a project's `@{…@}` block is cut out, its `name = depend "url"` directives
+//! are fetched, and its `import "…"` directives are resolved.
 //!
 //! The byte scan and the block's mini-frontend live in
 //! `crates/lichen-language/src/preprocess/` (the language crate owns the

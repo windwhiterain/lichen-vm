@@ -1,7 +1,7 @@
 //! The lichen package manager CLI.
 //!
 //! `lichen` manages a project whose dependencies are declared per-file as
-//! `depend "url"` directives in each `@{…@}` meta block: it fetches them
+//! `name = depend "url"` directives in each `@{…@}` meta block: it fetches them
 //! (`fetch`), fetches the toolchain binaries (`install`), rebuilds the
 //! compiler for a native plugin (`rebuild-plugin`), and reclaims the device
 //! cache (`clean` / `cache gc`).
@@ -280,7 +280,11 @@ fn stock_compiler() -> Option<PathBuf> {
 
 /// Spawn the compiler binary as a subprocess, relaying its exit status.
 fn spawn_compiler(bin: &Path, sub: &str, target: &Path) -> ExitCode {
-    let status = match std::process::Command::new(bin).arg(sub).arg(target).status() {
+    let status = match std::process::Command::new(bin)
+        .arg(sub)
+        .arg(target)
+        .status()
+    {
         Ok(status) => status,
         Err(e) => {
             eprintln!("cannot run {}: {e}", bin.display());

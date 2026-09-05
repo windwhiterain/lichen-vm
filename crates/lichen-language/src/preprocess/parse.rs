@@ -3,7 +3,8 @@
 //! It turns the interior token stream into a list of [Directive]s.  The
 //! grammar is a set of statements, Separator-separated (blank lines and a
 //! stray trailing separator are tolerated): `name = import "path"` is an
-//! import binding and `name = "value"` is a string metadata entry.  The block
+//! import binding, `name = depend "url"` is a git dependency, and
+//! `name = "value"` is a string metadata entry.  The block
 //! is small and line-oriented, so a simple scan gives precise, uniform
 //! errors (expected X found Y) with a byte offset into the interior, which
 //! the caller turns into a (line, col) diagnostic against the original file.
@@ -17,11 +18,12 @@ pub enum Directive {
     Import { name: String, path: String },
     /// `name = "value"` -- a string metadata entry.
     Metadata { name: String, value: String },
-    /// `depend "url" [as NAME] [rev/branch/tag/package/sub = "x"] [plugin]` -- a
-    /// git dependency, fetched by the package manager (not resolved here).
+    /// `name = depend "url" [rev/branch/tag/package/sub = "x"] [plugin]` -- a
+    /// git dependency bound to `name`, fetched by the package manager (not
+    /// resolved here).
     Depend {
         url: String,
-        name: Option<String>,
+        name: String,
         rev: Option<String>,
         branch: Option<String>,
         tag: Option<String>,
@@ -45,14 +47,9 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
             continue;
         }
 
-        // A statement starts either with `depend` (a dependency directive) or
-        // with a name (an import binding or a metadata entry).
+        // A statement starts with a name: an import binding, a metadata entry,
+        // or a dependency binding (`name = depend "url"`).
         let stmt_start = tokens[i].range.0;
-        if matches!(tokens[i].kind, TokenKind::KwDepend) {
-            i += 1;
-            out.push((parse_depend(tokens, &mut i)?, stmt_start));
-            continue;
-        }
         let name = match &tokens[i].kind {
             TokenKind::Name(n) => n.clone(),
             k => {
@@ -71,7 +68,8 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
         }
         i += 1;
 
-        // The right-hand side: `import "path"` or a bare string value.
+        // The right-hand side: `import "path"`, `depend "url" [options]`, or a
+        // bare string value.
         match tokens.get(i).map(|t| &t.kind) {
             Some(TokenKind::KwImport) => {
                 i += 1;
@@ -88,6 +86,11 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                 i += 1;
                 out.push((Directive::Import { name, path }, stmt_start));
             }
+            Some(TokenKind::KwDepend) => {
+                i += 1;
+                let depend = parse_depend(tokens, &mut i, name)?;
+                out.push((depend, stmt_start));
+            }
             Some(TokenKind::String(v)) => {
                 let v = v.clone();
                 i += 1;
@@ -97,7 +100,7 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                 return Err(vec![err_at(
                     tokens,
                     i,
-                    format!("expected a string value, found {}", found(k)),
+                    format!("expected a value, found {}", found(k)),
                 )]);
             }
         }
@@ -106,10 +109,15 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
 }
 
 /// Parse `depend "url" [options...]` starting at `*i` (already past the
-/// `depend` keyword).  Reads a URL string then zero or more options: `as NAME`,
-/// `rev|branch|tag|package = "..."`, `plugin`.  Stops at a Separator (the
+/// `depend` keyword), binding the dependency under `name` (the statement's
+/// left-hand side).  Reads a URL string then zero or more options:
+/// `rev|branch|tag|package|sub = "..."`, `plugin`.  Stops at a Separator (the
 /// outer loop consumes it) or the end of the block.
-fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, String)>> {
+fn parse_depend(
+    tokens: &[Token],
+    i: &mut usize,
+    name: String,
+) -> Result<Directive, Vec<(u32, String)>> {
     let url = match tokens.get(*i).map(|t| &t.kind) {
         Some(TokenKind::String(u)) => u.clone(),
         k => {
@@ -122,7 +130,6 @@ fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, 
     };
     *i += 1;
 
-    let mut name = None;
     let mut rev = None;
     let mut branch = None;
     let mut tag = None;
@@ -141,7 +148,7 @@ fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, 
                     tokens,
                     *i,
                     format!(
-                        "expected a depend option (as/rev/branch/tag/package/sub/plugin), found {}",
+                        "expected a depend option (rev/branch/tag/package/sub/plugin), found {}",
                         k.describe()
                     ),
                 )]);
@@ -149,7 +156,6 @@ fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, 
         };
         *i += 1;
         match keyword.as_str() {
-            "as" => name = Some(expect_name(tokens, i)?),
             "rev" => rev = Some(expect_string_after_eq(tokens, i, &keyword)?),
             "branch" => branch = Some(expect_string_after_eq(tokens, i, &keyword)?),
             "tag" => tag = Some(expect_string_after_eq(tokens, i, &keyword)?),
@@ -176,22 +182,6 @@ fn parse_depend(tokens: &[Token], i: &mut usize) -> Result<Directive, Vec<(u32, 
         sub,
         plugin,
     })
-}
-
-/// Expect a `Name` token (an `as NAME` alias).
-fn expect_name(tokens: &[Token], i: &mut usize) -> Result<String, Vec<(u32, String)>> {
-    let n = match tokens.get(*i).map(|t| &t.kind) {
-        Some(TokenKind::Name(n)) => n.clone(),
-        k => {
-            return Err(vec![err_at(
-                tokens,
-                *i,
-                format!("expected a name after 'as', found {}", found(k)),
-            )]);
-        }
-    };
-    *i += 1;
-    Ok(n)
 }
 
 /// Expect `= "string"` following a keyword option, returning the string.
@@ -282,12 +272,12 @@ mod tests {
 
     #[test]
     fn a_depend_directive_parses() {
-        let dirs = parse_ok("depend \"https://example.com/foo.git\"");
+        let dirs = parse_ok("foo = depend \"https://example.com/foo.git\"");
         assert_eq!(
             dirs,
             vec![Directive::Depend {
                 url: "https://example.com/foo.git".to_string(),
-                name: None,
+                name: "foo".to_string(),
                 rev: None,
                 branch: None,
                 tag: None,
@@ -301,14 +291,14 @@ mod tests {
     #[test]
     fn a_depend_directive_with_options_parses() {
         let dirs = parse_ok(
-            "depend \"https://example.com/foo.git\" as foo rev = \"abc123\" \
+            "foo = depend \"https://example.com/foo.git\" rev = \"abc123\" \
              branch = \"main\" package = \"foo-crate\" sub = \"lichen-std\" plugin",
         );
         assert_eq!(
             dirs,
             vec![Directive::Depend {
                 url: "https://example.com/foo.git".to_string(),
-                name: Some("foo".to_string()),
+                name: "foo".to_string(),
                 rev: Some("abc123".to_string()),
                 branch: Some("main".to_string()),
                 tag: None,
@@ -321,10 +311,32 @@ mod tests {
 
     #[test]
     fn a_depend_without_a_url_is_an_error() {
-        let lexed = tokenize("depend");
+        let lexed = tokenize("foo = depend");
         let errors = parse(&lexed.tokens).expect_err("expected an error");
         assert!(
             errors[0].1.contains("expected a url"),
+            "got: {}",
+            errors[0].1
+        );
+    }
+
+    #[test]
+    fn a_depend_without_a_name_is_an_error() {
+        let lexed = tokenize("depend \"https://example.com/foo.git\"");
+        let errors = parse(&lexed.tokens).expect_err("expected an error");
+        assert!(
+            errors[0].1.contains("expected a name"),
+            "got: {}",
+            errors[0].1
+        );
+    }
+
+    #[test]
+    fn an_as_option_is_rejected() {
+        let lexed = tokenize("foo = depend \"https://example.com/foo.git\" as bar");
+        let errors = parse(&lexed.tokens).expect_err("expected an error");
+        assert!(
+            errors[0].1.contains("unknown depend option"),
             "got: {}",
             errors[0].1
         );

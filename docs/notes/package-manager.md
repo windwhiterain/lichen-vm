@@ -28,19 +28,19 @@ There is **no project manifest**: dependencies are declared per file.
 
 ## Declaring dependencies
 
-Each file opens its `@{…@}` block with `depend "url"`:
+Each file opens its `@{…@}` block with `name = depend "url"`:
 
 ```lichen
 @{
-  depend "https://github.com/you/lic-math" as math rev = "abc123"
-  depend "https://github.com/you/lic-gpu" as gpu plugin
+  math = depend "https://github.com/you/lic-math" rev = "abc123"
+  gpu = depend "https://github.com/you/lic-gpu" plugin
   math = import "math"
 @}
 …
 ```
 
-`depend "url"` takes optional `as NAME` (the import alias; defaulted to the
-URL's repo name), `rev`/`branch`/`tag` (a pinned checkout), `package` (the Rust
+`name = depend "url"` binds the dependency under `name` (its import alias) and
+takes `rev`/`branch`/`tag` (a pinned checkout), `package` (the Rust
 crate name of a native plugin), `sub` (a subdirectory of the repo holding the
 source, for a monorepo dependency), and `plugin` (a native plugin — importing
 it requires the compiler to be rebuilt).  Mixing with `import "alias"` and

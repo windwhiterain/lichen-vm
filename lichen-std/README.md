@@ -8,7 +8,7 @@ It lives in this monorepo's `lichen-std/` directory, so depend on it with the
 
 ```lichen
 @{
-  depend "https://github.com/windwhiterain/lichen-vm" as std sub = "lichen-std"
+  std = depend "https://github.com/windwhiterain/lichen-vm" sub = "lichen-std"
   std = import "std"
 @}
 (std.add 40 2, std.double 5, std.inc_twice 5, std.succ 41)

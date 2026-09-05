@@ -327,10 +327,7 @@ fn replace_output_comment(source: &str, output: &str) -> String {
                     plugin,
                 } => {
                     out.push_str("  ");
-                    out.push_str(&format!("depend \"{url}\""));
-                    if let Some(name) = name {
-                        out.push_str(&format!(" as {name}"));
-                    }
+                    out.push_str(&format!("{name} = depend \"{url}\""));
                     if let Some(rev) = rev {
                         out.push_str(&format!(" rev = \"{rev}\""));
                     }

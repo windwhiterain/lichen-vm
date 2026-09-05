@@ -29,14 +29,15 @@ Each file declares its dependencies in its `@{…@}` block:
 
 ```lichen
 @{
-  depend "https://github.com/you/lic-math" as math rev = "abc123"
-  depend "https://github.com/you/lic-gpu" as gpu plugin
+  math = depend "https://github.com/you/lic-math" rev = "abc123"
+  gpu = depend "https://github.com/you/lic-gpu" plugin
   math = import "math"
 @}
 …
 ```
 
-`depend "url"` takes `as NAME` (the import alias), `rev`/`branch`/`tag` (a pinned
+`name = depend "url"` binds the dependency under its import alias `name` and
+takes `rev`/`branch`/`tag` (a pinned
 checkout), `package` (the Rust crate of a native plugin), `sub` (a subdirectory
 of the repo holding the source, for a monorepo dependency), and `plugin`.
 

@@ -3,7 +3,8 @@
 //! A file may open with a single `@{...@}` block (once, before any code; a
 //! non-`@` prefix is allowed and ignored).  Inside the block is a set of
 //! statements, Separator-separated: `name = import "path"` loads a package
-//! bound to `name`, and `name = "value"` defines a string metadata entry.
+//! bound to `name`, `name = depend "url"` declares a git dependency bound to
+//! `name`, and `name = "value"` defines a string metadata entry.
 //! The language lexer/parser never sees the block: it is cut out by a pure
 //! byte scan (independent of the lexer), the interior is parsed by this
 //! module's own little frontend (see [lex] and [parse]), and the caller
@@ -48,15 +49,17 @@ pub struct ResolvedImport {
     pub direct: Vec<(String, StaticNodeId)>,
 }
 
-/// A git dependency declared by a `depend "url"` directive in the block.  The
-/// package manager fetches it (into the lichen-home source cache) and stages
-/// it as a vendored alias before resolving the block's `import` bindings.
+/// A git dependency declared by a `name = depend "url"` directive in the block.
+/// The package manager fetches it (into the lichen-home source cache) and
+/// stages it as a vendored alias before resolving the block's `import`
+/// bindings.  `name` is the left-hand side binding, the alias the dependency
+/// is staged under.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Depend {
     /// The git repository URL.
     pub url: String,
-    /// An explicit import alias (`as NAME`); defaults to the URL's repo name.
-    pub name: Option<String>,
+    /// The import alias the dependency is staged under (`name = depend`).
+    pub name: String,
     /// A pinned revision, branch, or tag.
     pub rev: Option<String>,
     pub branch: Option<String>,
@@ -72,12 +75,12 @@ pub struct Depend {
 }
 
 impl Depend {
-    /// The import alias the dependency is staged under: `as NAME`, else the
-    /// URL's repository name.  This is the key both the package manager (when
-    /// it fetches into the source cache) and the compiler (when it resolves
-    /// the vendored alias) use, so the two agree by construction.
+    /// The import alias the dependency is staged under: its binding name
+    /// (`name = depend`).  This is the key both the package manager (when it
+    /// fetches into the source cache) and the compiler (when it resolves the
+    /// vendored alias) use, so the two agree by construction.
     pub fn alias(&self) -> String {
-        self.name.clone().unwrap_or_else(|| repo_name(&self.url))
+        self.name.clone()
     }
 
     /// The git clone root in the source cache: `lichendir()/sources/<alias>`.
@@ -95,16 +98,6 @@ impl Depend {
             None => self.sources_dir(),
         }
     }
-}
-
-/// The repository's last path component, sans `.git`.
-fn repo_name(url: &str) -> String {
-    let name = url
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("dep");
-    name.strip_suffix(".git").unwrap_or(name).to_string()
 }
 
 /// Sanitize an alias into a filesystem-safe directory name.

@@ -7,7 +7,8 @@
 
 A program may open with a single `@{ … }@` **preprocessor block**. Inside it,
 `name = import "path"` loads a package bound to `name`, `name = "value"` defines a
-string metadata entry, and `depend "url"` declares a git dependency (fetched by the
+string metadata entry, and `name = depend "url"` declares a git dependency bound to
+`name` (fetched by the
 package manager, [`package-manager`](package-manager.md), not by the compiler). The block
 is cut out by a pure byte scan (independent of the lexer), so the language lexer/parser
 never see it; the code to compile is everything after the block.
@@ -15,7 +16,7 @@ never see it; the code to compile is everything after the block.
 ## Import
 
 - The block syntax is the only import form: `@{ _p = import "geometry.lichen" @}`.
-- A dependency is declared first (`depend "url" as geo sub = "liche-std"`),
+- A dependency is declared first (`geo = depend "url" sub = "liche-std"`),
   fetched into the lichen-home source cache, and staged on the import path — then
   `_geo = import "geo"` resolves into it (into the repo's `sub` subdirectory when
   one is given).

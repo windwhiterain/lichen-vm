@@ -29,7 +29,7 @@ pub fn sources_root() -> PathBuf {
     persist::sources_root()
 }
 
-/// The alias a [`Depend`] resolves to: `as NAME`, else the URL's repo name.
+/// The alias a [`Depend`] resolves to: its binding name (`name = depend`).
 pub fn alias_of(dep: &Depend) -> String {
     dep.alias()
 }

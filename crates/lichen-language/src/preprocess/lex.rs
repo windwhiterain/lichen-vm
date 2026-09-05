@@ -2,7 +2,8 @@
 //!
 //! The `@{...@}` block at the top of a file holds a set of statements, one
 //! per line (Separator-separated): `name = import "path"` binds an import,
-//! and `name = "value"` defines a string metadata entry.  The block is cut
+//! `name = depend "url"` declares a git dependency, and `name = "value"`
+//! defines a string metadata entry.  The block is cut
 //! out of the source by a pure byte scan (see [super]) before this lexer
 //! runs, so it only ever sees the block's interior -- no `@{` / `@}` and no
 //! `@` at all (`@` is reserved for the block delimiters, so it cannot appear
@@ -28,8 +29,9 @@ pub enum TokenKind {
     /// The `import` keyword: `name = import "path"`.
     #[token("import")]
     KwImport,
-    /// The `depend` keyword: `depend "url" [options...]` — declare a git
-    /// dependency fetched from `url` (handled by the package manager).
+    /// The `depend` keyword: `name = depend "url" [options...]` — declare a git
+    /// dependency fetched from `url`, bound to `name` (handled by the package
+    /// manager).
     #[token("depend")]
     KwDepend,
     /// A string literal (quotes stripped); no escapes, may be multiline.
@@ -145,12 +147,12 @@ mod tests {
     #[test]
     fn a_depend_directive_lexes() {
         assert_eq!(
-            kinds("depend \"https://example.com/foo.git\" as foo"),
+            kinds("foo = depend \"https://example.com/foo.git\""),
             vec![
+                TokenKind::Name("foo".to_string()),
+                TokenKind::Equals,
                 TokenKind::KwDepend,
                 TokenKind::String("https://example.com/foo.git".to_string()),
-                TokenKind::Name("as".to_string()),
-                TokenKind::Name("foo".to_string()),
             ]
         );
     }
