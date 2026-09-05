@@ -74,10 +74,12 @@ python -c "import tomllib; tomllib.load(open('crates/lichen-language-zed/languag
 ```
 
 Then confirm the grammar pin: `[grammars.lichen]` has `rev` (a real Git SHA in `lichen-vm`),
-`path = "tree-sitter-lichen"`, and a `repository` that resolves. For local dev the
-`repository` is a `file://` URL; the matching `rev="9b23892…"` is currently only on the
-local branches, so a remote fetch fails until that SHA is pushed (documented in
-`extension.toml`).
+`path = "tree-sitter-lichen"`, and a `repository` that resolves. The `rev` must be the commit
+whose grammar actually contains every node that the `highlights.scm`/`outline.scm` queries
+reference — pinning an older rev (e.g. `9b23892`, before `return` was added to the grammar)
+makes the grammar `Query::new` fail on load with `Invalid node type "return"`. The current
+`0773b18` is committed and pushed to `origin/v1`, so both the `file://` URL (local dev) and
+the remote form resolve.
 
 ### 4. Grammar
 
@@ -231,10 +233,24 @@ Windows here):
 | build the WASM + section | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | **ok** (216 KB) |
 | run the crate's tests | `cargo test -p lichen-language -p lichen-language-server -p tree-sitter-lichen` | **348 passed** |
 | load grammar + validate `.scm` | `tree-sitter query languages/lichen/{highlights,outline}.scm <sample>.lichen` | **ok** |
+| guard the grammar `rev` | `cargo test -p lichen-language-zed --test grammar_consistency` | **passes; fails if `rev` goes stale** |
 | `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` | **fails at `lichen-highlevel` (not the plugin)** |
 
 The LSP stdio test and the grammar query check are the two that the manual "Install Dev
 Extension" flow never covers, and both run headless here.
+
+The **`grammar_consistency` guard** is the automation that stops the `rev` going stale again
+(the `return` bug was exactly this). It does two things, both locally and in CI:
+
+1. compiles every `.scm` in `languages/lichen/` + `tree-sitter-lichen/queries/` against the
+   current grammar via `Query::new` — a query referencing a node the grammar lacks fails here;
+2. `git diff --quiet <rev> HEAD` over the grammar-defining + query paths must be empty — if the
+   grammar or its queries changed after the pinned `rev`, the test fails and prints the `rev`
+   to set.
+
+So the loop is: edit `tree-sitter-lichen` → `tree-sitter generate` → commit → **bump the
+`rev` in `extension.toml` to that commit** (the guard tells you the SHA) → reinstall. The guard
+needs a git checkout (it shells out to `git`), which holds for both CI and a normal dev clone.
 
 **The strict `-D warnings` clippy check still fails further up the dependency tree** — a
 monorepo-wide lint backlog, not a problem in the plugin. Two of the original blockers are now

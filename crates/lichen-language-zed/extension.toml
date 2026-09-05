@@ -44,20 +44,20 @@ languages = ["Lichen"]
 #
 # `rev` must be a real Git SHA in `lichen-vm` — set it to the commit that
 # contains the `tree-sitter-lichen/` directory, then `tree-sitter generate` was
-# already run so `src/parser.c` is committed.
+# already run so `src/parser.c` is committed.  `0773b18` is the grammar update
+# that added the `return` keyword (and regenerated `src/parser.c`); the earlier
+# `9b23892` rev predates `return`, which made the extension's `highlights.scm`
+# fail on load with `Query error ... Invalid node type "return"`.
 #
-# NOTE: `9b23892` currently exists only on the local `v1`/`feature/lichen-zed`
-# branches — it is NOT pushed to the `origin` remote. For local development the
-# grammar is therefore sourced from the *local* git repository via a `file://`
-# URL below (Zed clones it and checks out `rev` from the local clone). Once the
-# tree-sitter-lichen history is pushed to `origin/v1` (or the branch it is
-# merged into), restore the remote form:
+# NOTE: this grammar is committed and pushed to `origin/v1`, so both the remote
+# and the local `file://` form work.  The `file://` URL is kept for local
+# development so Zed clones the local repo and checks out `rev` from it:
 #
 #   [grammars.lichen]
 #   repository = "https://github.com/windwhiterain/lichen-vm"
-#   rev = "9b23892d04b8daed9ffa6e40226d44af66e66ec1"
+#   rev = "0773b1862cf4397a8004909bd980d2dd2cdc5013"
 #   path = "tree-sitter-lichen"
 [grammars.lichen]
 repository = "file:///C:/resource/lichen-vm"
-rev = "9b23892d04b8daed9ffa6e40226d44af66e66ec1"
+rev = "0773b1862cf4397a8004909bd980d2dd2cdc5013"
 path = "tree-sitter-lichen"

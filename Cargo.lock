@@ -597,6 +597,8 @@ version = "0.1.0"
 dependencies = [
  "lichen-language",
  "lichen-language-server",
+ "tree-sitter",
+ "tree-sitter-lichen",
  "zed_extension_api",
 ]
 
