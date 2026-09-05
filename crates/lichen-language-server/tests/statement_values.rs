@@ -110,3 +110,36 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
         .expect("hover on k_double");
     assert_eq!(hover, "`k_double` — `Kernel : Int -> Int`");
 }
+
+#[test]
+fn compute_wrapper_functions_hover_with_named_type_variables() {
+    // `compute.jit` / `compute.launch` are generic wrappers from a frozen
+    // module.  Their type variables are unbound cells that must render as
+    // *named* `?a`/`?b` (and stay shared across a kernel's signature), not as
+    // an opaque bare `? -> ? -> ? -> ?` — the LSP-visible half of the same
+    // "raw layout" bug for the wrapper functions themselves.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
+    let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
+    let doc = Doc::new_with_base(source, Some(&dir));
+
+    // `jit` at line 5 (0-based): "k_double = compute.jit (y => y + y)" — char 19.
+    let (hover, _range) = doc
+        .hover_at(Position {
+            line: 5,
+            character: 19,
+        })
+        .expect("hover on `jit`");
+    assert_eq!(hover, "`.jit` — `Function : ?a -> ?b -> ?a -> ?b`");
+
+    // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  The
+    // module struct renders `.jit` first, so `launch`'s cells continue the
+    // letter sequence (`?c`/`?d`/`?e`); the kernel's codomain `?d` is shared
+    // with the result, while the argument is a separate generic cell `?e`.
+    let (hover, _range) = doc
+        .hover_at(Position {
+            line: 7,
+            character: 9,
+        })
+        .expect("hover on `launch`");
+    assert_eq!(hover, "`.launch` — `Function : ?c -> ?d -> ?e -> ?d`");
+}

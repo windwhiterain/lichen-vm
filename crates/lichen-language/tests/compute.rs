@@ -330,3 +330,30 @@ k
         "tuple-domain kernel value/type: {out:?}"
     );
 }
+
+#[test]
+fn wrapper_functions_render_with_named_type_variables() {
+    // `jit`/`launch` are generic wrapper functions from the frozen `compute`
+    // module — their domain/codomain cells are unbound at the module level, so
+    // they render *as named cells* (`?a`/`?b`, shared across a kernel's
+    // signature) rather than a bare `? -> ? -> ? -> ?`.  The wrapper itself
+    // stays generic; only an *applied* result resolves to `Int -> Int`.
+    assert_eq!(
+        run(r#"
+@{ compute = import "compute.lichen" @}
+compute.jit
+"#),
+        "Function: ?a -> ?b -> ?a -> ?b",
+        "jit wrapper value/type"
+    );
+    // `launch` takes a kernel (whose signature mirrors `d -> c`), then the
+    // argument, and returns the codomain — same shared signature shape.
+    assert_eq!(
+        run(r#"
+@{ compute = import "compute.lichen" @}
+compute.launch
+"#),
+        "Function: ?a -> ?b -> ?c -> ?b",
+        "launch wrapper value/type"
+    );
+}

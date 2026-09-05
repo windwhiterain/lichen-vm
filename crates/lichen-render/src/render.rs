@@ -110,6 +110,12 @@ where
     /// Stable class names: representative → `?a`, `?b`, …, within one type
     /// (or one diagnostic report).
     names: HashMap<NodeId, String>,
+    /// Stable names for unbound *static* cells — a frozen module's type
+    /// variables.  Keyed by the absolute static ref, so the same cell (e.g. a
+    /// kernel's shared `d`/`c` signature cells) keeps one name across the
+    /// whole type, exactly as a dynamic class shares one.  Distinct from
+    /// `names` because a static ref has no union-find class to join.
+    static_names: HashMap<lichen_lowlevel::StaticNodeId, String>,
     next: usize,
     /// Array nodes on the current recursion; a cycle renders as `…`.
     path: Vec<NodeId>,
@@ -157,6 +163,7 @@ where
             module,
             arrows,
             names: HashMap::new(),
+            static_names: HashMap::new(),
             next: 0,
             path: Vec::new(),
             render_ext,
@@ -201,6 +208,20 @@ where
         let name = letter_name(self.next);
         self.next += 1;
         self.names.insert(rep, name.clone());
+        name
+    }
+
+    /// The stable name of an unbound **static** cell: `?a`, `?b`, … — a frozen
+    /// module's type variable.  Keyed by the absolute ref so the same cell
+    /// keeps one name (and two refs to it — e.g. a kernel's signature cells —
+    /// share it), mirroring [`Self::class_name`].
+    pub fn static_class_name(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
+        if let Some(name) = self.static_names.get(&sref) {
+            return name.clone();
+        }
+        let name = letter_name(self.next);
+        self.next += 1;
+        self.static_names.insert(sref, name.clone());
         name
     }
 
@@ -395,13 +416,13 @@ where
             .is_none_or(|v| matches!(v.as_enum(), Some(LowValue::None | LowValue::Parameterized)))
         {
             visiting.remove(&sref);
-            return "?".to_string();
+            return self.static_class_name(sref);
         }
         let value = value.unwrap();
         let out = match value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
             Some(LowValue::Str(s)) => format!("\"{s}\""),
-            Some(LowValue::None | LowValue::Parameterized) => "?".to_string(),
+            Some(LowValue::None | LowValue::Parameterized) => self.static_class_name(sref),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
             Some(LowValue::Array(array)) => self.static_elements(sref, array.items(), visiting),
