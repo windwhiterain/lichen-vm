@@ -31,6 +31,19 @@ pub enum Directive {
         sub: Option<String>,
         plugin: bool,
     },
+    /// `name = plug "url" [rev/branch/tag/package/sub = "x"]` -- a native
+    /// plugin (a Rust crate) bound to `name`, fetched by the package manager
+    /// and composed into a rebuilt compiler.  A `plug` is always a plugin
+    /// (never a plain import), so it needs no `plugin` flag.
+    Plug {
+        url: String,
+        name: String,
+        rev: Option<String>,
+        branch: Option<String>,
+        tag: Option<String>,
+        package: Option<String>,
+        sub: Option<String>,
+    },
 }
 
 /// Parse a block-interior token stream.  Returns each directive with the
@@ -90,6 +103,11 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                 i += 1;
                 let depend = parse_depend(tokens, &mut i, name)?;
                 out.push((depend, stmt_start));
+            }
+            Some(TokenKind::KwPlug) => {
+                i += 1;
+                let plug = parse_plugin(tokens, &mut i, name)?;
+                out.push((plug, stmt_start));
             }
             Some(TokenKind::String(v)) => {
                 let v = v.clone();
@@ -181,6 +199,78 @@ fn parse_depend(
         package,
         sub,
         plugin,
+    })
+}
+
+/// Parse `plug "url" [options...]` starting at `*i` (already past the `plug`
+/// keyword), binding the plugin under `name` (the statement's left-hand side).
+/// A `plug` is a native plugin: an always-`plugin` dependency, so the option
+/// set is the dependency options minus the `plugin` flag.
+fn parse_plugin(
+    tokens: &[Token],
+    i: &mut usize,
+    name: String,
+) -> Result<Directive, Vec<(u32, String)>> {
+    let url = match tokens.get(*i).map(|t| &t.kind) {
+        Some(TokenKind::String(u)) => u.clone(),
+        k => {
+            return Err(vec![err_at(
+                tokens,
+                *i,
+                format!("expected a url after plug, found {}", found(k)),
+            )]);
+        }
+    };
+    *i += 1;
+
+    let mut rev = None;
+    let mut branch = None;
+    let mut tag = None;
+    let mut package = None;
+    let mut sub = None;
+
+    while let Some(tok) = tokens.get(*i) {
+        if matches!(tok.kind, TokenKind::Separator) {
+            break;
+        }
+        let keyword = match &tok.kind {
+            TokenKind::Name(k) => k.clone(),
+            k => {
+                return Err(vec![err_at(
+                    tokens,
+                    *i,
+                    format!(
+                        "expected a plug option (rev/branch/tag/package/sub), found {}",
+                        k.describe()
+                    ),
+                )]);
+            }
+        };
+        *i += 1;
+        match keyword.as_str() {
+            "rev" => rev = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "branch" => branch = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "tag" => tag = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "package" => package = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            "sub" => sub = Some(expect_string_after_eq(tokens, i, &keyword)?),
+            other => {
+                return Err(vec![err_at(
+                    tokens,
+                    *i - 1,
+                    format!("unknown plug option '{other}'"),
+                )]);
+            }
+        }
+    }
+
+    Ok(Directive::Plug {
+        url,
+        name,
+        rev,
+        branch,
+        tag,
+        package,
+        sub,
     })
 }
 
@@ -306,6 +396,37 @@ mod tests {
                 sub: Some("lichen-std".to_string()),
                 plugin: true,
             }]
+        );
+    }
+
+    #[test]
+    fn a_plug_directive_parses() {
+        let dirs = parse_ok(
+            "gpu = plug \"https://example.com/gpu.git\" rev = \"abc123\" \
+             package = \"gpu-crate\"",
+        );
+        assert_eq!(
+            dirs,
+            vec![Directive::Plug {
+                url: "https://example.com/gpu.git".to_string(),
+                name: "gpu".to_string(),
+                rev: Some("abc123".to_string()),
+                branch: None,
+                tag: None,
+                package: Some("gpu-crate".to_string()),
+                sub: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_plug_always_has_no_plugin_flag() {
+        let lexed = tokenize("gpu = plug \"https://example.com/gpu.git\" plugin");
+        let errors = parse(&lexed.tokens).expect_err("expected an error");
+        assert!(
+            errors[0].1.contains("unknown plug option"),
+            "got: {}",
+            errors[0].1
         );
     }
 

@@ -7,9 +7,10 @@
 //! this module does — "when a native plugin is imported, rebuild the
 //! compiler."
 //!
-//! The mechanism: generate a compiler crate under
-//! `<project>/.lichen/compiler/<name>/` that depends on the plugin (from git
-//! or a local path) and composes its vocabulary with the shipping leaves via
+//! The mechanism: generate a compiler crate under a caller-chosen directory
+//! (the package manager's compiler cache under the lichen home — see
+//! [`crate::compiler_cache`]) that depends on the plugin (from git or a local
+//! path) and composes its vocabulary with the shipping leaves via
 //! `liche_language::lang_compose_vocabulary!`, then run `cargo build` and
 //! report the produced `lichen-compiler` binary.
 //!
@@ -29,9 +30,6 @@ use std::process::Command;
 use lichen_language::preprocess::Depend;
 
 use crate::git;
-
-/// The compiler-build dir name, under the project's `.lichen` dir.
-pub const BUILD_DIR: &str = "compiler";
 
 /// The value/operator/attr leaves a plugin contributes to the vocabulary.
 /// A plugin's leaves are its own item names, spelled at the call site; the
@@ -75,11 +73,11 @@ pub struct CompilerBuild {
     pub bin: PathBuf,
 }
 
-/// Rebuild the compiler: generate a compiler crate composing `leaves` with
-/// the plugin dependencies (if any), then `cargo build` it.  Returns the
-/// produced binary path.
+/// Rebuild the compiler: generate a compiler crate at `dir` (the cache slot)
+/// composing `leaves` with the plugin dependencies (if any), then `cargo build`
+/// it.  Returns the produced binary path.
 pub fn rebuild(
-    project_dir: &Path,
+    dir: &Path,
     name: &str,
     core_repo: &str,
     plugins: &[Depend],
@@ -88,16 +86,15 @@ pub fn rebuild(
     if !cargo_available() {
         return Err("`cargo` is required to rebuild the compiler, but it is not on $PATH".into());
     }
-    let dir = project_dir.join(BUILD_DIR).join(sanitize(name));
     std::fs::create_dir_all(dir.join("src"))
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    write_cargo_toml(&dir, name, core_repo, plugins)?;
-    write_lib_rs(&dir, leaves)?;
-    write_main_rs(&dir)?;
+    write_cargo_toml(dir, name, core_repo, plugins)?;
+    write_lib_rs(dir, leaves)?;
+    write_main_rs(dir)?;
 
     let out = Command::new("cargo")
         .args(["build", "--release"])
-        .current_dir(&dir)
+        .current_dir(dir)
         .output()
         .map_err(|e| format!("cannot run cargo build: {e}"))?;
     if !out.status.success() {
@@ -107,7 +104,10 @@ pub fn rebuild(
         ));
     }
     let bin = dir.join("target").join("release").join(bin_name(name));
-    Ok(CompilerBuild { dir, bin })
+    Ok(CompilerBuild {
+        dir: dir.to_path_buf(),
+        bin,
+    })
 }
 
 /// Whether `cargo` is on `$PATH`.
@@ -118,23 +118,10 @@ pub fn cargo_available() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-fn bin_name(name: &str) -> String {
+/// The compiled binary name for a compiler named `name`.
+pub fn bin_name(name: &str) -> String {
     let n = format!("lichen-compiler-{name}");
     if cfg!(windows) { format!("{n}.exe") } else { n }
-}
-
-fn sanitize(s: &str) -> String {
-    let mut out = String::new();
-    for ch in s.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => out.push(ch),
-            _ => out.push('_'),
-        }
-    }
-    if out.is_empty() {
-        out.push_str("compiler");
-    }
-    out
 }
 
 /// The generated crate's `Cargo.toml`: depends on the language crate and the
@@ -252,29 +239,4 @@ fn write_main_rs(dir: &Path) -> Result<(), String> {
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
-}
-
-/// The path of a plugin-built compiler binary under
-/// `<project>/.lichen/compiler/`, when one has been built by [`rebuild`].
-/// Returns `None` when the project has no built compiler yet.
-pub fn built_bin(project_dir: &Path) -> Option<PathBuf> {
-    let compilers = project_dir.join(BUILD_DIR);
-    for entry in std::fs::read_dir(&compilers).ok()?.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let release = entry.path().join("target").join("release");
-        for f in std::fs::read_dir(&release).ok()?.flatten() {
-            let name = f.file_name().to_string_lossy().into_owned();
-            let is_bin = if cfg!(windows) {
-                name.starts_with("lichen-compiler-") && name.ends_with(".exe")
-            } else {
-                name.starts_with("lichen-compiler-") && !name.contains('.')
-            };
-            if is_bin && f.path().is_file() {
-                return Some(f.path());
-            }
-        }
-    }
-    None
 }

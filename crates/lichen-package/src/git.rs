@@ -102,6 +102,29 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
     Ok(dep.vendored_dir())
 }
 
+/// The resolved version (commit hash) of a fetched dependency: the current
+/// `HEAD` of its source-cache clone.  A dependency is fetched (or updated)
+/// before this is called, so the commit is concrete and stable — which is
+/// what the compiler cache keys on, so a dependency's change is a new cache
+/// slot.  The source must have been fetched into the cache.
+pub fn resolved_version(dep: &Depend) -> Result<String, String> {
+    let dir = dep.sources_dir();
+    let dir_git = git_path(&dir);
+    let out = Command::new("git")
+        .args(["-C", &dir_git, "rev-parse", "HEAD"])
+        .output()
+        .map_err(|e| format!("cannot resolve {} version: {e}", dep.alias()))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(format!(
+            "cannot resolve {} version: {}",
+            dep.alias(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
+    }
+}
+
 /// Run git with cwd `cwd`, returning the command's stderr on failure.
 fn git(args: &[&str], cwd: &str) -> Result<(), String> {
     let out = Command::new("git")

@@ -348,6 +348,34 @@ fn replace_output_comment(source: &str, output: &str) -> String {
                     }
                     out.push('\n');
                 }
+                Directive::Plug {
+                    url,
+                    name,
+                    rev,
+                    branch,
+                    tag,
+                    package,
+                    sub,
+                } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("{name} = plug \"{url}\""));
+                    if let Some(rev) = rev {
+                        out.push_str(&format!(" rev = \"{rev}\""));
+                    }
+                    if let Some(branch) = branch {
+                        out.push_str(&format!(" branch = \"{branch}\""));
+                    }
+                    if let Some(tag) = tag {
+                        out.push_str(&format!(" tag = \"{tag}\""));
+                    }
+                    if let Some(package) = package {
+                        out.push_str(&format!(" package = \"{package}\""));
+                    }
+                    if let Some(sub) = sub {
+                        out.push_str(&format!(" sub = \"{sub}\""));
+                    }
+                    out.push('\n');
+                }
             }
         }
     }

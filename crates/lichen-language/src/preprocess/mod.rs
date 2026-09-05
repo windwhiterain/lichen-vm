@@ -219,6 +219,24 @@ pub fn preprocess<'a>(
                             sub,
                             plugin,
                         }),
+                        Directive::Plug {
+                            url,
+                            name,
+                            rev,
+                            branch,
+                            tag,
+                            package,
+                            sub,
+                        } => depends.push(Depend {
+                            url,
+                            name,
+                            rev,
+                            branch,
+                            tag,
+                            package,
+                            sub,
+                            plugin: true,
+                        }),
                     }
                 }
             }
@@ -284,42 +302,74 @@ pub fn block_metadata(interior: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Stage a source's `depend "url"` directives onto `store` as vendored
-/// aliases, resolving each against the lichen-home source cache (see
-/// [`Depend::vendored_dir`]).  A dependency that has not been fetched by the
-/// package manager (`lichen fetch`) is reported as a preprocess diagnostic
-/// naming the missing dir — the compiler never fetches git sources itself, it
-/// only reads what the package manager put in the cache.
+/// The `Depend`s in a block interior: `name = depend "url"` git bindings and
+/// `name = plug "url"` native-plugin bindings, both normalized to a [`Depend`]
+/// (a `plug` is a plugin dep bound to the statement's name).
+pub fn block_depends(interior: &str) -> Vec<Depend> {
+    block_directives(interior)
+        .into_iter()
+        .filter_map(depend_of)
+        .collect()
+}
+
+/// Normalize a [`Directive`] to a [`Depend`]: a `depend` passes through, a
+/// `plug` becomes a plugin dep (`plugin: true`) bound to the statement's name.
+pub fn depend_of(dir: Directive) -> Option<Depend> {
+    match dir {
+        Directive::Depend {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+            plugin,
+        } => Some(Depend {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+            plugin,
+        }),
+        Directive::Plug {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+        } => Some(Depend {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+            plugin: true,
+        }),
+        _ => None,
+    }
+}
+
+/// Stage a source's `depend "url"` / `name = plug "url"` directives onto
+/// `store` as vendored aliases, resolving each against the lichen-home source
+/// cache (see [`Depend::vendored_dir`]).  A dependency that has not been
+/// fetched by the package manager (`lichen fetch`) is reported as a preprocess
+/// diagnostic naming the missing dir — the compiler never fetches git sources
+/// itself, it only reads what the package manager put in the cache.
 pub fn stage_depends(store: &mut PackageStore, source: &str) -> Vec<Diag> {
     let mut diags = Vec::new();
     let (interior, _) = split_block(source);
     let Some(interior) = interior else {
         return diags;
     };
-    for dir in block_directives(interior) {
-        let Directive::Depend {
-            url,
-            name,
-            rev,
-            branch,
-            tag,
-            package,
-            sub,
-            plugin,
-        } = dir
-        else {
-            continue;
-        };
-        let dep = Depend {
-            url,
-            name,
-            rev,
-            branch,
-            tag,
-            package,
-            sub,
-            plugin,
-        };
+    for dep in block_depends(interior) {
         let alias = dep.alias();
         let dir = dep.vendored_dir();
         if dir.is_dir() {
@@ -367,7 +417,8 @@ fn scan_block(raw: &str) -> Option<(usize, usize, usize)> {
 
 #[cfg(test)]
 mod tests {
-    use super::scan_block;
+    use super::{block_depends, depend_of, scan_block};
+    use crate::preprocess::Directive;
 
     #[test]
     fn no_block_is_the_whole_source() {
@@ -391,5 +442,33 @@ mod tests {
         let raw = "@{a = \"1\"\nb = \"2\"@}\na";
         assert_eq!(&raw[s..e], "a = \"1\"\nb = \"2\"");
         assert_eq!(&raw[c..], "a");
+    }
+
+    #[test]
+    fn block_depends_collects_depend_and_plug() {
+        let interior = "foo = depend \"https://example.com/foo.git\"\ngpu = plug \"https://example.com/gpu.git\"";
+        let deps = block_depends(interior);
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].name, "foo");
+        assert!(!deps[0].plugin);
+        assert_eq!(deps[1].name, "gpu");
+        assert!(deps[1].plugin);
+    }
+
+    #[test]
+    fn depend_of_marks_a_plug_as_a_plugin() {
+        let dir = Directive::Plug {
+            url: "https://example.com/gpu.git".to_string(),
+            name: "gpu".to_string(),
+            rev: None,
+            branch: None,
+            tag: None,
+            package: Some("gpu-crate".to_string()),
+            sub: None,
+        };
+        let dep = depend_of(dir).expect("a plug is a depend");
+        assert!(dep.plugin);
+        assert_eq!(dep.name, "gpu");
+        assert_eq!(dep.package.as_deref(), Some("gpu-crate"));
     }
 }
