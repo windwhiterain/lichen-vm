@@ -48,10 +48,40 @@ use lichen_compute::ComputeValue;
 /// the impls below (the checker/VM wiring) and the frontend are unchanged.
 #[macro_export]
 macro_rules! lang_compose_vocabulary {
+    // With a plugin set (the package-manager-generated compiler): the shipping
+    // leaves are spelled inline and each plugin contributes its own leaves via a
+    // `[#macro_export] macro_rules! lichen_leaves` the plugin crate exports.
     (
         attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
         values = [ $( $value:path as $value_name:ident ; )* ];
         operators = [ $( $operator:path as $operator_name:ident ; )* ];
+        plugins = [ $( $plugin:ident ; )* ];
+    ) => {
+        $crate::lang_compose_vocabulary! {
+            @run
+            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ];
+            [ $( $plugin ; )* ];
+        }
+    };
+
+    // Without a plugin set (the shipping compiler): `plugins = []`.
+    (
+        attrs = [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
+        values = [ $( $value:path as $value_name:ident ; )* ];
+        operators = [ $( $operator:path as $operator_name:ident ; )* ];
+    ) => {
+        $crate::lang_compose_vocabulary! {
+            @run
+            [ $( $operator as $operator_name ; )* ] [ $( $value as $value_name ; )* ] [ $( $attr as $attr_name ; )* ] [ $( $bound )* ];
+            [ ];
+        }
+    };
+
+    // Terminal: every plugin's leaves have been absorbed; emit the program.
+    (
+        @run
+        [ $( $operator:path as $operator_name:ident ; )* ] [ $( $value:path as $value_name:ident ; )* ] [ $( $attr:path as $attr_name:ident ; )* ] [ $( $bound:tt )* ];
+        [ ] ;
     ) => {
         ::lichen_utils::enum_ext! {
             /// The language program's operator vocabulary: a flat union of the
@@ -105,6 +135,31 @@ macro_rules! lang_compose_vocabulary {
         /// The language's concrete program marker: `Value = LangValue`,
         /// `Operator = LangOperator`, `Attr = LangAttr`.
         pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>;
+    };
+
+    // Thread the next plugin's `liche_leaves!`, passing the accumulator.
+    (
+        @run
+        [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ];
+        [ $plugin:ident ; $( $rest:tt )* ];
+    ) => {
+        $plugin::liche_leaves! {
+            $crate::lang_compose_vocabulary,
+            [ $( $oa )* ] [ $( $va )* ] [ $( $aa )* ] [ $( $b )* ] ; [ $( $rest )* ] ;
+        }
+    };
+
+    // Absorb one plugin's leaf fragment into the accumulator and recurse.
+    (
+        @absorb
+        ( operators: [ $( $o:path as $on:ident ; )* ]; values: [ $( $v:path as $vn:ident ; )* ]; attrs: [ $( $a:path as $an:ident ; )* ];
+          [ $( $oa:tt )* ] [ $( $va:tt )* ] [ $( $aa:tt )* ] [ $( $b:tt )* ] ; [ $( $rest:tt )* ] ; )
+    ) => {
+        $crate::lang_compose_vocabulary! {
+            @run
+            [ $( $oa )* $( $o as $on ; )* ] [ $( $va )* $( $v as $vn ; )* ] [ $( $aa )* $( $a as $an ; )* ] [ $( $b )* ] ;
+            [ $( $rest )* ] ;
+        }
     };
 }
 
@@ -268,3 +323,61 @@ impl OperatorExt<LangProgram> for LangOperator {
 #[cfg(test)]
 #[path = "tests/program_tests.rs"]
 mod tests;
+
+/// A probe plugin, used to exercise the `plugins = [...]` arm: it contributes
+/// no leaves (its `liche_leaves!` hands back empty lists) but threads the
+/// composition's accumulator, proving the tt-muncher composes a plugin set.
+#[cfg(test)]
+#[macro_export]
+macro_rules! ic_probe_leaves {
+    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
+        $next! {
+            @absorb (
+                operators: [ ];
+                values: [ ];
+                attrs: [ ];
+                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ] ; [ $($rest)* ] ;
+            )
+        }
+    };
+}
+
+#[cfg(test)]
+mod ic_probe_plugin {
+    pub use crate::ic_probe_leaves as liche_leaves;
+}
+
+#[cfg(test)]
+mod plugins_arm_tests {
+    #![allow(dead_code)]
+    use super::ic_probe_plugin;
+
+    lang_compose_vocabulary! {
+        attrs = [
+            lichen_perspective::Perspective as Perspective;
+            lichen_doc::Doc as Doc;
+        ]
+        [ P::Operator: From<lichen_perspective::GcdOp> ];
+        values = [
+            lichen_lowlevel::LowValue as LowValue;
+            lichen_highlevel::program::TypeValue as TypeValue;
+        ];
+        operators = [
+            lichen_lowlevel::LowOperator as LowOperator;
+            lichen_highlevel::program::TypeOperator as TypeOperator;
+            lichen_perspective::GcdOp as GcdOp;
+        ];
+        plugins = [ ic_probe_plugin; ic_probe_plugin; ];
+    }
+
+    #[test]
+    fn the_plugins_arm_threads_a_plugin_set() {
+        // The `plugins = [...]` arm absorbed both probe plugins (threading the
+        // tt-muncher accumulator): the composed enums exist.  The runtime
+        // `ValueType`/`OperatorExt` impls for a composed set are the follow-up
+        // tooling generalization, so this pins the composition at the type
+        // level only.
+        let _ = std::any::type_name::<LangValue>();
+        let _ = std::any::type_name::<LangOperator>();
+    }
+}
