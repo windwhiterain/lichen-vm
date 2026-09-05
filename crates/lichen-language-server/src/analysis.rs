@@ -29,7 +29,7 @@ use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
 use lichen_language::program::LangValue;
-use lichen_language::render::{print_type, print_value};
+use lichen_language::render::{print_type_lang, print_value_lang};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
 
@@ -221,7 +221,7 @@ impl Doc {
                 if let Some(eid) = eid
                     && let Some(t) = build.ty[eid]
                 {
-                    import_ty.insert(imp.span, print_type(&build.module, t));
+                    import_ty.insert(imp.span, print_type_lang(&build.module, t));
                 }
             }
         }
@@ -264,7 +264,7 @@ impl Doc {
                         }
                     };
                     let ty = match build.ty[id] {
-                        Some(t) => print_type(&build.module, t),
+                        Some(t) => print_type_lang(&build.module, t),
                         None => String::new(),
                     };
                     let value = build.val[id].and_then(|vn| {
@@ -272,7 +272,7 @@ impl Doc {
                             // A `Parameterized` value is a deferred (lazy /
                             // recursive) binding — report type only, never force.
                             Some(LangValue::LowValue(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value(
+                            Some(v) => Some(print_value_lang(
                                 &build.module,
                                 v,
                                 build.ty[id].unwrap_or_default(),
@@ -309,13 +309,13 @@ impl Doc {
                     for (name, &val_id) in field_names.iter().zip(vals.iter()) {
                         let Some(name) = name else { continue };
                         let ty = match build.ty[val_id] {
-                            Some(t) => print_type(&build.module, t),
+                            Some(t) => print_type_lang(&build.module, t),
                             None => String::new(),
                         };
                         let value = build.val[val_id].and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                                 Some(LangValue::LowValue(LowValue::Parameterized)) => None,
-                                Some(v) => Some(print_value(
+                                Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
                                     build.ty[val_id].unwrap_or_default(),
@@ -369,7 +369,7 @@ impl Doc {
                     let value = build.val[eid].and_then(|vn| {
                         match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                             Some(LangValue::LowValue(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value(
+                            Some(v) => Some(print_value_lang(
                                 &build.module,
                                 v,
                                 build.ty[eid].unwrap_or_default(),

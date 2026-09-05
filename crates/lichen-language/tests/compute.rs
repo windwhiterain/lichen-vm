@@ -299,3 +299,34 @@ compute.launch k 5
 "#);
     assert!(out.starts_with("8:"), "nested inline produced: {out:?}");
 }
+
+#[test]
+fn a_kernel_value_and_type_render_by_name() {
+    // A `jit` result's value is an opaque compiled artifact (a `Kernel`), and
+    // its type mirrors a function — so the program output spells it
+    // `Kernel : Int -> Int`, not the raw recursive-pair layout (`? :
+    // [[Int, Int], TypeKernel]`).  This pins the rendering of an extension
+    // value/kind marker that the base renderer cannot know.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (y => y + y)
+k
+"#);
+    assert_eq!(out, "Kernel: Int -> Int", "kernel value/type: {out:?}");
+}
+
+#[test]
+fn a_tuple_domain_kernel_type_renders_as_a_function() {
+    // A tuple-domain kernel's signature is `[(Int, Int), Int]`; the kernel
+    // type renders as the arrow `<Int, Int> -> Int`, mirroring the function
+    // whose signature it carries.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : (Int, Int) => p(0) + p(1))
+k
+"#);
+    assert_eq!(
+        out, "Kernel: <Int, Int> -> Int",
+        "tuple-domain kernel value/type: {out:?}"
+    );
+}

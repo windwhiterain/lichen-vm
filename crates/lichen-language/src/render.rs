@@ -22,7 +22,9 @@
 //!
 
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
-use lichen_lowlevel::LowValue;
+use lichen_lowlevel::{LowValue, Module, NodeId};
+
+use lichen_compute::ComputeValue;
 
 use crate::diag::Diag;
 use crate::program::{LangProgram, LangValue};
@@ -31,6 +33,44 @@ pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
     render_struct_fields_named,
 };
+
+// --- the extension-vocabulary render hooks ---------------------------------
+//
+// The shared `lichen_render` printer is generic over the value vocabulary, so
+// it cannot know the compute plugin's own value variants.  The base renderer
+// spells an unknown extension value `?`; these hooks spell the compute leaves a
+// kernel carries so the editor/CLI renders them by name.
+
+/// The compute plugin's value-variant spelling: a `Kernel` value and the
+/// `TypeKernel` kind marker both read as `Kernel` — the marker's are internal
+/// (the kernel's *signature* is what the type's arrow carries), and the value
+/// is an opaque compiled artifact, so one name suffices.
+fn lang_value_render(value: &LangValue) -> Option<String> {
+    match value {
+        LangValue::ComputeValue(ComputeValue::Kernel(_))
+        | LangValue::ComputeValue(ComputeValue::TypeKernel) => Some("Kernel".to_string()),
+        _ => None,
+    }
+}
+
+/// The `&'static` extension-vocabulary render hook, injected into the shared
+/// printers so a kernel's value/type spell correctly instead of degrading to `?`.
+pub fn lang_render_ext() -> &'static dyn Fn(&LangValue) -> Option<String> {
+    &lang_value_render
+}
+
+/// [`print_type`] with the language's extension vocabulary: a kernel type
+/// (`[sig, [TypeKernel, K]]`, which mirrors a function type) renders as
+/// `in -> out` and its kind marker as `Kernel`.
+pub fn print_type_lang(module: &Module<LangProgram>, root: NodeId) -> String {
+    TypePrinter::new_with_ext(module, Some(lang_render_ext())).node(root)
+}
+
+/// [`print_value`] with the language's extension vocabulary: a `Kernel` value
+/// renders as `Kernel` instead of the raw-layout `?`.
+pub fn print_value_lang(module: &Module<LangProgram>, value: LangValue, ty: NodeId) -> String {
+    ValuePrinter::new_with_ext(module, Some(lang_render_ext())).print(value, ty)
+}
 
 // --- the caret shell ---------------------------------------------------------
 

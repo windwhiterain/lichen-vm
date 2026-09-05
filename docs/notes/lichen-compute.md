@@ -19,8 +19,13 @@ compute.launch k 5               -- launch: run it -> 6 : Int (via `$launch`)
 ```
 
 `compute.jit` is `jit`, `compute.launch` is `launch`, exported as a named struct
-(`compute`). A kernel's **type is its signature** (`Kernel<Int -> Int>`), so the
-whole function-apply machinery transfers to kernels.
+(`compute`). A kernel's **type is its signature** (conceptually `Kernel<Int -> Int>`, it just
+re-heads the universe with `TypeKernel`), so the whole function-apply machinery transfers to
+kernels.  The tooling spells that kind marker as an arrow (the compute `TypeKernel` implements
+[`ValueType::is_function_kind`](crates/lichen-highlevel/src/program.rs) and the language's
+render hook names the `Kernel` value), so a `jit` result reads `Kernel : Int -> Int` rather
+than the raw `[sig, [TypeKernel, Type]]` layout pinned by
+`tests/compute.rs::a_kernel_value_and_type_render_by_name`.
 
 ## 1. The vocabulary injection
 

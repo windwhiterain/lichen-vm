@@ -3,7 +3,10 @@
 //! a value only when the build produced a concrete one (a lazy/recursive
 //! binding, whose value is a deferred `Parameterized` cell, reports `None`).
 
+use std::path::Path;
+
 use lichen_language_server::Doc;
+use lichen_language_server::lsp::Position;
 
 #[test]
 fn statement_values_report_type_and_concrete_value() {
@@ -69,4 +72,41 @@ if 0 then (paradox : Int) else 5";
         "a deferred binding reports no concrete value: {:?}",
         paradox.value
     );
+}
+
+#[test]
+fn compute_kernel_bindings_render_by_name_not_raw_layout() {
+    // The `compute_jit` example's two kernel bindings are `compute.jit` results:
+    // a `Kernel` value whose type mirrors a function.  The editor snapshot must
+    // spell them `Kernel : Int -> Int`, not the raw recursive-pair layout with
+    // `?` (the pre-fix `? : [[Int, Int], ?]`).  This is the LSP-visible fix.
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
+    let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
+    let doc = Doc::new_with_base(source, Some(&dir));
+
+    let vals = doc.statement_values();
+    assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
+    for sv in vals {
+        assert_eq!(
+            sv.value.as_deref(),
+            Some("Kernel"),
+            "value = {:?}",
+            sv.value
+        );
+        assert_eq!(sv.ty, "Int -> Int", "type = {:?}", sv.ty);
+        assert!(
+            !sv.ty.contains('?'),
+            "no unresolved `?` in a resolved kernel type: {:?}",
+            sv.ty
+        );
+    }
+
+    // The hover on the `k_double` binding renders the snapshot's `value : type`.
+    let (hover, _range) = doc
+        .hover_at(Position {
+            line: 5,
+            character: 0,
+        })
+        .expect("hover on k_double");
+    assert_eq!(hover, "`k_double` — `Kernel : Int -> Int`");
 }

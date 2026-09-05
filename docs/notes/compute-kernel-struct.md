@@ -16,9 +16,17 @@ the JIT body emitter lowers a kernel `Apply` to a `CallKernel`.  In lichen a **s
 a *different*, non-callable kind, so wrapping the kernel in a struct must not rely on the
 kernel staying directly callable.
 
-Separately, the tooling (LSP hover) renders this raw kernel type poorly: the `TypeKernel`
-marker and the frozen signature cells render as opaque `?`, so `compute.jit` hovers as
-`? -> ? -> [[?, ?], ?]`.
+Separately, the tooling (LSP hover) *used to* render this raw kernel type poorly: the
+`TypeKernel` marker and the frozen signature cells rendered as opaque `?`, so `compute.jit`
+hovered as `? -> ? -> [[?, ?], ?]`.  That is fixed at the rendering layer, not by a struct
+wrapping: the generic type printer treats a function-mirroring kind marker
+([`ValueType::is_function_kind`](crates/lichen-highlevel/src/program.rs), which the compute
+`TypeKernel` marker implements) as an arrow, and the language's render hook spells a
+`Kernel` value / `TypeKernel` marker as `Kernel` — so a `jit` result now renders
+`Kernel : Int -> Int` and a tuple-domain kernel `Kernel : <Int, Int> -> Int` (see the
+`a_kernel_value_and_type_render_by_name` and `compute_kernel_bindings_render_by_name_not_raw_layout`
+tests).  The struct-wrapping design below is now a *separation-of-concerns* change (split
+call / launch / run), not a hover fix.
 
 ## Design: kernels are generic structs; invocation is via explicit native functions
 

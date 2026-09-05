@@ -27,6 +27,8 @@ pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 use lichen_doc::Doc;
 pub use lichen_doc::doc_attr_ext;
 
+use lichen_compute::ComputeValue;
+
 /// Compose the language's concrete program marker from a manifest of its
 /// vocabulary leaves and attribute set.
 ///
@@ -175,6 +177,12 @@ impl ValueType for LangValue {
     }
     fn type_id_value(n: usize) -> Self {
         Self::TypeValue(TypeValue::TypeId(n))
+    }
+    fn is_function_kind(&self) -> bool {
+        // `TypeKernel` re-heads the universe to form a kernel type
+        // `[signature, [TypeKernel, Type]]`, which mirrors a function type —
+        // the generic renderer spells that kind as `in -> out`.
+        matches!(self, Self::ComputeValue(ComputeValue::TypeKernel))
     }
 }
 

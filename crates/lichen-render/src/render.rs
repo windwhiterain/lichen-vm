@@ -290,8 +290,10 @@ where
             && self.is_universe_any(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
-                Some(m) if m == P::Value::function_type_marker() => {
-                    // shape = [in, out] — render `in -> out`.
+                Some(m) if m == P::Value::function_type_marker() || m.is_function_kind() => {
+                    // shape = [in, out] — render `in -> out`.  An extension
+                    // marker that mirrors a function kind (e.g. the compute
+                    // plugin's `TypeKernel`) reads the same way.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         && let s = shape.items()
@@ -453,7 +455,7 @@ where
             && self.is_static_universe(kind[1].node)
         {
             match self.module.node_value(kind[0].node) {
-                Some(m) if m == P::Value::function_type_marker() => {
+                Some(m) if m == P::Value::function_type_marker() || m.is_function_kind() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         && let s = shape.items()
@@ -683,7 +685,7 @@ where
             return None;
         };
         let shape = shape.items();
-        if marker == P::Value::function_type_marker() {
+        if marker == P::Value::function_type_marker() || marker.is_function_kind() {
             if shape.len() == 2 {
                 return Some(format!(
                     "{} -> {}",
