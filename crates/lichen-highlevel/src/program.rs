@@ -386,12 +386,6 @@ impl TypeValue {
     }
 }
 
-// The type-constant values are not themselves function-kind markers (the
-// `Function` kind marker is, but that is not an `is_function_kind` re-head —
-// the renderer already special-cases the `function_type_marker`).  Delegating
-// here keeps the composed vocabulary's classification complete.
-impl lichen_utils::extend::FunctionKind for TypeValue {}
-
 // The highlevel program's value vocabulary: a flat union of the lowlevel
 // structural values and the highlevel type values, each carried whole as
 // one sibling variant — one `lichen_utils::enum_ext!` invocation listing
@@ -443,17 +437,6 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
     fn type_id(&self) -> Option<usize>;
     /// A nominal type id value — what the checker's `Fresh` operator yields.
     fn type_id_value(n: usize) -> Self;
-    /// Whether this value is a *function-kind* marker — a marker that re-heads
-    /// the universe to form a compound type whose `[in, out]` shape reads as an
-    /// arrow, mirroring [`Self::function_type_marker`].  The highlevel's own
-    /// function marker already implies this through the renderer's explicit
-    /// comparison; an extension that re-heads the universe with its own
-    /// function-mirroring marker (e.g. `lichen-compute`'s `TypeKernel`) returns
-    /// `true` here so the generic renderer spells that kind as `in -> out` too.
-    /// Defaults to `false`.
-    fn is_function_kind(&self) -> bool {
-        false
-    }
 }
 
 impl ValueType for HighProgramValue {

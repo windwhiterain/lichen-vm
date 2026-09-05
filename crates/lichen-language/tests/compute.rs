@@ -303,58 +303,62 @@ compute.launch k 5
 
 #[test]
 fn a_kernel_value_and_type_render_by_name() {
-    // A `jit` result's value is an opaque compiled artifact (a `Kernel`), and
-    // its type mirrors a function — so the program output spells it
-    // `Kernel : Int -> Int`, not the raw recursive-pair layout (`? :
-    // [[Int, Int], TypeKernel]`).  This pins the rendering of an extension
-    // value/kind marker that the base renderer cannot know.
+    // A `jit` result's value is a kernel struct `[.native, .sig]`: the `.native`
+    // artifact renders by name (via the compute vocabulary hook), the `.sig`
+    // field carries the signature, so the type renders as the struct
+    // `struct<.native <_>, .sig Int -> Int>`.  Dropping `TypeKernel` means no
+    // renderer special-case — the struct's own fields carry the signature.
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
 k = compute.jit (y => y + y)
 k
 "#);
-    assert_eq!(out, "Kernel: Int -> Int", "kernel value/type: {out:?}");
+    assert_eq!(
+        out, "(Kernel, parameterized): struct<.native [?a, ?b], .sig Int -> Int>",
+        "kernel value/type: {out:?}"
+    );
 }
 
 #[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
-    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the kernel
-    // type renders as the arrow `<Int, Int> -> Int`, mirroring the function
-    // whose signature it carries.
+    // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the struct's
+    // `.sig` field carries it, so the type renders as the struct
+    // `struct<.native <_>, .sig <Int, Int> -> Int>`.
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
 k = compute.jit (p : <Int, Int> => p(0) + p(1))
 k
 "#);
     assert_eq!(
-        out, "Kernel: <Int, Int> -> Int",
+        out, "(Kernel, parameterized): struct<.native [?a, ?b], .sig <Int, Int> -> Int>",
         "tuple-domain kernel value/type: {out:?}"
     );
 }
 
 #[test]
 fn wrapper_functions_render_with_named_type_variables() {
-    // `jit`/`launch` are generic wrapper functions from the frozen `compute`
-    // module — their domain/codomain cells are unbound at the module level, so
-    // they render *as named cells* (`?a`/`?b`, shared across a kernel's
-    // signature) rather than a bare `? -> ? -> ? -> ?`.  The wrapper itself
-    // stays generic; only an *applied* result resolves to `Int -> Int`.
+    // `jit` is a generic wrapper from the frozen `compute` module — its
+    // domain/codomain cells are unbound at the module level, so they render as
+    // *named cells* (`?a`/`?b`), and a `jit` result is a kernel struct whose
+    // `.sig` field is that signature.  The wrapper itself stays generic; only
+    // an *applied* result resolves to `Int -> Int`.
     assert_eq!(
         run(r#"
 @{ compute = import "compute.lichen" @}
 compute.jit
 "#),
-        "Function: ?a -> ?b -> ?a -> ?b",
+        "Function: ?a -> ?b -> struct<.native [?c, ?d], .sig ?a -> ?b>",
         "jit wrapper value/type"
     );
-    // `launch` takes a kernel (whose signature mirrors `d -> c`), then the
-    // argument, and returns the codomain — same shared signature shape.
+    // `launch` reads the kernel's `.sig` lazily and returns its codomain, so it
+    // stays a generic `? -> ? -> ?` (the codomain is an unbound cell at the
+    // module level) — the concrete codomain only resolves when applied.
     assert_eq!(
         run(r#"
 @{ compute = import "compute.lichen" @}
 compute.launch
 "#),
-        "Function: ?a -> ?b -> ?c -> ?b",
+        "Function: ?a -> ?b -> ?c",
         "launch wrapper value/type"
     );
 }
@@ -416,9 +420,9 @@ compute.pget p 1
 
 #[test]
 fn parallel_kernel_renders_by_name() {
-    // A `parallel` result is an opaque parallel-kernel artifact whose type
-    // mirrors the lifted `?a -> USize -> ?b` — so it spells `ParKernel` with
-    // an arrow, not the raw layout.
+    // A `parallel` result is a kernel struct whose `.sig` is the lifted
+    // `?a -> USize -> ?b` — so it renders as the struct with that signature in
+    // its `.sig` field.
     let out = run(r#"
 @{ compute = import "compute.lichen" @}
 f = cfg => i => cfg + i
@@ -426,7 +430,7 @@ k = compute.parallel f
 k
 "#);
     assert_eq!(
-        out, "ParKernel: Int -> Int -> Int",
+        out, "(ParKernel, parameterized): struct<.native [?a, ?b], .sig Int -> Int -> Int>",
         "parallel value/type: {out:?}"
     );
 }

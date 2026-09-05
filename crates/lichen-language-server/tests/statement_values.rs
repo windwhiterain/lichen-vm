@@ -77,9 +77,10 @@ if 0 then (paradox : Int) else 5";
 #[test]
 fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // The `compute_jit` example's two kernel bindings are `compute.jit` results:
-    // a `Kernel` value whose type mirrors a function.  The editor snapshot must
-    // spell them `Kernel : Int -> Int`, not the raw recursive-pair layout with
-    // `?` (the pre-fix `? : [[Int, Int], ?]`).  This is the LSP-visible fix.
+    // a kernel struct whose `.sig` field carries the signature.  Dropping
+    // `TypeKernel` means no renderer special-case: the value renders by name via
+    // the compute vocabulary hook (`Kernel`) and the type renders as the struct
+    // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = Doc::new_with_base(source, Some(&dir));
@@ -89,14 +90,13 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     for sv in vals {
         assert_eq!(
             sv.value.as_deref(),
-            Some("Kernel"),
+            Some("(Kernel, parameterized)"),
             "value = {:?}",
             sv.value
         );
-        assert_eq!(sv.ty, "Int -> Int", "type = {:?}", sv.ty);
-        assert!(
-            !sv.ty.contains('?'),
-            "no unresolved `?` in a resolved kernel type: {:?}",
+        assert_eq!(
+            sv.ty, "struct<.native [?a, ?b], .sig Int -> Int>",
+            "type = {:?}",
             sv.ty
         );
     }
@@ -108,7 +108,10 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
             character: 0,
         })
         .expect("hover on k_double");
-    assert_eq!(hover, "`k_double` — `Kernel : Int -> Int`");
+    assert_eq!(
+        hover,
+        "`k_double` — `(Kernel, parameterized) : struct<.native [?a, ?b], .sig Int -> Int>`"
+    );
 }
 
 #[test]
@@ -117,7 +120,8 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     // module.  Their type variables are unbound cells that must render as
     // *named* `?a`/`?b` (and stay shared across a kernel's signature), not as
     // an opaque bare `? -> ? -> ? -> ?` — the LSP-visible half of the same
-    // "raw layout" bug for the wrapper functions themselves.
+    // "raw layout" bug for the wrapper functions themselves.  A `jit` result is
+    // a kernel struct, so its type renders as `struct<.native <_>, .sig ?>`.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = Doc::new_with_base(source, Some(&dir));
@@ -129,17 +133,21 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
             character: 19,
         })
         .expect("hover on `jit`");
-    assert_eq!(hover, "`.jit` — `Function : ?a -> ?b -> ?a -> ?b`");
+    assert_eq!(
+        hover,
+        "`.jit` — `Function : ?a -> ?b -> struct<.native [?c, ?d], .sig ?a -> ?b>`"
+    );
 
     // `launch` at line 7 (0-based): "compute.launch k_outer 3" — char 9.  The
-    // module struct renders `.jit` first, so `launch`'s cells continue the
-    // letter sequence (`?c`/`?d`/`?e`); the kernel's codomain `?d` is shared
-    // with the result, while the argument is a separate generic cell `?e`.
+    // module struct renders `.jit` first, whose kernel-struct type claims
+    // `?a`..`?d`, so `launch`'s own cells continue at `?e`; `launch` reads the
+    // kernel's `.sig` lazily and returns its codomain, so it stays a generic
+    // `? -> ? -> ?`.
     let (hover, _range) = doc
         .hover_at(Position {
             line: 7,
             character: 9,
         })
         .expect("hover on `launch`");
-    assert_eq!(hover, "`.launch` — `Function : ?c -> ?d -> ?e -> ?d`");
+    assert_eq!(hover, "`.launch` — `Function : ?e -> ?f -> ?g`");
 }

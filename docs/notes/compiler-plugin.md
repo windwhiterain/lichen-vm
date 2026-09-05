@@ -116,11 +116,15 @@ process-global `static`s) omits this.
 The whole plugin lives in the `lichen-compute` crate (`crates/lichen-compute/src/compute.rs`);
 it is program-generic, so it never names a concrete host `Program`.  Its pieces:
 
-- two `Copy` enums — `ComputeValue` (`Kernel`/`TypeKernel`), `ComputeOperator` (`Jit`/`Launch`);
-- an `OperatorExt<P>` `run` impl (the wasm compile/execute, a process-global kernel registry),
-  bounded by the same associated-type constraints a host's `enum_ext!` vocabulary satisfies;
-- two `NativeOp<P>` impls — `JitOp`, `LaunchOp` (the gates + typed result through `Ctx`);
-- the `WRAPPER_SOURCE` (the lichen source that calls `$jit`/`$launch`);
+- two `Copy` enums — `ComputeValue` (`Kernel`/`ParKernel`/`Buffer`/`TypeBuffer`),
+  `ComputeOperator` (`Jit`/`Launch`/`Call`/`Parallel`/`ParLaunch`/`BufferGet`/`BufferCollect`);
+- an `OperatorExt<P>` `run` impl (the wasm compile/execute, process-global kernel/buffer
+  registries), bounded by the same associated-type constraints a host's `enum_ext!`
+  vocabulary satisfies;
+- several `NativeOp<P>` impls — `JitOp`, `LaunchOp`, `CallOp`, `ParallelOp`,
+  `ParLaunchOp`, `BufferGetOp`, `BufferCollectOp` (the gates + typed result through `Ctx`);
+- the embedded `compute.lichen` (the source that calls `$jit`/`$launch`/`$call`/…) copied as
+  the virtual `compute.lichen` package;
 - no `GlobalExt` (registry is process-global).
 
 Then a host composes it: `lichen-language`'s `program.rs` composes
