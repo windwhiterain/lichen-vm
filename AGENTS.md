@@ -4,6 +4,11 @@ REAMD.md, /docs, commends.
 - keep relative docs synced.
 - always avoid replication, if exists, merge or reference.
 
+## Approval
+- always present a plan and ask for user approval unless the instruction is direct.
+- in the mid-turn of implementation, any design point is meet, stop and ask user.
+- when coming to subtle place, stop and ask user's idea.
+
 ## Worktree
 make sure your are on your assigned worktree (usually you should create one for new feature). 
 
