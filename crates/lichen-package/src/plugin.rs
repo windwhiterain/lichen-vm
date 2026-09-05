@@ -29,7 +29,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lichen_language::preprocess::Depend;
+use lichen_preprocess::Depend;
 
 use crate::git;
 

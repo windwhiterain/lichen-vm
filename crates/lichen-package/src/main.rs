@@ -17,8 +17,8 @@ use std::env::Args;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use lichen_language::preprocess::{block_depends, split_block};
 use lichen_package::{DEFAULT_REPO, Depend, Project, compiler_cache, git, plugin, toolchain};
+use lichen_preprocess::{block_depends, split_block};
 
 const USAGE: &str = "\
 usage: lichen <command> [args]
@@ -209,7 +209,8 @@ fn delegate(target: &Path, sub: &str) -> ExitCode {
         }
     };
     println!("compiler: {}", bin.display());
-    spawn_compiler(&bin, sub, target)
+    let target_str = target.to_string_lossy().into_owned();
+    spawn_compiler(&bin, &[sub, target_str.as_str()])
 }
 
 /// The compiler binary to drive: the plugin-built one (from the lichen-home
@@ -248,12 +249,8 @@ fn stock_compiler() -> Option<PathBuf> {
 }
 
 /// Spawn the compiler binary as a subprocess, relaying its exit status.
-fn spawn_compiler(bin: &Path, sub: &str, target: &Path) -> ExitCode {
-    let status = match std::process::Command::new(bin)
-        .arg(sub)
-        .arg(target)
-        .status()
-    {
+fn spawn_compiler(bin: &Path, args: &[&str]) -> ExitCode {
+    let status = match std::process::Command::new(bin).args(args).status() {
         Ok(status) => status,
         Err(e) => {
             eprintln!("cannot run {}: {e}", bin.display());
@@ -269,18 +266,19 @@ fn spawn_compiler(bin: &Path, sub: &str, target: &Path) -> ExitCode {
 
 /// `lichen clean`: reclaim every device-cache artifact that is no longer a
 /// live `.lichen` (or `virtual:`) source slot.
+///
+/// The package manager never touches the device cache itself — it delegates the
+/// `cache gc` to the compiler binary, which owns the device cache.  (This keeps
+/// the package manager depending only on the preprocessor crate, not the
+/// language/VM stack.)
 fn cmd_clean(_args: &mut Args) -> ExitCode {
-    let dir = lichen_language::persist::lichendir();
-    let mut store = lichen_language::package::PackageStore::<
-        lichen_language::program::LangValue,
-        lichen_language::program::LangOperator,
-    >::with_cache_dir(dir.clone());
-    let removed = store.gc();
-    println!(
-        "reclaimed {removed} cached artifact(s) from {}",
-        dir.display()
-    );
-    ExitCode::SUCCESS
+    let Some(bin) = stock_compiler() else {
+        eprintln!(
+            "no `lichen-compiler` on $PATH (or next to `lichen`); run `lichen install compiler`"
+        );
+        return ExitCode::FAILURE;
+    };
+    spawn_compiler(&bin, &["cache", "gc"])
 }
 
 fn cmd_cache(args: &mut Args) -> ExitCode {

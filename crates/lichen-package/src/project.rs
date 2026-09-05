@@ -7,12 +7,12 @@
 //! ([`crate::git`]), and **compiles by delegating to the compiler binary** —
 //! it never compiles a program in-process itself.  The compiler resolves each
 //! `depend` against the cache it just populated (see
-//! [`lichen_language::preprocess::stage_depends`]), so `import "alias"`
+//! [`lichen_preprocess::stage_depends`]), so `import "alias"`
 //! resolves into the fetched source.
 
 use std::path::{Path, PathBuf};
 
-use lichen_language::preprocess::{Depend, block_depends, split_block};
+use lichen_preprocess::{Depend, block_depends, split_block};
 
 /// A lichen project rooted at a directory.
 pub struct Project {

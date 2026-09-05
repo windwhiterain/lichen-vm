@@ -4,8 +4,8 @@
 > Points at: `crates/lichen-package` (the crate), `src/main.rs` (the `lichen`
 > CLI), `src/project.rs` (`Project`), `src/git.rs` (git fetching into the
 > lichen-home source cache), `src/toolchain.rs` (binary install), `src/plugin.rs`
-> (compiler rebuild), `src/preprocess.rs` (the owned preprocessor import path),
-> and `crates/lichen-language/src/preprocess/` (the block grammar, `Depend`),
+> (compiler rebuild), and the isolated preprocessor crate `crates/lichen-preprocess`
+> (the block grammar, `Depend`, the preprocessor import path), plus
 > `crates/lichen-language/src/package.rs` (`PackageStore` `register_vendored` /
 > `resolve_import`).
 
@@ -20,11 +20,14 @@ There is **no project manifest**: dependencies are declared per file.
 ## Splitting the work
 
 - `lichen-compiler` (crates/lichen-language) — the frontend, the package store,
-  the persistent device cache, `run`/`build`/`cache gc`.  Owns the `@{…@}`
-  block *syntax* and its scanning/mini-frontend.
+  the persistent device cache, `run`/`build`/`cache gc`.  Consumes the `@{…@}`
+  block grammar and the `Depend` type from the isolated
+  [`lichen-preprocess`](../../crates/lichen-preprocess/) crate (which owns the
+  block *syntax* and the preprocessor import path).
 - `lichen` (crates/lichen-package) — the project workflow.  Owns the
   **preprocessor import path** (which dependency alias resolves to which file)
-  and drives the language crate's block preprocessor for a project.
+  and drives the compiler binary (or a plugin-built one) for a project.  It
+  depends only on `lichen-preprocess`, not on the language/VM stack.
 
 ## Declaring dependencies
 
@@ -58,17 +61,25 @@ introduces and git refuses as a clone destination.
 
 ## Owning the preprocessor import path
 
-The block scanner and mini-frontend stay in `crates/lichen-language` (the
-language crate owns the grammar).  The package manager owns the **resolution
-seam**: before the language crate's `preprocess` runs,
+The block scanner and mini-frontend live in the isolated
+[`lichen-preprocess`](../../crates/lichen-preprocess/) crate (the preprocessor
+import path: [`lichendir`](../../crates/lichen-preprocess/src/lib.rs) /
+[`sources_root`](../../crates/lichen-preprocess/src/lib.rs)).  The package
+manager owns the **resolution seam**: before the compiler's `preprocess` runs,
 [`Project::stage`](src/project.rs) fetches every `depend` into the source cache
 and registers each alias with the shared store via
 [`PackageStore::register_vendored`](../../crates/lichen-language/src/package.rs).
 [`resolve_import`](../../crates/lichen-language/src/package.rs) then resolves
-`import "alias"` to the dependency's entry package (`lib.lichen`, then
+`import "alias"` to the dependency's entry package (`_.lichen`, then
 `<alias>.lichen`, then the directory's sole `.lichen` file) and
 `import "alias/sub.lichen"` relative to the vendored dir.  A file-like first
 segment (`math.lichen`) never hits the alias map.
+
+`liche-preprocess` only knows an [`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs)
+trait for import resolution — it never names a package store or a compile
+vocabulary.  The language crate's `PackageStore` implements that trait (adapting
+its `PackageHandle`/`Diag`), and the package manager drives the scanner through
+`lichen-preprocess` directly.
 
 ## Toolchain binaries
 
@@ -103,9 +114,11 @@ rebuild-plugin [<file|dir>]` is the explicit form of the same build.
 ## CLI
 
 `lichen fetch/run/build/clean/install/rebuild-plugin/cache`, plus `--version` /
-`--help`.  `run` and `build` fetch the file's `depend`s/`plug`s into the source
-cache, then **spawn the compiler binary** to compile & run the program (the
-plugin-built compiler from the cache when the program imports a native plugin,
-else the shipped `lichen-compiler`) — the package manager never compiles
-in-process.  A directory target processes every `.lichen` file in it, each with
-its own dependencies.
+`--help`.  `run`, `build`, `clean`, and `cache gc` fetch the file's
+`depend`s/`plug`s into the source cache, then **spawn the compiler binary**
+(`run`/`build` to compile & run the program — the plugin-built compiler from the
+cache when the program imports a native plugin, else the shipped
+`lichen-compiler`; `clean`/`cache gc` to reclaim device-cache artifacts) — the
+package manager never compiles or GCs in-process, and never links the
+language/VM stack.  A directory target processes every `.lichen` file in it,
+each with its own dependencies.

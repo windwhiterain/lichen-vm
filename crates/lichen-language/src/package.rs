@@ -26,6 +26,7 @@ use lichen_compute::WRAPPER_SOURCE;
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{HighPackageMeta, TypeOperator, ValueType};
 use lichen_lowlevel::{LowOperator, ModuleKey, OperatorExt, Registry, StaticModule, StaticNodeId};
+use lichen_preprocess::{ImportResolver, PreprocessDiag, ResolvedPackage};
 use lichen_utils::extend::AsEnum;
 
 use crate::CompiledProgram;
@@ -783,6 +784,47 @@ where
         Ok(handle)
     }
 }
+/// The import-resolution seam for the preprocessor, implemented by the package
+/// store.  [`ImportResolver`] only knows the vocabulary-agnostic
+/// [`ResolvedPackage`] (export/path/direct); the store adapts its own
+/// `PackageHandle`/`Diag` to it, so the isolated preprocessor never names a
+/// program marker.
+impl<V, O, C> ImportResolver<StaticNodeId> for PackageStore<V, O, C>
+where
+    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+{
+    fn resolve_import(
+        &mut self,
+        base: Option<&Path>,
+        import_path: &str,
+    ) -> Result<ResolvedPackage<StaticNodeId>, PreprocessDiag> {
+        PackageStore::resolve_import(self, base, import_path)
+            .map_err(|d| PreprocessDiag {
+                span: d.span,
+                message: d.message,
+            })
+            .map(|handle| ResolvedPackage {
+                export: handle.export,
+                path: handle.path,
+                direct: handle.direct,
+            })
+    }
+
+    fn register_vendored(&mut self, alias: String, dir: PathBuf) {
+        PackageStore::register_vendored(self, alias, dir);
+    }
+}
 
 /// Split a potential vendored alias from an import path: `"foo"` →
 /// `("foo", None)`, `"foo/rest"` → `("foo", Some("rest"))`.  A leading
@@ -799,14 +841,14 @@ fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> {
     Some((first, rest))
 }
 
-/// The entry package file of a vendored dependency directory: a `lib.lichen`,
+/// The entry package file of a vendored dependency directory: a `_.lichen`,
 /// then `<alias>.lichen`, then the directory's sole `.lichen` file.  An
 /// ambiguous (many) or absent package is a diagnostic, not a guess.
 fn vendored_entry_file<P: lichen_lowlevel::Program>(
     dir: &Path,
     alias: &str,
 ) -> Result<PathBuf, Diag<P>> {
-    let lib = dir.join("lib.lichen");
+    let lib = dir.join("_.lichen");
     if lib.is_file() {
         return Ok(lib);
     }
@@ -829,7 +871,7 @@ fn vendored_entry_file<P: lichen_lowlevel::Program>(
             Stage::Preprocess,
             (0, 0),
             format!(
-                "vendored dependency '{alias}' has no .lichen entry package (no lib.lichen, \
+                "vendored dependency '{alias}' has no .lichen entry package (no _.lichen, \
                  {alias}.lichen, or a single .lichen file)"
             ),
         )),
@@ -848,7 +890,7 @@ fn vendored_entry_file<P: lichen_lowlevel::Program>(
                 Stage::Preprocess,
                 (0, 0),
                 format!(
-                    "vendored dependency '{alias}' is ambiguous: pick one of {names} (or add a lib.lichen)"
+                    "vendored dependency '{alias}' is ambiguous: pick one of {names} (or add a _.lichen)"
                 ),
             ))
         }
@@ -888,13 +930,13 @@ mod vendored_tests {
         let dir = tempdir("entry");
         let foo = dir.join("deps").join("foo");
         std::fs::create_dir_all(&foo).unwrap();
-        std::fs::write(foo.join("lib.lichen"), "42").unwrap();
+        std::fs::write(foo.join("_.lichen"), "42").unwrap();
         let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", foo.clone());
         let handle = store.resolve_import(None, "foo").unwrap();
         assert_eq!(
             handle.path,
-            std::fs::canonicalize(foo.join("lib.lichen")).unwrap()
+            std::fs::canonicalize(foo.join("_.lichen")).unwrap()
         );
     }
 
@@ -903,7 +945,7 @@ mod vendored_tests {
         let dir = tempdir("sub");
         let foo = dir.join("deps").join("foo");
         std::fs::create_dir_all(&foo).unwrap();
-        std::fs::write(foo.join("lib.lichen"), "1").unwrap();
+        std::fs::write(foo.join("_.lichen"), "1").unwrap();
         std::fs::write(foo.join("other.lichen"), "2").unwrap();
         let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", foo.clone());

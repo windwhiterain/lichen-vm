@@ -572,6 +572,7 @@ dependencies = [
  "lichen-language-parser",
  "lichen-lowlevel",
  "lichen-perspective",
+ "lichen-preprocess",
  "lichen-render",
  "lichen-std-native",
  "lichen-utils",
@@ -583,6 +584,7 @@ dependencies = [
 name = "lichen-language-lex"
 version = "0.1.0"
 dependencies = [
+ "lichen-span",
  "logos",
 ]
 
@@ -631,7 +633,8 @@ dependencies = [
 name = "lichen-package"
 version = "0.1.0"
 dependencies = [
- "lichen-language",
+ "lichen-preprocess",
+ "lichen-utils",
 ]
 
 [[package]]
@@ -644,6 +647,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lichen-preprocess"
+version = "0.1.0"
+dependencies = [
+ "lichen-span",
+ "logos",
+]
+
+[[package]]
 name = "lichen-render"
 version = "0.1.0"
 dependencies = [
@@ -651,6 +662,10 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-utils",
 ]
+
+[[package]]
+name = "lichen-span"
+version = "0.1.0"
 
 [[package]]
 name = "lichen-std-native"
@@ -665,6 +680,7 @@ dependencies = [
 name = "lichen-utils"
 version = "0.1.0"
 dependencies = [
+ "sha2",
  "slotmap",
  "stacksafe",
 ]

@@ -36,14 +36,11 @@ use sha2::Digest as _;
 
 use crate::program::{LangProgram, ProgramCodec};
 
-/// The content hash of an artifact — 32 bytes of SHA-256.
-pub type Hash = [u8; 32];
-
-/// SHA-256 over `bytes`.
-pub fn sha256(bytes: &[u8]) -> Hash {
-    use sha2::Sha256;
-    Sha256::digest(bytes).into()
-}
+// The shared hash helpers (`Hash`, `sha256`, `hex`) live in the leaf utility
+// crate, so the package manager (which keys its compiler cache by them) does
+// not depend on the language crate.  Re-exported here for the existing
+// `lichen_language::persist::{Hash, sha256, hex}` paths.
+pub use lichen_utils::hash::{Hash, hex, sha256};
 
 /// The artifact hash of a compiled package: the raw source bytes followed
 /// by its direct dependency keys in source order.  The hash is transitive —
@@ -870,38 +867,12 @@ impl Drop for RegistryLock {
     }
 }
 
-/// The device's cache directory: `$LICHEN_HOME` when set, otherwise
-/// `~/.lichen`.
-pub fn lichendir() -> PathBuf {
-    if let Some(home) = std::env::var_os("LICHEN_HOME") {
-        return PathBuf::from(home);
-    }
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
-    match home {
-        Some(home) => PathBuf::from(home).join(".lichen"),
-        None => PathBuf::from(".lichen"),
-    }
-}
+// The lichen home / git source cache root live in the preprocessor crate,
+// which owns the preprocessor import path.  Re-exported here so the existing
+// `lichen_language::persist::{lichendir, sources_root}` paths resolve.
+pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 
-/// The source-cache subdir name, under the lichen home.  The package manager
-/// keeps each fetched git dependency under `sources/<alias>`; the compiler
-/// resolves a file's `depend "url"` directives against this same root.
-pub const SOURCES_DIR: &str = "sources";
-
-/// The root of the git source cache: the lichen home's `sources/` directory.
-pub fn sources_root() -> PathBuf {
-    lichendir().join(SOURCES_DIR)
-}
-
-/// The hex encoding of a hash — the artifact file name.
-pub fn hex(hash: &Hash) -> String {
-    let mut out = String::with_capacity(64);
-    for byte in hash {
-        use std::fmt::Write as _;
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
+// `hex` is re-exported above from `liche_utils::hash`.
 
 // ---------------------------------------------------------------------------
 // Registry file serialization

@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/lichen-span",
     "crates/lichen-utils",
     "crates/lichen-language-lex",
     "crates/lichen-language-parser",
+    "crates/lichen-preprocess",
     "crates/lichen-lowlevel",
     "crates/lichen-highlevel",
     "crates/lichen-compute",

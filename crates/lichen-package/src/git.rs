@@ -4,7 +4,7 @@
 //! `@{…@}` block.  Each is fetched with the `git` CLI (no libgit2 dependency)
 //! into a **source cache under the lichen home** (`$LICHEN_HOME` or
 //! `~/.lichen`, the same root the compiler's static-module cache uses; see
-//! [`lichen_language::persist::lichendir`]).  A missing source is cloned, an
+//! [`lichen_preprocess::lichendir`]).  A missing source is cloned, an
 //! existing one is `fetch`ed and checked out to the pinned revision, so
 //! `lichen fetch` is idempotent and only pulls what changed.  The source cache
 //! lives in `sources/`, a sibling of the compiler's `artifacts/`/`registry`.
@@ -21,13 +21,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lichen_language::persist;
-use lichen_language::preprocess::Depend;
-
-/// The cache root for fetched git sources (the lichen home's `sources/`).
-pub fn sources_root() -> PathBuf {
-    persist::sources_root()
-}
+use lichen_preprocess::{Depend, sources_root};
 
 /// The alias a [`Depend`] resolves to: its binding name (`name = depend`).
 pub fn alias_of(dep: &Depend) -> String {

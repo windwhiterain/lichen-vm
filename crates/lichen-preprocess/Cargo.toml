@@ -1,0 +1,9 @@
+[package]
+name = "lichen-preprocess"
+version = "0.1.0"
+edition = "2024"
+description = "The lichen preprocessor: cut the leading @{...@} block, resolve its import/depend directives, and own the preprocessor import path."
+
+[dependencies]
+lichen-span = { path = "../lichen-span" }
+logos = "0.16"

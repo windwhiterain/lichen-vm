@@ -70,6 +70,18 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
 }
 
 impl<P: lichen_lowlevel::Program> Diag<P> {
+    /// Widen a preprocessor diagnostic into the pipeline's [`Diag`] at
+    /// `Stage::Preprocess`.  A preprocess diagnostic is program-blind
+    /// (`check: None`), so it re-types to any program marker.
+    pub fn from_preprocess(d: lichen_preprocess::PreprocessDiag) -> Self {
+        Diag {
+            span: d.span,
+            message: d.message,
+            stage: Stage::Preprocess,
+            check: None,
+        }
+    }
+
     /// Re-type a *frontend* diagnostic (which carries no checker facts) to any
     /// program marker's [`Diag`].  A frontend `Diag` has `check: None` — the
     /// `P` is only in the `check` slot, so a checker-free diagnostic is

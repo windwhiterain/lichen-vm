@@ -17,9 +17,8 @@
 
 use std::path::PathBuf;
 
-use lichen_language::persist;
-use lichen_language::persist::lichendir;
-use lichen_language::preprocess::Depend;
+use lichen_preprocess::{Depend, lichendir};
+use lichen_utils::hash::{hex, sha256};
 
 use crate::git;
 use crate::plugin::{self, Leaves};
@@ -48,12 +47,17 @@ pub fn key(plugins: &[Depend]) -> Result<String, String> {
         parts.push(format!("{}@{version}", dep.name));
     }
     parts.sort();
-    let mut spec = format!("liche-language={}", lichen_language::VERSION);
+    // The key is the toolchain version + the plugin set.  The plugin set is
+    // versioned by each plugin's resolved source-cache `HEAD`; the toolchain
+    // is versioned by this crate's own version (the package manager and the
+    // core crates are released together, so `CARGO_PKG_VERSION` is the
+    // toolchain version — the key a change to any core crate should bump).
+    let mut spec = format!("liche-language={}", env!("CARGO_PKG_VERSION"));
     for part in &parts {
         spec.push('&');
         spec.push_str(part);
     }
-    Ok(persist::hex(&persist::sha256(spec.as_bytes())))
+    Ok(hex(&sha256(spec.as_bytes())))
 }
 
 /// The cache slot directory for `key`.

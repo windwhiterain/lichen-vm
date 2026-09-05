@@ -14,4 +14,5 @@ name = "lichen"
 path = "src/main.rs"
 
 [dependencies]
-lichen-language = { path = "../lichen-language" }
+lichen-preprocess = { path = "../lichen-preprocess" }
+lichen-utils = { path = "../lichen-utils" }

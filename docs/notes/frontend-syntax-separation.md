@@ -257,15 +257,19 @@ was only because `Diag` was `!Send`); the parser returns `ParseDiag` directly.
 
 ### 5. The `@{…@}` preprocessor block
 
-The block *body* is checker-free and byte-range-typed. The clean option is to split it
-too — move `preprocess/lex.rs` to `lichen-language-lex` as a `block` module and
-`preprocess/parse.rs` to `lichen-language-parser` as a `block` module (it produces a
-`Directive`, not the main AST). The simpler default keeps them in `lichen-language`
-`preprocess/` for now, because the block is tiny, byte-range (not `Span`) based, and
-tightly bound to `PackageStore` import resolution. Either choice leaves the orchestrator
-`preprocess/mod.rs` in `lichen-language`. The `split_block`/`block_directives`/
-`block_metadata` helpers used by `readme`/`sync-readme` are thin wrappers over whichever
-home the block lexer/parser land in.
+The block *body* is checker-free and byte-range-typed, and it is **now isolated**
+in the [`lichen-preprocess`](../../crates/lichen-preprocess/) crate:
+`preprocess/mod.rs`, `preprocess/lex.rs`, and `preprocess/parse.rs` moved there
+(`lex`/`parse` as crate submodules), so the package manager can depend on the
+preprocessor without pulling in the language/VM stack.  The block's `Span`
+positioning uses the shared [`lichen-span`](../../crates/lichen-span/) protocol
+type rather than the lexer.  The orchestrator `preprocess`/`stage_depends` do
+not stay vocabulary-bound: they go through a small
+[`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs) trait and are generic
+only over the export handle type.  The language crate re-exports them (a
+`pub use` shim) so the existing `liche_language::preprocess::*` and
+`liche_language::preprocess::{split_block, block_directives, block_metadata}`
+paths (used by `readme`/`sync-readme` and the server) resolve unchanged.
 
 ## Migration plan (each step keeps `cargo check`/`cargo test` green)
 

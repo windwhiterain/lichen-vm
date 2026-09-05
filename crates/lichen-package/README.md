@@ -58,7 +58,7 @@ shipping compiler.
 home** — `$LICHEN_HOME` or `~/.lichen` (the same root as the compiler's
 static-module cache), under `sources/<alias>/`.  The compiler resolves each
 `depend`/`plug` against that cache (see
-[`liche_language::preprocess::stage_depends`]), so `import "alias"` or
+[`lichen_preprocess::stage_depends`]), so `import "alias"` or
 `import "alias/sub.lichen"` resolves into the fetched clone.
 
 ## Native plugins and the compiler cache
@@ -68,10 +68,11 @@ A native plugin extends the compiler's vocabulary at *compile time* (see
 `depend … plugin`), `lichen run`/`build` gather the program's plugins, select
 (or build) a compiler over them, and drive it.  The compiler is built into a
 **cache under the lichen home** (`<lichendir>/compilers/<key>/`), keyed by the
-lichen-library version (`liche_language::VERSION`) and every plugin's resolved
+toolchain version (the package manager's own `CARGO_PKG_VERSION`, which tracks
+the core crates' release) and every plugin's resolved
 version (its `HEAD` in the fetched source cache).  The same plugin set +
-library version reuses the cached binary; a change to any plugin (or the
-library) keys a new slot.  `lichen rebuild-plugin` is the explicit form of the
+toolchain version reuses the cached binary; a change to any plugin (or the
+toolchain) keys a new slot.  `lichen rebuild-plugin` is the explicit form of the
 same build.
 
 The composition scaffold is real; the language tooling's generalization to an

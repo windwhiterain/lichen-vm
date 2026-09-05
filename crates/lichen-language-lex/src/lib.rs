@@ -1,9 +1,10 @@
 //! The lexer: source text -> tokens, each with a (line, column) span.
 //!
-//! This crate is the source-position authority: it defines [`Span`] (a
-//! `(line, column)` pair), the byte→(line, col) mapping ([`line_starts`],
-//! [`line_col`]), and the token stream.  Nothing above it (the parser, the
-//! language crate) needs its own span type — the parser consumes
+//! This crate consumes the shared source-position protocol from
+//! [`liche_span`] — the [`Span`] type and the byte→(line, col) mapping
+//! ([`line_starts`], [`line_col`]), re-exported here so `lichen_language_lex::Span`
+//! still resolves — and produces the token stream.  Nothing above it (the
+//! parser, the language crate) needs its own span type — the parser consumes
 //! [`Token::span`], and the language crate stores spans in its own map keyed by
 //! the IR id it gets back from the checker.
 //!
@@ -35,9 +36,11 @@
 
 use logos::Logos;
 
-/// A source span: 1-based `(line, column)`.  Defined here — the lexer is the
-/// one thing that turns raw bytes into a source position, so it owns the type.
-pub type Span = (u32, u32);
+// The source-position protocol lives in `lichen_span` (a tiny dependency-free
+// crate) so a crate that only needs to name a source position doesn't have to
+// depend on the lexer.  Re-exported here for the existing
+// `lichen_language_lex::{Span, line_starts, line_col}` paths.
+pub use lichen_span::{Span, line_col, line_starts};
 
 /// A lex diagnostic: a message plus the source position it is grounded in.
 /// Check-free (no checker payload), so it is `Send` and stays entirely in this
@@ -692,28 +695,6 @@ fn raw_to_kind(
         RawToken::RAngle => Some(TokenKind::RAngle),
         RawToken::Separator => Some(TokenKind::Separator),
     }
-}
-
-/// Byte offsets at which each line starts (line 1 begins at 0).
-pub fn line_starts(source: &str) -> Vec<usize> {
-    let mut starts = vec![0];
-    for (i, byte) in source.bytes().enumerate() {
-        if byte == b'\n' {
-            starts.push(i + 1);
-        }
-    }
-    starts
-}
-
-/// Map a byte offset to its 1-based (line, column).
-pub fn line_col(starts: &[usize], pos: u32) -> Span {
-    let pos = pos as usize;
-    let line = match starts.binary_search(&pos) {
-        Ok(i) => i + 1,
-        Err(i) => i,
-    };
-    let col = pos - starts[line - 1] + 1;
-    (line as u32, col as u32)
 }
 
 #[cfg(test)]

@@ -11,8 +11,11 @@
 //! a native plugin ([`plugin`]), builds a plugin-composed compiler into the
 //! lichen-home compiler cache ([`compiler_cache`]) and drives that.
 //!
-//! The binary is named `lichen` ([`main`]); the language compiler is the
-//! renamed `lichen-compiler` in `crates/lichen-language`.
+//! The package manager depends only on the isolated [`lichen_preprocess`]
+//! crate for the `@{…@}` block grammar and its `Depend` import-path type (see
+//! [`preprocess`]); it never links the language or VM crates.  The binary is
+//! named `lichen` ([`main`]); the language compiler is the renamed
+//! `lichen-compiler` in `crates/lichen-language`.
 
 pub mod compiler_cache;
 pub mod git;
@@ -21,7 +24,7 @@ pub mod preprocess;
 pub mod project;
 pub mod toolchain;
 
-pub use lichen_language::preprocess::Depend;
+pub use lichen_preprocess::Depend;
 pub use project::Project;
 
 /// The repository the core crates and toolchain binaries are fetched from.

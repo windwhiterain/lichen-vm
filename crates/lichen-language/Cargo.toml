@@ -14,6 +14,7 @@ lichen-language-lex = { path = "../lichen-language-lex" }
 lichen-language-parser = { path = "../lichen-language-parser" }
 lichen-perspective = { path = "../lichen-perspective" }
 lichen-lowlevel = { path = "../lichen-lowlevel" }
+lichen-preprocess = { path = "../lichen-preprocess" }
 lichen-render = { path = "../lichen-render" }
 lichen-utils = { path = "../lichen-utils" }
 

@@ -320,7 +320,7 @@ fn found(k: Option<&TokenKind>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preprocess::lex::tokenize;
+    use crate::lex::tokenize;
 
     fn parse_ok(interior: &str) -> Vec<Directive> {
         let lexed = tokenize(interior);
