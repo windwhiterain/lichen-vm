@@ -1,0 +1,43 @@
+name: build
+
+on:
+  push:
+    branches: [v1]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            suffix: ""
+          - os: macos-latest
+            name: macos-aarch64
+            suffix: ""
+          - os: windows-latest
+            name: windows-x86_64
+            suffix: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build lichen and lichen-language-server
+        run: cargo build --release --locked -p lichen-language -p lichen-language-server
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: lichen-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            target/release/lichen${{ matrix.suffix }}
+            target/release/lichen-language-server${{ matrix.suffix }}
