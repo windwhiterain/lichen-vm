@@ -370,4 +370,16 @@ k_outer  = compute.jit (x => compute.launch k_double (x + 1))
 compute.launch k_outer 3
 ```
 
+### `doc.lichen`
+
+```text
+@{
+  order = "10"
+  output = "5 # 8 ? tag = 7: Int"
+@}
+Doc = struct<.tag Int>
+five = 5 # 8 ? Doc(.tag 7)
+five # 4
+```
+
 <!-- end: examples -->

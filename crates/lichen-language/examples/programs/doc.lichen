@@ -1,0 +1,7 @@
+@{
+  order = "10"
+  output = "5 # 8 ? tag = 7: Int"
+@}
+Doc = struct<.tag Int>
+five = 5 # 8 ? Doc(.tag 7)
+five # 4
