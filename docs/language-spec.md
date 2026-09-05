@@ -41,7 +41,7 @@ sep      := newline | ';' | ','                     -- one uniform Separator tok
 
 expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
-annotated:= arrow ((':' arrow) | ('#' arrow))*      -- type (':') and/or perspective ('#') annotation, right-assoc
+annotated:= arrow ((':' arrow) | ('#' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), and/or doc ('?') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
 cmp      := arith (('<=' | '==') arith)*            -- comparison, left-assoc; yields 0/1
 arith    := prefix (('+' | '-') prefix)*            -- arithmetic, left-assoc
@@ -76,7 +76,8 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 ```
 
 - **Keywords:** `Int`, `Type`, `struct`, `table`, `let`, `if`, `then`, `else`,
-  `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `::`,
+  `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+  `::`,
   `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
@@ -108,13 +109,17 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   `_` is an ordinary name, so `_ = 5; _` and `_ => _` stay legal.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
-- **Precedence** (loosest → tightest): `=>` → `:` / `#` → `->` → `<=` / `==`
+- **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` → `<=` / `==`
   → `+` / `-` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
   array lengths: `Int<x : T>` is the array type whose length is the annotated
-  expression.  `#` binds at the same precedence as `:`, so `e : T # p` annotates
-  both the type and the perspective slot, and `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.
-  A comparison (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
+  expression.  `#` and `?` bind at the same precedence as `:`, so
+  `e : T # p ? d` annotates the type, perspective, and doc slots, and
+  `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.  `?` is the **label** (doc) slot:
+  metadata that never constrains, so `e ? d` attaches a value (a user struct
+  instance) and — unlike `#`, which a compound lives with and the apply-time
+  check enforces — a later `? d'` replaces any earlier `? d`.  A comparison
+  (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
   is a prefix assert: `!e` compiles to the highlevel `assert(e)` — the checker
   force-evaluates `e` and requires `USize(1)`.  It binds tighter than the binary
   operators but looser than application, so `! f x` asserts `f x` and `! x <= 3`
