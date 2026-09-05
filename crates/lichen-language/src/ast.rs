@@ -31,6 +31,13 @@ pub enum Expr {
     Str(String, Span),
     /// One of the type constants `Int` / `string` / `Type`.
     TypeConst(TypeConst, Span),
+    /// The bare `type_of` atom — an ordinary first-class function value:
+    /// its application (`type_of e`, `type_of (e)`) reads the argument's
+    /// type.  Compiles to a generic lambda whose body is the highlevel
+    /// `ExprKind::TypeOf` (element 1 of the argument's pair), so juxtaposed
+    /// application is the whole story — no special grammar, and the bare
+    /// atom is bindable and passable like any function (`f = type_of`).
+    TypeOf(Span),
     /// A use of a name — resolved by [`crate::compile`] to the binder's id.
     Name(String, Span),
     /// `_` in type position — an inference placeholder (the checker infers
@@ -340,6 +347,7 @@ impl Expr {
             Expr::Int(_, s) => *s,
             Expr::Str(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
+            Expr::TypeOf(s) => *s,
             Expr::Name(_, s) => *s,
             Expr::Placeholder(s) => *s,
             Expr::Lambda { span, .. } => *span,

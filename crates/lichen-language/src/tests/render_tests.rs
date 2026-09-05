@@ -155,6 +155,43 @@ fn a_function_value_prints_function() {
     assert_eq!(output("f = x => x\nf"), "Function: ?a -> ?a");
 }
 
+// --- the first-class `type_of` function ----------------------------------
+
+#[test]
+fn type_of_reads_the_operands_type() {
+    // The spaced and juxtaposed spellings are ordinary application; the
+    // read is element 1 of the operand's pair.
+    assert_eq!(output("type_of (1)"), "Int: Type");
+    assert_eq!(output("type_of 1"), "Int: Type");
+    assert_eq!(
+        output("(type_of (1), type_of Int, type_of Type)"),
+        "(Int, Type, Type): <Type, Type, Type>"
+    );
+}
+
+#[test]
+fn type_of_is_first_class() {
+    // Bindable, passable — application is the whole story.
+    assert_eq!(output("f = type_of\nf 1"), "Int: Type");
+    assert_eq!(output("g = x => type_of x\ng 2"), "Int: Type");
+    assert_eq!(output("type_of (x => x)"), "?a -> ?a: TypeFunction");
+}
+
+#[test]
+fn type_of_reads_compound_types() {
+    assert_eq!(output("type_of [1, 2]"), "Int<2>: TypeArray");
+    assert_eq!(output("type_of (1, Int)"), "<Int, Type>: TypeTuple");
+    assert_eq!(output("type_of (type_of (1))"), "Type: Type");
+}
+
+#[test]
+fn a_value_annotates_against_its_own_type_of() {
+    // `type_of e` in a type position IS the operand's type expression, so
+    // the annotation unifies exactly as the spelled-out type would.
+    assert_eq!(output("5 : type_of (5)"), "5: Int");
+    assert_eq!(output("type_of (1) : Type"), "Int: Type");
+}
+
 // --- the extended vocabulary --------------------------------------------
 
 // A probe extension: a type constant beyond the highlevel's vocabulary,

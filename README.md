@@ -325,6 +325,19 @@ t = table{ [1, 2] :: 10, [3, 4] :: 20 }
 }
 ```
 
+### `type_of.lichen`
+
+```text
+@{
+  order = "5"
+  output = "(Int, Type, Int, Int<2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
+@}
+f = type_of
+g = x => type_of x
+n = 5 : type_of (1)
+(type_of (1), f Int, g 2, type_of [1, 2], type_of Type, n)
+```
+
 ### `perspective.lichen`
 
 ```text

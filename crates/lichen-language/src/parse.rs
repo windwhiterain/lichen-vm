@@ -797,6 +797,11 @@ fn atom_parser<'a>(
             token(TokenKind::KwInt).map(|t| Expr::TypeConst(TypeConst::Int, t.span)),
             token(TokenKind::KwString).map(|t| Expr::TypeConst(TypeConst::String, t.span)),
             token(TokenKind::KwType).map(|t| Expr::TypeConst(TypeConst::Type, t.span)),
+            // The bare `type_of` atom: an ordinary function value applied by
+            // juxtaposition (`type_of e`, `type_of (e)`).  No paren is
+            // consumed here — an adjacent `(` falls to the postfix chain
+            // (a slot read) exactly as after any name.
+            token(TokenKind::KwTypeOf).map(|t| Expr::TypeOf(t.span)),
             name().map(|(n, span)| Expr::Name(n, span)),
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
@@ -1622,7 +1627,7 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {
             Expr::Err { range, start } => out.push(ErrorBlock { range: *range, start: *start }),
-            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) => {}
+            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) | Expr::TypeOf(..) => {}
             Expr::Lambda {
                 parameter_type,
                 parameter_perspective,
