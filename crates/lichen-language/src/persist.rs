@@ -60,6 +60,19 @@ pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash {
     hasher.finalize().into()
 }
 
+/// The stable cache key of a file ID: SHA-256 over the identity string.  Used
+/// as the artifact file name, so the same file ID always occupies the same
+/// cache slot — recompiling a modified file overwrites it.
+pub fn file_id_hash(file_id: &str) -> Hash {
+    sha256(file_id.as_bytes())
+}
+
+/// Whether a file ID names a lichen source the cache should keep: an on-disk
+/// `.lichen` file path, or a `virtual:` embedded lichen source.
+pub fn is_lichen_file_id(file_id: &str) -> bool {
+    file_id.ends_with(".lichen") || file_id.starts_with("virtual:")
+}
+
 // ---------------------------------------------------------------------------
 // The artifact format (`artifacts/<hash>.module`)
 //
@@ -708,18 +721,21 @@ fn read_operator(r: &mut Reader) -> Result<LangOperator, String> {
 //   magic "LCHREG" | version u32 | next_key u64
 //   | free: u64 count + u64*
 //   | entries: u64 count + per entry:
-//       hash 32B, key u64, source_hash 32B, deps: u64 count
-//       + per dep (path_len u32 + path bytes, key u64)
-//   | paths: u64 count + per alias (path_len u32 + path bytes, hash 32B)
+//       file_id (len u32 + bytes), key u64, source_hash 32B,
+//       deps: u64 count + per dep (dep file_id: len u32 + bytes, key u64)
+//
+// A **file ID** is a compiled unit's identity: an on-disk file's canonical
+// path, or `virtual:<name>` for an embedded source.  Artifacts are stored at
+// `artifacts/<sha256(file_id)>.module` and overwritten on recompile.
 // ---------------------------------------------------------------------------
 
 /// One registered artifact's record: its device key, the hash of the raw
-/// source it was compiled from, and its direct dependencies (path + key).
+/// source it was compiled from, and its direct dependencies (file ID + key).
 #[derive(Debug, Clone)]
 pub struct Entry {
     pub key: ModuleKey,
     pub source_hash: Hash,
-    pub deps: Vec<(PathBuf, ModuleKey)>,
+    pub deps: Vec<(String, ModuleKey)>,
 }
 
 /// The result of a successful incremental verification: the artifact's
@@ -728,20 +744,23 @@ pub struct Entry {
 pub struct Verified {
     pub key: ModuleKey,
     pub hash: Hash,
-    pub deps: Vec<(PathBuf, ModuleKey)>,
+    pub deps: Vec<(String, ModuleKey)>,
 }
 
 /// The disk shape of the device registry: the key allocator (with its free
-/// list), the key → content map, and the path → key alias table.  All
-/// mutations go through the cross-process `mkdir` lock and are saved
-/// atomically; reads ([`Self::verify`]) lock nothing.
+/// list) and the file-ID → entry table.  A **file ID** is a compiled unit's
+/// identity: an on-disk file's canonical path, or `virtual:<name>` for an
+/// embedded source.  Artifacts are stored at `artifacts/<sha256(file_id)>.module`
+/// and **overwritten** when the file is recompiled, so a frequently modified
+/// file keeps exactly one cache slot.  All mutations go through the
+/// cross-process `mkdir` lock and are saved atomically; reads ([`Self::verify`])
+/// lock nothing.
 pub struct DeviceRegistry {
     dir: PathBuf,
     next_key: u64,
     free: BTreeSet<u64>,
-    entries: HashMap<Hash, Entry>,
-    by_key: HashMap<ModuleKey, Hash>,
-    paths: HashMap<PathBuf, Hash>,
+    entries: HashMap<String, Entry>,
+    by_key: HashMap<ModuleKey, String>,
 }
 
 /// The lock's stale threshold: registry mutations are millisecond-scale, so
@@ -759,7 +778,6 @@ impl DeviceRegistry {
             free: BTreeSet::new(),
             entries: HashMap::new(),
             by_key: HashMap::new(),
-            paths: HashMap::new(),
         };
         registry.reload();
         registry
@@ -768,10 +786,12 @@ impl DeviceRegistry {
     fn registry_path(&self) -> PathBuf {
         self.dir.join("registry")
     }
-    fn artifact_path(&self, hash: Hash) -> PathBuf {
+    /// The artifact file for a file ID: `artifacts/<sha256(file_id)>.module` —
+    /// stable per file ID, so recompiling a file overwrites its slot.
+    fn artifact_path(&self, file_id: &str) -> PathBuf {
         self.dir
             .join("artifacts")
-            .join(format!("{}.module", hex(&hash)))
+            .join(format!("{}.module", hex(&file_id_hash(file_id))))
     }
 
     /// Re-read the registry file, replacing the in-memory state.  A missing
@@ -785,12 +805,11 @@ impl DeviceRegistry {
             self.by_key = state
                 .entries
                 .iter()
-                .map(|(&hash, entry)| (entry.key, hash))
+                .map(|(file_id, entry)| (entry.key, file_id.clone()))
                 .collect();
             self.next_key = state.next_key;
             self.free = state.free;
             self.entries = state.entries;
-            self.paths = state.paths;
         }
     }
 
@@ -819,23 +838,19 @@ impl DeviceRegistry {
     pub fn entry_count(&self) -> usize {
         self.entries.len()
     }
-    /// The number of path aliases (tests).
-    pub fn path_count(&self) -> usize {
-        self.paths.len()
-    }
     /// The device's cache directory (tests).
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Allocate the device key for `hash`: the existing key when the
-    /// artifact is already registered, otherwise a reclaimed free key (or
-    /// the next fresh index) with a pending entry written back — the
-    /// allocation is visible to every process before the (possibly long)
-    /// compile starts.  Returns `(key, is_new)`.
-    pub fn alloc(&mut self, hash: Hash) -> (ModuleKey, bool) {
+    /// Allocate the device key for a file ID: the existing key when the file
+    /// is already registered (recompiles reuse it, overwriting the slot),
+    /// otherwise a reclaimed free key (or the next fresh index) with a pending
+    /// entry written back — visible to every process before the (possibly
+    /// long) compile starts.  Returns `(key, is_new)`.
+    pub fn alloc(&mut self, file_id: &str) -> (ModuleKey, bool) {
         self.with_lock(|registry| {
-            if let Some(entry) = registry.entries.get(&hash) {
+            if let Some(entry) = registry.entries.get(file_id) {
                 return (entry.key, false);
             }
             let key = match registry.free.pop_first() {
@@ -847,7 +862,7 @@ impl DeviceRegistry {
                 }
             };
             registry.entries.insert(
-                hash,
+                file_id.to_string(),
                 Entry {
                     key,
                     // A pending entry: `source_hash` all-zero can never
@@ -858,151 +873,123 @@ impl DeviceRegistry {
                     deps: Vec::new(),
                 },
             );
-            registry.by_key.insert(key, hash);
+            registry.by_key.insert(key, file_id.to_string());
             (key, true)
         })
     }
 
-    /// Complete an artifact's record after its compile: its raw-source hash,
-    /// its dependency list, and the path alias.  `key` must match the
-    /// pending allocation.
+    /// Complete an artifact's record after its compile: its raw-source hash
+    /// and its dependency list (file ID + key).  `key` must match the pending
+    /// allocation.
     pub fn publish(
         &mut self,
+        file_id: &str,
         key: ModuleKey,
-        hash: Hash,
         source_hash: Hash,
-        deps: Vec<(PathBuf, ModuleKey)>,
-        path: PathBuf,
+        deps: Vec<(String, ModuleKey)>,
     ) {
         self.with_lock(|registry| {
             let entry = registry
                 .entries
-                .get_mut(&hash)
+                .get_mut(file_id)
                 .expect("publishing an artifact that was never allocated");
             assert_eq!(entry.key, key, "publishing under a mismatched device key");
             entry.source_hash = source_hash;
             entry.deps = deps;
-            registry.paths.insert(path, hash);
         });
     }
 
-    /// The file an artifact is stored in.
-    pub fn artifact_file(&self, hash: Hash) -> PathBuf {
-        self.artifact_path(hash)
+    /// The artifact file a file ID is stored in.
+    pub fn artifact_file(&self, file_id: &str) -> PathBuf {
+        self.artifact_path(file_id)
     }
 
-    /// Write an artifact file (atomic; the file is content-addressed, so
-    /// concurrent writers of the same hash write identical bytes).
-    pub fn store_artifact(&mut self, hash: Hash, bytes: &[u8]) {
-        let path = self.artifact_path(hash);
+    /// Write an artifact file (atomic, overwriting the file ID's slot).
+    pub fn store_artifact(&mut self, file_id: &str, bytes: &[u8]) {
+        let path = self.artifact_path(file_id);
         let tmp = self.dir.join("artifacts").join("tmp");
         if std::fs::write(&tmp, bytes).is_ok() {
             let _ = std::fs::rename(&tmp, path);
         }
     }
 
-    /// Load and deserialize an artifact.  `modules` must hold every
+    /// Load and deserialize a file ID's artifact.  `modules` must hold every
     /// dependency the artifact's refs name (they are loaded first).
     pub fn load_artifact(
         &self,
+        file_id: &str,
         key: ModuleKey,
         hash: Hash,
         modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     ) -> Result<(StaticModule<LangProgram>, LocalNodeId), String> {
-        let bytes = std::fs::read(self.artifact_path(hash))
+        let bytes = std::fs::read(self.artifact_path(file_id))
             .map_err(|e| format!("cannot read cached artifact: {e}"))?;
         deserialize_artifact(&bytes, key, hash, modules)
     }
 
-    /// Incremental verification: is the package at `path` up to date on the
-    /// device?  Walks the *recorded* dependency graph (never parses or
-    /// re-hashes transitively): each node compares one source-file hash
-    /// against its record and recurses into its recorded dependencies.
-    /// Returns the artifact identity when the whole graph verifies.
-    pub fn verify(&self, path: &Path) -> Option<Verified> {
+    /// Incremental verification: is the artifact for `file_id` up to date
+    /// against its current source?  Walks the *recorded* dependency graph
+    /// (never parses or re-hashes transitively beyond one source hash per
+    /// node): each node compares one source-file hash against its record and
+    /// recurses into its recorded dependencies.  Returns the artifact identity
+    /// when the whole graph verifies.
+    pub fn verify(&self, file_id: &str, source: &[u8]) -> Option<Verified> {
         let bytes = std::fs::read(self.registry_path()).ok()?;
         let state = parse_registry(&bytes).ok()?;
-        let hash = state.paths.get(path).copied()?;
-        verify_entry(&state, path, hash, &mut HashSet::new())?;
-        let entry = state.entries.get(&hash)?;
+        let entry = state.entries.get(file_id)?;
+        if sha256(source) != entry.source_hash {
+            return None;
+        }
+        verify_entry(&state, file_id, source, &mut HashSet::new())?;
+        let dep_keys: Vec<ModuleKey> = entry.deps.iter().map(|(_, key)| *key).collect();
         Some(Verified {
             key: entry.key,
-            hash,
+            hash: artifact_hash(source, &dep_keys),
             deps: entry.deps.clone(),
         })
     }
 
-    /// Explicit garbage collection: mark the entries reachable from the
-    /// roots (path aliases whose source file still exists) through the
-    /// dependency graph, then delete every unmarked entry — its key is
-    /// reclaimed into the free list and its artifact file removed.  Returns
-    /// the number of reclaimed artifacts.
+    /// Clean the device cache: remove every artifact whose file ID is **not**
+    /// a lichen file path (`.lichen`) and **not** a virtual lichen-file path
+    /// (`virtual:`) — i.e. keep exactly the on-disk and embedded lichen
+    /// sources, and prune anything else.  The kept artifacts stay keyed by
+    /// their file ID (a `.lichen` source is kept even when its slot is
+    /// overwritten by a recompile).  Returns the number of removed artifacts.
     pub fn gc(&mut self) -> usize {
         self.with_lock(|registry| {
-            let mut roots: Vec<Hash> = Vec::new();
-            for (path, &hash) in &registry.paths {
-                if registry.entries.contains_key(&hash) && path.exists() {
-                    roots.push(hash);
-                }
-            }
-            let mut alive: HashSet<Hash> = HashSet::new();
-            let mut stack = roots;
-            while let Some(hash) = stack.pop() {
-                if !alive.insert(hash) {
-                    continue;
-                }
-                let Some(entry) = registry.entries.get(&hash) else {
-                    continue;
-                };
-                for (_, dep_key) in &entry.deps {
-                    if let Some(&dep_hash) = registry.by_key.get(dep_key) {
-                        stack.push(dep_hash);
-                    }
-                }
-            }
-            let dead: Vec<Hash> = registry
+            let dead: Vec<String> = registry
                 .entries
                 .keys()
-                .filter(|hash| !alive.contains(*hash))
-                .copied()
+                .filter(|file_id| !is_lichen_file_id(file_id))
+                .cloned()
                 .collect();
             let removed = dead.len();
-            for hash in dead {
-                let entry = registry.entries.remove(&hash).expect("the dead entry");
+            for file_id in dead {
+                let entry = registry.entries.remove(&file_id).expect("the dead entry");
                 registry.by_key.remove(&entry.key);
                 registry.free.insert(entry.key.as_raw());
-                let _ = std::fs::remove_file(registry.artifact_path(hash));
+                let _ = std::fs::remove_file(registry.artifact_path(&file_id));
             }
-            let keep: HashSet<PathBuf> = registry
-                .paths
-                .iter()
-                .filter(|(_, hash)| registry.entries.contains_key(*hash))
-                .map(|(path, _)| path.clone())
-                .collect();
-            registry.paths.retain(|path, _| keep.contains(path));
             removed
         })
     }
 
-    /// Explicitly remove the package at `path` (its entry, artifact file,
-    /// and key) from the device.  Returns whether anything was removed.
-    pub fn remove(&mut self, path: &Path) -> bool {
+    /// Explicitly remove the artifact for `file_id` (its entry, artifact file,
+    /// and key) from the device — keeping it when another artifact depends on
+    /// its key.  Returns whether anything was removed.
+    pub fn remove(&mut self, file_id: &str) -> bool {
         self.with_lock(|registry| {
-            let Some(hash) = registry.paths.remove(path) else {
+            let Some(entry_key) = registry.entries.get(file_id).map(|e| e.key) else {
                 return false;
             };
-            let Some(entry_key) = registry.entries.get(&hash).map(|entry| entry.key) else {
-                return true;
-            };
-            let referenced = registry.entries.values().any(|other| {
-                other.key != entry_key && other.deps.iter().any(|(_, k)| *k == entry_key)
+            let referenced = registry.entries.iter().any(|(other, other_entry)| {
+                other != file_id && other_entry.deps.iter().any(|(_, key)| *key == entry_key)
             });
-            let aliased = registry.paths.values().any(|&h| h == hash);
-            if !referenced && !aliased {
-                registry.entries.remove(&hash);
+            if !referenced {
+                registry.entries.remove(file_id);
                 registry.by_key.remove(&entry_key);
                 registry.free.insert(entry_key.as_raw());
-                let _ = std::fs::remove_file(registry.artifact_path(hash));
+                let _ = std::fs::remove_file(registry.artifact_path(file_id));
             }
             true
         })
@@ -1011,25 +998,24 @@ impl DeviceRegistry {
 
 fn verify_entry(
     state: &RegistryState,
-    path: &Path,
-    hash: Hash,
-    visited: &mut HashSet<Hash>,
+    file_id: &str,
+    source: &[u8],
+    visited: &mut HashSet<String>,
 ) -> Option<()> {
-    if !visited.insert(hash) {
+    if !visited.insert(file_id.to_string()) {
         return Some(()); // already checked along this walk
     }
-    let entry = state.entries.get(&hash)?;
-    let raw = std::fs::read(path).ok()?;
-    if sha256(&raw) != entry.source_hash {
+    let entry = state.entries.get(file_id)?;
+    if sha256(source) != entry.source_hash {
         return None;
     }
-    for (dep_path, dep_key) in &entry.deps {
-        let dep_hash = state.paths.get(dep_path).copied()?;
-        let dep_entry = state.entries.get(&dep_hash)?;
+    for (dep_file_id, dep_key) in &entry.deps {
+        let dep_entry = state.entries.get(dep_file_id)?;
         if dep_entry.key != *dep_key {
             return None;
         }
-        verify_entry(state, dep_path, dep_hash, visited)?;
+        let dep_raw = std::fs::read(dep_file_id).ok()?;
+        verify_entry(state, dep_file_id, &dep_raw, visited)?;
     }
     Some(())
 }
@@ -1109,34 +1095,28 @@ pub fn hex(hash: &Hash) -> String {
 struct RegistryState {
     next_key: u64,
     free: BTreeSet<u64>,
-    entries: HashMap<Hash, Entry>,
-    paths: HashMap<PathBuf, Hash>,
+    entries: HashMap<String, Entry>,
 }
 
 fn serialize_registry(registry: &DeviceRegistry) -> Vec<u8> {
     let mut w = Writer::new();
     w.bytes(b"LCHREG");
-    w.u32(1);
+    w.u32(2);
     w.u64(registry.next_key);
     w.u64(registry.free.len() as u64);
     for &index in &registry.free {
         w.u64(index);
     }
     w.u64(registry.entries.len() as u64);
-    for (hash, entry) in &registry.entries {
-        w.bytes(hash);
+    for (file_id, entry) in &registry.entries {
+        w.path(Path::new(file_id));
         w.u64(entry.key.as_raw());
         w.bytes(&entry.source_hash);
         w.u64(entry.deps.len() as u64);
-        for (path, key) in &entry.deps {
-            w.path(path);
-            w.u64(key.as_raw());
+        for (dep_file_id, dep_key) in &entry.deps {
+            w.path(Path::new(dep_file_id));
+            w.u64(dep_key.as_raw());
         }
-    }
-    w.u64(registry.paths.len() as u64);
-    for (path, hash) in &registry.paths {
-        w.path(path);
-        w.bytes(hash);
     }
     w.buf
 }
@@ -1146,7 +1126,7 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
     if r.take(6)? != b"LCHREG" {
         return Err("bad registry magic".into());
     }
-    if r.u32()? != 1 {
+    if r.u32()? != 2 {
         return Err("unknown registry format version".into());
     }
     let next_key = r.u64()?;
@@ -1156,29 +1136,23 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
     }
     let mut entries = HashMap::new();
     for _ in 0..r.u64()? {
-        let hash: Hash = r.take(32)?.try_into().expect("32 bytes");
+        let file_id = r.path()?.to_string_lossy().into_owned();
         let key = ModuleKey::from_raw(r.u64()?);
         let source_hash: Hash = r.take(32)?.try_into().expect("32 bytes");
         let mut deps = Vec::new();
         for _ in 0..r.u64()? {
-            let path = r.path()?;
-            let key = ModuleKey::from_raw(r.u64()?);
-            deps.push((path, key));
+            let dep_file_id = r.path()?.to_string_lossy().into_owned();
+            let dep_key = ModuleKey::from_raw(r.u64()?);
+            deps.push((dep_file_id, dep_key));
         }
         entries.insert(
-            hash,
+            file_id,
             Entry {
                 key,
                 source_hash,
                 deps,
             },
         );
-    }
-    let mut paths = HashMap::new();
-    for _ in 0..r.u64()? {
-        let path = r.path()?;
-        let hash: Hash = r.take(32)?.try_into().expect("32 bytes");
-        paths.insert(path, hash);
     }
     if !r.done() {
         return Err("trailing bytes after the registry".into());
@@ -1187,7 +1161,6 @@ fn parse_registry(bytes: &[u8]) -> Result<RegistryState, String> {
         next_key,
         free,
         entries,
-        paths,
     })
 }
 

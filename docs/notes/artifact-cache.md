@@ -51,10 +51,10 @@ source order**. It is:
 - **precise per stage in effect** — a file's token/AST depend on its own source
   only; only its lower/check depend on the (keyed) dependencies.
 
-`DeviceRegistry::verify(path)` is the *incremental verification*: it walks the
-**recorded** dependency graph (each node compares one source-file hash and
-recurses into its recorded deps) — "a source file hash and an index lookup per
-node, never a re-parse or a transitive re-hash — and only the chain that
+`DeviceRegistry::verify(file_id, source)` is the *incremental verification*: it
+walks the **recorded** dependency graph (each node compares one source-file hash
+and recurses into its recorded deps) — "a source file hash and an index lookup
+per node, never a re-parse or a transitive re-hash — and only the chain that
 actually changed is recompiled."
 
 ## Cross-process sharing
@@ -63,15 +63,20 @@ actually changed is recompiled."
 (`persist::lichendir`, or `$LICHEN_HOME`):
 
 - **keys are stable across processes** — `ModuleKey` is a compact index the
-  store allocates, maps to content hashes, and reclaims via a free-list, so the
-  same content gets the same key in every process;
+  store allocates by **file ID** (a compiled unit's identity: an on-disk
+  `.lichen` path, or `virtual:<name>` for an embedded source) and reclaims via a
+  free-list, so the same file gets the same key in every process;
+- **artifacts are file-ID keyed** — stored at `artifacts/<sha256(file_id)>.module`
+  and **overwritten** on recompile, so a frequently modified file keeps exactly
+  one cache slot (no content-addressed accumulation);
 - **writes are atomic** — an artifact file is written via temp + rename
   (`store_artifact`); the registry file the same (`save`); a lost update only
   costs a recompile, never corruption;
 - **mutations are serialized across processes** by a `mkdir` lock with
   stale-timeout recovery (`RegistryLock`), while reads (`verify`) lock nothing;
-- **bounding** — `gc` and `remove` mark-and-sweep from root source files through
-  the dependency graph, reclaiming keys and deleting artifact files;
+- **bounding** — `gc` is a *clean* that removes every artifact whose file ID is
+  not a `.lichen` path and not a `virtual:` path, and `remove(file_id)` drops one
+  file's slot, each reclaiming keys and deleting artifact files;
 
 `PackageStore` (`package.rs`), with `with_cache_dir(dir)`, drives it:
 

@@ -89,8 +89,6 @@ pub struct PackageStore {
     /// The in-memory key allocator — the device registry's counter when no
     /// cache directory is configured (a process-local device).
     next_key: u64,
-    /// The in-memory content dedup table: artifact hash → device key.
-    content: HashMap<Hash, ModuleKey>,
     /// Packages compiled (not loaded from the device cache) — tests.
     pub compiled: usize,
     /// Packages loaded from the device cache without recompiling — tests.
@@ -112,7 +110,6 @@ impl PackageStore {
             cache_dir: None,
             device: None,
             next_key: 0,
-            content: HashMap::new(),
             compiled: 0,
             loaded_from_cache: 0,
         }
@@ -144,7 +141,7 @@ impl PackageStore {
             Ok(canonical) => self
                 .device
                 .as_mut()
-                .is_some_and(|device| device.remove(&canonical)),
+                .is_some_and(|device| device.remove(&canonical.to_string_lossy())),
             Err(_) => false,
         }
     }
@@ -169,6 +166,20 @@ impl PackageStore {
                 .register_compute()
                 .map_err(|e| vec![Diag::new(Stage::Preprocess, (0, 0), e)])?;
             return Ok(handle);
+        }
+        // Only `.lichen` files are packages.  Reject any other extension up
+        // front so the cache invariant holds by construction — an artifact's
+        // file ID is always a `.lichen` path (or a `virtual:` path for an
+        // embedded source), which is exactly what the `gc` "clean" rule keeps.
+        if path.extension().is_none_or(|ext| ext != "lichen") {
+            return Err(vec![Diag::new(
+                Stage::Preprocess,
+                (0, 0),
+                format!(
+                    "cannot load package {}: only .lichen files are packages",
+                    path.display()
+                ),
+            )]);
         }
         let canonical = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
@@ -206,7 +217,10 @@ impl PackageStore {
     /// and remember the handle so `compute.lichen` imports are served from
     /// here (no disk file).  The wrapper is compiled against the plugin's
     /// *private* native registry — the only compilation that resolves its
-    /// `$jit`/`$launch` calls.
+    /// `$jit`/`$launch` calls.  Its frozen module carries runtime-only
+    /// `Kernel` values (see `plugin-taxonomy.md`), which the artifact format
+    /// deliberately cannot serialize, so it is always compiled fresh in
+    /// memory rather than cached on the device.
     fn register_compute(&mut self) -> Result<PackageHandle, String> {
         let source = WRAPPER_SOURCE;
         let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
@@ -241,8 +255,8 @@ impl PackageStore {
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        let hash = persist::artifact_hash(b"lichen-compute native package", &[]);
-        let (key, _is_new) = self.alloc_key(hash);
+        let hash = persist::artifact_hash(source.as_bytes(), &[]);
+        let (key, _is_new) = self.alloc_key("virtual:compute.lichen");
         let freeze = self
             .registry
             .write()
@@ -277,18 +291,30 @@ impl PackageStore {
     /// compile.  Only reached through [`Self::load_package`], which owns the
     /// cache and the loading stack.
     fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag>> {
+        let file_id = canonical.to_string_lossy().into_owned();
+        let source = std::fs::read_to_string(canonical).map_err(|e| {
+            vec![Diag::new(
+                Stage::Preprocess,
+                (0, 0),
+                format!("cannot read package {}: {e}", canonical.display()),
+            )]
+        })?;
         if let Some(device) = &self.device {
-            if let Some(verified) = device.verify(canonical) {
-                if let Some(handle) =
-                    self.try_reuse(canonical, verified.key, verified.hash, &verified.deps)?
-                {
+            if let Some(verified) = device.verify(&file_id, source.as_bytes()) {
+                if let Some(handle) = self.try_reuse(
+                    canonical,
+                    &file_id,
+                    verified.key,
+                    verified.hash,
+                    &verified.deps,
+                )? {
                     return Ok(handle);
                 }
                 // The artifact file is missing or corrupt — fall through to
                 // a fresh compile (the pending allocation is reused).
             }
         }
-        self.build_package(canonical)
+        self.build_package(canonical, source)
     }
 
     /// Reuse an already-registered artifact: ensure its dependencies are
@@ -299,12 +325,13 @@ impl PackageStore {
     fn try_reuse(
         &mut self,
         canonical: &Path,
+        file_id: &str,
         key: ModuleKey,
         hash: Hash,
-        deps: &[(PathBuf, ModuleKey)],
+        deps: &[(String, ModuleKey)],
     ) -> Result<Option<PackageHandle>, Vec<Diag>> {
-        for (dep_path, _) in deps {
-            self.load_package(dep_path)?;
+        for (dep_file_id, _) in deps {
+            self.load_package(Path::new(dep_file_id))?;
         }
         let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
         {
@@ -342,7 +369,7 @@ impl PackageStore {
             }
         }
         let device = self.device.as_ref().expect("the device store");
-        let Ok((module, export_index)) = device.load_artifact(key, hash, &modules) else {
+        let Ok((module, export_index)) = device.load_artifact(file_id, key, hash, &modules) else {
             return Ok(None);
         };
         let export = StaticNodeId {
@@ -371,36 +398,29 @@ impl PackageStore {
         }))
     }
 
-    /// Allocate the device key for an artifact hash: the existing key when
-    /// the content is already registered (in memory or on the device),
+    /// Allocate the device key for a file ID: the existing key when the file
+    /// is already registered (recompiles reuse it, overwriting the slot),
     /// otherwise a fresh one (reclaimed first, then the next index).
-    fn alloc_key(&mut self, hash: Hash) -> (ModuleKey, bool) {
-        if let Some(&key) = self.content.get(&hash) {
-            return (key, false);
-        }
-        let (key, is_new) = match &mut self.device {
-            Some(device) => device.alloc(hash),
+    fn alloc_key(&mut self, file_id: &str) -> (ModuleKey, bool) {
+        match &mut self.device {
+            Some(device) => device.alloc(file_id),
             None => {
                 let key = ModuleKey::from_raw(self.next_key);
                 self.next_key += 1;
                 (key, true)
             }
-        };
-        self.content.insert(hash, key);
-        (key, is_new)
+        }
     }
 
     /// Read, resolve, compile, and freeze one package, serializing it into
     /// the device cache.  Only reached through [`Self::load_package`], which
-    /// owns the cache and the loading stack.
-    fn build_package(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag>> {
-        let source = std::fs::read_to_string(canonical).map_err(|e| {
-            vec![Diag::new(
-                Stage::Preprocess,
-                (0, 0),
-                format!("cannot read package {}: {e}", canonical.display()),
-            )]
-        })?;
+    /// owns the cache and the loading stack; the source is already read.
+    fn build_package(
+        &mut self,
+        canonical: &Path,
+        source: String,
+    ) -> Result<PackageHandle, Vec<Diag>> {
+        let file_id = canonical.to_string_lossy().into_owned();
 
         // Resolve the package's own imports through this store: each
         // dependency loads (and freezes) first, recursively.
@@ -410,26 +430,17 @@ impl PackageStore {
         }
 
         // The artifact identity: the raw source plus the dependency keys in
-        // source order — transitive, so any dependency change re-keys this
-        // artifact.  An already-registered identity is reused, not
-        // recompiled.
+        // source order — transitive, so a dependency change re-keys this
+        // artifact.
         let dep_keys: Vec<ModuleKey> = preprocessed
             .imports
             .iter()
             .map(|import| import.export.module)
             .collect();
         let hash = persist::artifact_hash(source.as_bytes(), &dep_keys);
-        let (key, is_new) = self.alloc_key(hash);
-        if !is_new {
-            let deps: Vec<(PathBuf, ModuleKey)> = preprocessed
-                .imports
-                .iter()
-                .map(|import| (import.path.clone(), import.export.module))
-                .collect();
-            if let Some(handle) = self.try_reuse(canonical, key, hash, &deps)? {
-                return Ok(handle);
-            }
-        }
+        // A file ID is compiled once and overwritten: the key is stable per
+        // file, so recompiling a changed file reuses the same slot.
+        let (key, _is_new) = self.alloc_key(&file_id);
 
         // Compile against the shared registry so the import leaves resolve
         // in place; the module then carries the dependencies' absolute refs
@@ -472,9 +483,8 @@ impl PackageStore {
                 },
             );
 
-        // Serialize into the device cache: the artifact file (content-
-        // addressed) and the registry record (source hash, dependency
-        // graph, path alias).
+        // Serialize into the device cache under the file ID slot (overwritten
+        // on recompile), and record the source hash + dependency graph.
         if let Some(device) = &mut self.device {
             let modules = {
                 let registry = self
@@ -494,19 +504,18 @@ impl PackageStore {
                 hash,
                 export.index,
             );
-            device.store_artifact(hash, &bytes);
-            let deps: Vec<(PathBuf, ModuleKey)> = preprocessed
+            device.store_artifact(&file_id, &bytes);
+            let deps: Vec<(String, ModuleKey)> = preprocessed
                 .imports
                 .iter()
-                .map(|import| (import.path.clone(), import.export.module))
+                .map(|import| {
+                    (
+                        import.path.to_string_lossy().into_owned(),
+                        import.export.module,
+                    )
+                })
                 .collect();
-            device.publish(
-                key,
-                hash,
-                persist::sha256(source.as_bytes()),
-                deps,
-                canonical.to_path_buf(),
-            );
+            device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
         }
         self.compiled += 1;
         Ok(PackageHandle {

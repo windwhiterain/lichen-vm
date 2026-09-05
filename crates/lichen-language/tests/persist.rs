@@ -1,6 +1,9 @@
 //! Device-persistence tests: the `~/.lichen` cache — cross-store round
-//! trips, incremental recompilation, stable/reclaimed device keys, content
-//! dedup, explicit GC, crash recovery, and corrupt-artifact self-healing.
+//! trips, incremental recompilation, stable/reclaimed device keys, file-ID
+//! keyed overwrite-on-recompile, explicit GC, crash recovery, and
+//! corrupt-artifact self-healing.  Unlike a content-addressed cache, each
+//! compiled file keeps exactly one cache slot (keyed by its file ID), so
+//! recompiling a modified file overwrites it rather than accumulating.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -108,7 +111,10 @@ fn incremental_recompile_only_touches_the_changed_chain() {
     let a2 = store2.load_package(&a_path).unwrap();
     assert_eq!(store2.compiled, 2, "only B and A recompile");
     assert_eq!(store2.loaded_from_cache, 1, "C loads from the cache");
-    assert_ne!(a2.key, a1.key, "A's transitive content changed → a new key");
+    assert_eq!(
+        a2.key, a1.key,
+        "A's key is stable: the file ID's slot is overwritten, not reallocated"
+    );
     assert_eq!(
         handle_of(&store2, "c.lichen").key,
         c_key,
@@ -160,56 +166,79 @@ fn corrupt_artifact_rebuilds_cleanly() {
 }
 
 #[test]
-fn identical_content_shares_one_device_key() {
-    // Two paths with identical content are one artifact: one compile, one
-    // key, two aliases.
-    let dir = temp_dir("dedupe");
+fn identical_content_gets_separate_file_id_slots() {
+    // Two paths with identical content are distinct files (distinct file IDs),
+    // so each is compiled and cached in its own slot — no content dedup.
+    let dir = temp_dir("nodedupe");
     write(&dir, "a.lichen", "7\n");
     write(&dir, "b.lichen", "7\n");
     let cache = dir.join("cache");
     let mut store = PackageStore::with_cache_dir(cache.clone());
     let a = store.load_package(&dir.join("a.lichen")).unwrap();
     let b = store.load_package(&dir.join("b.lichen")).unwrap();
-    assert_eq!(
-        store.compiled, 1,
-        "the second path reuses the first artifact"
-    );
-    assert_eq!(a.key, b.key);
-}
-
-#[test]
-fn gc_reclaims_orphans_and_reuses_keys() {
-    // A → B.  Changing B orphans the old B and old A entries; the explicit
-    // `gc` reclaims exactly those two (keys and artifact files), and the
-    // next fresh compile reuses the smallest reclaimed key.
-    let dir = temp_dir("gc");
-    write(&dir, "b.lichen", "1\n");
-    let a_path = write(&dir, "a.lichen", "@{b = import \"b.lichen\"@}b\n");
-    let cache = dir.join("cache");
-    let mut store = PackageStore::with_cache_dir(cache.clone());
-    store.load_package(&a_path).unwrap();
-    let artifacts_before = fs::read_dir(cache.join("artifacts")).unwrap().count();
-    assert_eq!(artifacts_before, 2);
-
-    write(&dir, "b.lichen", "2\n");
-    let mut store2 = PackageStore::with_cache_dir(cache.clone());
-    store2.load_package(&a_path).unwrap();
-    let artifacts_now = fs::read_dir(cache.join("artifacts")).unwrap().count();
-    assert_eq!(artifacts_now, 4, "the new chain compiles alongside the old");
-
-    let removed = store2.gc();
-    assert_eq!(removed, 2, "the two orphaned artifacts are reclaimed");
+    assert_eq!(store.compiled, 2, "each file compiles separately");
+    assert_ne!(a.key, b.key, "distinct files get distinct keys");
     assert_eq!(
         fs::read_dir(cache.join("artifacts")).unwrap().count(),
         2,
-        "their files are deleted"
+        "two slots, one per file ID"
+    );
+}
+
+#[test]
+fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
+    // `gc` is a "clean": it keeps artifacts whose file ID is a lichen file
+    // path or a virtual lichen-file path, and removes anything else.  Since
+    // `load_package` rejects non-`.lichen` files, a stray non-lichen file ID
+    // can only enter the registry out-of-band (here, directly) — gc prunes it.
+    let dir = temp_dir("clean");
+    let keep_path = write(&dir, "keep.lichen", "42\n");
+    let cache = dir.join("cache");
+
+    // Inject a non-lichen file ID directly into the device registry.
+    let mut device = DeviceRegistry::open(cache.clone());
+    let (junk_key, is_new) = device.alloc("junk.txt");
+    assert!(is_new);
+    drop(device);
+
+    let mut store = PackageStore::with_cache_dir(cache.clone());
+    let keep = store.load_package(&keep_path).unwrap();
+    assert_eq!(store.compiled, 1);
+    assert_eq!(fs::read_dir(cache.join("artifacts")).unwrap().count(), 1);
+
+    let removed = store.gc();
+    assert_eq!(removed, 1, "the non-lichen slot is cleaned");
+    assert_eq!(
+        fs::read_dir(cache.join("artifacts")).unwrap().count(),
+        1,
+        "the .lichen slot survives"
     );
 
-    // The reclaimed keys are reused: the fresh package takes key 0 (the
-    // smallest freed index — B compiled first, so B was key 0).
-    write(&dir, "c.lichen", "9\n");
-    let h = store2.load_package(&dir.join("c.lichen")).unwrap();
-    assert_eq!(h.key.as_raw(), 0, "a reclaimed key is reused");
+    // A fresh store reuses the cleaned key.
+    let c_path = write(&dir, "c.lichen", "9\n");
+    let mut store2 = PackageStore::with_cache_dir(cache.clone());
+    let h = store2.load_package(&c_path).unwrap();
+    assert_eq!(h.key, junk_key, "the cleaned key is reused");
+    drop(keep);
+}
+
+#[test]
+fn non_lichen_package_is_rejected_at_load() {
+    // Only `.lichen` files are packages: a non-lichen path is rejected up
+    // front, so the cache invariant (file ID is a `.lichen` or `virtual:` path)
+    // holds by construction.
+    let dir = temp_dir("extension");
+    let txt_path = write(&dir, "data.txt", "7\n");
+    let mut store = PackageStore::with_cache_dir(dir.join("cache"));
+    let err = store.load_package(&txt_path).unwrap_err();
+    assert!(
+        err.iter().any(|d| d.message.contains("only .lichen files")),
+        "got: {}",
+        err.iter()
+            .map(|d| d.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
 }
 
 #[test]
@@ -240,16 +269,19 @@ fn a_crash_between_alloc_and_publish_recovers() {
     // between allocation and the end of the compile).  A fresh store sees
     // the pending record as a miss, recompiles, and completes the same key.
     let dir = temp_dir("pending");
-    write(&dir, "pkg.lichen", "42\n");
+    let pkg_path = write(&dir, "pkg.lichen", "42\n");
     let cache = dir.join("cache");
-    let hash = lichen_language::persist::artifact_hash(b"42\n", &[]);
+    let file_id = std::fs::canonicalize(&pkg_path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
     let mut device = DeviceRegistry::open(cache.clone());
-    let (key, is_new) = device.alloc(hash);
+    let (key, is_new) = device.alloc(&file_id);
     assert!(is_new);
     drop(device); // no publish, no artifact file
 
     let mut store = PackageStore::with_cache_dir(cache.clone());
-    let h = store.load_package(&dir.join("pkg.lichen")).unwrap();
+    let h = store.load_package(&pkg_path).unwrap();
     assert_eq!(store.compiled, 1, "the pending record recompiles");
     assert_eq!(h.key, key, "the pending key is completed, not reallocated");
 }

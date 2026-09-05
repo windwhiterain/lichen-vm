@@ -44,17 +44,26 @@ after reclamation under a different `hash` is recognized as a new artifact.
 ## Persistent device store
 
 Under `~/.lichen` (`$LICHEN_HOME` overrides; `crate::persist::lichendir()`), the
-**device registry** (`persist::DeviceRegistry`) owns the keys and the content-addressed
-artifact files (`artifacts/<hash>.module`). The lowlevel registry stays the in-memory
+**device registry** (`persist::DeviceRegistry`) owns the keys and the **file-ID
+keyed** artifact files (`artifacts/<sha256(file_id)>.module`). A **file ID** is a
+compiled unit's identity: an on-disk `.lichen` file's canonical path, or
+`virtual:<name>` for an embedded source. Each file keeps **one** cache slot —
+recompiling a modified file **overwrites** that slot rather than accumulating a
+new content-addressed artifact. The lowlevel registry stays the in-memory
 runtime map; the device registry owns the keys.
 
-- `Hash` = SHA-256(source ‖ dependency keys in source order) — transitive and
-  deterministic.
+- The `Hash` (SHA-256 of source ‖ dependency keys in source order) is the artifact's
+  *identity* for verification — transitive and deterministic.
 - **Incremental load:** verify the recorded dependency graph (one source-file hash per
   node plus key lookups); recompile only the chain that changed; otherwise deserialize
   and register, skipping the compile.
-- **CLI:** `lichen-compiler cache gc` mark-sweeps the recorded dependency graph and deletes every
-  unreachable entry, its artifact file, and its key.
+- **CLI:** `lichen-compiler cache gc` is a *clean*: it removes every artifact whose
+  file ID is **not** a `.lichen` path and **not** a `virtual:` path (a bare `[depend]`
+  / `load_package` only admits `.lichen` files, so this prunes out-of-band or stale
+  entries), keeping exactly the on-disk and embedded lichen sources.
+- **Only `.lichen` files are packages:** `load_package` rejects a non-`.lichen` path
+  (the `virtual:` embedded sources are the exception), so the cache invariant — every
+  file ID is a `.lichen` or `virtual:` path — holds by construction.
 
 ## Reads & materialize
 

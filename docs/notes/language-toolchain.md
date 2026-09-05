@@ -116,8 +116,9 @@ and `Diag`/`Stage` decoupling seams, and the step-by-step migration — is
 A language server and the CLI are separate processes; they cannot share a live
 `Build`. But lichen already has a **cross-process artifact store** — a frozen
 [`StaticModule`](../../crates/lichen-lowlevel/src/static_module.rs) serialized to
-a content-addressed cache (`persist.rs`'s `DeviceRegistry` under `~/.lichen`,
-keyed by a transitive, deterministic [`artifact_hash`](artifact-cache.md)) — and
+a **file-ID keyed** cache (`persist.rs`'s `DeviceRegistry` under `~/.lichen`,
+artifacts at `artifacts/<sha256(file_id)>.module`, identity verified by a
+transitive, deterministic [`artifact_hash`](artifact-cache.md)) — and
 `PackageStore` (`package.rs`) loads those artifacts without recompiling, with
 incremental dependency-graph verification. **The tooling crates reuse that store
 for settled per-file artifacts, and [`BufferSession`](incremental-parse-compile.md)
