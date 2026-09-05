@@ -71,6 +71,57 @@ pub struct Depend {
     pub plugin: bool,
 }
 
+impl Depend {
+    /// The import alias the dependency is staged under: `as NAME`, else the
+    /// URL's repository name.  This is the key both the package manager (when
+    /// it fetches into the source cache) and the compiler (when it resolves
+    /// the vendored alias) use, so the two agree by construction.
+    pub fn alias(&self) -> String {
+        self.name.clone().unwrap_or_else(|| repo_name(&self.url))
+    }
+
+    /// The git clone root in the source cache: `lichendir()/sources/<alias>`.
+    /// The package manager clones (or fetches) a dependency here; the compiler
+    /// reads the same path when it resolves the vendored alias.
+    pub fn sources_dir(&self) -> PathBuf {
+        crate::persist::sources_root().join(sanitize_alias(&self.alias()))
+    }
+
+    /// The vendored directory the alias resolves to: the clone root, or its
+    /// `sub` subdirectory (a monorepo dependency).
+    pub fn vendored_dir(&self) -> PathBuf {
+        match &self.sub {
+            Some(sub) => self.sources_dir().join(sub),
+            None => self.sources_dir(),
+        }
+    }
+}
+
+/// The repository's last path component, sans `.git`.
+fn repo_name(url: &str) -> String {
+    let name = url
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("dep");
+    name.strip_suffix(".git").unwrap_or(name).to_string()
+}
+
+/// Sanitize an alias into a filesystem-safe directory name.
+fn sanitize_alias(alias: &str) -> String {
+    let mut out = String::new();
+    for ch in alias.chars() {
+        match ch {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => out.push(ch),
+            _ => out.push('_'),
+        }
+    }
+    if out.is_empty() {
+        out.push_str("dep");
+    }
+    out
+}
+
 /// The preprocessor output: the borrowed code (a suffix of the source), the
 /// byte offset where it starts (so spans map back to the original file),
 /// resolved imports, the block's string metadata, and its git dependency set.
@@ -238,6 +289,60 @@ pub fn block_metadata(interior: &str) -> Vec<(String, String)> {
             _ => None,
         })
         .collect()
+}
+
+/// Stage a source's `depend "url"` directives onto `store` as vendored
+/// aliases, resolving each against the lichen-home source cache (see
+/// [`Depend::vendored_dir`]).  A dependency that has not been fetched by the
+/// package manager (`lichen fetch`) is reported as a preprocess diagnostic
+/// naming the missing dir — the compiler never fetches git sources itself, it
+/// only reads what the package manager put in the cache.
+pub fn stage_depends(store: &mut PackageStore, source: &str) -> Vec<Diag> {
+    let mut diags = Vec::new();
+    let (interior, _) = split_block(source);
+    let Some(interior) = interior else {
+        return diags;
+    };
+    for dir in block_directives(interior) {
+        let Directive::Depend {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+            plugin,
+        } = dir
+        else {
+            continue;
+        };
+        let dep = Depend {
+            url,
+            name,
+            rev,
+            branch,
+            tag,
+            package,
+            sub,
+            plugin,
+        };
+        let alias = dep.alias();
+        let dir = dep.vendored_dir();
+        if dir.is_dir() {
+            store.register_vendored(alias, dir);
+        } else {
+            diags.push(Diag::new(
+                Stage::Preprocess,
+                (0, 0),
+                format!(
+                    "dependency '{alias}' is not fetched (expected {}) — run `lichen fetch` first",
+                    dir.display()
+                ),
+            ));
+        }
+    }
+    diags
 }
 
 /// Locate the leading `@{...@}` block in `raw` by a pure byte scan.  Returns

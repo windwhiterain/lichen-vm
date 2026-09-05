@@ -240,45 +240,41 @@ pub type Program = LangProgram;
 }
 
 /// The generated crate's `src/main.rs`: a thin compiler CLI over the language
-/// crate's library (the shipping vocabulary).  A compiler built with an
-/// *additional* plugin keeps this shell; the plugin's leaves are declared in
-/// `lib.rs` and the tooling generalization is the tracked follow-up.
+/// crate's library.  It shares [`liche_language::cli`], so a plugin-built
+/// compiler speaks the same dialect as the shipped `lichen-compiler` and is
+/// already depend-aware (resolving `depend` directives against the source
+/// cache).  A compiler built with an *additional* plugin keeps this shell; the
+/// plugin's leaves are declared in `lib.rs` and the tooling generalization is
+/// the tracked follow-up.
 fn write_main_rs(dir: &Path) -> Result<(), String> {
-    let lines = r#"use std::path::PathBuf;
-use std::process::ExitCode;
-
-fn main() -> ExitCode {
-    let mut args = std::env::args();
-    let _program = args.next();
-    let Some(path) = args.next() else {
-        eprintln!("usage: lichen-compiler-<name> <program.lichen>");
-        return ExitCode::FAILURE;
-    };
-    if path == "-h" || path == "--help" {
-        println!("usage: lichen-compiler-<name> <program.lichen>");
-        return ExitCode::SUCCESS;
-    }
-    let source = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("cannot read {path}: {e}");
-            return ExitCode::FAILURE;
-        }
-    };
-    let mut store = lichen_language::package::PackageStore::with_cache_dir(
-        lichen_language::persist::lichendir(),
-    );
-    match lichen_language::run::evaluate_raw(&source, Some(&PathBuf::from(&path)), &mut store) {
-        Ok(output) => {
-            println!("{output}");
-            ExitCode::SUCCESS
-        }
-        Err(diags) => {
-            print!("{}", lichen_language::render::render_all(&source, &diags));
-            ExitCode::FAILURE
-        }
-    }
+    let lines = r#"fn main() -> std::process::ExitCode {
+    liche_language::cli::main()
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
+}
+
+/// The path of a plugin-built compiler binary under
+/// `<project>/.lichen/compiler/`, when one has been built by [`rebuild`].
+/// Returns `None` when the project has no built compiler yet.
+pub fn built_bin(project_dir: &Path) -> Option<PathBuf> {
+    let compilers = project_dir.join(BUILD_DIR);
+    for entry in std::fs::read_dir(&compilers).ok()?.flatten() {
+        if !entry.path().is_dir() {
+            continue;
+        }
+        let release = entry.path().join("target").join("release");
+        for f in std::fs::read_dir(&release).ok()?.flatten() {
+            let name = f.file_name().to_string_lossy().into_owned();
+            let is_bin = if cfg!(windows) {
+                name.starts_with("lichen-compiler-") && name.ends_with(".exe")
+            } else {
+                name.starts_with("lichen-compiler-") && !name.contains('.')
+            };
+            if is_bin && f.path().is_file() {
+                return Some(f.path());
+            }
+        }
+    }
+    None
 }

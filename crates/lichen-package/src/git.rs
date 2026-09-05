@@ -9,6 +9,11 @@
 //! `lichen fetch` is idempotent and only pulls what changed.  The source cache
 //! lives in `sources/`, a sibling of the compiler's `artifacts/`/`registry`.
 //!
+//! The cache path and the import alias a dependency resolves to come from
+//! [`Depend`] (see [`Depend::sources_dir`], [`Depend::vendored_dir`],
+//! [`Depend::alias`]) — the same derivation the compiler uses when it stages
+//! the vendored alias, so fetch and run agree by construction.
+//!
 //! Paths handed to git are normalized to drop the Windows `\\?\` extended-path
 //! prefix that `std::fs::canonicalize` produces — git refuses a `\\?\`
 //! destination on clone ("could not create work tree dir").
@@ -16,35 +21,17 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use lichen_language::persist::lichendir;
+use lichen_language::persist;
 use lichen_language::preprocess::Depend;
-
-/// The source-cache subdir name, under the lichen home.
-pub const SOURCES_DIR: &str = "sources";
 
 /// The cache root for fetched git sources (the lichen home's `sources/`).
 pub fn sources_root() -> PathBuf {
-    lichendir().join(SOURCES_DIR)
-}
-
-/// The directory a dependency's source is cached in, keyed by its alias.
-pub fn dep_dir(alias: &str) -> PathBuf {
-    sources_root().join(sanitize(alias))
+    persist::sources_root()
 }
 
 /// The alias a [`Depend`] resolves to: `as NAME`, else the URL's repo name.
 pub fn alias_of(dep: &Depend) -> String {
-    dep.name.clone().unwrap_or_else(|| repo_name(&dep.url))
-}
-
-/// The repository's last path component, sans `.git`.
-fn repo_name(url: &str) -> String {
-    let name = url
-        .trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .unwrap_or("dep");
-    name.strip_suffix(".git").unwrap_or(name).to_string()
+    dep.alias()
 }
 
 /// The Rust crate package a native-plugin [`Depend`] is built under.
@@ -74,21 +61,6 @@ fn git_path(p: &Path) -> String {
     }
 }
 
-/// Sanitize an alias into a filesystem-safe directory name.
-fn sanitize(alias: &str) -> String {
-    let mut out = String::new();
-    for ch in alias.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' | '.' => out.push(ch),
-            _ => out.push('_'),
-        }
-    }
-    if out.is_empty() {
-        out.push_str("dep");
-    }
-    out
-}
-
 /// Whether the `git` CLI is available.
 pub fn git_available() -> bool {
     Command::new("git")
@@ -109,7 +81,7 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
             "the `git` CLI is required to fetch dependencies, but it is not on $PATH".into(),
         );
     }
-    let dir = dep_dir(&alias_of(dep));
+    let dir = dep.sources_dir();
     let rev = checkout(dep);
     let dir_git = git_path(&dir);
     // The cache root must exist; the clone lands under it.
@@ -127,24 +99,7 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
             git_in(&dir_git, &["checkout", rev])?;
         }
     }
-    pkg_dir(&dir, dep)
-}
-
-/// The package directory a [`Depend`] resolves to: the fetched clone's root,
-/// or its `sub` subdirectory (a monorepo source).
-fn pkg_dir(clone: &Path, dep: &Depend) -> Result<PathBuf, String> {
-    let Some(sub) = &dep.sub else {
-        return Ok(clone.to_path_buf());
-    };
-    let subdir = clone.join(sub);
-    if !subdir.is_dir() {
-        return Err(format!(
-            "dependency '{}' has no subdirectory '{}' in the fetched source",
-            alias_of(dep),
-            sub
-        ));
-    }
-    Ok(subdir)
+    Ok(dep.vendored_dir())
 }
 
 /// Run git with cwd `cwd`, returning the command's stderr on failure.

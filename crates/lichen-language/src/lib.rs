@@ -27,6 +27,7 @@ pub use lichen_language_parser as parse;
 pub use lichen_language_parser::ast;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
+pub mod cli;
 pub mod compile;
 pub mod diag;
 pub mod package;

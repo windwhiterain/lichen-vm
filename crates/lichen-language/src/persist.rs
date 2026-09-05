@@ -1078,6 +1078,16 @@ pub fn lichendir() -> PathBuf {
     }
 }
 
+/// The source-cache subdir name, under the lichen home.  The package manager
+/// keeps each fetched git dependency under `sources/<alias>`; the compiler
+/// resolves a file's `depend "url"` directives against this same root.
+pub const SOURCES_DIR: &str = "sources";
+
+/// The root of the git source cache: the lichen home's `sources/` directory.
+pub fn sources_root() -> PathBuf {
+    lichendir().join(SOURCES_DIR)
+}
+
 /// The hex encoding of a hash — the artifact file name.
 pub fn hex(hash: &Hash) -> String {
     let mut out = String::with_capacity(64);
