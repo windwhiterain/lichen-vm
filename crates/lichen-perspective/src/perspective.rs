@@ -46,11 +46,7 @@ impl AttrSpec for Perspective {}
 /// `gcd` over the divisibility lattice.  `gcd(n, 0) = n` (the meet identity),
 /// `gcd(0, 0) = 0`.
 pub fn gcd(a: usize, b: usize) -> usize {
-    if b == 0 {
-        a
-    } else {
-        gcd(b, a % b)
-    }
+    if b == 0 { a } else { gcd(b, a % b) }
 }
 
 /// Whether `sub` divides `sup` in the divisibility lattice — the subtype
@@ -66,11 +62,7 @@ pub fn gcd(a: usize, b: usize) -> usize {
 /// - `sub > 0`: `sub | sup ⟺ sup % sub == 0`.  `sup = 0` (a uniform-over-all
 ///   value) satisfies any requirement, since `0 % sub == 0`.
 pub fn divides(sub: usize, sup: usize) -> bool {
-    if sub == 0 {
-        sup == 0
-    } else {
-        sup % sub == 0
-    }
+    if sub == 0 { sup == 0 } else { sup % sub == 0 }
 }
 
 /// The attribute-extension registry for a host program `P`: maps the
@@ -103,7 +95,10 @@ where
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             GcdOp::Gcd => {
-                if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {

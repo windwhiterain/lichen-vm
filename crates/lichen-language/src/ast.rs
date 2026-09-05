@@ -90,10 +90,7 @@ pub enum Expr {
     /// condition's (an assert checks its subject, it does not replace it).
     /// `! 1 == 1` parses as `(!1) == 1`; assert a comparison by parenthesizing
     /// it: `!(1 == 1)`.
-    Assert {
-        value: Box<Expr>,
-        span: Span,
-    },
+    Assert { value: Box<Expr>, span: Span },
     /// `$name(args…)` — a call to a native operator registered by the compiling
     /// module's plugin (a private, per-file naming contract).  `name` resolves
     /// only against the module's native registry; the args are ordinary
@@ -226,10 +223,7 @@ pub enum Expr {
     /// inference placeholder).  `range` is the byte span the broken
     /// construct's fallback covers (the mask — what a content signature /
     /// diff excludes); `start` the position where the broken construct began.
-    Err {
-        range: (u32, u32),
-        start: Span,
-    },
+    Err { range: (u32, u32), start: Span },
 }
 
 /// One statement: a binding or a bare expression (the program's non-final

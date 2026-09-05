@@ -192,7 +192,7 @@ impl OperatorExt<LangProgram> for LangOperator {
             }
             LangOperator::TypeOperator(TypeOperator::Fresh) => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                                LangValue::type_id_value(id)
+                LangValue::type_id_value(id)
             }
             LangOperator::TypeOperator(
                 TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq,

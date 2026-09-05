@@ -92,10 +92,16 @@ fn function_call_operator_clones_array_body() {
         m.equality_representative(ids[0]),
         m.equality_representative(arg)
     );
-    assert!(matches!(m.node_value(AnyNodeId::Dynamic(ids[0])), Some(TestValue::U128(_))));
+    assert!(matches!(
+        m.node_value(AnyNodeId::Dynamic(ids[0])),
+        Some(TestValue::U128(_))
+    ));
     assert_eq!(ids[1], seven);
     assert_eq!(m.nodes[seven].block, f); // referenced in place, not cloned
-    assert_eq!(array_ids(m.node_value(AnyNodeId::Dynamic(ret)).unwrap()), &[param, seven]); // body unchanged
+    assert_eq!(
+        array_ids(m.node_value(AnyNodeId::Dynamic(ret)).unwrap()),
+        &[param, seven]
+    ); // body unchanged
 }
 #[test]
 fn function_call_operator_preserves_parameterized_operand_chain() {
@@ -795,7 +801,10 @@ fn apply_clone_preserves_the_shallow_mask() {
         "the mask travels through the clone"
     );
     let ids = array_ids(value);
-    assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()), 10);
+    assert_eq!(
+        u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()),
+        10
+    );
     assert!(
         m.node_value(AnyNodeId::Dynamic(ids[1])).is_none(),
         "the marked element stays lazy in the call"
@@ -832,7 +841,10 @@ fn pattern_argument_evaluation_skips_shallow_positions() {
     assert!(m.unify_errors.is_empty());
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2);
-    assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()), 7);
+    assert_eq!(
+        u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()),
+        7
+    );
     // The shallow pattern position stays lazy: the argument's element there
     // (an unevaluated Add) is never forced by the apply, and the masked
     // position itself is never walked.

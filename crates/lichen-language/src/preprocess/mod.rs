@@ -122,10 +122,8 @@ pub fn preprocess<'a>(
                                 }),
                                 Err(mut diag) => {
                                     diag.span = Some(span);
-                                    diag.message = format!(
-                                        "cannot load package '{}': {}",
-                                        path, diag.message
-                                    );
+                                    diag.message =
+                                        format!("cannot load package '{}': {}", path, diag.message);
                                     diags.push(diag);
                                 }
                             }

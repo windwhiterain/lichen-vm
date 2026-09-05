@@ -31,7 +31,7 @@ use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
 use crate::program::LangProgram;
-use crate::{build_report, Report};
+use crate::{Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
 /// is cheap to hold) plus every diagnostic, and the content signature the
@@ -193,7 +193,13 @@ impl BufferSession {
             (Some(prev), Some((a, b, delta))) => {
                 match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
                     Some(out) => {
-                        let SpliceOut { program, errors, lo, hi, reuse } = out;
+                        let SpliceOut {
+                            program,
+                            errors,
+                            lo,
+                            hi,
+                            reuse,
+                        } = out;
                         (program, errors, Some((lo, hi, reuse)))
                     }
                     None => {
@@ -406,7 +412,11 @@ fn splice_program(
     // the edit start are unchanged; positions at/after the edit end shift by
     // the length delta.
     let new_ob = win_ob;
-    let new_eb = if win_eb >= e_end { win_eb + delta } else { win_eb };
+    let new_eb = if win_eb >= e_end {
+        win_eb + delta
+    } else {
+        win_eb
+    };
 
     // New token index range [ns, ne) covering the window.
     let ns = new_tokens
@@ -488,10 +498,7 @@ fn splice_program(
     // still line up) AND no binding name changed (so its resolution is the same).
     let old_window_end = hi.min(old_program.statements.len());
     let reuse = win_stmts.len() == hi - lo
-        && splt_binding_names_unchanged(
-            &old_program.statements[lo..old_window_end],
-            &win_stmts,
-        );
+        && splt_binding_names_unchanged(&old_program.statements[lo..old_window_end], &win_stmts);
     Some(SpliceOut {
         program,
         errors: win_errors,
@@ -696,7 +703,8 @@ impl Sig {
                 self.begin_stmt();
                 self.hash_stmt(stmt);
                 self.record_stmt();
-                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+                self.stmt_had_diag
+                    .push(self.diagnostics.len() > diag_before);
             } else {
                 self.hash_stmt(stmt);
             }
@@ -708,7 +716,8 @@ impl Sig {
                 self.cur.update(&[2]);
                 self.hash_expr(e);
                 self.record_stmt();
-                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+                self.stmt_had_diag
+                    .push(self.diagnostics.len() > diag_before);
             } else {
                 self.cur.update(&[2]);
                 self.hash_expr(e);
@@ -725,10 +734,7 @@ impl Sig {
     /// Finalize the current statement's hash into the result list.
     fn record_stmt(&mut self) {
         let v = u64::from_le_bytes(
-            self.cur
-                .clone()
-                .finalize()
-                .as_slice()[..8]
+            self.cur.clone().finalize().as_slice()[..8]
                 .try_into()
                 .expect("sha256 is at least 8 bytes"),
         );
@@ -800,7 +806,8 @@ impl Sig {
                 self.begin_stmt();
                 self.hash_logical_stmt(program, i);
                 self.record_stmt();
-                self.stmt_had_diag.push(self.diagnostics.len() > diag_before);
+                self.stmt_had_diag
+                    .push(self.diagnostics.len() > diag_before);
             }
         }
         self.scopes.truncate(base);
@@ -892,9 +899,7 @@ impl Sig {
                 self.scopes.truncate(base);
             }
             Expr::Apply {
-                function,
-                argument,
-                ..
+                function, argument, ..
             } => {
                 self.cur.update(&[8]);
                 self.hash_expr(function);
@@ -949,9 +954,7 @@ impl Sig {
                 self.hash_expr(key);
             }
             Expr::NamedFieldRead {
-                container,
-                name,
-                ..
+                container, name, ..
             } => {
                 self.cur.update(&[24]);
                 self.hash_expr(container);
@@ -982,9 +985,7 @@ impl Sig {
                 self.hash_expr(parameter);
                 self.hash_expr(r#return);
             }
-            Expr::Tuple(elems, _)
-            | Expr::TypeTuple(elems, _)
-            | Expr::Array(elems, _) => {
+            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
                 self.cur.update(&[18]);
                 for el in elems {
                     self.hash_expr(el);
@@ -1038,7 +1039,9 @@ impl Sig {
                 self.hash_expr(element_type);
                 self.hash_expr(length);
             }
-            Expr::Block { statements, expr, .. } => {
+            Expr::Block {
+                statements, expr, ..
+            } => {
                 self.cur.update(&[23]);
                 self.hash_scope(statements, Some(expr), false);
             }
@@ -1047,7 +1050,8 @@ impl Sig {
                 for f in fields {
                     // The field's name, its `let`-vs-field nature, and its
                     // `pub` mark are part of its identity.
-                    self.cur.update(&[f.name.is_some() as u8, f.field as u8, f.public as u8]);
+                    self.cur
+                        .update(&[f.name.is_some() as u8, f.field as u8, f.public as u8]);
                     if let Some(name) = &f.name {
                         self.cur.update(name.as_bytes());
                     }

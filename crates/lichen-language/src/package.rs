@@ -133,7 +133,10 @@ impl PackageStore {
     /// cache.  Returns whether anything was removed.
     pub fn remove(&mut self, path: &Path) -> bool {
         match std::fs::canonicalize(path) {
-            Ok(canonical) => self.device.as_mut().is_some_and(|device| device.remove(&canonical)),
+            Ok(canonical) => self
+                .device
+                .as_mut()
+                .is_some_and(|device| device.remove(&canonical)),
             Err(_) => false,
         }
     }
@@ -200,7 +203,11 @@ impl PackageStore {
         let source = WRAPPER_SOURCE;
         let (preprocessed, mut diags) = preprocess(source, Some(Path::new(COMPUTE_PATH)), self);
         if !diags.is_empty() {
-            return Err(diags.drain(..).map(|d| d.message).collect::<Vec<_>>().join("\n"));
+            return Err(diags
+                .drain(..)
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+                .join("\n"));
         }
         let line_starts = crate::lex::line_starts(&preprocessed.code);
         let report = crate::compile_with_imports_at(
@@ -212,14 +219,12 @@ impl PackageStore {
             compute_native_ops(),
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
-            return Err(
-                report
-                    .diagnostics
-                    .into_iter()
-                    .map(|d| d.message)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            );
+            return Err(report
+                .diagnostics
+                .into_iter()
+                .map(|d| d.message)
+                .collect::<Vec<_>>()
+                .join("\n"));
         }
         let build = report.build.unwrap();
 
@@ -293,10 +298,12 @@ impl PackageStore {
         for (dep_path, _) in deps {
             self.load_package(dep_path)?;
         }
-        let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> =
-            HashMap::new();
+        let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
         {
-            let registry = self.registry.read().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let registry = self
+                .registry
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             match registry.get(key) {
                 Some(package) if package.hash == hash => {
                     let export = package
@@ -335,9 +342,17 @@ impl PackageStore {
             index: export_index,
         };
         {
-            let mut registry = self.registry.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut registry = self
+                .registry
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             registry.insert_module(key, hash, module);
-            registry.set_package_meta(key, HighPackageMeta { export: Some(export) });
+            registry.set_package_meta(
+                key,
+                HighPackageMeta {
+                    export: Some(export),
+                },
+            );
         }
         self.loaded_from_cache += 1;
         Ok(Some(PackageHandle {
@@ -458,10 +473,8 @@ impl PackageStore {
                     .registry
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut modules: HashMap<
-                    ModuleKey,
-                    Arc<StaticModule<LangProgram>>,
-                > = HashMap::new();
+                let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> =
+                    HashMap::new();
                 for (key, package) in registry.iter() {
                     modules.insert(key, package.module.clone());
                 }

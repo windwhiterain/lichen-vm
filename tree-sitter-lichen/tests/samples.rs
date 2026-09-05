@@ -35,7 +35,9 @@ fn sample_dirs() -> Vec<PathBuf> {
 #[test]
 fn samples_parse_without_error_nodes() {
     let mut parser = Parser::new();
-    parser.set_language(&language()).expect("set lichen grammar");
+    parser
+        .set_language(&language())
+        .expect("set lichen grammar");
 
     let mut files = Vec::new();
     for dir in sample_dirs() {
@@ -61,17 +63,19 @@ fn samples_parse_without_error_nodes() {
 #[test]
 fn edge_cases_parse_without_error_nodes() {
     let mut parser = Parser::new();
-    parser.set_language(&language()).expect("set lichen grammar");
+    parser
+        .set_language(&language())
+        .expect("set lichen grammar");
 
     let cases = [
-        "",                              // empty file
-        "5",                             // bare expression
-        "a = 1\nb = a + 2\nb",           // no preprocess block, bindings + expr
-        "f = x => x\nf 1",               // lambda + application
-        "if x then a else b",            // conditional
-        "let a = 1\na",                  // restrictive binding
+        "",                               // empty file
+        "5",                              // bare expression
+        "a = 1\nb = a + 2\nb",            // no preprocess block, bindings + expr
+        "f = x => x\nf 1",                // lambda + application
+        "if x then a else b",             // conditional
+        "let a = 1\na",                   // restrictive binding
         "T = struct<.x Int, .y Type>\nT", // named struct fields
-        "t = table{}\nt",           // empty constant table
+        "t = table{}\nt",                 // empty constant table
     ];
 
     for (idx, src) in cases.iter().enumerate() {

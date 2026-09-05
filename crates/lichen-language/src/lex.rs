@@ -336,7 +336,11 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                 }
                 match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
                     Some(kind) => {
-                        tokens.push(Token { kind, span: lc, range: (start, end) });
+                        tokens.push(Token {
+                            kind,
+                            span: lc,
+                            range: (start, end),
+                        });
                         prev_end = Some(end);
                     }
                     None => {
@@ -350,7 +354,11 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                 let start = base + span.start as u32;
                 let lc = line_col(line_starts, start);
                 let ch = lexer.slice().chars().next().unwrap_or('?');
-                errors.push(Diag::new(Stage::Lex, lc, format!("unexpected character '{ch}'")));
+                errors.push(Diag::new(
+                    Stage::Lex,
+                    lc,
+                    format!("unexpected character '{ch}'"),
+                ));
                 prev_end = None;
             }
         }
@@ -407,7 +415,11 @@ pub fn lex_resume(
         .unwrap_or(prev.len());
     // The byte offset (in `old_source`/`new_source`) at which to start re-lexing.
     // `prev[i].range.0 <= a`, so this offset is identical in old and new.
-    let s: u32 = if i < prev.len() { prev[i].range.0 } else { a as u32 };
+    let s: u32 = if i < prev.len() {
+        prev[i].range.0
+    } else {
+        a as u32
+    };
 
     // Reuse the intact prefix (tokens before index `i` are before the edit).
     tokens.extend_from_slice(&prev[..i]);
@@ -431,7 +443,11 @@ pub fn lex_resume(
                 let end_abs = s + span.end as u32;
                 let lc = line_col(line_starts, start_abs);
                 if raw == RawToken::Separator {
-                    let t = Token { kind: TokenKind::Separator, span: lc, range: (start_abs, end_abs) };
+                    let t = Token {
+                        kind: TokenKind::Separator,
+                        span: lc,
+                        range: (start_abs, end_abs),
+                    };
                     if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
@@ -442,7 +458,11 @@ pub fn lex_resume(
                 }
                 let glued = raw.is_postfix_delim() && prev_end == Some(start_abs);
                 if glued {
-                    let g = Token { kind: TokenKind::Glue, span: lc, range: (start_abs, start_abs) };
+                    let g = Token {
+                        kind: TokenKind::Glue,
+                        span: lc,
+                        range: (start_abs, start_abs),
+                    };
                     if let Some(jj) = resync(&prev, &mut j, &g, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
@@ -451,7 +471,11 @@ pub fn lex_resume(
                 }
                 match raw_to_kind(&raw, lexer.slice(), lc, &mut errors) {
                     Some(kind) => {
-                        let t = Token { kind, span: lc, range: (start_abs, end_abs) };
+                        let t = Token {
+                            kind,
+                            span: lc,
+                            range: (start_abs, end_abs),
+                        };
                         if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
                             resynced_at = Some(jj);
                             break 'lex;
@@ -467,7 +491,11 @@ pub fn lex_resume(
                 let start_abs = s + span.start as u32;
                 let lc = line_col(line_starts, start_abs);
                 let ch = lexer.slice().chars().next().unwrap_or('?');
-                errors.push(Diag::new(Stage::Lex, lc, format!("unexpected character '{ch}'")));
+                errors.push(Diag::new(
+                    Stage::Lex,
+                    lc,
+                    format!("unexpected character '{ch}'"),
+                ));
                 prev_end = None;
             }
         }
@@ -540,16 +568,9 @@ fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> O
     }
 }
 
-
-
 /// Map a raw token plus its matched slice to a TokenKind.  Integer literals
 /// are parsed here: overflow records an error and returns None (no token).
-fn raw_to_kind(
-    raw: &RawToken,
-    slice: &str,
-    lc: Span,
-    errors: &mut Vec<Diag>,
-) -> Option<TokenKind> {
+fn raw_to_kind(raw: &RawToken, slice: &str, lc: Span, errors: &mut Vec<Diag>) -> Option<TokenKind> {
     match raw {
         RawToken::IntLit => {
             let mut value: usize = 0;

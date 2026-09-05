@@ -25,7 +25,7 @@
 //! is the checker's error channel.
 
 use std::collections::{HashMap, HashSet};
-use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, RwLock};
 
 use lichen_lowlevel::{
@@ -38,7 +38,7 @@ use lichen_utils::extend::AsEnum;
 use crate::attr::AttrExt;
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep, Schema};
-use crate::native::{no_native_ops, NativeArg, NativeOps};
+use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
@@ -415,19 +415,27 @@ where
                 let Some(term) = checker.term[s] else {
                     continue;
                 };
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| checker.module.evaluate_node_deep(term, None)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    checker.module.evaluate_node_deep(term, None)
+                }));
                 if result.is_err() {
-                    checker.nonterminating.push(Loc { expr: s, path: Vec::new() });
+                    checker.nonterminating.push(Loc {
+                        expr: s,
+                        path: Vec::new(),
+                    });
                     fatal = true;
                     break;
                 }
             }
             if !fatal {
-                let result =
-                    catch_unwind(AssertUnwindSafe(|| checker.module.evaluate_node_deep(root_term, None)));
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    checker.module.evaluate_node_deep(root_term, None)
+                }));
                 if result.is_err() {
-                    checker.nonterminating.push(Loc { expr: root, path: Vec::new() });
+                    checker.nonterminating.push(Loc {
+                        expr: root,
+                        path: Vec::new(),
+                    });
                 }
             }
         }
@@ -492,7 +500,8 @@ where
         self.int_marker = self.alloc_node(root, None, Some(P::Value::int_marker()));
         self.string_marker = self.alloc_node(root, None, Some(P::Value::string_marker()));
         self.type_marker = self.alloc_node(root, None, Some(P::Value::type_marker()));
-        self.function_type_marker = self.alloc_node(root, None, Some(P::Value::function_type_marker()));
+        self.function_type_marker =
+            self.alloc_node(root, None, Some(P::Value::function_type_marker()));
         self.tuple_type_marker = self.alloc_node(root, None, Some(P::Value::tuple_type_marker()));
         self.array_type_marker = self.alloc_node(root, None, Some(P::Value::array_type_marker()));
         self.type_struct_marker = self.alloc_node(root, None, Some(P::Value::type_struct_marker()));
@@ -665,7 +674,10 @@ where
                 element_type,
                 length,
             } => vec![element_type, length],
-            ExprKind::TypeFunction { parameter, r#return } => vec![parameter, r#return],
+            ExprKind::TypeFunction {
+                parameter,
+                r#return,
+            } => vec![parameter, r#return],
             ExprKind::Tuple(_)
             | ExprKind::TypeTuple(_)
             | ExprKind::Array(_)
@@ -749,9 +761,11 @@ where
             return value;
         }
         let pair = self.term[e].expect("expression must be compiled");
-        let zero =
-            self.module
-                .add_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
+        let zero = self.module.add_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(0))),
+        );
         let operands = self.array_node(self.current_block, &[pair, zero]);
         let index = self.op_node(
             self.current_block,
@@ -774,9 +788,11 @@ where
     /// clone rewrites the parameter pair to the argument's).
     fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
         self.check_expr(value);
-        let one = self
-            .module
-            .add_node(self.current_block, None, Some(P::Value::from(LowValue::USize(1))));
+        let one = self.module.add_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(1))),
+        );
         let operands = self.array_node(self.current_block, &[self.term[value].unwrap(), one]);
         let pair = self.op_node(
             self.current_block,
@@ -814,7 +830,6 @@ where
     /// where the *declared* side of a check is the absent value.
     fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
         (self.attr_ext)(marker).missing_slot(self)
-
     }
 
     /// The value currently held by `node`'s equality class — the
@@ -1025,7 +1040,8 @@ where
         if items.len() != 2 {
             return false;
         }
-        self.kind_marker_is_any(items[1].node, P::Value::tuple_type_marker()) || self.is_struct_type_any(ty)
+        self.kind_marker_is_any(items[1].node, P::Value::tuple_type_marker())
+            || self.is_struct_type_any(ty)
     }
 
     fn is_positional_type(&mut self, ty: NodeId) -> bool {
@@ -1055,10 +1071,10 @@ where
                 ExprKind::Apply { .. }
                     | ExprKind::BinOp { .. }
                     | ExprKind::Instantiate { .. }
-                | ExprKind::Assert { .. }
-                | ExprKind::Index { .. }
-                | ExprKind::Find { .. }
-                | ExprKind::Annotation { .. }
+                    | ExprKind::Assert { .. }
+                    | ExprKind::Index { .. }
+                    | ExprKind::Find { .. }
+                    | ExprKind::Annotation { .. }
                     | ExprKind::TypeFunction { .. }
                     | ExprKind::Tuple(_)
                     | ExprKind::TypeTuple(_)
@@ -1300,7 +1316,11 @@ where
         let attr_cell = parameter_attribute.is_some().then(|| {
             let value_cell = self.fresh_cell();
             let type_cell = self.fresh_cell();
-            (value_cell, type_cell, self.array_node(return_block, &[value_cell, type_cell]))
+            (
+                value_cell,
+                type_cell,
+                self.array_node(return_block, &[value_cell, type_cell]),
+            )
         });
         let param = match attr_cell {
             Some((_, _, attr)) => {
@@ -1669,8 +1689,11 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let zero =
-            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
+        let zero = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(0))),
+        );
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,
@@ -1742,8 +1765,11 @@ where
                 field: None,
             });
         }
-        let zero =
-            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
+        let zero = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(0))),
+        );
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
@@ -1784,12 +1810,7 @@ where
     /// binds it, the same laziness as the positional form.  A *concretely*
     /// non-struct container, or a concrete struct whose name table has no such
     /// field, is the guard's error below — never a runtime panic.
-    fn check_named_field(
-        &mut self,
-        e: ExprId,
-        container: ExprId,
-        name: &'static str,
-    ) -> NodeId {
+    fn check_named_field(&mut self, e: ExprId, container: ExprId, name: &'static str) -> NodeId {
         self.check_expr(container);
         let container_ty = self.ty[container].unwrap();
         let concrete = self
@@ -1811,10 +1832,16 @@ where
                 self.record_named_field_error(container_ty, container, 1);
             }
         }
-        let zero =
-            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(0))));
-        let one =
-            self.alloc_node(self.current_block, None, Some(P::Value::from(LowValue::USize(1))));
+        let zero = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(0))),
+        );
+        let one = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(1))),
+        );
         // names = Index(Index(kind, 0), 1) — the struct marker `[id, names]`
         // at kind[0], then its name-table field at [1].
         let kind_ops = self.array_node(self.current_block, &[container_ty, one]);
@@ -2013,12 +2040,7 @@ where
         pair
     }
 
-    fn check_ann(
-        &mut self,
-        e: ExprId,
-        value: ExprId,
-        r#type: Option<ExprId>,
-    ) -> NodeId {
+    fn check_ann(&mut self, e: ExprId, value: ExprId, r#type: Option<ExprId>) -> NodeId {
         self.check_expr(value);
         // `: T` — the value expression's type must unify with the type
         // expression itself; both sides are pairs in the recursive encoding.
@@ -2066,7 +2088,9 @@ where
             let ext = (self.attr_ext)(marker);
             // Does this annotation spell this slot?  (its own schema lists
             // exactly the slots it replaces; everything else is preserved.)
-            let spelled = own_tail.iter().any(|m| self.slot_of(m) == self.slot_of(marker));
+            let spelled = own_tail
+                .iter()
+                .any(|m| self.slot_of(m) == self.slot_of(marker));
             if spelled {
                 let pe = attrs
                     .get(attr_idx)
@@ -2110,8 +2134,10 @@ where
                         if children.is_empty() {
                             None
                         } else {
-                            let child_attrs: Vec<NodeId> =
-                                children.iter().map(|&c| self.attr_or_missing(c, marker)).collect();
+                            let child_attrs: Vec<NodeId> = children
+                                .iter()
+                                .map(|&c| self.attr_or_missing(c, marker))
+                                .collect();
                             Some(ext.combine(self, &child_attrs))
                         }
                     };
@@ -2295,7 +2321,12 @@ where
         {
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
-                    self.record_struct_error(elem_ids[i], type_pair, *name, DiagKind::StructAnonymousField);
+                    self.record_struct_error(
+                        elem_ids[i],
+                        type_pair,
+                        *name,
+                        DiagKind::StructAnonymousField,
+                    );
                 }
             }
             return (self.value_of(value), self.ty[value].unwrap(), false);
@@ -2322,14 +2353,24 @@ where
                             assign.resize(pos + 1, None);
                         }
                         if assign[pos].is_some() {
-                            self.record_struct_error(elem_ids[i], type_pair, Some(name), DiagKind::StructDuplicateField);
+                            self.record_struct_error(
+                                elem_ids[i],
+                                type_pair,
+                                Some(name),
+                                DiagKind::StructDuplicateField,
+                            );
                             valid = false;
                         } else {
                             assign[pos] = Some(i);
                         }
                     }
                     None => {
-                        self.record_struct_error(elem_ids[i], type_pair, Some(name), DiagKind::StructUnknownField);
+                        self.record_struct_error(
+                            elem_ids[i],
+                            type_pair,
+                            Some(name),
+                            DiagKind::StructUnknownField,
+                        );
                         valid = false;
                     }
                 }
@@ -2347,7 +2388,12 @@ where
                     next += 1;
                 } else if assign.len() >= def_len.unwrap_or(assign.len() + 1) {
                     // Every definition position is claimed; this is an excess.
-                    self.record_struct_error(elem_ids[i], type_pair, None, DiagKind::StructExcessField);
+                    self.record_struct_error(
+                        elem_ids[i],
+                        type_pair,
+                        None,
+                        DiagKind::StructExcessField,
+                    );
                     valid = false;
                 } else if next == assign.len() {
                     // Append a fresh position past the currently-claimed ones.
@@ -2679,7 +2725,10 @@ where
             self.check_expr(value);
             let key_node = self.value_of(key);
             self.node_edges.insert(key_node, self.loc(key, 0));
-            pairs.push((AnyNodeId::Dynamic(key_node), AnyNodeId::Dynamic(self.value_of(value))));
+            pairs.push((
+                AnyNodeId::Dynamic(key_node),
+                AnyNodeId::Dynamic(self.value_of(value)),
+            ));
             self.check_unify(
                 self.ty[key].unwrap(),
                 key_ty,

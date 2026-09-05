@@ -156,7 +156,10 @@ impl Loc {
     /// leading [`LocStep::Type`]s (the first is the type, the second is the
     /// type's type, and so on, unbounded).
     pub fn type_depth(&self) -> usize {
-        self.path.iter().take_while(|s| **s == LocStep::Type).count()
+        self.path
+            .iter()
+            .take_while(|s| **s == LocStep::Type)
+            .count()
     }
 }
 
@@ -323,7 +326,10 @@ pub enum ExprKind<L> {
     /// resolves `name` against the container type's struct name table to the
     /// positional index, then reads like [`Self::Field`].  `name` is an
     /// interned `&'static str` (the source's leaked field name).
-    NamedField { container: ExprId, name: &'static str },
+    NamedField {
+        container: ExprId,
+        name: &'static str,
+    },
     /// `{ container, key }` — a table lookup `t{k}`: the entry whose stored
     /// key is deep-content-equal to `k`.  The frontend emits it for the
     /// *adjacent* brace form — the syntactic distinction from positional
@@ -360,7 +366,10 @@ pub enum ExprKind<L> {
     /// shaped `[TypeId(n), [T1, …, Tn]]`: a *fresh nominal* id bundled with
     /// the field-type list, plus an optional name table (see the checker).  A
     /// struct type is reused by binding it once through a parameter.
-    TypeStruct { fields: ChildRange, names: ChildRange },
+    TypeStruct {
+        fields: ChildRange,
+        names: ChildRange,
+    },
     /// An array instance `[v1, ..., vn]` — every element shares one type
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`IR::children`].
@@ -465,7 +474,14 @@ impl<A: AttrSpec, L> IR<A, L> {
             start,
             end: self.children.len() as u32,
         };
-        self.alloc(ExprKind::Annotation { value, r#type, attributes }, span)
+        self.alloc(
+            ExprKind::Annotation {
+                value,
+                r#type,
+                attributes,
+            },
+            span,
+        )
     }
 
     /// The attribute value expressions of an [`ExprKind::Annotation`] — aligned,
@@ -573,7 +589,13 @@ impl<A: AttrSpec, L> IR<A, L> {
             start: nstart,
             end: self.struct_names.len() as u32,
         };
-        self.alloc(ExprKind::Record { value, names: name_range }, span)
+        self.alloc(
+            ExprKind::Record {
+                value,
+                names: name_range,
+            },
+            span,
+        )
     }
 
     pub fn alloc_array(&mut self, elements: &[ExprId], span: Option<Span>) -> ExprId {

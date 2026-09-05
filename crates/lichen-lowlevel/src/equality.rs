@@ -132,7 +132,14 @@ impl<P: Program> Module<P> {
         // The descent path, seeded empty; the root operands are carried
         // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
         let mut steps = Vec::new();
-        self.unify_inner(Dyn(a), Dyn(b), &mut path, &mut materialized, &mut steps, (a, b));
+        self.unify_inner(
+            Dyn(a),
+            Dyn(b),
+            &mut path,
+            &mut materialized,
+            &mut steps,
+            (a, b),
+        );
         disjoint::find(&mut self.nodes, a)
     }
 
@@ -652,7 +659,13 @@ impl<P: Program> Module<P> {
         Some(value)
     }
 
-    fn record_error(&mut self, ra: NodeId, rb: NodeId, steps: &[UnifyStep], root: (NodeId, NodeId)) {
+    fn record_error(
+        &mut self,
+        ra: NodeId,
+        rb: NodeId,
+        steps: &[UnifyStep],
+        root: (NodeId, NodeId),
+    ) {
         self.unify_errors.push(UnifyError {
             root_a: root.0,
             root_b: root.1,

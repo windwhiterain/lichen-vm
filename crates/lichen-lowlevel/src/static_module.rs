@@ -24,10 +24,10 @@ use std::sync::{Arc, PoisonError};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId,
-    Function, FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
-    Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule,
-    StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
+    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, Program,
+    StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
+    StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -75,7 +75,9 @@ impl<P: Program> Module<P> {
     /// it is materialized before the backend runs), so the backend must not
     /// rely on it.
     pub fn node_shape(&self, node: NodeId) -> Option<&LowShape> {
-        self.nodes.get(node).and_then(|node| node.low_shape.as_ref())
+        self.nodes
+            .get(node)
+            .and_then(|node| node.low_shape.as_ref())
     }
 
     /// Record `node`'s [`LowShape`].  Only the layer above the lowlevel that
@@ -153,7 +155,9 @@ impl<P: Program> Module<P> {
             if let Some(&cloned_param) = ctx.remap.get(&parameter) {
                 if ctx.remap.len() > 1 {
                     for clones in crate::apply::regroup_clones(
-                        ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
+                        ctx.remap
+                            .iter()
+                            .map(|(&template, &clone)| (template, clone)),
                         |template| static_find(&ctx.module.nodes, template),
                     )
                     .values()
@@ -282,7 +286,11 @@ impl<P: Program> Module<P> {
                 // this call's clone.
                 AnyNodeId::Static(sref)
                     if sref.module == ctx.module.key
-                        && static_node_is_capturing_closure(&ctx.module, sref.index, ctx.parameter) =>
+                        && static_node_is_capturing_closure(
+                            &ctx.module,
+                            sref.index,
+                            ctx.parameter,
+                        ) =>
                 {
                     changed = true;
                     Dyn(self.static_node_apply(sref.index, ctx))
@@ -566,9 +574,7 @@ impl<P: Program> StaticModule<P> {
                 if seen.insert(key) {
                     unique.push((key.0, key.1, std::mem::align_of::<TableItem>()));
                 }
-            } else if value.is_handle()
-                && matches!(value.handle(), AnyHandle::Dynamic(_))
-            {
+            } else if value.is_handle() && matches!(value.handle(), AnyHandle::Dynamic(_)) {
                 let handle = value.handle();
                 let key = (handle.as_ptr() as usize, handle.len());
                 if seen.insert(key) {

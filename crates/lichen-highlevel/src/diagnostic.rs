@@ -20,7 +20,11 @@ use std::collections::HashSet;
 
 use lichen_lowlevel::{AnyNodeId, EvalError, LowValue, NodeId, Program, UnifyError};
 
-use crate::{checker::Build, ir::Loc, program::{HighProgram, ValueType}};
+use crate::{
+    checker::Build,
+    ir::Loc,
+    program::{HighProgram, ValueType},
+};
 
 /// What kind of check a unification failure implements — drives the
 /// expected/found direction of a [`Diag::Mismatch`]'s `a`/`b`.  All are
@@ -273,12 +277,8 @@ where
             // parses" rule): the descent tags each level as a `[value, type]`
             // pair slot or a tuple/array shape, so the language can build the
             // diagnostic without re-deriving the type grammar.
-            let path = crate::checker::tag_descent(
-                &self.module,
-                Vec::new(),
-                apply.argument,
-                &err.steps,
-            );
+            let path =
+                crate::checker::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
             let loc = self.apply_edges.get(&apply.apply_node).map(|edge| Loc {
                 expr: edge.argument_expr,
                 path,

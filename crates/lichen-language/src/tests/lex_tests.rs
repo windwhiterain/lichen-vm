@@ -88,7 +88,6 @@ fn int_and_type_are_keywords_but_not_prefixes() {
     );
 }
 
-
 #[test]
 fn spans_track_line_and_column() {
     let token = lex_one("  x");
@@ -259,11 +258,19 @@ fn a_tilde_is_a_shallow_marker_token() {
     );
     assert_eq!(
         kinds("~0 x"),
-        vec![TokenKind::Tilde(0), TokenKind::Name("x".to_string()), TokenKind::Eof]
+        vec![
+            TokenKind::Tilde(0),
+            TokenKind::Name("x".to_string()),
+            TokenKind::Eof
+        ]
     );
     assert_eq!(
         kinds("~ 1"),
-        vec![TokenKind::Tilde(usize::MAX), TokenKind::Int(1), TokenKind::Eof]
+        vec![
+            TokenKind::Tilde(usize::MAX),
+            TokenKind::Int(1),
+            TokenKind::Eof
+        ]
     );
 }
 
@@ -363,15 +370,20 @@ fn assert_incremental_eq(old: &str, a: usize, b: usize, text: &str) {
     let got = lex_resume(&prev, old, &new, &ls, a, b);
 
     assert_eq!(
-        got.tokens, expected.tokens,
+        got.tokens,
+        expected.tokens,
         "incremental tokens differ for edit {:?} on {:?} -> {:?}",
-        (a, b, text), old, new
+        (a, b, text),
+        old,
+        new
     );
     assert_eq!(
         got.errors.len(),
         expected.errors.len(),
         "incremental error count differs for {:?} on {:?} -> {:?}",
-        (a, b, text), old, new
+        (a, b, text),
+        old,
+        new
     );
 }
 

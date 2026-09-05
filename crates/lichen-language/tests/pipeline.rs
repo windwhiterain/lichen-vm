@@ -98,7 +98,15 @@ fn the_polymorphic_identity_checks() {
     let value = module.evaluate_node_deep(root, None);
     let ids = array_ids(value);
     assert_eq!(ids.len(), 2, "the tuple has two elements");
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        5
+    );
     assert!(
         matches!(
             module.node_value(AnyNodeId::Dynamic(ids[1])),
@@ -205,7 +213,9 @@ fn a_nonterminating_binding_is_reported_an_error() {
         .iter()
         .filter(|d| {
             d.stage == Stage::Check
-                && d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NonTerminating)
+                && d.check
+                    .as_ref()
+                    .is_some_and(|c| c.kind == DiagKind::NonTerminating)
         })
         .collect();
     assert_eq!(nonterminating.len(), 1, "one NonTerminating diagnostic");
@@ -264,8 +274,24 @@ fn a_binding_used_twice_shares_one_node() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 5);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        5
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        5
+    );
 }
 
 #[test]
@@ -277,7 +303,15 @@ fn a_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        5
+    );
     assert!(
         matches!(
             module.node_value(AnyNodeId::Dynamic(ids[1])),
@@ -363,7 +397,15 @@ fn a_block_bound_lambda_is_still_polymorphic() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 5);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        5
+    );
     assert!(
         matches!(
             module.node_value(AnyNodeId::Dynamic(ids[1])),
@@ -860,7 +902,15 @@ fn a_struct_instance_indexes_its_fields() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1
+    );
     assert_eq!(
         module.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(LangValue::TypeValue(TypeValue::TypeInt)),
@@ -900,13 +950,17 @@ fn a_named_struct_instantiation_reorders_arguments() {
     // S(.y Int, .x 1) — the named arguments are reordered to the definition's
     // positional order, so a(0) reads the .x field (1) and a(1) the .y field
     // (Int).
-    let (module, root) =
-        run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a(0), a(1))");
+    let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); (a(0), a(1))");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
     assert_eq!(
-        usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()),
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
         1,
         "a(0) reads the reordered .x field"
     );
@@ -933,7 +987,15 @@ fn a_named_struct_instantiation_mixes_positional_and_named() {
     let (module, root) = run("S = struct<.x Int, .y Type>; a = S(.y Int, 1); (a(0), a(1))");
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1);
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1
+    );
     assert_eq!(
         module.node_value(AnyNodeId::Dynamic(ids[1])),
         Some(LangValue::TypeValue(TypeValue::TypeInt))
@@ -983,7 +1045,10 @@ fn a_named_struct_instantiation_with_a_wrong_field_type_is_rejected() {
     // element types are checked against the field list, so this fails as an
     // annotation mismatch.
     let d = diags("S = struct<.x Int, .y Type>; S(.x Type, .y Int)");
-    assert_eq!(d[0].check.as_ref().expect("a checker diagnostic").kind, DiagKind::Annotation);
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::Annotation
+    );
 }
 
 #[test]
@@ -991,7 +1056,9 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
     // Lazy resolution through a parameter: get = s => s.y, applied to a named
     // instantiation, resolves the field through the struct's name table at
     // the call.
-    let report = compile("S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type");
+    let report = compile(
+        "S = struct<.x Int, .y Type>; a = S(.y Int, .x 1); apply = s => s.y; apply (a) : Type",
+    );
     assert!(
         report.ok(),
         "a named-instantiation field read through a parameter must check: {:?}",
@@ -1009,7 +1076,12 @@ fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 4);
     assert_eq!(
-        usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()),
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
         1,
         "a.x"
     );
@@ -1019,7 +1091,12 @@ fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
         "a.y"
     );
     assert_eq!(
-        usize_of(module.node_value(AnyNodeId::Dynamic(ids[2])).as_ref().unwrap()),
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[2]))
+                .as_ref()
+                .unwrap()
+        ),
         1,
         "a(0)"
     );
@@ -1038,12 +1115,33 @@ fn a_struct_block_with_pub_only_exposes_the_pub_fields() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1, "a.x");
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 1, "a(0)");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1,
+        "a.x"
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        1,
+        "a(0)"
+    );
     // y is not exposed: reading it is a named-field error.
     let d = diags("a = { pub x = 1; y = 2 }; a.y");
     assert!(
-        d.iter().any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NamedField)),
+        d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::NamedField)),
         "a.y must be a named-field miss: {:?}",
         d
     );
@@ -1057,12 +1155,33 @@ fn a_let_in_a_struct_block_is_a_local_not_a_field() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 2, "a.y = x + 1");
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 2, "a(0)");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        "a.y = x + 1"
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        "a(0)"
+    );
     // x is not exposed: reading it is a named-field miss.
     let d = diags("a = { let x = 1; y = x + 1 }; a.x");
     assert!(
-        d.iter().any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::NamedField)),
+        d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::NamedField)),
         "a.x must be a named-field miss: {:?}",
         d
     );
@@ -1076,8 +1195,26 @@ fn a_struct_block_can_have_a_positional_expression_field() {
     let mut module = module;
     let ids = array_ids(module.evaluate_node_deep(root, None));
     assert_eq!(ids.len(), 2);
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[0])).as_ref().unwrap()), 1, "a(0)");
-    assert_eq!(usize_of(module.node_value(AnyNodeId::Dynamic(ids[1])).as_ref().unwrap()), 2, "a.x");
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[0]))
+                .as_ref()
+                .unwrap()
+        ),
+        1,
+        "a(0)"
+    );
+    assert_eq!(
+        usize_of(
+            module
+                .node_value(AnyNodeId::Dynamic(ids[1]))
+                .as_ref()
+                .unwrap()
+        ),
+        2,
+        "a.x"
+    );
 }
 
 #[test]
@@ -1085,7 +1222,8 @@ fn pub_let_is_a_parse_error() {
     // `pub` and `let` cannot co-exist.
     let d = diags("{ pub let x = 1; y = 2 }");
     assert!(
-        d.iter().any(|d| d.message.contains("pub cannot mark a let binding")),
+        d.iter()
+            .any(|d| d.message.contains("pub cannot mark a let binding")),
         "expected a pub/let parse error: {:?}",
         d
     );
@@ -1103,7 +1241,11 @@ fn a_return_statement_enforces_the_block_value_anywhere() {
     // { x = 1; return 2; y = 3 } — `return` designates the tail expression no
     // matter where it appears; the other statements are block-locals.
     let value = evaluate("a = { x = 1; return 2; y = 3 }; a");
-    assert_eq!(usize_of(&value), 2, "the block's value is the return expression");
+    assert_eq!(
+        usize_of(&value),
+        2,
+        "the block's value is the return expression"
+    );
 }
 
 #[test]
@@ -1252,7 +1394,11 @@ fn indexing_a_function_is_an_index_target_error() {
     assert_eq!(d.len(), 1);
     // The checker attributes the guard to the indexed function value (its
     // type is a function, not an indexable shape), not to the `a[0]` marker.
-    assert_eq!(d[0].span, Some((1, 5)), "the caret is on the function value");
+    assert_eq!(
+        d[0].span,
+        Some((1, 5)),
+        "the caret is on the function value"
+    );
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Guard);
     assert!(
@@ -1315,14 +1461,8 @@ fn an_array_of_the_wrong_length_is_rejected() {
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);
-    assert_eq!(
-        check.value_a,
-        Some(LangValue::LowValue(LowValue::USize(2)))
-    );
-    assert_eq!(
-        check.value_b,
-        Some(LangValue::LowValue(LowValue::USize(3)))
-    );
+    assert_eq!(check.value_a, Some(LangValue::LowValue(LowValue::USize(2))));
+    assert_eq!(check.value_b, Some(LangValue::LowValue(LowValue::USize(3))));
 }
 
 #[test]

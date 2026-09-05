@@ -32,7 +32,9 @@ fn message(source: &str) -> String {
 /// (`build.attr[root]` is the checker's lowered slot — a `[value, type]` term
 /// pair, whose lattice value is element 0).
 fn root_persp(source: &str) -> usize {
-    let build = compile(source).build.expect("the program must compile clean");
+    let build = compile(source)
+        .build
+        .expect("the program must compile clean");
     let root = build.ir.root;
     let slot = build.attr[root].expect("the root carries a perspective slot");
     let mut module = build.module;

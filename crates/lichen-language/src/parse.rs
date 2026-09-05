@@ -226,7 +226,10 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let expr = expression(region);
     // `seps elem (seps elem)* seps` — like the statement list, but without the
     // final-expr pop.  Leading/trailing separators are consumed and dropped.
-    let seps = token(TokenKind::Separator).ignored().repeated().collect::<Vec<_>>();
+    let seps = token(TokenKind::Separator)
+        .ignored()
+        .repeated()
+        .collect::<Vec<_>>();
     let seps1 = token(TokenKind::Separator)
         .ignored()
         .repeated()
@@ -443,7 +446,11 @@ fn statement_list<'a>(
             Some((Stmt::Expr(final_expr), last_range)) => {
                 let mut ranges: Vec<(usize, usize)> = elems.iter().map(|(_, r)| *r).collect();
                 ranges.push(last_range);
-                (elems.into_iter().map(|(s, _)| s).collect(), final_expr, ranges)
+                (
+                    elems.into_iter().map(|(s, _)| s).collect(),
+                    final_expr,
+                    ranges,
+                )
             }
             Some((Stmt::Binding(binding), last_range)) => {
                 emit.emit(Rich::custom(
@@ -459,7 +466,14 @@ fn statement_list<'a>(
                 // binding's own position (a zero-width mask, stable across
                 // edits that grow an earlier region).
                 let pos = byte_at_span(tokens, span);
-                (stmts, Expr::Err { range: (pos, pos), start: span }, ranges)
+                (
+                    stmts,
+                    Expr::Err {
+                        range: (pos, pos),
+                        start: span,
+                    },
+                    ranges,
+                )
             }
             None => {
                 emit.emit(Rich::custom(
@@ -930,10 +944,8 @@ fn struct_inst_field<'a>(
                 name: Some(name),
                 value,
             }),
-        expr.clone().map(|value| StructInstArg {
-            name: None,
-            value,
-        }),
+        expr.clone()
+            .map(|value| StructInstArg { name: None, value }),
     ))
 }
 
@@ -1183,10 +1195,7 @@ fn struct_field<'a>(
     let named = token(TokenKind::Dot)
         .ignore_then(name())
         .then(expr.clone())
-        .map(|((n, _span), ty)| StructField {
-            name: Some(n),
-            ty,
-        });
+        .map(|((n, _span), ty)| StructField { name: Some(n), ty });
     let unnamed = expr.map(|ty| StructField { name: None, ty });
     choice((named, unnamed))
 }
@@ -1296,7 +1305,9 @@ fn block_body<'a>(
         .at_least(1)
         .collect::<Vec<_>>();
     let item = choice((
-        token(TokenKind::KwReturn).ignore_then(expr.clone()).map(BlockItem::Return),
+        token(TokenKind::KwReturn)
+            .ignore_then(expr.clone())
+            .map(BlockItem::Return),
         block_statement(tokens, expr.clone()).map(BlockItem::Stmt),
     ));
     seps.clone()
@@ -1343,7 +1354,8 @@ fn block_body<'a>(
             };
             match all.pop() {
                 Some(BlockItem::Stmt(BlockStmt {
-                    stmt: Stmt::Expr(e), ..
+                    stmt: Stmt::Expr(e),
+                    ..
                 })) => (statements(all), Some(e)),
                 Some(other) => {
                     all.push(other);
@@ -1367,10 +1379,7 @@ fn block_statement<'a>(
         .then(statement(tokens, expr.clone()))
         .validate(|(public, stmt), me, emit| {
             if public.is_some() && matches!(&stmt, Stmt::Binding(b) if b.restrictive) {
-                emit.emit(Rich::custom(
-                    me.span(),
-                    "pub cannot mark a let binding",
-                ));
+                emit.emit(Rich::custom(me.span(), "pub cannot mark a let binding"));
             }
             BlockStmt {
                 stmt,
@@ -1626,8 +1635,16 @@ fn apply_type_mode(program: Program) -> Program {
 pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
     fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
         match e {
-            Expr::Err { range, start } => out.push(ErrorBlock { range: *range, start: *start }),
-            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) | Expr::TypeOf(..) => {}
+            Expr::Err { range, start } => out.push(ErrorBlock {
+                range: *range,
+                start: *start,
+            }),
+            Expr::Int(..)
+            | Expr::Str(..)
+            | Expr::TypeConst(..)
+            | Expr::Name(..)
+            | Expr::Placeholder(..)
+            | Expr::TypeOf(..) => {}
             Expr::Lambda {
                 parameter_type,
                 parameter_perspective,
@@ -1643,9 +1660,7 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(r#return, out);
             }
             Expr::Apply {
-                function,
-                argument,
-                ..
+                function, argument, ..
             } => {
                 walk_expr(function, out);
                 walk_expr(argument, out);
@@ -1738,7 +1753,9 @@ pub(crate) fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(element_type, out);
                 walk_expr(length, out);
             }
-            Expr::Block { statements, expr, .. } => {
+            Expr::Block {
+                statements, expr, ..
+            } => {
                 for s in statements {
                     walk_stmt(s, out);
                 }

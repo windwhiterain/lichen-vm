@@ -11,7 +11,11 @@ fn statement_values_report_type_and_concrete_value() {
     // is NOT a statement root.
     let doc = Doc::new("x = 3\ny = x + 4\ny\n");
     let vals = doc.statement_values();
-    assert_eq!(vals.len(), 2, "x and y are the two statements; got {vals:#?}");
+    assert_eq!(
+        vals.len(),
+        2,
+        "x and y are the two statements; got {vals:#?}"
+    );
 
     // x = 3 → type Int, value "3".
     assert!(vals[0].ty.contains("Int"), "x type = {:?}", vals[0].ty);
@@ -61,8 +65,7 @@ if 0 then (paradox : Int) else 5";
         paradox.ty
     );
     assert_eq!(
-        paradox.value,
-        None,
+        paradox.value, None,
         "a deferred binding reports no concrete value: {:?}",
         paradox.value
     );

@@ -30,19 +30,25 @@ fn a_recovered_error_block_carries_a_byte_range() {
         panic!("the first statement is a binding, got {:?}", program);
     };
     let Expr::Err { range, .. } = &binding.value else {
-        panic!("the broken binding value is a masked error block, got {:?}", binding.value);
+        panic!(
+            "the broken binding value is a masked error block, got {:?}",
+            binding.value
+        );
     };
     // The mask covers the broken region (non-degenerate) and stays in scope.
     assert!(range.0 < range.1, "a non-empty byte range: {range:?}");
-    assert!(range.1 as usize <= source.len(), "the range ends at the source:");
+    assert!(
+        range.1 as usize <= source.len(),
+        "the range ends at the source:"
+    );
     // The recovered error regions are surfaced on the program as byte-range
     // masks (the frontend's diff/Mask record).
-    assert!(!program.error_blocks.is_empty(), "the program carries its masks");
     assert!(
-        program
-            .error_blocks
-            .iter()
-            .any(|b| b.range == *range),
+        !program.error_blocks.is_empty(),
+        "the program carries its masks"
+    );
+    assert!(
+        program.error_blocks.iter().any(|b| b.range == *range),
         "the mask list includes the recovered value's range: {:?}",
         program.error_blocks
     );
@@ -62,7 +68,10 @@ fn an_error_block_lowers_to_errorblock_not_placeholder() {
         .iter()
         .filter(|e| matches!(e.kind, ExprKind::ErrorBlock))
         .count();
-    assert!(error_blocks >= 1, "the error region lowers to an ErrorBlock");
+    assert!(
+        error_blocks >= 1,
+        "the error region lowers to an ErrorBlock"
+    );
     // The intentional-placeholder test in compile_tests covers `_`; here we
     // assert the *broken* region is never a Placeholder.
     let placeholder_at_error = ir
@@ -70,7 +79,10 @@ fn an_error_block_lowers_to_errorblock_not_placeholder() {
         .iter()
         .filter(|e| matches!(e.kind, ExprKind::Placeholder))
         .count();
-    assert_eq!(placeholder_at_error, 0, "a broken region is not a `_` placeholder");
+    assert_eq!(
+        placeholder_at_error, 0,
+        "a broken region is not a `_` placeholder"
+    );
 }
 
 #[test]
@@ -120,7 +132,10 @@ fn growing_an_error_block_reuses_the_established_build() {
     let before = r1.signature;
     sess.push("2");
     let r2 = sess.compile();
-    assert_eq!(r2.signature, before, "the clean content signature is unchanged");
+    assert_eq!(
+        r2.signature, before,
+        "the clean content signature is unchanged"
+    );
     assert!(r2.reused, "the established build is reused");
     assert_eq!(
         r2.build.as_ref().map(|b| b.ok),
@@ -164,8 +179,14 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
     for digit in ["2", "3", "4"] {
         sess.push(digit);
         let r = sess.compile();
-        assert_eq!(r.signature, sig, "'{digit}': the clean signature is unchanged");
-        assert!(r.reused, "'{digit}': a keystroke inside the mask reuses the build");
+        assert_eq!(
+            r.signature, sig,
+            "'{digit}': the clean signature is unchanged"
+        );
+        assert!(
+            r.reused,
+            "'{digit}': a keystroke inside the mask reuses the build"
+        );
         assert_eq!(r.build.as_ref().map(|b| b.ok), Some(true));
     }
 }
@@ -181,7 +202,10 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
     let _ = sess.compile();
     sess.push("v"); // first character: a new (unresolved) name leaf appears.
     let r1 = sess.compile();
-    assert!(!r1.reused, "the first character introduces a new name, a structural change");
+    assert!(
+        !r1.reused,
+        "the first character introduces a new name, a structural change"
+    );
     assert_eq!(
         r1.build.as_ref().map(|b| b.ok),
         Some(true),
@@ -191,7 +215,10 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
     for ch in "ery_long_variable_name".chars() {
         sess.push(&ch.to_string());
         let r = sess.compile();
-        assert!(r.reused, "extending an unresolved name reuses the established build");
+        assert!(
+            r.reused,
+            "extending an unresolved name reuses the established build"
+        );
         assert_eq!(r.signature, sig, "the resolved structure is unchanged");
         assert_eq!(r.build.as_ref().map(|b| b.ok), Some(true));
         // The *current* name's resolve diagnostic is refreshed, not stale.
@@ -214,8 +241,14 @@ fn renaming_a_binding_consistently_reuses() {
     let sig = r0.signature;
     sess.replace(0..sess.len(), "g = x => x + 1\ng 2\n");
     let r1 = sess.compile();
-    assert_eq!(r1.signature, sig, "a consistent rename keeps the resolved structure");
-    assert!(r1.reused, "the established build is reused across a consistent rename");
+    assert_eq!(
+        r1.signature, sig,
+        "a consistent rename keeps the resolved structure"
+    );
+    assert!(
+        r1.reused,
+        "the established build is reused across a consistent rename"
+    );
     assert_eq!(r1.build.as_ref().map(|b| b.ok), Some(true));
 }
 
@@ -306,8 +339,14 @@ fn assert_splice_equals_full_parse(old: &str, new: &str) {
     let full = parse::parse(&new_tokens);
     // The spliced statements/expr/ranges must equal a full parse's.
     assert_eq!(program.statements.len(), full.program.statements.len());
-    assert_eq!(format!("{:?}", program.statements), format!("{:?}", full.program.statements));
-    assert_eq!(format!("{:?}", program.expr), format!("{:?}", full.program.expr));
+    assert_eq!(
+        format!("{:?}", program.statements),
+        format!("{:?}", full.program.statements)
+    );
+    assert_eq!(
+        format!("{:?}", program.expr),
+        format!("{:?}", full.program.expr)
+    );
     assert_eq!(program.stmt_ranges, full.program.stmt_ranges);
     // The recovered error blocks are recomputed from the spliced AST.
     assert_eq!(
@@ -378,7 +417,10 @@ fn the_incremental_signature_equals_the_full_signature() {
         let reuse = signature_reuse(&out.program, &bsig, out.lo, out.hi, out.reuse);
         let full = signature_full(&out.program);
         assert_eq!(reuse.combined, full.combined, "combined for {new:?}");
-        assert_eq!(reuse.stmt_hashes, full.stmt_hashes, "per-statement hashes for {new:?}");
+        assert_eq!(
+            reuse.stmt_hashes, full.stmt_hashes,
+            "per-statement hashes for {new:?}"
+        );
         assert_eq!(
             reuse.diagnostics.len(),
             full.diagnostics.len(),
@@ -386,4 +428,3 @@ fn the_incremental_signature_equals_the_full_signature() {
         );
     }
 }
-

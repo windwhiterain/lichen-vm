@@ -84,11 +84,20 @@ fn handshake_and_features() {
     );
     let init = read_frame(&mut stdout);
     assert!(init.contains("\"id\":1"), "initialize resp = {init}");
-    assert!(init.contains("\"capabilities\""), "initialize resp = {init}");
-    assert!(init.contains("semanticTokensProvider"), "initialize resp = {init}");
+    assert!(
+        init.contains("\"capabilities\""),
+        "initialize resp = {init}"
+    );
+    assert!(
+        init.contains("semanticTokensProvider"),
+        "initialize resp = {init}"
+    );
 
     // initialized (notification), then open a document that has an unresolved name.
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///test.lichen","languageId":"lichen","version":1,"text":"a = 1\nb = a + unknown\nb\n"}}}"#,
@@ -112,8 +121,14 @@ fn handshake_and_features() {
         r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":2,"character":0}}}"#,
     );
     let definition = read_frame(&mut stdout);
-    assert!(definition.contains("\"id\":3"), "definition resp = {definition}");
-    assert!(definition.contains("file:///test.lichen"), "definition resp = {definition}");
+    assert!(
+        definition.contains("\"id\":3"),
+        "definition resp = {definition}"
+    );
+    assert!(
+        definition.contains("file:///test.lichen"),
+        "definition resp = {definition}"
+    );
 
     // semanticTokens/full — Lichen's own parser drives the highlight payload.
     send(
@@ -121,14 +136,26 @@ fn handshake_and_features() {
         r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.lichen"}}}"#,
     );
     let tokens = read_frame(&mut stdout);
-    assert!(tokens.contains("\"id\":4"), "semanticTokens resp = {tokens}");
-    assert!(tokens.contains("\"data\""), "semanticTokens resp = {tokens}");
+    assert!(
+        tokens.contains("\"id\":4"),
+        "semanticTokens resp = {tokens}"
+    );
+    assert!(
+        tokens.contains("\"data\""),
+        "semanticTokens resp = {tokens}"
+    );
 
     // shutdown, then exit.
-    send(&mut stdin, r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#,
+    );
     let shutdown = read_frame(&mut stdout);
     assert!(shutdown.contains("\"id\":5"), "shutdown resp = {shutdown}");
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
     drop(stdin);
     child.wait().expect("server exits cleanly");
 }
@@ -139,10 +166,8 @@ fn temp_dir(name: &str) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let dir = std::env::temp_dir().join(format!(
-        "lichen-lsp-{name}-{}-{nonce}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("lichen-lsp-{name}-{}-{nonce}", std::process::id()));
     fs::create_dir_all(&dir).unwrap();
     dir
 }
@@ -182,7 +207,10 @@ fn relative_imports_resolve_via_the_document_uri() {
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
     let _init = read_frame(&mut stdout);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
 
     let text = fs::read_to_string(&main_path).unwrap();
     let did_open = format!(
@@ -198,9 +226,15 @@ fn relative_imports_resolve_via_the_document_uri() {
         "relative import should resolve; got diagnostics = {diag}"
     );
 
-    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#,
+    );
     let _shutdown = read_frame(&mut stdout);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
     drop(stdin);
     child.wait().expect("server exits cleanly");
 }
@@ -212,8 +246,8 @@ fn the_repo_import_example_loads() {
     // `geometry.lichen` itself imports `math.lichen` (a transitive relative
     // import).  Driving the real server against this file must resolve every
     // import relative to the file's directory — no "cannot load package".
-    let examples = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../lichen-language/examples/programs/import");
+    let examples =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs/import");
     let main_path = examples.join("_.lichen");
     let uri = Url::from_file_path(&main_path).unwrap();
 
@@ -231,7 +265,10 @@ fn the_repo_import_example_loads() {
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
     let _init = read_frame(&mut stdout);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
 
     let text = fs::read_to_string(&main_path).unwrap();
     let did_open = format!(
@@ -247,9 +284,15 @@ fn the_repo_import_example_loads() {
         "the repo import example's relative imports should resolve; got {diag}"
     );
 
-    send(&mut stdin, r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#,
+    );
     let _shutdown = read_frame(&mut stdout);
-    send(&mut stdin, r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
     drop(stdin);
     child.wait().expect("server exits cleanly");
 }

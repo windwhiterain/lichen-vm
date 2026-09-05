@@ -25,30 +25,26 @@ fn fail(source: &str) -> Vec<String> {
 fn jit_then_launch_scalar() {
     // `compute.jit` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (x => x + 1)
 compute.launch k 5
-"#,
-    );
+"#);
     assert_eq!(out, "6: Int", "jit+launch produced: {out:?}");
 }
 
 #[test]
 fn jit_multi_op_signature() {
     // A body of several scalar operations: `x + 1 + 2`.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (x => x + 1 + 2)
 compute.launch k 5
-"#,
-    );
+"#);
     assert_eq!(out, "8: Int", "multi-op jit+launch produced: {out:?}");
 }
 
@@ -90,43 +86,37 @@ compute.launch (x => x + 1) 5
 fn jit_multi_arg_tuple() {
     // A tuple-domain kernel: `(p : (Int, Int) => p(0) + p(1))` compiles to
     // a wasm `(i64, i64) -> i64` and launches with a 2-tuple argument.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (p : (Int, Int) => p(0) + p(1))
 compute.launch k (5, 3)
-"#,
-    );
+"#);
     assert_eq!(out, "8: Int", "tuple-domain jit+launch produced: {out:?}");
 }
 
 #[test]
 fn jit_multi_arg_ternary() {
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (p : (Int, Int, Int) => p(0) + p(1) + p(2))
 compute.launch k (5, 3, 2)
-"#,
-    );
+"#);
     assert_eq!(out, "10: Int", "ternary jit+launch produced: {out:?}");
 }
 
 #[test]
 fn jit_multi_arg_sub() {
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (p : (Int, Int) => p(0) - p(1))
 compute.launch k (10, 3)
-"#,
-    );
+"#);
     assert_eq!(out, "7: Int", "tuple subtraction produced: {out:?}");
 }
 
@@ -155,16 +145,14 @@ fn jit_closes_over_constant() {
     // A kernel body may reference a module-level constant binding (non-function
     // values are graph-shared, so the body references the value node in place
     // and the JIT lowers it to `i64.const`).
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 a = 42
 k = compute.jit (x => x + a)
 compute.launch k 1
-"#,
-    );
+"#);
     assert_eq!(out, "43: Int", "closure-over-constant produced: {out:?}");
 }
 
@@ -172,15 +160,13 @@ compute.launch k 1
 fn jit_multi_arg_all_ops() {
     // A tuple-domain body mixing `+`, `-`, `<=` and a constant.
     // (5 + 3) - (5 <= 3) = 8 - 0 = 8.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (p : (Int, Int) => (p(0) + p(1)) - (p(0) <= p(1)))
 compute.launch k (5, 3)
-"#,
-    );
+"#);
     assert_eq!(out, "8: Int", "mixed-op tuple produced: {out:?}");
 }
 
@@ -188,29 +174,25 @@ compute.launch k (5, 3)
 fn jit_conditional_then() {
     // `if x <= 3 then 10 else 20` lowers to `[20, 10][x <= 3]` — a 2-element
     // array index the JIT lowers to a wasm `select`.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 2
-"#,
-    );
+"#);
     assert_eq!(out, "10: Int", "conditional (then) produced: {out:?}");
 }
 
 #[test]
 fn jit_conditional_else() {
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (x => if x <= 3 then 10 else 20)
 compute.launch k 5
-"#,
-    );
+"#);
     assert_eq!(out, "20: Int", "conditional (else) produced: {out:?}");
 }
 
@@ -219,15 +201,13 @@ fn jit_nested_tuple_domain() {
     // A nested tuple domain `((Int, Int), Int)`: the parameter flattens to
     // three wasm i64 locals, and `p(0)(0) + p(0)(1) + p(1)` reads them at
     // their flattened offsets (0, 1, 2).  Exercises recursive LowShape.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k = compute.jit (p : ((Int, Int), Int) => p(0)(0) + p(0)(1) + p(1))
 compute.launch k ((2, 3), 4)
-"#,
-    );
+"#);
     assert_eq!(out, "9: Int", "nested tuple jit+launch produced: {out:?}");
 }
 
@@ -241,16 +221,14 @@ fn jit_cross_kernel_call() {
     // checker only resolves it via `$launch`), so the value is asserted.  The
     // wrapper form `compute.launch k0 (x + 1)` *does* give `Int` — covered by
     // `jit_cross_kernel_wrapper` below.
-    let out = run(
-        r#"
+    let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
 k0 = compute.jit (y => y + 1)
 k1 = compute.jit (x => k0 (x + 1))
 compute.launch k1 5
-"#,
-    );
+"#);
     assert!(
         out.starts_with("7:"),
         "cross-kernel call produced 7, got: {out:?}"

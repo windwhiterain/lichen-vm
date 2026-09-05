@@ -396,7 +396,9 @@ fn wrap_function_asserts(
 ) -> (NodeId, FunctionId) {
     let nodes = m.blocks[block].nodes.clone();
     let func_node = m.add_function(block, ret, param, nodes, asserts);
-    let TestValue::LowValue(LowValue::Function(func)) = m.node_value(AnyNodeId::Dynamic(func_node)).unwrap() else {
+    let TestValue::LowValue(LowValue::Function(func)) =
+        m.node_value(AnyNodeId::Dynamic(func_node)).unwrap()
+    else {
         unreachable!("add_function always wraps a function value")
     };
     let AnyFunctionId::Dynamic(func) = func else {

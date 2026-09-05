@@ -61,13 +61,7 @@ where
     /// the call's source location.  `ctx` is the curated context — the
     /// operator builds through the highlevel's encoding ([`Ctx`]), never raw
     /// lowlevel nodes.
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        e: ExprId,
-        args: &[NativeArg],
-        loc: Loc,
-    ) -> NativeApply;
+    fn build(&self, ctx: &mut dyn Ctx<P>, e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply;
 }
 
 /// The registry attached to ONE module's checker: a private, name→operator

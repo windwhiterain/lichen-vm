@@ -19,8 +19,6 @@ use std::path::Path;
 
 use lichen_highlevel::ir::{ExprId, Span};
 use lichen_highlevel::no_native_ops;
-use lichen_language::program::LangValue;
-use lichen_language::render::{print_type, print_value};
 use lichen_language::ast::{Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
@@ -29,12 +27,14 @@ use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
+use lichen_language::program::LangValue;
+use lichen_language::render::{print_type, print_value};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
 
 use crate::lsp::{
-    self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData, SemanticTokenModifier,
-    SemanticTokens, SemanticTokenType,
+    self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData,
+    SemanticTokenModifier, SemanticTokenType, SemanticTokens,
 };
 
 /// A definition site: a binding name or a lambda parameter.
@@ -189,7 +189,12 @@ impl Doc {
         // the checker over the IR.  All spans are absolute.
         let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
         diagnostics.extend(frontend.diagnostics);
-        let report = build_report(frontend.ir, diagnostics, Some(store.registry()), no_native_ops());
+        let report = build_report(
+            frontend.ir,
+            diagnostics,
+            Some(store.registry()),
+            no_native_ops(),
+        );
         let diagnostics = report.diagnostics;
 
         // The imported module's checked type, per `@import` directive span: the
@@ -285,7 +290,8 @@ impl Doc {
                     else {
                         continue;
                     };
-                    let vals = &build.ir.children[tuple_range.start as usize..tuple_range.end as usize];
+                    let vals =
+                        &build.ir.children[tuple_range.start as usize..tuple_range.end as usize];
                     let field_names =
                         &build.ir.struct_names[names.start as usize..names.end as usize];
                     for (name, &val_id) in field_names.iter().zip(vals.iter()) {
@@ -367,12 +373,7 @@ impl Doc {
                 }
                 (statements, starts, field_types, module_field_types)
             }
-            None => (
-                Vec::new(),
-                Vec::new(),
-                HashMap::new(),
-                HashMap::new(),
-            ),
+            None => (Vec::new(), Vec::new(), HashMap::new(), HashMap::new()),
         };
 
         let (defs, resolve, def_index) = index(&program, &pre.imports);
@@ -438,8 +439,14 @@ impl Doc {
                     .span
                     .map(|s| lsp::range_from_span(&self.source, &self.line_starts, s))
                     .unwrap_or_else(|| Range {
-                        start: Position { line: 0, character: 0 },
-                        end: Position { line: 0, character: 0 },
+                        start: Position {
+                            line: 0,
+                            character: 0,
+                        },
+                        end: Position {
+                            line: 0,
+                            character: 0,
+                        },
                     });
                 Diagnostic {
                     range,
@@ -458,7 +465,9 @@ impl Doc {
 
     /// The token at byte offset `offset`, if any.
     fn token_at(&self, offset: usize) -> Option<&Token> {
-        self.tokens.iter().find(|t| (t.range.0 as usize) <= offset && offset < (t.range.1 as usize))
+        self.tokens
+            .iter()
+            .find(|t| (t.range.0 as usize) <= offset && offset < (t.range.1 as usize))
     }
 
     fn offset_of(&self, position: Position) -> Option<usize> {
@@ -483,7 +492,9 @@ impl Doc {
     /// any.  Statements are disjoint and stored in source order, so the
     /// containing statement is the last one whose start is not past `offset`.
     pub fn statement_at(&self, offset: usize) -> Option<&StatementValue> {
-        let idx = self.stmt_starts.partition_point(|&s| (s as usize) <= offset);
+        let idx = self
+            .stmt_starts
+            .partition_point(|&s| (s as usize) <= offset);
         if idx == 0 {
             None
         } else {
@@ -568,7 +579,11 @@ impl Doc {
         if let TokenKind::Name(_) = &token.kind {
             if let Some(idx) = self.resolve.get(&token.span) {
                 let def = &self.defs[*idx];
-                return Some(lsp::range_from_span(&self.source, &self.line_starts, def.span));
+                return Some(lsp::range_from_span(
+                    &self.source,
+                    &self.line_starts,
+                    def.span,
+                ));
             }
         }
         None
@@ -599,10 +614,15 @@ impl Doc {
         {
             let module = &self.imports[import_i].name;
             let fallback = format!("`.{name}` — field of imported module `{module}`");
-            return Some(match self.module_field_types.get(&(module.clone(), name.to_string())) {
-                Some(sv) => snapshot_hover(&format!(".{name}"), sv, fallback),
-                None => fallback,
-            });
+            return Some(
+                match self
+                    .module_field_types
+                    .get(&(module.clone(), name.to_string()))
+                {
+                    Some(sv) => snapshot_hover(&format!(".{name}"), sv, fallback),
+                    None => fallback,
+                },
+            );
         }
 
         // A local struct-binding container (`point.x`): the field's value:type
@@ -817,7 +837,9 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
 // the default `VARIABLE`, and so the same frontend drives highlighting with no
 // tree-sitter grammar in play.
 
-fn classify_token_kind(kind: &TokenKind) -> Option<(SemanticTokenType, Vec<SemanticTokenModifier>)> {
+fn classify_token_kind(
+    kind: &TokenKind,
+) -> Option<(SemanticTokenType, Vec<SemanticTokenModifier>)> {
     match kind {
         TokenKind::Int(_) => Some((SemanticTokenType::NUMBER, Vec::new())),
         TokenKind::Str(_) => Some((SemanticTokenType::STRING, Vec::new())),
@@ -893,8 +915,13 @@ impl<'a> NameClass<'a> {
             Stmt::Binding(b) => {
                 // A binding definition is a VARIABLE declaration; the value is
                 // in scope (and may be a lambda / application).
-                self.map
-                    .insert(b.span, (SemanticTokenType::VARIABLE, vec![SemanticTokenModifier::DECLARATION]));
+                self.map.insert(
+                    b.span,
+                    (
+                        SemanticTokenType::VARIABLE,
+                        vec![SemanticTokenModifier::DECLARATION],
+                    ),
+                );
                 self.expr(&b.value);
             }
             Stmt::Expr(e) => self.expr(e),
@@ -912,7 +939,10 @@ impl<'a> NameClass<'a> {
             } => {
                 self.map.insert(
                     *parameter_span,
-                    (SemanticTokenType::PARAMETER, vec![SemanticTokenModifier::DECLARATION]),
+                    (
+                        SemanticTokenType::PARAMETER,
+                        vec![SemanticTokenModifier::DECLARATION],
+                    ),
                 );
                 if let Some(t) = parameter_type {
                     self.expr(t);
@@ -922,15 +952,24 @@ impl<'a> NameClass<'a> {
                 }
                 self.expr(r#return);
             }
-            Expr::Apply { function, argument, .. } => {
+            Expr::Apply {
+                function, argument, ..
+            } => {
                 // A plain name in function position is a function call.
                 if let Expr::Name(_, span) = &**function {
-                    self.map.insert(*span, (SemanticTokenType::FUNCTION, Vec::new()));
+                    self.map
+                        .insert(*span, (SemanticTokenType::FUNCTION, Vec::new()));
                 }
                 self.expr(function);
                 self.expr(argument);
             }
-            Expr::Int(..) | Expr::Str(..) | Expr::TypeConst(..) | Expr::Name(..) | Expr::Placeholder(..) | Expr::Err { .. } | Expr::TypeOf(..) => {}
+            Expr::Int(..)
+            | Expr::Str(..)
+            | Expr::TypeConst(..)
+            | Expr::Name(..)
+            | Expr::Placeholder(..)
+            | Expr::Err { .. }
+            | Expr::TypeOf(..) => {}
             Expr::BinOp { left, right, .. } => {
                 self.expr(left);
                 self.expr(right);
@@ -978,7 +1017,11 @@ impl<'a> NameClass<'a> {
                     self.expr(p);
                 }
             }
-            Expr::Arrow { parameter, r#return, .. } => {
+            Expr::Arrow {
+                parameter,
+                r#return,
+                ..
+            } => {
                 self.expr(parameter);
                 self.expr(r#return);
             }
@@ -1013,7 +1056,9 @@ impl<'a> NameClass<'a> {
                 self.expr(element_type);
                 self.expr(length);
             }
-            Expr::Block { statements, expr, .. } => {
+            Expr::Block {
+                statements, expr, ..
+            } => {
                 self.stmts(statements);
                 self.expr(expr);
             }
@@ -1073,7 +1118,10 @@ impl Walk {
             span,
         });
         self.def_index.insert(span, idx);
-        self.scopes.last_mut().expect("a scope frame is pushed").insert(name.to_string(), idx);
+        self.scopes
+            .last_mut()
+            .expect("a scope frame is pushed")
+            .insert(name.to_string(), idx);
         idx
     }
 
@@ -1147,7 +1195,9 @@ impl Walk {
                 self.expr(r#return);
                 self.scopes.truncate(base);
             }
-            Expr::Apply { function, argument, .. } => {
+            Expr::Apply {
+                function, argument, ..
+            } => {
                 self.expr(function);
                 self.expr(argument);
             }
@@ -1198,7 +1248,11 @@ impl Walk {
                     self.expr(p);
                 }
             }
-            Expr::Arrow { parameter, r#return, .. } => {
+            Expr::Arrow {
+                parameter,
+                r#return,
+                ..
+            } => {
                 self.expr(parameter);
                 self.expr(r#return);
             }
@@ -1233,7 +1287,9 @@ impl Walk {
                 self.expr(element_type);
                 self.expr(length);
             }
-            Expr::Block { statements, expr, .. } => self.scope(statements, Some(expr)),
+            Expr::Block {
+                statements, expr, ..
+            } => self.scope(statements, Some(expr)),
             Expr::RecordBlock { fields, .. } => {
                 // A struct-returning block scopes its field statements exactly
                 // like a block: a named field is a binding (a `let` a
@@ -1325,7 +1381,12 @@ mod tests {
         let d = doc("a = 1\nb = a + 1\nb");
         // A use of `a` resolves to the binding; its hover shows the bound
         // expr's `value : type` (a = 1 → 1 : Int).
-        let (msg, _range) = d.hover_at(Position { line: 1, character: 4 }).expect("hover on `a`");
+        let (msg, _range) = d
+            .hover_at(Position {
+                line: 1,
+                character: 4,
+            })
+            .expect("hover on `a`");
         assert!(msg.contains("1 : Int"), "hover msg = {msg}");
     }
 
@@ -1335,7 +1396,12 @@ mod tests {
         // there is no `value : type` snapshot — the hover falls back to the
         // definition-site line.
         let d = doc("f = x => x\nf 1\n");
-        let (msg, _) = d.hover_at(Position { line: 0, character: 4 }).expect("hover on `x`");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 0,
+                character: 4,
+            })
+            .expect("hover on `x`");
         assert!(msg.contains("defined at line `1`"), "hover msg = {msg}");
     }
 
@@ -1345,17 +1411,32 @@ mod tests {
         // binding's own name and for any use of it.
         let d = doc("x = 3\ny = x + 4\nx + y\n");
         // On the definition site of `x`: value 3 : Int.
-        let (msg, _) = d.hover_at(Position { line: 0, character: 0 }).expect("hover on `x` def");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 0,
+                character: 0,
+            })
+            .expect("hover on `x` def");
         assert!(msg.contains("3 : Int"), "hover msg = {msg}");
         // On the use of `y` in the final expression `x + y`: value 7 : Int.
-        let (msg, _) = d.hover_at(Position { line: 2, character: 4 }).expect("hover on `y` use");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 2,
+                character: 4,
+            })
+            .expect("hover on `y` use");
         assert!(msg.contains("7 : Int"), "hover msg = {msg}");
     }
 
     #[test]
     fn hover_on_unresolved_name_says_so() {
         let d = doc("a = 1\nb = unknown");
-        let (msg, _) = d.hover_at(Position { line: 1, character: 4 }).expect("hover on `unknown`");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 1,
+                character: 4,
+            })
+            .expect("hover on `unknown`");
         assert!(msg.contains("unresolved name"), "hover msg = {msg}");
     }
 
@@ -1363,16 +1444,31 @@ mod tests {
     fn definition_jumps_to_the_binding() {
         let d = doc("a = 1\nb = a + 1\nb");
         let range = d
-            .definition_at(Position { line: 2, character: 0 })
+            .definition_at(Position {
+                line: 2,
+                character: 0,
+            })
             .expect("definition for the final `b`");
-        assert_eq!(range.start, Position { line: 1, character: 0 });
+        assert_eq!(
+            range.start,
+            Position {
+                line: 1,
+                character: 0
+            }
+        );
     }
 
     #[test]
     fn definition_is_none_on_a_non_name() {
         let d = doc("a = 1\na + 1\n");
         // Cursor on the `1` literal in `a + 1` (line index 1, char 4).
-        assert!(d.definition_at(Position { line: 1, character: 4 }).is_none());
+        assert!(
+            d.definition_at(Position {
+                line: 1,
+                character: 4
+            })
+            .is_none()
+        );
     }
 
     #[test]
@@ -1381,7 +1477,11 @@ mod tests {
         let toks = d.semantic_tokens();
         assert!(!toks.is_empty(), "expected some semantic tokens");
         for t in &toks {
-            assert!(t.end >= t.start, "token range is ordered {:?}", (t.start, t.end));
+            assert!(
+                t.end >= t.start,
+                "token range is ordered {:?}",
+                (t.start, t.end)
+            );
             assert!(t.end as usize <= d.source.len(), "token end in bounds");
         }
     }
@@ -1391,23 +1491,34 @@ mod tests {
         let d = doc("f = x => x + 1\nf 7\n");
         let toks = d.semantic_tokens();
         let types = |t: &crate::lsp::SemanticTokenType| toks.iter().any(|x| &x.token_type == t);
-        assert!(types(&crate::lsp::SemanticTokenType::NUMBER), "a literal is a number");
-        assert!(types(&crate::lsp::SemanticTokenType::OPERATOR), "an operator is colored");
+        assert!(
+            types(&crate::lsp::SemanticTokenType::NUMBER),
+            "a literal is a number"
+        );
+        assert!(
+            types(&crate::lsp::SemanticTokenType::OPERATOR),
+            "an operator is colored"
+        );
         // The binding `f` is a declaration.
         assert!(
-            toks.iter().any(|t| t.token_type == crate::lsp::SemanticTokenType::VARIABLE
-                && t.modifiers.contains(&crate::lsp::SemanticTokenModifier::DECLARATION)),
+            toks.iter()
+                .any(|t| t.token_type == crate::lsp::SemanticTokenType::VARIABLE
+                    && t.modifiers
+                        .contains(&crate::lsp::SemanticTokenModifier::DECLARATION)),
             "binding definition is a declared variable"
         );
         // The lambda parameter `x` is a parameter declaration.
         assert!(
-            toks.iter().any(|t| t.token_type == crate::lsp::SemanticTokenType::PARAMETER
-                && t.modifiers.contains(&crate::lsp::SemanticTokenModifier::DECLARATION)),
+            toks.iter()
+                .any(|t| t.token_type == crate::lsp::SemanticTokenType::PARAMETER
+                    && t.modifiers
+                        .contains(&crate::lsp::SemanticTokenModifier::DECLARATION)),
             "lambda parameter is a declared parameter"
         );
         // The `f` use in `f 7` is a function call.
         assert!(
-            toks.iter().any(|t| t.token_type == crate::lsp::SemanticTokenType::FUNCTION),
+            toks.iter()
+                .any(|t| t.token_type == crate::lsp::SemanticTokenType::FUNCTION),
             "a name in function position is a function"
         );
     }
@@ -1420,13 +1531,20 @@ mod tests {
             .iter()
             .filter(|t| t.token_type == crate::lsp::SemanticTokenType::COMMENT)
             .collect();
-        assert!(!comments.is_empty(), "expected the preprocess block as a comment");
+        assert!(
+            !comments.is_empty(),
+            "expected the preprocess block as a comment"
+        );
         for t in &comments {
-            assert!(t.end as usize <= d.code_base as usize, "comment stays before the code");
+            assert!(
+                t.end as usize <= d.code_base as usize,
+                "comment stays before the code"
+            );
         }
         // The compiled code region is still classified.
         assert!(
-            toks.iter().any(|t| t.token_type == crate::lsp::SemanticTokenType::NUMBER),
+            toks.iter()
+                .any(|t| t.token_type == crate::lsp::SemanticTokenType::NUMBER),
             "code numbers are classified past the block"
         );
     }
@@ -1472,7 +1590,11 @@ mod tests {
         // (and hovers with the module's type), and a field resolves to the
         // imported module it belongs to.
         let dir = temp_dir("hoverimport");
-        write(&dir, "math.lichen", "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n");
+        write(
+            &dir,
+            "math.lichen",
+            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+        );
         let main_path = write(
             &dir,
             "main.lichen",
@@ -1484,26 +1606,41 @@ mod tests {
         );
 
         // The module name `math` (line 3, char 0): imported module + its type.
-        let (msg, _) = d.hover_at(Position { line: 3, character: 0 }).expect("hover on `math`");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 3,
+                character: 0,
+            })
+            .expect("hover on `math`");
         assert!(msg.contains("imported module"), "module hover msg = {msg}");
         assert!(msg.contains("Int -> Int"), "module hover type = {msg}");
 
         // The field `succ` (line 3, char 5): a field of the imported module —
         // its `value : type`, not "unresolved".
-        let (msg, _) = d.hover_at(Position { line: 3, character: 5 }).expect("hover on `succ`");
-        assert!(
-            msg.contains("Int -> Int"),
-            "field hover msg = {msg}"
-        );
-        assert!(
-            !msg.contains("unresolved"),
-            "field hover msg = {msg}"
-        );
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 3,
+                character: 5,
+            })
+            .expect("hover on `succ`");
+        assert!(msg.contains("Int -> Int"), "field hover msg = {msg}");
+        assert!(!msg.contains("unresolved"), "field hover msg = {msg}");
 
         // Go-to-definition on the module use jumps to the import directive
         // (`math` in `@{`...` math = import ...` at line 1, char 2).
-        let def = d.definition_at(Position { line: 3, character: 0 }).expect("def on `math`");
-        assert_eq!(def.start, Position { line: 1, character: 2 });
+        let def = d
+            .definition_at(Position {
+                line: 3,
+                character: 0,
+            })
+            .expect("def on `math`");
+        assert_eq!(
+            def.start,
+            Position {
+                line: 1,
+                character: 2
+            }
+        );
     }
 
     #[test]
@@ -1528,11 +1665,20 @@ mod tests {
         // Line 7 (0-based line 6): `(math.succ 41, geo.double 5, geo.inc_twice 5)`
         for pos in [
             // `.succ` field access on `math`
-            Position { line: 6, character: 6 },
+            Position {
+                line: 6,
+                character: 6,
+            },
             // `.double` field access on `geo`
-            Position { line: 6, character: 19 },
+            Position {
+                line: 6,
+                character: 19,
+            },
             // `.inc_twice` field access on `geo`
-            Position { line: 6, character: 33 },
+            Position {
+                line: 6,
+                character: 33,
+            },
         ] {
             let (msg, _) = d.hover_at(pos).expect("hover on an imported field access");
             assert!(
@@ -1552,7 +1698,12 @@ mod tests {
         // field's value:type too — not "unresolved".  It reads the current
         // file's struct-block field table.
         let d = doc("point = { x = 1, y = 2 }\npoint.x\n");
-        let (msg, _) = d.hover_at(Position { line: 1, character: 6 }).expect("hover on `.x`");
+        let (msg, _) = d
+            .hover_at(Position {
+                line: 1,
+                character: 6,
+            })
+            .expect("hover on `.x`");
         assert!(
             msg.contains("Int") && !msg.contains("unresolved"),
             "local field access hover msg = {msg}"
@@ -1581,10 +1732,19 @@ mod tests {
         // "unresolved" and never merely "defined at line".
         for (line, name) in [(1usize, "succ"), (2, "add")] {
             let (msg, _) = d
-                .hover_at(Position { line: line as u32, character: 2 })
+                .hover_at(Position {
+                    line: line as u32,
+                    character: 2,
+                })
                 .expect(&format!("hover on `{name}`"));
-            assert!(!msg.contains("unresolved"), "`{name}` should resolve; got {msg}");
-            assert!(msg.contains("->"), "`{name}` should show its type; got {msg}");
+            assert!(
+                !msg.contains("unresolved"),
+                "`{name}` should resolve; got {msg}"
+            );
+            assert!(
+                msg.contains("->"),
+                "`{name}` should show its type; got {msg}"
+            );
         }
     }
 

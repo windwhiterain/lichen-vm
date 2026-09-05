@@ -117,7 +117,11 @@ mod tests {
     use super::*;
 
     fn kinds(interior: &str) -> Vec<TokenKind> {
-        tokenize(interior).tokens.into_iter().map(|t| t.kind).collect()
+        tokenize(interior)
+            .tokens
+            .into_iter()
+            .map(|t| t.kind)
+            .collect()
     }
 
     #[test]
@@ -139,9 +143,13 @@ mod tests {
         assert_eq!(
             kinds("a = \"1\"\nb = \"2\";"),
             vec![
-                K::Name("a".into()), K::Equals, K::String("1".into()),
+                K::Name("a".into()),
+                K::Equals,
+                K::String("1".into()),
                 K::Separator,
-                K::Name("b".into()), K::Equals, K::String("2".into()),
+                K::Name("b".into()),
+                K::Equals,
+                K::String("2".into()),
                 K::Separator,
             ]
         );

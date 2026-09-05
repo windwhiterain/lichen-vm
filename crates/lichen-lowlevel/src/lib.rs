@@ -784,12 +784,7 @@ impl<P: Program> Registry<P> {
     /// values reference must already be registered *here*, so the frozen
     /// artifact resolves from any importer through this registry.  Freeze
     /// dependencies first.
-    pub fn freeze_mapped(
-        &mut self,
-        module: &Module<P>,
-        key: ModuleKey,
-        hash: [u8; 32],
-    ) -> Freeze {
+    pub fn freeze_mapped(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
         for dep in crate::static_module::referenced_keys(module) {
             assert!(
                 self.entries.contains_key(&dep),
@@ -822,14 +817,16 @@ impl<P: Program> Registry<P> {
     /// reallocated after reclamation).
     pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
         assert!(
-            self.entries.insert(
-                key,
-                Package {
-                    module: Arc::new(module),
-                    meta: Default::default(),
-                    hash,
-                }
-            ).is_none(),
+            self.entries
+                .insert(
+                    key,
+                    Package {
+                        module: Arc::new(module),
+                        meta: Default::default(),
+                        hash,
+                    }
+                )
+                .is_none(),
             "inserting a module under device key {key:?}, which is already registered — a loaded module is never shadowed"
         );
     }
@@ -928,12 +925,7 @@ impl<P: Program> Module<P> {
     /// module's registry under `key`, returning both the device key and the
     /// source→statics node map.  Convenience over
     /// [`Registry::freeze_mapped`].
-    pub fn freeze_mapped(
-        &mut self,
-        source: &Module<P>,
-        key: ModuleKey,
-        hash: [u8; 32],
-    ) -> Freeze {
+    pub fn freeze_mapped(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
         debug_assert!(
             !std::ptr::eq(self, source),
             "freezing a module into itself would deadlock its registry lock"

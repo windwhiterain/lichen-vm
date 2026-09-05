@@ -166,12 +166,15 @@ impl<P> OperatorExt<P> for ComputeOperator
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             ComputeOperator::Jit => {
-                if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
@@ -197,7 +200,10 @@ where
                 }
             }
             ComputeOperator::Launch => {
-                if matches!(AsEnum::<LowValue>::as_enum(&operand), Some(LowValue::Parameterized)) {
+                if matches!(
+                    AsEnum::<LowValue>::as_enum(&operand),
+                    Some(LowValue::Parameterized)
+                ) {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
@@ -217,7 +223,10 @@ where
                 // computed scalar) stays lazy — the definition pass reports
                 // the unbound result.
                 let mut args: Vec<i64> = Vec::new();
-                match module.node_value(operands[1].node).and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
+                match module
+                    .node_value(operands[1].node)
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                {
                     Some(LowValue::USize(n)) => args.push(n as i64),
                     Some(LowValue::Array(_)) => {
                         if !collect_args(module, operands[1].node, &mut args) {
@@ -249,11 +258,14 @@ where
 /// marker a backend reads instead of re-deriving the type half.  The body
 /// emitter then reads that shape to distinguish a scalar parameter read
 /// (`local.get 0`) from a tuple-element read (`local.get k`).
-fn compile_fragment<P>(module: &mut Module<P>, function: AnyFunctionId) -> Result<KernelFragment, String>
+fn compile_fragment<P>(
+    module: &mut Module<P>,
+    function: AnyFunctionId,
+) -> Result<KernelFragment, String>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let AnyFunctionId::Dynamic(fid) = function else {
         return Err("static (imported) functions are not kernel-compilable v1".into());
@@ -280,7 +292,10 @@ where
     }
     // The parameter's value cell (element 0 of the `[value, type]` pair) is
     // where the domain shape is stored — the node the body emitter consults.
-    let param_value = match module.array_items(param_pair).and_then(|items| items.first()) {
+    let param_value = match module
+        .array_items(param_pair)
+        .and_then(|items| items.first())
+    {
         Some(first) => dyn_node(first.node)?,
         None => return Err("parameter is not a [value, type] pair".into()),
     };
@@ -289,10 +304,7 @@ where
     let mut body: Vec<KernelInstr> = Vec::new();
     emit_node(module, param_pair, param_value, ret_value, &mut body)?;
 
-    Ok(KernelFragment {
-        param_shape,
-        body,
-    })
+    Ok(KernelFragment { param_shape, body })
 }
 
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
@@ -320,7 +332,9 @@ fn assemble_module(
         let arity = flat_arity(&frag.param_shape);
         let ti = *type_index_by_arity.entry(arity).or_insert_with(|| {
             let id = types.len();
-            types.ty().function(vec![ValType::I64; arity], vec![ValType::I64]);
+            types
+                .ty()
+                .function(vec![ValType::I64; arity], vec![ValType::I64]);
             id
         });
         func_types.push(ti);
@@ -408,7 +422,7 @@ fn kernel_param_shape<P>(module: &Module<P>, param_pair: NodeId) -> Result<LowSh
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let pair = module
         .array_items(param_pair)
@@ -429,7 +443,7 @@ fn element_shape<P>(module: &Module<P>, type_node: AnyNodeId) -> Result<LowShape
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let type_node = dyn_node(type_node)?;
     let Some(type_items) = module.array_items(type_node) else {
@@ -473,7 +487,7 @@ fn equality_rep<P>(module: &Module<P>, node: NodeId) -> NodeId
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut root = node;
     while let Some(parent) = module.nodes[root].equality.parent {
@@ -494,7 +508,7 @@ fn class_computation_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let root = equality_rep(module, node);
     for (n, nd) in &module.nodes {
@@ -502,7 +516,10 @@ where
             continue;
         }
         if let Some(op) = nd.operation.as_ref() {
-            if !matches!(AsEnum::<LowOperator>::as_enum(&op.operator), Some(LowOperator::Index)) {
+            if !matches!(
+                AsEnum::<LowOperator>::as_enum(&op.operator),
+                Some(LowOperator::Index)
+            ) {
                 return Some(n);
             }
         }
@@ -523,7 +540,7 @@ fn emit_node<P>(
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         match AsEnum::<LowValue>::as_enum(&value) {
@@ -638,12 +655,10 @@ where
                         .into(),
                 );
             }
-            LowOperator::TableGet => {
-                return Err(
-                    "unsupported tableget operator in kernel body (kernel-safe subset is scalar arith)"
-                        .into(),
-                )
-            }
+            LowOperator::TableGet => return Err(
+                "unsupported tableget operator in kernel body (kernel-safe subset is scalar arith)"
+                    .into(),
+            ),
         }
     }
     // The highlevel's type-level arithmetic: `Add`/`Sub`/`Leq`/`Eq` over
@@ -667,7 +682,7 @@ where
             _ => {
                 return Err(format!(
                     "unsupported highlevel operator in kernel body: {ty_op:?}"
-                ))
+                ));
             }
         }
     }
@@ -684,7 +699,7 @@ where
             other => {
                 return Err(format!(
                     "unsupported compute operator in kernel body: {other:?}"
-                ))
+                ));
             }
         }
     }
@@ -709,7 +724,7 @@ fn emit_cross_kernel_call<P>(
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let kid = kernel_id_of(module, kernel)
         .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
@@ -738,12 +753,15 @@ fn is_param_value<P>(module: &Module<P>, param_pair: NodeId, node: NodeId) -> bo
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(operation) = module.nodes[node].operation else {
         return false;
     };
-    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&operation.operator),
+        Some(LowOperator::Index)
+    ) {
         return false;
     }
     let Ok((target, index)) = operand_pair(module, operation.operand) else {
@@ -764,7 +782,7 @@ fn usize_value<P>(module: &Module<P>, node: NodeId) -> Option<usize>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     match module
         .node_value(AnyNodeId::Dynamic(node))
@@ -784,10 +802,13 @@ fn value_of_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let operation = module.nodes[node].operation?;
-    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&operation.operator),
+        Some(LowOperator::Index)
+    ) {
         return None;
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
@@ -816,7 +837,7 @@ fn kernel_id_of<P>(module: &Module<P>, node: NodeId) -> Option<KernelId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
         if let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value) {
@@ -836,7 +857,7 @@ fn pair_value_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let items = module.array_items(node)?;
     dyn_node(items.first()?.node).ok()
@@ -854,10 +875,13 @@ fn param_path<P>(module: &Module<P>, param_pair: NodeId, node: NodeId) -> Option
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let operation = module.nodes[node].operation?;
-    if !matches!(AsEnum::<LowOperator>::as_enum(&operation.operator), Some(LowOperator::Index)) {
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&operation.operator),
+        Some(LowOperator::Index)
+    ) {
         return None;
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
@@ -914,9 +938,12 @@ fn collect_args<P>(module: &Module<P>, node: AnyNodeId, out: &mut Vec<i64>) -> b
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    match module.node_value(node).and_then(|v| AsEnum::<LowValue>::as_enum(&v)) {
+    match module
+        .node_value(node)
+        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+    {
         Some(LowValue::USize(n)) => {
             out.push(n as i64);
             true
@@ -938,7 +965,7 @@ fn operand_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeI
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(operand) = operand else {
         return Err("binary operator/Index operand is missing".into());
@@ -954,7 +981,7 @@ fn operand_items<P>(module: &Module<P>, node: NodeId) -> Result<&'static [ArrayI
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     module
         .array_items(node)
@@ -969,7 +996,7 @@ fn apply_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId,
 where
     P: Program,
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let Some(operand) = operand else {
         return Err("Apply operand is missing".into());
@@ -1018,7 +1045,9 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
                 let kid = *kid;
                 if seen.insert(kid) {
                     if !fragments.contains_key(&kid) {
-                        return Err(format!("cross-kernel callee kernel {kid} is not registered"));
+                        return Err(format!(
+                            "cross-kernel callee kernel {kid} is not registered"
+                        ));
                     }
                     queue.push_back(kid);
                 }
@@ -1075,10 +1104,8 @@ macro_rules! compute_native_ops {
     ($program:ty) => {{
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
-        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 2] = [
-            ("jit", &JIT),
-            ("launch", &LAUNCH),
-        ];
+        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 2] =
+            [("jit", &JIT), ("launch", &LAUNCH)];
         &OPS[..] as $crate::NativeOps<$program>
     }};
 }
@@ -1106,13 +1133,7 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        _e: ExprId,
-        args: &[NativeArg],
-        loc: Loc,
-    ) -> NativeApply {
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let f = &args[0];
         // Function-ness gate: the argument's type must be a function (an arrow),
         // binding the domain/codomain to the fresh cells below.
@@ -1130,7 +1151,9 @@ where
         // from.  It references the cells the gate just bound, so a concrete
         // function signature flows into the kernel's type.
         let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(ComputeValue::TypeKernel));
+        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeKernel,
+        ));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
         let kernel_ty = ctx.array_node(&[sig, k_kind]);
@@ -1153,13 +1176,7 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
-    fn build(
-        &self,
-        ctx: &mut dyn Ctx<P>,
-        _e: ExprId,
-        args: &[NativeArg],
-        loc: Loc,
-    ) -> NativeApply {
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let k = &args[0];
         let a = &args[1];
         // Kernel-ness gate: `k`'s type must be a kernel type, binding the
@@ -1167,7 +1184,9 @@ where
         let d = ctx.fresh();
         let c = ctx.fresh();
         let sig = ctx.array_node(&[d, c]);
-        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(ComputeValue::TypeKernel));
+        let k_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeKernel,
+        ));
         let universe = ctx.universe();
         let k_kind = ctx.array_node(&[k_marker, universe]);
         let kernel_ty = ctx.array_node(&[sig, k_kind]);

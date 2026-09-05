@@ -622,9 +622,7 @@ pub struct ProgramImpl<
     A: AttrSpec = NoAttr,
     L = HighProgramLiteral,
     G: GlobalExt = HighGlobalExt,
->(
-    #[doc(hidden)] pub PhantomData<(V, O, A, L, G)>,
-);
+>(#[doc(hidden)] pub PhantomData<(V, O, A, L, G)>);
 
 // The marker's `Debug`/`Clone`/`Copy`/`PartialEq` are structural: the single
 // `PhantomData` field is `Clone`/`Copy`/`Debug`/`PartialEq` for *any* type

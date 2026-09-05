@@ -68,13 +68,18 @@ impl Backend {
     /// Store the new source for `uri` and publish its diagnostics.
     async fn update_document(&self, uri: Url, text: String) {
         let base = Self::uri_base(&uri);
-        self.sources.lock().unwrap().insert(uri.clone(), text.clone());
+        self.sources
+            .lock()
+            .unwrap()
+            .insert(uri.clone(), text.clone());
         let diagnostics = Self::compile_diagnostics(text, base).await;
         self.publish(uri, diagnostics, None).await;
     }
 
     async fn publish(&self, uri: Url, diagnostics: Vec<Diagnostic>, version: Option<i32>) {
-        self.client.publish_diagnostics(uri, diagnostics, version).await;
+        self.client
+            .publish_diagnostics(uri, diagnostics, version)
+            .await;
     }
 }
 
@@ -151,7 +156,10 @@ impl LanguageServer for Backend {
         Ok(hover)
     }
 
-    async fn goto_definition(&self, params: GotoDefinitionParams) -> Result<Option<GotoDefinitionResponse>> {
+    async fn goto_definition(
+        &self,
+        params: GotoDefinitionParams,
+    ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
@@ -163,14 +171,19 @@ impl LanguageServer for Backend {
         })
         .await
         .expect("compile lichen source");
-        let response = range.map(|range| GotoDefinitionResponse::Scalar(Location {
-            uri: uri.clone(),
-            range,
-        }));
+        let response = range.map(|range| {
+            GotoDefinitionResponse::Scalar(Location {
+                uri: uri.clone(),
+                range,
+            })
+        });
         Ok(response)
     }
 
-    async fn semantic_tokens_full(&self, params: SemanticTokensParams) -> Result<Option<SemanticTokensResult>> {
+    async fn semantic_tokens_full(
+        &self,
+        params: SemanticTokensParams,
+    ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
         let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
             return Ok(None);

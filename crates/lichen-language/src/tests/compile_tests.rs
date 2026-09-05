@@ -14,7 +14,11 @@ fn compile_err(source: &str) -> Diag {
     let ast = parse(&tokens).program;
     // The lowering is total but collects its resolve errors; the tests check
     // the first one (an unresolved-name program yields exactly one).
-    compile(&ast).1.into_iter().next().expect("expected a resolve diagnostic")
+    compile(&ast)
+        .1
+        .into_iter()
+        .next()
+        .expect("expected a resolve diagnostic")
 }
 
 fn kind(ir: &IR<LangAttr>, id: ExprId) -> ExprKind<HighProgramLiteral> {
@@ -26,7 +30,10 @@ fn kind(ir: &IR<LangAttr>, id: ExprId) -> ExprKind<HighProgramLiteral> {
 /// which unwraps to the final expression.
 fn wrapped(ir: &IR<LangAttr>) -> ExprId {
     match ir[ir.root].kind {
-        ExprKind::Field { container: array, key: index } => {
+        ExprKind::Field {
+            container: array,
+            key: index,
+        } => {
             let ExprKind::Tuple(range) = ir[array].kind else {
                 panic!("expected the wrapped tuple")
             };

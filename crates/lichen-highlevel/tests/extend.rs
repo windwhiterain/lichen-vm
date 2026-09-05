@@ -7,10 +7,10 @@
 //! [`LiteralExt`]), composing the built-in int/type-constant literals with a
 //! downstream literal the same way an operator vocabulary composes.
 
+use lichen_highlevel::NoAttr;
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ChildRange, ExprKind, IR};
-use lichen_highlevel::NoAttr;
 use lichen_highlevel::program::{
     Ctx, HighProgramOperator, IntLit, IntTypeLit, LiteralBuild, LiteralExt, ProgramImpl,
     TypeOperator, TypeTypeLit, TypeValue, ValueType,
@@ -216,7 +216,6 @@ fn an_extended_union_reports_type_conflicts() {
 }
 // A probe operator vocabulary: the same extension shape a downstream language
 
-
 // would use when it needs operators beyond the highlevel's own set.
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -246,6 +245,8 @@ fn the_program_marker_accepts_a_composed_operator_vocabulary() {
     // downstream operator union; the lowlevel runtime machinery no longer
     // requires the operator set to be exactly `HighProgramOperator`.
     let _module = Module::<ProbeProgram>::new();
-    assert!(HighProgramOperator::LowOperator(LowOperator::Apply)
-        == HighProgramOperator::LowOperator(LowOperator::Apply));
+    assert!(
+        HighProgramOperator::LowOperator(LowOperator::Apply)
+            == HighProgramOperator::LowOperator(LowOperator::Apply)
+    );
 }

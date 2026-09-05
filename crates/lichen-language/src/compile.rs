@@ -47,9 +47,9 @@ use lichen_highlevel::program::{
 
 use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
+use crate::doc::Doc;
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, Perspective};
-use crate::doc::Doc;
 
 pub fn compile(program: &Program) -> (IR<LangAttr>, Vec<Diag>) {
     compile_with_imports(program, &[])
@@ -299,9 +299,9 @@ impl Compiler {
             // native-operator names are interned.  The type is the shared
             // `[string, Type]` expression the literal builds.
             Expr::Str(s, span) => self.alloc(
-                ExprKind::Literal(HighProgramLiteral::from(StrLit(
-                    Box::leak(s.clone().into_boxed_str()),
-                ))),
+                ExprKind::Literal(HighProgramLiteral::from(StrLit(Box::leak(
+                    s.clone().into_boxed_str(),
+                )))),
                 span,
             ),
             Expr::TypeConst(TypeConst::Int, span) => self.alloc(
@@ -374,8 +374,12 @@ impl Compiler {
                 // static schema — the checker reads `schema(parameter).tail[0]`
                 // to dispatch the apply's attribute equality check.
                 if parameter_perspective.is_some() {
-                    self.ir
-                        .set_schema(parameter_id, Schema { tail: vec![LangAttr::Perspective(Perspective)] });
+                    self.ir.set_schema(
+                        parameter_id,
+                        Schema {
+                            tail: vec![LangAttr::Perspective(Perspective)],
+                        },
+                    );
                 }
                 self.scopes
                     .push(HashMap::from([(parameter.clone(), parameter_id)]));
@@ -427,16 +431,15 @@ impl Compiler {
                 span,
             } => {
                 let type_expr = self.compile_expr(callee);
-                let field_ids: Vec<ExprId> = fields
-                    .iter()
-                    .map(|f| self.compile_expr(&f.value))
-                    .collect();
+                let field_ids: Vec<ExprId> =
+                    fields.iter().map(|f| self.compile_expr(&f.value)).collect();
                 let names: Vec<Option<&'static str>> = fields
                     .iter()
                     .map(|f| f.name.as_deref().map(|n| self.intern_str(n)))
                     .collect();
                 let value = self.ir.alloc_tuple(&field_ids, Some(*span));
-                self.ir.alloc_instantiate(type_expr, value, &names, Some(*span))
+                self.ir
+                    .alloc_instantiate(type_expr, value, &names, Some(*span))
             }
             Expr::BinOp {
                 operator,
@@ -717,12 +720,11 @@ impl Compiler {
                     emitted.push((name, id));
                 }
                 let field_ids: Vec<ExprId> = emitted.iter().map(|(_, v)| *v).collect();
-                let names: Vec<Option<&'static str>> =
-                    emitted.iter().map(|(n, _)| *n).collect();
+                let names: Vec<Option<&'static str>> = emitted.iter().map(|(n, _)| *n).collect();
                 let value = self.ir.alloc_tuple(&field_ids, Some(*span));
                 self.ir.alloc_record(value, &names, Some(*span))
             }
-    }
+        }
     }
 
     fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {

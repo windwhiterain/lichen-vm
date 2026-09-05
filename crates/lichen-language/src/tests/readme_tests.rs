@@ -12,9 +12,7 @@ fn replaces_the_region_between_markers() {
 fn missing_markers_are_errors() {
     assert!(replace_examples("no markers", "blob").is_err());
     assert!(replace_examples("<!-- begin: examples -->\nno end", "blob").is_err());
-    assert!(
-        replace_examples("<!-- end: examples -->\n<!-- begin: examples -->", "blob").is_err()
-    );
+    assert!(replace_examples("<!-- end: examples -->\n<!-- begin: examples -->", "blob").is_err());
 }
 
 #[test]
@@ -80,7 +78,10 @@ fn renders_the_tree_grouped_and_ordered() {
         blob.contains("order = \"0\""),
         "the order metadata is shown with the whole file"
     );
-    assert!(!blob.contains("output:\n```text"), "no separate output block");
+    assert!(
+        !blob.contains("output:\n```text"),
+        "no separate output block"
+    );
 }
 
 #[test]

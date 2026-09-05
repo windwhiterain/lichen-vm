@@ -37,7 +37,7 @@ use std::sync::{Arc, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
 use lichen_highlevel::ir::IR;
-use lichen_highlevel::{no_native_ops, NativeOps};
+use lichen_highlevel::{NativeOps, no_native_ops};
 use lichen_lowlevel::Registry;
 
 pub use diag::{Diag, Stage};
@@ -100,10 +100,7 @@ pub fn compile_with_imports_at(
     line_starts: &[usize],
     native_ops: NativeOps<LangProgram>,
 ) -> Report {
-    let Frontend {
-        ir,
-        diagnostics,
-    } = frontend_at(code, base, line_starts, imports);
+    let Frontend { ir, diagnostics } = frontend_at(code, base, line_starts, imports);
     build_report(ir, diagnostics, registry, native_ops)
 }
 

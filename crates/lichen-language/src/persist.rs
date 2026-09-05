@@ -624,12 +624,10 @@ fn read_value(
                 return Err("artifact handle out of its arena's bounds".into());
             }
             let payload = unsafe { owner_base.add(offset) as *const ArrayItem };
-            LangValue::LowValue(LowValue::Array(AnyHandle::Static(
-                StaticHandle {
-                    module: owner,
-                    offset: std::ptr::slice_from_raw_parts(payload, len),
-                },
-            )))
+            LangValue::LowValue(LowValue::Array(AnyHandle::Static(StaticHandle {
+                module: owner,
+                offset: std::ptr::slice_from_raw_parts(payload, len),
+            })))
         }
         2 => {
             let module = ModuleKey::from_raw(r.u64()?);
@@ -670,12 +668,10 @@ fn read_value(
                 return Err("artifact handle out of its arena's bounds".into());
             }
             let payload = unsafe { owner_base.add(offset) as *const TableItem };
-            LangValue::LowValue(LowValue::Table(AnyHandle::Static(
-                StaticHandle {
-                    module: owner,
-                    offset: std::ptr::slice_from_raw_parts(payload, len),
-                },
-            )))
+            LangValue::LowValue(LowValue::Table(AnyHandle::Static(StaticHandle {
+                module: owner,
+                offset: std::ptr::slice_from_raw_parts(payload, len),
+            })))
         }
         5 => LangValue::TypeValue(TypeValue::TypeInt),
         6 => LangValue::TypeValue(TypeValue::TypeType),
@@ -998,10 +994,9 @@ impl DeviceRegistry {
             let Some(entry_key) = registry.entries.get(&hash).map(|entry| entry.key) else {
                 return true;
             };
-            let referenced = registry
-                .entries
-                .values()
-                .any(|other| other.key != entry_key && other.deps.iter().any(|(_, k)| *k == entry_key));
+            let referenced = registry.entries.values().any(|other| {
+                other.key != entry_key && other.deps.iter().any(|(_, k)| *k == entry_key)
+            });
             let aliased = registry.paths.values().any(|&h| h == hash);
             if !referenced && !aliased {
                 registry.entries.remove(&hash);

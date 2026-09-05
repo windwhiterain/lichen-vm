@@ -30,7 +30,10 @@ fn recursive_function_applies_itself_lazily() {
     let rep_five = m.equality_representative(five);
     assert_eq!(ids.len(), 2);
     assert_eq!(m.equality_representative(ids[0]), rep_five);
-    assert!(matches!(m.node_value(AnyNodeId::Dynamic(ids[0])), Some(TestValue::U128(_))));
+    assert!(matches!(
+        m.node_value(AnyNodeId::Dynamic(ids[0])),
+        Some(TestValue::U128(_))
+    ));
     let c1 = ids[1];
     assert!(m.node_value(AnyNodeId::Dynamic(c1)).is_none()); // unevaluated until forced
     assert!(matches!(

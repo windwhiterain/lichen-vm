@@ -15,10 +15,10 @@ use crate::compile;
 use crate::diag::Diag;
 use crate::package::PackageStore;
 use crate::preprocess::preprocess;
+use crate::program::{LangProgram, lang_attr_ext};
 pub use crate::render::print_type;
 pub use crate::render::print_value;
 use crate::render::render_attributes;
-use crate::program::{lang_attr_ext, LangProgram};
 
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///

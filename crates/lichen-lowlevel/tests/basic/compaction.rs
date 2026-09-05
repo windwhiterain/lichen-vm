@@ -107,7 +107,10 @@ fn nested_array_return_relocates_data_twice() {
     assert_eq!(ids.len(), 1);
     let ids = array_ids(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap());
     assert_eq!(ids.len(), 1);
-    assert_eq!(u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()), 7);
+    assert_eq!(
+        u128_of(m.node_value(AnyNodeId::Dynamic(ids[0])).unwrap()),
+        7
+    );
     assert_eq!(m.nodes.len(), 4); // root_node + outer_ret + inner_ret + c
     assert!(m.nodes.contains_key(c));
 }
@@ -139,7 +142,8 @@ fn compact_preserves_the_shallow_mask() {
     assert_eq!(array_ids(value).len(), 2);
     assert_eq!(m.nodes[ret].block, root, "compacted into the parent");
     assert!(
-        m.node_value(AnyNodeId::Dynamic(array_ids(value)[1])).is_none(),
+        m.node_value(AnyNodeId::Dynamic(array_ids(value)[1]))
+            .is_none(),
         "shallow element stays lazy"
     );
 }

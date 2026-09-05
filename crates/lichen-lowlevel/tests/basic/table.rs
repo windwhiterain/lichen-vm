@@ -7,7 +7,11 @@
 use super::*;
 
 /// A node holding a table value built from raw `(key, value)` node pairs.
-fn table_value(m: &mut Module<TestProgram>, block: BlockId, entries: &[(AnyNodeId, AnyNodeId)]) -> NodeId {
+fn table_value(
+    m: &mut Module<TestProgram>,
+    block: BlockId,
+    entries: &[(AnyNodeId, AnyNodeId)],
+) -> NodeId {
     let payload = m.build_table(entries, block);
     m.add_node(
         block,
@@ -84,7 +88,11 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
     let key2 = mk_key(&mut m);
     assert_ne!(key1, key2, "two distinct node groups");
     let value = usize_node(&mut m, root, 7);
-    let t = table_value(&mut m, root, &[(AnyNodeId::Dynamic(key1), AnyNodeId::Dynamic(value))]);
+    let t = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(key1), AnyNodeId::Dynamic(value))],
+    );
 
     let get = table_get(&mut m, root, t, key2);
     let read = m.evaluate_node_deep(get, None);
@@ -103,12 +111,22 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
 fn an_unbound_key_is_dropped_with_a_recorded_error() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let key = m.add_node(root, None, Some(TestValue::LowValue(LowValue::Parameterized)));
+    let key = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
     let value = usize_node(&mut m, root, 1);
-    let t = table_value(&mut m, root, &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))]);
+    let t = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))],
+    );
 
     // The entry never made it into the payload.
-    let TestValue::LowValue(LowValue::Table(payload)) = m.node_value(AnyNodeId::Dynamic(t)).unwrap() else {
+    let TestValue::LowValue(LowValue::Table(payload)) =
+        m.node_value(AnyNodeId::Dynamic(t)).unwrap()
+    else {
         panic!("the table value")
     };
     assert_eq!(payload.items().len(), 0, "the unbound entry is dropped");
@@ -148,7 +166,11 @@ fn cyclic_keys_hash_and_compare_equal() {
     let key1 = mk_cycle(&mut m);
     let key2 = mk_cycle(&mut m);
     let value = usize_node(&mut m, root, 9);
-    let t = table_value(&mut m, root, &[(AnyNodeId::Dynamic(key1), AnyNodeId::Dynamic(value))]);
+    let t = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(key1), AnyNodeId::Dynamic(value))],
+    );
 
     let get = table_get(&mut m, root, t, key2);
     let read = m.evaluate_node_deep(get, None);
@@ -162,11 +184,7 @@ fn table_values_key_by_identity() {
     let mk_table = |m: &mut Module<TestProgram>| -> NodeId {
         let a = usize_node(m, root, 1);
         let b = usize_node(m, root, 2);
-        table_value(
-            m,
-            root,
-            &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b))],
-        )
+        table_value(m, root, &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b))])
     };
     let t1 = mk_table(&mut m);
     let t2 = mk_table(&mut m);
@@ -229,7 +247,9 @@ fn the_payload_is_stored_sorted_by_hash() {
         ],
     );
 
-    let TestValue::LowValue(LowValue::Table(payload)) = m.node_value(AnyNodeId::Dynamic(t)).unwrap() else {
+    let TestValue::LowValue(LowValue::Table(payload)) =
+        m.node_value(AnyNodeId::Dynamic(t)).unwrap()
+    else {
         panic!("the table value")
     };
     let items = payload.items();
@@ -285,11 +305,7 @@ fn tables_unify_by_identity_not_content() {
     let mk_table = |m: &mut Module<TestProgram>| -> NodeId {
         let a = usize_node(m, root, 1);
         let b = usize_node(m, root, 2);
-        table_value(
-            m,
-            root,
-            &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b))],
-        )
+        table_value(m, root, &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(b))])
     };
     let t1 = mk_table(&mut m);
     let t2 = mk_table(&mut m);

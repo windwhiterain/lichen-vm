@@ -107,7 +107,10 @@ fn declared_order(file: &Path, source: &str) -> Option<usize> {
         .find(|(name, _)| name == "order")
         .map(|(_, value)| value)?;
     Some(value.parse().unwrap_or_else(|_| {
-        panic!("{}: expected a number after `order =`, found {value:?}", file.display())
+        panic!(
+            "{}: expected a number after `order =`, found {value:?}",
+            file.display()
+        )
     }))
 }
 
@@ -218,7 +221,11 @@ fn render_entry(entry: &Entry, level: usize) -> String {
     if face.is_file() {
         blocks.push(render_program_body(&face));
     }
-    blocks.extend(render_dir(&entry.path, &format!("{}/", entry.name), level + 1));
+    blocks.extend(render_dir(
+        &entry.path,
+        &format!("{}/", entry.name),
+        level + 1,
+    ));
     blocks.join("\n\n")
 }
 

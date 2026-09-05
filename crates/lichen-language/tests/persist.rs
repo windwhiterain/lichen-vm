@@ -46,8 +46,16 @@ fn cache_round_trip_across_stores() {
     // device keys, zero compiles.
     let dir = temp_dir("roundtrip");
     write(&dir, "inner.lichen", "x => x + 1\n");
-    write(&dir, "middle.lichen", "@{inc = import \"inner.lichen\"@}x => inc x\n");
-    let main_path = write(&dir, "main.lichen", "@{f = import \"middle.lichen\"@}f 41\n");
+    write(
+        &dir,
+        "middle.lichen",
+        "@{inc = import \"inner.lichen\"@}x => inc x\n",
+    );
+    let main_path = write(
+        &dir,
+        "main.lichen",
+        "@{f = import \"middle.lichen\"@}f 41\n",
+    );
     let cache = dir.join("cache");
 
     let mut store1 = PackageStore::with_cache_dir(cache.clone());
@@ -162,7 +170,10 @@ fn identical_content_shares_one_device_key() {
     let mut store = PackageStore::with_cache_dir(cache.clone());
     let a = store.load_package(&dir.join("a.lichen")).unwrap();
     let b = store.load_package(&dir.join("b.lichen")).unwrap();
-    assert_eq!(store.compiled, 1, "the second path reuses the first artifact");
+    assert_eq!(
+        store.compiled, 1,
+        "the second path reuses the first artifact"
+    );
     assert_eq!(a.key, b.key);
 }
 

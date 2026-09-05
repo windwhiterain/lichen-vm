@@ -10,9 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::{
-    AnyFunctionId, ApplyError, BlockId, LowValue, Module, NodeId, Program,
-};
+use crate::{AnyFunctionId, ApplyError, BlockId, LowValue, Module, NodeId, Program};
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {

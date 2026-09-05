@@ -66,7 +66,11 @@ fn transitive_imports_apply_across_modules() {
     // middle's freeze.
     let dir = temp_dir("transitive");
     write(&dir, "inner.lichen", "x => x + 1\n");
-    write(&dir, "middle.lichen", "@{inc = import \"inner.lichen\"@}x => inc x\n");
+    write(
+        &dir,
+        "middle.lichen",
+        "@{inc = import \"inner.lichen\"@}x => inc x\n",
+    );
     let main = "@{f = import \"middle.lichen\"@}f 41\n";
     let mut store = PackageStore::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
@@ -82,7 +86,11 @@ fn transitive_struct_types_flow_through_packages() {
     // type travel across two freeze boundaries.
     let dir = temp_dir("transitive-struct");
     write(&dir, "inner.lichen", "struct<Int>\n");
-    write(&dir, "middle.lichen", "@{S = import \"inner.lichen\"@}S(41,)\n");
+    write(
+        &dir,
+        "middle.lichen",
+        "@{S = import \"inner.lichen\"@}S(41,)\n",
+    );
     let main = "@{v = import \"middle.lichen\"@}v(0)\n";
     let mut store = PackageStore::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
@@ -101,7 +109,11 @@ fn diamond_imports_load_each_package_once() {
     let mut store = PackageStore::new();
     let out = evaluate_raw(main, Some(&dir), &mut store).unwrap();
     assert_eq!(out, "(43, 44): <Int, Int>");
-    assert_eq!(store.packages.len(), 3, "a loads once despite two importers");
+    assert_eq!(
+        store.packages.len(),
+        3,
+        "a loads once despite two importers"
+    );
 }
 
 #[test]
@@ -133,12 +145,14 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
     let mut store = PackageStore::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
-        err.iter().any(|d| d.message.contains("cannot load package 'inner.lichen'")
-            && d.message.contains("unresolved name 'y'")),
+        err.iter()
+            .any(|d| d.message.contains("cannot load package 'inner.lichen'")
+                && d.message.contains("unresolved name 'y'")),
         "the diagnostic names the failing package and its cause: {err:?}"
     );
     assert!(
-        err.iter().any(|d| d.message.contains("cannot load package") && d.span == Some((1, 3))),
+        err.iter()
+            .any(|d| d.message.contains("cannot load package") && d.span == Some((1, 3))),
         "the caret sits on the @import directive, not the package's line 2: {err:?}"
     );
 }
@@ -162,11 +176,21 @@ fn two_importers_share_one_package_through_one_store() {
     let dir = temp_dir("shared");
     write(&dir, "pkg.lichen", "x => x + 1\n");
     let mut store = PackageStore::new();
-    let first = evaluate_raw("@{f = import \"pkg.lichen\"@}f 41\n", Some(&dir), &mut store).unwrap();
-    let second = evaluate_raw("@{f = import \"pkg.lichen\"@}f 1\n", Some(&dir), &mut store).unwrap();
+    let first = evaluate_raw(
+        "@{f = import \"pkg.lichen\"@}f 41\n",
+        Some(&dir),
+        &mut store,
+    )
+    .unwrap();
+    let second =
+        evaluate_raw("@{f = import \"pkg.lichen\"@}f 1\n", Some(&dir), &mut store).unwrap();
     assert_eq!(first, "42: Int");
     assert_eq!(second, "2: Int");
-    assert_eq!(store.packages.len(), 1, "the package loaded once for both files");
+    assert_eq!(
+        store.packages.len(),
+        1,
+        "the package loaded once for both files"
+    );
 }
 
 #[test]
@@ -177,8 +201,7 @@ fn imported_type_error_is_reported_without_panicking() {
     let mut store = PackageStore::new();
     let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
     assert!(
-        err.iter()
-            .any(|d| d.message.contains("found Int")),
+        err.iter().any(|d| d.message.contains("found Int")),
         "diagnostics should render the imported non-function type error: {err:?}"
     );
 }

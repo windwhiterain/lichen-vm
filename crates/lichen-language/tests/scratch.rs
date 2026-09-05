@@ -22,7 +22,8 @@ fn annotated_rec_scratch() {
             for m in disjoint::members(&build.module.nodes, rep) {
                 println!(
                     "    {m:?} value={:?} op={:?}",
-                    build.module.node_value(AnyNodeId::Dynamic(m)), build.module.nodes[m].operation
+                    build.module.node_value(AnyNodeId::Dynamic(m)),
+                    build.module.nodes[m].operation
                 );
             }
         }

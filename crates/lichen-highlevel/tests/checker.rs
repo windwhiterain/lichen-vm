@@ -82,7 +82,13 @@ fn index(ir: &mut IR, a: ExprId, i: ExprId) -> ExprId {
 }
 /// `a(k)` — a positional slot read over a tuple element or struct field.
 fn field(ir: &mut IR, c: ExprId, k: ExprId) -> ExprId {
-    ir.alloc(ExprKind::Field { container: c, key: k }, None)
+    ir.alloc(
+        ExprKind::Field {
+            container: c,
+            key: k,
+        },
+        None,
+    )
 }
 fn ann(ir: &mut IR, e: ExprId, t: ExprId) -> ExprId {
     ir.alloc(
@@ -112,8 +118,7 @@ fn type_tuple(ir: &mut IR, elements: &[ExprId]) -> ExprId {
 }
 /// A struct type expression: `struct<T1, ..., Tn>` — positional fields.
 fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
-    let fields: Vec<(ExprId, Option<&'static str>)> =
-        fields.iter().map(|&e| (e, None)).collect();
+    let fields: Vec<(ExprId, Option<&'static str>)> = fields.iter().map(|&e| (e, None)).collect();
     ir.alloc_type_struct(&fields, None)
 }
 /// A struct type expression with field names: `struct<a :: T1, b :: T2>`.
@@ -312,7 +317,10 @@ fn an_error_block_as_a_child_does_not_cascade() {
     let e = err_block(&mut ir);
     let b = build(tuple(&mut ir, &[e, five]), ir);
     assert!(b.ok, "a tuple with an error block checks");
-    assert!(b.term[e].is_some(), "the embedded error block still records its pair");
+    assert!(
+        b.term[e].is_some(),
+        "the embedded error block still records its pair"
+    );
 }
 
 #[test]
@@ -430,7 +438,10 @@ fn real_array_type_is_type_and_length() {
     let shape = b.val[arr].unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
-    assert!(is_int_type(&b, shape_ids[0]), "instance[0] is the element type");
+    assert!(
+        is_int_type(&b, shape_ids[0]),
+        "instance[0] is the element type"
+    );
     assert!(
         matches!(
             b.module.node_value(AnyNodeId::Dynamic(shape_ids[1])),
@@ -1066,10 +1077,7 @@ fn a_tuples_unbound_element_types_sync_from_the_return_types() {
     let pair = array_ids(&b, b.root_ty);
     assert_eq!(pair.len(), 2);
     let shape = array_ids(&b, pair[0]);
-    assert!(
-        is_int_type(&b, shape[0]),
-        "element 0's cell syncs to int"
-    );
+    assert!(is_int_type(&b, shape[0]), "element 0's cell syncs to int");
     assert_eq!(
         b.module.node_value(AnyNodeId::Dynamic(shape[1])),
         b.module.node_value(AnyNodeId::Dynamic(b.type_expr)),
@@ -1400,9 +1408,8 @@ fn a_named_struct_carries_a_name_to_index_table() {
     assert_eq!(marker_ids.len(), 2);
     // the names field (marker[1]) is a constant table: "a" -> 0, "b" -> 1.
     let names_node = marker_ids[1];
-    let Some(HighProgramValue::LowValue(LowValue::Table(table))) = b
-        .module
-        .node_value(AnyNodeId::Dynamic(names_node))
+    let Some(HighProgramValue::LowValue(LowValue::Table(table))) =
+        b.module.node_value(AnyNodeId::Dynamic(names_node))
     else {
         panic!("the names field must be a table");
     };
@@ -1496,9 +1503,16 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let err = module.unify_errors[0].clone();
     let (a, b) = (err.value_a, err.value_b);
     assert!(
-        matches!((&a, &b),
-            (Some(HighProgramValue::LowValue(LowValue::Array(_))), Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)))
-            | (Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)), Some(HighProgramValue::LowValue(LowValue::Array(_))))),
+        matches!(
+            (&a, &b),
+            (
+                Some(HighProgramValue::LowValue(LowValue::Array(_))),
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple))
+            ) | (
+                Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
+                Some(HighProgramValue::LowValue(LowValue::Array(_)))
+            )
+        ),
         "marker-level nominal clash: got {a:?} vs {b:?}"
     );
 }
@@ -1541,7 +1555,10 @@ fn an_annotation_against_a_struct_type_reports_the_conflict() {
     // The struct's shape is the structured expected side now; the wording
     // ("expected [...]") is re-rendered by the language layer from the kind
     // and the value_a/value_b facts.
-    assert!(diags[0].loc().is_some(), "the annotation conflict is located");
+    assert!(
+        diags[0].loc().is_some(),
+        "the annotation conflict is located"
+    );
 }
 
 #[test]
@@ -1881,7 +1898,8 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
         panic!("expected a kind expression");
     };
     assert_eq!(
-        b.module.node_value(AnyNodeId::Dynamic(dyn_node(kind.items()[0].node))),
+        b.module
+            .node_value(AnyNodeId::Dynamic(dyn_node(kind.items()[0].node))),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
         "typed like a tuple"
     );

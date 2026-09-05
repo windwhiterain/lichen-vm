@@ -143,7 +143,10 @@ fn statement_errors_carry_spans() {
     assert!(err.message.contains("must end with an expression"));
     // A binding without a value.
     let err = parse_err("a = ; 5");
-    assert_eq!(err.message, "expected '!' or an expression, found a separator");
+    assert_eq!(
+        err.message,
+        "expected '!' or an expression, found a separator"
+    );
     assert_eq!(err.span, Some((1, 5)));
 }
 
@@ -367,19 +370,28 @@ fn struct_types_carry_optional_field_names() {
 #[test]
 fn named_field_read_is_dot_postfix() {
     // `a.b` — a named field read over a struct instance.
-    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a.b") else {
+    let Expr::NamedFieldRead {
+        container, name, ..
+    } = parse_ok("a.b")
+    else {
         panic!("expected a named field read")
     };
     assert!(matches!(*container, Expr::Name(n, _) if n == "a"));
     assert_eq!(name, "b");
     // `a.b.c` chains left.
-    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a.b.c") else {
+    let Expr::NamedFieldRead {
+        container, name, ..
+    } = parse_ok("a.b.c")
+    else {
         panic!("expected a named field read")
     };
     assert_eq!(name, "c");
     assert!(matches!(*container, Expr::NamedFieldRead { name: inner, .. } if inner == "b"));
     // a dot postfix after an index folds left too: `a[0].b`.
-    let Expr::NamedFieldRead { container, name, .. } = parse_ok("a[0].b") else {
+    let Expr::NamedFieldRead {
+        container, name, ..
+    } = parse_ok("a[0].b")
+    else {
         panic!("expected a named field read")
     };
     assert_eq!(name, "b");
@@ -396,7 +408,10 @@ fn struct_instantiation_is_adjacent_parens() {
     assert!(matches!(*callee, Expr::Name(n, _) if n == "A"));
     assert_eq!(fields.len(), 2);
     assert!(matches!(fields[0].value, Expr::Int(1, _)));
-    assert!(matches!(fields[1].value, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(
+        fields[1].value,
+        Expr::TypeConst(TypeConst::Int, _)
+    ));
     // a single field carries a trailing comma — the bare `A(1)` is the
     // positional slot read.
     assert!(matches!(
@@ -439,7 +454,10 @@ fn struct_instantiation_carries_optional_field_names() {
     assert_eq!(fields[0].name.as_deref(), Some("x"));
     assert!(matches!(fields[0].value, Expr::Int(1, _)));
     assert_eq!(fields[1].name.as_deref(), Some("y"));
-    assert!(matches!(fields[1].value, Expr::TypeConst(TypeConst::Int, _)));
+    assert!(matches!(
+        fields[1].value,
+        Expr::TypeConst(TypeConst::Int, _)
+    ));
     // mixed positional and named
     let Expr::StructInst { fields, .. } = parse_ok("A(1, .y Int)") else {
         panic!("expected a struct instance")
@@ -538,7 +556,10 @@ fn index_errors_carry_spans() {
     // `a[]` is application of `a` to an empty array literal — the
     // element error mentions the `~` prefix the array parser now accepts.
     let err = parse_err("a[]");
-    assert_eq!(err.message, "expected '~', '!', or an expression, found ']'");
+    assert_eq!(
+        err.message,
+        "expected '~', '!', or an expression, found ']'"
+    );
     let err = parse_err("a[0");
     assert_eq!(err.span, Some((1, 4)));
 }

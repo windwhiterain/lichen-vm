@@ -82,7 +82,8 @@ fn index_out_of_bounds_records_an_eval_error() {
     assert_eq!(index_value, 5);
     assert_eq!(length, 2);
     assert!(m.unify_errors.is_empty());
-}#[test]
+}
+#[test]
 fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
     let mut m = Module::new();
     let root = m.add_block(None);
@@ -283,7 +284,10 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
     let value = m.evaluate_node_deep(arr, None);
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
 
-    assert!(m.node_value(AnyNodeId::Dynamic(add)).is_none(), "shallow position stays lazy");
+    assert!(
+        m.node_value(AnyNodeId::Dynamic(add)).is_none(),
+        "shallow position stays lazy"
+    );
     assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
     assert_eq!(
         m.nodes[three].evaluated_deep,

@@ -9,11 +9,7 @@ fn gcd_run(values: &[usize]) -> usize {
     let items: Vec<ArrayItem> = values
         .iter()
         .map(|&n| {
-            let node = module.add_node(
-                block,
-                None,
-                Some(LangValue::from(LowValue::USize(n))),
-            );
+            let node = module.add_node(block, None, Some(LangValue::from(LowValue::USize(n))));
             ArrayItem::new(AnyNodeId::Dynamic(node))
         })
         .collect();

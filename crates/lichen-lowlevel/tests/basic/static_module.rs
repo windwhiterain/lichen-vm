@@ -682,7 +682,10 @@ fn frozen_dependency() -> (
     let n20 = u128_node(&mut a, block, 20);
     let arr = array_node(&mut a, block, &[n10, n20], None);
     a.evaluate_node_deep(arr, None);
-    let freeze = registry.write().unwrap().freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
+    let freeze = registry
+        .write()
+        .unwrap()
+        .freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
     (
         registry,
         freeze.key,
@@ -710,7 +713,11 @@ fn freezing_keeps_dependency_refs_verbatim() {
     let root = b.add_block(None);
     let local = u128_node(&mut b, root, 7);
     let a_leaf = b.materialize_leaf(const_sref, root);
-    let items = [item(local), ArrayItem::new(AnyNodeId::Static(arr_sref)), item(a_leaf)];
+    let items = [
+        item(local),
+        ArrayItem::new(AnyNodeId::Static(arr_sref)),
+        item(a_leaf),
+    ];
     let holder = b.add_node(
         root,
         None,
@@ -720,7 +727,10 @@ fn freezing_keeps_dependency_refs_verbatim() {
     );
     b.evaluate_node_deep(holder, None);
 
-    let freeze_b = registry.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
+    let freeze_b = registry
+        .write()
+        .unwrap()
+        .freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
     assert_ne!(freeze_b.key, key_a, "B is a distinct artifact");
 
     // The frozen array's middle item still names module A, verbatim.
@@ -742,8 +752,8 @@ fn freezing_keeps_dependency_refs_verbatim() {
     );
     // The materialized A leaf keeps A's static handle — the payload stays
     // in A's arena, never copied into B's.
-    let TestValue::U128(AnyHandle::Static(handle)) = b_module.nodes[freeze_b.node_map[&a_leaf]
-        .index]
+    let TestValue::U128(AnyHandle::Static(handle)) = b_module.nodes
+        [freeze_b.node_map[&a_leaf].index]
         .value
         .expect("the leaf's value")
     else {
@@ -791,7 +801,10 @@ fn freeze_rejects_an_unregistered_dependency_key() {
     b.evaluate_node_deep(holder, None);
 
     let elsewhere = Arc::new(RwLock::new(Registry::new()));
-    let _ = elsewhere.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(1), [0; 32]);
+    let _ = elsewhere
+        .write()
+        .unwrap()
+        .freeze_mapped(&b, ModuleKey::from_raw(1), [0; 32]);
 }
 
 #[test]
@@ -812,7 +825,10 @@ fn static_apply_keeps_foreign_items_in_place() {
     let n20 = u128_node(&mut a, ablock, 20);
     let arr = array_node(&mut a, ablock, &[n10, n20], None);
     a.evaluate_node_deep(arr, None);
-    let freeze_a = registry.write().unwrap().freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
+    let freeze_a = registry
+        .write()
+        .unwrap()
+        .freeze_mapped(&a, ModuleKey::from_raw(1), [0; 32]);
     let arr_sref = StaticNodeId {
         module: freeze_a.key,
         index: freeze_a.node_map[&arr],
@@ -828,16 +844,17 @@ fn static_apply_keeps_foreign_items_in_place() {
     let ret = b.add_node(body, None, None);
     b.write_node_value(
         ret,
-        Some(TestValue::LowValue(LowValue::Array(
-            b.alloc_array(
-                &[item(param), ArrayItem::new(AnyNodeId::Static(arr_sref))],
-                body,
-            ),
-        ))),
+        Some(TestValue::LowValue(LowValue::Array(b.alloc_array(
+            &[item(param), ArrayItem::new(AnyNodeId::Static(arr_sref))],
+            body,
+        )))),
     );
     let (func_node, _) = wrap_function(&mut b, body, ret, param);
     b.evaluate_node_deep(ret, None);
-    let freeze_b = registry.write().unwrap().freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
+    let freeze_b = registry
+        .write()
+        .unwrap()
+        .freeze_mapped(&b, ModuleKey::from_raw(2), [0; 32]);
 
     let mut imp = Registry::new_module(&registry);
     let root = imp.add_block(None);

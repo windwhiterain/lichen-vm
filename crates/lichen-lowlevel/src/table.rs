@@ -90,7 +90,10 @@ impl<P: Program> Module<P> {
         match key {
             Dyn(node) => {
                 self.evaluate_node_forced(node, None);
-                if self.nodes[node].evaluated_deep.is_some_and(|e| e.parameterized) {
+                if self.nodes[node]
+                    .evaluated_deep
+                    .is_some_and(|e| e.parameterized)
+                {
                     return None;
                 }
             }
@@ -122,15 +125,16 @@ impl<P: Program> Module<P> {
         let h = match value.as_enum() {
             Some(LowValue::USize(n)) => mix(n as u64),
             // A string key hashes by its byte content.
-            Some(LowValue::Str(s)) => mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64))),
+            Some(LowValue::Str(s)) => {
+                mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64)))
+            }
             Some(LowValue::None) => NONE_TOKEN,
             Some(LowValue::Parameterized) => PARAM_TOKEN,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => mix(id_hash(function)),
             Some(LowValue::Function(AnyFunctionId::Static(sref))) => mix(id_hash(sref)),
-            Some(LowValue::Array(array)) => array
-                .items()
-                .iter()
-                .fold(ARRAY_SEED, |h, item| mix(h ^ self.hash_inner(item.node, path, depth + 1))),
+            Some(LowValue::Array(array)) => array.items().iter().fold(ARRAY_SEED, |h, item| {
+                mix(h ^ self.hash_inner(item.node, path, depth + 1))
+            }),
             // A table keyed by identity (user directive) — the payload's
             // identity, matching [`AnyHandle`]'s `PartialEq`.
             Some(LowValue::Table(table)) => mix(match table {

@@ -19,7 +19,6 @@ pub enum Directive {
     Metadata { name: String, value: String },
 }
 
-
 /// Parse a block-interior token stream.  Returns each directive with the
 /// byte offset (within the interior) of its first token, or the
 /// (byte-offset, message) for the first error (the block is small, so
@@ -42,7 +41,7 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                 return Err(vec![(
                     tokens[i].range.0,
                     format!("expected a name, found {}", k.describe()),
-                )])
+                )]);
             }
         };
         i += 1;
@@ -65,7 +64,7 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                             tokens,
                             i,
                             format!("expected a path after import, found {}", found(k)),
-                        )])
+                        )]);
                     }
                 };
                 i += 1;
@@ -81,7 +80,7 @@ pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String
                     tokens,
                     i,
                     format!("expected a string value, found {}", found(k)),
-                )])
+                )]);
             }
         }
     }

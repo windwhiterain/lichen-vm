@@ -107,10 +107,7 @@ fn a_table_flows_through_a_function() {
     // A table literal inside a function body: the key is concrete at build,
     // the value stays a lazy reference to the parameter, and the apply
     // clones the table (entries re-pointed at the call's clones).
-    assert_eq!(
-        usize_of(&evaluate("f = x => table{ 1 :: x }; (f 5){1}")),
-        5
-    );
+    assert_eq!(usize_of(&evaluate("f = x => table{ 1 :: x }; (f 5){1}")), 5);
 }
 
 #[test]

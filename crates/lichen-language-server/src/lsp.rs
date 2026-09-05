@@ -16,8 +16,8 @@
 
 pub use lsp_types::{
     Diagnostic, DiagnosticSeverity, Position, Range, SemanticToken, SemanticTokenModifier,
-    SemanticTokens, SemanticTokensLegend, SemanticTokensOptions, SemanticTokensResult,
-    SemanticTokenType,
+    SemanticTokenType, SemanticTokens, SemanticTokensLegend, SemanticTokensOptions,
+    SemanticTokensResult,
 };
 
 use lichen_highlevel::ir::Span;
@@ -32,7 +32,11 @@ use lichen_highlevel::ir::Span;
 pub fn offset_of_span(line_starts: &[usize], span: Span) -> usize {
     let (line, col) = (span.0 as usize, span.1 as usize);
     if line == 0 || line > line_starts.len() {
-        return line_starts.len().checked_sub(1).map(|i| line_starts[i]).unwrap_or(0);
+        return line_starts
+            .len()
+            .checked_sub(1)
+            .map(|i| line_starts[i])
+            .unwrap_or(0);
     }
     line_starts[line - 1] + (col.saturating_sub(1))
 }
@@ -62,10 +66,7 @@ pub fn position_at_offset(source: &str, line_starts: &[usize], offset: usize) ->
 pub fn offset_from_position(source: &str, line_starts: &[usize], pos: Position) -> Option<usize> {
     let line = pos.line as usize;
     let line_start = *line_starts.get(line)?;
-    let line_end = line_starts
-        .get(line + 1)
-        .copied()
-        .unwrap_or(source.len());
+    let line_end = line_starts.get(line + 1).copied().unwrap_or(source.len());
     let text = &source[line_start..line_end.min(source.len())];
     // Walk `text` counting UTF-16 code units until we reach `character`.
     let mut units = 0usize;
@@ -97,7 +98,12 @@ pub fn span_of_offset(line_starts: &[usize], offset: usize) -> Span {
 pub fn range_from_span(source: &str, line_starts: &[usize], span: Span) -> Range {
     let start = offset_of_span(line_starts, span).min(source.len());
     // Advance one code point past `start` for the end.
-    let end = start + source[start..].chars().next().map(|c| c.len_utf8()).unwrap_or_else(|| source.len().saturating_sub(start).min(1));
+    let end = start
+        + source[start..]
+            .chars()
+            .next()
+            .map(|c| c.len_utf8())
+            .unwrap_or_else(|| source.len().saturating_sub(start).min(1));
     Range {
         start: position_at_offset(source, line_starts, start),
         end: position_at_offset(source, line_starts, end.min(source.len())),
@@ -200,7 +206,10 @@ pub fn encode_semantic_tokens(
         prev_start = start.character;
     }
     // Serialize as the flat `[deltaLine, deltaStart, length, type, modifiers]*`.
-    SemanticTokens { result_id: None, data }
+    SemanticTokens {
+        result_id: None,
+        data,
+    }
 }
 
 #[cfg(test)]
@@ -213,7 +222,13 @@ mod tests {
         let starts = lichen_language::lex::line_starts(source);
         // The `a` use in `b = a + 1` is at line 1, byte column 4 (0-based col 4).
         let pos = position_at_offset(source, &starts, starts[1] + 4);
-        assert_eq!(pos, Position { line: 1, character: 4 });
+        assert_eq!(
+            pos,
+            Position {
+                line: 1,
+                character: 4
+            }
+        );
         let back = offset_from_position(source, &starts, pos).expect("position in source");
         assert_eq!(back, starts[1] + 4);
     }
@@ -233,16 +248,32 @@ mod tests {
         let starts = lichen_language::lex::line_starts(source);
         let tokens = vec![
             // `a` at line 0 char 0.
-            SemanticTokenData { start: 0, end: 1, token_type: SemanticTokenType::VARIABLE, modifiers: Vec::new() },
+            SemanticTokenData {
+                start: 0,
+                end: 1,
+                token_type: SemanticTokenType::VARIABLE,
+                modifiers: Vec::new(),
+            },
             // `1` at line 0 char 4 (same line, so a delta_start).
-            SemanticTokenData { start: 4, end: 5, token_type: SemanticTokenType::NUMBER, modifiers: Vec::new() },
+            SemanticTokenData {
+                start: 4,
+                end: 5,
+                token_type: SemanticTokenType::NUMBER,
+                modifiers: Vec::new(),
+            },
             // `2` at line 1 char 4 (a new line, so an absolute delta_start).
-            SemanticTokenData { start: 10, end: 11, token_type: SemanticTokenType::NUMBER, modifiers: Vec::new() },
+            SemanticTokenData {
+                start: 10,
+                end: 11,
+                token_type: SemanticTokenType::NUMBER,
+                modifiers: Vec::new(),
+            },
         ];
         let encoded = encode_semantic_tokens(source, &starts, &tokens);
         assert_eq!(encoded.data.len(), 3);
         let legend = semantic_token_legend();
-        let ty = |t: &SemanticTokenType| legend.token_types.iter().position(|x| x == t).unwrap() as u32;
+        let ty =
+            |t: &SemanticTokenType| legend.token_types.iter().position(|x| x == t).unwrap() as u32;
         assert_eq!(encoded.data[0].delta_line, 0);
         assert_eq!(encoded.data[0].delta_start, 0);
         assert_eq!(encoded.data[0].length, 1);

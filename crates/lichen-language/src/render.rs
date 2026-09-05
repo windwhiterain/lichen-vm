@@ -158,10 +158,7 @@ where
 
     /// A printer that also knows the checker's arrow shapes, so bare
     /// `[in, out]` shapes render as `in -> out`.
-    pub fn new_with_arrows(
-        module: &'a Module<P>,
-        arrows: Option<&'a HashSet<NodeId>>,
-    ) -> Self {
+    pub fn new_with_arrows(module: &'a Module<P>, arrows: Option<&'a HashSet<NodeId>>) -> Self {
         Self::new_with(module, arrows, None)
     }
 
@@ -742,7 +739,12 @@ where
     /// against the shape — a tuple reads `(v1, ..., vn)` (a single element
     /// `(v1,)`), an array `[v1, ..., vn]`, a struct instance its field tuple
     /// `(v1, ..., vn)`.  `None` when the value or the shape does not fit.
-    fn instance(&mut self, value: P::Value, shape_node: AnyNodeId, marker: P::Value) -> Option<String> {
+    fn instance(
+        &mut self,
+        value: P::Value,
+        shape_node: AnyNodeId,
+        marker: P::Value,
+    ) -> Option<String> {
         let Some(LowValue::Array(values)) = value.as_enum() else {
             return None;
         };
@@ -775,7 +777,10 @@ where
         // A struct marker is the two-field `TypeStruct{id, names}` value, a
         // 2-element array.  No other kind's marker is an array, so an array
         // marker names a struct.
-        if marker.as_enum().is_some_and(|m| matches!(m, LowValue::Array(_))) {
+        if marker
+            .as_enum()
+            .is_some_and(|m| matches!(m, LowValue::Array(_)))
+        {
             // The shape is the positional field-type list (the nominal id
             // lives in the struct marker), so the element types are the fields.
             let fields = shape;
@@ -847,15 +852,16 @@ where
     /// not a struct kind.  Used to render a struct instance whose value reads
     /// against the field-type shape.
     fn struct_marker_value(&self, kind_node: AnyNodeId) -> Option<P::Value> {
-        let Some(LowValue::Array(kind)) = self
-            .module
-            .node_value(kind_node)
-            .and_then(|v| v.as_enum())
+        let Some(LowValue::Array(kind)) =
+            self.module.node_value(kind_node).and_then(|v| v.as_enum())
         else {
             return None;
         };
         let marker = self.module.node_value(kind.items()[0].node)?;
-        if marker.as_enum().is_some_and(|m| matches!(m, LowValue::Array(_))) {
+        if marker
+            .as_enum()
+            .is_some_and(|m| matches!(m, LowValue::Array(_)))
+        {
             Some(marker)
         } else {
             None
@@ -1046,9 +1052,7 @@ where
     let Some(names_item) = marker_items.get(1) else {
         return out;
     };
-    let Some(LowValue::Table(table)) = module
-        .node_value(names_item.node)
-        .and_then(|v| v.as_enum())
+    let Some(LowValue::Table(table)) = module.node_value(names_item.node).and_then(|v| v.as_enum())
     else {
         return out;
     };
@@ -1095,10 +1099,7 @@ where
 
 /// Render a struct field list with per-field names (`name :: T` for a named
 /// field, `T` for an unnamed one).
-fn struct_fields_with_names(
-    fields: &[String],
-    names: &[Option<&'static str>],
-) -> Vec<String> {
+fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -> Vec<String> {
     fields
         .iter()
         .enumerate()
@@ -1286,7 +1287,9 @@ pub fn checker_message(printer: &mut TypePrinter, d: &CheckerDiag<LangProgram>) 
             };
             format!("assertion failed: expected 1, found {value}")
         }
-        DiagKind::NonTerminating => "this binding never terminates (non-terminating recursion)".to_string(),
+        DiagKind::NonTerminating => {
+            "this binding never terminates (non-terminating recursion)".to_string()
+        }
     }
 }
 
