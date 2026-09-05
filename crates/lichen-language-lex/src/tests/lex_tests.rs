@@ -89,6 +89,22 @@ fn int_and_type_are_keywords_but_not_prefixes() {
 }
 
 #[test]
+fn an_underscore_lexes_as_a_placeholder_token() {
+    assert_eq!(kinds("_"), vec![TokenKind::Placeholder, TokenKind::Eof]);
+    // A bare `_` is a placeholder, but `_` inside a longer identifier is just
+    // part of the name — `_` is never a valid binder/identifier on its own.
+    assert_eq!(
+        kinds("_a a_ _1"),
+        vec![
+            TokenKind::Name("_a".to_string()),
+            TokenKind::Name("a_".to_string()),
+            TokenKind::Name("_1".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
 fn spans_track_line_and_column() {
     let token = lex_one("  x");
     assert_eq!(token.span, (1, 3));

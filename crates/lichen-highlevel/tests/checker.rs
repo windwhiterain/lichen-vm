@@ -116,7 +116,7 @@ fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
         length,
     })
 }
-/// `_` — an inference placeholder in type position.
+/// `_` — an inference placeholder hole in any position (type or value).
 fn hole(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Placeholder)
 }

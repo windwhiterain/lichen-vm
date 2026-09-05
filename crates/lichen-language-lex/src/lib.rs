@@ -56,6 +56,10 @@ pub enum TokenKind {
     Str(String),
     /// An identifier, never a keyword.
     Name(String),
+    /// `_` — an inference placeholder hole, usable in *any* position (type or
+    /// value).  It is never a name: it cannot be bound and cannot be a lambda
+    /// parameter.
+    Placeholder,
     /// The Int type constant.
     KwInt,
     /// The string type constant.
@@ -144,6 +148,7 @@ impl TokenKind {
             TokenKind::Int(_) => "an integer literal".to_string(),
             TokenKind::Str(_) => "a string literal".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
+            TokenKind::Placeholder => "'_'".to_string(),
             TokenKind::KwInt => "'Int'".to_string(),
             TokenKind::KwString => "'string'".to_string(),
             TokenKind::KwType => "'Type'".to_string(),
@@ -635,6 +640,7 @@ fn raw_to_kind(
             "return" => TokenKind::KwReturn,
             "pub" => TokenKind::KwPub,
             "type_of" => TokenKind::KwTypeOf,
+            "_" => TokenKind::Placeholder,
             _ => TokenKind::Name(slice.to_string()),
         }),
         RawToken::TildeLit => {

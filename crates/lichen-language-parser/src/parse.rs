@@ -797,6 +797,11 @@ fn atom_parser<'a>(
             // consumed here — an adjacent `(` falls to the postfix chain
             // (a slot read) exactly as after any name.
             token(TokenKind::KwTypeOf).map(|t| Expr::TypeOf(t.span)),
+            // `_` — an inference placeholder in any position (type or value).
+            // It is its own token, never a name, so it can appear as a value
+            // expression too (`f _`, `(1, _)`, `_ : Int`) but cannot be bound
+            // or used as a lambda parameter.
+            token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),
             name().map(|(n, span)| Expr::Name(n, span)),
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
@@ -1397,13 +1402,13 @@ fn if_expr<'a>(
 /// Reinterpret the parser's single-mode AST in the language's two modes:
 /// the annotation's right side (and a struct's fields) are type expressions,
 /// everywhere else is a term.  The parser builds everything as a term
-/// (`(a, b)` a [`Expr::Tuple`], `_` a [`Expr::Name`]); this pass flips the
-/// mode-sensitive nodes — `Tuple` → `TypeTuple`, `_` → [`Expr::Placeholder`]
-/// — inside type positions.
+/// (`(a, b)` a [`Expr::Tuple`]); this pass flips the mode-sensitive node —
+/// `Tuple` → `TypeTuple` — inside type positions.  `_` is *not* mode-sensitive:
+/// it lexes as its own token and is always a [`Expr::Placeholder`], in type
+/// and value positions alike.
 fn apply_type_mode(program: Program) -> Program {
     fn expr(e: Expr, type_mode: bool) -> Expr {
         match e {
-            Expr::Name(name, span) if type_mode && name == "_" => Expr::Placeholder(span),
             Expr::Lambda {
                 parameter,
                 parameter_span,
