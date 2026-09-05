@@ -22,10 +22,12 @@
 //!   so a later `? b` overrides an earlier `? a` naturally.
 //!
 //! The doc value is just any first-class lichen value (a struct instance), so
-//! the type system validates it like any other value.  The checker's label
-//! slot stores the `?` expression's `[value, type]` term pair, so the
-//! renderer can walk the value's whole type chain — a doc's *field names* come
-//! from the struct type, not a hardcoded shape.
+//! the type system validates it like any other value.  The checker's slot for
+//! the label is the `?` expression's `[value, type]` term pair — the uniform
+//! slot shape shared with a constraint (a perspective's lattice value sits in
+//! the same pair's element 0) — so the renderer can walk the value's whole
+//! type chain: a doc's *field names* come from the struct type, not a
+//! hardcoded shape.
 
 use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;

@@ -4,10 +4,13 @@
 //! expression carries; an attribute's **lowering behaviour** lives in an
 //! [`AttrExt`].  The checker is attribute-agnostic: it reads the schema,
 //! builds the runtime pair at exactly the schema's arity, and pads an absent
-//! attribute with the extension's `missing_value` at every unify site — it
-//! never names "perspective = gcd, missing = 0".  Those semantics live only in
-//! a concrete attribute (in a language layer, e.g. `Perspective` in
-//! `lichen-language`) and in the operator it emits.
+//! attribute with the extension's `missing_slot` at every unify site — it
+//! never names "perspective = gcd, missing = 0".  Every attribute's slot is
+//! the annotation value's `[value, type]` term pair (the uniform shape): a
+//! perspective's lattice value is that pair's element 0, a doc's metadata is
+//! the whole pair.  Those semantics live only in a concrete attribute (in a
+//! language layer, e.g. `Perspective` in `lichen-perspective`) and in the
+//! operator it emits.
 //!
 //! A concrete attribute is a marker implementing [`AttrSpec`]; highlevel ships
 //! two of them — `NoAttr` (the default, an empty attribute whose extension is
@@ -51,6 +54,19 @@ where
     /// unify.
     fn missing_value(&self) -> LowValue;
 
+    /// The slot node read for an *absent* occurrence of this attribute.
+    ///
+    /// The default builds a `[missing_value, int]` term pair — the uniform
+    /// slot shape every attribute uses (the checker always pushes the
+    /// annotation value's `[value, type]` pair, so an absent slot must be the
+    /// same shape).  A perspective therefore reads `[0, int]` (its missing
+    /// lattice value in value position).  An attribute whose missing value is
+    /// not a term expression overrides this.
+    fn missing_slot(&self, ctx: &mut dyn Ctx<P>) -> NodeId {
+        let value = ctx.value_node(P::Value::from(self.missing_value()));
+        ctx.pair(value, ctx.int_type())
+    }
+
     /// Combine the direct sub-expressions' attribute slots into one node
     /// (a perspective → the language's meet operator over the operand array, a
     /// lazy operand → `Parameterized`).  `children` are the already-compiled
@@ -81,13 +97,16 @@ where
     }
 
     /// Whether this attribute is a **label**: metadata that attaches to an
-    /// expression but carries no constraint.  A label contributes no apply-time
-    /// constraint slot, and its runtime pair slot is the annotation value's
-    /// `[value, type]` term pair (so its renderer can walk the value's type
-    /// chain).  Whether a label *conflicts* is decided solely by
-    /// [`Self::is_subtype`] — a metadata attribute overrides it to `true`, so
-    /// the checker never has to special-case a label's unification, only its
-    /// metadata slot.  A constraint attribute (e.g. `Perspective`) returns
+    /// expression but carries no constraint.  The checker's slot handling is
+    /// uniform — every attribute's runtime pair slot is the annotation value's
+    /// `[value, type]` term pair (a constraint reads its lattice value from
+    /// element 0; a label's renderer walks the value's whole type chain) — so
+    /// `is_label` selects only the *semantic* difference: a label contributes
+    /// no apply-time constraint slot and is never validated against the
+    /// provider, while a constraint is.  Whether a label *conflicts* is
+    /// decided solely by [`Self::is_subtype`] — a metadata attribute overrides
+    /// it to `true`, so the checker never has to special-case a label's
+    /// unification.  A constraint attribute (e.g. `Perspective`) returns
     /// `false`, keeping its lattice combine/unify behaviour.
     ///
     /// Default `false` — only a metadata attribute overrides it.  The checker

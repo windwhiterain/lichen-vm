@@ -13,7 +13,7 @@ use lichen_highlevel::attr::{AttrExt, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
-use lichen_lowlevel::{BlockId, LowValue, Module, NodeId, OperatorExt, Program};
+use lichen_lowlevel::{AnyNodeId, BlockId, LowValue, Module, NodeId, OperatorExt, Program};
 use lichen_utils::extend::AsEnum;
 
 /// The perspective's operator leaf: the n-ary `gcd` meet.
@@ -111,11 +111,24 @@ where
                 };
                 let mut acc = 0;
                 for item in operands.items() {
+                    // A child slot is a `[value, type]` term pair; the lattice
+                    // value is its element 0.  A bare value (an un-annotated
+                    // edge that never became a pair) is accepted too.
                     let Some(n) = module
                         .node_value(item.node)
                         .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
                         .and_then(|value| match value {
                             LowValue::USize(n) => Some(n),
+                            LowValue::Array(items) => {
+                                let elem0 = items.items().first()?;
+                                match module
+                                    .node_value(elem0.node)
+                                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
+                                {
+                                    Some(LowValue::USize(n)) => Some(n),
+                                    _ => None,
+                                }
+                            }
                             _ => None,
                         })
                     else {
@@ -143,30 +156,42 @@ where
     P::Operator: From<GcdOp>,
 {
     /// The slot this attribute occupies below the `[value, type]` head
-    /// (a first attribute → 2, so the pair is `[value, type, persp]`).
+    /// (a first attribute → 2, so the pair is
+    /// `[value, type, [persp value, persp type]]` — the slot is itself a
+    /// `[value, type]` term pair, the uniform slot shape).
     fn slot(&self) -> usize {
         2
     }
 
     /// `0` — neutral in `gcd` (the meet identity), concrete in equality
-    /// unify.
+    /// unify.  The slot's absent form is `[0, int]` (see
+    /// [`AttrExt::missing_slot`]).
     fn missing_value(&self) -> LowValue {
         LowValue::USize(0)
     }
 
     /// Perspective combine: a single `Gcd` op node over the children's
-    /// attribute slots (the n-ary gcd meet).  An absent child reads `0`
-    /// (padded by the checker), which is neutral, so `(1 # 4 + 2) # 4`
-    /// derives `gcd(4, 0) = 4`.
+    /// attribute slots (the n-ary gcd meet), wrapped as a `[value, type]`
+    /// term pair — the uniform slot shape.  An absent child reads `[0, int]`
+    /// (padded by the checker), whose value `0` is neutral, so
+    /// `(1 # 4 + 2) # 4` derives `gcd(4, 0) = 4`.  The `Gcd` operator reads
+    /// each child's lattice value from its pair's element 0.
     fn combine(&self, ctx: &mut dyn Ctx<P>, children: &[NodeId]) -> NodeId {
         let operands = ctx.array_node(children);
-        ctx.op_node(P::Operator::from(GcdOp::Gcd), Some(operands))
+        let gcd = ctx.op_node(P::Operator::from(GcdOp::Gcd), Some(operands));
+        ctx.pair(gcd, ctx.int_type())
     }
 
     /// Perspective unify: two slots must unify, or — when they differ — the
     /// declared (`b`) must be a *subtype* of the value's (`a`) under the
     /// divisibility order.  An absent side reads `0` before this is called.
+    ///
+    /// Each slot is a `[value, type]` term pair; the lattice value is element
+    /// 0.  The unify compares the *values* (so the diagnostic and the subtype
+    /// read bare `4`/`8`, not `[4, Int]`/`[8, Int]`).
     fn unify_slots(&self, ctx: &mut dyn Ctx<P>, a: NodeId, b: NodeId, loc: Loc) {
+        let a = slot_value_node(ctx, a);
+        let b = slot_value_node(ctx, b);
         ctx.check_unify_relaxed(a, b, loc, DiagKind::Attribute, &|ctx, value, declared| {
             // `a` (first) is the value's actual perspective, `b` (second) the
             // declared one.  A value uniform over `value` threads is usable
@@ -181,26 +206,70 @@ where
     /// `sub ⊑ super ⟺ sub | super` under the divisibility order, where `0`
     /// is the top ("uniform over all threads", the `∞` fold): `sub = 0` is
     /// satisfied only by `super = 0`, and `super = 0` satisfies any `sub`.
-    /// Implementation reads the two slot values (an unbound value — a
-    /// runtime-dependent perspective — is not a subtype).
+    /// Implementation reads the two slot values — each slot is a
+    /// `[value, type]` term pair, so the lattice value is its element 0 (a
+    /// bare value — an un-annotated edge — is accepted too).  An unbound
+    /// value (a runtime-dependent perspective) is not a subtype.
     fn is_subtype(&self, ctx: &dyn Ctx<P>, sub: NodeId, sup: NodeId) -> bool {
-        let (Some(sub), Some(sup)) = (ctx.class_value(sub), ctx.class_value(sup)) else {
-            return false;
+        let value_of = |node: NodeId| -> Option<usize> {
+            let value = ctx.class_value(node)?;
+            match AsEnum::<LowValue>::as_enum(&value) {
+                Some(LowValue::USize(n)) => Some(n),
+                Some(LowValue::Array(items)) => match items.items().first()?.node {
+                    AnyNodeId::Dynamic(n) => {
+                        let elem0 = ctx.class_value(n)?;
+                        match AsEnum::<LowValue>::as_enum(&elem0) {
+                            Some(LowValue::USize(n)) => Some(n),
+                            _ => None,
+                        }
+                    }
+                    AnyNodeId::Static(_) => None,
+                },
+                _ => None,
+            }
         };
-        let (Some(LowValue::USize(sub)), Some(LowValue::USize(sup))) =
-            (AsEnum::<LowValue>::as_enum(&sub), AsEnum::<LowValue>::as_enum(&sup))
-        else {
+        let (Some(sub), Some(sup)) = (value_of(sub), value_of(sup)) else {
             return false;
         };
         divides(sub, sup)
     }
 
     /// A leaf perspective spells `# n`; a compound's gcd meet (or an unbound
-    /// value) has no single spelling and is not shown.
+    /// value) has no single spelling and is not shown.  The slot is a
+    /// `[value, type]` term pair, so the lattice value is its element 0.
     fn render(&self, module: &Module<P>, slot: NodeId) -> Option<String> {
-        match self.slot_value(module, slot)? {
-            LowValue::USize(n) => Some(format!("# {n}")),
-            _ => None,
-        }
+        let slot_value = self.slot_value(module, slot)?;
+        let n = match slot_value {
+            LowValue::USize(n) => n,
+            LowValue::Array(items) => match module
+                .node_value(items.items().first()?.node)
+                .and_then(|v| v.as_enum())
+            {
+                Some(LowValue::USize(n)) => n,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some(format!("# {n}"))
+    }
+}
+
+/// The lattice-value node of a slot: a `[value, type]` term pair's element 0
+/// (the bare value), or the slot itself when it is already bare — an
+/// un-annotated edge that never became a pair.  Used so the apply-time check
+/// and its diagnostics read the bare `4`, not the whole `[4, Int]`.
+fn slot_value_node<P: HighProgram>(ctx: &dyn Ctx<P>, slot: NodeId) -> NodeId
+where
+    P::Value: ValueType + AsEnum<LowValue>,
+{
+    let Some(value) = ctx.class_value(slot) else {
+        return slot;
+    };
+    match AsEnum::<LowValue>::as_enum(&value) {
+        Some(LowValue::Array(items)) => match items.items().first().map(|item| item.node) {
+            Some(AnyNodeId::Dynamic(n)) => n,
+            _ => slot,
+        },
+        _ => slot,
     }
 }

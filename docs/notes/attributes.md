@@ -3,7 +3,7 @@
 > Status: current
 > Points at: `crates/lichen-highlevel/src/attr.rs` (the extension point), `ir.rs`
 > (the `Schema`), `checker.rs` (`check_unify_relaxed`), and
-> `crates/lichen-language/src/program.rs` (the `Perspective` attribute + `GcdOp`).
+> `crates/lichen-perspective/src/perspective.rs` (the `Perspective` attribute + `GcdOp`).
 > Inspired by [the typed-perspectives paper](../reference/perspectives-paper.md).
 
 A program already wraps every expression in a `[value, type]` pair. The attribute
@@ -24,8 +24,13 @@ Schema<A> { tail: Vec<A> }    // [] => [value, type]; [Perspective] => [value, t
 `e # p` stamps the expression's schema with the attribute tail, so the expression is
 lowered to a **3-wide pair** instead of a 2-wide one. **Nothing has a fixed arity** —
 the highlevel reads the schema and builds the pair at exactly that arity, padding an
-absent attribute with the extension's `missing_value` at every unify site so the
+absent attribute with the extension's `missing_slot` at every unify site so the
 positional lowlevel unify just works.
+
+Every attribute's slot is the annotation value's **`[value, type]` term pair** — the
+uniform shape. A constraint reads its lattice value from that pair's element 0; a label
+uses the whole pair. This is what lets the checker's slot handling be attribute-agnostic
+(`# 4` is a real expression `4 : Int`; `? doc` is a real expression `doc : Doc`).
 
 ## The extension point (`AttrExt`)
 
@@ -36,12 +41,13 @@ that defines the attribute; highlevel ships the inert `NoAttr` marker.
 
 ```
 AttrSpec     marker bound (Copy + PartialEq + Eq + Debug)
-AttrExt<P>   slot() / missing_value() / combine() / unify_slots() / is_subtype()
+AttrExt<P>   slot() / missing_value() / missing_slot() / combine() /
+             unify_slots() / is_subtype()
 ```
 
 ## Perspective
 
-`Perspective` (in `lichen-language`) is the first attribute: a plain non-negative
+`Perspective` (in `lichen-perspective`) is the first attribute: a plain non-negative
 integer whose lattice is **divisibility**, not numeric size. "Uniform over `n` aligned
 threads."
 
@@ -152,5 +158,7 @@ label's shape is hardcoded.
 - Subtype relaxation was originally a stage-2 non-goal; it is now implemented via
   `check_unify_relaxed` + `AttrExt::is_subtype`.
 - A label's runtime render slot carries the annotation expression's `[value, type]`
-  pair, so the renderer walks the value's whole type chain; a constraint slot keeps its
-  bare lifted value (the lattice machinery reads `attr[e]`, never the render slot).
+  pair, and a constraint's does too — the one uniform slot shape. A constraint reads its
+  lattice value from that pair's element 0 (the checker stores the pair in `attr[e]`,
+  the apply-time unify and subtype read the value); a label reads the whole pair (its
+  renderer walks the value's type chain).

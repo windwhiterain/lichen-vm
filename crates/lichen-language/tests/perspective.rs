@@ -14,7 +14,7 @@
 //! `1 # 4 + 2 # 6` string is the same semantics under that reading.
 
 use lichen_language::compile;
-use lichen_lowlevel::LowValue;
+use lichen_lowlevel::{AnyNodeId, LowValue};
 use lichen_utils::extend::AsEnum;
 
 /// Whether the source compiles *and* passes every check with no diagnostics.
@@ -29,13 +29,29 @@ fn message(source: &str) -> String {
 
 /// The root expression's static perspective slot, evaluated to its value.
 /// Only meaningful for a program whose root is itself `# p`-annotated
-/// (`build.attr[root]` is the checker's lowered slot).
+/// (`build.attr[root]` is the checker's lowered slot — a `[value, type]` term
+/// pair, whose lattice value is element 0).
 fn root_persp(source: &str) -> usize {
     let build = compile(source).build.expect("the program must compile clean");
     let root = build.ir.root;
     let slot = build.attr[root].expect("the root carries a perspective slot");
     let mut module = build.module;
     let value = module.evaluate_node_deep(slot, None);
+    // A slot is a `[value, type]` term pair; the lattice value is element 0.
+    let value = match value.as_enum() {
+        Some(LowValue::Array(items)) => {
+            let node = match items.items().first().map(|item| item.node) {
+                Some(AnyNodeId::Dynamic(n)) => n,
+                _ => panic!("expected a dynamic perspective value"),
+            };
+            module.evaluate_node_deep(node, None)
+        }
+        other => {
+            // A bare slot (not yet a pair) already holds the lattice value.
+            let _ = other;
+            value
+        }
+    };
     let Some(LowValue::USize(n)) = value.as_enum() else {
         panic!("expected a USize perspective slot")
     };

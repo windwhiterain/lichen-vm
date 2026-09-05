@@ -151,10 +151,6 @@ where
     array_type_marker: NodeId,
     type_struct_marker: NodeId,
     table_type_marker: NodeId,
-    /// The shared `USize(0)` constant — the attribute attribute's
-    /// `missing()` value, read for any expression whose schema has no
-    /// attribute slot.  Reused so `attr_or_missing` adds no node per use.
-    zero_marker: NodeId,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
     /// The shared `[string, Type]` type expression every `Str` literal's pair
@@ -335,7 +331,6 @@ where
             array_type_marker: NodeId::default(),
             type_struct_marker: NodeId::default(),
             table_type_marker: NodeId::default(),
-            zero_marker: NodeId::default(),
             int_type: NodeId::default(),
             string_type: NodeId::default(),
             type_expr: NodeId::default(),
@@ -502,7 +497,6 @@ where
         self.array_type_marker = self.alloc_node(root, None, Some(P::Value::array_type_marker()));
         self.type_struct_marker = self.alloc_node(root, None, Some(P::Value::type_struct_marker()));
         self.table_type_marker = self.alloc_node(root, None, Some(P::Value::table_type_marker()));
-        self.zero_marker = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
@@ -728,8 +722,8 @@ where
     }
 
     /// The value expression's existing attribute slot for `marker` — the node
-    /// the value's runtime pair carries at that attribute's position (a
-    /// constraint's bare lattice value, a label's `[value, type]` pair).  Used
+    /// the value's runtime pair carries at that attribute's position (always a
+    /// `[value, type]` term pair, for a constraint and a label alike).  Used
     /// to *preserve* a slot an annotation does not spell (`(x # 8 ? doc) # 4`
     /// keeps the doc).  `None` when the value's schema has no such slot.
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
@@ -765,12 +759,25 @@ where
         index
     }
 
-    /// The attribute slot of an expression, reading the attribute's
-    /// `missing()` value (`USize(0)` — neutral in `gcd`) for an expression
-    /// whose schema has no attribute slot.  Only meaningful after the
-    /// expression has been compiled.
-    fn attr_or_missing(&self, e: ExprId) -> NodeId {
-        self.attr[e].unwrap_or(self.zero_marker)
+    /// The attribute slot of an expression for `marker` — its own slot when it
+    /// carries the attribute, else the attribute's *missing* slot (built as a
+    /// `[missing_value, int]` term pair, the uniform slot shape).  Only
+    /// meaningful after the expression has been compiled.  The marker names
+    /// which attribute the caller is asking about; the missing slot is the
+    /// attribute's own (`[0, int]` for a perspective).
+    fn attr_or_missing(&mut self, e: ExprId, marker: &P::Attr) -> NodeId {
+        if let Some(slot) = self.attr[e] {
+            return slot;
+        }
+        self.missing_slot_of(marker)
+    }
+
+    /// The attribute's *missing* slot node — built fresh through the
+    /// extension's `AttrExt` (a perspective reads `[0, int]`).  Used where a
+    /// slot is needed for an expression that does not carry the attribute, or
+    /// where the *declared* side of a check is the absent value.
+    fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
+        (self.attr_ext)(marker).missing_slot(self)
     }
 
     /// The value currently held by `node`'s equality class — the
@@ -1247,12 +1254,17 @@ where
         // The parameter *is* the pair `[value, type]`; the cells live in the
         // function's scope so the apply's clone yields fresh cells per call
         // (that is what makes a polymorphic value usable at several types).
-        // A `x # n` parameter carries a third attribute slot (a fresh cell
-        // bound to the attribute value in body scope), so the pair becomes
-        // the schema-shaped `[value, type, attribute]`.
-        let attr_cell = parameter_attribute.is_some().then(|| self.fresh_cell());
+        // A `x # n` parameter carries a third attribute slot — itself a
+        // `[value, type]` term pair (two fresh cells), the uniform slot shape
+        // — so the pair becomes the schema-shaped
+        // `[value, type, [attribute value, attribute type]]`.
+        let attr_cell = parameter_attribute.is_some().then(|| {
+            let value_cell = self.fresh_cell();
+            let type_cell = self.fresh_cell();
+            (value_cell, type_cell, self.array_node(return_block, &[value_cell, type_cell]))
+        });
         let param = match attr_cell {
-            Some(attr) => {
+            Some((_, _, attr)) => {
                 self.attr[parameter] = Some(attr);
                 self.array_node(return_block, &[value_cell, type_cell, attr])
             }
@@ -1292,7 +1304,9 @@ where
         // its scope and retag them, exactly where the helper would have put
         // them had the shell existed first.
         let mut param_parts = vec![value_cell, type_cell];
-        if let Some(attr) = attr_cell {
+        if let Some((attr_value, attr_type, attr)) = attr_cell {
+            param_parts.push(attr_value);
+            param_parts.push(attr_type);
             param_parts.push(attr);
         }
         // The parameter pair itself (`param`) belongs to this function's
@@ -1372,7 +1386,10 @@ where
         // [`Checker::function_param_attr`].
         if let Some(parameter_attribute) = parameter_attribute {
             self.check_expr(parameter_attribute);
-            let declared = self.value_of(parameter_attribute);
+            // The declared value is the annotation expression's `[value, type]`
+            // term pair — the uniform slot shape the apply's check compares
+            // against the argument's slot.
+            let declared = self.term[parameter_attribute].expect("an attribute expr is compiled");
             // The parameter's schema tail[0] names the attribute; the apply's
             // check resolves its `AttrExt` from this marker.
             let marker = self.ir.schema(parameter).tail[0];
@@ -1431,22 +1448,24 @@ where
         let function_value = self.value_of(function);
         // The apply's argument operand is normalized to the function's
         // declared *parameter* arity, slot-aligned: value@0, type@1, and — for
-        // a parameter carrying the attribute attribute — the argument's
-        // attribute@2 (read `missing()` = `0` when absent).  The lowlevel
-        // apply's positional unify then compares value-to-value and
-        // type-to-type, matching the parameter pair's shape.  The attribute
+        // a parameter carrying the attribute — the argument's attribute@2
+        // (the `[value, type]` slot; read the missing `[0, int]` when absent).
+        // The lowlevel apply's positional unify then compares value-to-value
+        // and type-to-type, matching the parameter pair's shape.  The attribute
         // equality is checked separately below (the per-apply parameter clone
-        // resets its own attribute cell, so it cannot enforce the template's
+        // resets its own attribute cells, so it cannot enforce the template's
         // declared value).
         let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
         let argument_type = self.ty[argument].unwrap();
-        let argument_persp = self.attr_or_missing(argument);
-        let argument_pair = match param_persp {
-            Some(_) => self.array_node(
-                self.current_block,
-                &[argument_value, argument_type, argument_persp],
-            ),
+        let argument_pair = match &param_persp {
+            Some((marker, _)) => {
+                let argument_persp = self.attr_or_missing(argument, marker);
+                self.array_node(
+                    self.current_block,
+                    &[argument_value, argument_type, argument_persp],
+                )
+            }
             None => self.array_node(self.current_block, &[argument_value, argument_type]),
         };
         // Function-ness guard: catch *concretely* non-function types
@@ -1483,16 +1502,18 @@ where
         // extension reaches neither branch (no schema carries an attribute).
         if let Some((param_marker, param_slot)) = param_persp {
             let ext = (self.attr_ext)(&param_marker);
-            let arg_missing = self.attr_or_missing(argument);
+            let arg_missing = self.attr_or_missing(argument, &param_marker);
             let loc2 = self.loc(e, 2);
             ext.unify_slots(self, arg_missing, param_slot, loc2);
         } else if self.attr[argument].is_some() {
-            let marker = &self.ir.schema(argument).tail[0];
-            let ext = (self.attr_ext)(marker);
+            let marker = self.ir.schema(argument).tail[0];
+            let ext = (self.attr_ext)(&marker);
             let found_attr = self.attr[argument].unwrap();
-            let zero_marker = self.zero_marker;
+            // The declared side of an unannotated parameter is the attribute's
+            // missing slot — a `[0, int]` term pair, the uniform slot shape.
+            let missing = self.missing_slot_of(&marker);
             let loc2 = self.loc(e, 2);
-            ext.unify_slots(self, found_attr, zero_marker, loc2);
+            ext.unify_slots(self, found_attr, missing, loc2);
         }
         // The result's type cell: unbound unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime
@@ -2014,17 +2035,21 @@ where
                     .expect("a spelled attribute slot has a value expression");
                 attr_idx += 1;
                 self.check_expr(pe);
-                let attr_val = self.value_of(pe);
+                // The slot is the annotation value's `[value, type]` term pair
+                // — the ONE slot shape every attribute shares.  A constraint
+                // (e.g. `Perspective`) reads its lattice value from element 0;
+                // a label (e.g. `Doc`) uses the whole pair (its renderer walks
+                // the value's type chain).  The checker never special-cases a
+                // label's slot representation — the distinction below is the
+                // *semantic* one (does the attribute constrain at apply time?)
+                // that lives in [`AttrExt::is_label`].
+                let slot = self.term[pe].expect("an annotation value expr is compiled");
                 if ext.is_label() {
                     // A label (metadata, e.g. `Doc`) carries no constraint: it
-                    // contributes no apply-time slot, and its runtime slot is the
-                    // annotation value's `[value, type]` term pair, so the
-                    // renderer can walk the value's *whole type chain* (a doc
-                    // struct's field names come from the type, not a hardcoded
-                    // shape).  The attribute's own `is_subtype` (doc → always
-                    // `true`) is what permits `? b` to override `? a` without
-                    // conflict.
-                    slots.push(self.term[pe].expect("an annotation value expr is compiled"));
+                    // contributes no apply-time slot.  The attribute's own
+                    // `is_subtype` (doc → always `true`) is what permits
+                    // `? b` to override `? a` without conflict.
+                    slots.push(slot);
                 } else {
                     // A *constraint* **replaces** the slot with the annotation
                     // value, and validates it against the value's EXISTING
@@ -2040,33 +2065,33 @@ where
                     // annotation) has no provider, so there is nothing to
                     // validate against and the annotation is the slot.
                     let provider = if self.attr[value].is_some() {
-                        Some(self.attr_or_missing(value))
+                        Some(self.attr_or_missing(value, marker))
                     } else {
                         let children = self.persp_combine_children(value);
                         if children.is_empty() {
                             None
                         } else {
                             let child_attrs: Vec<NodeId> =
-                                children.iter().map(|&c| self.attr_or_missing(c)).collect();
+                                children.iter().map(|&c| self.attr_or_missing(c, marker)).collect();
                             Some(ext.combine(self, &child_attrs))
                         }
                     };
                     if let Some(p) = provider {
                         let loc2 = self.loc(e, 2);
-                        ext.unify_slots(self, p, attr_val, loc2);
+                        ext.unify_slots(self, p, slot, loc2);
                     }
                     // The annotation value *is* the slot (it replaces).
-                    let slot = attr_val;
-                    // The constraint slot is what the apply-time attribute check
-                    // reads; the runtime pair keeps the same bare lifted value.
                     constraint_slot = Some(slot);
                     slots.push(slot);
                 }
             } else {
                 // A slot the annotation does not spell is *preserved*: carry the
-                // value's existing attribute for this marker over unchanged — a
-                // constraint's bare lattice value, a label's `[value, type]`.
-                let node = self.value_attr_node(value, marker).unwrap_or(self.zero_marker);
+                // value's existing attribute for this marker over unchanged —
+                // a term pair in both cases (a constraint's lattice value sits
+                // at element 0, a label's metadata is the whole pair).
+                let node = self
+                    .value_attr_node(value, marker)
+                    .unwrap_or_else(|| self.missing_slot_of(marker));
                 if !ext.is_label() {
                     constraint_slot = Some(node);
                 }
