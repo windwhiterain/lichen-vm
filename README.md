@@ -375,7 +375,7 @@ compute.launch k_outer 3
 ```text
 @{
   order = "10"
-  output = "5 # 8 ? tag = 7: Int"
+  output = "5 # 4 ? tag = 7: Int"
 @}
 Doc = struct<.tag Int>
 five = 5 # 8 ? Doc(.tag 7)

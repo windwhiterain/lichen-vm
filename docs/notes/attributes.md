@@ -90,24 +90,26 @@ The `perspective.rs` integration tests encode this table.
 ### Annotation over an existing attribute (requirements & providers)
 
 An `expr # p ? d` over a value that **already carries** an attribute **replaces the
-slots it spells and preserves the rest**, unifying the spelled value against the
-value's existing attribute. The annotation is the **requirement** (a subtype); the
-value's own/existing attribute is the **provider** (a supertype). So the check is
-`requirement ⊑ provider` (`requirement | provider`), and the slot keeps the provider:
+slots it spells and preserves the rest**. A spelled value **replaces** the slot; the
+value's existing attribute is the **provider** it is validated against. The annotation
+is the **requirement** (a subtype); the provider is a **supertype**. So the check is
+`requirement ⊑ provider` (`requirement | provider`), and the slot becomes the
+annotation:
 
 | program | result |
 |---|---|
-| `(5 # 8) # 4` | provider `8` kept, `4 \| 8` ✓ → slot `8` |
+| `(5 # 8) # 4` | `4 \| 8` ✓, slot becomes `4` |
 | `(5 # 4) # 8` | `8 ∤ 4` ✗ → "expected 8, found 4" |
-| `x = 1 # 8; x # 4` | provider `8` kept, `4 \| 8` ✓ → slot `8` |
+| `x = 1 # 8; x # 4` | `4 \| 8` ✓, slot becomes `4` |
 | `x = 1 # 8; x # 16` | `16 ∤ 8` ✗ |
-| `(5 # 8 ? doc) # 4` | perspective `8` kept, doc **preserved** |
+| `(5 # 8 ? doc) # 4` | perspective becomes `4`, doc **preserved** |
 | `(5 # 8 ? docA) ? docB` | doc replaced by `docB`, perspective `8` preserved |
 
 The provider is the value's own attribute slot (a value that is itself annotated, or a
 bound name carrying an attribute) or, for a compound, the `gcd`-meet of its
-sub-expressions' slots. A plain leaf with no attribute of its own has no provider, so
-the annotation *is* the slot (`1 # 4` → `4`).
+sub-expressions' slots (which is only ever validated, never kept as the slot). A plain
+leaf with no attribute of its own has no provider, so the annotation *is* the slot
+(`1 # 4` → `4`).
 
 ## Syntax
 

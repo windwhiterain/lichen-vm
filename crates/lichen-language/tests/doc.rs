@@ -103,15 +103,16 @@ fn a_perspective_and_a_doc_coexist_on_one_expression() {
 }
 
 /// An annotation replaces only the slot it spells: re-annotating the
-/// perspective (`# 4` over a `# 8 ? doc` value) unifies the requirement `4`
-/// against the provider `8` and **preserves the doc**.
+/// perspective (`# 4` over a `# 8 ? doc` value) *replaces* the perspective
+/// with the requirement `4` (validated as a subtype of the provider `8`, since
+/// `4 | 8`) and **preserves the doc**.
 #[test]
-fn reinterpret_the_perspective_preserves_the_doc() {
+fn reinterpret_the_perspective_replaces_it_and_preserves_the_doc() {
     let out = evaluate(&format!(
         "{DOC}(5 # 8 ? Doc(.name \"five\", .description \"a\")) # 4"
     ))
     .unwrap();
-    assert_eq!(out, "5 # 8 ? name = \"five\", description = \"a\": Int");
+    assert_eq!(out, "5 # 4 ? name = \"five\", description = \"a\": Int");
 }
 
 /// Re-annotating the doc (`? b` over a `# 8 ? a` value) replaces the doc and

@@ -2026,18 +2026,19 @@ where
                     // conflict.
                     slots.push(self.term[pe].expect("an annotation value expr is compiled"));
                 } else {
-                    // A *constraint* unifies the annotation against the value's
-                    // EXISTING attribute and keeps that existing value as the
-                    // slot.  The annotation (`expr2`) is the *requirement*: it
-                    // must be a subtype of the provider (the value's actual
-                    // attribute) — `(x # 8) # 4` is legal (uniform-8 entails
-                    // uniform-4), `(x # 4) # 8` is not (uniform-4 does not entail
-                    // uniform-8).  The provider is the value's own attribute slot
-                    // (a value that is itself annotated, or a bound name carrying
-                    // an attribute) or, for a compound, the combine of its
-                    // sub-expressions' slots.  A value with no attribute of its
-                    // own (a plain leaf, or a doc-only annotation) is the
-                    // degenerate case: no provider, so the annotation is the slot.
+                    // A *constraint* **replaces** the slot with the annotation
+                    // value, and validates it against the value's EXISTING
+                    // attribute (the *provider*).  The annotation (`expr2`) is
+                    // the *requirement* and must be a subtype of the provider —
+                    // `(x # 8) # 4` is legal (uniform-8 entails uniform-4), so
+                    // the slot becomes `4`; `(x # 4) # 8` is not (uniform-4
+                    // does not entail uniform-8).  The provider is the value's
+                    // own attribute slot (a value that is itself annotated, or
+                    // a bound name carrying an attribute) or, for a compound,
+                    // the combine of its sub-expressions' slots.  A value with
+                    // no attribute of its own (a plain leaf, or a doc-only
+                    // annotation) has no provider, so there is nothing to
+                    // validate against and the annotation is the slot.
                     let provider = if self.attr[value].is_some() {
                         Some(self.attr_or_missing(value))
                     } else {
@@ -2050,14 +2051,12 @@ where
                             Some(ext.combine(self, &child_attrs))
                         }
                     };
-                    let slot = match provider {
-                        Some(p) => {
-                            let loc2 = self.loc(e, 2);
-                            ext.unify_slots(self, p, attr_val, loc2);
-                            p
-                        }
-                        None => attr_val,
-                    };
+                    if let Some(p) = provider {
+                        let loc2 = self.loc(e, 2);
+                        ext.unify_slots(self, p, attr_val, loc2);
+                    }
+                    // The annotation value *is* the slot (it replaces).
+                    let slot = attr_val;
                     // The constraint slot is what the apply-time attribute check
                     // reads; the runtime pair keeps the same bare lifted value.
                     constraint_slot = Some(slot);

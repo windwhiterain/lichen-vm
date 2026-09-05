@@ -121,13 +121,13 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   check enforces — the attribute's own `is_subtype` (a doc returns `true`)
   allows a later `? d'` to override an earlier `? d` without conflict (a label
   contributes no apply-time constraint slot).  A constraint annotation (`# p`)
-  over a value that already carries one unifies `p` (the *requirement*, a
-  subtype) against the value's existing attribute (the *provider*, a
-  supertype), keeping the existing value as the slot: `(x # 8) # 4` checks,
-  `(x # 4) # 8` does not.  An annotation replaces **only the slots it spells**
-  and preserves the rest — `(x # 8 ? doc) # 4` re-checks the perspective and
-  keeps the doc, `(x # 8 ? a) ? b` keeps the perspective and replaces the doc.
-  A comparison
+  over a value that already carries one **replaces** the slot with `p` (the
+  *requirement*, a subtype) and validates it against the value's existing
+  attribute (the *provider*, a supertype): `(x # 8) # 4` checks (`4 | 8`) and
+  the value becomes `# 4`; `(x # 4) # 8` does not.  An annotation replaces
+  **only the slots it spells** and preserves the rest — `(x # 8 ? doc) # 4`
+  re-checks the perspective and keeps the doc, `(x # 8 ? a) ? b` keeps the
+  perspective and replaces the doc.  A comparison
   (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
   is a prefix assert: `!e` compiles to the highlevel `assert(e)` — the checker
   force-evaluates `e` and requires `USize(1)`.  It binds tighter than the binary

@@ -147,11 +147,11 @@ fn an_annotated_parameter_rejects_an_incomparable_perspective() {
 
 #[test]
 fn a_compound_annotation_accepts_a_broader_derived_perspective() {
-    // `((1 # 8) + (2 # 4)) # 2` — the derived slot is gcd(8, 4) = 4 (uniform
-    // over 4); `# 2` declares uniform over 2, and 2 | 4, so the assertion
-    // holds ✓.  The slot stays the derived value, 4.
+    // `((1 # 8) + (2 # 4)) # 2` — the derived provider is gcd(8, 4) = 4
+    // (uniform over 4); `# 2` is the requirement, and 2 | 4 so it checks ✓.
+    // The annotation *replaces* the slot, so the value's perspective is 2.
     assert!(ok("((1 # 8) + (2 # 4)) # 2"));
-    assert_eq!(root_persp("((1 # 8) + (2 # 4)) # 2"), 4);
+    assert_eq!(root_persp("((1 # 8) + (2 # 4)) # 2"), 2);
 }
 
 #[test]
@@ -163,20 +163,20 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
     assert_eq!(message("((1 # 2) + (2 # 2)) # 4"), "expected 4, found 2");
 }
 
-// --- annotation over an existing attribute (the requirement/provider order) --
+// --- annotation over an existing attribute (the provider/requirement order) --
 //
-// The annotation (`expr2`) is the *requirement*; the value's own/existing
-// attribute is the *provider*.  A re-annotation keeps the provider as the slot
-// and validates the requirement against it as a subtype: `(x # 8) # 4` is
-// legal (uniform-8 entails uniform-4), while `(x # 4) # 8` is not.
+// The annotation (`expr2`) is the *requirement* and **replaces** the slot; the
+// value's own/existing attribute is the *provider* it is validated against as a
+// subtype.  `(x # 8) # 4` is legal (uniform-8 entails uniform-4), so the value
+// becomes `# 4`; `(x # 4) # 8` is not (uniform-4 does not entail uniform-8).
 
 #[test]
-fn a_requirement_subtype_annotation_keeps_the_provider() {
+fn a_requirement_subtype_annotation_replaces_the_provider() {
     // `(5 # 8) # 4` — the provider is 8 (the value is uniform over 8 threads);
-    // `# 4` requires uniform over 4, and 4 | 8, so it checks.  The slot stays
-    // the provider, 8.
+    // `# 4` requires uniform over 4, and 4 | 8, so it checks.  The annotation
+    // replaces the slot, so the value becomes `# 4`.
     assert!(ok("(5 # 8) # 4"));
-    assert_eq!(root_persp("(5 # 8) # 4"), 8);
+    assert_eq!(root_persp("(5 # 8) # 4"), 4);
 }
 
 #[test]
@@ -188,11 +188,11 @@ fn a_narrower_provider_rejects_a_broader_requirement() {
 }
 
 #[test]
-fn an_annotation_over_a_bound_perspective_keeps_the_provider() {
-    // `x = 1 # 8` then `x # 4` — the name reference carries the provider 8;
-    // `# 4` requires 4, and 4 | 8, so it checks and the slot stays 8.
+fn an_annotation_over_a_bound_perspective_replaces_the_provider() {
+    // `x = 1 # 8` then `x # 4` — the name reference provides 8; `# 4` requires
+    // 4, and 4 | 8, so it checks and the annotation replaces the slot with 4.
     assert!(ok("x = 1 # 8\nx # 4"));
-    assert_eq!(root_persp("x = 1 # 8\nx # 4"), 8);
+    assert_eq!(root_persp("x = 1 # 8\nx # 4"), 4);
 }
 
 #[test]
