@@ -7,21 +7,24 @@
 //! this module does — "when a native plugin is imported, rebuild the
 //! compiler."
 //!
-//! The mechanism: generate a compiler crate under
-//! `<project>/.lichen/compiler/<name>/` that depends on the plugin (from git
-//! or a local path) and composes its vocabulary with the shipping leaves via
+//! The mechanism: generate a compiler crate under a caller-chosen directory
+//! (the package manager's compiler cache under the lichen home — see
+//! [`crate::compiler_cache`]) that depends on the plugin (from git or a local
+//! path) and composes its vocabulary with the shipping leaves via
 //! `liche_language::lang_compose_vocabulary!`, then run `cargo build` and
 //! report the produced `lichen-compiler` binary.
 //!
 //! **Status:** the *composition* scaffold is real — the generated crate
-//! `cargo check`s once the plugin's leaves exist.  The *tooling* of a
-//! generated compiler (its package store, persist codec, CLI, and `run`
-//! path) is currently monomorphic over the shipped `LangProgram`, so a
-//! compiler built with an *additional* plugin cannot yet route through the
-//! language crate's store/run machinery; that generalization — turning the
-//! language layer's tooling generic over the `Program` marker — is the
-//! tracked follow-up in [`docs/notes/plugin-taxonomy.md`].  A rebuild over the
-//! shipping plugin set produces a fully working compiler.
+//! `cargo check`s once the plugin's leaves exist.  The language layer's
+//! tooling (package store, run, render, CLI) is generic over a program's
+//! value/operator vocabularies (see `liche_language::CompiledProgram`), so a
+//! generated compiler routes through the shared [`liche_language::cli`] over
+//! its own composed vocabulary.  The one open piece is the plugin's **artifact
+//! codec**: a built compiler currently runs in memory only (`NoPersist` — no
+//! `~/.lichen` device cache) because a per-leaf codec protocol that lets the
+//! composition macro emit a `ProgramCodec` is the tracked follow-up in
+//! [`docs/notes/plugin-taxonomy.md`].  A rebuild over the shipping plugin set
+//! produces a fully working compiler.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -29,9 +32,6 @@ use std::process::Command;
 use lichen_language::preprocess::Depend;
 
 use crate::git;
-
-/// The compiler-build dir name, under the project's `.lichen` dir.
-pub const BUILD_DIR: &str = "compiler";
 
 /// The value/operator/attr leaves a plugin contributes to the vocabulary.
 /// A plugin's leaves are its own item names, spelled at the call site; the
@@ -75,11 +75,11 @@ pub struct CompilerBuild {
     pub bin: PathBuf,
 }
 
-/// Rebuild the compiler: generate a compiler crate composing `leaves` with
-/// the plugin dependencies (if any), then `cargo build` it.  Returns the
-/// produced binary path.
+/// Rebuild the compiler: generate a compiler crate at `dir` (the cache slot)
+/// composing `leaves` with the plugin dependencies (if any), then `cargo build`
+/// it.  Returns the produced binary path.
 pub fn rebuild(
-    project_dir: &Path,
+    dir: &Path,
     name: &str,
     core_repo: &str,
     plugins: &[Depend],
@@ -88,16 +88,15 @@ pub fn rebuild(
     if !cargo_available() {
         return Err("`cargo` is required to rebuild the compiler, but it is not on $PATH".into());
     }
-    let dir = project_dir.join(BUILD_DIR).join(sanitize(name));
     std::fs::create_dir_all(dir.join("src"))
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    write_cargo_toml(&dir, name, core_repo, plugins)?;
-    write_lib_rs(&dir, leaves)?;
-    write_main_rs(&dir)?;
+    write_cargo_toml(dir, name, core_repo, plugins)?;
+    write_lib_rs(dir, plugins, leaves)?;
+    write_main_rs(dir)?;
 
     let out = Command::new("cargo")
         .args(["build", "--release"])
-        .current_dir(&dir)
+        .current_dir(dir)
         .output()
         .map_err(|e| format!("cannot run cargo build: {e}"))?;
     if !out.status.success() {
@@ -107,7 +106,10 @@ pub fn rebuild(
         ));
     }
     let bin = dir.join("target").join("release").join(bin_name(name));
-    Ok(CompilerBuild { dir, bin })
+    Ok(CompilerBuild {
+        dir: dir.to_path_buf(),
+        bin,
+    })
 }
 
 /// Whether `cargo` is on `$PATH`.
@@ -118,23 +120,10 @@ pub fn cargo_available() -> bool {
         .is_ok_and(|out| out.status.success())
 }
 
-fn bin_name(name: &str) -> String {
+/// The compiled binary name for a compiler named `name`.
+pub fn bin_name(name: &str) -> String {
     let n = format!("lichen-compiler-{name}");
     if cfg!(windows) { format!("{n}.exe") } else { n }
-}
-
-fn sanitize(s: &str) -> String {
-    let mut out = String::new();
-    for ch in s.chars() {
-        match ch {
-            'a'..='z' | 'A'..='Z' | '0'..='9' | '-' | '_' => out.push(ch),
-            _ => out.push('_'),
-        }
-    }
-    if out.is_empty() {
-        out.push_str("compiler");
-    }
-    out
 }
 
 /// The generated crate's `Cargo.toml`: depends on the language crate and the
@@ -197,9 +186,20 @@ edition = "2024"
     std::fs::write(dir.join("Cargo.toml"), toml).map_err(|e| format!("write Cargo.toml: {e}"))
 }
 
+/// The Rust crate identifier for a plugin dependency — its crate name with
+/// hyphens replaced by underscores (the extern-prelude / macro-preferred
+/// spelling).  The Cargo.toml dependency key keeps the hyphenated package
+/// name; the Rust source uses this ident for `<crate>` and derives the leaf
+/// macro name `<crate>_leaves`.
+fn crate_ident(dep: &Depend) -> String {
+    git::crate_name(dep).replace('-', "_")
+}
+
 /// The generated crate's `src/lib.rs`: compose the program marker over the
-/// shipping leaves plus the plugin's contributed leaves.
-fn write_lib_rs(dir: &Path, leaves: &Leaves) -> Result<(), String> {
+/// shipping leaves plus the plugin's contributed leaves.  The shipping leaves
+/// are spelled inline (with the `plugins = [...]` arm composing each native
+/// plugin's own leaves via its `<crate>_leaves` macro — no config file).
+fn write_lib_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
     let mut attrs = String::new();
     for (ty, variant) in &leaves.attrs {
         attrs.push_str(&format!("        {ty} as {variant};\n"));
@@ -212,13 +212,19 @@ fn write_lib_rs(dir: &Path, leaves: &Leaves) -> Result<(), String> {
     for (ty, variant) in &leaves.operators {
         operators.push_str(&format!("        {ty} as {variant};\n"));
     }
+    let mut plugin_line = String::new();
+    for dep in plugins {
+        let ident = crate_ident(dep);
+        plugin_line.push_str(&format!("    {ident} as {ident}_leaves;\n"));
+    }
     let lines = format!(
         r#"//! A compiler built over the project's plugin set.  Generated by
 //! `lichen rebuild-plugin`; re-run it whenever the native-plugin set changes.
 
 // The value/operator/attribute vocabulary and the program marker, composed
-// from the plugin set.  The shipping plugin set is composed by default; a
-// plugin's own leaves are spliced in by the generator.
+// from the shipping leaves plus each plugin's own leaf macro (the
+// `plugins = [<crate> as <crate>_leaves; ...]` arm stitches their leaves in —
+// no config file).
 liche_language::lang_compose_vocabulary! {{
     attrs = [
 {attrs}    ]
@@ -227,6 +233,8 @@ liche_language::lang_compose_vocabulary! {{
 {values}    ];
     operators = [
 {operators}    ];
+    plugins = [
+{plugin_line}    ];
 }}
 
 /// The composed program marker for this compiler build.
@@ -235,6 +243,7 @@ pub type Program = LangProgram;
         attrs = attrs,
         values = values,
         operators = operators,
+        plugin_line = plugin_line,
     );
     std::fs::write(dir.join("src/lib.rs"), lines).map_err(|e| format!("write src/lib.rs: {e}"))
 }
@@ -243,38 +252,19 @@ pub type Program = LangProgram;
 /// crate's library.  It shares [`liche_language::cli`], so a plugin-built
 /// compiler speaks the same dialect as the shipped `lichen-compiler` and is
 /// already depend-aware (resolving `depend` directives against the source
-/// cache).  A compiler built with an *additional* plugin keeps this shell; the
-/// plugin's leaves are declared in `lib.rs` and the tooling generalization is
-/// the tracked follow-up.
+/// cache).
 fn write_main_rs(dir: &Path) -> Result<(), String> {
+    // The generated compiler routes the shared `liche_language::cli` over its
+    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  It
+    // uses `NoPersist` as the artifact codec: the plugin program's extra
+    // value/operator variants have no generated codec yet, so the CLI drives
+    // an in-memory store (no `~/.lichen` device cache), and compiled packages
+    // are recompiled fresh rather than persisted.  (A per-leaf artifact-codec
+    // protocol that lets the composition macro emit `ProgramCodec` for a
+    // persistent plugin cache is the tracked follow-up.)
     let lines = r#"fn main() -> std::process::ExitCode {
-    liche_language::cli::main()
+    liche_language::cli::main::<crate::LangValue, crate::LangOperator, liche_language::persist::NoPersist>()
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
-}
-
-/// The path of a plugin-built compiler binary under
-/// `<project>/.lichen/compiler/`, when one has been built by [`rebuild`].
-/// Returns `None` when the project has no built compiler yet.
-pub fn built_bin(project_dir: &Path) -> Option<PathBuf> {
-    let compilers = project_dir.join(BUILD_DIR);
-    for entry in std::fs::read_dir(&compilers).ok()?.flatten() {
-        if !entry.path().is_dir() {
-            continue;
-        }
-        let release = entry.path().join("target").join("release");
-        for f in std::fs::read_dir(&release).ok()?.flatten() {
-            let name = f.file_name().to_string_lossy().into_owned();
-            let is_bin = if cfg!(windows) {
-                name.starts_with("lichen-compiler-") && name.ends_with(".exe")
-            } else {
-                name.starts_with("lichen-compiler-") && !name.contains('.')
-            };
-            if is_bin && f.path().is_file() {
-                return Some(f.path());
-            }
-        }
-    }
-    None
 }

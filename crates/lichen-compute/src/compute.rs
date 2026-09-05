@@ -190,6 +190,17 @@ pub enum ComputeValue {
     TypeBuffer,
 }
 
+impl lichen_utils::extend::FunctionKind for ComputeValue {
+    fn is_function_kind(&self) -> bool {
+        // `TypeKernel` (and its parallel twin `TypeParKernel`) re-head the
+        // universe to form a kernel type `[signature, [TypeKernel, Type]]`,
+        // which mirrors a function type — the generic renderer spells that
+        // kind as `in -> out`.  A parallel kernel mirrors the lifted
+        // `?a -> USize -> ?b` the same way.
+        matches!(self, ComputeValue::TypeKernel | ComputeValue::TypeParKernel)
+    }
+}
+
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
 /// by the VM through [`OperatorExt::run`].  Composed into a host's operator
 /// union (see a host `program` module).
@@ -1502,21 +1513,25 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 #[macro_export]
 macro_rules! compute_native_ops {
     ($program:ty) => {{
+        // The registry is a `&'static [(&str, &dyn NativeOp<P>)]`.  A `static`
+        // of that type cannot reference a *generic* `$program` (statics are
+        // never generic), so build it per call and leak it — once per host
+        // `register_compute`, a handful of small allocations.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
         static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
         static PARLAUNCH: $crate::ParLaunchOp = $crate::ParLaunchOp;
         static PGET: $crate::BufferGetOp = $crate::BufferGetOp;
         static PCOLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
-        static OPS: [(&str, &dyn $crate::NativeOp<$program>); 6] = [
-            ("jit", &JIT),
-            ("launch", &LAUNCH),
-            ("parallel", &PARALLEL),
-            ("plrun", &PARLAUNCH),
-            ("pget", &PGET),
-            ("pcollect", &PCOLLECT),
+        let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
+            ("jit", &JIT as &dyn $crate::NativeOp<$program>),
+            ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
+            ("parallel", &PARALLEL as &dyn $crate::NativeOp<$program>),
+            ("plrun", &PARLAUNCH as &dyn $crate::NativeOp<$program>),
+            ("pget", &PGET as &dyn $crate::NativeOp<$program>),
+            ("pcollect", &PCOLLECT as &dyn $crate::NativeOp<$program>),
         ];
-        &OPS[..] as $crate::NativeOps<$program>
+        Box::leak(ops.into_boxed_slice()) as $crate::NativeOps<$program>
     }};
 }
 

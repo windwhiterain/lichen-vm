@@ -77,15 +77,19 @@ the repository (or a local checkout), fetching and building the
 `lichen-compiler` and `lichen-language-server` binaries.  Distribution is via
 Cargo; "download" is fetch-and-build.
 
-## Native plugins: rebuilding the compiler
+## Native plugins: the compiler cache
 
 A native plugin contributes vocabulary leaves to the `Program` marker at
 compile time, so a compiler that knows a plugin must be built with it composed
-in.  `lichen rebuild-plugin [<file|dir>]` collects the `plugin` dependencies
-declared in the sources, generates a compiler crate under
-`.lichen/compiler/<name>/` that composes them with the shipped set via
-`liche_language::lang_compose_vocabulary!`, and runs `cargo build`, producing a
-`lichen-compiler-<name>` binary.
+in.  When a program declares a native plugin (`name = plug "url"`, or a
+`name = depend "url" … plugin`), `lichen run`/`build` collect the program's
+plugins, then ensure a compiler over them in a **cache under the lichen home**
+(`<lichendir>/compilers/<key>/`), keyed by the lichen-library version and every
+plugin's resolved version (its `HEAD` in the fetched source cache).  A cache
+hit reuses the binary; a miss generates a compiler crate (composing the plugin
+set via `liche_language::lang_compose_vocabulary!`) and runs `cargo build`,
+then drives the produced `lichen-compiler-<name>` binary.  `lichen
+rebuild-plugin [<file|dir>]` is the explicit form of the same build.
 
 > **Status:** the *composition* is real.  The generated compiler's tooling (its
 > package store, persist codec, CLI, and `run` path) is currently monomorphic
@@ -98,8 +102,10 @@ declared in the sources, generates a compiler crate under
 
 ## CLI
 
-`lichen fetch/run/build/install/rebuild-plugin/cache`, plus `--version` /
-`--help`.  `run` and `build` fetch the file's `depend`s, stage them, and behave
-like `lichen-compiler`'s `run`/`build` (a project file's `@{…@}` block resolves
-through the staged vendored aliases).  A directory target processes every
-`.lichen` file in it, each with its own dependencies.
+`lichen fetch/run/build/clean/install/rebuild-plugin/cache`, plus `--version` /
+`--help`.  `run` and `build` fetch the file's `depend`s/`plug`s into the source
+cache, then **spawn the compiler binary** to compile & run the program (the
+plugin-built compiler from the cache when the program imports a native plugin,
+else the shipped `lichen-compiler`) — the package manager never compiles
+in-process.  A directory target processes every `.lichen` file in it, each with
+its own dependencies.

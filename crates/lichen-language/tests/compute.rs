@@ -4,18 +4,19 @@
 //! `compute.jit` and `compute.launch`.
 
 use lichen_language::package::PackageStore;
+use lichen_language::program::{LangOperator, LangValue};
 
 /// Compile and run `source` (resolving imports through a fresh store),
 /// returning the rendered `value: type` output.
 fn run(source: &str) -> String {
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     lichen_language::run::evaluate_raw(source, None, &mut store)
         .unwrap_or_else(|diags| panic!("expected {source:?} to check and run, got: {diags:?}"))
 }
 
 /// Compile `source` and assert it *fails*; return the rendered diagnostics.
 fn fail(source: &str) -> Vec<String> {
-    let mut store = PackageStore::new();
+    let mut store = PackageStore::<LangValue, LangOperator>::new();
     let errs = lichen_language::run::evaluate_raw(source, None, &mut store)
         .expect_err("expected this program to fail");
     errs.into_iter().map(|d| d.message).collect()

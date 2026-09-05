@@ -9,7 +9,7 @@ fn compile_ok(source: &str) -> IR<LangAttr> {
     compile(&ast).0
 }
 
-fn compile_err(source: &str) -> Diag {
+fn compile_err(source: &str) -> crate::diag::Diag<crate::program::LangProgram> {
     let tokens = lex(source).tokens;
     let ast = parse(&tokens).program;
     // The lowering is total but collects its resolve errors; the tests check

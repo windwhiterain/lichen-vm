@@ -151,7 +151,10 @@ impl Entry {
 /// `@import` lines resolve relative to the file (import-free programs are
 /// unaffected).
 fn program_output(file: &Path, source: &str) -> String {
-    let mut store = crate::package::PackageStore::new();
+    let mut store = crate::package::PackageStore::<
+        crate::program::LangValue,
+        crate::program::LangOperator,
+    >::new();
     crate::run::evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!(
             "{}: failed\n{}",
@@ -345,6 +348,34 @@ fn replace_output_comment(source: &str, output: &str) -> String {
                     }
                     if plugin {
                         out.push_str(" plugin");
+                    }
+                    out.push('\n');
+                }
+                Directive::Plug {
+                    url,
+                    name,
+                    rev,
+                    branch,
+                    tag,
+                    package,
+                    sub,
+                } => {
+                    out.push_str("  ");
+                    out.push_str(&format!("{name} = plug \"{url}\""));
+                    if let Some(rev) = rev {
+                        out.push_str(&format!(" rev = \"{rev}\""));
+                    }
+                    if let Some(branch) = branch {
+                        out.push_str(&format!(" branch = \"{branch}\""));
+                    }
+                    if let Some(tag) = tag {
+                        out.push_str(&format!(" tag = \"{tag}\""));
+                    }
+                    if let Some(package) = package {
+                        out.push_str(&format!(" package = \"{package}\""));
+                    }
+                    if let Some(sub) = sub {
+                        out.push_str(&format!(" sub = \"{sub}\""));
                     }
                     out.push('\n');
                 }

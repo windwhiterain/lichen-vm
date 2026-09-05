@@ -12,7 +12,7 @@
 
 use std::path::{Path, PathBuf};
 
-use lichen_language::preprocess::{Depend, Directive, block_directives, split_block};
+use lichen_language::preprocess::{Depend, block_depends, split_block};
 
 /// A lichen project rooted at a directory.
 pub struct Project {
@@ -27,37 +27,11 @@ impl Project {
         Ok(Project { dir })
     }
 
-    /// The `depend "url"` directives declared in a source's `@{…@}` block.
+    /// The `depend "url"` / `name = plug "url"` directives declared in a
+    /// source's `@{…@}` block.
     pub fn depends(source: &str) -> Vec<Depend> {
         let (interior, _) = split_block(source);
-        let Some(interior) = interior else {
-            return Vec::new();
-        };
-        block_directives(interior)
-            .into_iter()
-            .filter_map(|dir| match dir {
-                Directive::Depend {
-                    url,
-                    name,
-                    rev,
-                    branch,
-                    tag,
-                    package,
-                    sub,
-                    plugin,
-                } => Some(Depend {
-                    url,
-                    name,
-                    rev,
-                    branch,
-                    tag,
-                    package,
-                    sub,
-                    plugin,
-                }),
-                _ => None,
-            })
-            .collect()
+        block_depends(interior.unwrap_or_default())
     }
 
     /// The native-plugin `depend` directives in a source (those needing a

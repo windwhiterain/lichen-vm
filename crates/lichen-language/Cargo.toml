@@ -17,6 +17,9 @@ lichen-lowlevel = { path = "../lichen-lowlevel" }
 lichen-render = { path = "../lichen-render" }
 lichen-utils = { path = "../lichen-utils" }
 
+[dev-dependencies]
+lichen-std-native = { path = "../../lichen-std-native" }
+
 [[bin]]
 name = "lichen-compiler"
 path = "src/main.rs"

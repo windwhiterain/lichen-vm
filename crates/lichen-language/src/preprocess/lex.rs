@@ -34,6 +34,11 @@ pub enum TokenKind {
     /// manager).
     #[token("depend")]
     KwDepend,
+    /// The `plug` keyword: `name = plug "url" [options...]` — declare a native
+    /// plugin (a Rust crate) fetched from `url`, bound to `name` (handled by
+    /// the package manager, which rebuilds the compiler over it).
+    #[token("plug")]
+    KwPlug,
     /// A string literal (quotes stripped); no escapes, may be multiline.
     /// `@` is reserved, so it is excluded from the content.
     #[regex(r#""[^"@]*""#, |lex| {
@@ -54,6 +59,7 @@ impl TokenKind {
             TokenKind::Equals => "'='".to_string(),
             TokenKind::KwImport => "'import'".to_string(),
             TokenKind::KwDepend => "'depend'".to_string(),
+            TokenKind::KwPlug => "'plug'".to_string(),
             TokenKind::String(_) => "a string".to_string(),
             TokenKind::Name(_) => "a name".to_string(),
         }
@@ -153,6 +159,19 @@ mod tests {
                 TokenKind::Equals,
                 TokenKind::KwDepend,
                 TokenKind::String("https://example.com/foo.git".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_plug_directive_lexes() {
+        assert_eq!(
+            kinds("gpu = plug \"https://example.com/gpu.git\""),
+            vec![
+                TokenKind::Name("gpu".to_string()),
+                TokenKind::Equals,
+                TokenKind::KwPlug,
+                TokenKind::String("https://example.com/gpu.git".to_string()),
             ]
         );
     }

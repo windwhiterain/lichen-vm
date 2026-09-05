@@ -63,6 +63,22 @@ and assembles each plugin's private per-module registry with its
 The frontend, checker, and VM are reused unchanged. **Adding a native plugin is
 one manifest line** (and one op-registry line).
 
+`lang_compose_vocabulary!` generates the *whole* composed program, not just the
+enums: for a plugin set it also emits the `ValueExt` / `ValueType` /
+`OperatorExt` impls (the type-constant markers delegated to the core
+`TypeValue` leaf, function-kind markers via each leaf's `FunctionKind`, and the
+operator union's `run` dispatching every leaf).  So a composed program marker is
+a live, executable `Program` — its operators actually run, and a plugin compiler
+can be driven over it.
+
+A native plugin contributes its leaves through a `#[macro_export]` leaf macro
+named `<crate_ident>_leaves` (e.g. `lichen_compute_leaves`,
+`lichen_std_native_leaves`), and the manifest lists it as
+`plugins = [ <crate_ident> as <crate_ident>_leaves; ... ]`.  The name is
+per-plugin and crate-derivable by design: two `#[macro_export]` macros named
+identically across the dependency graph collide in the extern prelude, so a
+shared `liche_leaves` name would break any host composing more than one plugin.
+
 This is the "package manager pulls a crate and builds a new compiler" story:
 the reusable layer is the generic core + the composition manifest, and a built
 compiler is just a particular plugin set substituted into that manifest.
@@ -132,6 +148,17 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   `lang_compose_vocabulary!`.  Its `render` module re-exports `lichen-render`
   and layers the host-specific shells (the caret diagnostic, the
   checker-message wording) on top.
+- **The language layer's tooling is generic over the program**: the package
+  store, run, render, and CLI are parameterized by a program's value/operator
+  vocabularies (`liche_language::CompiledProgram<V, O>`), with the attr type
+  fixed to the language's `LangAttr`.  So a compiler built over an additional
+  native plugin routes through the shared `liche_language::cli` over its own
+  composed vocabulary.  The one open piece is the plugin's **artifact codec**:
+  a plugin-built compiler currently runs in memory only (`NoPersist`), and the
+  tracked follow-up is a per-leaf codec protocol under which each value/
+  operator leaf exposes an encode/decode and `lang_compose_vocabulary!` emits a
+  `ProgramCodec` for the composed set — giving a plugin-built compiler a real
+  `~/.lichen` device cache.
 - `Perspective` and `Doc`'s codesign sites (grammar `# p` / `? expr`, AST
   fields, `IR<…>` schema tails, the `GcdOp` persist discriminator) stay in
   `lichen-language`.

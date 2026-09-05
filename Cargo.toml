@@ -14,5 +14,6 @@ members = [
     "crates/lichen-language-server",
     "crates/lichen-language-zed",
     "crates/lichen-package",
+    "lichen-std-native",
     "tree-sitter-lichen",
 ]

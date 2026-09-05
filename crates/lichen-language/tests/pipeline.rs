@@ -56,7 +56,7 @@ fn usize_of(value: &LangValue) -> usize {
 }
 
 /// The rendered diagnostics of a failing program.
-fn diags(source: &str) -> Vec<lichen_language::Diag> {
+fn diags(source: &str) -> Vec<lichen_language::Diag<lichen_language::program::LangProgram>> {
     let report = compile(source);
     assert!(!report.diagnostics.is_empty(), "{source:?} should fail");
     report.diagnostics

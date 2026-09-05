@@ -29,6 +29,7 @@ use std::path::Path;
 
 use lichen_language::diag::Diag;
 use lichen_language::package::PackageStore;
+use lichen_language::program::{LangOperator, LangProgram, LangValue};
 
 /// Preprocess a project source: cut the leading `@{…@}` block, resolve its
 /// `import` bindings through `store` (whose vendored dependency aliases have
@@ -43,7 +44,7 @@ use lichen_language::package::PackageStore;
 pub fn preprocess<'a>(
     source: &'a str,
     base: Option<&Path>,
-    store: &mut PackageStore,
-) -> (Preprocessed<'a>, Vec<Diag>) {
+    store: &mut PackageStore<LangValue, LangOperator>,
+) -> (Preprocessed<'a>, Vec<Diag<LangProgram>>) {
     lichen_language::preprocess::preprocess(source, base, store)
 }

@@ -1,0 +1,10 @@
+[package]
+name = "lichen-std-native"
+version = "0.1.0"
+edition = "2024"
+description = "A standard-library native plugin for lichen: a Rust-backed `SortOp` that sorts a lichen `[usize]` array."
+
+[dependencies]
+lichen-highlevel = { path = "../crates/lichen-highlevel" }
+lichen-lowlevel = { path = "../crates/lichen-lowlevel" }
+lichen-utils = { path = "../crates/lichen-utils" }

@@ -18,18 +18,21 @@
 //! serialized back into the cache.
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use lichen_compute::WRAPPER_SOURCE;
 use lichen_highlevel::native::NativeOps;
-use lichen_highlevel::program::HighPackageMeta;
-use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
+use lichen_highlevel::program::{HighPackageMeta, TypeOperator, ValueType};
+use lichen_lowlevel::{LowOperator, ModuleKey, OperatorExt, Registry, StaticModule, StaticNodeId};
+use lichen_utils::extend::AsEnum;
 
+use crate::CompiledProgram;
 use crate::diag::{Diag, Stage};
-use crate::persist::{self, DeviceRegistry, Hash};
+use crate::persist::{self, ArtifactCodec, DeviceRegistry, Hash};
 use crate::preprocess::preprocess;
-use crate::program::LangProgram;
+use crate::program::GcdOp;
 
 /// The virtual path of the `lichen-compute` native package.  Imported as
 /// `compute.lichen`, it is served from a registered native module (see
@@ -37,13 +40,25 @@ use crate::program::LangProgram;
 const COMPUTE_PATH: &str = "compute.lichen";
 
 /// The `lichen-compute` plugin's private native registry, built by the
-/// plugin over the host's concrete [`LangProgram`] marker.  Attached only to
-/// the compilation of `compute.lichen`, so `$jit`/`$launch` resolve
-/// privately — a second plugin registering its own `$jit` never collides.
-/// The plugin itself is program-generic; only this composition site names
-/// [`LangProgram`].
-fn compute_native_ops() -> NativeOps<LangProgram> {
-    lichen_compute::compute_native_ops!(LangProgram)
+/// plugin over a host's concrete program marker.  Attached only to the
+/// compilation of `compute.lichen`, so `$jit`/`$launch` resolve privately — a
+/// second plugin registering its own `$jit` never collides.  The plugin itself
+/// is program-generic; only this composition site names the program marker.
+fn compute_native_ops<V, O>() -> NativeOps<CompiledProgram<V, O>>
+where
+    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+{
+    lichen_compute::compute_native_ops!(CompiledProgram<V, O>)
 }
 
 /// A loaded package: the path, its registry key, and the static ref to the
@@ -64,9 +79,20 @@ pub struct PackageHandle {
 ///
 /// The registry is shared with every package and importer, so a package
 /// loaded once is used in place by all of them (`packages` is public so a
-/// host or test can observe that sharing).
-pub struct PackageStore {
-    pub registry: Arc<RwLock<Registry<LangProgram>>>,
+/// host or test can observe that sharing).  Generic over the value/operator
+/// vocabularies `V`/`O` (the language's attribute set is fixed) and the
+/// artifact codec `C` (`[`persist::NoPersist`]` for an in-memory store).
+pub struct PackageStore<
+    V: ValueType,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+    C = persist::HighProgramCodec,
+> {
+    pub registry: Arc<RwLock<Registry<CompiledProgram<V, O>>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,
     /// The in-flight load stack (canonical paths) — a package re-entered
     /// while still loading closes an import cycle.
@@ -89,13 +115,28 @@ pub struct PackageStore {
     /// The in-memory key allocator — the device registry's counter when no
     /// cache directory is configured (a process-local device).
     next_key: u64,
+    /// The artifact codec `C` is a type-level marker (the codec value is
+    /// `C::default()` at use).
+    _codec: PhantomData<C>,
     /// Packages compiled (not loaded from the device cache) — tests.
     pub compiled: usize,
     /// Packages loaded from the device cache without recompiling — tests.
     pub loaded_from_cache: usize,
 }
 
-impl PackageStore {
+// The minimal impl: construction, cache-dir plumbing, and the vendored
+// registry — none of which touch a compute value/operator or the artifact
+// codec.  These need only that `CompiledProgram<V, O>` is a program.
+impl<V, O, C> PackageStore<V, O, C>
+where
+    V: ValueType,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+{
     /// A purely in-memory store — the pre-cache behavior (tests, the readme
     /// sync, in-process embeddings).  Device keys are allocated from a
     /// process-local counter and nothing is persisted.
@@ -110,6 +151,7 @@ impl PackageStore {
             cache_dir: None,
             device: None,
             next_key: 0,
+            _codec: PhantomData,
             compiled: 0,
             loaded_from_cache: 0,
         }
@@ -151,11 +193,66 @@ impl PackageStore {
         self.cache_dir.as_deref()
     }
 
+    /// Register a vendored dependency directory under an import alias, so
+    /// `import "alias"` / `import "alias/rest"` resolve into it.  The package
+    /// manager registers one alias per git-fetched dependency before compiling.
+    pub fn register_vendored(&mut self, alias: impl Into<String>, dir: PathBuf) {
+        self.vendored.insert(alias.into(), dir);
+    }
+
+    /// Whether `alias` is a registered vendored dependency.
+    pub fn is_vendored(&self, alias: &str) -> bool {
+        self.vendored.contains_key(alias)
+    }
+
+    /// The shared registry, for the importer's checker.
+    pub fn registry(&self) -> Arc<RwLock<Registry<CompiledProgram<V, O>>>> {
+        self.registry.clone()
+    }
+
+    /// Allocate the device key for a file ID: the existing key when the file
+    /// is already registered (recompiles reuse it, overwriting the slot),
+    /// otherwise a fresh one (reclaimed first, then the next index).
+    fn alloc_key(&mut self, file_id: &str) -> (ModuleKey, bool) {
+        match &mut self.device {
+            Some(device) => device.alloc(file_id),
+            None => {
+                let key = ModuleKey::from_raw(self.next_key);
+                self.next_key += 1;
+                (key, true)
+            }
+        }
+    }
+}
+
+// The compute-bounds impl: load/compile/freeze/serialize, which compile the
+// `compute.lichen` native package and run the program's imports through the
+// shared store.  These need the compute value/operator coercions (and the
+// `GcdOp`/`TypeOperator`/`'static`/codec bundle) because they call
+// `compile_with_imports_at`, `compute_native_ops`, and the artifact codec.
+impl<V, O, C> PackageStore<V, O, C>
+where
+    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+{
     /// Load (or fetch from cache) the package at `path`, resolving its own
     /// `@import` directives first: each dependency loads (recursively)
     /// before this package compiles, so its refs are absolute from birth
     /// and the freeze below sees their keys already registered.
-    pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag>> {
+    pub fn load_package(
+        &mut self,
+        path: &Path,
+    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
         // The `lichen-compute` native package: served from a registered
         // module, not a disk file.
         if path.file_name().is_some_and(|n| n == "compute.lichen") {
@@ -232,13 +329,13 @@ impl PackageStore {
                 .join("\n"));
         }
         let line_starts = crate::lex::line_starts(&preprocessed.code);
-        let report = crate::compile_with_imports_at(
+        let report = crate::compile_with_imports_at::<V, O>(
             &preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
             &line_starts,
-            compute_native_ops(),
+            compute_native_ops::<V, O>(),
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(report
@@ -271,7 +368,7 @@ impl PackageStore {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .set_package_meta(
                 freeze.key,
-                lichen_highlevel::program::HighPackageMeta {
+                HighPackageMeta {
                     export: Some(export),
                 },
             );
@@ -290,7 +387,10 @@ impl PackageStore {
     /// The load path behind the cache: incremental verification first, then
     /// compile.  Only reached through [`Self::load_package`], which owns the
     /// cache and the loading stack.
-    fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag>> {
+    fn load_package_inner(
+        &mut self,
+        canonical: &Path,
+    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
         let file_id = canonical.to_string_lossy().into_owned();
         let source = std::fs::read_to_string(canonical).map_err(|e| {
             vec![Diag::new(
@@ -329,11 +429,12 @@ impl PackageStore {
         key: ModuleKey,
         hash: Hash,
         deps: &[(String, ModuleKey)],
-    ) -> Result<Option<PackageHandle>, Vec<Diag>> {
+    ) -> Result<Option<PackageHandle>, Vec<Diag<CompiledProgram<V, O>>>> {
         for (dep_file_id, _) in deps {
             self.load_package(Path::new(dep_file_id))?;
         }
-        let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
+        let mut modules: HashMap<ModuleKey, Arc<StaticModule<CompiledProgram<V, O>>>> =
+            HashMap::new();
         {
             let registry = self
                 .registry
@@ -369,7 +470,9 @@ impl PackageStore {
             }
         }
         let device = self.device.as_ref().expect("the device store");
-        let Ok((module, export_index)) = device.load_artifact(file_id, key, hash, &modules) else {
+        let Ok((module, export_index)) =
+            device.load_artifact::<CompiledProgram<V, O>, C>(file_id, key, hash, &modules)
+        else {
             return Ok(None);
         };
         let export = StaticNodeId {
@@ -398,20 +501,6 @@ impl PackageStore {
         }))
     }
 
-    /// Allocate the device key for a file ID: the existing key when the file
-    /// is already registered (recompiles reuse it, overwriting the slot),
-    /// otherwise a fresh one (reclaimed first, then the next index).
-    fn alloc_key(&mut self, file_id: &str) -> (ModuleKey, bool) {
-        match &mut self.device {
-            Some(device) => device.alloc(file_id),
-            None => {
-                let key = ModuleKey::from_raw(self.next_key);
-                self.next_key += 1;
-                (key, true)
-            }
-        }
-    }
-
     /// Read, resolve, compile, and freeze one package, serializing it into
     /// the device cache.  Only reached through [`Self::load_package`], which
     /// owns the cache and the loading stack; the source is already read.
@@ -419,7 +508,7 @@ impl PackageStore {
         &mut self,
         canonical: &Path,
         source: String,
-    ) -> Result<PackageHandle, Vec<Diag>> {
+    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
         let file_id = canonical.to_string_lossy().into_owned();
 
         // Resolve the package's own imports through this store: each
@@ -446,7 +535,7 @@ impl PackageStore {
         // in place; the module then carries the dependencies' absolute refs
         // into its freeze below.
         let line_starts = crate::lex::line_starts(&source);
-        let report = crate::compile_with_imports_at(
+        let report = crate::compile_with_imports_at::<V, O>(
             &preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
@@ -491,18 +580,19 @@ impl PackageStore {
                     .registry
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> =
+                let mut modules: HashMap<ModuleKey, Arc<StaticModule<CompiledProgram<V, O>>>> =
                     HashMap::new();
                 for (key, package) in registry.iter() {
                     modules.insert(key, package.module.clone());
                 }
                 modules
             };
-            let bytes = persist::serialize_artifact(
+            let bytes = persist::serialize_artifact_with::<CompiledProgram<V, O>, C>(
                 modules[&freeze.key].as_ref(),
                 &modules,
                 hash,
                 export.index,
+                C::default(),
             );
             device.store_artifact(&file_id, &bytes);
             let deps: Vec<(String, ModuleKey)> = preprocessed
@@ -531,7 +621,7 @@ impl PackageStore {
         &mut self,
         base: Option<&Path>,
         import_path: &str,
-    ) -> Result<PackageHandle, Diag> {
+    ) -> Result<PackageHandle, Diag<CompiledProgram<V, O>>> {
         // A vendored dependency alias: `import "alias"` or `import "alias/rest"`
         // resolves against the vendored directory registered under `alias`
         // (see [`Self::register_vendored`]).  A bare `alias` names the
@@ -542,7 +632,7 @@ impl PackageStore {
             if let Some(dir) = self.vendored.get(alias) {
                 let resolved = match rest {
                     Some(rest) => dir.join(rest),
-                    None => vendored_entry_file(dir, alias)?,
+                    None => vendored_entry_file::<CompiledProgram<V, O>>(dir, alias)?,
                 };
                 return self.load_package(&resolved).map_err(|mut diags| {
                     diags.drain(..).next().unwrap_or_else(|| {
@@ -582,23 +672,6 @@ impl PackageStore {
             })
         })
     }
-
-    /// Register a vendored dependency directory under an import alias, so
-    /// `import "alias"` / `import "alias/rest"` resolve into it.  The package
-    /// manager registers one alias per git-fetched dependency before compiling.
-    pub fn register_vendored(&mut self, alias: impl Into<String>, dir: PathBuf) {
-        self.vendored.insert(alias.into(), dir);
-    }
-
-    /// Whether `alias` is a registered vendored dependency.
-    pub fn is_vendored(&self, alias: &str) -> bool {
-        self.vendored.contains_key(alias)
-    }
-
-    /// The shared registry, for the importer's checker.
-    pub fn registry(&self) -> Arc<RwLock<Registry<LangProgram>>> {
-        self.registry.clone()
-    }
 }
 
 /// Split a potential vendored alias from an import path: `"foo"` →
@@ -619,7 +692,10 @@ fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> {
 /// The entry package file of a vendored dependency directory: a `lib.lichen`,
 /// then `<alias>.lichen`, then the directory's sole `.lichen` file.  An
 /// ambiguous (many) or absent package is a diagnostic, not a guess.
-fn vendored_entry_file(dir: &Path, alias: &str) -> Result<PathBuf, Diag> {
+fn vendored_entry_file<P: lichen_lowlevel::Program>(
+    dir: &Path,
+    alias: &str,
+) -> Result<PathBuf, Diag<P>> {
     let lib = dir.join("lib.lichen");
     if lib.is_file() {
         return Ok(lib);
@@ -669,7 +745,16 @@ fn vendored_entry_file(dir: &Path, alias: &str) -> Result<PathBuf, Diag> {
     }
 }
 
-impl Default for PackageStore {
+impl<V, O, C> Default for PackageStore<V, O, C>
+where
+    V: ValueType,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq,
+{
     fn default() -> Self {
         Self::new()
     }
@@ -678,6 +763,7 @@ impl Default for PackageStore {
 #[cfg(test)]
 mod vendored_tests {
     use super::*;
+    use crate::program::{LangOperator, LangValue};
 
     fn tempdir(tag: &str) -> PathBuf {
         let dir =
@@ -693,7 +779,7 @@ mod vendored_tests {
         let foo = dir.join("deps").join("foo");
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("lib.lichen"), "42").unwrap();
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", foo.clone());
         let handle = store.resolve_import(None, "foo").unwrap();
         assert_eq!(
@@ -709,7 +795,7 @@ mod vendored_tests {
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("lib.lichen"), "1").unwrap();
         std::fs::write(foo.join("other.lichen"), "2").unwrap();
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", foo.clone());
         let handle = store.resolve_import(None, "foo/other.lichen").unwrap();
         assert_eq!(
@@ -722,7 +808,7 @@ mod vendored_tests {
     fn non_vendored_relative_import_does_not_hit_alias() {
         let dir = tempdir("plain");
         std::fs::write(dir.join("math.lichen"), "3").unwrap();
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", dir.join("deps").join("foo"));
         let base = dir.join("main.lichen");
         let handle = store.resolve_import(Some(&base), "math.lichen").unwrap();
@@ -739,7 +825,7 @@ mod vendored_tests {
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("a.lichen"), "1").unwrap();
         std::fs::write(foo.join("b.lichen"), "2").unwrap();
-        let mut store = PackageStore::new();
+        let mut store = PackageStore::<LangValue, LangOperator>::new();
         store.register_vendored("foo", foo);
         let err = store.resolve_import(None, "foo").unwrap_err();
         assert!(err.message.contains("ambiguous"), "{}", err.message);

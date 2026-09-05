@@ -28,3 +28,33 @@ pub use compute::{
     BufferCollectOp, BufferGetOp, BufferId, ComputeOperator, ComputePlugin, ComputeValue, JitOp,
     KernelId, LaunchOp, ParLaunchOp, ParallelOp, WRAPPER_SOURCE,
 };
+
+/// Contribute this plugin's vocabulary leaves into a
+/// [`liche_language::lang_compose_vocabulary!`] composition.  A native plugin
+/// exports this leaf macro; the package manager lists the plugin in the
+/// composition's `plugins = [...]` as `<crate> as <crate>_leaves`, and this
+/// macro hands its value / operator leaves back to the composition's
+/// accumulator (its `$next` callback) — so the generated compiler composes an
+/// arbitrary plugin's vocabulary without any config file.
+///
+/// The macro name is `<crate_ident>_leaves` (`lichen_compute_leaves`), not a
+/// shared `liche_leaves`: two `#[macro_export]` macros named identically in
+/// the dependency graph collide in the extern prelude, so each plugin's leaf
+/// macro has a distinct, crate-derivable name.
+///
+/// The `[ $($oa)* ] … [ $($b)* ]` accumulator and `[ $($rest)* ]` remaining
+/// plugin list are threaded through verbatim so the composition continues past
+/// this plugin.
+#[macro_export]
+macro_rules! lichen_compute_leaves {
+    ($next:path, [ $($oa:tt)* ][ $($va:tt)* ][ $($aa:tt)* ][ $($b:tt)* ] ; [ $($rest:tt)* ] ;) => {
+        $next! {
+            @absorb (
+                operators: [ lichen_compute::ComputeOperator as ComputeOperator; ];
+                values: [ lichen_compute::ComputeValue as ComputeValue; ];
+                attrs: [ ];
+                [ $($oa)* ][ $($va)* ][ $($aa)* ][ $($b)* ] ; [ $($rest)* ] ;
+            )
+        }
+    };
+}

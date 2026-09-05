@@ -24,27 +24,33 @@ use std::sync::Arc;
 
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::no_native_ops;
+use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
+use lichen_lowlevel::{LowOperator, OperatorExt};
+use lichen_utils::extend::AsEnum;
 use sha2::Digest;
 
 use crate::ast::{BinOp, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
-use crate::program::LangProgram;
-use crate::{ParseDiag, Report, build_report};
+use crate::program::{GcdOp, LangProgram};
+use crate::{CompiledProgram, ParseDiag, Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
 /// is cheap to hold) plus every diagnostic, and the content signature the
 /// compile ran under.
 #[derive(Clone)]
-pub struct SessionReport {
+pub struct SessionReport<P: HighProgram>
+where
+    P::Value: ValueType,
+{
     /// The checked build — `Some` whenever the frontend resolved the program
     /// (including a partially recovered parse) and the checker ran on it.
     /// Shared, so reusing the session never requires rebuilding it.
-    pub build: Option<Arc<Build<LangProgram>>>,
+    pub build: Option<Arc<Build<P>>>,
     /// Lex + parse (always fresh) and the checker's rendered failures (from the
     /// reused or freshly built [`Build`]).
-    pub diagnostics: Vec<Diag>,
+    pub diagnostics: Vec<Diag<P>>,
     /// The beyond-error content signature this report was compiled under —
     /// equal across edits that only change error blocks.
     pub signature: u64,
@@ -53,7 +59,10 @@ pub struct SessionReport {
     pub reused: bool,
 }
 
-impl SessionReport {
+impl<P: HighProgram> SessionReport<P>
+where
+    P::Value: ValueType,
+{
     /// No errors and the program checked.
     pub fn ok(&self) -> bool {
         self.diagnostics.is_empty() && self.build.as_ref().is_some_and(|b| b.ok)
@@ -61,9 +70,20 @@ impl SessionReport {
 }
 
 /// An editable source buffer with a diff-gated compile.
-pub struct BufferSession {
+pub struct BufferSession<V: ValueType, O: OperatorExt<CompiledProgram<V, O>>>
+where
+    O: AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + 'static,
+    V: 'static,
+{
     source: String,
-    cache: Option<Cache>,
+    cache: Option<Cache<CompiledProgram<V, O>>>,
     /// The state the last compile ran under — the baseline the *next* edit is
     /// diffed against and, for lexing, the token stream it resumes from.
     last: Option<LastState>,
@@ -83,18 +103,33 @@ struct LastState {
     sig: SignatureOut,
 }
 
-struct Cache {
+struct Cache<P: HighProgram>
+where
+    P::Value: ValueType,
+{
     /// The beyond-error content signature the cached build was compiled under.
     signature: u64,
     /// The cached build, shared with any report that reused it.
-    build: Option<Arc<Build<LangProgram>>>,
+    build: Option<Arc<Build<P>>>,
     /// The checker's rendered diagnostics for that build — static across edits
     /// that keep the clean content (the fresh frontend diagnostics are
     /// re-derived per call).
-    check_diagnostics: Vec<Diag>,
+    check_diagnostics: Vec<Diag<P>>,
 }
 
-impl BufferSession {
+impl<V, O> BufferSession<V, O>
+where
+    V: ValueType + 'static,
+    O: OperatorExt<CompiledProgram<V, O>>
+        + AsEnum<LowOperator>
+        + From<LowOperator>
+        + std::fmt::Debug
+        + Copy
+        + PartialEq
+        + From<GcdOp>
+        + From<TypeOperator>
+        + 'static,
+{
     /// A new session over `source`.
     pub fn new(source: impl Into<String>) -> Self {
         BufferSession {
@@ -159,7 +194,7 @@ impl BufferSession {
     /// regex work.  The result is identical to a full re-lex (`lex_resume` is
     /// proven equal to [`lex::lex_with`] — see the lex tests); only the cost
     /// changes.
-    pub fn compile(&mut self) -> SessionReport {
+    pub fn compile(&mut self) -> SessionReport<CompiledProgram<V, O>> {
         let line_starts = lex::line_starts(&self.source);
 
         // Whether a prior snapshot plus a changed source lets us re-derive only
@@ -184,7 +219,8 @@ impl BufferSession {
                 (lexed.tokens, lexed.errors)
             }
         };
-        let mut diagnostics: Vec<Diag> = lex_errors.into_iter().map(Diag::from_lex).collect();
+        let mut diagnostics: Vec<Diag<CompiledProgram<V, O>>> =
+            lex_errors.into_iter().map(Diag::from_lex).collect();
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
@@ -228,7 +264,7 @@ impl BufferSession {
             _ => signature_full(&program),
         };
         let signature = sig_out.combined;
-        diagnostics.extend(sig_out.diagnostics.clone());
+        diagnostics.extend(sig_out.diagnostics.iter().cloned().map(|d| d.retype()));
 
         // Reuse: the name-resolved structure is unchanged, so the established
         // build is exactly right.  Only the (fresh, above) frontend/resolve
@@ -258,14 +294,14 @@ impl BufferSession {
         // already produced by the signature pass (the frontend source of truth
         // for the session), so the lowering's own are discarded.
         let (ir, span_index, _) = crate::compile::compile_with_imports(&program, &[]);
-        let report: Report = build_report(
+        let report: Report<CompiledProgram<V, O>> = build_report::<V, O>(
             Some(ir),
             Some(span_index),
             diagnostics,
             None,
             no_native_ops(),
         );
-        let check_diagnostics: Vec<Diag> = report
+        let check_diagnostics: Vec<Diag<CompiledProgram<V, O>>> = report
             .diagnostics
             .iter()
             .filter(|d| d.stage == Stage::Check)
@@ -552,7 +588,8 @@ struct SpliceOut {
 /// resolved hashes and whether each emitted a diagnostic.
 struct SignatureOut {
     combined: u64,
-    diagnostics: Vec<Diag>,
+    /// The resolve-layer diagnostics (frontend — no checker build).
+    diagnostics: Vec<Diag<LangProgram>>,
     stmt_hashes: Vec<u64>,
     stmt_had_diag: Vec<bool>,
 }
@@ -627,7 +664,7 @@ struct Sig {
     stmt_had_diag: Vec<bool>,
     scopes: Vec<HashMap<String, usize>>,
     next_slot: usize,
-    diagnostics: Vec<Diag>,
+    diagnostics: Vec<Diag<LangProgram>>,
 }
 
 impl Sig {

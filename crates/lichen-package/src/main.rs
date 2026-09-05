@@ -17,8 +17,8 @@ use std::env::Args;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use lichen_language::preprocess::{Directive, block_directives, split_block};
-use lichen_package::{DEFAULT_REPO, Depend, Project, git, plugin, toolchain};
+use lichen_language::preprocess::{block_depends, split_block};
+use lichen_package::{DEFAULT_REPO, Depend, Project, compiler_cache, git, plugin, toolchain};
 
 const USAGE: &str = "\
 usage: lichen <command> [args]
@@ -33,9 +33,9 @@ commands:
                                                         binary
   clean                                                 reclaim device-cache artifacts
   install <compiler|language-server|all>                fetch a toolchain binary
-  rebuild-plugin [<file|dir>] [--name <n>] [--repo <u>] rebuild the compiler for the
-                                                        native plugins declared in the
-                                                        file(s)' `depend` blocks
+  rebuild-plugin [<file|dir>] [--repo <u>]            build (or reuse) a cached
+                                                        compiler over the project's
+                                                        native plugins
   cache gc                                              reclaim device-cache artifacts
   --help, -h                                            print this help
   --version, -V                                         print the version
@@ -84,37 +84,11 @@ fn take(args: &mut Args) -> Option<String> {
     args.next()
 }
 
-/// The dependencies declared by a source's `@{…@}` block.
+/// The dependencies declared by a source's `@{…@}` block (`depend` and `plug`
+/// bindings).
 fn depends_of(source: &str) -> Vec<Depend> {
     let (interior, _) = split_block(source);
-    let Some(interior) = interior else {
-        return Vec::new();
-    };
-    block_directives(interior)
-        .into_iter()
-        .filter_map(|dir| match dir {
-            Directive::Depend {
-                url,
-                name,
-                rev,
-                branch,
-                tag,
-                package,
-                sub,
-                plugin,
-            } => Some(Depend {
-                url,
-                name,
-                rev,
-                branch,
-                tag,
-                package,
-                sub,
-                plugin,
-            }),
-            _ => None,
-        })
-        .collect()
+    block_depends(interior.unwrap_or_default())
 }
 
 /// Every `.lichen` source under `target` (a file or a directory), as
@@ -187,22 +161,14 @@ fn cmd_fetch(args: &mut Args) -> ExitCode {
 }
 
 fn cmd_run(args: &mut Args) -> ExitCode {
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
     let Some(target) = take(args).map(PathBuf::from) else {
         eprintln!("usage: lichen run <file|dir>");
         return ExitCode::FAILURE;
     };
-    delegate(&project, &target, "run")
+    delegate(&target, "run")
 }
 
 fn cmd_build(args: &mut Args) -> ExitCode {
-    let project = match load_current() {
-        Ok(p) => p,
-        Err(code) => return code,
-    };
     let Some(target) = take(args).map(PathBuf::from) else {
         eprintln!("usage: lichen build <file>");
         return ExitCode::FAILURE;
@@ -211,14 +177,15 @@ fn cmd_build(args: &mut Args) -> ExitCode {
         eprintln!("usage: lichen build <file> (a directory is only valid for `run`)");
         return ExitCode::FAILURE;
     }
-    delegate(&project, &target, "build")
+    delegate(&target, "build")
 }
 
 /// The shared `run`/`build` workflow: fetch the target's dependencies into the
-/// source cache, select the compiler binary (the plugin-built one when the
-/// project imports a native plugin, else the shipped compiler), and delegate
-/// the actual compilation to it as a subprocess.
-fn delegate(project: &Project, target: &Path, sub: &str) -> ExitCode {
+/// source cache, select the compiler binary (the plugin-built one, from the
+/// lichen-home compiler cache, when the target imports a native plugin, else
+/// the shipped compiler), and delegate the actual compilation to it as a
+/// subprocess.
+fn delegate(target: &Path, sub: &str) -> ExitCode {
     if !target.exists() {
         eprintln!("cannot {sub}: {} does not exist", target.display());
         return ExitCode::FAILURE;
@@ -234,7 +201,7 @@ fn delegate(project: &Project, target: &Path, sub: &str) -> ExitCode {
             }
         }
     }
-    let bin = match select_compiler(project, &depends) {
+    let bin = match select_compiler(&depends) {
         Ok(bin) => bin,
         Err(e) => {
             eprintln!("{e}");
@@ -245,20 +212,22 @@ fn delegate(project: &Project, target: &Path, sub: &str) -> ExitCode {
     spawn_compiler(&bin, sub, target)
 }
 
-/// The compiler binary to drive: the plugin-built one when the project's deps
-/// include a native plugin (`depend … plugin`), else the installed/shipping
+/// The compiler binary to drive: the plugin-built one (from the lichen-home
+/// compiler cache, built or reused) when the target's deps include a native
+/// plugin (`name = plug …` or `depend … plugin`), else the installed/shipping
 /// `lichen-compiler`.
-fn select_compiler(project: &Project, depends: &[Depend]) -> Result<PathBuf, String> {
-    if depends.iter().any(|dep| dep.plugin) {
-        plugin::built_bin(&project.dir).ok_or_else(|| {
-            "the project imports a native plugin; run `lichen rebuild-plugin` first".to_string()
-        })
-    } else {
-        stock_compiler().ok_or_else(|| {
+///
+/// The plugin set must already be fetched ([`crate::git::fetch`]) so its
+/// resolved version can key the cache.
+fn select_compiler(depends: &[Depend]) -> Result<PathBuf, String> {
+    let plugins: Vec<Depend> = depends.iter().filter(|dep| dep.plugin).cloned().collect();
+    if plugins.is_empty() {
+        return stock_compiler().ok_or_else(|| {
             "no `lichen-compiler` on $PATH (or next to `lichen`); run `lichen install compiler`"
                 .to_string()
-        })
+        });
     }
+    compiler_cache::ensure(DEFAULT_REPO, &plugins, &plugin::Leaves::shipping())
 }
 
 /// The shipped compiler binary: an installed one, else a sibling
@@ -302,7 +271,10 @@ fn spawn_compiler(bin: &Path, sub: &str, target: &Path) -> ExitCode {
 /// live `.lichen` (or `virtual:`) source slot.
 fn cmd_clean(_args: &mut Args) -> ExitCode {
     let dir = lichen_language::persist::lichendir();
-    let mut store = lichen_language::package::PackageStore::with_cache_dir(dir.clone());
+    let mut store = lichen_language::package::PackageStore::<
+        lichen_language::program::LangValue,
+        lichen_language::program::LangOperator,
+    >::with_cache_dir(dir.clone());
     let removed = store.gc();
     println!(
         "reclaimed {removed} cached artifact(s) from {}",
@@ -364,13 +336,10 @@ fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let mut name = "project".to_string();
     let mut repo = DEFAULT_REPO.to_string();
     let mut target: Option<PathBuf> = None;
     while let Some(v) = take(args) {
-        if v == "--name" || v == "-n" {
-            name = take(args).unwrap_or(name);
-        } else if v == "--repo" {
+        if v == "--repo" {
             repo = take(args).unwrap_or(repo);
         } else if v.starts_with('-') {
             eprintln!("unknown flag: {v}");
@@ -387,10 +356,22 @@ fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
     if plugins.is_empty() {
         println!("no native-plugin dependencies; rebuilding over the shipping plugin set");
     }
+    // Fetch the plugins so their resolved versions can key the cache, then
+    // build (or reuse) a plugin-composed compiler into the lichen-home cache.
+    for dep in &plugins {
+        let alias = git::alias_of(dep);
+        match git::fetch(dep) {
+            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
+            Err(e) => {
+                eprintln!("failed to fetch {alias}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let leaves = plugin::Leaves::shipping();
-    match plugin::rebuild(&project.dir, &name, &repo, &plugins, &leaves) {
-        Ok(build) => {
-            println!("rebuilt compiler: {}", build.bin.display());
+    match compiler_cache::ensure(&repo, &plugins, &leaves) {
+        Ok(bin) => {
+            println!("rebuilt compiler: {}", bin.display());
             ExitCode::SUCCESS
         }
         Err(e) => {

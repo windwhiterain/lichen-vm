@@ -101,6 +101,23 @@ pub trait AsEnum<B> {
     fn as_enum(&self) -> Option<B>;
 }
 
+/// A value leaf's contribution to the composed vocabulary's
+/// [`is_function_kind`] classification: whether a value of this leaf re-heads
+/// the universe to form a *function-kind* marker.  Such a marker has a
+/// function type's `[in, out]` shape and so renders as `in -> out` — e.g. the
+/// `lichen-compute` plugin's `TypeKernel`.  The composed value's
+/// [`ValueType::is_function_kind`] delegates to each leaf; a plain value leaf
+/// returns `false` (the default).
+///
+/// The trait lives here rather than in the highlevel so the structural
+/// [`LowValue`] (a lowlevel leaf) can implement it without a circular
+/// dependency.
+pub trait FunctionKind {
+    fn is_function_kind(&self) -> bool {
+        false
+    }
+}
+
 /// Compose a base enum with one carry variant per extension enum.
 ///
 /// See the [module documentation](self) for the generated items and the

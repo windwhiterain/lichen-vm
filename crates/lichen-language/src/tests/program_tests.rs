@@ -1,5 +1,6 @@
 use super::*;
-use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module};
+use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
+use lichen_utils::extend::AsEnum;
 
 /// Feed `values` (as the operand array) to the language's `Gcd` operator
 /// and return the computed meet.

@@ -573,6 +573,7 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-perspective",
  "lichen-render",
+ "lichen-std-native",
  "lichen-utils",
  "logos",
  "sha2",
@@ -646,6 +647,15 @@ dependencies = [
 
 [[package]]
 name = "lichen-render"
+version = "0.1.0"
+dependencies = [
+ "lichen-highlevel",
+ "lichen-lowlevel",
+ "lichen-utils",
+]
+
+[[package]]
+name = "lichen-std-native"
 version = "0.1.0"
 dependencies = [
  "lichen-highlevel",

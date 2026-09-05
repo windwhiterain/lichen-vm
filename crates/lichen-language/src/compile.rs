@@ -49,7 +49,7 @@ use lichen_language_lex::Span;
 use crate::ast::{Binding, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
-use crate::program::{LangAttr, Perspective};
+use crate::program::{LangAttr, LangProgram, Perspective};
 use lichen_doc::Doc;
 
 /// `ExprId` → the source span the expr lowers from.  Built here, exactly where
@@ -58,7 +58,7 @@ use lichen_doc::Doc;
 /// only record of source positions for IR nodes.
 pub type SpanIndex = Vec<Option<Span>>;
 
-pub fn compile(program: &Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag>) {
+pub fn compile(program: &Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
     compile_with_imports(program, &[])
 }
 
@@ -75,7 +75,7 @@ pub fn compile(program: &Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag>) {
 pub fn compile_with_imports(
     program: &Program,
     imports: &[ResolvedImport],
-) -> (IR<LangAttr>, SpanIndex, Vec<Diag>) {
+) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
     let mut compiler = Compiler {
         ir: IR::new(),
         scopes: Vec::new(),
@@ -143,8 +143,9 @@ struct Compiler {
     str_names: HashMap<String, &'static str>,
     /// The frontend diagnostics the lowering accumulated (the resolve-layer
     /// errors for unresolved names).  The frontend surfaces these alongside
-    /// the IR; lowering itself never fails on them.
-    diagnostics: Vec<Diag>,
+    /// the IR; lowering itself never fails on them.  They carry no checker
+    /// build, so they are typed over the shipped [`LangProgram`] marker.
+    diagnostics: Vec<Diag<LangProgram>>,
     /// The source span of each IR node, keyed by [ExprId] — the crate's own
     /// position index; highlevel itself is span-free.
     spans: Vec<Option<Span>>,
