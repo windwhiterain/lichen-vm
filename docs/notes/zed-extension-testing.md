@@ -77,9 +77,9 @@ Then confirm the grammar pin: `[grammars.lichen]` has `rev` (a real Git SHA in `
 `path = "tree-sitter-lichen"`, and a `repository` that resolves. The `rev` must be the commit
 whose grammar actually contains every node that the `highlights.scm`/`outline.scm` queries
 reference — pinning an older rev (e.g. `9b23892`, before `return` was added to the grammar)
-makes the grammar `Query::new` fail on load with `Invalid node type "return"`. The current
-`0773b18` is committed and pushed to `origin/v1`, so both the `file://` URL (local dev) and
-the remote form resolve.
+makes the grammar `Query::new` fail on load with `Invalid node type "return"`. The `rev` must
+be reachable from the public `repository`; `d799ade` is the current pin, pushed to `origin/v1`
+and containing `tree-sitter-lichen/`.
 
 ### 4. Grammar
 

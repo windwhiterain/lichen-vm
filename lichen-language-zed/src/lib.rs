@@ -2,11 +2,11 @@
 //!
 //! This is a *package-kind*-separate crate, not a *tool*-separate crate: it is
 //! a WASM plugin that speaks `zed_extension_api`, so it cannot live in the same
-//! binary target as the LSP server. Everything editor-y that it needs — the
-//! span↔position conversion, the name-resolution index, and above all the
-//! shared frontend artifacts from `lichen-language` — comes from
-//! `lichen-language-server`'s library, so the extension and the server agree
-//! byte-for-byte. See `docs/notes/language-toolchain.md`.
+//! binary target as the LSP server. Editor-y logic that must match the server —
+//! span↔position conversion, the name-resolution index, the shared frontend
+//! artifacts — is intended to come from `lichen-language-server`'s library so the
+//! extension and the server agree byte-for-byte. That reuse is *not wired up yet*,
+//! so those crates are not dependencies for now; see `docs/notes/language-toolchain.md`.
 //!
 //! The `zed` feature is on by default (`default = ["zed"]` in `Cargo.toml`), so
 //! a plain `cargo build` — including the one Zed's own dev-extension builder

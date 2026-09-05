@@ -206,11 +206,12 @@ not pull the tokio/tower async stack.
 ### `lichen-language-zed` (editor plugin)
 
 - A `zed_extension_api` extension that (a) declares the `lichen` language, and
-  (b) points Zed's LSP integration at `lichen-language-server`. It reuses
-  `lichen-language-server`'s editor-view library so its span math and hover /
-  go-to-definition logic match the server byte-for-byte. It is a separate crate
-  only because it is a WASM plugin for a different host, not because it is a
-  different tool.
+  (b) points Zed's LSP integration at `lichen-language-server`. It is a separate
+  crate only because it is a WASM plugin for a different host, not because it is a
+  different tool. It is meant to reuse `lichen-language-server`'s editor-view
+  library so its span math and hover / go-to-definition logic match the server
+  byte-for-byte — but that reuse is **not wired up yet**, so those crates are
+  currently **not** dependencies of the extension.
 - The installable extension is this crate directory: `extension.toml` (id, name,
   the `[language_servers.lichen-language-server]` and `language_ids` wiring) plus
   `languages/lichen/config.toml`. Build the WASM with:
@@ -218,9 +219,8 @@ not pull the tokio/tower async stack.
   --release` and install it as a dev extension from this directory.
 - **Distribution shape:** for the official registry, the extension does not need
   its own repo — the whole `lichen-vm` repository is added as a public submodule
-  with `path = "lichen-language-zed"` (and `default-features = false` on
-  the `lichen-language-server` dependency keeps the tower-lsp/tokio stack out of
-  the WASM). Install-as-dev-extension needs no Git or registry at all.
+  with `path = "lichen-language-zed"`. Install-as-dev-extension needs no Git or
+  registry at all.
 - **Grammar:** Lichen's lexer/parser is hand-rolled, so syntax highlighting needs
   a Tree-sitter grammar. `tree-sitter-lichen/` at the repo root provides it.
   It is a **deliberately simple, permissive** grammar (not a re-implementation of
@@ -233,12 +233,12 @@ not pull the tokio/tower async stack.
   `src/parser.c` is committed, so Zed builds it without the toolchain. Queries
   live both in `tree-sitter-lichen/queries/` and (mirrored) in the extension's
   `languages/lichen/`, because Zed reads queries from the extension directory.
-- **Grammar `rev`:** pinned to `9b23892` (the commit containing `tree-sitter-lichen/`),
-  with `[grammars.lichen]` `repository` pointing at the real remote
-  (`windwhiterain/lichen-vm`). **Push caveat:** that SHA is currently only on the
-  local `v1`/`feature/lichen-zed` branches — until it is pushed to `origin/v1`
-  (or the branch it merges into), the registry-path grammar fetch fails, so use
-  the `file://` `repository` form for local development.
+- **Grammar `rev`:** pinned to `d799ade` (a commit containing `tree-sitter-lichen/`
+  and pushed to `origin/v1`), with `[grammars.lichen]` `repository` pointing at the
+  public HTTPS remote (`https://github.com/windwhiterain/lichen-vm`). The pinned
+  `rev` must stay reachable from that remote and in sync with the grammar/query
+  paths (the `grammar_consistency` test guards this) so a registry install can clone
+  and check it out. A `file://` `repository` is only for local development.
 - **Semantic tokens** (the grammar-optional highlight path) are served by the
   LSP, so the extension neither needs the grammar for color nor needs any extra
   client-side config — Zed requests `textDocument/semanticTokens/full` because
