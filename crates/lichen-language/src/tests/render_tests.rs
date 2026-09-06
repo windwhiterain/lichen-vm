@@ -156,6 +156,22 @@ fn a_raw_index_reads_a_type_component() {
 }
 
 #[test]
+fn a_raw_named_read_yields_the_field_type() {
+    // `X::a` reads the named field's *type* from a TypeStruct value (the name
+    // table lies at container_ty[0][1]); `.a` reads the field *value* from a
+    // struct instance.
+    assert_eq!(output("S = struct<.a Int, .b string>\nS::a"), "Int: Type");
+    assert_eq!(
+        output("S = struct<.a Int, .b string>\nS::b"),
+        "string: Type"
+    );
+    assert_eq!(
+        output("S = struct<.a Int, .b string>\ns = S(.a 1, .b \"h\")\ns.a"),
+        "1: Int"
+    );
+}
+
+#[test]
 fn a_type_second_slot_does_not_collapse_an_array() {
     // The raw layout's `[head, K]` heuristic reads a two-element array
     // whose second element is the universe as an atomic type pair and

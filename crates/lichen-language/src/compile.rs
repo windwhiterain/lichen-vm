@@ -648,6 +648,15 @@ impl Compiler {
                 let name = self.intern_str(name);
                 self.alloc(ExprKind::NamedField { container, name }, span)
             }
+            Expr::RawNamedField {
+                container,
+                name,
+                span,
+            } => {
+                let container = self.compile_expr(container);
+                let name = self.intern_str(name);
+                self.alloc(ExprKind::RawNamedField { container, name }, span)
+            }
             Expr::Arrow {
                 parameter,
                 r#return,

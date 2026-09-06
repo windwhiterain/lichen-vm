@@ -148,10 +148,24 @@ pub enum Expr {
     },
     /// `a.name` — a *named* field read over a struct field.  The field name
     /// is resolved against the struct type's name table (the
-    /// `struct<a :: Int, …>` names) to the field's positional index, then
+    /// `struct<.a Int, …>` names) to the field's positional index, then
     /// read like [`Expr::FieldRead`].  The name is a plain identifier,
     /// distinct from `a(k)` (a positional index expression).
     NamedFieldRead {
+        container: Box<Expr>,
+        name: String,
+        span: Span,
+    },
+    /// `X::a` — a *raw* named component read.  The glued `::` reads the
+    /// field named `a` from a **TypeStruct value** — the container's *type*
+    /// must be a TypeStruct (the name→index table lies directly there, at
+    /// `container_ty[0][1]`), unlike [`Expr::NamedFieldRead`]'s `.a`, which
+    /// requires the container's *kind* to be TypeStruct (its table at
+    /// `container_ty[1][0][1]`).  Both are check-time requirements; the
+    /// difference is where the requirement and the name table sit.  `X::a`
+    /// reads the field's type as a value (`struct<.a Int, .b string>::a`
+    /// is `Int : Type`), and is lazy on an unbound container.
+    RawNamedField {
         container: Box<Expr>,
         name: String,
         span: Span,
@@ -188,8 +202,8 @@ pub enum Expr {
     /// `<T1, ..., Tn>` — a tuple type (angle brackets always produce one).
     TypeTuple(Vec<Expr>, Span),
     /// `struct<T1, ..., Tn>` — a nominal struct type.  Each field may carry
-    /// an optional name (`<name> :: T`), so the syntax is `struct<a :: Int, b`
-    /// where the name is the syntactic prefix `<name> ::`.
+    /// an optional name (`.name T`), so the syntax is `struct<.a Int, .b
+    /// string>` where the name is the syntactic prefix `.name`.
     StructType(Vec<StructField>, Span),
     /// `C(e1, ..., en)` — struct instantiation: a callee (a struct type or a
     /// generic struct constructor) applied to a field list.  Each field may be
@@ -210,9 +224,9 @@ pub enum Expr {
     },
     /// `[e1, ..., en]` — an array literal.
     Array(Vec<Expr>, Span),
-    /// `table { k1 :: v1, k2 :: v2, … }` — a constant table literal.  Each
-    /// entry is a `key :: value` pair (any expressions; the parser recognizes
-    /// the double colon as the pair separator).  The keys are force-evaluated
+    /// `table { k1 ==> v1, k2 ==> v2, … }` — a constant table literal.  Each
+    /// entry is a `key ==> value` pair (any expressions; the parser recognizes
+    /// the table arrow as the pair separator).  The keys are force-evaluated
     /// and deep-content-hashed when the table is built; a key that is not
     /// concrete (it depends on an unbound value) is dropped with an error.
     Table(Vec<(Expr, Expr)>, Span),
@@ -290,7 +304,7 @@ pub struct Binding {
 }
 
 /// One field of a `struct<…>` type: an optional name plus the field's type
-/// expression.  `name` is `Some` for a `name :: Ty` field and `None` for a
+/// expression.  `name` is `Some` for a `.name Ty` field and `None` for a
 /// positional (`Ty`) field.
 #[derive(Clone, Debug)]
 pub struct StructField {
@@ -405,6 +419,7 @@ impl Expr {
             Expr::RawIndex { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::NamedFieldRead { span, .. } => *span,
+            Expr::RawNamedField { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
             Expr::Annotation { span, .. } => *span,
             Expr::Arrow { span, .. } => *span,

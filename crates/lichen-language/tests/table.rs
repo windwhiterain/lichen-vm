@@ -1,4 +1,4 @@
-//! End-to-end table tests: the `table { k :: v, … }` literal, deep-content
+//! End-to-end table tests: the `table { k ==> v, … }` literal, deep-content
 //! keys, the `t{k}` lookup (compiled straight to the lowlevel `TableGet` —
 //! the container's type is pinned to a table, so the operator comes from
 //! the syntax, never a runtime kind dispatch), and the recorded failures
@@ -49,13 +49,13 @@ fn a_table_literal_checks_and_reads_by_deep_key() {
     // lookup syntax `t{...}` compiles straight to `TableGet`.
     assert_eq!(
         usize_of(&evaluate(
-            "t = table { [1, 2] :: 3, [4, 5] :: 6 }; t{[1, 2]}"
+            "t = table { [1, 2] ==> 3, [4, 5] ==> 6 }; t{[1, 2]}"
         )),
         3
     );
     assert_eq!(
         usize_of(&evaluate(
-            "t = table { [1, 2] :: 3, [4, 5] :: 6 }; t{[4, 5]}"
+            "t = table { [1, 2] ==> 3, [4, 5] ==> 6 }; t{[4, 5]}"
         )),
         6
     );
@@ -70,7 +70,7 @@ fn an_empty_table_misses() {
 
 #[test]
 fn a_miss_is_a_recorded_error() {
-    let d = diags("t = table { [1, 2] :: 3 }; t{[7, 8]}");
+    let d = diags("t = table { [1, 2] ==> 3 }; t{[7, 8]}");
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::TableMiss);
 }
@@ -81,7 +81,7 @@ fn an_unbound_key_is_dropped_with_an_error() {
     // cannot be forced concrete at build time — the entry is dropped and
     // the failure recorded.
     assert!(has_check_kind(
-        "f = x => table{ x :: 1 }; f 5",
+        "f = x => table{ x ==> 1 }; f 5",
         DiagKind::TableKeyUnbound
     ));
 }
@@ -89,7 +89,7 @@ fn an_unbound_key_is_dropped_with_an_error() {
 #[test]
 fn table_keys_share_one_type() {
     assert!(has_check_kind(
-        "t = table { [1, 2] :: 3, [1, 2, 3] :: 4 }",
+        "t = table { [1, 2] ==> 3, [1, 2, 3] ==> 4 }",
         DiagKind::TableKey
     ));
 }
@@ -97,7 +97,7 @@ fn table_keys_share_one_type() {
 #[test]
 fn table_values_share_one_type() {
     assert!(has_check_kind(
-        "t = table { [1, 2] :: 3, [4, 5] :: Int }",
+        "t = table { [1, 2] ==> 3, [4, 5] ==> Int }",
         DiagKind::TableValue
     ));
 }
@@ -107,7 +107,10 @@ fn a_table_flows_through_a_function() {
     // A table literal inside a function body: the key is concrete at build,
     // the value stays a lazy reference to the parameter, and the apply
     // clones the table (entries re-pointed at the call's clones).
-    assert_eq!(usize_of(&evaluate("f = x => table{ 1 :: x }; (f 5){1}")), 5);
+    assert_eq!(
+        usize_of(&evaluate("f = x => table{ 1 ==> x }; (f 5){1}")),
+        5
+    );
 }
 
 #[test]
@@ -116,7 +119,7 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
     // to a table type, and the argument unify binds the pinned key/value
     // cells when the call resolves.
     assert_eq!(
-        usize_of(&evaluate("get = t => t{1}; t = table { 1 :: 7 }; get t")),
+        usize_of(&evaluate("get = t => t{1}; t = table { 1 ==> 7 }; get t")),
         7
     );
 }

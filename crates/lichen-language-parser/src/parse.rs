@@ -708,16 +708,17 @@ fn atom_parser<'a>(
         .labelled("an expression");
 
     // The postfix forms, chained left.  A `[` after an expression is always
-    // an index, and a `<` after an expression is the **raw** component read
+    // an index, a `<` after an expression is the **raw** component read
     // `X<e>` (no type validation) — the glued `<` no longer builds an array
     // type (that is now the keyword-led `array<T, n>` atom, see
-    // [`array_type`]).  A `(` or a `{` is postfix only
-    // when *adjacent* — the bracket comes straight after the expression, no
-    // space between: a `(` holding a single comma-free expression is the
-    // positional slot read `a(k)`, any other adjacent `(` is struct
-    // instantiation, an adjacent `{` is a table lookup.  A spaced `(` is a
-    // paren atom and a spaced `{` a block; the application rule treats
-    // either as an argument, never this postfix.
+    // [`array_type`]) — and a glued `::name` is the **raw** named read
+    // `X::a` (the container's type must be a TypeStruct).  A `(` or a `{` is
+    // postfix only when *adjacent* — the bracket comes straight after the
+    // expression, no space between: a `(` holding a single comma-free
+    // expression is the positional slot read `a(k)`, any other adjacent `(`
+    // is struct instantiation, an adjacent `{` is a table lookup.  A spaced
+    // `(` is a paren atom and a spaced `{` a block; the application rule
+    // treats either as an argument, never this postfix.
     let glue = token(TokenKind::Glue).ignored();
     let postfix = choice((
         token(TokenKind::Dot)
@@ -733,6 +734,10 @@ fn atom_parser<'a>(
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RAngle))
             .map(Postfix::RawIndex),
+        glue.clone()
+            .ignore_then(token(TokenKind::DoubleColon))
+            .ignore_then(name())
+            .map(|(field_name, _)| Postfix::RawFieldName(field_name)),
         glue.clone()
             .ignore_then(token(TokenKind::LBrace))
             .ignore_then(expr.clone())
@@ -769,6 +774,11 @@ fn atom_parser<'a>(
                     Postfix::RawIndex(index) => Expr::RawIndex {
                         container: Box::new(acc),
                         index: Box::new(index),
+                        span,
+                    },
+                    Postfix::RawFieldName(name) => Expr::RawNamedField {
+                        container: Box::new(acc),
+                        name,
                         span,
                     },
                     Postfix::Paren((fields, saw_comma)) => {
@@ -809,6 +819,7 @@ enum Postfix {
     Index(Expr),
     TableFind(Expr),
     RawIndex(Expr),
+    RawFieldName(String),
     Paren((Vec<StructInstArg>, bool)),
 }
 
@@ -967,9 +978,9 @@ fn array_literal<'a>(
         })
 }
 
-/// `table { k1 :: v1, k2 :: v2, … }` — a constant table literal.  Each
-/// entry is a key/value pair separated by `::`.  Keys and values are full
-/// expressions; the double colon is not part of the expression grammar, so
+/// `table { k1 ==> v1, k2 ==> v2, … }` — a constant table literal.  Each
+/// entry is a key/value pair separated by `==>`.  Keys and values are full
+/// expressions; the table arrow is not part of the expression grammar, so
 /// it unambiguously separates the pair.  Anything else recovers as a parse
 /// error.  Entries are comma-separated with a tolerated trailing comma;
 /// `table {}` is the empty table.
@@ -980,7 +991,7 @@ fn table_literal<'a>(
     let entry = expr
         .clone()
         .then(
-            token(TokenKind::DoubleColon)
+            token(TokenKind::TableArrow)
                 .ignore_then(operand(tokens, expr.clone()))
                 .or_not(),
         )
@@ -989,7 +1000,7 @@ fn table_literal<'a>(
             None => {
                 emit.emit(Rich::custom(
                     me.span(),
-                    "a table entry must be a `key :: value` pair",
+                    "a table entry must be a `key ==> value` pair",
                 ));
                 // Recover like any parse error: the entry's key compiles,
                 // its value is a masked error block.
@@ -1440,6 +1451,9 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
                 walk_expr(key, out);
             }
             Expr::NamedFieldRead { container, .. } => {
+                walk_expr(container, out);
+            }
+            Expr::RawNamedField { container, .. } => {
                 walk_expr(container, out);
             }
             Expr::TableFind { container, key, .. } => {

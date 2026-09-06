@@ -175,7 +175,7 @@ pub struct IR<A = NoAttr, L = HighProgramLiteral> {
     /// One dense arena for struct **field names** — index-aligned with the
     /// [`ExprKind::TypeStruct`] `fields` range **and** the
     /// [`ExprKind::Instantiate`] `value` tuple's elements: `None` for an
-    /// unnamed (positional) field/argument, `Some(name)` for a `name :: Ty`
+    /// unnamed (positional) field/argument, `Some(name)` for a `.name Ty`
     /// field or a `.name bool` argument.
     pub struct_names: Vec<Option<&'static str>>,
     /// One dense arena for the shallow depths of [`ExprKind::ShallowArray`]
@@ -339,6 +339,19 @@ pub enum ExprKind<L> {
         container: ExprId,
         name: &'static str,
     },
+    /// `{ container, name }` — a *raw* named component read `X::a`.  Unlike
+    /// [`Self::NamedField`] (whose name table sits in the container type's
+    /// **kind**, `container_ty[1][0][1]`), this reads the table directly from
+    /// the container's **type**, which must be a TypeStruct (`container_ty[0][1]`),
+    /// and yields the field's *type* as a value (`S::a` on
+    /// `struct<.a Int, .b string>` is `Int : Type`).  `name` is an interned
+    /// `&'static str`.  The requirement is a check-time unify (a concretely
+    /// non-TypeStruct container is a diagnostic), so it is *not* raw in the
+    /// no-validation sense of [`Self::RawIndex`].
+    RawNamedField {
+        container: ExprId,
+        name: &'static str,
+    },
     /// `{ container, key }` — a table lookup `t{k}`: the entry whose stored
     /// key is deep-content-equal to `k`.  The frontend emits it for the
     /// *adjacent* brace form — the syntactic distinction from positional
@@ -383,7 +396,7 @@ pub enum ExprKind<L> {
     /// (unlike a [`Self::Tuple`]'s per-element slots).  Elements stored in
     /// [`IR::children`].
     Array(ChildRange),
-    /// A constant table instance `table { k1 :: v1, k2 :: v2, … }` — every
+    /// A constant table instance `table { k1 ==> v1, k2 ==> v2, … }` — every
     /// key shares one key type and every value one value type (checked
     /// against two shared cells, like an array's single element cell).  The
     /// entries are stored interleaved in [`IR::children`]:

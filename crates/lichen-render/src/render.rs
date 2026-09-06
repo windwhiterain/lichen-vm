@@ -642,7 +642,7 @@ where
         // A struct type itself: the value's type is the struct kind
         // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
         // and the value is the field-type list — render
-        // `struct<T1, ..., Tn>` (or `struct<a :: T1, ...>` when named).
+        // `struct<T1, ..., Tn>` (or `struct<.a T1, ...>` when named).
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
@@ -1032,7 +1032,7 @@ where
 
 /// The per-field names of a struct type, read from its marker `[id, names]`
 /// (the marker sits at the kind's slot 0): `None` for an unnamed (positional)
-/// field, `Some(name)` for a `name :: Ty` field.  Sized to `field_count`; a
+/// field, `Some(name)` for a `.name Ty` field.  Sized to `field_count`; a
 /// name whose index maps outside the field list is dropped (defensive).
 fn struct_field_names<P: HighProgram>(
     module: &Module<P>,
@@ -1088,7 +1088,7 @@ where
 /// the type's kind marker `[id, names]`.  `None` when `node` is not a concrete
 /// struct type (an unbound cell, a tuple, an array, a function).  A `None`
 /// entry is a positional (unnamed) field; a `Some(name)` entry is a
-/// `name :: Ty` field.
+/// `.name Ty` field.
 ///
 /// This is the read-only counterpart to the checker's `struct_names_any`, for a
 /// renderer that only has the module (e.g. the did-you-mean clause on a
@@ -1142,7 +1142,7 @@ where
     module.node_value(id_item.node).and_then(|v| v.type_id())
 }
 
-/// Render a struct field list with per-field names (`name :: T` for a named
+/// Render a struct field list with per-field names (`.name T` for a named
 /// field, `T` for an unnamed one).
 fn struct_fields_with_names(fields: &[String], names: &[Option<&'static str>]) -> Vec<String> {
     fields

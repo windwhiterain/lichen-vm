@@ -98,8 +98,10 @@ pub enum TokenKind {
     FatArrow,
     /// ':' -- an annotation.
     Colon,
-    /// '::' -- the table literal's key/value separator.
+    /// '::' -- the raw named field read on a TypeStruct value (`X::a`).
     DoubleColon,
+    /// '==>' -- the table literal's key/value separator (`table { k ==> v }`).
+    TableArrow,
     /// '#' -- the perspective annotation.
     Hash,
     /// '?' -- the label (doc) annotation: `e ? expr`.
@@ -173,6 +175,7 @@ impl TokenKind {
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
             TokenKind::DoubleColon => "'::'".to_string(),
+            TokenKind::TableArrow => "'==>'".to_string(),
             TokenKind::Hash => "'#'".to_string(),
             TokenKind::Question => "'?'".to_string(),
             TokenKind::Bang => "'!'".to_string(),
@@ -270,6 +273,8 @@ enum RawToken {
     FatArrow,
     #[token("::")]
     DoubleColon,
+    #[token("==>")]
+    TableArrow,
     #[token(":")]
     Colon,
     #[token("#")]
@@ -318,7 +323,11 @@ impl RawToken {
     fn is_postfix_delim(&self) -> bool {
         matches!(
             &self,
-            RawToken::LParen | RawToken::LBracket | RawToken::LBrace | RawToken::LAngle
+            RawToken::LParen
+                | RawToken::LBracket
+                | RawToken::LBrace
+                | RawToken::LAngle
+                | RawToken::DoubleColon
         )
     }
 }
@@ -682,6 +691,7 @@ fn raw_to_kind(
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),
+        RawToken::TableArrow => Some(TokenKind::TableArrow),
         RawToken::Colon => Some(TokenKind::Colon),
         RawToken::Hash => Some(TokenKind::Hash),
         RawToken::Question => Some(TokenKind::Question),

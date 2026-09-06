@@ -131,10 +131,11 @@ module.exports = grammar({
     application: $ => prec.left(PREC.application, repeat1($._atom)),
 
     // An atom is a base form followed by postfix forms.  For simplicity and
-    // permissiveness we keep only the unambiguous `.name` field read as a
-    // postfix; every `[`/`<`/`{`/`(` is read as a *fresh* atom (and handled
-    // by application juxtaposition), so the whitespace-sensitive "Glue"
-    // distinction of the real parser is deliberately glossed over.
+    // permissiveness we keep only the unambiguous `.name` field read and the
+    // `::name` raw named read as postfixes; every `[`/`<`/`{`/`(` is read as
+    // a *fresh* atom (and handled by application juxtaposition), so the
+    // whitespace-sensitive "Glue" distinction of the real parser is
+    // deliberately glossed over.
     _atom: $ => prec.left(seq($._base, repeat($._postfix))),
 
     _base: $ => choice(
@@ -154,9 +155,12 @@ module.exports = grammar({
       $.native_call,
     ),
 
-    _postfix: $ => field('field', $.field_read),
+    _postfix: $ => field('field', choice($.field_read, $.raw_field_read)),
 
     field_read: $ => seq('.', field('name', $.identifier)),
+
+    // `X::a` — the raw named read over a TypeStruct value.
+    raw_field_read: $ => seq('::', field('name', $.identifier)),
 
     // -- atoms & literals --------------------------------------------------
     identifier: $ => /[A-Za-z_][A-Za-z0-9_]*/,
@@ -222,7 +226,7 @@ module.exports = grammar({
       field('type', $.expression),
     ),
 
-    // `table { k1 :: v1, ... }`.
+    // `table { k1 ==> v1, ... }`.
     table_literal: $ => seq(
       'table',
       optional($.separator),
@@ -237,7 +241,7 @@ module.exports = grammar({
 
     table_entry: $ => seq(
       field('key', $.expression),
-      '::',
+      '==>',
       field('value', $.expression),
     ),
 
