@@ -123,8 +123,8 @@ already covers, plus the LSP supplying a root at all:
   cases; the edge where a device key is reclaimed under a still-running process
   remains a CLI-oriented `panic!` in `try_reuse`, untouched here. If the server
   ever hits it in practice it is a separate hardening pass.
-- **No opportunistic GC / compile daemon.** Cache growth is bounded by the
-  existing `cache gc`; a cross-process compile daemon is already noted as out of
+- **No opportunistic GC / compile daemon.** Cache growth is bounded by
+  `lichen clean`; a cross-process compile daemon is already noted as out of
   scope in `artifact-cache.md`.
 - **No in-memory registry held across requests,** which would reintroduce the
   `!Send` problem for plugin-composed servers. Persistence is the disk store.

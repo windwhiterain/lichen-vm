@@ -52,7 +52,7 @@ changed chain recompiles, and each compiled package is serialized back.
 
 - `lichen-compiler run <file|dir>` (or the bare `lichen-compiler <file|dir>`) — compile and run.
 - `lichen-compiler build <file>` — load/freeze a package and print its exported type.
-- `lichen-compiler cache gc` — reclaim unreachable artifacts from the device cache.
+- `lichen clean` (the package manager) — reclaim unreachable artifacts from the device cache.
 - `-h/--help`, `-V/--version`.
 
 The compiler binary is `lichen-compiler` (it was `lichen` before the package

@@ -2,8 +2,8 @@
 //!
 //! `lichen-compiler <program.lichen>` compiles and runs one program, printing
 //! its output; a directory path runs every `.lichen` file in it, printing
-//! `file: output` per program.  `run`, `build`, and `cache gc` subcommands are
-//! also accepted.
+//! `file: output` per program.  The `run` and `build` subcommands are also
+//! accepted.
 //!
 //! The CLI is depend-aware: a file's `depend "url"` directives resolve against
 //! the lichen-home source cache (populated by the package manager's

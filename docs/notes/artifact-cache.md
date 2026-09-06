@@ -91,10 +91,10 @@ language/VM stack.  `crates/lichen-language/src/persist.rs` keeps only the
 vocabulary half (`ArtifactCodec`, the artifact container serialization,
 `load_artifact`) and re-exports the registry items so the old
 `persist::{DeviceRegistry, ModuleKey, artifact_hash, …}` paths keep resolving.
-The package manager sits on that seam: `lichen clean` opens each plugin-composed
-compiler slot's registry (`<lichendir>/compilers/<key>`) and calls `gc()`
-itself, while `lichen-compiler cache gc` reclaims a compiler's own cache root
-(see [package-manager](package-manager.md)).
+The package manager owns `clean` on that seam: it opens the shipping compiler's
+base cache root (`lichendir()`) and every plugin-composed compiler slot's
+registry (`<lichendir>/compilers/<key>`) and calls `gc()` itself — the compiler
+binary has no cache subcommand (see [package-manager](package-manager.md)).
 
 `PackageStore` (`package.rs`), with `with_cache_dir(dir)`, drives it:
 

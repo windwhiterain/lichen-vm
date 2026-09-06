@@ -13,10 +13,11 @@
 //! compiles a program in-process, so a compiler rebuilt with a native plugin
 //! is the one that actually runs the program.
 //!
-//! `clean` is the exception: the package manager reclaims the plugin-set
-//! compiler cache slots itself, opening each slot's [`lichen_registry::DeviceRegistry`]
-//! and calling `gc()` — no compiler subprocess, and no language/VM dependency
-//! (the registry layer is type-independent, in `lichen-registry`).
+//! `clean` is the exception: the package manager owns it, opening the shipping
+//! compiler's base cache root (`lichendir()`) and **every** plugin-composed
+//! compiler slot's [`lichen_registry::DeviceRegistry`] and calling `gc()` — no
+//! compiler subprocess, and no language/VM dependency (the registry layer is
+//! type-independent, in `lichen-registry`).
 //!
 //! The command surface is declared with clap (derive); each command's runtime
 //! work stays in the `cmd_*` functions below.
@@ -313,40 +314,34 @@ fn spawn_compiler(bin: &Path, args: &[&str]) -> ExitCode {
 }
 
 /// `lichen clean`: reclaim every device-cache artifact that is no longer a
-/// live `.lichen` (or `virtual:`) source slot, in **every plugin-composed
-/// compiler cache slot** under the lichen home (`compilers/<key>`).
+/// live `.lichen` (or `virtual:`) source slot, across the shipping compiler's
+/// base cache root (`lichendir()`) and **every plugin-composed compiler cache
+/// slot** under the lichen home (`compilers/<key>`).
 ///
-/// The package manager owns the clean now: it opens each plugin-set slot's
+/// The package manager owns clean: it opens each cache root's
 /// [`lichen_registry::DeviceRegistry`] and calls `gc()` directly, so it never
 /// needs to spawn (or even install) the compiler binary.  The registry layer
 /// is type-independent (`lichen-registry`), so this pulls no language/VM
-/// stack.  The shipping compiler's own base cache root (`lichendir()`) is
-/// untouched — `clean` reclaims only the per-plugin-set slots.
+/// stack.
 fn cmd_clean() -> ExitCode {
-    let compilers_dir = lichendir().join("compilers");
-    match std::fs::read_dir(&compilers_dir) {
-        Ok(entries) => {
-            let mut slots: Vec<PathBuf> = entries
-                .flatten()
-                .map(|e| e.path())
-                .filter(|p| p.is_dir())
-                .collect();
-            slots.sort();
-            for slot in slots {
-                let mut registry = DeviceRegistry::open(slot.clone());
-                let removed = registry.gc();
-                println!(
-                    "reclaimed {removed} cached artifact(s) from {}",
-                    slot.display()
-                );
-            }
-        }
-        Err(_) => {
-            println!(
-                "no plugin compiler caches under {}",
-                compilers_dir.display()
-            );
-        }
+    let home = lichendir();
+    let mut roots: Vec<PathBuf> = vec![home.clone()];
+    if let Ok(entries) = std::fs::read_dir(home.join(compiler_cache::COMPILERS_DIR)) {
+        let mut slots: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect();
+        slots.sort();
+        roots.extend(slots);
+    }
+    for root in roots {
+        let mut registry = DeviceRegistry::open(root.clone());
+        let removed = registry.gc();
+        println!(
+            "reclaimed {removed} cached artifact(s) from {}",
+            root.display()
+        );
     }
     ExitCode::SUCCESS
 }

@@ -40,7 +40,7 @@ shared substrate is the registry.
 - `insert_module(key, hash, module)` — file an already-deserialized artifact.
 
 `Module::freeze` / `Module::freeze_mapped` are the module-facing conveniences. Keys are
-**reclaimed** (via `cache gc`), so the key space stays bounded, and re-inserting a key
+**reclaimed** (via `lichen clean`), so the key space stays bounded, and re-inserting a key
 after reclamation under a different `hash` is recognized as a new artifact.
 
 ## Persistent device store
@@ -60,8 +60,9 @@ runtime map; the device registry owns the keys.
 - **Incremental load:** verify the recorded dependency graph (one source-file hash per
   node plus key lookups); recompile only the chain that changed; otherwise deserialize
   and register, skipping the compile.
-- **CLI:** `lichen-compiler cache gc` is a *clean*: it removes every artifact whose
-  file ID is **not** a `.lichen` path and **not** a `virtual:` path (a bare `[depend]`
+- **CLI:** `lichen clean` (the package manager) is a *clean*: it removes every
+  artifact whose file ID is **not** a `.lichen` path and **not** a `virtual:`
+  path (a bare `[depend]`
   / `load_package` only admits `.lichen` files, so this prunes out-of-band or stale
   entries), keeping exactly the on-disk and embedded lichen sources.
 - **Only `.lichen` files are packages:** `load_package` rejects a non-`.lichen` path

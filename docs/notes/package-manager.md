@@ -20,7 +20,7 @@ There is **no project manifest**: dependencies are declared per file.
 ## Splitting the work
 
 - `lichen-compiler` (crates/lichen-language) — the frontend, the package store,
-  the persistent device cache, `run`/`build`/`cache gc`.  Consumes the `@{…@}`
+  the persistent device cache, `run`/`build`.  Consumes the `@{…@}`
   block grammar and the `Depend` type from the isolated
   [`lichen-preprocess`](../../crates/lichen-preprocess/) crate (which owns the
   block *syntax* and the preprocessor import path).
@@ -120,9 +120,10 @@ rebuild-plugin`, plus `--version` / `--help`.  `run` and `build` fetch the
 file's `depend`s/`plug`s into the source cache, then **spawn the compiler
 binary** (the plugin-built compiler from the cache when the program imports a
 native plugin, else the shipped `lichen-compiler`) — the package manager never
-compiles in-process.  `clean` is the exception: it opens each plugin-composed
-compiler cache slot's registry (`<lichendir>/compilers/<key>`, a
-`lichen_registry::DeviceRegistry`) and calls `gc()` directly, so no compiler
-subprocess and no language/VM dependency — the registry layer is
+compiles in-process.  `clean` is the exception: it owns the device cache,
+opening the shipping compiler's base cache root (`lichendir()`) and each
+plugin-composed compiler cache slot's registry (`<lichendir>/compilers/<key>`,
+a `lichen_registry::DeviceRegistry`) and calling `gc()` directly, so no
+compiler subprocess and no language/VM dependency — the registry layer is
 type-independent, in `crates/lichen-registry`.  A directory target processes
 every `.lichen` file in it, each with its own dependencies.

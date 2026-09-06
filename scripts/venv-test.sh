@@ -147,10 +147,10 @@ expect_grep "$out" "type: Int" "build add -> type: Int"
 [ -f "$LICHEN_HOME/registry" ] || fail "the device registry was not written"
 pass "artifact .module + registry exist under \$LICHEN_HOME"
 
-# `clean` reclaims only the per-plugin-set compiler cache slots
-# (`$LICHEN_HOME/compilers/<key>`); a shipping-only home has none, so it says so.
+# `clean` reclaims the shipping compiler's base cache root (`gc` keeps every
+# `.lichen`/`virtual:` slot, so a shipping-only home reclaims nothing).
 out="$(lichen clean)" || fail "lichen clean"
-expect_grep "$out" "no plugin compiler caches" "clean (no plugin slots) -> no plugin compiler caches"
+expect_grep "$out" "reclaimed 0 cached artifact(s)" "clean -> reclaimed 0 cached artifact(s)"
 
 # ---------------------------------------------------------------------------
 # 2. a real .lichen git dependency (local file:// fixture, offline)
