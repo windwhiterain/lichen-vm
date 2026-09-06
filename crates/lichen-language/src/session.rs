@@ -21,9 +21,6 @@
 
 use std::sync::Arc;
 
-use lichen_highlevel::checker::Build;
-use lichen_highlevel::native::no_native_ops;
-use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 use crate::LangProgramShape;
 use crate::ast::{BlockStmt, Program, Stmt};
 use crate::diag::{Diag, Stage};
@@ -32,6 +29,9 @@ use crate::parse;
 use crate::persist::ProgramCodecOf;
 use crate::program::GcdOp;
 use crate::{ParseDiag, Report, build_report};
+use lichen_highlevel::checker::Build;
+use lichen_highlevel::native::no_native_ops;
+use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
 /// is cheap to hold) plus every diagnostic, and the resolved content key the
