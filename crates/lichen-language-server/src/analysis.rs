@@ -326,7 +326,9 @@ where
                         };
                         let value = build.val[val_id].and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
+                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
+                                    None
+                                }
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,

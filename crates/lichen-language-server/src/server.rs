@@ -21,8 +21,8 @@ use std::sync::Mutex;
 
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::program::{TypeOperator, ValueType};
-use lichen_language::program::GcdOp;
 use lichen_language::LangProgramShape;
+use lichen_language::program::GcdOp;
 use lichen_utils::extend::AsEnum;
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
