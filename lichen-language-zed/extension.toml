@@ -16,6 +16,29 @@ authors = ["Lichen Developers"]
 description = "Lichen language support and language server for Zed."
 repository = "https://github.com/windwhiterain/lichen-vm"
 
+# Capabilities the extension asks Zed to grant. The extension runs the `lichen`
+# package manager (`lichen path language-server [--project <root>]`) to resolve
+# (and, if absent, install) the language server into Lichen Home; on a fresh
+# machine with neither `lichen` on `$PATH` nor a copy in `$LICHEN_HOME/tools`,
+# it downloads the prebuilt `lichen` binary from this repo's GitHub release via
+# `curl`, so the toolchain bootstraps itself.
+#
+# `command = "*"` for the package manager is required because it is located at a
+# per-user path (`$LICHEN_HOME/tools/lichen`, or wherever `which` finds it) that
+# cannot be known statically; its args are locked to the `path language-server`
+# subcommand. The `curl` capability is the minimal download path (mirroring the
+# package manager's own `toolchain::download`). `process:exec` is what Zed gates
+# for `Command::output()` (see Zed's extension capabilities).
+[[capabilities]]
+kind = "process:exec"
+command = "*"
+args = ["path", "language-server", "**"]
+
+[[capabilities]]
+kind = "process:exec"
+command = "curl"
+args = ["**"]
+
 # The language server Zed should launch for Lichen buffers. It is *not* bundled
 # with the extension (per Zed's publishing rules); the extension's
 # `language_server_command` supplies the command.
