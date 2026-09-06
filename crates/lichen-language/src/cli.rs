@@ -4,8 +4,8 @@
 //!
 //! `lichen-compiler <program.lichen>` compiles and runs one program, printing
 //! its output; a directory path runs every `.lichen` file in it, printing
-//! `file: output` per program.  The `run`, `build`, and `cache gc` subcommands
-//! are also accepted.
+//! `file: output` per program.  The `run` and `build` subcommands are also
+//! accepted.
 //!
 //! The compiler is **depend-aware**: a file's `depend "url"` directives
 //! resolve against the lichen-home source cache (populated by the package
@@ -57,7 +57,7 @@ use crate::program::GcdOp;
 pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
 
 /// The compiler CLI surface: a single positional program path (the default
-/// `run` action) or an explicit subcommand (`run`, `build`, `cache gc`).
+/// `run` action) or an explicit subcommand (`run`, `build`).
 ///
 /// The command name is overridden at runtime from `argv[0]` (see
 /// [`main_with_native_packages`]) so a plugin-built `lichen-compiler-<name>`
@@ -85,17 +85,6 @@ enum Command {
         /// The program file to build.
         path: PathBuf,
     },
-    /// Manage the device/artifact cache.
-    Cache {
-        #[command(subcommand)]
-        command: CacheCommand,
-    },
-}
-
-#[derive(Subcommand)]
-enum CacheCommand {
-    /// Reclaim every artifact no live source chain references.
-    Gc,
 }
 
 /// Run the compiler CLI with the process arguments, using the lichen home as
@@ -181,9 +170,6 @@ where
     match cli.command {
         Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native),
         Some(Command::Build { path }) => build_file::<P>(cache_root, &path, native),
-        Some(Command::Cache {
-            command: CacheCommand::Gc,
-        }) => cache_gc::<P>(cache_root),
         None => {
             if let Some(program) = cli.program {
                 run_path::<P>(cache_root, &program, native)
@@ -209,31 +195,6 @@ where
     } else {
         run_file::<P>(cache_root, path, native)
     }
-}
-
-/// `cache gc`: explicitly reclaim every artifact in the device cache that no
-/// live source chain references.
-fn cache_gc<P>(cache_root: &Path) -> ExitCode
-where
-    P: LangProgramShape,
-    P::Value: ValueType
-        + AsEnum<lichen_compute::ComputeValue>
-        + From<lichen_compute::ComputeValue>
-        + 'static,
-    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
-{
-    // An in-memory-only codec has no device cache to reclaim.
-    if !P::Codec::PERSISTENT {
-        eprintln!("this compiler keeps no persistent cache — nothing to reclaim");
-        return ExitCode::SUCCESS;
-    }
-    let mut store: PackageStore<P> = PackageStore::with_cache_dir(cache_root.to_path_buf());
-    let removed = store.gc();
-    println!(
-        "reclaimed {removed} cached artifact(s) from {}",
-        cache_root.display()
-    );
-    ExitCode::SUCCESS
 }
 
 /// A store that stages the file's `depend` directives from the source cache

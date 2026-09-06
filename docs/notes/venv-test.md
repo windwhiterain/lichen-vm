@@ -26,9 +26,9 @@ scripts/venv-test.sh --no-build  # reuse existing bin staging
 `1 + 2` prints `42: Int` / `3: Int`; a directory `run` prints each file; `lichen
 build` prints `built …` **and** `type: Int`; a compiled artifact
 (`artifacts/<sha256(file_id)>.module`) and a `registry` are written under the
-fresh `$LICHEN_HOME`; `lichen clean` on a shipping-only home (no
-`compilers/<key>` slots) reports `no plugin compiler caches`. This pins the
-shipping compiler's `run`/`build`/persist path (see
+fresh `$LICHEN_HOME`; `lichen clean` reclaims the base cache root and reports
+`reclaimed 0 cached artifact(s)` (`gc` keeps every `.lichen`/`virtual:` slot).
+This pins the shipping compiler's `run`/`build`/persist path (see
 [`artifact-cache.md`](artifact-cache.md)).
 
 **Leg 2 — a real `.lichen` git dependency.** A tiny `file://` git fixture repo
