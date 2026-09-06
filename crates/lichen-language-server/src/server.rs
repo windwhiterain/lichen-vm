@@ -17,7 +17,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::program::{TypeOperator, ValueType};
@@ -29,6 +29,7 @@ use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::analysis::Doc;
+use crate::home::LichenHome;
 use crate::lsp::semantic_token_legend;
 
 /// The server state: one source buffer per open document URI.
@@ -38,6 +39,7 @@ use crate::lsp::semantic_token_legend;
 pub struct Backend<P: LangProgramShape> {
     client: Client,
     sources: Mutex<HashMap<Url, String>>,
+    home: Arc<LichenHome>,
     // `fn() -> P` keeps the type parameter without requiring `P: Send + Sync`
     // (the composed value/operator leaves carry raw arena pointers, so `P`
     // itself is not `Send`); a function-pointer phantom is always `Send + Sync`.
@@ -51,9 +53,16 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     fn new(client: Client) -> Self {
+        // Resolve Lichen Home and (re)create it lazily on server start.  Each
+        // request hands its store this root, so the settled imported packages
+        // are cached on disk and shared cross-process with the `lichen`
+        // compiler.  See `docs/notes/liche-lsp-home.md`.
+        let home = Arc::new(LichenHome::resolve());
+        home.ensure();
         Backend {
             client,
             sources: Mutex::new(HashMap::new()),
+            home,
             _program: std::marker::PhantomData,
         }
     }
@@ -68,10 +77,16 @@ where
 
     /// Re-parse + check `text` off the async runtime and return the resulting
     /// LSP diagnostics (a `Send` value).  `base` is the file's path (from the
-    /// document URI) used to resolve relative `@import` lines.
-    async fn compile_diagnostics(text: String, base: Option<PathBuf>) -> Vec<Diagnostic> {
+    /// document URI) used to resolve relative `@import` lines; `cache_root` is
+    /// Lichen Home, so the settled imported packages are cached on disk.
+    async fn compile_diagnostics(
+        text: String,
+        base: Option<PathBuf>,
+        cache_root: PathBuf,
+    ) -> Vec<Diagnostic> {
         tokio::task::spawn_blocking(move || {
-            Doc::<P>::new_with_base(text, base.as_deref()).lsp_diagnostics()
+            Doc::<P>::new_with_cache(text, base.as_deref(), Some(cache_root.as_path()))
+                .lsp_diagnostics()
         })
         .await
         .expect("compile lichen source")
@@ -84,7 +99,8 @@ where
             .lock()
             .unwrap()
             .insert(uri.clone(), text.clone());
-        let diagnostics = Self::compile_diagnostics(text, base).await;
+        let cache_root = self.home.cache_root().to_path_buf();
+        let diagnostics = Self::compile_diagnostics(text, base, cache_root).await;
         self.publish(uri, diagnostics, None).await;
     }
 
@@ -164,8 +180,10 @@ where
             return Ok(None);
         };
         let base = Self::uri_base(&uri);
+        let cache_root = self.home.cache_root().to_path_buf();
         let result = tokio::task::spawn_blocking(move || {
-            Doc::<P>::new_with_base(text, base.as_deref()).hover_at(position)
+            Doc::<P>::new_with_cache(text, base.as_deref(), Some(cache_root.as_path()))
+                .hover_at(position)
         })
         .await
         .expect("compile lichen source");
@@ -186,8 +204,10 @@ where
             return Ok(None);
         };
         let base = Self::uri_base(&uri);
+        let cache_root = self.home.cache_root().to_path_buf();
         let range = tokio::task::spawn_blocking(move || {
-            Doc::<P>::new_with_base(text, base.as_deref()).definition_at(position)
+            Doc::<P>::new_with_cache(text, base.as_deref(), Some(cache_root.as_path()))
+                .definition_at(position)
         })
         .await
         .expect("compile lichen source");
@@ -210,8 +230,10 @@ where
             return Ok(None);
         };
         let base = Self::uri_base(&uri);
+        let cache_root = self.home.cache_root().to_path_buf();
         let items = tokio::task::spawn_blocking(move || {
-            Doc::<P>::new_with_base(text, base.as_deref()).completion_at(position)
+            Doc::<P>::new_with_cache(text, base.as_deref(), Some(cache_root.as_path()))
+                .completion_at(position)
         })
         .await
         .expect("compile lichen source");
@@ -230,8 +252,10 @@ where
         // (delta-encoded, with the legend indices).  `Doc` is `!Send`, so the
         // `spawn_blocking` returns the fully-encoded (Send) exchange object.
         let base = Self::uri_base(&uri);
+        let cache_root = self.home.cache_root().to_path_buf();
         let tokens = tokio::task::spawn_blocking(move || {
-            Doc::<P>::new_with_base(text, base.as_deref()).semantic_tokens_lsp()
+            Doc::<P>::new_with_cache(text, base.as_deref(), Some(cache_root.as_path()))
+                .semantic_tokens_lsp()
         })
         .await
         .expect("compile lichen source");

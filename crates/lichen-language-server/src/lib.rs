@@ -22,6 +22,7 @@
 //! entry points — *not* one crate per tool.
 
 pub mod analysis;
+pub mod home;
 pub mod lsp;
 #[cfg(feature = "server")]
 pub mod server;

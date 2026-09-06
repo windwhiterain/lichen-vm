@@ -29,6 +29,7 @@ use lichen_language::lex::Span;
 use lichen_language::lex::{Token, TokenKind};
 use lichen_language::package::PackageStore;
 use lichen_language::parse;
+use lichen_language::persist::ArtifactCodec;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
 use lichen_language::program::GcdOp;
@@ -190,14 +191,35 @@ where
     /// `dir/math.lichen`.  `None` keeps the pre-LSP behavior (relative to the
     /// current directory).
     pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc<P> {
+        Doc::new_with_cache(source, base, None)
+    }
+
+    /// [`Doc::new_with_base`] with an explicit persistent cache root.  `cache_root`
+    /// is Lichen Home (see [`home::LichenHome`]): when `Some` (and the program's
+    /// artifact codec can serialize) the imported packages are compiled once and
+    /// cached on disk, reused across documents / sessions / processes.  Below the
+    /// LSP a `Some(root)` is passed so the server actually uses Lichen Home; a
+    /// `None` root keeps the in-memory (pre-cache) behavior.
+    ///
+    /// In-memory is used only when it is *intended*: no `cache_root` was given,
+    /// or the program's codec cannot persist (`NoPersist`).  A healthy home is
+    /// never silently dropped to in-memory.
+    pub fn new_with_cache(
+        source: impl Into<String>,
+        base: Option<&Path>,
+        cache_root: Option<&Path>,
+    ) -> Doc<P> {
         let source = source.into();
         let line_starts = lex::line_starts(&source);
 
         // Cut the leading `@{…@}` block (metadata + imports) off the frontend
-        // input, resolving imports through a fresh in-memory package store so
-        // the shared registry can serve any loaded imports.  `base` lets the
-        // store resolve relative `@import` paths against the file's directory.
-        let mut store = PackageStore::<P>::new();
+        // input, resolving imports through a package store so the shared
+        // registry can serve any loaded imports.  `base` lets the store resolve
+        // relative `@import` paths against the file's directory.
+        let mut store: PackageStore<P> = match cache_root {
+            Some(root) if P::Codec::PERSISTENT => PackageStore::with_cache_dir(root.to_path_buf()),
+            _ => PackageStore::new(),
+        };
         let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
 
         // The frontend artifacts (for the editor index): tokens + AST in
@@ -2399,6 +2421,46 @@ mod tests {
             "relative imports should resolve; got {:?}",
             d.diagnostics
         );
+    }
+
+    #[test]
+    fn new_with_cache_writes_imports_to_the_lichen_home() {
+        // The settled imported packages are compiled into the device cache rooted
+        // at `cache_root`, so the LSP actually uses Lichen Home (persisting across
+        // documents/sessions and sharing with the `lichen` compiler).  `Doc`'s
+        // in-memory path (`new_with_base`) never writes a cache; this one does.
+        let dir = temp_dir("cachewrite");
+        write(&dir, "math.lichen", "{\n  succ = x => x + 1\n}\n");
+        let main_path = write(
+            &dir,
+            "main.lichen",
+            "@{\n  math = import \"math.lichen\"\n  output = \"(42): Int\"\n@}\nmath.succ 41\n",
+        );
+        let cache = temp_dir("cachehome");
+
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_cache(
+            fs::read_to_string(&main_path).unwrap(),
+            Some(main_path.as_path()),
+            Some(cache.as_path()),
+        );
+        assert!(
+            d.diagnostics.is_empty(),
+            "imports should resolve through the cache; got {:?}",
+            d.diagnostics
+        );
+
+        // The compiled package was serialized into the home: a registry file and
+        // a `.module` artifact under `artifacts/`.
+        assert!(
+            cache.join("registry").is_file(),
+            "the cache registry should be written"
+        );
+        let artifacts = cache.join("artifacts");
+        let any_module = fs::read_dir(&artifacts)
+            .expect("artifacts dir should exist")
+            .filter_map(|e| e.ok())
+            .any(|e| e.path().extension().is_some_and(|ext| ext == "module"));
+        assert!(any_module, "a compiled package artifact should be cached");
     }
 
     #[test]
