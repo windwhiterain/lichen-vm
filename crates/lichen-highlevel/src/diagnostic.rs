@@ -99,8 +99,9 @@ pub struct DiaryEntry {
     /// position within the `[value, type]` spine.
     pub loc: Loc,
     pub kind: DiagKind,
-    /// The offending (or missing) struct field name, for a
-    /// `struct<...>` instantiation mismatch.
+    /// The offending (or missing) field name: a `a.name` named-field read
+    /// where the struct has no such field, or a `struct<...>` instantiation
+    /// mismatch.
     pub field: Option<String>,
 }
 
@@ -133,8 +134,9 @@ pub struct Diag<P: Program> {
     pub index: Option<usize>,
     /// The container's length for an out-of-bounds read.
     pub length: Option<usize>,
-    /// The offending (or missing) struct field name, for a `struct<...>`
-    /// instantiation mismatch.
+    /// The offending (or missing) field name: a `a.name` named-field read
+    /// where the struct has no such field, or a `struct<...>` instantiation
+    /// mismatch.
     pub field: Option<String>,
     /// Which `Module::unify_errors` entry a mismatch came from — the key back
     /// to its diary entry, for callers that re-render.

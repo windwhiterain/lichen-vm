@@ -32,7 +32,7 @@ use crate::diag::Diag;
 
 pub use lichen_render::{
     TypePrinter, ValuePrinter, print_type, print_value, render_attributes,
-    render_struct_fields_named,
+    render_struct_fields_named, struct_type_named_fields,
 };
 
 // --- the extension-vocabulary render hooks ---------------------------------
@@ -159,10 +159,27 @@ where
                 printer.node(d.a)
             )
         }
-        DiagKind::NamedField => format!(
-            "no field with this name in the struct type {}",
-            printer.node(d.a)
-        ),
+        DiagKind::NamedField => {
+            let base = format!(
+                "no field with this name in the struct type {}",
+                printer.node(d.a)
+            );
+            // Append a did-you-mean clause naming the struct's actual fields,
+            // so the editor can suggest a fix and power field completion.  The
+            // accessed field name rides in `d.field`; the candidate field names
+            // come from the container's struct type.  No name / no concrete
+            // struct (an unbound container) → the plain message.
+            let Some(name) = d.field.as_deref() else {
+                return base;
+            };
+            let Some(fields) = struct_type_named_fields(printer.module(), d.a) else {
+                return base;
+            };
+            match crate::suggest::did_you_mean(name, fields.into_iter().flatten()) {
+                Some(clause) => format!("{base}{clause}"),
+                None => base,
+            }
+        }
         DiagKind::StructUnknownField => match &d.field {
             Some(name) => format!(
                 "no field named {name} in the struct type {}",

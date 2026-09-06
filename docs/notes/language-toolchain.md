@@ -176,7 +176,12 @@ frontend stays a single source of truth for the *syntax*; resolution for
     `completion_at`, `lsp_diagnostics`, and `semantic_tokens`/`semantic_tokens_lsp`
     on top of it.  `completion_at` offers the names in scope at the cursor (the
     same scope set that an unresolved name's "did you mean" clause uses), and the
-    `resolve`-layer diagnostics name the closest in-scope candidates too.
+    `resolve`-layer diagnostics name the closest in-scope candidates too.  After a
+    `.` it offers the container's **field** names instead: an imported module's
+    exported fields (read from its `Static` type) or a local struct binding's
+    fields (read from its checked struct type).  The *field-access* (named-field
+    miss) diagnostic appends the same did-you-mean clause against the struct's
+    actual fields, so the error and the completion share one candidate set.
 - `src/bin/lichen-language-server.rs` — a [`tower_lsp::LanguageServer`] (stdlib
   JSON-RPC transport via `LspService`/`Server`): `initialize` (capabilities:
   full text-sync, hover, definition, `completionProvider`,
