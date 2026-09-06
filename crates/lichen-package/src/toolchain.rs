@@ -176,7 +176,8 @@ fn toolchain_commit() -> Result<String, String> {
     })
 }
 
-/// The SHA tag of the newest published GitHub release for `repo`.
+/// The tag of the newest published GitHub release for `repo` (a short-SHA
+/// toolchain tag — see [`release_tag`]).
 ///
 /// GitHub's release list is newest-first and includes pre-releases, so its first
 /// entry is the latest.  This decouples `lichen update` from the repository tip,
@@ -232,12 +233,26 @@ struct Release {
     tag_name: String,
 }
 
-/// The GitHub release asset download URL for `bin` at `commit`.
+/// The number of leading hex characters of a commit used as a release tag.
+///
+/// GitHub rejects release/branch tags that are a bare 40- or 64-hex commit SHA,
+/// so toolchain releases are tagged with the first 12 hex chars of the commit
+/// instead of the raw SHA.
+const RELEASE_TAG_LEN: usize = 12;
+
+/// The GitHub release tag for a toolchain commit: its first [`RELEASE_TAG_LEN`]
+/// hex chars (never the raw 40-hex SHA, which GitHub forbids as a tag).
+pub fn release_tag(commit: &str) -> String {
+    commit.chars().take(RELEASE_TAG_LEN).collect()
+}
+
+/// The GitHub release asset download URL for `bin` at the given release `tag`.
 ///
 /// GitHub downloads are `https://github.com/<owner>/<repo>/releases/download/<tag>/<asset>`;
-/// here the *tag* is the commit SHA (the release is tagged at the commit).
-pub fn asset_url(repo: &str, commit: &str, bin: &str) -> String {
-    format!("{repo}/releases/download/{commit}/{}", asset_name(bin))
+/// here the *tag* is the toolchain release tag (a short-SHA tag derived from the
+/// commit — see [`release_tag`]).
+pub fn asset_url(repo: &str, tag: &str, bin: &str) -> String {
+    format!("{repo}/releases/download/{tag}/{}", asset_name(bin))
 }
 
 /// Download `url` to `dest` (a temp sibling, then rename) using `curl`.
@@ -295,13 +310,14 @@ fn make_executable(path: &PathBuf) -> Result<(), String> {
 pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     let bin = tool.bin_name();
     let commit = toolchain_commit()?;
-    let url = asset_url(repo, &commit, bin);
+    let tag = release_tag(&commit);
+    let url = asset_url(repo, &tag, bin);
     let dest = tool_dest_path(tool)?;
     match download(&url, &dest) {
         Ok(()) => Ok(dest),
         Err(e) => Err(format!(
-            "{e}; if `{bin}` was not published at `{commit}` (this `lichen`'s own \
-             commit), run `liche update`"
+            "{e}; if `{bin}` was not published at `{tag}` (this `lichen`'s own \
+             commit `{commit}`), run `liche update`"
         )),
     }
 }
@@ -351,14 +367,14 @@ pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
 /// extension and the CLI resolve from); a copy on `$PATH` elsewhere is left for the
 /// user to refresh. Returns `Ok(None)` when already current, else the new commit.
 pub fn update(repo: &str) -> Result<Option<String>, String> {
-    let commit = latest_release_tag(repo)?;
-    if self_commit().is_some_and(|c| c == commit) {
+    let tag = latest_release_tag(repo)?;
+    if self_commit().is_some_and(|c| release_tag(c) == tag) {
         return Ok(None);
     }
     let dest = tools_dir().join(local_name(PACKAGE_MANAGER_BIN));
-    let url = asset_url(repo, &commit, PACKAGE_MANAGER_BIN);
+    let url = asset_url(repo, &tag, PACKAGE_MANAGER_BIN);
     download(&url, &dest)?;
-    Ok(Some(commit))
+    Ok(Some(tag))
 }
 
 /// Whether the given installed binary for `bin` exists in Lichen Home (used to
@@ -397,7 +413,7 @@ pub fn find(tool: Tool) -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::github_owner_repo;
+    use super::{github_owner_repo, release_tag};
 
     #[test]
     fn parses_github_repo_urls() {
@@ -423,5 +439,13 @@ mod tests {
     fn rejects_non_github_urls() {
         assert!(github_owner_repo("C:\\dev\\lichen-vm").is_err());
         assert!(github_owner_repo("https://example.com/just-one-segment").is_err());
+    }
+
+    #[test]
+    fn release_tag_is_the_short_sha() {
+        let commit = "15a12b39020cc3c093f193f79ddc30860cb041d0";
+        // GitHub forbids tags that are a bare 40/64-hex SHA; the tag is a 12-char prefix.
+        assert_eq!(release_tag(commit), "15a12b39020c");
+        assert_ne!(release_tag(commit).len(), 40);
     }
 }

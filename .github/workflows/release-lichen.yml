@@ -9,9 +9,10 @@ name: release-lichen-toolchain
 # `<bin>-<host-target>[.exe]`, where `<host-target>` is the Rust host triple).
 #
 # Trigger manually (workflow_dispatch) after tagging the commit you want to ship:
-# the release tag is the commit SHA, which equals the `LICHEN_BUILD_COMMIT` that
-# `lichen` embeds at build time (keeping the toolchain at the same revision as the
-# package manager).
+# the release tag is the **commit's short SHA** (first 12 hex chars) — GitHub
+# rejects tags that are a bare 40/64-hex commit SHA — which the `lichen` package
+# manager derives from the same `LICHEN_BUILD_COMMIT` it embeds at build time
+# (keeping the toolchain at the same revision as the package manager).
 #
 # By default the release is published as a **full/latest** release. Set the
 # `prerelease` input (or `scripts/release.sh --prerelease`) to publish it as a
@@ -81,14 +82,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Compute short commit tag
+        id: short_sha
+        shell: bash
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           path: dist
       - name: Create/update the toolchain release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.sha }}
-          name: "lichen toolchain ${{ github.sha }}"
+          tag_name: ${{ steps.short_sha.outputs.tag }}
+          name: "lichen toolchain ${{ steps.short_sha.outputs.tag }}"
           draft: false
           prerelease: ${{ inputs.prerelease }}
           files: dist/**/*

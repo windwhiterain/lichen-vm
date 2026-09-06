@@ -59,12 +59,12 @@ say "triggering CI release workflow: gh workflow run $WORKFLOW --ref $REF -F pre
 gh workflow run "$WORKFLOW" --ref "$REF" -F "prerelease=$PRERELEASE" \
   || fail "gh workflow run failed (check the workflow name, and that $REF is pushed to origin)"
 if [ "$PRERELEASE" = "true" ]; then
-  say "this run publishes a PRE-RELEASE tagged at \`github.sha\`."
+  say "this run publishes a PRE-RELEASE tagged at the commit's short SHA."
 else
-  say "this run publishes a full/latest RELEASE tagged at \`github.sha\`."
+  say "this run publishes a full/latest RELEASE tagged at the commit's short SHA."
 fi
 say "run started. Monitor with:  gh run list --workflow=$WORKFLOW"
-say "it publishes a release tagged at \`github.sha\` (the commit $REF points to) with the"
+say "it publishes a release tagged at the commit's short SHA (the commit $REF points to) with the"
 say "assets \`lichen-<host-target>[.exe]\`, \`lichen-compiler-<...>\`, \`lichen-language-server-<...>\`."
 
 if [ "$WATCH" -eq 1 ]; then

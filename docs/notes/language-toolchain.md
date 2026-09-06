@@ -303,7 +303,7 @@ not pull the tokio/tower async stack.
   [`release-lichen`](../../.github/workflows/release-lichen.yml) CI workflow,
   which
   [`release.sh`](../../scripts/release.sh) triggers); the
-  download needs a release (tagged at a commit SHA, assets
+  download needs a release (tagged at the commit's short SHA, assets
   `<bin>-<host-target>[.exe]`) to actually exist, else it reports "no release
   asset".
 
