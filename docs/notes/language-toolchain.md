@@ -302,7 +302,7 @@ not pull the tokio/tower async stack.
   prebuilt `lichen` from the repo's GitHub release (published by the
   [`release-lichen`](../../.github/workflows/release-lichen.yml) CI workflow,
   which
-  [`publish-toolchain.sh`](../../scripts/publish-toolchain.sh) triggers); the
+  [`release.sh`](../../scripts/release.sh) triggers); the
   download needs a release (tagged at a commit SHA, assets
   `<bin>-<host-target>[.exe]`) to actually exist, else it reports "no release
   asset".

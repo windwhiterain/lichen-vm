@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# publish-toolchain.sh — trigger the GitHub Actions `release-lichen` workflow,
+# release.sh — trigger the GitHub Actions `release-lichen-toolchain` workflow,
 # which builds the prebuilt toolchain **on CI** (all four host triples) and
 # publishes it as a GitHub release tagged at the commit. The Zed extension (and
 # `lichen install` / `lichen path`) download those assets, so a fresh machine
@@ -10,9 +10,9 @@
 # is just a thin `gh` wrapper around it (no local Rust build here).
 #
 # Usage:
-#   scripts/publish-toolchain.sh            # trigger CI at the current branch (v1)
-#   scripts/publish-toolchain.sh --ref <branch|commit>  # trigger CI at a specific ref
-#   scripts/publish-toolchain.sh --watch     # also wait for the run to finish
+#   scripts/release.sh                        # trigger CI at the **current branch**
+#   scripts/release.sh --ref <branch|commit>  # trigger CI at a specific ref
+#   scripts/release.sh --watch                # also wait for the run to finish
 #
 # Requires: gh (https://cli.github.com), authenticated (`gh auth login`).
 set -euo pipefail
@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-REF="v1"
+REF=""
 WATCH=0
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -30,6 +30,19 @@ while [ $# -gt 0 ]; do
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac
 done
+
+# Default the dispatch ref to the repo's **current branch**, so a branch rename
+# (the old `v1` became `dev`) doesn't leave a stale hardcoded ref that GitHub
+# rejects with "No ref found for: <ref>".  Fall back to origin's default branch
+# on a detached HEAD.
+if [ -z "$REF" ]; then
+  REF="$(git -C "$ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+  if [ -z "$REF" ] || [ "$REF" = "HEAD" ]; then
+    REF="$(git -C "$ROOT" symbolic-ref --quiet --short refs/remotes/origin/HEAD \
+            2>/dev/null || echo "main")"
+    REF="${REF#origin/}"
+  fi
+fi
 
 WORKFLOW="release-lichen.yml"
 

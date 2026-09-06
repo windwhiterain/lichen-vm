@@ -131,7 +131,7 @@ manager's own commit and prints the binary path. `lichen` is the single canonica
 `$LICHEN_HOME/tools/lichen` (or a `lichen` on `$PATH`); with neither, on a fresh machine the
 extension downloads the prebuilt package manager from the repo's GitHub release into that same
 `$LICHEN_HOME/tools` slot via `curl` (`make_file_executable`, see
-[`publish-toolchain.sh`](../../scripts/publish-toolchain.sh), which triggers the
+[`release.sh`](../../scripts/release.sh), which triggers the
 `release-lichen` CI workflow) before resolving the server. Using the canonical copy means a
 later `liche update` (which refreshes exactly `$LICHEN_HOME/tools/lichen`) stays in sync with what
 the extension runs. Run it
@@ -151,7 +151,7 @@ lichen path language-server   # must print an existing path under ~/.lichen
 
 If the server (or `lichen`) is missing and no release asset is published, Zed reports an
 installation error on the `.lichen` buffer; publish the prebuilt toolchain first by triggering the
-`release-lichen` CI workflow (`scripts/publish-toolchain.sh`, or `gh workflow run
+`release-lichen` CI workflow (`scripts/release.sh`, or `gh workflow run
 release-lichen.yml`), which builds all four host triples on GitHub's runners.
 
 ## Gotchas that actually bite
