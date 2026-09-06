@@ -274,13 +274,15 @@ edition = "2024"
 
 /// A single core-crate dependency line for the generated crate: a local path
 /// dep (`{core_repo}/crates/{crate_name}`) when `core_repo` is a directory
-/// here, else a git dep.
+/// here, else a git dep.  A git `core_repo` names the workspace member via
+/// `package = <crate_name>` (the repo root is a virtual workspace, so without
+/// it cargo looks for a package there and fails).
 fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
     if std::path::Path::new(core_repo).is_dir() {
         let rel = format!("{core_repo}/crates/{crate_name}");
         format!("{crate_name} = {{ path = \"{rel}\" }}")
     } else {
-        format!("{crate_name} = {{ git = \"{core_repo}\" }}")
+        format!("{crate_name} = {{ git = \"{core_repo}\", package = \"{crate_name}\" }}")
     }
 }
 
