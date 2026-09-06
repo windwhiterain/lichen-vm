@@ -103,10 +103,11 @@ cargo test -p lichen-language-server
 ```
 
 This builds the real binary and runs three suites: the `lib` unit tests (span↔position
-round-trips, semantic-token delta encoding, `Doc` hover / definition / diagnostics), a
-`statement_values` integration test, and — the important one — `tests/lsp_smoke.rs`, which
-**spawns the real `lichen-language-server` over stdio** and drives an
-`initialize → didOpen → hover → definition → semanticTokens/full → shutdown → exit`
+round-trips, semantic-token delta encoding, `Doc` hover / definition / completion /
+diagnostics), a `statement_values` integration test, and — the important one —
+`tests/lsp_smoke.rs`, which **spawns the real `lichen-language-server` over stdio** and
+drives an
+`initialize → didOpen → hover → definition → completion → semanticTokens/full → shutdown → exit`
 exchange. Green proves the tower-lsp wiring end to end, which is the exact path Zed uses.
 
 ### 6. The shared frontend
@@ -210,7 +211,7 @@ The most reliable way to test the plugin's *behavior* without a GUI is to spawn 
 `lichen-language-server` over stdio and drive it as an LSP client (`tests/lsp_smoke.rs`).
 This is the standard community pattern for "integration testing an editor extension's
 language layer", and it exercises the exact path Zed uses (initialize → didOpen →
-hover → definition → semanticTokens → shutdown → exit).
+hover → definition → completion → semanticTokens → shutdown → exit).
 
 ### 3. Real-host E2E (headless) — GUI/CI
 

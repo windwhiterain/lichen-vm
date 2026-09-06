@@ -173,14 +173,19 @@ frontend stays a single source of truth for the *syntax*; resolution for
     `SemanticTokens` payload;
   - `analysis` — `Doc`: parse a source once, hold the tokens, AST, pipeline
     diagnostics and the resolution index; `hover_at`, `definition_at`,
-    `lsp_diagnostics`, and `semantic_tokens`/`semantic_tokens_lsp` on top of it.
+    `completion_at`, `lsp_diagnostics`, and `semantic_tokens`/`semantic_tokens_lsp`
+    on top of it.  `completion_at` offers the names in scope at the cursor (the
+    same scope set that an unresolved name's "did you mean" clause uses), and the
+    `resolve`-layer diagnostics name the closest in-scope candidates too.
 - `src/bin/lichen-language-server.rs` — a [`tower_lsp::LanguageServer`] (stdlib
   JSON-RPC transport via `LspService`/`Server`): `initialize` (capabilities:
-  full text-sync, hover, definition, `semanticTokensProvider`),
+  full text-sync, hover, definition, `completionProvider`,
+  `semanticTokensProvider`),
   `textDocument/didOpen|didChange|didClose` (→ publish diagnostics),
-  `textDocument/hover`, `textDocument/definition`, `textDocument/semanticTokens/full`,
-  `shutdown`/`exit`. `tower-lsp` owns framing, dispatch, cancellation and error
-  codes; the binary only decides how to answer each request.
+  `textDocument/hover`, `textDocument/definition`, `textDocument/completion`,
+  `textDocument/semanticTokens/full`, `shutdown`/`exit`. `tower-lsp` owns framing,
+  dispatch, cancellation and error codes; the binary only decides how to answer
+  each request.
 
 `Doc` is built by cutting the leading `@{…@}` block with `preprocess`, then
 compiling the remainder with `frontend_at`/`build_report` (absolute spans). The

@@ -93,6 +93,9 @@ impl LanguageServer for Backend {
                 )),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 definition_provider: Some(OneOf::Left(true)),
+                // Complete the names in scope at the cursor (the same scope set
+                // that powers an unresolved name's "did you mean" candidates).
+                completion_provider: Some(CompletionOptions::default()),
                 // Lichen's own parser drives highlighting, so Zed can run with
                 // (or without) the tree-sitter grammar — the semantic tokens
                 // carry the color when the grammar is absent.
@@ -178,6 +181,21 @@ impl LanguageServer for Backend {
             })
         });
         Ok(response)
+    }
+
+    async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let uri = params.text_document_position.text_document.uri;
+        let position = params.text_document_position.position;
+        let Some(text) = self.sources.lock().unwrap().get(&uri).cloned() else {
+            return Ok(None);
+        };
+        let base = Self::uri_base(&uri);
+        let items = tokio::task::spawn_blocking(move || {
+            Doc::new_with_base(text, base.as_deref()).completion_at(position)
+        })
+        .await
+        .expect("compile lichen source");
+        Ok(Some(items.into()))
     }
 
     async fn semantic_tokens_full(
