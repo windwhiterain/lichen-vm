@@ -49,11 +49,11 @@ self-heal. It holds no `P` type, so it never reintroduces the composed-program
 
 ```rust
 pub struct LichenHome {
-    dir: PathBuf,          // resolved home ($LICHEN_HOME, else ~/.lichen)
+    dir: PathBuf,          // this vocabulary's compilers/<plugin-set-key> slot
 }
 
 impl LichenHome {
-    pub fn resolve() -> LichenHome { ... }        // persist::lichendir()
+    pub fn at(cache_root: PathBuf) -> LichenHome { ... }
     pub fn ensure(&self) -> &Path { ... }         // create_dir_all(dir/artifacts)
     pub fn cache_root(&self) -> &Path { &self.dir }
 }
@@ -79,19 +79,22 @@ artifact codec can serialize; otherwise it is in-memory. `new_with_base` (tests,
 
 ### 3. `server.rs` — `Backend` owns the home
 
-`Backend` gains `home: Arc<LichenHome>` (initialized in `new`, which calls
-`resolve()` + `ensure()` — the home is (re)created lazily at LSP start, i.e. when
-a lichen buffer is opened). Every request switches its `Doc` to
+`Backend` gains `home: Arc<LichenHome>` (initialized in `new`, which takes the
+vocabulary's cache root, calls `at(cache_root)` + `ensure()` — the slot is
+(re)created lazily at LSP start, i.e. when a lichen buffer is opened). Every
+request switches its `Doc` to
 `new_with_cache(text, base, Some(self.home.cache_root()))`. `Backend<P>` remains
 `Send + Sync` (`Arc<LichenHome>` is `Send + Sync` because `LichenHome` is a
 `PathBuf`; `sources` is `Mutex<HashMap>`).
 
 ### 4. Store root is per plugin set (consistency with the compiler)
 
-Per `artifact-cache.md`, the compiled-artifact store is scoped per plugin set: the
-shipping server uses `lichendir()`, a plugin-composed server uses
-`lichendir()/compilers/<plugin-set-key>`. The composed server can derive its root
-the same way `plugin.rs` does; the shipping path passes `lichendir()` directly.
+Per `artifact-cache.md`, every vocabulary scopes its compiled-artifact store to a
+`compilers/<plugin-set-key>` slot: the shipping server uses the empty plugin set's
+slot (`lichendir()/compilers/<toolchain-key>`, [`persist::shipping_cache_root`]),
+and a plugin-composed server uses `lichendir()/compilers/<plugin-set-key>`. The
+composed server's generated `main` derives its slot the same way `plugin.rs` does
+(`lichendir()/compilers/<key>`); the shipping binary passes `shipping_cache_root()`.
 
 ## Self-heal: just "missing/corrupt home (re)created lazily"
 
@@ -99,8 +102,8 @@ The self-heal is deliberately minimal and is exactly the two cases the store
 already covers, plus the LSP supplying a root at all:
 
 - **Missing home → created lazily.** `LichenHome::ensure()` runs `create_dir_all`
-  at server start (first lichen buffer), so `~/.lichen` and its `artifacts/`
-  appear on demand — never at install time.
+  at server start (first lichen buffer), so the slot's `artifacts/` appears on
+  demand — never at install time.
 - **Corrupt home → repaired lazily by the store.** `DeviceRegistry` already
   reloads the last-known (or empty) state from an unparseable `registry` and
   repairs it on the next `save`; a corrupt/missing artifact makes `try_reuse`

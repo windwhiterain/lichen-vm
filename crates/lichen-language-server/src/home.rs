@@ -1,12 +1,12 @@
-//! The LSP's handle to Lichen Home.
+//! The LSP's handle to a specific artifact-cache slot under Lichen Home.
 //!
 //! The server persists the *settled imported packages* it compiles through the
-//! same device store the `lichen` compiler uses, rooted at Lichen Home
-//! (`$LICHEN_HOME`, else `~/.lichen` — `persist::lichendir`).  This small type
-//! owns the "the home must exist" half of the self-heal: resolve the root and
-//! (re)create it lazily.  The durability and per-artifact recovery live in the
-//! store (`PackageStore` / `persist::DeviceRegistry`), which the LSP drives by
-//! handing each request's `Doc` a cache root.
+//! same device store the `lichen` compiler uses, rooted at that vocabulary's
+//! slot (`$LICHEN_HOME/compilers/<plugin-set-key>`, under `~/.lichen`).
+//! This small type owns the "the slot must exist" half of the self-heal: hold
+//! the root and (re)create it lazily.  The durability and per-artifact
+//! recovery live in the store (`PackageStore` / `persist::DeviceRegistry`),
+//! which the LSP drives by handing each request's `Doc` a cache root.
 //!
 //! Self-heal is deliberately minimal (see `docs/notes/liche-lsp-home.md`):
 //!
@@ -24,25 +24,30 @@
 
 use std::path::{Path, PathBuf};
 
-use lichen_language::persist::lichendir;
-
-/// The server's handle to the Lichen Home directory.
+/// The server's handle to a specific artifact-cache slot under Lichen Home
+/// (`~/.lichen/compilers/<plugin-set-key>/`).
+///
+/// Every vocabulary caches its settled imported packages under its own slot
+/// (shipping = the empty plugin set, a plugin-composed server = its plugin set),
+/// so two compilers/servers over different vocabularies never share or reuse
+/// each other's artifacts for the same file ID.
 pub struct LichenHome {
     dir: PathBuf,
 }
 
 impl LichenHome {
-    /// Resolve the home (`$LICHEN_HOME`, else `~/.lichen`) without creating it.
-    /// The LSP server only needs the root; whether to create/home — and the
-    /// persistent store — is driven by the cache root passed to each `Doc`.
-    pub fn resolve() -> LichenHome {
-        LichenHome { dir: lichendir() }
+    /// Construct for an explicit cache root — the `compilers/<plugin-set-key>`
+    /// slot this server's vocabulary caches into.  The LSP only needs the root;
+    /// whether to create it — and the persistent store — is driven by the cache
+    /// root passed to each `Doc`.
+    pub fn at(cache_root: PathBuf) -> LichenHome {
+        LichenHome { dir: cache_root }
     }
 
-    /// Create the home (and its `artifacts/` subdir) if missing, returning the
+    /// Create the cache root's `artifacts/` subdir if missing, returning the
     /// resolved root.  This is the "missing home is created lazily" half of the
     /// self-heal: it runs when the server starts (a lichen buffer is opened), not
-    /// at install time.  A failure to create (e.g. an unwritable home) is not a
+    /// at install time.  A failure to create (e.g. an unwritable root) is not a
     /// hard error here — the store's own fault-tolerant paths handle writes
     /// degrading silently.
     pub fn ensure(&self) -> &Path {

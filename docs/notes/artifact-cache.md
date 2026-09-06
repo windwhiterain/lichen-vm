@@ -112,18 +112,20 @@ dependency-aware) *is* the cross-process artifact.
 
 ### The artifact store is scoped per plugin set
 
-The `DeviceRegistry` cache root is **not** always `lichendir()`: the compiler CLI
+The `DeviceRegistry` cache root is **not** `lichendir()`: the compiler CLI
 takes an explicit cache root ([`lichen_language::cli::main_with_cache_dir`]), and
-a **plugin-built** compiler passes its own plugin-set slot
-(`<lichendir>/compilers/<plugin-set-key>`) so the store lives under that slot.
-This isolates the *compiled-artifact* store per vocabulary.  The artifact
-encoding depends on the compiler's value/operator leaves (`ProgramCodec`), so a
-compiler built over a different plugin set produces a *different* artifact for
-the same file ID — sharing the base `lichendir()` store would let one plugin set
-reuse (or thrash) another's, and a deserialize-then-recompile churn.  The
-shipping compiler keeps `lichendir()`.  Only the compiled-artifact store is
-scoped; the git **source** cache (`lichendir()/sources`) stays shared across
-compilers (it holds the same fetched plugin sources).
+**every** compiler — shipping and **plugin-built** — scopes it to a
+`compilers/<plugin-set-key>` slot (`lichendir()/compilers/<key>`).  This isolates
+the *compiled-artifact* store per vocabulary.  The artifact encoding depends on
+the compiler's value/operator leaves (`ProgramCodec`), so a compiler built over a
+different plugin set produces a *different* artifact for the same file ID —
+sharing the base `lichendir()` store would let one plugin set reuse (or thrash)
+another's, and a deserialize-then-recompile churn.  The shipping compiler uses
+the **empty plugin set's** slot (`compilers/<toolchain-key>`,
+[`persist::shipping_cache_root`]); a plugin-built one uses its own slot.  Only the
+compiled-artifact store is scoped; the git **source** cache
+(`lichendir()/sources`) stays shared across compilers (it holds the same fetched
+plugin sources).
 
 ## What this means for the new tooling crates
 

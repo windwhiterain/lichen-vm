@@ -22,7 +22,8 @@
 //! plugin-built compiler must therefore NOT share the shipping compiler's
 //! device cache — the same source file compiled by a different plugin set
 //! produces a different artifact, so the cache slot must be isolated per
-//! vocabulary.  [`main`] uses the lichen-home root (the shipping compiler);
+//! vocabulary.  [`main`] uses the shipping compiler's own
+//! `compilers/<toolchain-key>` slot (`persist::shipping_cache_root`);
 //! [`main_with_cache_dir`] lets a plugin-built compiler scope its artifacts to
 //! its own `compilers/<plugin-set-key>` slot.  Source staging (the git source
 //! cache) stays shared; only the compiled-artifact store is scoped.
@@ -87,9 +88,10 @@ enum Command {
     },
 }
 
-/// Run the compiler CLI with the process arguments, using the lichen home as
-/// the device/artifact cache root (the shipping compiler's cache).  The
-/// program name is read from `argv[0]` so the plugin-built
+/// Run the compiler CLI with the process arguments, using the shipping
+/// compiler's `compilers/<toolchain-key>` slot as the device/artifact cache
+/// root (so every vocabulary — shipping included — caches under `compilers/`).
+/// The program name is read from `argv[0]` so the plugin-built
 /// `lichen-compiler-<name>` reports its own name in usage.  Generic over a
 /// single program type `P` (the associate-type collector), so the shipped
 /// compiler and a plugin-built compiler share one CLI.
@@ -102,18 +104,17 @@ where
         + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    main_with_cache_dir::<P>(&persist::lichendir())
+    main_with_cache_dir::<P>(&persist::shipping_cache_root())
 }
 
 /// [`Self::main`] with an explicit **device/artifact cache root**.
 ///
 /// The compile artifacts drive the incremental device store
-/// ([`crate::package::PackageStore`]'s `with_cache_dir`).  The shipping
-/// compiler uses the lichen-home root, but a **plugin-built** compiler scopes
-/// its artifacts to its own plugin-set slot
-/// (`<lichendir>/compilers/<plugin-set-key>`) so it never collides with (or
-/// reuses) another vocabulary's artifacts — see
-/// `docs/notes/artifact-cache.md`.
+/// ([`crate::package::PackageStore`]'s `with_cache_dir`).  Every compiler
+/// scopes its artifacts to a `compilers/<plugin-set-key>` slot so it never
+/// collides with (or reuses) another vocabulary's artifacts — the shipping
+/// compiler uses the empty plugin set's slot (see [`persist::shipping_cache_root`]),
+/// a **plugin-built** compiler its own slot (`<lichendir>/compilers/<plugin-set-key>`).
 pub fn main_with_cache_dir<P>(cache_root: &Path) -> ExitCode
 where
     P: LangProgramShape,

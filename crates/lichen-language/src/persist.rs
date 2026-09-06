@@ -25,6 +25,7 @@
 //! chain that actually changed is recompiled.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use lichen_highlevel::program::HighProgram;
@@ -532,6 +533,22 @@ where
 // which owns the preprocessor import path.  Re-exported here so the existing
 // `lichen_language::persist::{lichendir, sources_root}` paths resolve.
 pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
+
+/// The Lichen Home `compilers/<toolchain-key>` slot for the **shipping**
+/// (empty plugin-set) vocabulary.
+///
+/// The slot key hashes the toolchain version — the same value the package
+/// manager computes for an empty plugin set (`compiler_cache::key(&[])`), so
+/// the shipping compiler and language server cache under the same
+/// `compilers/<key>` slot the package manager installs them into.  The core
+/// crates are versioned and released together, so `CARGO_PKG_VERSION` here is
+/// the toolchain version.
+pub fn shipping_cache_root() -> PathBuf {
+    let key = hex(&sha256(
+        format!("lichen-language={}", env!("CARGO_PKG_VERSION")).as_bytes(),
+    ));
+    lichendir().join("compilers").join(key)
+}
 
 // ---------------------------------------------------------------------------
 // Codec-round-trip tests: enforce the write/read bijection contract.

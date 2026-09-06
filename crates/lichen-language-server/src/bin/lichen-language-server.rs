@@ -20,5 +20,8 @@
 use lichen_language::program::LangProgram;
 
 fn main() {
-    lichen_language_server::server::main::<LangProgram>();
+    // The shipping server caches under the empty plugin set's slot
+    // (`compilers/<toolchain-key>`), consistent with every other vocabulary.
+    let cache_root = lichen_language::persist::shipping_cache_root();
+    lichen_language_server::server::main::<LangProgram>(&cache_root);
 }

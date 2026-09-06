@@ -195,11 +195,12 @@ where
     }
 
     /// [`Doc::new_with_base`] with an explicit persistent cache root.  `cache_root`
-    /// is Lichen Home (see [`home::LichenHome`]): when `Some` (and the program's
-    /// artifact codec can serialize) the imported packages are compiled once and
-    /// cached on disk, reused across documents / sessions / processes.  Below the
-    /// LSP a `Some(root)` is passed so the server actually uses Lichen Home; a
-    /// `None` root keeps the in-memory (pre-cache) behavior.
+    /// is the vocabulary's `compilers/<plugin-set-key>` slot (see
+    /// [`home::LichenHome`]): when `Some` (and the program's artifact codec can
+    /// serialize) the imported packages are compiled once and cached on disk,
+    /// reused across documents / sessions / processes.  Below the LSP a
+    /// `Some(root)` is passed so the server actually uses the slot; a `None` root
+    /// keeps the in-memory (pre-cache) behavior.
     ///
     /// In-memory is used only when it is *intended*: no `cache_root` was given,
     /// or the program's codec cannot persist (`NoPersist`).  A healthy home is

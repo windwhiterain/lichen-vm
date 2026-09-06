@@ -16,7 +16,7 @@
 //! as the non-generic server did.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use lichen_compute::{ComputeOperator, ComputeValue};
@@ -52,12 +52,13 @@ where
     P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
-    fn new(client: Client) -> Self {
-        // Resolve Lichen Home and (re)create it lazily on server start.  Each
-        // request hands its store this root, so the settled imported packages
-        // are cached on disk and shared cross-process with the `lichen`
-        // compiler.  See `docs/notes/liche-lsp-home.md`.
-        let home = Arc::new(LichenHome::resolve());
+    fn new(client: Client, cache_root: PathBuf) -> Self {
+        // The cache root is this vocabulary's `compilers/<plugin-set-key>` slot
+        // (the shipping server uses the empty plugin set's slot).  Each request
+        // hands its store this root, so the settled imported packages are cached
+        // on disk and shared cross-process with the `lichen` compiler.  See
+        // `docs/notes/liche-lsp-home.md`.
+        let home = Arc::new(LichenHome::at(cache_root));
         home.ensure();
         Backend {
             client,
@@ -264,10 +265,12 @@ where
 }
 
 /// Run the stdio LSP server for the composed program `P` (shipping or
-/// plugin-built).  This builds the runtime itself so the generated crate's
-/// `main` needs no `#[tokio::main]`; the frontend is synchronous per document,
-/// so requests are serialized via `concurrency_level(1)`.
-pub fn main<P>()
+/// plugin-built), caching the settled imported packages under `cache_root`
+/// (the vocabulary's `compilers/<plugin-set-key>` slot).  This builds the
+/// runtime itself so the generated crate's `main` needs no `#[tokio::main]`;
+/// the frontend is synchronous per document, so requests are serialized via
+/// `concurrency_level(1)`.
+pub fn main<P>(cache_root: &Path)
 where
     P: LangProgramShape,
     P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
@@ -281,7 +284,9 @@ where
         let stdin = tokio::io::stdin();
         let stdout = tokio::io::stdout();
 
-        let (service, socket) = LspService::new(Backend::<P>::new);
+        let cache_root = cache_root.to_path_buf();
+        let (service, socket) =
+            LspService::new(move |client| Backend::<P>::new(client, cache_root.clone()));
         Server::new(stdin, stdout, socket)
             .concurrency_level(1)
             .serve(service)
