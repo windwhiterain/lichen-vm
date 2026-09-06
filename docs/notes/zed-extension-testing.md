@@ -152,7 +152,7 @@ lichen path language-server   # must print an existing path under ~/.lichen
 If the server (or `lichen`) is missing and no release asset is published, Zed reports an
 installation error on the `.lichen` buffer; publish the prebuilt toolchain first by triggering the
 `release-lichen` CI workflow (`scripts/release.sh`, or `gh workflow run
-release-lichen.yml`), which builds all four host triples on GitHub's runners.
+release-lichen.yml`), which builds the supported host triples on GitHub's runners.
 
 ## Gotchas that actually bite
 
