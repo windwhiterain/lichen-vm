@@ -18,7 +18,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use lichen_language::persist::lichendir;
+use lichen_preprocess::lichendir;
 
 use crate::compiler_cache;
 
