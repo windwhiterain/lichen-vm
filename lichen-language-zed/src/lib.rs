@@ -16,9 +16,15 @@
 //! progress to Zed and asks the `lichen` package manager to ensure it is present:
 //! `lichen path language-server` installs the **prebuilt** compiler + language
 //! server into **Lichen Home** (`$LICHEN_HOME`, defaulting to `~/.lichen`) at the
-//! package manager's own commit, and prints the binary path. The package manager
-//! is located on `$PATH` or at `$LICHEN_HOME/tools/lichen`; how it was installed
-//! does not matter (see `docs/notes/language-toolchain.md`).
+//! package manager's own commit, and prints the binary path (see
+//! `docs/notes/language-toolchain.md`).
+//!
+//! `lichen` is located on `$PATH`; on a machine with no `lichen` at all, the
+//! extension downloads the prebuilt `lichen` binary from this repo's GitHub
+//! release into its **own working directory** (`download_file` +
+//! `make_file_executable`, mirroring how the Kotlin extension self-installs) and
+//! runs that. Either way it then resolves the server through the package
+//! manager.
 //!
 //! When the worktree root is available, the extension passes it as
 //! `--project <root>` so that a project importing a **native plugin** composes
@@ -34,20 +40,34 @@ pub const GRAMMAR_SCOPE: &str = "source.lichen";
 pub const LANGUAGE_SERVER_BINARY: &str = "lichen-language-server";
 
 /// The extension type. Non-`zed` builds expose this as metadata only.
-pub struct LichenExtension;
+pub struct LichenExtension {
+    /// The self-bootstrapped `lichen` package-manager path, cached once it has
+    /// been downloaded into the extension's working directory. Cached so a
+    /// fresh environment bootstraps once, not on every buffer open.
+    cached_lichen: Option<String>,
+}
 
 #[cfg(feature = "zed")]
 mod zed_impl {
     use zed_extension_api::{
-        self as zed, Command, Extension, LanguageServerId, LanguageServerInstallationStatus, Os,
-        Worktree, current_platform, set_language_server_installation_status,
+        self as zed, Architecture, Command, DownloadedFileType, Extension, GithubReleaseOptions,
+        LanguageServerId, LanguageServerInstallationStatus, Os, Worktree, current_platform,
+        download_file, latest_github_release, make_file_executable,
+        set_language_server_installation_status,
     };
 
     use crate::{LANGUAGE_SERVER_BINARY, LichenExtension};
 
+    /// The GitHub `owner/repo` the prebuilt toolchain releases are published to.
+    const RELEASE_REPO: &str = "windwhiterain/lichen-vm";
+    /// The package-manager binary name (built as `lichen`).
+    const LICHEN_BIN: &str = "lichen";
+
     impl Extension for LichenExtension {
         fn new() -> Self {
-            LichenExtension
+            LichenExtension {
+                cached_lichen: None,
+            }
         }
 
         fn language_server_command(
@@ -67,9 +87,10 @@ mod zed_impl {
 
             // The toolchain is managed by the `lichen` package manager, which
             // installs the prebuilt compiler + language server into Lichen Home
-            // at its own commit. Ask it to ensure the server is present and print
-            // its path, then hand that path to Zed.
-            match resolve_via_lichen(worktree) {
+            // at its own commit.  Ask it to ensure the server is present and
+            // print its path, then hand that path to Zed.  On a fresh machine
+            // with no `lichen`, it is first downloaded into the extension dir.
+            match resolve_via_lichen(worktree, self) {
                 Ok(path) => {
                     set_language_server_installation_status(
                         language_server_id,
@@ -88,49 +109,99 @@ mod zed_impl {
         }
     }
 
-    /// Whether the current OS is Windows (affects the `lichen` executable suffix).
+    /// Whether the current OS is Windows (affects the executable suffix).
     fn on_windows() -> bool {
         matches!(current_platform().0, Os::Windows)
     }
 
-    /// The shell environment as `(key, value)` pairs.
-    fn shell_env(worktree: &Worktree) -> Vec<(String, String)> {
-        worktree.shell_env()
-    }
-
-    /// Resolve `$LICHEN_HOME`, defaulting to `~/.lichen` (per
-    /// `lichen_language::persist::lichendir`).
-    fn lichen_home(worktree: &Worktree) -> String {
-        let vars = shell_env(worktree);
-        if let Some((_, home)) = vars.iter().find(|(k, _)| k == "LICHEN_HOME") {
-            return home.clone();
+    /// The host target triple used to name release assets (matches
+    /// `lichen-package`'s `toolchain::host_target`).
+    fn host_target() -> String {
+        match current_platform() {
+            (Os::Windows, Architecture::X8664) => "x86_64-pc-windows-msvc",
+            (Os::Windows, Architecture::Aarch64) => "aarch64-pc-windows-msvc",
+            (Os::Mac, Architecture::Aarch64) => "aarch64-apple-darwin",
+            (Os::Mac, Architecture::X8664) => "x86_64-apple-darwin",
+            (Os::Linux, Architecture::X8664) => "x86_64-unknown-linux-gnu",
+            (Os::Linux, Architecture::Aarch64) => "aarch64-unknown-linux-gnu",
+            _ => "unknown-unknown",
         }
-        let home = vars
-            .iter()
-            .find(|(k, _)| k == "HOME" || k == "USERPROFILE")
-            .map(|(_, v)| v.clone())
-            .unwrap_or_else(|| ".".into());
-        format!("{home}/.lichen")
+        .to_string()
     }
 
-    /// Locate the `lichen` package manager: on `$PATH`, else the canonical copy in
-    /// `$LICHEN_HOME/tools/lichen`.
-    fn lichen_binary(worktree: &Worktree) -> Result<String, String> {
-        if let Some(path) = worktree.which("lichen") {
-            return Ok(path);
+    /// The `.exe` suffix a Windows release asset carries (matches
+    /// `lichen-package`'s `toolchain::asset_name`), else empty.
+    fn asset_suffix() -> &'static str {
+        if on_windows() { ".exe" } else { "" }
+    }
+
+    /// The extension's working directory (the WASM process CWD, which Zed sets
+    /// via `PWD`).  This is the only directory the extension may read/write, so
+    /// the self-bootstrapped `lichen` is cached here.
+    fn extension_dir() -> String {
+        std::env::var("PWD").unwrap_or_else(|_| ".".into())
+    }
+
+    /// The relative path (under the extension dir) of the self-bootstrapped
+    /// `lichen`.  Relative is used for `download_file` / `std::fs::metadata`,
+    /// which operate relative to the extension's working directory.
+    fn cached_lichen_rel() -> String {
+        format!("{}", if on_windows() { "lichen.exe" } else { "lichen" })
+    }
+
+    /// Locate `lichen`: on `$PATH`, else the self-bootstrapped copy in the
+    /// extension's working directory, downloading it from the repo's GitHub
+    /// release on first use (a truly fresh machine).  Cached in `cached`.
+    fn ensure_lichen(worktree: &Worktree, cached: &mut Option<String>) -> Result<String, String> {
+        if let Some(p) = cached.as_ref() {
+            return Ok(p.clone());
         }
-        let exe = if on_windows() { "lichen.exe" } else { "lichen" };
-        Ok(format!("{}/tools/{exe}", lichen_home(worktree)))
+        if let Some(p) = worktree.which(LICHEN_BIN) {
+            *cached = Some(p.clone());
+            return Ok(p);
+        }
+        // Fresh machine with no `lichen` at all: download the prebuilt binary
+        // for this host into the extension dir.
+        let rel = cached_lichen_rel();
+        if !std::path::Path::new(&rel).exists() {
+            let asset_name = format!("{}-{}{}", LICHEN_BIN, host_target(), asset_suffix());
+            let release = latest_github_release(
+                RELEASE_REPO,
+                GithubReleaseOptions {
+                    require_assets: true,
+                    pre_release: true,
+                },
+            )
+            .map_err(|e| format!("cannot query lichen-vm releases: {e}"))?;
+            let asset = release
+                .assets
+                .iter()
+                .find(|a| a.name == asset_name)
+                .ok_or_else(|| {
+                    format!("no release asset named `{asset_name}`; publish the toolchain first")
+                })?;
+            download_file(&asset.download_url, &rel, DownloadedFileType::Uncompressed)
+                .map_err(|e| format!("cannot download `{LICHEN_BIN}` toolchain: {e}"))?;
+            make_file_executable(&rel)
+                .map_err(|e| format!("cannot mark `{LICHEN_BIN}` executable: {e}"))?;
+        }
+        // Return an absolute path so the spawned subprocess resolves it exactly.
+        let abs = format!("{}/{}", extension_dir(), rel);
+        *cached = Some(abs.clone());
+        Ok(abs)
     }
 
-    /// Ensure the server is installed (asking the `lichen` package manager, which
-    /// installs the prebuilt compiler + language server into Lichen Home at its
-    /// own commit) and return its absolute path.  When the worktree root is
-    /// available it is passed as `--project <root>` so a project with native
+    /// Ensure the server is installed (asking the `lichen` package manager,
+    /// which installs the prebuilt compiler + language server into Lichen Home
+    /// at its own commit) and return its absolute path.  When the worktree root
+    /// is available it is passed as `--project <root>` so a project with native
     /// plugins composes its own server; when no root is available the shipping
     /// server is resolved.
-    fn resolve_via_lichen(worktree: &Worktree) -> Result<String, String> {
-        let lichen = lichen_binary(worktree)?;
+    fn resolve_via_lichen(
+        worktree: &Worktree,
+        self_: &mut LichenExtension,
+    ) -> Result<String, String> {
+        let lichen = ensure_lichen(worktree, &mut self_.cached_lichen)?;
         let mut command = Command::new(lichen.as_str())
             .arg("path")
             .arg("language-server");

@@ -19,25 +19,24 @@ repository = "https://github.com/windwhiterain/lichen-vm"
 # Capabilities the extension asks Zed to grant. The extension runs the `lichen`
 # package manager (`lichen path language-server [--project <root>]`) to resolve
 # (and, if absent, install) the language server into Lichen Home; on a fresh
-# machine with neither `lichen` on `$PATH` nor a copy in `$LICHEN_HOME/tools`,
-# it downloads the prebuilt `lichen` binary from this repo's GitHub release via
-# `curl`, so the toolchain bootstraps itself.
+# machine with no `lichen` on `$PATH`, it downloads the prebuilt `lichen` binary
+# from this repo's GitHub release into the extension's working directory
+# (`download_file` + `make_file_executable`), so the toolchain bootstraps itself.
 #
 # `command = "*"` for the package manager is required because it is located at a
-# per-user path (`$LICHEN_HOME/tools/lichen`, or wherever `which` finds it) that
-# cannot be known statically; its args are locked to the `path language-server`
-# subcommand. The `curl` capability is the minimal download path (mirroring the
-# package manager's own `toolchain::download`). `process:exec` is what Zed gates
-# for `Command::output()` (see Zed's extension capabilities).
+# per-user path (or wherever `which` finds it) that cannot be known statically;
+# its args are locked to the `path language-server` subcommand. `download_file`
+# permits fetching the toolchain release asset from this repo. `process:exec`
+# is what Zed gates for `Command::output()` (see Zed's extension capabilities).
 [[capabilities]]
 kind = "process:exec"
 command = "*"
 args = ["path", "language-server", "**"]
 
 [[capabilities]]
-kind = "process:exec"
-command = "curl"
-args = ["**"]
+kind = "download_file"
+host = "github.com"
+path = ["windwhiterain", "lichen-vm", "releases", "download", "**"]
 
 # The language server Zed should launch for Lichen buffers. It is *not* bundled
 # with the extension (per Zed's publishing rules); the extension's
@@ -47,10 +46,11 @@ args = ["**"]
 # install progress to Zed and asks the `lichen` package manager to ensure it is
 # present: `lichen path language-server` installs the *prebuilt* compiler + language
 # server into Lichen Home (`$LICHEN_HOME`, default `~/.lichen`) at the package
-# manager's own commit and prints the binary path. `lichen` is found on `$PATH` or
-# at `$LICHEN_HOME/tools/lichen`; how it was installed does not matter. Run `lichen
-# update` to move the package manager (and the toolchain it installs) to a later
-# commit.
+# manager's own commit and prints the binary path. `lichen` is found on `$PATH`,
+# or — on a machine with no `lichen` at all — is downloaded (prebuilt, from this
+# repo's GitHub release) into the extension's working directory on first use.
+# Run `lichen update` to move the package manager (and the toolchain it installs)
+# to a later commit.
 #
 # The extension passes the worktree root as `--project <root>` so that a project
 # importing a *native plugin* composes its own language server over that plugin

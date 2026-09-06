@@ -127,8 +127,11 @@ The extension does not bundle the server (Zed's publishing rules); `language_ser
 resolves it with `Worktree::which` (which searches `$PATH`), else drives the `lichen` package
 manager: `lichen path language-server` installs the **prebuilt** compiler + language server into
 **Lichen Home** (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-manager's own commit and prints the binary path. `lichen` is found on `$PATH` or at
-`$LICHEN_HOME/tools/lichen`. Run it by hand:
+manager's own commit and prints the binary path. `lichen` is found on `$PATH`; with no `lichen`
+on a fresh machine, the extension downloads the prebuilt package manager from the repo's GitHub
+release into its own working directory (`download_file` + `make_file_executable`, see
+[`publish-toolchain.sh`](../../scripts/publish-toolchain.sh)) before resolving the server. Run it
+by hand:
 
 ```powershell
 lichen install language-server
@@ -142,8 +145,9 @@ Check the server resolves:
 lichen path language-server   # must print an existing path under ~/.lichen
 ```
 
-If it is missing, Zed reports "`lichen-language-server` not found on `$PATH`" when a
-`.lichen` buffer is opened.
+If the server (or `lichen`) is missing and no release asset is published, Zed reports an
+installation error on the `.lichen` buffer; publish the prebuilt toolchain first with
+`scripts/publish-toolchain.sh` (or the `release-lichen` GitHub Actions workflow).
 
 ## Gotchas that actually bite
 

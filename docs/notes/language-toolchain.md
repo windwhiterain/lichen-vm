@@ -265,9 +265,12 @@ not pull the tokio/tower async stack.
   progress to Zed and runs `lichen path language-server`, which installs the
   **prebuilt** compiler + language server into **Lichen Home**
   (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-  manager's own commit, then prints the binary path; `lichen` is found on `$PATH` or
-  at `$LICHEN_HOME/tools/lichen`. Run it by hand and restart Zed, or `lichen update`
-  to move the package manager (and the toolchain it installs) to a later commit:
+  manager's own commit, then prints the binary path. `lichen` is found on `$PATH`;
+  on a machine with no `lichen` at all, the extension downloads the prebuilt
+  package manager from the repo's GitHub release into **its own working
+  directory** (`download_file` + `make_file_executable`) and then runs it. Run it
+  by hand and restart Zed, or `lichen update` to move the package manager (and the
+  toolchain it installs) to a later commit:
 
   ```text
   lichen install language-server   # install the prebuilt server into Lichen Home
@@ -286,8 +289,11 @@ not pull the tokio/tower async stack.
   tooling is generic over one program type `P` (see `lichen_language::LangProgramShape`),
   so the same `Doc`/server services the shipping and the composed vocabulary.
 
-  Without `lichen` (or the server) Zed reports "`lichen-language-server` not found
-  on `$PATH`" when a `.lichen` buffer is opened.
+  When neither the server nor `lichen` is present, the extension bootstraps a
+  prebuilt `lichen` from the repo's GitHub release (see
+  [`publish-toolchain.sh`](../../scripts/publish-toolchain.sh)); the download
+  needs a release (tagged at a commit SHA, assets `<bin>-<host-target>[.exe]`) to
+  actually exist, else it reports "no release asset".
 
 ## Fitting future tools into the model
 
