@@ -45,6 +45,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build the toolchain binaries
+        shell: bash
         run: |
           cargo build --release --locked \
             -p lichen-package \
