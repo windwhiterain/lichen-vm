@@ -48,20 +48,52 @@ use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
 };
 use lichen_highlevel::{NativeOps, no_native_ops};
-use lichen_lowlevel::{LowOperator, OperatorExt, Registry};
-use lichen_utils::extend::AsEnum;
+use lichen_lowlevel::Registry;
 
+use crate::persist::ProgramCodecOf;
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
 use program::{GcdOp, LangProgram, lang_attr_ext};
 
-/// The concrete program marker the language's tooling drives: the value and
-/// operator vocabularies vary (`V`, `O`), while the compile-time attribute set
-/// is fixed to the language's [`program::LangAttr`] and the literal /
-/// global-ext defaults are the highlevel's own.  A plugin-built compiler uses a
-/// `ProgramImpl` of exactly this shape, so the store/run/CLI machinery is
-/// generic over precisely these two vocabularies and the frontend / checker
-/// already agree on `IR<LangAttr>`.
+/// A program the language tooling drives: a [`ProgramCodecOf`] program that
+/// additionally carries the language's own `LangAttr` attribute set, the
+/// highlevel literal vocabulary, and the highlevel package-meta type — the
+/// shape every [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary)
+/// program has.  The frontend/checker/build the store all speak in those
+/// concrete types, so a single-`P` function needs these associated-type
+/// equalities (plus `'static`, which `NativeOps`/`lang_attr_ext` demand) in
+/// one bound.  A program implements this automatically when it satisfies the
+/// equalities; only the composition site (the language's own program, a
+/// plugin-built one) ever names it.
+pub trait LangProgramShape:
+    ProgramCodecOf
+    + ::lichen_highlevel::program::HighProgram<
+        Attr = program::LangAttr,
+        Literal = ::lichen_highlevel::program::HighProgramLiteral,
+    > + ::lichen_lowlevel::Program<PackageMeta = ::lichen_highlevel::program::HighPackageMeta>
+    + 'static
+{
+}
+
+impl<T> LangProgramShape for T
+where
+    T: ProgramCodecOf,
+    T: ::lichen_highlevel::program::HighProgram<
+            Attr = program::LangAttr,
+            Literal = ::lichen_highlevel::program::HighProgramLiteral,
+        >,
+    T: ::lichen_lowlevel::Program<PackageMeta = ::lichen_highlevel::program::HighPackageMeta>,
+    T: 'static,
+{
+}
+
+/// The inner program shape a composed program wraps: the value and operator
+/// vocabularies vary (`V`, `O`), while the compile-time attribute set is fixed
+/// to the language's [`program::LangAttr`] and the literal / global-ext
+/// defaults are the highlevel's own.  This is the `ProgramImpl` that the
+/// [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) newtype
+/// `LangProgram` wraps; downstream tooling is generic over `LangProgram`
+/// (the single associated-type collector), not over this alias.
 pub type CompiledProgram<V, O> = lichen_highlevel::program::ProgramImpl<
     V,
     O,
@@ -127,7 +159,7 @@ pub fn compile_with_imports_in(
     registry: Option<Arc<RwLock<Registry<LangProgram>>>>,
 ) -> Report<LangProgram> {
     let line_starts = lex::line_starts(source);
-    compile_with_imports_at::<program::LangValue, program::LangOperator>(
+    compile_with_imports_at::<LangProgram>(
         source,
         imports,
         registry,
@@ -137,31 +169,24 @@ pub fn compile_with_imports_in(
     )
 }
 
-/// Compile and check a program over any value/operator vocabulary `V`/`O`
-/// (the language's attribute set is fixed to [`program::LangAttr`]).  The
-/// program is a slice of a larger source starting at byte `base`, whose line
+/// Compile and check a program over any program `P` (the associated-type
+/// collector; the language's attribute set is fixed to [`program::LangAttr`]).
+/// The program is a slice of a larger source starting at byte `base`, whose line
 /// starts are `line_starts`.  Token spans are absolute positions in that
 /// larger source, so diagnostics point at the real file even when `code` is
 /// only a suffix of it (the code after a stripped `@{...@}` block).
-pub fn compile_with_imports_at<V, O>(
+pub fn compile_with_imports_at<P>(
     code: &str,
     imports: &[ResolvedImport],
-    registry: Option<Arc<RwLock<Registry<CompiledProgram<V, O>>>>>,
+    registry: Option<Arc<RwLock<Registry<P>>>>,
     base: u32,
     line_starts: &[usize],
-    native_ops: NativeOps<CompiledProgram<V, O>>,
-) -> Report<CompiledProgram<V, O>>
+    native_ops: NativeOps<P>,
+) -> Report<P>
 where
-    V: ValueType + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + 'static,
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let Frontend {
         ir,
@@ -170,8 +195,7 @@ where
     } = frontend_at(code, base, line_starts, imports);
     // The frontend diagnostics carry no checker build (they are program-blind),
     // so re-type them onto the caller's program marker before the report.
-    let diagnostics: Vec<Diag<CompiledProgram<V, O>>> =
-        diagnostics.into_iter().map(|d| d.retype()).collect();
+    let diagnostics: Vec<Diag<P>> = diagnostics.into_iter().map(|d| d.retype()).collect();
     build_report(ir, Some(span_index), diagnostics, registry, native_ops)
 }
 
@@ -180,24 +204,17 @@ where
 /// build fails).  [`compile_with_imports_at`] and the incremental
 /// [`BufferSession`] both end here — the session reuses this for its cached
 /// rebuild path, so the rendering is centralized.
-pub fn build_report<V, O>(
+pub fn build_report<P>(
     ir: Option<IR<program::LangAttr>>,
     span_index: Option<compile::SpanIndex>,
-    mut diagnostics: Vec<Diag<CompiledProgram<V, O>>>,
-    registry: Option<Arc<RwLock<Registry<CompiledProgram<V, O>>>>>,
-    native_ops: NativeOps<CompiledProgram<V, O>>,
-) -> Report<CompiledProgram<V, O>>
+    mut diagnostics: Vec<Diag<P>>,
+    registry: Option<Arc<RwLock<Registry<P>>>>,
+    native_ops: NativeOps<P>,
+) -> Report<P>
 where
-    V: ValueType + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + 'static,
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     let Some(ir) = ir else {
         return Report {
@@ -207,12 +224,7 @@ where
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
-    let build = Checker::<CompiledProgram<V, O>>::build_in_attr_native(
-        ir,
-        registry,
-        lang_attr_ext::<CompiledProgram<V, O>>(),
-        native_ops,
-    );
+    let build = Checker::<P>::build_in_attr_native(ir, registry, lang_attr_ext::<P>(), native_ops);
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
     // message carries no `?a` journey — the user inspects an expression's

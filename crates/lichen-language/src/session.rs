@@ -25,17 +25,17 @@ use std::sync::Arc;
 use lichen_highlevel::checker::Build;
 use lichen_highlevel::native::no_native_ops;
 use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
-use lichen_lowlevel::{LowOperator, OperatorExt};
-use lichen_utils::extend::AsEnum;
 use sha2::Digest;
 
+use crate::LangProgramShape;
 use crate::ast::{BinOp, BlockStmt, Expr, Program, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
+use crate::persist::ProgramCodecOf;
 use crate::program::{GcdOp, LangProgram};
 use crate::suggest;
-use crate::{CompiledProgram, ParseDiag, Report, build_report};
+use crate::{ParseDiag, Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
 /// is cheap to hold) plus every diagnostic, and the content signature the
@@ -71,20 +71,12 @@ where
 }
 
 /// An editable source buffer with a diff-gated compile.
-pub struct BufferSession<V: ValueType, O: OperatorExt<CompiledProgram<V, O>>>
+pub struct BufferSession<P: ProgramCodecOf>
 where
-    O: AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + 'static,
-    V: 'static,
+    P::Value: ValueType,
 {
     source: String,
-    cache: Option<Cache<CompiledProgram<V, O>>>,
+    cache: Option<Cache<P>>,
     /// The state the last compile ran under — the baseline the *next* edit is
     /// diffed against and, for lexing, the token stream it resumes from.
     last: Option<LastState>,
@@ -118,18 +110,11 @@ where
     check_diagnostics: Vec<Diag<P>>,
 }
 
-impl<V, O> BufferSession<V, O>
+impl<P> BufferSession<P>
 where
-    V: ValueType + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + 'static,
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     /// A new session over `source`.
     pub fn new(source: impl Into<String>) -> Self {
@@ -195,7 +180,7 @@ where
     /// regex work.  The result is identical to a full re-lex (`lex_resume` is
     /// proven equal to [`lex::lex_with`] — see the lex tests); only the cost
     /// changes.
-    pub fn compile(&mut self) -> SessionReport<CompiledProgram<V, O>> {
+    pub fn compile(&mut self) -> SessionReport<P> {
         let line_starts = lex::line_starts(&self.source);
 
         // Whether a prior snapshot plus a changed source lets us re-derive only
@@ -220,8 +205,7 @@ where
                 (lexed.tokens, lexed.errors)
             }
         };
-        let mut diagnostics: Vec<Diag<CompiledProgram<V, O>>> =
-            lex_errors.into_iter().map(Diag::from_lex).collect();
+        let mut diagnostics: Vec<Diag<P>> = lex_errors.into_iter().map(Diag::from_lex).collect();
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
@@ -305,14 +289,14 @@ where
         // already produced by the signature pass (the frontend source of truth
         // for the session), so the lowering's own are discarded.
         let (ir, span_index, _) = crate::compile::compile_with_imports(&program, &[]);
-        let report: Report<CompiledProgram<V, O>> = build_report::<V, O>(
+        let report: Report<P> = build_report::<P>(
             Some(ir),
             Some(span_index),
             diagnostics,
             None,
             no_native_ops(),
         );
-        let check_diagnostics: Vec<Diag<CompiledProgram<V, O>>> = report
+        let check_diagnostics: Vec<Diag<P>> = report
             .diagnostics
             .iter()
             .filter(|d| d.stage == Stage::Check)

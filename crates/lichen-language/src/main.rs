@@ -19,9 +19,5 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    lichen_language::cli::main::<
-        lichen_language::program::LangValue,
-        lichen_language::program::LangOperator,
-        lichen_language::program::ProgramCodec,
-    >()
+    lichen_language::cli::main::<lichen_language::program::LangProgram>()
 }

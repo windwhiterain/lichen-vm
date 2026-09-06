@@ -11,19 +11,18 @@
 
 use std::path::Path;
 
+use crate::LangProgramShape;
 use crate::compile;
 use crate::diag::Diag;
+use crate::lang_attr_ext;
 use crate::package::PackageStore;
-use crate::persist::ArtifactCodec;
 use crate::preprocess::preprocess;
 use crate::program::{GcdOp, LangProgram};
 pub use crate::render::print_type;
 pub use crate::render::print_value;
 use crate::render::{print_type_lang, print_value_lang, render_attributes};
-use crate::{CompiledProgram, lang_attr_ext};
 
 use lichen_highlevel::program::ValueType;
-use lichen_lowlevel::OperatorExt;
 use lichen_utils::extend::AsEnum;
 
 /// Compile, check, and run `source`; the rendered output value and its type.
@@ -62,36 +61,30 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
 
 /// Compile, check, and run a raw source file after preprocessing imports.
 /// The package store is caller-owned so multiple files can share a registry.
-/// Generic over the value/operator vocabularies `V`/`O` and the artifact codec
-/// `C`, so a plugin-built compiler runs through the same path.
-pub fn evaluate_raw<V, O, C>(
+/// Generic over a single program type `P` (the associated-type collector),
+/// so a plugin-built compiler runs through the same path.
+pub fn evaluate_raw<P>(
     source: &str,
     base: Option<&Path>,
-    store: &mut PackageStore<V, O, C>,
-) -> Result<String, Vec<Diag<CompiledProgram<V, O>>>>
+    store: &mut PackageStore<P>,
+) -> Result<String, Vec<Diag<P>>>
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<lichen_lowlevel::LowOperator>
-        + From<lichen_lowlevel::LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
+    P::Operator: From<GcdOp>
         + From<lichen_highlevel::program::TypeOperator>
         + From<lichen_compute::ComputeOperator>
         + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
 {
     let (preprocessed, diags) = preprocess(source, base, store);
     if !diags.is_empty() {
         return Err(diags);
     }
     let line_starts = crate::lex::line_starts(source);
-    let report = crate::compile_with_imports_at::<V, O>(
+    let report = crate::compile_with_imports_at::<P>(
         &preprocessed.code,
         &preprocessed.imports,
         Some(store.registry()),
@@ -108,10 +101,10 @@ where
     module.evaluate_node_deep(build.root_ty, None);
     Ok(format!(
         "{}{}: {}",
-        print_value_lang::<CompiledProgram<V, O>>(&module, value, build.root_ty),
+        print_value_lang::<P>(&module, value, build.root_ty),
         {
             // Render only the attributes the root expression actually carries.
-            let attr_ext = lang_attr_ext::<CompiledProgram<V, O>>();
+            let attr_ext = lang_attr_ext::<P>();
             let tail = &build.ir.schema(build.ir.root).tail;
             let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
             if attrs.is_empty() {
@@ -120,6 +113,6 @@ where
                 format!(" {attrs}")
             }
         },
-        print_type_lang::<CompiledProgram<V, O>>(&module, build.root_ty)
+        print_type_lang::<P>(&module, build.root_ty)
     ))
 }

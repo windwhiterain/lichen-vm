@@ -37,9 +37,12 @@ commands:
                                                         this binary's own commit
   update [--repo <u>]                                  update the package manager itself to the
                                                         repository's latest commit
-  path <compiler|language-server> [--repo <u>]         print the resolved toolchain binary path
-                                                        (installing it into Lichen Home if
-                                                        absent)
+  path <compiler|language-server> [--repo <u>]  print the resolved toolchain
+              [--project <dir>]                 binary path (installing it into
+                                                Lichen Home if absent); for
+                                                language-server, --project
+                                                <dir> composes a server over the
+                                                project's native plugins
   rebuild-plugin [<file|dir>] [--repo <u>]            build (or reuse) a cached
                                                         compiler over the project's
                                                         native plugins
@@ -379,24 +382,101 @@ fn cmd_update(args: &mut Args) -> ExitCode {
 }
 
 /// `liche path <tool>`: print the resolved toolchain binary path, installing it
-/// into Lichen Home first if it is absent.
+/// into Lichen Home first if it is absent.  For `language-server`, an optional
+/// `--project <dir>` gathers the project's native-plugin set and composes a
+/// server over it (built + cached into the plugin-set LSP slot).
 fn cmd_path(args: &mut Args) -> ExitCode {
     let Some(tool) = take(args) else {
-        eprintln!("usage: lichen path <compiler|language-server> [--repo <u>]");
+        eprintln!("usage: lichen path <compiler|language-server> [--repo <u>] [--project <dir>]");
         return ExitCode::FAILURE;
     };
-    let repo = match take_repo(args, DEFAULT_REPO) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
+    let mut repo = DEFAULT_REPO.to_string();
+    let mut project: Option<PathBuf> = None;
+    while let Some(flag) = take(args) {
+        match flag.as_str() {
+            "--repo" => repo = take(args).unwrap_or(repo),
+            "--project" => {
+                let Some(dir) = take(args) else {
+                    eprintln!("--project requires a directory");
+                    return ExitCode::FAILURE;
+                };
+                project = Some(PathBuf::from(dir));
+            }
+            other => {
+                eprintln!("unknown flag: {other}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     let Some(t) = toolchain::Tool::from_name(&tool) else {
         eprintln!("unknown tool: {tool}");
         return ExitCode::FAILURE;
     };
-    // Ensure the tool is present (install into Lichen Home only if absent) then
-    // print its resolved path.
+    // A plugin-set language server: when a project directory is given, gather its
+    // native plugins and resolve the composed server for them.  The empty plugin
+    // set falls through to the standard shipping resolution below.
+    if t == toolchain::Tool::LanguageServer {
+        if let Some(dir) = project {
+            return cmd_path_lsp_project(&dir, &repo);
+        }
+    }
+    resolve_and_print(t, &repo)
+}
+
+/// `liche path language-server --project <dir>`: gather the project's native
+/// plugin set from the `.lichen` sources under `dir`, fetch each plugin, and
+/// resolve the language server for the set.  With plugins, a composed server is
+/// ensured (built + cached into the plugin-set LSP slot) and its path printed;
+/// with no plugins, the standard shipping server resolution/install runs.
+fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
+    if !dir.exists() {
+        eprintln!(
+            "cannot resolve language server: {} does not exist",
+            dir.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    let plugins: Vec<Depend> = collect_depends(dir)
+        .into_iter()
+        .filter(|dep| dep.plugin)
+        .collect();
+    // Fetch each plugin so its resolved version can key the LSP cache, then
+    // ensure a composed server over the plugin set (or fall through to the
+    // shipping server when there are no native plugins).
+    for dep in &plugins {
+        let alias = git::alias_of(dep);
+        match git::fetch(dep) {
+            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
+            Err(e) => {
+                eprintln!("failed to fetch {alias}: {e}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
+    if plugins.is_empty() {
+        return resolve_and_print(toolchain::Tool::LanguageServer, repo);
+    }
+    match toolchain::resolve_lsp_for(&plugins) {
+        Ok(Some(path)) => {
+            println!("{}", path.display());
+            ExitCode::SUCCESS
+        }
+        Ok(None) => {
+            eprintln!("could not resolve a language server for the project's plugins");
+            ExitCode::FAILURE
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// Resolve `tool` (installing it into Lichen Home from the release at `repo` if
+/// absent) and print its path.
+fn resolve_and_print(t: toolchain::Tool, repo: &str) -> ExitCode {
     if !toolchain::resolve(t).is_some() {
-        if let Err(e) = toolchain::install(t, &repo) {
+        if let Err(e) = toolchain::install(t, repo) {
             eprintln!("failed to install {}: {e}", t.bin_name());
             return ExitCode::FAILURE;
         }

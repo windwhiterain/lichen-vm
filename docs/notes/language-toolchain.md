@@ -261,8 +261,19 @@ not pull the tokio/tower async stack.
   ```text
   liche install language-server   # install the prebuilt server into Lichen Home
   liche path language-server      # print its path (installing if absent)
+  liche path language-server --project <dir>  # compose+print a server over <dir>'s plugins
   liche update                    # update the package manager to the latest commit
   ```
+
+- **Per-project plugin-set LSP.** A project that imports a *native plugin* gets a
+  `liche-language-server` built over that plugin set (`liche path language-server
+  --project <dir>`, which the Zed extension calls with `--project <worktree
+  root>`), so the server understands the plugin's value/operator leaves for
+  diagnostics / hover / go-to-definition. The composed server is cached
+  plugin-set-keyed under `$LICHEN_HOME/compilers/<key>/` (mirroring the compiler
+  cache); a project with no plugins falls back to the shipping server. The
+  tooling is generic over one program type `P` (see `lichen_language::LangProgramShape`),
+  so the same `Doc`/server services the shipping and the composed vocabulary.
 
   Without `liche` (or the server) Zed reports "`lichen-language-server` not found
   on `$PATH`" when a `.lichen` buffer is opened.

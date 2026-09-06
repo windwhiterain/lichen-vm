@@ -18,9 +18,10 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use lichen_preprocess::lichendir;
+use lichen_preprocess::{Depend, lichendir};
 
 use crate::compiler_cache;
+use crate::plugin;
 
 /// The default repository toolchain releases are fetched from.
 pub const DEFAULT_REPO: &str = "https://github.com/windwhiterain/lichen-vm";
@@ -265,6 +266,36 @@ pub fn resolve(tool: Tool) -> Option<PathBuf> {
         }
     }
     find_on_path(tool.bin_name())
+}
+
+/// Resolve the language-server binary for a plugin set.
+///
+/// With an **empty** plugin set, the *shipping* `lichen-language-server` is
+/// resolved (the Lichen Home copy first, then `$PATH`), installed into Lichen
+/// Home from the prebuilt release if absent.  With a **non-empty** plugin set,
+/// a language server composed over those plugins is ensured via the
+/// plugin-set LSP cache (see [`compiler_cache::ensure_lsp`]) and returned —
+/// an editor then runs the composed server so it understands the plugins'
+/// leaves for diagnostics / hover / go-to-definition.
+///
+/// Returns `Ok(Some(binary))` on success.  The `Option` is always `Some` in
+/// practice (a shipping server can always be resolved or installed); a caller
+/// that only wants a composed server can `filter` the shipped out.
+pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
+    if plugins.is_empty() {
+        if let Some(path) = resolve(Tool::LanguageServer) {
+            return Ok(Some(path));
+        }
+        let dest = install(Tool::LanguageServer, DEFAULT_REPO)?;
+        return Ok(Some(dest));
+    }
+    println!(
+        "composing a language server over the project's {} native plugin(s)...",
+        plugins.len()
+    );
+    let leaves = plugin::Leaves::shipping();
+    let bin = compiler_cache::ensure_lsp(DEFAULT_REPO, plugins, &leaves)?;
+    Ok(Some(bin))
 }
 
 /// Self-update the package manager to the repo's latest commit. The updated binary
