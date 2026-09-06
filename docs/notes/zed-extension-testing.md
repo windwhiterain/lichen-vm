@@ -130,7 +130,8 @@ manager: `lichen path language-server` installs the **prebuilt** compiler + lang
 manager's own commit and prints the binary path. `lichen` is found on `$PATH`; with no `lichen`
 on a fresh machine, the extension downloads the prebuilt package manager from the repo's GitHub
 release into its own working directory (`download_file` + `make_file_executable`, see
-[`publish-toolchain.sh`](../../scripts/publish-toolchain.sh)) before resolving the server. Run it
+[`publish-toolchain.sh`](../../scripts/publish-toolchain.sh), which triggers the
+`release-lichen` CI workflow) before resolving the server. Run it
 by hand:
 
 ```powershell
@@ -146,8 +147,9 @@ lichen path language-server   # must print an existing path under ~/.lichen
 ```
 
 If the server (or `lichen`) is missing and no release asset is published, Zed reports an
-installation error on the `.lichen` buffer; publish the prebuilt toolchain first with
-`scripts/publish-toolchain.sh` (or the `release-lichen` GitHub Actions workflow).
+installation error on the `.lichen` buffer; publish the prebuilt toolchain first by triggering the
+`release-lichen` CI workflow (`scripts/publish-toolchain.sh`, or `gh workflow run
+release-lichen.yml`), which builds all four host triples on GitHub's runners.
 
 ## Gotchas that actually bite
 

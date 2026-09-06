@@ -290,10 +290,13 @@ not pull the tokio/tower async stack.
   so the same `Doc`/server services the shipping and the composed vocabulary.
 
   When neither the server nor `lichen` is present, the extension bootstraps a
-  prebuilt `lichen` from the repo's GitHub release (see
-  [`publish-toolchain.sh`](../../scripts/publish-toolchain.sh)); the download
-  needs a release (tagged at a commit SHA, assets `<bin>-<host-target>[.exe]`) to
-  actually exist, else it reports "no release asset".
+  prebuilt `lichen` from the repo's GitHub release (published by the
+  [`release-lichen`](../../.github/workflows/release-lichen.yml) CI workflow,
+  which
+  [`publish-toolchain.sh`](../../scripts/publish-toolchain.sh) triggers); the
+  download needs a release (tagged at a commit SHA, assets
+  `<bin>-<host-target>[.exe]`) to actually exist, else it reports "no release
+  asset".
 
 ## Fitting future tools into the model
 
