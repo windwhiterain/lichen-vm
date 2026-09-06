@@ -126,6 +126,12 @@ for settled per-file artifacts, and [`BufferSession`](incremental-parse-compile.
 for the live buffer**, rather than building a second cache. See
 [`artifact-cache.md`](artifact-cache.md) for the whole mechanism.
 
+The store is **scoped per plugin set**: a plugin-built compiler uses its own
+`<lichendir>/compilers/<key>/` as the artifact-cache root (via
+`liche_language::cli::main_with_cache_dir`), so its compile artifacts never
+collide with (or reuse) another vocabulary's — only the shipping compiler uses
+the base `lichendir()` root.
+
 ## The artifact contract (what the tools import)
 
 Concretely, the shared artifacts — all re-exported from `crates/lichen-language`:

@@ -159,12 +159,13 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   vocabularies (`liche_language::CompiledProgram<V, O>`), with the attr type
   fixed to the language's `LangAttr`.  So a compiler built over an additional
   native plugin routes through the shared `liche_language::cli` over its own
-  composed vocabulary.  The one open piece is the plugin's **artifact codec**:
-  a plugin-built compiler currently runs in memory only (`NoPersist`), and the
-  tracked follow-up is a per-leaf codec protocol under which each value/
-  operator leaf exposes an encode/decode and `lang_compose_vocabulary!` emits a
-  `ProgramCodec` for the composed set — giving a plugin-built compiler a real
-  `~/.lichen` device cache.
+  composed vocabulary, and the composition macro emits a **per-leaf
+  [`ProgramCodec`]** (`liche_language::persist`) so a built compiler writes a
+  real device cache.  The compiler's **artifact cache is scoped per plugin
+  set**: `liche_language::cli` takes an explicit cache root, and a generated
+  compiler passes its own plugin-set slot (`<lichendir>/compilers/<key>`), so
+  its compile artifacts never collide with (or reuse) another plugin set's —
+  each vocabulary reads/writes its own `artifacts/` store.
 - `Perspective` and `Doc`'s codesign sites (grammar `# p` / `? expr`, AST
   fields, `IR<…>` schema tails, the `GcdOp` persist discriminator) stay in
   `lichen-language`.

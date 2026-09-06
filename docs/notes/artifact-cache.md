@@ -92,6 +92,21 @@ So the CLI already shares the frozen artifacts of closed files with every other
 process using the same cache directory. The `StaticModule` (frozen, keyed,
 dependency-aware) *is* the cross-process artifact.
 
+### The artifact store is scoped per plugin set
+
+The `DeviceRegistry` cache root is **not** always `lichendir()`: the compiler CLI
+takes an explicit cache root ([`liche_language::cli::main_with_cache_dir`]), and
+a **plugin-built** compiler passes its own plugin-set slot
+(`<lichendir>/compilers/<plugin-set-key>`) so the store lives under that slot.
+This isolates the *compiled-artifact* store per vocabulary.  The artifact
+encoding depends on the compiler's value/operator leaves (`ProgramCodec`), so a
+compiler built over a different plugin set produces a *different* artifact for
+the same file ID — sharing the base `lichendir()` store would let one plugin set
+reuse (or thrash) another's, and a deserialize-then-recompile churn.  The
+shipping compiler keeps `lichendir()`.  Only the compiled-artifact store is
+scoped; the git **source** cache (`lichendir()/sources`) stays shared across
+compilers (it holds the same fetched plugin sources).
+
 ## What this means for the new tooling crates
 
 - **Do not build a store.** `lichen-language-server` and `lichen-language-zed`
