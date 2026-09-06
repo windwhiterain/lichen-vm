@@ -265,10 +265,14 @@ not pull the tokio/tower async stack.
   progress to Zed and runs `lichen path language-server`, which installs the
   **prebuilt** compiler + language server into **Lichen Home**
   (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-  manager's own commit, then prints the binary path. `lichen` is found on `$PATH`;
-  on a machine with no `lichen` at all, the extension downloads the prebuilt
-  package manager from the repo's GitHub release into **its own working
-  directory** (`download_file` + `make_file_executable`) and then runs it. Run it
+  manager's own commit, then prints the binary path. `lichen` is the single
+  canonical copy at `$LICHEN_HOME/tools/lichen` (or a `lichen` on `$PATH`); on a
+  machine with neither, the extension downloads the prebuilt package manager from
+  the repo's GitHub release **into that same `$LICHEN_HOME/tools` slot** via
+  `curl` (mirroring `toolchain::download`) and then runs it. Because the extension
+  uses this canonical copy, a later `liche update` — which refreshes exactly
+  `$LICHEN_HOME/tools/lichen` — stays in sync with what the extension runs (it
+  never keeps a private copy of its own). Run it
   by hand and restart Zed, or `lichen update` to move the package manager (and the
   toolchain it installs) to a later commit:
 

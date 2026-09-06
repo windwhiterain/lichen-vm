@@ -16,15 +16,16 @@
 //! progress to Zed and asks the `lichen` package manager to ensure it is present:
 //! `lichen path language-server` installs the **prebuilt** compiler + language
 //! server into **Lichen Home** (`$LICHEN_HOME`, defaulting to `~/.lichen`) at the
-//! package manager's own commit, and prints the binary path (see
-//! `docs/notes/language-toolchain.md`).
+//! package manager's own commit, and prints the binary path.
 //!
-//! `lichen` is located on `$PATH`; on a machine with no `lichen` at all, the
-//! extension downloads the prebuilt `lichen` binary from this repo's GitHub
-//! release into its **own working directory** (`download_file` +
-//! `make_file_executable`, mirroring how the Kotlin extension self-installs) and
-//! runs that. Either way it then resolves the server through the package
-//! manager.
+//! The package manager is the single canonical copy at
+//! `$LICHEN_HOME/tools/lichen[.exe]` — exactly the file `liche update` refreshes
+//! in place — or a `lichen` already on `$PATH`. On a machine with neither, the
+//! extension downloads the prebuilt `lichen` for this host from this repo's GitHub
+//! release **into that same `$LICHEN_HOME/tools` slot** via `curl` (mirroring the
+//! package manager's own `toolchain::download`). This keeps a fresh environment
+//! self-bootstrapping while later `liche update`s stay in sync: the extension
+//! never keeps a private copy of its own.
 //!
 //! When the worktree root is available, the extension passes it as
 //! `--project <root>` so that a project importing a **native plugin** composes
@@ -41,19 +42,22 @@ pub const LANGUAGE_SERVER_BINARY: &str = "lichen-language-server";
 
 /// The extension type. Non-`zed` builds expose this as metadata only.
 pub struct LichenExtension {
-    /// The self-bootstrapped `lichen` package-manager path, cached once it has
-    /// been downloaded into the extension's working directory. Cached so a
-    /// fresh environment bootstraps once, not on every buffer open.
+    /// The located `lichen` package-manager path. This is the canonical
+    /// `$LICHEN_HOME/tools/lichen` copy (or the `lichen` `which` found on
+    /// `$PATH`) — never a private extension-dir download. Cached once located so
+    /// a fresh environment bootstraps once rather than re-downloading on every
+    /// buffer open. Only read/written under the `zed` feature; in the
+    /// metadata-only (non-`zed`) build the field is intentionally dead.
+    #[allow(dead_code)]
     cached_lichen: Option<String>,
 }
 
 #[cfg(feature = "zed")]
 mod zed_impl {
     use zed_extension_api::{
-        self as zed, Architecture, Command, DownloadedFileType, Extension, GithubReleaseOptions,
-        LanguageServerId, LanguageServerInstallationStatus, Os, Worktree, current_platform,
-        download_file, latest_github_release, make_file_executable,
-        set_language_server_installation_status,
+        self as zed, Architecture, Command, Extension, GithubReleaseOptions, LanguageServerId,
+        LanguageServerInstallationStatus, Os, Worktree, current_platform, latest_github_release,
+        make_file_executable, set_language_server_installation_status,
     };
 
     use crate::{LANGUAGE_SERVER_BINARY, LichenExtension};
@@ -88,8 +92,7 @@ mod zed_impl {
             // The toolchain is managed by the `lichen` package manager, which
             // installs the prebuilt compiler + language server into Lichen Home
             // at its own commit.  Ask it to ensure the server is present and
-            // print its path, then hand that path to Zed.  On a fresh machine
-            // with no `lichen`, it is first downloaded into the extension dir.
+            // print its path, then hand that path to Zed.
             match resolve_via_lichen(worktree, self) {
                 Ok(path) => {
                     set_language_server_installation_status(
@@ -135,76 +138,48 @@ mod zed_impl {
         if on_windows() { ".exe" } else { "" }
     }
 
-    /// The extension's working directory (the WASM process CWD, which Zed sets
-    /// via `PWD`).  This is the only directory the extension may read/write, so
-    /// the self-bootstrapped `lichen` is cached here.
-    fn extension_dir() -> String {
-        std::env::var("PWD").unwrap_or_else(|_| ".".into())
+    /// The shell environment as `(key, value)` pairs.
+    fn shell_env(worktree: &Worktree) -> Vec<(String, String)> {
+        worktree.shell_env()
     }
 
-    /// The relative path (under the extension dir) of the self-bootstrapped
-    /// `lichen`.  Relative is used for `download_file` / `std::fs::metadata`,
-    /// which operate relative to the extension's working directory.
-    fn cached_lichen_rel() -> String {
-        format!("{}", if on_windows() { "lichen.exe" } else { "lichen" })
+    /// Resolve `$LICHEN_HOME`, defaulting to `~/.lichen` (per the package
+    /// manager's `lichen_preprocess::lichendir`).
+    fn lichen_home(worktree: &Worktree) -> String {
+        let vars = shell_env(worktree);
+        if let Some((_, home)) = vars.iter().find(|(k, _)| k == "LICHEN_HOME") {
+            return home.clone();
+        }
+        let home = vars
+            .iter()
+            .find(|(k, _)| k == "HOME" || k == "USERPROFILE")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| ".".into());
+        format!("{home}/.lichen")
     }
 
-    /// Locate `lichen`: on `$PATH`, else the self-bootstrapped copy in the
-    /// extension's working directory, downloading it from the repo's GitHub
-    /// release on first use (a truly fresh machine).  Cached in `cached`.
-    fn ensure_lichen(worktree: &Worktree, cached: &mut Option<String>) -> Result<String, String> {
-        if let Some(p) = cached.as_ref() {
-            return Ok(p.clone());
-        }
-        if let Some(p) = worktree.which(LICHEN_BIN) {
-            *cached = Some(p.clone());
-            return Ok(p);
-        }
-        // Fresh machine with no `lichen` at all: download the prebuilt binary
-        // for this host into the extension dir.
-        let rel = cached_lichen_rel();
-        if !std::path::Path::new(&rel).exists() {
-            let asset_name = format!("{}-{}{}", LICHEN_BIN, host_target(), asset_suffix());
-            let release = latest_github_release(
-                RELEASE_REPO,
-                GithubReleaseOptions {
-                    require_assets: true,
-                    pre_release: true,
-                },
-            )
-            .map_err(|e| format!("cannot query lichen-vm releases: {e}"))?;
-            let asset = release
-                .assets
-                .iter()
-                .find(|a| a.name == asset_name)
-                .ok_or_else(|| {
-                    format!("no release asset named `{asset_name}`; publish the toolchain first")
-                })?;
-            download_file(&asset.download_url, &rel, DownloadedFileType::Uncompressed)
-                .map_err(|e| format!("cannot download `{LICHEN_BIN}` toolchain: {e}"))?;
-            make_file_executable(&rel)
-                .map_err(|e| format!("cannot mark `{LICHEN_BIN}` executable: {e}"))?;
-        }
-        // Return an absolute path so the spawned subprocess resolves it exactly.
-        let abs = format!("{}/{}", extension_dir(), rel);
-        *cached = Some(abs.clone());
-        Ok(abs)
+    /// The canonical package-manager path: `$LICHEN_HOME/tools/lichen[.exe]`,
+    /// exactly the file `liche update` refreshes in place.
+    fn canonical_lichen(worktree: &Worktree) -> String {
+        format!("{}/tools/lichen{}", lichen_home(worktree), asset_suffix())
     }
 
-    /// Ensure the server is installed (asking the `lichen` package manager,
-    /// which installs the prebuilt compiler + language server into Lichen Home
-    /// at its own commit) and return its absolute path.  When the worktree root
-    /// is available it is passed as `--project <root>` so a project with native
-    /// plugins composes its own server; when no root is available the shipping
-    /// server is resolved.
-    fn resolve_via_lichen(
-        worktree: &Worktree,
-        self_: &mut LichenExtension,
-    ) -> Result<String, String> {
-        let lichen = ensure_lichen(worktree, &mut self_.cached_lichen)?;
-        let mut command = Command::new(lichen.as_str())
-            .arg("path")
-            .arg("language-server");
+    /// The outcome of running `lichen path language-server`.
+    enum PmRun {
+        /// The command succeeded; this is the server binary's absolute path.
+        Path(String),
+        /// The package manager binary could not be spawned (`output()` errored),
+        /// meaning it is absent — try another location or bootstrap.
+        Missing,
+        /// The package manager ran but failed; this is a real error to report.
+        Failed(String),
+    }
+
+    /// Run `lichen path language-server [--project <root>]` for `pm` and classify
+    /// the result: `Path` on success, `Missing` when the binary cannot be spawned
+    /// (absent), `Failed` for a genuine command error.
+    fn run_server(worktree: &Worktree, pm: &str) -> PmRun {
+        let mut command = Command::new(pm).arg("path").arg("language-server");
         // A project with native plugins composes its own server over the plugin
         // set (`--project <root>`); the fallback (no `--project`) resolves the
         // shipping server.  `root_path()` always returns a string, so an empty
@@ -213,20 +188,126 @@ mod zed_impl {
         if !root.is_empty() {
             command = command.arg("--project").arg(root);
         }
-        let out = command
-            .output()
-            .map_err(|e| format!("cannot run `{lichen} path language-server`: {e}"))?;
+        let out = match command.output() {
+            Ok(out) => out,
+            // A spawn error (`output()` errs) means the binary is not present.
+            Err(_) => return PmRun::Missing,
+        };
         if out.status != Some(0) {
-            return Err(format!(
-                "`{lichen} path language-server` failed: {}",
+            return PmRun::Failed(format!(
+                "`{pm} path language-server` failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if path.is_empty() {
-            Err("`lichen path language-server` returned an empty path".to_string())
+            PmRun::Failed(format!(
+                "`{pm} path language-server` returned an empty path"
+            ))
         } else {
-            Ok(path)
+            PmRun::Path(path)
+        }
+    }
+
+    /// Download the prebuilt `lichen` for this host into `$LICHEN_HOME/tools` via
+    /// `curl` (creating the directory as needed) and mark it executable.
+    fn bootstrap_lichen(home: &str) -> Result<(), String> {
+        let asset_name = format!("{}-{}{}", LICHEN_BIN, host_target(), asset_suffix());
+        let release = latest_github_release(
+            RELEASE_REPO,
+            GithubReleaseOptions {
+                require_assets: true,
+                pre_release: true,
+            },
+        )
+        .map_err(|e| format!("cannot query lichen-vm releases: {e}"))?;
+        let asset = release
+            .assets
+            .iter()
+            .find(|a| a.name == asset_name)
+            .ok_or_else(|| {
+                format!("no release asset named `{asset_name}`; publish the toolchain first")
+            })?;
+        let mut curl = Command::new("curl")
+            .arg("--create-dirs")
+            .arg("-L")
+            .arg("--fail")
+            .arg("--silent")
+            .arg("--show-error")
+            .arg("--output")
+            .arg(home)
+            .arg(asset.download_url.as_str());
+        let out = curl.output().map_err(|e| format!("cannot run curl: {e}"))?;
+        if out.status != Some(0) {
+            return Err(format!(
+                "cannot download `{LICHEN_BIN}` ({asset_name}): {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ));
+        }
+        make_file_executable(home)
+            .map_err(|e| format!("cannot mark `{LICHEN_BIN}` executable: {e}"))?;
+        Ok(())
+    }
+
+    /// Ensure the server is installed (asking the `lichen` package manager, which
+    /// installs the prebuilt compiler + language server into Lichen Home at its
+    /// own commit) and return its absolute path.  When the worktree root is
+    /// available it is passed as `--project <root>` so a project with native
+    /// plugins composes its own server; when no root is available the shipping
+    /// server is resolved.
+    fn resolve_via_lichen(
+        worktree: &Worktree,
+        self_: &mut LichenExtension,
+    ) -> Result<String, String> {
+        // Fast path: a package manager located on a previous call.  If that path
+        // has since become unusable (cleared below), re-locate rather than
+        // surfacing a confusing spawn error.
+        if let Some(pm) = self_.cached_lichen.clone() {
+            match run_server(worktree, &pm) {
+                PmRun::Path(path) => return Ok(path),
+                PmRun::Missing => self_.cached_lichen = None,
+                PmRun::Failed(e) => return Err(e),
+            }
+        }
+
+        // 1. A `lichen` already on `$PATH`.  `which` is a reliable presence check
+        //    (it only returns a path the shell can actually run), so the common
+        //    case needs no spawn-probe.
+        if let Some(p) = worktree.which(LICHEN_BIN) {
+            match run_server(worktree, &p) {
+                PmRun::Path(path) => {
+                    self_.cached_lichen = Some(p.clone());
+                    return Ok(path);
+                }
+                PmRun::Missing => {}
+                PmRun::Failed(e) => return Err(e),
+            }
+        }
+
+        // 2. The canonical Lichen Home copy — `liche update` refreshes this exact
+        //    file, so using it keeps the extension in sync with the package
+        //    manager (the fix for the stale "private extension-dir copy" bug).
+        //    `run_server` doubles as the presence probe: if it cannot spawn, the
+        //    copy is absent and we fall through.
+        let home = canonical_lichen(worktree);
+        match run_server(worktree, &home) {
+            PmRun::Path(path) => {
+                self_.cached_lichen = Some(home.clone());
+                return Ok(path);
+            }
+            PmRun::Missing => {}
+            PmRun::Failed(e) => return Err(e),
+        }
+
+        // 3. Nothing anywhere: bootstrap the canonical home copy, then run it.
+        bootstrap_lichen(&home)?;
+        self_.cached_lichen = Some(home.clone());
+        match run_server(worktree, &home) {
+            PmRun::Path(path) => Ok(path),
+            PmRun::Missing => Err(format!(
+                "bootstrapped `{LICHEN_BIN}` is not runnable at `{home}`"
+            )),
+            PmRun::Failed(e) => Err(e),
         }
     }
 

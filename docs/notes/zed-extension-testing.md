@@ -127,11 +127,14 @@ The extension does not bundle the server (Zed's publishing rules); `language_ser
 resolves it with `Worktree::which` (which searches `$PATH`), else drives the `lichen` package
 manager: `lichen path language-server` installs the **prebuilt** compiler + language server into
 **Lichen Home** (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-manager's own commit and prints the binary path. `lichen` is found on `$PATH`; with no `lichen`
-on a fresh machine, the extension downloads the prebuilt package manager from the repo's GitHub
-release into its own working directory (`download_file` + `make_file_executable`, see
+manager's own commit and prints the binary path. `lichen` is the single canonical copy at
+`$LICHEN_HOME/tools/lichen` (or a `lichen` on `$PATH`); with neither, on a fresh machine the
+extension downloads the prebuilt package manager from the repo's GitHub release into that same
+`$LICHEN_HOME/tools` slot via `curl` (`make_file_executable`, see
 [`publish-toolchain.sh`](../../scripts/publish-toolchain.sh), which triggers the
-`release-lichen` CI workflow) before resolving the server. Run it
+`release-lichen` CI workflow) before resolving the server. Using the canonical copy means a
+later `liche update` (which refreshes exactly `$LICHEN_HOME/tools/lichen`) stays in sync with what
+the extension runs. Run it
 by hand:
 
 ```powershell
