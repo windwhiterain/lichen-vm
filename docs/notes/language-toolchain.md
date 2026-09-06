@@ -243,18 +243,24 @@ not pull the tokio/tower async stack.
   LSP, so the extension neither needs the grammar for color nor needs any extra
   client-side config — Zed requests `textDocument/semanticTokens/full` because
   the server advertises the capability.
-- **The LSP binary must be on `$PATH`.** The extension does not bundle
-  `lichen-language-server` (per Zed's publishing rules); `language_server_command`
-  resolves it with `Worktree::which`, which searches `$PATH`. Build and install it
-  from this checkout (this puts it on `~/.cargo/bin`, on a stock Cargo `$PATH`),
-  then restart Zed:
+- **The toolchain is installed into Lichen Home, on demand.** The extension does
+  not bundle `lichen-language-server` (per Zed's publishing rules). On first
+  launch, if `Worktree::which` cannot find it, the extension reports install
+  progress to Zed and runs `liche path language-server`, which installs the
+  **prebuilt** compiler + language server into **Lichen Home**
+  (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
+  manager's own commit, then prints the binary path; `liche` is found on `$PATH` or
+  at `$LICHEN_HOME/tools/liche`. Run it by hand and restart Zed, or `liche update`
+  to move the package manager (and the toolchain it installs) to a later commit:
 
   ```text
-  cargo install --path crates/lichen-language-server
+  liche install language-server   # install the prebuilt server into Lichen Home
+  liche path language-server      # print its path (installing if absent)
+  liche update                    # update the package manager to the latest commit
   ```
 
-  Without it Zed reports "`lichen-language-server` not found on `$PATH`" when a
-  `.lichen` buffer is opened.
+  Without `liche` (or the server) Zed reports "`lichen-language-server` not found
+  on `$PATH`" when a `.lichen` buffer is opened.
 
 ## Fitting future tools into the model
 

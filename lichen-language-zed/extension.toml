@@ -18,16 +18,16 @@ repository = "https://github.com/windwhiterain/lichen-vm"
 
 # The language server Zed should launch for Lichen buffers. It is *not* bundled
 # with the extension (per Zed's publishing rules); the extension's
-# `language_server_command` supplies the command, and the `lichen-language-server`
-# binary must be on the user's `$PATH` (locating/downloading it is a follow-up).
-# Install it from the lichen-vm checkout (this puts it on `~/.cargo/bin`, which is
-# on a stock Cargo `$PATH`):
+# `language_server_command` supplies the command.
 #
-#     cargo install --path crates/lichen-language-server
-#
-# Then restart Zed (or reload the extension) so `language_server_command`'s
-# `Worktree::which` can find it. If Zed still reports it "not found on `$PATH`",
-# confirm `~/.cargo/bin` is on your `PATH` and that the binary is there.
+# On first launch, if the server is not already on `$PATH`, the extension reports
+# install progress to Zed and asks the `liche` package manager to ensure it is
+# present: `liche path language-server` installs the *prebuilt* compiler + language
+# server into Lichen Home (`$LICHEN_HOME`, default `~/.lichen`) at the package
+# manager's own commit and prints the binary path. `liche` is found on `$PATH` or
+# at `$LICHEN_HOME/tools/liche`; how it was installed does not matter. Run `liche
+# update` to move the package manager (and the toolchain it installs) to a later
+# commit.
 [language_servers.lichen-language-server]
 name = "Lichen Language Server"
 languages = ["Lichen"]

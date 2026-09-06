@@ -32,7 +32,14 @@ commands:
                                                         exported type via the compiler
                                                         binary
   clean                                                 reclaim device-cache artifacts
-  install <compiler|language-server|all>                fetch a toolchain binary
+  install <compiler|language-server|all> [--repo <u>]  install a prebuilt toolchain binary
+                                                        into Lichen Home, from the release at
+                                                        this binary's own commit
+  update [--repo <u>]                                  update the package manager itself to the
+                                                        repository's latest commit
+  path <compiler|language-server> [--repo <u>]         print the resolved toolchain binary path
+                                                        (installing it into Lichen Home if
+                                                        absent)
   rebuild-plugin [<file|dir>] [--repo <u>]            build (or reuse) a cached
                                                         compiler over the project's
                                                         native plugins
@@ -62,6 +69,8 @@ fn main() -> ExitCode {
         "build" => cmd_build(&mut args),
         "clean" => cmd_clean(&mut args),
         "install" => cmd_install(&mut args),
+        "update" => cmd_update(&mut args),
+        "path" => cmd_path(&mut args),
         "rebuild-plugin" => cmd_rebuild_plugin(&mut args),
         "cache" => cmd_cache(&mut args),
         other => {
@@ -295,22 +304,34 @@ fn cmd_cache(args: &mut Args) -> ExitCode {
     cmd_clean(args)
 }
 
-fn cmd_install(args: &mut Args) -> ExitCode {
-    let Some(tool) = take(args) else {
-        eprintln!("usage: lichen install <compiler|language-server|all>");
-        return ExitCode::FAILURE;
-    };
-    let mut repo = DEFAULT_REPO.to_string();
+/// Parse a trailing `--repo <u>` (and reject anything else).
+fn take_repo(args: &mut Args, default: &str) -> Result<String, ExitCode> {
+    let mut repo = default.to_string();
     while let Some(flag) = take(args) {
         if flag == "--repo" {
             repo = take(args).unwrap_or(repo);
         } else {
             eprintln!("unknown flag: {flag}");
-            return ExitCode::FAILURE;
+            return Err(ExitCode::FAILURE);
         }
     }
+    Ok(repo)
+}
+
+/// `liche install <tool>`: install a prebuilt toolchain binary into Lichen Home
+/// from the GitHub release at this binary's own commit (so the package manager and
+/// the toolchain are always the same revision).
+fn cmd_install(args: &mut Args) -> ExitCode {
+    let Some(tool) = take(args) else {
+        eprintln!("usage: lichen install <compiler|language-server|all> [--repo <u>]");
+        return ExitCode::FAILURE;
+    };
+    let repo = match take_repo(args, DEFAULT_REPO) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
     let tools: Vec<toolchain::Tool> = match tool.as_str() {
-        "all" => vec![toolchain::Tool::Compiler, toolchain::Tool::LanguageServer],
+        "all" => toolchain::Tool::ALL_PLUGIN_SENSITIVE.to_vec(),
         _ => {
             let Some(t) = toolchain::Tool::from_name(&tool) else {
                 eprintln!("unknown tool: {tool}");
@@ -320,8 +341,8 @@ fn cmd_install(args: &mut Args) -> ExitCode {
         }
     };
     for t in tools {
-        match toolchain::install(t, &repo, None) {
-            Ok(()) => println!("installed {}", t.bin_name()),
+        match toolchain::install(t, &repo) {
+            Ok(path) => println!("installed {} -> {}", t.bin_name(), path.display()),
             Err(e) => {
                 eprintln!("failed to install {}: {e}", t.bin_name());
                 return ExitCode::FAILURE;
@@ -329,6 +350,69 @@ fn cmd_install(args: &mut Args) -> ExitCode {
         }
     }
     ExitCode::SUCCESS
+}
+
+/// `liche update`: update the package manager itself to the repo's latest commit,
+/// written to `$LICHEN_HOME/tools/liche`.
+fn cmd_update(args: &mut Args) -> ExitCode {
+    let repo = match take_repo(args, DEFAULT_REPO) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    match toolchain::update(&repo) {
+        Ok(None) => {
+            println!("lichen is already at the latest commit");
+            ExitCode::SUCCESS
+        }
+        Ok(Some(commit)) => {
+            println!(
+                "updated lichen to {commit} ({})",
+                toolchain::tools_dir()
+                    .join(toolchain::local_name(toolchain::PACKAGE_MANAGER_BIN))
+                    .display()
+            );
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("failed to update lichen: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+/// `liche path <tool>`: print the resolved toolchain binary path, installing it
+/// into Lichen Home first if it is absent.
+fn cmd_path(args: &mut Args) -> ExitCode {
+    let Some(tool) = take(args) else {
+        eprintln!("usage: lichen path <compiler|language-server> [--repo <u>]");
+        return ExitCode::FAILURE;
+    };
+    let repo = match take_repo(args, DEFAULT_REPO) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    let Some(t) = toolchain::Tool::from_name(&tool) else {
+        eprintln!("unknown tool: {tool}");
+        return ExitCode::FAILURE;
+    };
+    // Ensure the tool is present (install into Lichen Home only if absent) then
+    // print its resolved path.
+    if !toolchain::resolve(t).is_some() {
+        if let Err(e) = toolchain::install(t, &repo) {
+            eprintln!("failed to install {}: {e}", t.bin_name());
+            return ExitCode::FAILURE;
+        }
+    }
+    match toolchain::resolve(t) {
+        Some(path) => {
+            println!("{}", path.display());
+            ExitCode::SUCCESS
+        }
+        None => {
+            eprintln!("could not resolve {}", t.bin_name());
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
