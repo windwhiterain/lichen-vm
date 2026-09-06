@@ -136,7 +136,7 @@ fn a_nested_function_captures_the_applied_outer_parameter() {
 
 #[test]
 fn an_array_literal_checks_against_its_array_type() {
-    assert_eq!(array_ids(evaluate("([1, 2, 3] : Int<3>)")).len(), 3);
+    assert_eq!(array_ids(evaluate("([1, 2, 3] : array<Int, 3>)")).len(), 3);
 }
 
 #[test]
@@ -1296,12 +1296,15 @@ fn a_function_type_is_a_first_class_value() {
 
 #[test]
 fn a_dependent_array_length_pins_the_parameter() {
-    // `Int<n>` with a bound `n`: the check resolves the length read to a pure
+    // `array<Int, n>` with a bound `n`: the check resolves the length read to a pure
     // reference of `n`'s cell and pins it to the literal's length — the
     // parameter is monomorphized, and applying the pinned length checks and
     // runs.  (The root apply is annotated to anchor its lazy result cell.)
     assert_eq!(
-        array_ids(evaluate("(((n => ([1, 2, 3] : Int<n>)) 3) : Int<3>)")).len(),
+        array_ids(evaluate(
+            "(((n => ([1, 2, 3] : array<Int, n>)) 3) : array<Int, 3>)"
+        ))
+        .len(),
         3
     );
 }
@@ -1311,7 +1314,7 @@ fn a_dependent_array_length_rejects_other_lengths() {
     // `n` is pinned to 3 by the annotation; applying 5 clashes at the apply
     // (a runtime failure — the parameter's expected value against the
     // argument).
-    let d = diags("((n => ([1, 2, 3] : Int<n>)) 5)");
+    let d = diags("((n => ([1, 2, 3] : array<Int, n>)) 5)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Runtime);
@@ -1470,7 +1473,7 @@ fn a_heterogeneous_array_is_rejected() {
 
 #[test]
 fn an_array_of_the_wrong_length_is_rejected() {
-    let d = diags("([1, 2] : Int<3>)");
+    let d = diags("([1, 2] : array<Int, 3>)");
     assert_eq!(d.len(), 1);
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Annotation);

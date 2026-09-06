@@ -568,7 +568,7 @@ where
                 };
                 // Materialize each element as a fresh scalar node and build a
                 // real lichen array value over them, so `collect` yields an
-                // ordinary array the user can index/treat as `Int<n>`.
+                // ordinary array the user can index/treat as `array<Int, n>`.
                 let items: Vec<ArrayItem> = results
                     .iter()
                     .map(|value| {

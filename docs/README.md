@@ -42,6 +42,7 @@ Every note opens with a `> Status:` line:
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
+| [Raw index `X<e>`](notes/raw-index.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`), `lichen-render` | current |
 | [Packages & import](notes/packages.md) | `lichen-language` (`preprocess`/`package`/`persist`/`run`), `lichen-preprocess` | current |
 | [Package manager](notes/package-manager.md) | `lichen-package`, `lichen-preprocess` | current |
 | [Isolating the preprocessor](notes/preprocessor-isolation.md) | `lichen-preprocess`, `lichen-span`, `lichen-language` (`preprocess` shim, `package`), `lichen-package` | current |

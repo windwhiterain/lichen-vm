@@ -225,8 +225,8 @@ pass "composed compiler built into \$LICHEN_HOME/compilers/<plugin-set-key>"
 # still wires only the vocabulary, not the native ops) we assert the build and
 # note the run is a tracked follow-up.  Toggle by checking for the canonical
 # output.
-if printf '%s' "$out" | grep -qF "[1, 2, 3]: Int<3>"; then
-  pass "std.sort [3,1,2] -> [1, 2, 3]: Int<3>"
+if printf '%s' "$out" | grep -qF "[1, 2, 3]: array<Int, 3>"; then
+  pass "std.sort [3,1,2] -> [1, 2, 3]: array<Int, 3>"
 else
   say "note: composed compiler built, but runtime std.sort did not print the canonical output"
   say "output was: $(printf '%s' "$out" | tail -3)"

@@ -1,0 +1,5 @@
+@{
+  order = "11"
+  output = "(Int, string, Int, string): <Type, Type, Type, Type>"
+@}
+(<Int, string><0>, <Int, string><1>, struct<Int, string><0>, struct<Int, string><1>)

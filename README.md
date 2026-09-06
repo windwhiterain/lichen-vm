@@ -107,9 +107,9 @@ This section is generated from [`examples`](examples) by `cargo run -p lichen-la
 ```text
 @{
   order = "0"
-  output = "[1, 2, 3]: Int<3>"
+  output = "[1, 2, 3]: array<Int, 3>"
 @}
-[1, 2, 3] : Int<3>
+[1, 2, 3] : array<Int, 3>
 ```
 
 ### `tuple.lichen`
@@ -139,7 +139,7 @@ b = (1, Int)
 ```text
 @{
   order = "2"
-  output = "[1, 2, 3, 4]: Int<4>"
+  output = "[1, 2, 3, 4]: array<Int, 4>"
 @}
 a = 1
 f1 = x => {
@@ -201,7 +201,7 @@ is_old = x => [is_even (x - 1), 0][x == 0]
 ```text
 @{
   order = "2"
-  output = "[1, 1]: Int<2>"
+  output = "[1, 1]: array<Int, 2>"
 @}
 f1 = x => {
     f2 = y => [y, y]
@@ -332,7 +332,7 @@ inc_twice = x => math.succ (math.succ x)
 ```text
 @{
   order = "5"
-  output = "(Int, Type, Int, Int<2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
+  output = "(Int, Type, Int, array<Int, 2>, Type, 5): <Type, Type, Type, TypeArray, Type, Int>"
 @}
 f = type_of
 g = x => type_of x
@@ -395,6 +395,16 @@ compute.launch k_outer 3
 Doc = struct<.tag Int>
 five = 5 # 8 ? Doc(.tag 7)
 five # 4
+```
+
+### `raw_index.lichen`
+
+```text
+@{
+  order = "11"
+  output = "(Int, string, Int, string): <Type, Type, Type, Type>"
+@}
+(<Int, string><0>, <Int, string><1>, struct<Int, string><0>, struct<Int, string><1>)
 ```
 
 <!-- end: examples -->

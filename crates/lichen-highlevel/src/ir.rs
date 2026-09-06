@@ -307,6 +307,19 @@ pub enum ExprKind<L> {
     /// and the read registers an `i < length` bounds assert), so this form
     /// never kind-dispatches.
     Index { array: ExprId, index: ExprId },
+    /// `{ container, index }` — a *raw* positional read `X<e>` (the glued `<`
+    /// postfix): element `index` of the container's **value**, read
+    /// structurally through the lowlevel `Index` **without type validation**.
+    /// There is no array-type pinning, no [`IndexTarget`](crate::DiagKind)
+    /// guard, and no bounds assert — the container is read by value whatever
+    /// its type, so it reads a component of a type-as-value
+    /// (`<Int, string><0>`, `struct<Int, string><1>`) or of any expression's
+    /// value.  The result is the element's own pair: its value is element 0
+    /// of the read, its type element 1, both lazily (an unbound container
+    /// resolves at the apply).  This form is what the `T<e>` array-type
+    /// postfix used to be; the array type is now [`Self::TypeArray`] spelled
+    /// `array<T, n>`.
+    RawIndex { container: ExprId, index: ExprId },
     /// `{ container, key }` — a positional slot read `a(k)` over a tuple
     /// element or struct field (both shapes are positional type lists; the
     /// nominal struct id lives in the kind, so the extraction is the same

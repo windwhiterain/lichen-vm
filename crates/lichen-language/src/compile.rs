@@ -612,6 +612,15 @@ impl Compiler {
                 let index = self.compile_expr(index);
                 self.alloc(ExprKind::Index { array, index }, span)
             }
+            Expr::RawIndex {
+                container,
+                index,
+                span,
+            } => {
+                let container = self.compile_expr(container);
+                let index = self.compile_expr(index);
+                self.alloc(ExprKind::RawIndex { container, index }, span)
+            }
             Expr::TableFind {
                 container,
                 key,

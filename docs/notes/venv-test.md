@@ -45,7 +45,7 @@ its artifact cache to that slot (see
 [`plugin-taxonomy.md`](plugin-taxonomy.md)). The composed compiler registers each
 plugin's native package (the plugin's `WRAPPER_SOURCE` compiled against its
 private native-op registry) on the store it evaluates against, so `std.sort
-[3, 1, 2]` fully runs and prints `[1, 2, 3]: Int<3>`. This leg needs **no
+[3, 1, 2]` fully runs and prints `[1, 2, 3]: array<Int, 3>`. This leg needs **no
 network** — see below.
 
 ## Accepting a local git URL

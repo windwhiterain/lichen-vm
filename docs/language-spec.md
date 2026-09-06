@@ -60,12 +60,13 @@ primary  := int_literal
           | '{' block '}'                           -- block: statements, then the block's value (or a struct-returning block)
           | '<' expr (sep expr)+ '>'                -- tuple type  (always TypeTuple; >= 2 elements)
           | 'struct' '<' sfield (sep sfield)* '>'     -- struct type  (nominal, optional field names)
+          | 'array' '<' expr sep expr '>'          -- array type  (element type, then length)
           | 'if' expr 'then' expr 'else' expr       -- conditional
 block    := (bstmt sep)* ['return' expr]            -- statements + an explicit tail (`return` anywhere)
           | (bstmt sep)*                            -- struct-returning block (no tail): an anonymous struct
 bstmt    := ['pub'] stmt                            -- a block statement (`pub` marks one as a struct field)
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
-                 | '<' expr '>'                     -- array type  T<e>
+                 | '<' expr '>'                     -- raw index  X<e>  (no type validation)
                  | '{' expr '}'                     -- table lookup  t{k}
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
@@ -76,8 +77,8 @@ sfield   := '.' name expr                           -- named struct field  (a le
 fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read paren content
 ```
 
-- **Keywords:** `Int`, `Type`, `struct`, `table`, `let`, `if`, `then`, `else`,
-  `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+- **Keywords:** `Int`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+  `else`, `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
   `::`,
   `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
@@ -120,7 +121,7 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 - **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` → `<=` / `==`
   → `+` / `-` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
-  array lengths: `Int<x : T>` is the array type whose length is the annotated
+  array lengths: `array<Int, x : T>` is the array type whose length is the annotated
   expression.  `#` and `?` bind at the same precedence as `:`, so
   `e : T # p ? d` annotates the type, perspective, and doc slots, and
   `1 # 4 + 2 # 6` is `(1 # 4) + (2 # 6)`.  `?` is the **label** (doc) slot:
@@ -176,8 +177,8 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
 ### 2.1 Delimiters, postfix forms, and adjacency (Glue)
 
 Brackets `[ ]` and parens `( )` build values; angle brackets `< >` build
-types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `T<3>` is the
-array type of length 3, `<Int, Type>` the tuple type, and
+types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `array<Int, 3>`
+is the array type of length 3, `<Int, Type>` the tuple type, and
 `struct<Int, Type>` a nominal struct type.
 
 All four postfix delimiters — `(` `{` `<` `[` — are **postfix-only when glued**
@@ -191,18 +192,24 @@ delimiter is a fresh atom — an argument of an application:
   conditional form — with an integer index it selects a branch.  An array
   literal in argument position needs no parens when glued, but a spaced
   `f ([1, 2])` applies `f` to the array.
-- `Int<3>` (glued `<`) is the array type of length 3; `f <3>` (spaced `<`)
-  applies `f` to `3`.  A type tuple in argument position is parenthesized:
-  `f (<Int, Type>)`.  A single-element `<Int>` is a parse error — `(Int)`
-  is the grouping form.
+- `X<e>` (glued `<`) is a **raw index**: element `e` of `X`'s *value*, read
+  with **no type validation** (see §3).  It reads a component of a type-as-value
+  (`<Int, string><0>`, `struct<Int, string><1>`) or of any expression's value,
+  and stays lazy on an unbound container.  A spaced `<` is a fresh tuple-type
+  atom — an application argument (`f <3>` is a parse error, a single-element
+  tuple type; a two-element one, `f <Int, Type>`, applies `f` to it).  A type
+  tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
+  type is now **keyword-led** — `array<T, n>` (an `array` form in §2), never the
+  postfix `<` form.
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
   `(`) applies `f` to the tuple.  A glued `(` after a container is a field/
   slot read (`a(0)`).  A fresh atom may itself open with a glued delimiter,
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
   `Int` and `Type` (a tuple type is `x : <Int, Type>`).
 - `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
-  `{k}`.  A table literal (`table{…}`) and a struct type (`struct<…>`) are
-  *keyword-led*, so their delimiter sits directly after the keyword.
+  `{k}`.  A table literal (`table{…}`) and a struct type (`struct<…>`) and an
+  array type (`array<…>`) are *keyword-led*, so their delimiter sits directly
+  after the keyword.
 
 ### 2.2 The `@{...@}` preprocessor block
 
@@ -306,7 +313,7 @@ span back to the original file.
   (`(id => ((id 5 : Int), (id Type : Type))) (x => x)`) checks as well.  No
   generalize/instantiate special form exists or is needed.
 - **Types are first-class values.**  `Int`, `Type`, function types
-  (`T -> U`), tuple types, and array types (`T<e>`) are ordinary values that
+  (`T -> U`), tuple types, and array types (`array<T, n>`) are ordinary values that
   can be passed around, bound, and used in type position.  `Type : Type`
   holds in a single universe; kinding is an ordinary type check (a literal in
   type position is a kinding error, not a separate "kind system").
@@ -322,6 +329,18 @@ span back to the original file.
   guard).  `[then, else][i]` is the language's only
   conditional form — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
+- **The raw index `X<e>`.**  The glued `<` postfix reads element `e` of `X`'s
+  **value** with **no type validation** — no array-type pinning, no
+  `IndexTarget` guard, no bounds assert.  It is the way to read a component of
+  a *type-as-value* directly: `<Int, string><0>` is the `Int` type (the tuple
+  type's first element), `struct<Int, string><1>` the `string` type, and any
+  expression may be the container (a bound name, a parameter, a call result).
+  Because it is unvalidated, an index into a concretely non-positional value
+  (an atomic type, an `Int`) or an out-of-bounds index is a **runtime**
+  lowlevel `Index` evaluation error, never a static diagnostic; an unbound
+  container stays lazy and resolves at the apply.  This is the syntax the
+  array type used to occupy — the array type is now the keyword-led
+  `array<T, n>`.
 - **Nominal struct types.**  `struct<T1, ..., Tn>` is a *new type* with
   positional fields; a field may carry an optional name prefix (`.name`), so
   `struct<.x Int, .y Type>` names its fields.  The leading `.` unambiguously
@@ -407,7 +426,8 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads like `a(k)` |
 | `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
-| `T<e>` | `TypeArray { element_type, length }` |
+| `array<T, n>` | `TypeArray { element_type, length }` |
+| `X<e>` | `RawIndex { container, index }` — a raw, unvalidated element read |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 | `{ x = 1; …; y = 2 }` (no tail) | `RecordBlock { fields }` — a struct-returning block; each field carries an optional name, its value, a `pub` mark, and a `field` flag (false for a `let` local) |
 | `{ …; return e }` | `Block { statements, expr: e }` — the `return` expression is the block's tail |
@@ -490,7 +510,7 @@ diagnostics.
 
 Checker messages are rendered by the same printer as the CLI output, so
 types appear in the language's own syntax: `Int`, `Type`, `T1 -> T2`,
-`<T1, T2>`, `T<len>`, `struct<...>`, and unbound cells as stable `?a`,
+`<T1, T2>`, `array<T, len>`, `struct<...>`, and unbound cells as stable `?a`,
 `?b`, … names (cells in one unification class share a name).  The boxed
 highlevel `Diag` in `check` stays raw — it carries the structured facts
 (`kind`, the classes `a`/`b` and their values, the `error_index` into

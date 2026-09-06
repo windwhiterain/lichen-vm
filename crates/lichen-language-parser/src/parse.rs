@@ -702,12 +702,16 @@ fn atom_parser<'a>(
             block(tokens, expr.clone()),
             angle_tuple(tokens, expr.clone()),
             struct_type(tokens, expr.clone()),
+            array_type(tokens, expr.clone()),
             if_expr(tokens, expr.clone()),
         )))
         .labelled("an expression");
 
     // The postfix forms, chained left.  A `[` after an expression is always
-    // an index, a `<` always an array type.  A `(` or a `{` is postfix only
+    // an index, and a `<` after an expression is the **raw** component read
+    // `X<e>` (no type validation) — the glued `<` no longer builds an array
+    // type (that is now the keyword-led `array<T, n>` atom, see
+    // [`array_type`]).  A `(` or a `{` is postfix only
     // when *adjacent* — the bracket comes straight after the expression, no
     // space between: a `(` holding a single comma-free expression is the
     // positional slot read `a(k)`, any other adjacent `(` is struct
@@ -728,7 +732,7 @@ fn atom_parser<'a>(
             .ignore_then(token(TokenKind::LAngle))
             .ignore_then(expr.clone())
             .then_ignore(token(TokenKind::RAngle))
-            .map(Postfix::TypeArray),
+            .map(Postfix::RawIndex),
         glue.clone()
             .ignore_then(token(TokenKind::LBrace))
             .ignore_then(expr.clone())
@@ -762,9 +766,9 @@ fn atom_parser<'a>(
                         key: Box::new(key),
                         span,
                     },
-                    Postfix::TypeArray(length) => Expr::TypeArray {
-                        element_type: Box::new(acc),
-                        length: Box::new(length),
+                    Postfix::RawIndex(index) => Expr::RawIndex {
+                        container: Box::new(acc),
+                        index: Box::new(index),
                         span,
                     },
                     Postfix::Paren((fields, saw_comma)) => {
@@ -804,7 +808,7 @@ enum Postfix {
     DotName(String),
     Index(Expr),
     TableFind(Expr),
-    TypeArray(Expr),
+    RawIndex(Expr),
     Paren((Vec<StructInstArg>, bool)),
 }
 
@@ -1105,6 +1109,28 @@ fn struct_type<'a>(
         })
 }
 
+/// `array<T, n>` — the array type: the element type `T` and the length `n`,
+/// keyword-led exactly like `struct<…>`.  This replaces the old glued
+/// `T<e>` array-type postfix, which is now the raw type-component read
+/// (`X<e>`).  Exactly two fields: `array<Int, 3>` (a single field is a
+/// typo).
+fn array_type<'a>(
+    tokens: &'a [Token],
+    expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, Expr, E<'a>> + Clone {
+    token(TokenKind::KwArray)
+        .ignore_then(token(TokenKind::Glue).ignored().or_not())
+        .ignore_then(token(TokenKind::LAngle))
+        .ignore_then(expr.clone())
+        .then(token(TokenKind::Separator).ignore_then(expr.clone()))
+        .then_ignore(token(TokenKind::RAngle))
+        .map_with(|(element_type, length), me| Expr::TypeArray {
+            element_type: Box::new(element_type),
+            length: Box::new(length),
+            span: span_at(tokens, me.span().start),
+        })
+}
+
 /// `{ stmt; …; expr }` — a block: scoped statements followed by the block's
 /// value.  The body is the same statement list as a program's, recursing
 /// through the same expression parser.
@@ -1401,6 +1427,12 @@ pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
             }
             Expr::Index { array, index, .. } => {
                 walk_expr(array, out);
+                walk_expr(index, out);
+            }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                walk_expr(container, out);
                 walk_expr(index, out);
             }
             Expr::FieldRead { container, key, .. } => {

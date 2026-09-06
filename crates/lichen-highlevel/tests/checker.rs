@@ -2163,7 +2163,7 @@ fn a_body_index_fails_at_the_violating_argument() {
 
 #[test]
 fn an_annotated_array_parameter_bounds_are_checked_in_body() {
-    // f = xs : Int<3> => xs[5] — the annotation is compiled in body scope,
+    // f = xs : array<Int, 3> => xs[5] — the annotation is compiled in body scope,
     // so the generated `5 < 3` constraint is decided at normalize: the
     // never-applied function already fails, with no unification involved.
     let mut ir = IR::new();
@@ -2175,7 +2175,7 @@ fn an_annotated_array_parameter_bounds_are_checked_in_body() {
     let body = index(&mut ir, xs, five);
     let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, 0);
     let b = build(f, ir);
-    assert!(!b.ok, "xs[5] against Int<3> must fail");
+    assert!(!b.ok, "xs[5] against array<Int, 3> must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
     assert_eq!(b.module.assert_errors.len(), 1);
     assert_eq!(
@@ -2190,7 +2190,7 @@ fn an_annotated_array_parameter_bounds_are_checked_in_body() {
 
 #[test]
 fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
-    // f = xs : Int<3> => xs[1]; f [7, 8, 9] — with a literal index the
+    // f = xs : array<Int, 3> => xs[1]; f [7, 8, 9] — with a literal index the
     // body's `1 < 3` is fully concrete, so the template's own constraint is
     // decided at normalize and consumed along with the apply's clone.
     let mut ir = IR::new();

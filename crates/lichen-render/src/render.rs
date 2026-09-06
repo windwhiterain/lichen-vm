@@ -26,7 +26,7 @@ type RenderExt<'a, V> = &'a dyn Fn(&V) -> Option<String>;
 /// The type chain decides how the value reads: a value whose type is the
 /// universe is an atomic type constant (`Int` / `Type`), a value whose type
 /// is a kind is a compound type (`struct<Int, Type>`, `Int -> Int`,
-/// `<Int, Type>`, `Int<3>`), a value whose type is a tuple type reads as a
+/// `<Int, Type>`, `array<Int, 3>`), a value whose type is a tuple type reads as a
 /// tuple `(1, Int)`, an array type as an array `[1, 2, 3]`, and a struct
 /// type as its field tuple.  When the type chain is opaque (an unbound cell,
 /// an extension type), the value falls back to its raw layout — the old
@@ -40,7 +40,7 @@ where
 
 /// Render a type expression (the recursive-pair encoding again) in the
 /// language's own type syntax: `Int`, `Type`, `T1 -> T2`, `<T1, ..., Tn>`,
-/// `T<len>`, `struct<T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
+/// `array<T, len>`, `struct<T1, ...>`.  Unbound cells get stable `?a`, `?b`, …
 /// names — cells in the same unification class share a name — so the type
 /// shows which parts are linked.  Cycles are cut at `…`.
 pub fn print_type<P: HighProgram>(module: &Module<P>, root: NodeId) -> String
@@ -338,14 +338,14 @@ where
                     return format!("<{}>", fields.join(", "));
                 }
                 Some(m) if m == P::Value::array_type_marker() => {
-                    // shape = [element type, length] — render `T<len>`.
+                    // shape = [element type, length] — render `array<T, len>`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
                         && let s = shape.items()
                         && s.len() == 2
                     {
                         return format!(
-                            "{}<{}>",
+                            "array<{}, {}>",
                             self.any_node(s[0].node),
                             self.any_node(s[1].node)
                         );
@@ -505,7 +505,7 @@ where
                         && s.len() == 2
                     {
                         return format!(
-                            "{}<{}>",
+                            "array<{}, {}>",
                             self.static_any(s[0].node, visiting),
                             self.static_any(s[1].node, visiting)
                         );
@@ -727,7 +727,7 @@ where
             return Some(format!("<{}>", fields.join(", ")));
         } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
             return Some(format!(
-                "{}<{}>",
+                "array<{}, {}>",
                 self.printer.any_node(shape[0].node),
                 self.printer.any_node(shape[1].node)
             ));

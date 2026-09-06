@@ -88,6 +88,10 @@ pub enum TokenKind {
     /// The type_of keyword -- an ordinary first-class function value whose
     /// application reads its argument's type (`type_of e`, `type_of (e)`).
     KwTypeOf,
+    /// The array keyword -- a keyword-led array type, `array<T, n>`.  This
+    /// replaces the old `T<e>` array-type postfix, which is now the raw
+    /// type-component read (`X<e>`).
+    KwArray,
     /// '->' -- a function type.
     Arrow,
     /// '=>' -- a lambda.
@@ -164,6 +168,7 @@ impl TokenKind {
             TokenKind::KwReturn => "'return'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
             TokenKind::KwTypeOf => "'type_of'".to_string(),
+            TokenKind::KwArray => "'array'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
             TokenKind::FatArrow => "'=>'".to_string(),
             TokenKind::Colon => "':'".to_string(),
@@ -255,6 +260,8 @@ enum RawToken {
     KwPub,
     #[token("type_of")]
     KwTypeOf,
+    #[token("array")]
+    KwArray,
     #[regex(r"[A-Za-z_][A-Za-z0-9_]*")]
     NameLit,
     #[token("->")]
@@ -671,6 +678,7 @@ fn raw_to_kind(
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
         RawToken::KwTypeOf => Some(TokenKind::KwTypeOf),
+        RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::Arrow => Some(TokenKind::Arrow),
         RawToken::FatArrow => Some(TokenKind::FatArrow),
         RawToken::DoubleColon => Some(TokenKind::DoubleColon),
