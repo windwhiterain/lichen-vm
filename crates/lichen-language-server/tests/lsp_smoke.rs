@@ -180,6 +180,62 @@ fn handshake_and_features() {
     child.wait().expect("server exits cleanly");
 }
 
+#[test]
+fn field_completion_after_a_dot() {
+    // The server must surface the field-access completion: typing `point.s` after
+    // a local struct binding offers its field `sub` (wired through the real
+    // `textDocument/completion` handler, not just the library).
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_lichen-language-server"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn lichen-language-server");
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
+    );
+    let _init = read_frame(&mut stdout);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///field.lichen","languageId":"lichen","version":1,"text":"point = { x = 1, y = 2, sub = 3 }\npoint.s\n"}}}"#,
+    );
+    let _diag = wait_for(&mut stdout, "publishDiagnostics");
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///field.lichen"},"position":{"line":1,"character":7}}}"#,
+    );
+    let completion = read_frame(&mut stdout);
+    assert!(
+        completion.contains("\"id\":2"),
+        "completion resp = {completion}"
+    );
+    assert!(
+        completion.contains("\"label\":\"sub\""),
+        "completion resp = {completion}"
+    );
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#,
+    );
+    let _shutdown = read_frame(&mut stdout);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"exit","params":null}"#,
+    );
+    drop(stdin);
+    child.wait().expect("server exits cleanly");
+}
+
 /// A fresh temporary directory so a test's import files are isolated on disk.
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()

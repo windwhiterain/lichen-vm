@@ -93,25 +93,34 @@ pub fn suggest_names<'a>(
     Some(hits.into_iter().map(|(_, cand)| cand).collect())
 }
 
+/// The did-you-mean clause for a name typed against a set of valid names, or
+/// `None` when nothing is close.  The clause is `, did you mean 'y'?` (one
+/// candidate) or `, did you mean one of 'a', 'b'?` (several).  Shared by the
+/// unresolved-name and the field-access messages so both read identically.
+pub fn did_you_mean<'a>(name: &str, in_scope: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    let cands = suggest_names(name, in_scope)?;
+    Some(if cands.len() == 1 {
+        format!(", did you mean '{}'?", cands[0])
+    } else {
+        let joined = cands
+            .iter()
+            .map(|c| format!("'{c}'"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(", did you mean one of {joined}?")
+    })
+}
+
 /// Render the full `unresolved name` diagnostic message for `name`, appending a
 /// did-you-mean clause when a close in-scope name exists.  `in_scope` yields the
 /// names visible at the use site (duplicates are fine).  No candidate → the
 /// plain `unresolved name 'x'` message (so an error with nothing to suggest is
 /// unchanged).
 pub fn unresolved_message<'a>(name: &str, in_scope: impl IntoIterator<Item = &'a str>) -> String {
-    match suggest_names(name, in_scope) {
-        None => format!("unresolved name '{name}'"),
-        Some(cands) if cands.len() == 1 => {
-            format!("unresolved name '{name}', did you mean '{}'?", cands[0])
-        }
-        Some(cands) => {
-            let joined = cands
-                .iter()
-                .map(|c| format!("'{c}'"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("unresolved name '{name}', did you mean one of {joined}?")
-        }
+    let base = format!("unresolved name '{name}'");
+    match did_you_mean(name, in_scope) {
+        Some(clause) => format!("{base}{clause}"),
+        None => base,
     }
 }
 

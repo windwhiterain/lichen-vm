@@ -818,6 +818,19 @@ fn a_named_field_read_on_a_missing_field_is_rejected() {
 }
 
 #[test]
+fn a_named_field_miss_suggests_a_close_field() {
+    // `a.sux` on a struct whose closest field is `sub`: the field-access
+    // error message appends the struct's actually-close field name so the
+    // editor can suggest a fix and power field completion.
+    let d = diags("A = struct<.x Int, .sub Int>; a = A(1, 2); a.sux");
+    let msg = &d[0].message;
+    assert!(
+        msg.contains("no field") && msg.contains("did you mean 'sub'?"),
+        "a named-field miss should suggest the close field, got {msg}"
+    );
+}
+
+#[test]
 fn a_named_field_read_on_a_non_struct_is_rejected() {
     // reading `a.b` on a non-struct (an int) is an index-target error.
     let d = diags("a = 1; a.b");

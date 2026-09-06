@@ -1829,7 +1829,7 @@ where
                 .named_field_index_any(AnyNodeId::Dynamic(container_ty), name)
                 .is_none()
             {
-                self.record_named_field_error(container_ty, container, 1);
+                self.record_named_field_error(container_ty, container, 1, name);
             }
         }
         let zero = self.alloc_node(
@@ -1974,8 +1974,10 @@ where
     }
 
     /// Record a "no such named field" failure — a `a.name` read on a struct
-    /// that has no field named `name` — as a reported type error.
-    fn record_named_field_error(&mut self, ty: NodeId, e: ExprId, slot: usize) {
+    /// that has no field named `name` — as a reported type error.  The offending
+    /// name is carried in the diary entry (so the language layer can append a
+    /// did-you-mean clause naming the struct's actual fields).
+    fn record_named_field_error(&mut self, ty: NodeId, e: ExprId, slot: usize, name: &'static str) {
         let error_index = self.module.unify_errors.len();
         self.module.unify_errors.push(UnifyError {
             root_a: ty,
@@ -1992,7 +1994,7 @@ where
             b: ty,
             loc: self.loc(e, slot),
             kind: DiagKind::NamedField,
-            field: None,
+            field: Some(name.to_string()),
         });
     }
 
