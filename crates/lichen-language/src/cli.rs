@@ -20,10 +20,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use lichen_highlevel::program::{TypeOperator, ValueType};
-use lichen_lowlevel::{LowOperator, OperatorExt};
 use lichen_utils::extend::AsEnum;
 
-use crate::CompiledProgram;
+use crate::LangProgramShape;
 use crate::package::PackageStore;
 use crate::persist::{self, ArtifactCodec};
 use crate::preprocess::stage_depends;
@@ -31,26 +30,17 @@ use crate::program::GcdOp;
 
 /// Run the compiler CLI with the process arguments.  The program name is read
 /// from `argv[0]` so the plugin-built `lichen-compiler-<name>` reports its own
-/// name in usage.  Generic over the value/operator vocabularies `V`/`O` and the
-/// artifact codec `C`, so the shipped compiler and a plugin-built compiler
-/// share one CLI.
-pub fn main<V, O, C>() -> ExitCode
+/// name in usage.  Generic over a single program type `P` (the associate-type
+/// collector), so the shipped compiler and a plugin-built compiler share one
+/// CLI.
+pub fn main<P>() -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     let mut args = std::env::args();
     let bin = args
@@ -82,7 +72,7 @@ where
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            cache_gc::<V, O, C>()
+            cache_gc::<P>()
         }
         "run" => {
             let Some(path) = args.next() else {
@@ -93,7 +83,7 @@ where
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            run_path::<V, O, C>(&PathBuf::from(path))
+            run_path::<P>(&PathBuf::from(path))
         }
         "build" => {
             let Some(path) = args.next() else {
@@ -104,70 +94,52 @@ where
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            build_file::<V, O, C>(&PathBuf::from(path))
+            build_file::<P>(&PathBuf::from(path))
         }
         path_arg => {
             if args.next().is_some() {
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            run_path::<V, O, C>(&PathBuf::from(path_arg))
+            run_path::<P>(&PathBuf::from(path_arg))
         }
     }
 }
 
-fn run_path<V, O, C>(path: &Path) -> ExitCode
+fn run_path<P>(path: &Path) -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     if path.is_dir() {
-        run_directory::<V, O, C>(path)
+        run_directory::<P>(path)
     } else {
-        run_file::<V, O, C>(path)
+        run_file::<P>(path)
     }
 }
 
 /// `cache gc`: explicitly reclaim every artifact in the device cache that no
 /// live source chain references.
-fn cache_gc<V, O, C>() -> ExitCode
+fn cache_gc<P>() -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     // An in-memory-only codec has no device cache to reclaim.
-    if !C::PERSISTENT {
+    if !P::Codec::PERSISTENT {
         eprintln!("this compiler keeps no persistent cache — nothing to reclaim");
         return ExitCode::SUCCESS;
     }
     let dir = persist::lichendir();
-    let mut store: PackageStore<V, O, C> = PackageStore::with_cache_dir(dir.clone());
+    let mut store: PackageStore<P> = PackageStore::with_cache_dir(dir.clone());
     let removed = store.gc();
     println!(
         "reclaimed {removed} cached artifact(s) from {}",
@@ -178,58 +150,35 @@ where
 
 /// A store that stages the file's `depend` directives from the source cache
 /// and reports a diagnostic when one has not been fetched.
-fn staged_store<V, O, C>(
-    source: &str,
-) -> (
-    PackageStore<V, O, C>,
-    Vec<crate::diag::Diag<CompiledProgram<V, O>>>,
-)
+fn staged_store<P>(source: &str) -> (PackageStore<P>, Vec<crate::diag::Diag<P>>)
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     // A persistent codec drives a cache directory; an in-memory-only one
     // (`NoPersist`) never serializes, so the store is in-memory and no
     // artifact is written (avoids the `NoPersist` unreachable path).
-    let mut store: PackageStore<V, O, C> = if C::PERSISTENT {
+    let mut store: PackageStore<P> = if P::Codec::PERSISTENT {
         PackageStore::with_cache_dir(persist::lichendir())
     } else {
         PackageStore::new()
     };
-    let diags = stage_depends::<V, O, C>(&mut store, source);
+    let diags = stage_depends::<P>(&mut store, source);
     (store, diags)
 }
 
-fn run_file<V, O, C>(path: &Path) -> ExitCode
+fn run_file<P>(path: &Path) -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     let source = match std::fs::read_to_string(path) {
         Ok(source) => source,
@@ -238,12 +187,12 @@ where
             return ExitCode::FAILURE;
         }
     };
-    let (mut store, diags) = staged_store::<V, O, C>(&source);
+    let (mut store, diags) = staged_store::<P>(&source);
     if !diags.is_empty() {
         print!("{}", crate::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
     }
-    match crate::run::evaluate_raw::<V, O, C>(&source, Some(path), &mut store) {
+    match crate::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
@@ -255,23 +204,14 @@ where
     }
 }
 
-fn run_directory<V, O, C>(dir: &Path) -> ExitCode
+fn run_directory<P>(dir: &Path) -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     let mut files: Vec<PathBuf> = match std::fs::read_dir(dir) {
         Ok(entries) => entries
@@ -295,14 +235,14 @@ where
                 continue;
             }
         };
-        let (mut store, diags) = staged_store::<V, O, C>(&source);
+        let (mut store, diags) = staged_store::<P>(&source);
         if !diags.is_empty() {
             failed += 1;
             eprintln!("{}: failed to stage dependencies", file.display());
             print!("{}", crate::render::render_all(&source, &diags));
             continue;
         }
-        match crate::run::evaluate_raw::<V, O, C>(&source, Some(&file), &mut store) {
+        match crate::run::evaluate_raw::<P>(&source, Some(&file), &mut store) {
             Ok(output) => {
                 println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
             }
@@ -320,26 +260,17 @@ where
     }
 }
 
-fn build_file<V, O, C>(path: &Path) -> ExitCode
+fn build_file<P>(path: &Path) -> ExitCode
 where
-    V: ValueType
+    P: LangProgramShape,
+    P::Value: ValueType
         + AsEnum<lichen_compute::ComputeValue>
         + From<lichen_compute::ComputeValue>
         + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     let source = std::fs::read_to_string(path).unwrap_or_default();
-    let (mut store, diags) = staged_store::<V, O, C>(&source);
+    let (mut store, diags) = staged_store::<P>(&source);
     if !diags.is_empty() {
         print!("{}", crate::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
@@ -354,7 +285,7 @@ where
             // resolved against the file's directory.
             let name = path.file_name().unwrap().to_string_lossy();
             let source = format!("@{{\n  _pkg = import \"{name}\"\n@}}\n_pkg\n");
-            match crate::run::evaluate_raw::<V, O, C>(&source, Some(path), &mut store) {
+            match crate::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
                 Ok(output) => println!("type: {}", output.split(": ").nth(1).unwrap_or(&output)),
                 Err(diags) => {
                     print!("{}", crate::render::render_all(&source, &diags));

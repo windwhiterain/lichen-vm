@@ -5,14 +5,19 @@
 
 use std::path::Path;
 
+use lichen_language::program::LangProgram;
 use lichen_language_server::Doc;
 use lichen_language_server::lsp::Position;
+
+/// The shipping-vocabulary `Doc` the server tests drive (the crate's `Doc` is
+/// generic over the program collector).
+type ShipsDoc = Doc<LangProgram>;
 
 #[test]
 fn statement_values_report_type_and_concrete_value() {
     // `x` and `y` are statements; the trailing `y` is the final expression and
     // is NOT a statement root.
-    let doc = Doc::new("x = 3\ny = x + 4\ny\n");
+    let doc = ShipsDoc::new("x = 3\ny = x + 4\ny\n");
     let vals = doc.statement_values();
     assert_eq!(
         vals.len(),
@@ -31,7 +36,7 @@ fn statement_values_report_type_and_concrete_value() {
 
 #[test]
 fn statement_at_finds_the_containing_statement() {
-    let doc = Doc::new("x = 3\ny = x + 4\ny\n");
+    let doc = ShipsDoc::new("x = 3\ny = x + 4\ny\n");
     // byte offset 0 is inside `x = 3`.
     let s0 = doc.statement_at(0).expect("first statement at offset 0");
     assert_eq!(s0.value.as_deref(), Some("3"));
@@ -58,7 +63,7 @@ lemma = x => p => q => q I p (i => q (y => i (sb U le y)))
 lemma2 = x => (x I lemma) (i => x (y => i (sb U le y)))
 paradox = lemma2 omega
 if 0 then (paradox : Int) else 5";
-    let doc = Doc::new(source);
+    let doc = ShipsDoc::new(source);
     let vals = doc.statement_values();
     // The `paradox` binding is the last statement (the `if` is the final expr).
     let paradox = vals.last().expect("a paradox statement");
@@ -83,7 +88,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
-    let doc = Doc::new_with_base(source, Some(&dir));
+    let doc = ShipsDoc::new_with_base(source, Some(&dir));
 
     let vals = doc.statement_values();
     assert_eq!(vals.len(), 2, "k_double and k_outer are the two statements");
@@ -124,7 +129,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     // a kernel struct, so its type renders as `struct<.native <_>, .sig ?>`.
     let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
-    let doc = Doc::new_with_base(source, Some(&dir));
+    let doc = ShipsDoc::new_with_base(source, Some(&dir));
 
     // `jit` at line 5 (0-based): "k_double = compute.jit (y => y + y)" — char 19.
     let (hover, _range) = doc

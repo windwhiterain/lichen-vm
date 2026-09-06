@@ -151,10 +151,7 @@ impl Entry {
 /// `@import` lines resolve relative to the file (import-free programs are
 /// unaffected).
 fn program_output(file: &Path, source: &str) -> String {
-    let mut store = crate::package::PackageStore::<
-        crate::program::LangValue,
-        crate::program::LangOperator,
-    >::new();
+    let mut store = crate::package::PackageStore::<crate::program::LangProgram>::new();
     crate::run::evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!(
             "{}: failed\n{}",

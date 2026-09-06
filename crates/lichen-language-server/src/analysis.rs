@@ -17,8 +17,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
+use lichen_highlevel::program::{TypeOperator, ValueType};
+use lichen_language::LangProgramShape;
 use lichen_language::ast::{Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
@@ -28,10 +31,11 @@ use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
-use lichen_language::program::{LangOperator, LangValue};
+use lichen_language::program::GcdOp;
 use lichen_language::render::{print_type_lang, print_value_lang};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
+use lichen_utils::extend::AsEnum;
 
 use crate::lsp::{
     self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData,
@@ -95,8 +99,10 @@ pub struct Reference {
     pub definition: Option<usize>,
 }
 
-/// A parsed + checked source, ready for editor lookups.
-pub struct Doc {
+/// A parsed + checked source, ready for editor lookups.  Generic over the
+/// compiled program `P` (the associated-type collector), so the same editor
+/// view serves the shipping vocabulary and a plugin-composed one.
+pub struct Doc<P: LangProgramShape> {
     /// The full source text.
     pub source: String,
     /// Byte offset at which each line begins (line 1 = 0).
@@ -110,7 +116,7 @@ pub struct Doc {
     /// The parsed AST — the frontend's parser output.
     pub program: Program,
     /// The full diagnostic set (lex + parse + resolve + check).
-    pub diagnostics: Vec<Diag<lichen_language::program::LangProgram>>,
+    pub diagnostics: Vec<Diag<P>>,
     /// Every definition site, in declaration order.
     pub defs: Vec<Definition>,
     /// Span of a name *use* → index into [`Doc::defs`].
@@ -147,7 +153,11 @@ pub struct Doc {
     module_field_types: HashMap<(String, String), StatementValue>,
 }
 
-impl Doc {
+impl<P: LangProgramShape> Doc<P>
+where
+    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+{
     /// Parse, lower and check `source`, keeping the frontend artifacts and
     /// indexing name resolution.  The leading `@{…@}` preprocessor block (with
     /// its `import`/metadata directives) is cut out and resolved first, so a
@@ -157,7 +167,7 @@ impl Doc {
     /// Imports resolve against the current directory (`base = None`); use
     /// [`Doc::new_with_base`] for a file whose `@import` lines should resolve
     /// relative to the file (the LSP server's case).
-    pub fn new(source: impl Into<String>) -> Doc {
+    pub fn new(source: impl Into<String>) -> Doc<P> {
         Doc::new_with_base(source, None)
     }
 
@@ -166,7 +176,7 @@ impl Doc {
     /// to it — a relative import `"math.lichen"` in `dir/main.lichen` loads
     /// `dir/math.lichen`.  `None` keeps the pre-LSP behavior (relative to the
     /// current directory).
-    pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc {
+    pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc<P> {
         let source = source.into();
         let line_starts = lex::line_starts(&source);
 
@@ -174,7 +184,7 @@ impl Doc {
         // input, resolving imports through a fresh in-memory package store so
         // the shared registry can serve any loaded imports.  `base` lets the
         // store resolve relative `@import` paths against the file's directory.
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<P>::new();
         let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
 
         // The frontend artifacts (for the editor index): tokens + AST in
@@ -187,10 +197,12 @@ impl Doc {
 
         // The full pipeline diagnostics (lex + parse + resolve + check):
         // preprocess first, then the frontend over the preprocessed code, then
-        // the checker over the IR.  All spans are absolute.
+        // the checker over the IR.  All spans are absolute.  The frontend
+        // diagnostics are program-blind (they carry no checker build), so
+        // re-type them onto the caller's program marker before the report.
         let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
-        diagnostics.extend(frontend.diagnostics);
-        let report = build_report(
+        diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
+        let report = build_report::<P>(
             frontend.ir,
             Some(frontend.span_index),
             diagnostics,
@@ -271,7 +283,7 @@ impl Doc {
                         match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                             // A `Parameterized` value is a deferred (lazy /
                             // recursive) binding — report type only, never force.
-                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
                             Some(v) => Some(print_value_lang(
                                 &build.module,
                                 v,
@@ -314,7 +326,7 @@ impl Doc {
                         };
                         let value = build.val[val_id].and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
@@ -368,7 +380,7 @@ impl Doc {
                         .unwrap_or_default();
                     let value = build.val[eid].and_then(|vn| {
                         match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
                             Some(v) => Some(print_value_lang(
                                 &build.module,
                                 v,
@@ -1353,7 +1365,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn doc(source: &str) -> Doc {
+    fn doc(source: &str) -> Doc<lichen_language::program::LangProgram> {
         Doc::new(source)
     }
 
@@ -1603,7 +1615,7 @@ mod tests {
             "@{order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"@}\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -1631,7 +1643,7 @@ mod tests {
             "main.lichen",
             "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
         );
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -1683,7 +1695,7 @@ mod tests {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../lichen-language/examples/programs/import");
         let main_path = examples.join("_.lichen");
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -1753,7 +1765,7 @@ mod tests {
             "math.lichen",
             "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
         );
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&math_path).unwrap(),
             Some(math_path.as_path()),
         );

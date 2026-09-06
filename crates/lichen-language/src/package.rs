@@ -25,13 +25,12 @@ use std::sync::{Arc, RwLock};
 use lichen_compute::WRAPPER_SOURCE;
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{HighPackageMeta, TypeOperator, ValueType};
-use lichen_lowlevel::{LowOperator, ModuleKey, OperatorExt, Registry, StaticModule, StaticNodeId};
+use lichen_lowlevel::{ModuleKey, Registry, StaticModule, StaticNodeId};
 use lichen_preprocess::{ImportResolver, PreprocessDiag, ResolvedPackage};
-use lichen_utils::extend::AsEnum;
 
-use crate::CompiledProgram;
+use crate::LangProgramShape;
 use crate::diag::{Diag, Stage};
-use crate::persist::{self, ArtifactCodec, DeviceRegistry, Hash};
+use crate::persist::{self, DeviceRegistry, Hash, ProgramCodecOf};
 use crate::preprocess::preprocess;
 use crate::program::GcdOp;
 
@@ -45,21 +44,13 @@ const COMPUTE_PATH: &str = "compute.lichen";
 /// compilation of `compute.lichen`, so `$jit`/`$launch` resolve privately — a
 /// second plugin registering its own `$jit` never collides.  The plugin itself
 /// is program-generic; only this composition site names the program marker.
-fn compute_native_ops<V, O>() -> NativeOps<CompiledProgram<V, O>>
+fn compute_native_ops<P>() -> NativeOps<P>
 where
-    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
+    P: LangProgramShape,
+    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    lichen_compute::compute_native_ops!(CompiledProgram<V, O>)
+    lichen_compute::compute_native_ops!(P)
 }
 
 /// A loaded package: the path, its registry key, and the static ref to the
@@ -80,20 +71,11 @@ pub struct PackageHandle {
 ///
 /// The registry is shared with every package and importer, so a package
 /// loaded once is used in place by all of them (`packages` is public so a
-/// host or test can observe that sharing).  Generic over the value/operator
-/// vocabularies `V`/`O` (the language's attribute set is fixed) and the
-/// artifact codec `C` (`[`persist::NoPersist`]` for an in-memory store).
-pub struct PackageStore<
-    V: ValueType,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq,
-    C = crate::program::ProgramCodec,
-> {
-    pub registry: Arc<RwLock<Registry<CompiledProgram<V, O>>>>,
+/// host or test can observe that sharing).  Generic over a single program
+/// type `P` (the associated-type collector; its `P::Codec` is the artifact
+/// codec — [`persist::NoPersist`] for an in-memory store).
+pub struct PackageStore<P: ProgramCodecOf> {
+    pub registry: Arc<RwLock<Registry<P>>>,
     pub packages: HashMap<PathBuf, PackageHandle>,
     /// The in-flight load stack (canonical paths) — a package re-entered
     /// while still loading closes an import cycle.
@@ -116,9 +98,9 @@ pub struct PackageStore<
     /// The in-memory key allocator — the device registry's counter when no
     /// cache directory is configured (a process-local device).
     next_key: u64,
-    /// The artifact codec `C` is a type-level marker (the codec value is
-    /// `C::default()` at use).
-    _codec: PhantomData<C>,
+    /// The artifact codec `P::Codec` is a type-level marker (the codec value is
+    /// `P::Codec::default()` at use).
+    _codec: PhantomData<<P as ProgramCodecOf>::Codec>,
     /// Packages compiled (not loaded from the device cache) — tests.
     pub compiled: usize,
     /// Packages loaded from the device cache without recompiling — tests.
@@ -127,17 +109,8 @@ pub struct PackageStore<
 
 // The minimal impl: construction, cache-dir plumbing, and the vendored
 // registry — none of which touch a compute value/operator or the artifact
-// codec.  These need only that `CompiledProgram<V, O>` is a program.
-impl<V, O, C> PackageStore<V, O, C>
-where
-    V: ValueType,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq,
-{
+// codec.  These need only that `P` is a program carrying its codec.
+impl<P: ProgramCodecOf> PackageStore<P> {
     /// A purely in-memory store — the pre-cache behavior (tests, the readme
     /// sync, in-process embeddings).  Device keys are allocated from a
     /// process-local counter and nothing is persisted.
@@ -207,7 +180,7 @@ where
     }
 
     /// The shared registry, for the importer's checker.
-    pub fn registry(&self) -> Arc<RwLock<Registry<CompiledProgram<V, O>>>> {
+    pub fn registry(&self) -> Arc<RwLock<Registry<P>>> {
         self.registry.clone()
     }
 
@@ -231,29 +204,17 @@ where
 // shared store.  These need the compute value/operator coercions (and the
 // `GcdOp`/`TypeOperator`/`'static`/codec bundle) because they call
 // `compile_with_imports_at`, `compute_native_ops`, and the artifact codec.
-impl<V, O, C> PackageStore<V, O, C>
+impl<P> PackageStore<P>
 where
-    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P: LangProgramShape,
+    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     /// Load (or fetch from cache) the package at `path`, resolving its own
     /// `@import` directives first: each dependency loads (recursively)
     /// before this package compiles, so its refs are absolute from birth
     /// and the freeze below sees their keys already registered.
-    pub fn load_package(
-        &mut self,
-        path: &Path,
-    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
+    pub fn load_package(&mut self, path: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         // A registered native virtual package (`compute.lichen`, `std.lichen`,
         // …): served from the in-memory registry, never a disk file.  A host
         // that registered one (the package-manager plug: a plugin's embedded
@@ -337,13 +298,13 @@ where
                 .join("\n"));
         }
         let line_starts = crate::lex::line_starts(&preprocessed.code);
-        let report = crate::compile_with_imports_at::<V, O>(
+        let report = crate::compile_with_imports_at::<P>(
             &preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
             &line_starts,
-            compute_native_ops::<V, O>(),
+            compute_native_ops::<P>(),
         );
         if !report.diagnostics.is_empty() || report.build.as_ref().is_none_or(|b| !b.ok) {
             return Err(report
@@ -395,10 +356,7 @@ where
     /// The load path behind the cache: incremental verification first, then
     /// compile.  Only reached through [`Self::load_package`], which owns the
     /// cache and the loading stack.
-    fn load_package_inner(
-        &mut self,
-        canonical: &Path,
-    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
+    fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
         let source = std::fs::read_to_string(canonical).map_err(|e| {
             vec![Diag::new(
@@ -437,12 +395,11 @@ where
         key: ModuleKey,
         hash: Hash,
         deps: &[(String, ModuleKey)],
-    ) -> Result<Option<PackageHandle>, Vec<Diag<CompiledProgram<V, O>>>> {
+    ) -> Result<Option<PackageHandle>, Vec<Diag<P>>> {
         for (dep_file_id, _) in deps {
             self.load_package(Path::new(dep_file_id))?;
         }
-        let mut modules: HashMap<ModuleKey, Arc<StaticModule<CompiledProgram<V, O>>>> =
-            HashMap::new();
+        let mut modules: HashMap<ModuleKey, Arc<StaticModule<P>>> = HashMap::new();
         {
             let registry = self
                 .registry
@@ -479,7 +436,7 @@ where
         }
         let device = self.device.as_ref().expect("the device store");
         let Ok((module, export_index)) =
-            device.load_artifact::<CompiledProgram<V, O>, C>(file_id, key, hash, &modules)
+            device.load_artifact::<P, P::Codec>(file_id, key, hash, &modules)
         else {
             return Ok(None);
         };
@@ -516,7 +473,7 @@ where
         &mut self,
         canonical: &Path,
         source: String,
-    ) -> Result<PackageHandle, Vec<Diag<CompiledProgram<V, O>>>> {
+    ) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
 
         // Resolve the package's own imports through this store: each
@@ -543,7 +500,7 @@ where
         // in place; the module then carries the dependencies' absolute refs
         // into its freeze below.
         let line_starts = crate::lex::line_starts(&source);
-        let report = crate::compile_with_imports_at::<V, O>(
+        let report = crate::compile_with_imports_at::<P>(
             &preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
@@ -588,19 +545,18 @@ where
                     .registry
                     .read()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let mut modules: HashMap<ModuleKey, Arc<StaticModule<CompiledProgram<V, O>>>> =
-                    HashMap::new();
+                let mut modules: HashMap<ModuleKey, Arc<StaticModule<P>>> = HashMap::new();
                 for (key, package) in registry.iter() {
                     modules.insert(key, package.module.clone());
                 }
                 modules
             };
-            let bytes = persist::serialize_artifact_with::<CompiledProgram<V, O>, C>(
+            let bytes = persist::serialize_artifact_with::<P, P::Codec>(
                 modules[&freeze.key].as_ref(),
                 &modules,
                 hash,
                 export.index,
-                C::default(),
+                P::Codec::default(),
             );
             device.store_artifact(&file_id, &bytes);
             let deps: Vec<(String, ModuleKey)> = preprocessed
@@ -629,7 +585,7 @@ where
         &mut self,
         base: Option<&Path>,
         import_path: &str,
-    ) -> Result<PackageHandle, Diag<CompiledProgram<V, O>>> {
+    ) -> Result<PackageHandle, Diag<P>> {
         // A vendored dependency alias: `import "alias"` or `import "alias/rest"`
         // resolves against the vendored directory registered under `alias`
         // (see [`Self::register_vendored`]).  A bare `alias` names the
@@ -640,7 +596,7 @@ where
             if let Some(dir) = self.vendored.get(alias) {
                 let resolved = match rest {
                     Some(rest) => dir.join(rest),
-                    None => vendored_entry_file::<CompiledProgram<V, O>>(dir, alias)?,
+                    None => vendored_entry_file::<P>(dir, alias)?,
                 };
                 return self.load_package(&resolved).map_err(|mut diags| {
                     diags.drain(..).next().unwrap_or_else(|| {
@@ -687,18 +643,11 @@ where
 // package.  It needs only the bounds `compile_with_imports_at` requires — the
 // store's compute/`ComputeValue` leaves are NOT needed — so the package-manager
 // plug (register any native plugin source) stays plugin-agnostic.
-impl<V, O, C> PackageStore<V, O, C>
+impl<P> PackageStore<P>
 where
-    V: ValueType + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + 'static,
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
     /// Register a native virtual package: compile `source` (a plugin's
     /// embedded lichen wrapper) against that plugin's *private* native-op
@@ -721,10 +670,10 @@ where
         &mut self,
         virtual_path: &str,
         source: &str,
-        native_ops: NativeOps<CompiledProgram<V, O>>,
+        native_ops: NativeOps<P>,
     ) -> Result<PackageHandle, String> {
         let line_starts = crate::lex::line_starts(source);
-        let report = crate::compile_with_imports_at::<V, O>(
+        let report = crate::compile_with_imports_at::<P>(
             source,
             &[],
             Some(self.registry()),
@@ -789,20 +738,11 @@ where
 /// [`ResolvedPackage`] (export/path/direct); the store adapts its own
 /// `PackageHandle`/`Diag` to it, so the isolated preprocessor never names a
 /// program marker.
-impl<V, O, C> ImportResolver<StaticNodeId> for PackageStore<V, O, C>
+impl<P> ImportResolver<StaticNodeId> for PackageStore<P>
 where
-    V: ValueType + From<lichen_compute::ComputeValue> + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<lichen_compute::ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P: LangProgramShape,
+    P::Value: ValueType + From<lichen_compute::ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     fn resolve_import(
         &mut self,
@@ -897,16 +837,7 @@ fn vendored_entry_file<P: lichen_lowlevel::Program>(
     }
 }
 
-impl<V, O, C> Default for PackageStore<V, O, C>
-where
-    V: ValueType,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq,
-{
+impl<P: ProgramCodecOf> Default for PackageStore<P> {
     fn default() -> Self {
         Self::new()
     }
@@ -915,7 +846,7 @@ where
 #[cfg(test)]
 mod vendored_tests {
     use super::*;
-    use crate::program::{LangOperator, LangValue};
+    use crate::program::LangProgram;
 
     fn tempdir(tag: &str) -> PathBuf {
         let dir =
@@ -931,7 +862,7 @@ mod vendored_tests {
         let foo = dir.join("deps").join("foo");
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("_.lichen"), "42").unwrap();
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<LangProgram>::new();
         store.register_vendored("foo", foo.clone());
         let handle = store.resolve_import(None, "foo").unwrap();
         assert_eq!(
@@ -947,7 +878,7 @@ mod vendored_tests {
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("_.lichen"), "1").unwrap();
         std::fs::write(foo.join("other.lichen"), "2").unwrap();
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<LangProgram>::new();
         store.register_vendored("foo", foo.clone());
         let handle = store.resolve_import(None, "foo/other.lichen").unwrap();
         assert_eq!(
@@ -960,7 +891,7 @@ mod vendored_tests {
     fn non_vendored_relative_import_does_not_hit_alias() {
         let dir = tempdir("plain");
         std::fs::write(dir.join("math.lichen"), "3").unwrap();
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<LangProgram>::new();
         store.register_vendored("foo", dir.join("deps").join("foo"));
         let base = dir.join("main.lichen");
         let handle = store.resolve_import(Some(&base), "math.lichen").unwrap();
@@ -977,7 +908,7 @@ mod vendored_tests {
         std::fs::create_dir_all(&foo).unwrap();
         std::fs::write(foo.join("a.lichen"), "1").unwrap();
         std::fs::write(foo.join("b.lichen"), "2").unwrap();
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<LangProgram>::new();
         store.register_vendored("foo", foo);
         let err = store.resolve_import(None, "foo").unwrap_err();
         assert!(err.message.contains("ambiguous"), "{}", err.message);

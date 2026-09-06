@@ -15,7 +15,10 @@
 //!
 //! [`LangProgram`] is the program marker the whole frontend checks with — the
 //! `P` of `Module<P>`/`Registry<P>`/`Checker<P>`, with `Value = LangValue`,
-//! `Operator = LangOperator`, and `Attr = LangAttr` (`Perspective` + `Doc`).
+//! `Operator = LangOperator`, and `Attr = LangAttr` (`Perspective` + `Doc`).  It
+//! is a **local newtype** around [`ProgramImpl`], not a type alias, so the
+//! `Program`/`HighProgram`/`ProgramCodecOf` wiring attached to it stays
+//! orphan-legal from an external composition crate (a plugin-built compiler).
 
 use lichen_highlevel::program::{TypeOperator, TypeValue};
 use lichen_lowlevel::{LowOperator, LowValue};
@@ -148,7 +151,42 @@ macro_rules! lang_compose_vocabulary {
 
         /// The language's concrete program marker: `Value = LangValue`,
         /// `Operator = LangOperator`, `Attr = LangAttr`.
-        pub type LangProgram = ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>;
+        ///
+        /// This is a **local newtype** around the highlevel's
+        /// [`::lichen_highlevel::program::ProgramImpl`] marker, not a type
+        /// alias.  A composition site *inside* `liche_language` may implement
+        /// any trait for an alias of its own types, but an **external**
+        /// composition site (a plugin-built compiler crate; `std_native.rs`'s
+        /// `HostProgram`) cannot: writing `impl ProgramCodecOf for
+        /// <alias-of-ProgramImpl>` is E0117, because the alias unwraps to a
+        /// foreign `ProgramImpl` and the trait is foreign.  Making the marker
+        /// a fresh nominal type fixes that — the `Program`/`HighProgram`/
+        /// `ProgramCodecOf`/`OperatorExt` impls below are then orphan-legal
+        /// from any crate that composes this vocabulary.
+        #[repr(transparent)]
+        #[derive(Clone, Copy, Debug, PartialEq)]
+        pub struct LangProgram(
+            ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>,
+        );
+
+        // The marker's `Program`/`HighProgram` wiring, delegating the
+        // associated types to the inner [`::lichen_highlevel::program::ProgramImpl`]
+        // it wraps.  They are spelled out rather than read through
+        // `<Inner as Program>::…`, so this marker never requires the inner
+        // `ProgramImpl` to itself be a `Program` (which would need a
+        // `LangOperator: OperatorExt<Inner>` impl the composed vocabulary no
+        // longer carries).
+        impl ::lichen_lowlevel::Program for LangProgram {
+            type Value = LangValue;
+            type Operator = LangOperator;
+            type GlobalExt = ::lichen_highlevel::program::HighGlobalExt;
+            type PackageMeta = ::lichen_highlevel::program::HighPackageMeta;
+        }
+
+        impl ::lichen_highlevel::program::HighProgram for LangProgram {
+            type Attr = LangAttr;
+            type Literal = ::lichen_highlevel::program::HighProgramLiteral;
+        }
 
         // ── The runtime-wiring impls the composed program needs to be a
         //    `Program`/`HighProgram`: the structural value traits on the value
@@ -203,6 +241,110 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
+        // The type-level operator leaf's own [`::lichen_lowlevel::OperatorExt`]
+        // impl (in `lichen_highlevel`) is tied to `ProgramImpl` — it dispatches
+        // against `Module<ProgramImpl<…>>`, not an arbitrary `P`.  Since this
+        // composition's `LangProgram` is now a local newtype, that impl no
+        // longer covers it, so the composed vocabulary needs its own
+        // `OperatorExt<LangProgram>` impl for the `$tyop` leaf, running the
+        // same semantics against `Module<LangProgram>`.  (Every other leaf —
+        // `LowOperator`, `GcdOp`, the plugin operators — already has a generic
+        // `impl<P: Program> OperatorExt<P>`, so it works for `LangProgram`
+        // unchanged.)
+        impl ::lichen_lowlevel::OperatorExt<LangProgram> for $tyop {
+            fn run(
+                &self,
+                operand: LangValue,
+                _block: ::lichen_lowlevel::BlockId,
+                module: &mut ::lichen_lowlevel::Module<LangProgram>,
+            ) -> LangValue {
+                match self {
+                    <$tyop>::Fresh => {
+                        let id = ::lichen_utils::compose::AsField::<
+                            ::lichen_highlevel::program::HighGlobal,
+                        >::get_mut(&mut module.global_ext)
+                        .next_type_id();
+                        <LangValue as ::lichen_highlevel::program::ValueType>::type_id_value(id)
+                    }
+                    <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq | <$tyop>::Eq => {
+                        if matches!(
+                            <LangValue as ::lichen_utils::extend::AsEnum<
+                                ::lichen_lowlevel::LowValue,
+                            >>::as_enum(&operand),
+                            Some(::lichen_lowlevel::LowValue::Parameterized)
+                        ) {
+                            return <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
+                        }
+                        let Some(::lichen_lowlevel::LowValue::Array(operands)) =
+                            <LangValue as ::lichen_utils::extend::AsEnum<
+                                ::lichen_lowlevel::LowValue,
+                            >>::as_enum(&operand)
+                        else {
+                            unreachable!("binary operators expect an operand array of [left, right]")
+                        };
+                        let operands = operands.items();
+                        let Some(left) = module
+                            .node_value(operands[0].node)
+                            .and_then(|value| {
+                                <LangValue as ::lichen_utils::extend::AsEnum<
+                                    ::lichen_lowlevel::LowValue,
+                                >>::as_enum(&value)
+                            })
+                            .and_then(|value| match value {
+                                ::lichen_lowlevel::LowValue::USize(n) => Some(n),
+                                _ => None,
+                            })
+                        else {
+                            return <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
+                        };
+                        let Some(right) = module
+                            .node_value(operands[1].node)
+                            .and_then(|value| {
+                                <LangValue as ::lichen_utils::extend::AsEnum<
+                                    ::lichen_lowlevel::LowValue,
+                                >>::as_enum(&value)
+                            })
+                            .and_then(|value| match value {
+                                ::lichen_lowlevel::LowValue::USize(n) => Some(n),
+                                _ => None,
+                            })
+                        else {
+                            return <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
+                        };
+                        match self {
+                            <$tyop>::Add => <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::USize(
+                                left.wrapping_add(right),
+                            )),
+                            <$tyop>::Sub => <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::USize(
+                                left.wrapping_sub(right),
+                            )),
+                            <$tyop>::Leq => <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::USize(
+                                (left <= right) as usize,
+                            )),
+                            <$tyop>::Eq => <LangValue as ::core::convert::From<
+                                ::lichen_lowlevel::LowValue,
+                            >>::from(::lichen_lowlevel::LowValue::USize(
+                                (left == right) as usize,
+                            )),
+                            _ => unreachable!("all binary operators are handled above"),
+                        }
+                    }
+                }
+            }
+        }
+
         // The operator union's `run` is a uniform dispatch: each leaf handles
         // itself (the structural lowlevel operator is unreachable — the VM
         // routes it through `AsEnum` first; the type operators run through
@@ -235,6 +377,13 @@ macro_rules! lang_compose_vocabulary {
         // `~/.lichen` device cache.
         #[derive(Default)]
         pub struct ProgramCodec;
+
+        // Bind the program's codec into the associated-type collector, so the
+        // tooling is generic over a single `P` and reads `P::Codec` rather than
+        // threading the codec as a separate generic.
+        impl $crate::persist::ProgramCodecOf for LangProgram {
+            type Codec = ProgramCodec;
+        }
 
         impl $crate::persist::ArtifactCodec<LangProgram> for ProgramCodec {
             const PERSISTENT: bool = true;

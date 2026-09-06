@@ -600,9 +600,11 @@ dependencies = [
 name = "lichen-language-server"
 version = "0.1.0"
 dependencies = [
+ "lichen-compute",
  "lichen-highlevel",
  "lichen-language",
  "lichen-lowlevel",
+ "lichen-utils",
  "lsp-types",
  "serde",
  "serde_json",

@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use lichen_highlevel::program::HighProgram;
 pub use lichen_lowlevel::codec::{ARENA_ALIGN, Reader, Writer, arena_base};
 use lichen_lowlevel::{
     LocalNodeId, LowShape, ModuleKey, Program, StaticFunction, StaticModule, StaticNode,
@@ -139,6 +140,23 @@ pub trait ArtifactCodec<P: Program> {
 
     /// Read one operation's operator tag.
     fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
+}
+
+/// A compiled program that carries its own artifact codec, so the language
+/// tooling is generic over a single program type `P` (the associated-type
+/// collector) rather than the value/operator leaves plus a separate `C` codec.
+///
+/// A codec is not an associated type of the lowlevel [`Program`] trait — it is a
+/// serialization concern layered on top by `liche-language` — so this trait is
+/// the seam that folds the codec into the collector.  The
+/// [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) macro implements
+/// it for every composed program, binding `Codec` to the [`ProgramCodec`] that
+/// vocabulary emits; a program that never persists uses [`NoPersist`].
+pub trait ProgramCodecOf: HighProgram {
+    /// The artifact codec for this program (a composed program's
+    /// [`crate::program::ProgramCodec`], or [`NoPersist`] for one that never
+    /// serializes).
+    type Codec: ArtifactCodec<Self> + Default;
 }
 
 /// A marker codec for a program that is compiled in memory only and never

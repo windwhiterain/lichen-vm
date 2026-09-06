@@ -255,13 +255,14 @@ pub type Program = LangProgram;
 /// cache).
 fn write_main_rs(dir: &Path) -> Result<(), String> {
     // The generated compiler routes the shared `lichen_language::cli` over its
-    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  The
-    // composition macro emits a `ProgramCodec` for that vocabulary (per-leaf
-    // value/operator codecs), so the CLI drives a real `~/.lichen` device
-    // cache: the plugin's own leaves serialize through their codecs, exactly
-    // like the shipping compiler's leaves do.
+    // own composed program (`crate::LangProgram` — the associated-type
+    // collector).  The CLI reads the vocabulary and the artifact codec from
+    // `LangProgram` (`P::Value`/`P::Operator`/`P::Codec`), so the composition
+    // macro's `ProgramCodec` for this vocabulary drives a real `~/.lichen`
+    // device cache: the plugin's own leaves serialize through their codecs,
+    // exactly like the shipping compiler's leaves do.
     let lines = r#"fn main() -> std::process::ExitCode {
-    lichen_language::cli::main::<crate::LangValue, crate::LangOperator, crate::ProgramCodec>()
+    lichen_language::cli::main::<crate::LangProgram>()
 }
 "#;
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))

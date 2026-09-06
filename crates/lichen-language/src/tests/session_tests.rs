@@ -9,7 +9,7 @@ use crate::ast::{Expr, Stmt};
 use crate::diag::Stage;
 use crate::lex;
 use crate::parse::{self, Parsed};
-use crate::program::{LangOperator, LangValue};
+use crate::program::LangProgram;
 use crate::session::BufferSession;
 
 /// The parsed program + diagnostics for a source (lex + parse).
@@ -111,7 +111,7 @@ fn growing_an_error_block_reuses_the_established_build() {
     // changes the clean content (a new binding appears), so the first compile
     // is fresh; growing that *error block* changes only the mask — the clean
     // (beyond-error) content is unchanged, so the established build is reused.
-    let mut sess = BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused, "the first compile is a fresh build");
     assert!(r0.ok(), "the clean program checks");
@@ -153,7 +153,7 @@ fn growing_an_error_block_reuses_the_established_build() {
 
 #[test]
 fn changing_clean_content_invalidates_the_cache() {
-    let mut sess = BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let r0 = sess.compile();
     let sig0 = r0.signature;
 
@@ -171,7 +171,7 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
     // is a single masked error block (an unclosed paren), every keystroke
     // grows only the mask — the clean structure is unchanged, so the
     // established program is reused per char.
-    let mut sess = BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("fix1 = (1");
     let r0 = sess.compile();
@@ -199,7 +199,7 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
     // leaf, and its resolution stays the unresolved sentinel — so extending it
     // changes nothing the lowering/check consume, and only the resolve
     // diagnostic updates.
-    let mut sess = BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
     let _ = sess.compile();
     sess.push("v"); // first character: a new (unresolved) name leaf appears.
     let r1 = sess.compile();
@@ -236,7 +236,7 @@ fn renaming_a_binding_consistently_reuses() {
     // the resolution (which binding each use resolves to), not the spelling, so
     // a *consistent* rename — same bindings, same uses, different names — reuses
     // the established build.  The name-free IR is genuinely identical.
-    let mut sess = BufferSession::<LangValue, LangOperator>::new("f = x => x + 1\nf 2\n");
+    let mut sess = BufferSession::<LangProgram>::new("f = x => x + 1\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused);
     let sig = r0.signature;
@@ -309,15 +309,14 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
         &["a = 1\nf = x => a\nf 2\n"],
     ];
     for edit in cases {
-        let mut sess =
-            BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
+        let mut sess = BufferSession::<LangProgram>::new("a = 1\nf = x => a + x\nf 2\n");
         let _ = sess.compile();
         for (i, target) in edit.iter().enumerate() {
             // Apply the edit by replacing the whole source with the target.
             sess.replace(0..sess.len(), target);
             assert_eq!(
                 shape(&sess.compile()),
-                shape(&BufferSession::<LangValue, LangOperator>::new(*target).compile()),
+                shape(&BufferSession::<LangProgram>::new(*target).compile()),
                 "edit {i} to {target:?} diverged from a fresh compile"
             );
             assert_eq!(sess.source(), *target);
