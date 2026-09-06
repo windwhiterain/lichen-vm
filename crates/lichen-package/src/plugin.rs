@@ -297,8 +297,15 @@ fn plugin_lines(plugins: &[Depend]) -> String {
             let rev = git::checkout(dep)
                 .map(|r| format!(", rev = \"{r}\""))
                 .unwrap_or_default();
+            // A remote plugin is a **git** dep on a crate inside the plugin
+            // repo's workspace (e.g. `liche-std-native` inside the lichen-vm
+            // monorepo).  `package = <crate_name>` names the workspace member
+            // so cargo finds it in the repo (without it, cargo looks for a
+            // package at the repo root and fails).  The plugin's own core deps
+            // are git too, so cargo resolves the whole subtree from git — a
+            // path dep into the workspace is what it cannot fresh-resolve.
             plugin_lines.push_str(&format!(
-                "{crate_name} = {{ git = \"{}\"{rev} }}\n",
+                "{crate_name} = {{ git = \"{}\", package = \"{crate_name}\"{rev}}}\n",
                 dep.url
             ));
         }

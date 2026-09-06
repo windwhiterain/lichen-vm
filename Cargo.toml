@@ -19,3 +19,16 @@ members = [
     "lichen-std-native",
     "tree-sitter-lichen",
 ]
+
+# `lichen-std-native` declares its core deps as **git** deps (to this same
+# repo) so an external compose crate (a generated plugin-built compiler) can
+# depend on it via git and resolve the whole core subtree from git — a path dep
+# into *this* workspace is what cargo cannot fresh-resolve for such a crate.
+# The crate stays a workspace member: this patch redirects those git deps back
+# to the local path members for the monorepo's own build, so the workspace
+# compiles cross-typed (a git `liche-highlevel` and the local member would be
+# distinct crate instances and the plugin's trait impls would not unify).
+[patch."https://github.com/windwhiterain/lichen-vm"]
+lichen-utils = { path = "crates/lichen-utils" }
+lichen-lowlevel = { path = "crates/lichen-lowlevel" }
+lichen-highlevel = { path = "crates/lichen-highlevel" }
