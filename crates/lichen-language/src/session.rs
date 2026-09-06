@@ -227,7 +227,7 @@ where
         // it into the snapshot's program when that is safe; otherwise parse the
         // whole buffer (the result is identical either way).  The window extent
         // feeds the incremental signature.
-        let (program, errors, window) = match (&self.last, edit) {
+        let (mut program, errors, window) = match (&self.last, edit) {
             (Some(prev), Some((a, b, delta))) => {
                 match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
                     Some(out) => {
@@ -301,10 +301,11 @@ where
             }
         }
 
-        // Rebuild: lower (total) and check.  The resolve diagnostics were
-        // already produced by the signature pass (the frontend source of truth
-        // for the session), so the lowering's own are discarded.
-        let (ir, span_index, _) = crate::compile::compile_with_imports(&program, &[]);
+        // Rebuild: resolve (already distinct from the reuse decision) then lower
+        // (total) and check.  The resolve diagnostics were already produced by
+        // the resolver the session ran above (the frontend source of truth), so
+        // the lowering's own are discarded.
+        let (ir, span_index, _) = crate::compile::compile_with_imports(&mut program, &[]);
         let report: Report<CompiledProgram<V, O>> = build_report::<V, O>(
             Some(ir),
             Some(span_index),
@@ -1027,7 +1028,7 @@ impl Sig {
                     TypeConst::String => 2,
                 }]);
             }
-            Expr::Name(name, span) => {
+            Expr::Name(name, span, _) => {
                 self.cur.update(&[2]);
                 self.hash_name(name, span);
             }

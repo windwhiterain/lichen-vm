@@ -46,11 +46,10 @@ use lichen_highlevel::program::{
 };
 use lichen_language_lex::Span;
 
-use crate::ast::{Binding, Expr, Program, RecordField, Stmt, TypeConst};
-use crate::diag::{Diag, Stage};
+use crate::ast::{BinderId, Binding, Expr, Program, RecordField, Stmt, TypeConst};
+use crate::diag::Diag;
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, LangProgram, Perspective};
-use crate::suggest;
 use lichen_doc::Doc;
 
 /// `ExprId` → the source span the expr lowers from.  Built here, exactly where
@@ -59,56 +58,43 @@ use lichen_doc::Doc;
 /// only record of source positions for IR nodes.
 pub type SpanIndex = Vec<Option<Span>>;
 
-pub fn compile(program: &Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
+pub fn compile(program: &mut Program) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
     compile_with_imports(program, &[])
 }
 
-/// Lower a parsed program with resolved imports pre-seeded in the first
-/// scope frame.  Local bindings may shadow an imported name because the
-/// import frame is below the block-wide binding frames.
+/// Lower an already-resolved program (its AST fields carry the `BinderId`s).
 ///
 /// The lowering is **total**: it does not stop at the first problem.  A
-/// recovered parse error lowers to an inert [`ExprKind::ErrorBlock`] (masked,
-/// checked-skipped) and an *unresolved name* lowers to the **same** inert
-/// block plus a `Resolve` diagnostic — the resolve layer reports it and the
-/// lower layers proceed on the effective content.  So the pipeline always
-/// produces an `IR`; diagnostics are returned alongside it.
+/// recovered parse error and an *unresolved name* both lower to the **same**
+/// inert [`ExprKind::ErrorBlock`] (masked, checked-skipped); the resolver
+/// reports the `Resolve` diagnostic for the unresolved name, and the lower
+/// layers proceed on the effective content.  So the pipeline always produces an
+/// `IR`; the resolve diagnostics ride out alongside it.
 pub fn compile_with_imports(
-    program: &Program,
+    program: &mut Program,
     imports: &[ResolvedImport],
 ) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
-    let mut compiler = Compiler {
-        ir: IR::new(),
-        scopes: Vec::new(),
-        fn_depth: 0,
-        op_names: HashMap::new(),
-        str_names: HashMap::new(),
-        diagnostics: Vec::new(),
-        spans: Vec::new(),
-    };
-    if !imports.is_empty() {
-        let mut frame = HashMap::new();
-        for import in imports {
-            let id = compiler.alloc(
-                ExprKind::Static {
-                    export: import.export,
-                },
-                &import.span,
-            );
-            frame.insert(import.name.clone(), id);
-            // A package's direct exports are bound as names too (the compute
-            // package's `jit`/`launch`/`Kernel`).
-            for (name, export) in &import.direct {
-                let id = compiler.alloc(ExprKind::Static { export: *export }, &import.span);
-                frame.insert(name.clone(), id);
-            }
-        }
-        compiler.scopes.push(frame);
-    }
-    // The whole program is one scope: block-wide bindings are entered before
-    // any value compiles, restrictive `let` bindings are entered as they're
-    // seen; the scope is never popped, so later statements (and the final
-    // expression) see every earlier binding.
+    // Resolution is its own stage: it assigns each binder a `BinderId` (writing
+    // it into the AST's resolve fields) and yields the resolve diagnostics.  The
+    // lowering below reads those fields instead of re-resolving.
+    let resolved = crate::resolve::resolve(program, imports);
+    let (ir, spans) = compile_resolved(program, &resolved.import_binders);
+    (ir, spans, resolved.diagnostics)
+}
+
+/// Lower a *resolved* program.  `program` must already carry its `BinderId`
+/// annotations (from [`crate::resolve`]); `import_binders` are the base-scope
+/// import binders the resolver assigned, each lowering to a `Static` node.
+fn compile_resolved(
+    program: &Program,
+    import_binders: &[crate::resolve::ImportBinder],
+) -> (IR<LangAttr>, SpanIndex) {
+    let mut compiler = Compiler::new();
+    compiler.seed_imports(import_binders);
+    // The whole program is one scope (established by the resolver): block-wide
+    // bindings are entered before any value compiles, restrictive `let` bindings
+    // are entered as they're seen; the scope is never popped, so later
+    // statements (and the final expression) see every earlier binding.
     let (statements, final_id) = match &program.expr {
         Some(final_expr) => {
             // An ordinary program: the top-level statements followed by the
@@ -133,12 +119,18 @@ pub fn compile_with_imports(
                 .statements
                 .iter()
                 .map(|bs| {
-                    let (name, value, field) = match &bs.stmt {
-                        Stmt::Binding(b) => (Some(b.name.clone()), b.value.clone(), !b.restrictive),
-                        Stmt::Expr(e) => (None, e.clone(), true),
+                    let (name, value, binder, field) = match &bs.stmt {
+                        Stmt::Binding(b) => (
+                            Some(b.name.clone()),
+                            b.value.clone(),
+                            b.binder,
+                            !b.restrictive,
+                        ),
+                        Stmt::Expr(e) => (None, e.clone(), None, true),
                     };
                     RecordField {
                         name,
+                        binder,
                         value,
                         public: bs.public,
                         field,
@@ -163,13 +155,17 @@ pub fn compile_with_imports(
     // cascade.  (Nested blocks still use the tuple wrap.)
     compiler.ir.set_stmt_roots(statements);
     compiler.ir.set_root(final_id);
-    (compiler.ir, compiler.spans, compiler.diagnostics)
+    (compiler.ir, compiler.spans)
 }
 
 struct Compiler {
     ir: IR<LangAttr>,
-    /// The in-scope binders, innermost last.
-    scopes: Vec<HashMap<String, ExprId>>,
+    /// `BinderId` → the IR `ExprId` of that binding's node.  Every binder (a
+    /// block-wide or `let` binding, a lambda parameter, a record field, an
+    /// import) gets exactly one node, and a use of the name *is* that node —
+    /// the IR's graph-sharing invariant.  Filled as binders are emitted, read
+    /// by name uses.  Keyed by the resolver's dense `BinderId`.
+    binder_to_expr: Vec<Option<ExprId>>,
     /// The count of enclosing function scopes at the current compilation
     /// point — the `depth` carried on each lambda's [`ExprKind::Function`],
     /// which the checker uses to make sibling functions' template scopes
@@ -186,38 +182,63 @@ struct Compiler {
     /// per unique string, so [`ExprKind::NamedField`] and the IR struct-name
     /// arena can hold `&'static str` (the `ExprKind` must stay `Copy`).
     str_names: HashMap<String, &'static str>,
-    /// The frontend diagnostics the lowering accumulated (the resolve-layer
-    /// errors for unresolved names).  The frontend surfaces these alongside
-    /// the IR; lowering itself never fails on them.  They carry no checker
-    /// build, so they are typed over the shipped [`LangProgram`] marker.
-    diagnostics: Vec<Diag<LangProgram>>,
     /// The source span of each IR node, keyed by [ExprId] — the crate's own
     /// position index; highlevel itself is span-free.
     spans: Vec<Option<Span>>,
 }
 
 impl Compiler {
+    fn new() -> Self {
+        Compiler {
+            ir: IR::new(),
+            binder_to_expr: Vec::new(),
+            fn_depth: 0,
+            op_names: HashMap::new(),
+            str_names: HashMap::new(),
+            spans: Vec::new(),
+        }
+    }
+
+    /// Emit the `Static` node for each import binder, keyed by its `BinderId`.
+    fn seed_imports(&mut self, import_binders: &[crate::resolve::ImportBinder]) {
+        for ib in import_binders {
+            let id = self.alloc(ExprKind::Static { export: ib.export }, &ib.span);
+            self.set_binder(ib.binder, id);
+        }
+    }
+
+    /// Record `binder`'s IR node (growing the map as the dense ids demand).
+    fn set_binder(&mut self, binder: BinderId, expr: ExprId) {
+        if binder >= self.binder_to_expr.len() {
+            self.binder_to_expr.resize(binder + 1, None);
+        }
+        self.binder_to_expr[binder] = Some(expr);
+    }
+
+    /// The IR node a resolved name use points to — a binder is always emitted
+    /// before a use of it (block-wide bindings pre-reserve a placeholder).
+    fn binder(&self, binder: BinderId) -> ExprId {
+        self.binder_to_expr[binder].expect("a resolved binder is emitted before use")
+    }
     /// Compile a statement list, entering every block-wide binding's name
     /// *before* any value compiles so a value may forward- or mutually-
     /// reference the block's bindings.  Restrictive `let` bindings are
     /// entered during the pass (their value compiles first, so the name is
     /// visible only to later statements).
     fn compile_scope_statements(&mut self, statements: &[Stmt]) -> Vec<ExprId> {
-        // Pre-pass: reserve a `Placeholder` per block-wide binding and enter
-        // the name, in one frame.  A scope's block-wide bindings are mutually
-        // visible in both directions.
-        let mut frame = HashMap::new();
+        // Pre-pass: reserve a `Placeholder` per block-wide binding and record
+        // it under the binding's id.  A scope's block-wide bindings are
+        // mutually visible in both directions, so a value may reference itself
+        // or a later binding (which resolves to the placeholder).
         for stmt in statements {
             if let Stmt::Binding(binding) = stmt
                 && !binding.restrictive
             {
+                let binder = binding.binder.expect("a resolved block-wide binding");
                 let p = self.alloc(ExprKind::Placeholder, &binding.span);
-                frame.insert(binding.name.clone(), p);
                 self.ir.block_roots.insert(p);
+                self.set_binder(binder, p);
             }
-        }
-        if !frame.is_empty() {
-            self.scopes.push(frame);
         }
 
         // Compile pass: each statement becomes one id in order.
@@ -225,33 +246,31 @@ impl Compiler {
         for stmt in statements {
             out.push(match stmt {
                 Stmt::Binding(binding) if binding.restrictive => {
-                    // `let a = e` — the value compiles before the name enters
-                    // scope, so it is visible only to later statements and
+                    // `let a = e` — the value compiles before the name is
+                    // recorded, so it is visible only to later statements and
                     // never to itself.  `let a = a` resolves `a` to the outer
                     // (or block-wise) binding, exactly the sequential case.
                     let id = self.compile_expr(&binding.value);
-                    self.scopes
-                        .push(HashMap::from([(binding.name.clone(), id)]));
+                    let binder = binding.binder.expect("a resolved let binding");
+                    self.set_binder(binder, id);
                     id
                 }
                 Stmt::Binding(binding) => {
-                    // Block-wide binding: the name already maps to the
-                    // reserved placeholder `p`.  Compile the value; if the
-                    // value *is* a block-wide placeholder (a bare name
-                    // reference, e.g. `b = a` or the degenerate `a = a`),
-                    // alias the name to it — otherwise transplant the value's
-                    // kind into `p` so the placeholder becomes the value node
-                    // and any self/mutual reference (which resolves to `p`)
-                    // points at the value.
-                    let p = self
-                        .lookup(&binding.name)
-                        .expect("a block-wide binding's name is pre-entered");
+                    // Block-wide binding: its placeholder `p` was reserved in
+                    // the pre-pass.  Compile the value; if the value *is* a
+                    // bare name reference (`b = a`, `a = a`), alias this
+                    // binding to it — otherwise transplant the value's kind
+                    // into `p` so the placeholder becomes the value node and
+                    // any self/mutual reference (which resolves to `p`) points
+                    // at the value.
+                    let binder = binding.binder.expect("a resolved block-wide binding");
+                    let p = self.binder(binder);
                     let value = self.compile_expr(&binding.value);
                     if matches!(&binding.value, Expr::Name(..)) {
                         // A bare name reference (`b = a`, `y = x`, and the
                         // degenerate `a = a`): share the resolved id rather
                         // than copying the kind, so the binding aliases it.
-                        self.remap(&binding.name, p, value);
+                        self.set_binder(binder, value);
                         value
                     } else {
                         self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
@@ -269,21 +288,6 @@ impl Compiler {
             });
         }
         out
-    }
-
-    /// Change the mapping of `name` from the reserved placeholder `p` to `to`
-    /// (the shared value), in the frame holding that placeholder.  The
-    /// placeholder is unique to this binding, so the innermost frame whose
-    /// `name` maps to exactly `p` is the pre-pass frame; a restrictive `let`
-    /// frame shadowing the same name maps it to a different id and is left
-    /// alone (it stays shadowed, as intended).
-    fn remap(&mut self, name: &str, p: ExprId, to: ExprId) {
-        for frame in self.scopes.iter_mut().rev() {
-            if frame.get(name) == Some(&p) {
-                frame.insert(name.to_string(), to);
-                return;
-            }
-        }
     }
 
     /// Wire the statements into the root so the checker compiles and runs
@@ -394,27 +398,15 @@ impl Compiler {
                     span,
                 )
             }
-            Expr::Name(name, span) => match self.lookup(name) {
-                Some(id) => id,
+            Expr::Name(name, span, binder) => match binder {
+                Some(id) => self.binder(*id),
                 None => {
-                    // An unresolved name is a *resolve-layer* diagnostic,
-                    // absorbed here — it never stops the lowering.  It lowers
-                    // to the same inert `ErrorBlock` the parse layer reuses,
-                    // so the region is masked and the checker skips it; the
-                    // lower layers keep seeing the same effective content.
-                    // When the typo is close to a name that is in scope, the
-                    // message names the candidate(s) (a did-you-mean clause).
-                    let in_scope: Vec<&str> = self
-                        .scopes
-                        .iter()
-                        .flat_map(|frame| frame.keys())
-                        .map(|s| s.as_str())
-                        .collect();
-                    self.diagnostics.push(Diag::new(
-                        Stage::Resolve,
-                        *span,
-                        suggest::unresolved_message(name, in_scope),
-                    ));
+                    // An unresolved name was already reported by the resolver
+                    // (a `Resolve` diagnostic, possibly with a did-you-mean
+                    // clause); it lowers to the same inert `ErrorBlock` a parse
+                    // error uses, so the region is masked and the checker skips
+                    // it.
+                    let _ = name;
                     self.alloc(ExprKind::ErrorBlock, span)
                 }
             },
@@ -426,8 +418,9 @@ impl Compiler {
             // distinct from a genuine `_` so a diff can exclude it).
             Expr::Err { start, .. } => self.alloc(ExprKind::ErrorBlock, start),
             Expr::Lambda {
-                parameter,
+                parameter: _,
                 parameter_span,
+                parameter_binder,
                 parameter_type,
                 parameter_perspective,
                 r#return,
@@ -446,10 +439,13 @@ impl Compiler {
                         },
                     );
                 }
-                self.scopes
-                    .push(HashMap::from([(parameter.clone(), parameter_id)]));
-                // The annotated parameter's type and attribute are compiled
-                // in scope too — either may reference the parameter
+                // The parameter is the binder the body (and its own annotation)
+                // resolves to — no scope frame is pushed; the resolver already
+                // assigned the id, and the body's uses read it via the map.
+                let binder = parameter_binder.expect("a resolved lambda parameter");
+                self.set_binder(binder, parameter_id);
+                // The annotated parameter's type and attribute are compiled in
+                // scope too — either may reference the parameter
                 // (`x : x -> Int`).
                 let parameter_type = parameter_type.as_ref().map(|t| self.compile_expr(t));
                 let parameter_attribute =
@@ -460,7 +456,6 @@ impl Compiler {
                     self.fn_depth -= 1;
                     body
                 };
-                self.scopes.pop();
                 self.alloc(
                     ExprKind::Function {
                         parameter: parameter_id,
@@ -739,14 +734,13 @@ impl Compiler {
                 span,
             } => {
                 // The same graph sharing as a program's statements — each
-                // value compiles once and names resolve to its own id — but
-                // the block's scope frames are dropped at the `}`, so a
-                // block compiles to its final expression's own node (wired
-                // through the statement wrapper like a program's).
-                let scope_len = self.scopes.len();
+                // value compiles once and a use of a name is its binding's own
+                // id — but the block's bindings are block-scoped (the resolver
+                // gave them distinct ids), so a block compiles to its final
+                // expression's own node (wired through the statement wrapper
+                // like a program's).
                 let stmts = self.compile_scope_statements(statements);
                 let body = self.compile_expr(expr);
-                self.scopes.truncate(scope_len);
                 self.wrap(stmts, body, span)
             }
             Expr::RecordBlock { fields, span } => {
@@ -776,12 +770,12 @@ impl Compiler {
         fields: &[RecordField],
         span: &Span,
     ) -> (Vec<ExprId>, ExprId) {
-        let scope_len = self.scopes.len();
         let stmts: Vec<Stmt> = fields
             .iter()
             .map(|f| match &f.name {
                 Some(name) => Stmt::Binding(Binding {
                     name: name.clone(),
+                    binder: f.binder,
                     value: f.value.clone(),
                     span: f.span,
                     restrictive: !f.field,
@@ -790,7 +784,6 @@ impl Compiler {
             })
             .collect();
         let ids = self.compile_scope_statements(&stmts);
-        self.scopes.truncate(scope_len);
         let any_pub = fields.iter().any(|f| f.public);
         let mut emitted = Vec::with_capacity(fields.len());
         for (f, id) in fields.iter().zip(ids.iter()) {
@@ -811,13 +804,6 @@ impl Compiler {
 
     fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {
         elements.iter().map(|e| self.compile_expr(e)).collect()
-    }
-
-    fn lookup(&self, name: &str) -> Option<ExprId> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name).copied())
     }
 
     fn alloc(&mut self, kind: ExprKind<HighProgramLiteral>, span: &Span) -> ExprId {

@@ -4,6 +4,15 @@
 
 use lichen_language_lex::Span;
 
+/// A binding's identity within one resolution pass — a dense, program-wide
+/// index assigned by [`crate::resolve::Resolver`] to every binder (a block-wide
+/// or `let` binding, a lambda parameter, a record field).  A [`Name`](Expr::Name)
+/// use carries the id of the binder it resolves to.  The compiler maps an id to
+/// its `ExprId`; the session compares resolved forms by these ids instead of
+/// hashing name resolution.  Chosen as a plain `usize` because it is also used
+/// as a dense `Vec` index (the ids are `0..n` over one pass).
+pub type BinderId = usize;
+
 /// The type constants.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum TypeConst {
@@ -38,8 +47,12 @@ pub enum Expr {
     /// application is the whole story — no special grammar, and the bare
     /// atom is bindable and passable like any function (`f = type_of`).
     TypeOf(Span),
-    /// A use of a name — resolved by [`crate::compile`] to the binder's id.
-    Name(String, Span),
+    /// A use of a name — resolved by [`crate::resolve::Resolver`] to the
+    /// binder's id.  The third field is the `BinderId` the use resolves to
+    /// (`Some`) or `None` when the name does not resolve (an unresolved name
+    /// lowers to the same inert `ErrorBlock` and emits a `Resolve` diagnostic).
+    /// The parser leaves it unset; resolution fills it.
+    Name(String, Span, Option<BinderId>),
     /// `_` — an inference placeholder hole, usable in *any* position (type or
     /// value): the checker infers the type from context.  It is its own token
     /// and never a name, so it cannot be bound or used as a lambda parameter.
@@ -53,6 +66,9 @@ pub enum Expr {
     Lambda {
         parameter: String,
         parameter_span: Span,
+        /// The parameter's own `BinderId`, assigned by the resolver so the
+        /// body's uses of the parameter resolve to it.  Unset by the parser.
+        parameter_binder: Option<BinderId>,
         parameter_type: Option<Box<Expr>>,
         parameter_perspective: Option<Box<Expr>>,
         r#return: Box<Expr>,
@@ -247,6 +263,10 @@ pub struct Binding {
     pub name: String,
     /// The name's span — diagnostics for the binding point here.
     pub span: Span,
+    /// The binding's own `BinderId`, assigned by the resolver so uses of the
+    /// name (including a block-wide binding's self/mutual references) resolve
+    /// to it.  Unset by the parser.
+    pub binder: Option<BinderId>,
     pub value: Expr,
     /// `let` — the name is visible only to *later* statements (the name is
     /// not in scope in its own value, so `let a = a` resolves `a` to the
@@ -281,6 +301,9 @@ pub struct StructInstArg {
 #[derive(Clone, Debug)]
 pub struct RecordField {
     pub name: Option<String>,
+    /// The field's own `BinderId` (for a named field), assigned by the
+    /// resolver.  Unset by the parser; `None` for a positional field.
+    pub binder: Option<BinderId>,
     pub value: Expr,
     pub public: bool,
     /// `false` for a `let` binding (a block-local, never a struct field).
@@ -357,7 +380,7 @@ impl Expr {
             Expr::Str(_, s) => *s,
             Expr::TypeConst(_, s) => *s,
             Expr::TypeOf(s) => *s,
-            Expr::Name(_, s) => *s,
+            Expr::Name(_, s, _) => *s,
             Expr::Placeholder(s) => *s,
             Expr::Lambda { span, .. } => *span,
             Expr::Apply { span, .. } => *span,

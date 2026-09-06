@@ -1104,7 +1104,7 @@ impl<'a> NameClass<'a> {
                 function, argument, ..
             } => {
                 // A plain name in function position is a function call.
-                if let Expr::Name(_, span) = &**function {
+                if let Expr::Name(_, span, _) = &**function {
                     self.map
                         .insert(*span, (SemanticTokenType::FUNCTION, Vec::new()));
                 }
@@ -1325,7 +1325,7 @@ impl Walk {
             | Expr::Placeholder(..)
             | Expr::Err { .. }
             | Expr::TypeOf(..) => {}
-            Expr::Name(name, span) => {
+            Expr::Name(name, span, _) => {
                 if let Some(idx) = self.lookup(name) {
                     self.resolve.insert(*span, idx);
                 }
@@ -1456,6 +1456,7 @@ impl Walk {
                     .map(|f| match &f.name {
                         Some(name) => Stmt::Binding(lichen_language::ast::Binding {
                             name: name.clone(),
+                            binder: f.binder,
                             value: f.value.clone(),
                             span: f.span,
                             restrictive: !f.field,
@@ -1738,6 +1739,7 @@ impl<'a> ScopeCapture<'a> {
                     .map(|f| match &f.name {
                         Some(name) => Stmt::Binding(Binding {
                             name: name.clone(),
+                            binder: f.binder,
                             value: f.value.clone(),
                             span: f.span,
                             restrictive: !f.field,

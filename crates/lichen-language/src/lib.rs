@@ -36,6 +36,7 @@ pub mod preprocess;
 pub mod program;
 pub mod readme;
 pub mod render;
+pub mod resolve;
 pub mod run;
 pub mod session;
 pub mod suggest;
@@ -302,14 +303,14 @@ pub fn frontend_at(
     let mut diagnostics: Vec<Diag<LangProgram>> =
         lex_errors.into_iter().map(Diag::from_lex).collect();
     let parse::Parsed {
-        program,
+        mut program,
         errors: parse_errors,
     } = parse::parse(&tokens);
     diagnostics.extend(parse_errors.into_iter().map(Diag::from_parse));
     // The lowering is total: an unresolved name lowers to the same inert
     // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
     // and the resolve errors ride in `diagnostics`.
-    let (ir, span_index, resolve_errors) = compile::compile_with_imports(&program, imports);
+    let (ir, span_index, resolve_errors) = compile::compile_with_imports(&mut program, imports);
     diagnostics.extend(resolve_errors);
     Frontend {
         ir: Some(ir),

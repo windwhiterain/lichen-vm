@@ -1,20 +1,21 @@
 use super::*;
+use crate::diag::Stage;
 use crate::lex::lex;
 use crate::parse::parse;
 use lichen_highlevel::program::{HighProgramLiteral, IntLit, IntTypeLit};
 
 fn compile_ok(source: &str) -> IR<LangAttr> {
     let tokens = lex(source).tokens;
-    let ast = parse(&tokens).program;
-    compile(&ast).0
+    let mut ast = parse(&tokens).program;
+    compile(&mut ast).0
 }
 
 fn compile_err(source: &str) -> crate::diag::Diag<crate::program::LangProgram> {
     let tokens = lex(source).tokens;
-    let ast = parse(&tokens).program;
+    let mut ast = parse(&tokens).program;
     // The lowering is total but collects its resolve errors; the tests check
     // the first one (an unresolved-name program yields exactly one).
-    compile(&ast)
+    compile(&mut ast)
         .2
         .into_iter()
         .next()
@@ -101,8 +102,8 @@ fn shadowing_resolves_to_the_inner_binder() {
 #[test]
 fn every_expression_carries_a_span() {
     let tokens = lex("x => x").tokens;
-    let ast = parse(&tokens).program;
-    let (ir, spans, _) = compile(&ast);
+    let mut ast = parse(&tokens).program;
+    let (ir, spans, _) = compile(&mut ast);
     assert_eq!(spans.len(), ir.expr.len(), "one span entry per expression");
     assert!(
         spans.iter().all(|s| s.is_some()),
@@ -150,8 +151,8 @@ fn a_type_position_underscore_compiles_to_a_placeholder() {
 fn a_bang_prefix_compiles_to_an_assert() {
     // !(1 == 1) — the highlevel Assert form, whose condition is the operand.
     let tokens = lex("!(1 == 1)").tokens;
-    let ast = parse(&tokens).program;
-    let (ir, spans, _) = compile(&ast);
+    let mut ast = parse(&tokens).program;
+    let (ir, spans, _) = compile(&mut ast);
     let ExprKind::Assert { condition } = kind(&ir, ir.root) else {
         panic!("expected an assert")
     };

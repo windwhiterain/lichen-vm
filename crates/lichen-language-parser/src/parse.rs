@@ -398,6 +398,7 @@ fn binding<'a>(
         .map(|(((name, span), restrictive), value)| Binding {
             name,
             span,
+            binder: None,
             value,
             restrictive,
         })
@@ -547,9 +548,10 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             .validate(|pre, me, emit| match pre {
                 Pre::E(e) => e,
                 Pre::FatArrow(lhs, rhs) => match *lhs {
-                    Expr::Name(parameter, span) => Expr::Lambda {
+                    Expr::Name(parameter, span, _) => Expr::Lambda {
                         parameter,
                         parameter_span: span,
+                        parameter_binder: None,
                         parameter_type: None,
                         parameter_perspective: None,
                         r#return: rhs,
@@ -562,9 +564,10 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                         span,
                         ..
                     } => match *value {
-                        Expr::Name(parameter, parameter_span) => Expr::Lambda {
+                        Expr::Name(parameter, parameter_span, _) => Expr::Lambda {
                             parameter,
                             parameter_span,
+                            parameter_binder: None,
                             parameter_type: r#type,
                             parameter_perspective: perspective,
                             r#return: rhs,
@@ -691,7 +694,7 @@ fn atom_parser<'a>(
             // expression too (`f _`, `(1, _)`, `_ : Int`) but cannot be bound
             // or used as a lambda parameter.
             token(TokenKind::Placeholder).map(|t| Expr::Placeholder(t.span)),
-            name().map(|(n, span)| Expr::Name(n, span)),
+            name().map(|(n, span)| Expr::Name(n, span, None)),
             native_call(tokens, expr.clone()),
             paren(tokens, expr.clone()),
             array_literal(tokens, expr.clone()),
@@ -1139,6 +1142,7 @@ fn block<'a>(
                             };
                             RecordField {
                                 name,
+                                binder: None,
                                 value,
                                 public,
                                 field,

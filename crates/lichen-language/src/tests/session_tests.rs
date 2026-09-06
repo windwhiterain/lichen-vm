@@ -62,8 +62,8 @@ fn an_error_block_lowers_to_errorblock_not_placeholder() {
     // broken value lowers to a distinct `ExprKind::ErrorBlock`.
     let source = "a = ); b = 2; b";
     let tokens = lex::lex(source).tokens;
-    let Parsed { program, .. } = parse::parse(&tokens);
-    let ir = crate::compile::compile(&program).0;
+    let Parsed { mut program, .. } = parse::parse(&tokens);
+    let ir = crate::compile::compile(&mut program).0;
     let error_blocks = ir
         .expr
         .iter()

@@ -182,7 +182,7 @@ fn bare_expressions_are_statements_anywhere() {
     assert!(matches!(program.statements[0].stmt, Stmt::Expr(..)));
     assert!(matches!(program.statements[1].stmt, Stmt::Binding(..)));
     assert!(matches!(program.statements[2].stmt, Stmt::Expr(..)));
-    assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "a"));
+    assert!(matches!(program.expr, Some(Expr::Name(name, _, _)) if name == "a"));
     // 5; 6 — the last expression is the value.
     let tokens = lex("5; 6").tokens;
     let program = parse(&tokens).program;
@@ -284,7 +284,7 @@ fn an_annotated_parameter_is_a_lambda() {
         parameter_type,
         Some(t) if matches!(*t, Expr::TypeConst(TypeConst::Int, _))
     ));
-    assert!(matches!(*r#return, Expr::Name(name, _) if name == "x"));
+    assert!(matches!(*r#return, Expr::Name(name, _, _) if name == "x"));
     // An unannotated lambda has no parameter type.
     assert!(matches!(
         parse_ok("x => x"),
@@ -402,7 +402,7 @@ fn named_field_read_is_dot_postfix() {
     else {
         panic!("expected a named field read")
     };
-    assert!(matches!(*container, Expr::Name(n, _) if n == "a"));
+    assert!(matches!(*container, Expr::Name(n, _, _) if n == "a"));
     assert_eq!(name, "b");
     // `a.b.c` chains left.
     let Expr::NamedFieldRead {
@@ -431,7 +431,7 @@ fn struct_instantiation_is_adjacent_parens() {
     let Expr::StructInst { callee, fields, .. } = parse_ok("A(1, Int)") else {
         panic!("expected a struct instance")
     };
-    assert!(matches!(*callee, Expr::Name(n, _) if n == "A"));
+    assert!(matches!(*callee, Expr::Name(n, _, _) if n == "A"));
     assert_eq!(fields.len(), 2);
     assert!(matches!(fields[0].value, Expr::Int(1, _)));
     assert!(matches!(
@@ -460,7 +460,7 @@ fn struct_instantiation_is_adjacent_parens() {
     let Expr::FieldRead { container, key, .. } = parse_ok("A(1)") else {
         panic!("expected a slot read")
     };
-    assert!(matches!(*container, Expr::Name(n, _) if n == "A"));
+    assert!(matches!(*container, Expr::Name(n, _, _) if n == "A"));
     assert!(matches!(*key, Expr::Int(1, _)));
     // the callee may be an inline struct type.
     let Expr::StructInst { callee, .. } = parse_ok("struct<Int, Int>(1, 2)") else {
@@ -693,7 +693,7 @@ fn a_block_is_bindings_followed_by_a_final_expression() {
     };
     assert_eq!(binding.name, "a");
     assert!(matches!(binding.value, Expr::Int(1, _)));
-    assert!(matches!(*expr, Expr::Name(name, _) if name == "a"));
+    assert!(matches!(*expr, Expr::Name(name, _, _) if name == "a"));
     // A block with only a final expression.
     assert!(matches!(parse_ok("{5}"), Expr::Block { .. }));
     // Statements are graph-shared bindings, not just literals.
@@ -729,7 +729,7 @@ fn a_block_can_be_written_without_semicolons() {
     };
     assert_eq!(a.name, "a");
     assert_eq!(b.name, "b");
-    assert!(matches!(*expr, Expr::Name(name, _) if name == "b"));
+    assert!(matches!(*expr, Expr::Name(name, _, _) if name == "b"));
     // A trailing newline before the `}` is fine.
     assert!(matches!(parse_ok("{a = 1\na\n}"), Expr::Block { .. }));
 }
@@ -799,7 +799,7 @@ fn broken_statements_are_recovered() {
     let tokens = lex("a = 1; -> ; b = 2; b").tokens;
     let Parsed { program, errors } = parse(&tokens);
     assert_eq!(errors.len(), 1);
-    assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "b"));
+    assert!(matches!(program.expr, Some(Expr::Name(name, _, _)) if name == "b"));
 }
 
 #[test]
@@ -826,7 +826,7 @@ fn dangling_operators_are_recovered() {
             "{source}: at the missing operand"
         );
         assert_eq!(program.statements.len(), 2, "{source}: both statements");
-        assert!(matches!(program.expr, Some(Expr::Name(name, _)) if name == "b"));
+        assert!(matches!(program.expr, Some(Expr::Name(name, _, _)) if name == "b"));
         let Stmt::Binding(binding) = &program.statements[0].stmt else {
             panic!("{source}: first statement is a binding");
         };
