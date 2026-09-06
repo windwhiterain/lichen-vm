@@ -132,7 +132,7 @@ fn a_tuple_value_renders_with_parens() {
 
 #[test]
 fn an_array_value_keeps_brackets() {
-    assert_eq!(output("[1, 2, 3]"), "[1, 2, 3]: Int<3>");
+    assert_eq!(output("[1, 2, 3]"), "[1, 2, 3]: array<Int, 3>");
 }
 
 #[test]
@@ -141,7 +141,18 @@ fn a_compound_type_value_renders_in_type_syntax() {
     // kind it prints as the arrow, not the raw pair.
     assert_eq!(output("Int -> Int"), "Int -> Int: TypeFunction");
     assert_eq!(output("<Int, Type>"), "<Int, Type>: TypeTuple");
-    assert_eq!(output("Int<3>"), "Int<3>: TypeArray");
+    assert_eq!(output("array<Int, 3>"), "array<Int, 3>: TypeArray");
+}
+
+#[test]
+fn a_raw_index_reads_a_type_component() {
+    // `X<e>` reads element `e` of `X`'s VALUE with no type validation, so it
+    // reads a component of a type-as-value — a tuple type or a struct type —
+    // and yields that component type.
+    assert_eq!(output("<Int, string><0>"), "Int: Type");
+    assert_eq!(output("<Int, string><1>"), "string: Type");
+    assert_eq!(output("struct<Int, string><1>"), "string: Type");
+    assert_eq!(output("<Int, string, Type><0>"), "Int: Type");
 }
 
 #[test]
@@ -183,7 +194,7 @@ fn type_of_is_first_class() {
 
 #[test]
 fn type_of_reads_compound_types() {
-    assert_eq!(output("type_of [1, 2]"), "Int<2>: TypeArray");
+    assert_eq!(output("type_of [1, 2]"), "array<Int, 2>: TypeArray");
     assert_eq!(output("type_of (1, Int)"), "<Int, Type>: TypeTuple");
     assert_eq!(output("type_of (type_of (1))"), "Type: Type");
 }

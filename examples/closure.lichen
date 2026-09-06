@@ -1,6 +1,6 @@
 @{
   order = "2"
-  output = "[1, 2, 3, 4]: Int<4>"
+  output = "[1, 2, 3, 4]: array<Int, 4>"
 @}
 a = 1
 f1 = x => {

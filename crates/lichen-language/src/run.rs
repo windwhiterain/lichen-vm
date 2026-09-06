@@ -2,7 +2,7 @@
 //!
 //! [`evaluate`] compiles and checks a program, runs it (the deep evaluation
 //! of its root value), and renders the result as text — the program's
-//! output, with its type: `5: Int`, `[1, 2, 3]: Int<3>`.  The value renders
+//! output, with its type: `5: Int`, `[1, 2, 3]: array<Int, 3>`.  The value renders
 //! *against its type chain* (a struct type value prints `struct<Int, Type>`,
 //! a tuple `(1, Int)`) — see [`crate::render`].  Diagnostics are returned
 //! unrendered so the caller (the CLI, the example tests) can render them

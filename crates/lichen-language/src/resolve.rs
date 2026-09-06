@@ -281,6 +281,12 @@ impl Resolver {
                 self.resolve_expr(array);
                 self.resolve_expr(index);
             }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                self.resolve_expr(container);
+                self.resolve_expr(index);
+            }
             Expr::FieldRead { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);
@@ -558,6 +564,13 @@ impl KeyWriter {
             Expr::Index { array, index, .. } => {
                 self.u(13);
                 self.expr(array);
+                self.expr(index);
+            }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                self.u(27);
+                self.expr(container);
                 self.expr(index);
             }
             Expr::FieldRead { container, key, .. } => {

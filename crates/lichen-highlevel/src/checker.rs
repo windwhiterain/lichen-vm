@@ -667,6 +667,7 @@ where
             } => vec![type_expr, value],
             ExprKind::Record { value, .. } => vec![value],
             ExprKind::Index { array, index } => vec![array, index],
+            ExprKind::RawIndex { container, index } => vec![container, index],
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
             ExprKind::Find { container, key } => vec![container, key],
@@ -1073,6 +1074,7 @@ where
                     | ExprKind::Instantiate { .. }
                     | ExprKind::Assert { .. }
                     | ExprKind::Index { .. }
+                    | ExprKind::RawIndex { .. }
                     | ExprKind::Find { .. }
                     | ExprKind::Annotation { .. }
                     | ExprKind::TypeFunction { .. }
@@ -1161,6 +1163,7 @@ where
             }
             ExprKind::Assert { condition } => self.check_assert(e, condition),
             ExprKind::Index { array, index } => self.check_index(e, array, index),
+            ExprKind::RawIndex { container, index } => self.check_raw_index(e, container, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
@@ -1712,6 +1715,51 @@ where
         self.val[e] = Some(value_node);
         self.ty[e] = Some(elem_cell);
         pair
+    }
+
+    /// A **raw** positional read `X<e>` (the glued `<` postfix) — element
+    /// `index` of the container's **value**, read structurally through the
+    /// lowlevel `Index` **without type validation**.  There is no array-type
+    /// pinning (unlike [`Self::check_index`]), no `IndexTarget` guard and no
+    /// shape-derived type (unlike [`Self::check_field`]): the container is
+    /// read by value whatever its type, so it reads a component of a
+    /// type-as-value (`<Int, string><0>`, `struct<Int, string><1>`) or of any
+    /// expression's value.  An unbound container (a parameter, a call result)
+    /// stays lazy — the lowlevel `Index` defers — and resolves at the apply,
+    /// exactly the laziness the wrapper field reads rely on.
+    ///
+    /// The result is the element's own pair: `term[e]` is the raw read
+    /// `Index(container_value, index)`; the value is element 0 of that pair
+    /// and the type element 1, both read lazily.  An out-of-bounds index or a
+    /// non-array container is a runtime `Index` evaluation error (never a
+    /// static diagnostic), per the no-validation contract.
+    fn check_raw_index(&mut self, e: ExprId, container: ExprId, index: ExprId) -> NodeId {
+        self.check_expr(container);
+        self.check_expr(index);
+        let container_value = self.value_of(container);
+        let index_value = self.value_of(index);
+        self.node_edges.insert(index_value, self.loc(index, 0));
+        let ops = self.array_node(self.current_block, &[container_value, index_value]);
+        let value_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ops),
+        );
+        let one = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(1))),
+        );
+        let ty_ops = self.array_node(self.current_block, &[value_node, one]);
+        let ty_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ty_ops),
+        );
+        self.term[e] = Some(value_node);
+        self.val[e] = None;
+        self.ty[e] = Some(ty_node);
+        value_node
     }
 
     /// A positional slot read `a(k)` — a tuple element or a struct field

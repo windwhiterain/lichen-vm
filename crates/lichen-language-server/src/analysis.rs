@@ -1199,6 +1199,7 @@ fn classify_token_kind(
         }
         TokenKind::KwStruct
         | TokenKind::KwTable
+        | TokenKind::KwArray
         | TokenKind::KwLet
         | TokenKind::KwIf
         | TokenKind::KwThen
@@ -1414,6 +1415,12 @@ impl<'a> NameClass<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -1652,6 +1659,12 @@ impl Walk {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..
@@ -1940,6 +1953,12 @@ impl<'a> ScopeCapture<'a> {
             } => {
                 self.expr(element_type);
                 self.expr(length);
+            }
+            Expr::RawIndex {
+                container, index, ..
+            } => {
+                self.expr(container);
+                self.expr(index);
             }
             Expr::Block {
                 statements, expr, ..

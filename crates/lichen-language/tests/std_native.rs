@@ -247,7 +247,10 @@ fn std_sort_sorts_a_usize_array() {
 @}
 std.sort [3, 1, 2]
 "#);
-    assert_eq!(out, "[1, 2, 3]: Int<3>", "std.sort produced: {out:?}");
+    assert_eq!(
+        out, "[1, 2, 3]: array<Int, 3>",
+        "std.sort produced: {out:?}"
+    );
 }
 
 #[test]
@@ -262,7 +265,7 @@ fn std_sort_is_reusable_and_length_preserving() {
 (std.sort [4, 1, 3, 2], std.sort [9, 7])
 "#);
     assert_eq!(
-        out, "([1, 2, 3, 4], [7, 9]): <Int<4>, Int<2>>",
+        out, "([1, 2, 3, 4], [7, 9]): <array<Int, 4>, array<Int, 2>>",
         "produced: {out:?}"
     );
 }

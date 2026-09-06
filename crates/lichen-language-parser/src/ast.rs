@@ -122,6 +122,19 @@ pub enum Expr {
         index: Box<Expr>,
         span: Span,
     },
+    /// `X<e>` — a *raw* positional read.  The glued `<` (was the array-type
+    /// postfix; the array type is now spelled `array<T, n>`, see
+    /// [`Expr::TypeArray`]) reads element `e` of `X`'s **value** directly
+    /// through the lowlevel `Index`, with **no type validation** — no
+    /// array-type pinning, no `IndexTarget` guard, no bounds assert.  It reads
+    /// a component of a type-as-value (`<Int, string><0>`,
+    /// `struct<Int, string><1>`), and stays lazy on an unbound container
+    /// (a parameter, a call result) so it resolves at the apply.
+    RawIndex {
+        container: Box<Expr>,
+        index: Box<Expr>,
+        span: Span,
+    },
     /// `a(k)` — a positional slot read over a tuple element or a struct
     /// field.  The `(` is *adjacent* to the container and holds a single
     /// expression with no comma — the syntactic distinction from struct
@@ -389,6 +402,7 @@ impl Expr {
             Expr::Assert { span, .. } => *span,
             Expr::NativeCall { span, .. } => *span,
             Expr::Index { span, .. } => *span,
+            Expr::RawIndex { span, .. } => *span,
             Expr::FieldRead { span, .. } => *span,
             Expr::NamedFieldRead { span, .. } => *span,
             Expr::TableFind { span, .. } => *span,
