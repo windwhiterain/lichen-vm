@@ -99,7 +99,7 @@ fn type_struct(ir: &mut IR, fields: &[ExprId]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> = fields.iter().map(|&e| (e, None)).collect();
     ir.alloc_type_struct(&fields)
 }
-/// A struct type expression with field names: `struct<a :: T1, b :: T2>`.
+/// A struct type expression with field names: `struct<.a T1, .b T2>`.
 fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
     let fields: Vec<(ExprId, Option<&'static str>)> =
         fields.iter().map(|&(e, name)| (e, Some(name))).collect();
@@ -1340,7 +1340,7 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
 
 #[test]
 fn a_named_struct_carries_a_name_to_index_table() {
-    // struct<a :: Int, b :: Type> — the struct marker `[id, names]` (in the
+    // struct<.a Int, .b Type> — the struct marker `[id, names]` (in the
     // kind's marker slot) holds a table mapping each field name to its
     // positional index.
     let mut ir = IR::new();

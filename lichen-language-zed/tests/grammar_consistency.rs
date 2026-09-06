@@ -11,7 +11,10 @@
 //!    and `HEAD` over the grammar-defining + query paths is empty. When it is not, the
 //!    message prints the `rev` to set.
 //!
-//! Both checks run in CI and locally via `cargo test -p lichen-language-zed`.
+//! Compiled only when the crate's `grammar-consistency` feature is enabled (opt-in, because it
+//! builds the tree-sitter grammar and needs the tree-sitter CLI). Enable it with
+//! `cargo test -p lichen-language-zed --features grammar-consistency`.
+#![cfg(feature = "grammar-consistency")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,9 +23,10 @@ use std::process::{Command, Output};
 use tree_sitter::{Language, Query};
 
 /// Files that define the grammar surface / queries, so a change to any of them needs a
-/// `rev` bump. Deliberately excludes the grammar's `tests/` (test-only churn, e.g. formatting).
+/// `rev` bump. Deliberately excludes the grammar's `tests/` (test-only churn, e.g. formatting)
+/// and `src/` (the generated `src/parser.c` etc., which are regenerated from `grammar.js` at
+/// build time and are no longer committed).
 const GRAMMAR_PATHS: &[&str] = &[
-    "tree-sitter-lichen/src",
     "tree-sitter-lichen/grammar.js",
     "tree-sitter-lichen/queries",
     "lichen-language-zed/languages/lichen",

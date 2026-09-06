@@ -38,16 +38,42 @@ fn tokens_of_a_small_program() {
 }
 
 #[test]
-fn a_double_colon_is_one_table_separator() {
+fn a_table_arrow_separates_a_table_entry() {
     assert_eq!(
-        kinds("table{ 1 :: 2 }"),
+        kinds("table{ 1 ==> 2 }"),
         vec![
             TokenKind::KwTable,
             TokenKind::LBrace,
             TokenKind::Int(1),
-            TokenKind::DoubleColon,
+            TokenKind::TableArrow,
             TokenKind::Int(2),
             TokenKind::RBrace,
+            TokenKind::Eof,
+        ]
+    );
+}
+
+#[test]
+fn a_glued_double_colon_is_a_raw_field_postfix() {
+    // `S::a` — the `::` is glued to `S`, so a Glue marker precedes it; the
+    // spaced `::` (the old table separator) is now `==>`.  `kinds_all`
+    // keeps Glue; `kinds` (below) filters it and Separator.
+    assert_eq!(
+        kinds_all("S::a"),
+        vec![
+            TokenKind::Name("S".to_string()),
+            TokenKind::Glue,
+            TokenKind::DoubleColon,
+            TokenKind::Name("a".to_string()),
+            TokenKind::Eof,
+        ]
+    );
+    assert_eq!(
+        kinds_all("S :: a"),
+        vec![
+            TokenKind::Name("S".to_string()),
+            TokenKind::DoubleColon,
+            TokenKind::Name("a".to_string()),
             TokenKind::Eof,
         ]
     );

@@ -290,58 +290,66 @@ macro_rules! lang_compose_vocabulary {
                             unreachable!("binary operators expect an operand array of [left, right]")
                         };
                         let operands = operands.items();
-                        let Some(left) = module
-                            .node_value(operands[0].node)
-                            .and_then(|value| {
+                        let left = module.node_value(operands[0].node);
+                        let right = module.node_value(operands[1].node);
+                        let unbound = |v: &Option<LangValue>| match v {
+                            None => true,
+                            Some(value) => matches!(
                                 <LangValue as ::lichen_utils::extend::AsEnum<
                                     ::lichen_lowlevel::LowValue,
-                                >>::as_enum(&value)
-                            })
-                            .and_then(|value| match value {
-                                ::lichen_lowlevel::LowValue::USize(n) => Some(n),
-                                _ => None,
-                            })
-                        else {
+                                >>::as_enum(value),
+                                Some(::lichen_lowlevel::LowValue::Parameterized)
+                            ),
+                        };
+                        if unbound(&left) || unbound(&right) {
                             return <LangValue as ::core::convert::From<
                                 ::lichen_lowlevel::LowValue,
                             >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        };
-                        let Some(right) = module
-                            .node_value(operands[1].node)
-                            .and_then(|value| {
-                                <LangValue as ::lichen_utils::extend::AsEnum<
-                                    ::lichen_lowlevel::LowValue,
-                                >>::as_enum(&value)
-                            })
-                            .and_then(|value| match value {
-                                ::lichen_lowlevel::LowValue::USize(n) => Some(n),
-                                _ => None,
-                            })
-                        else {
-                            return <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        };
+                        }
+                        // `==` compares any two same-typed values (an `Int`, or a
+                        // type value); `+ - <=` are Int-only and read USizes.
                         match self {
-                            <$tyop>::Add => <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::USize(
-                                left.wrapping_add(right),
-                            )),
-                            <$tyop>::Sub => <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::USize(
-                                left.wrapping_sub(right),
-                            )),
-                            <$tyop>::Leq => <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::USize(
-                                (left <= right) as usize,
-                            )),
+                            <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq => {
+                                let to_usize = |v: &LangValue| -> Option<usize> {
+                                    <LangValue as ::lichen_utils::extend::AsEnum<
+                                        ::lichen_lowlevel::LowValue,
+                                    >>::as_enum(v)
+                                    .and_then(|value| match value {
+                                        ::lichen_lowlevel::LowValue::USize(n) => Some(n),
+                                        _ => None,
+                                    })
+                                };
+                                let (Some(a), Some(b)) = (
+                                    to_usize(left.as_ref().unwrap()),
+                                    to_usize(right.as_ref().unwrap()),
+                                ) else {
+                                    return <LangValue as ::core::convert::From<
+                                        ::lichen_lowlevel::LowValue,
+                                    >>::from(::lichen_lowlevel::LowValue::Parameterized);
+                                };
+                                match self {
+                                    <$tyop>::Add => <LangValue as ::core::convert::From<
+                                        ::lichen_lowlevel::LowValue,
+                                    >>::from(::lichen_lowlevel::LowValue::USize(
+                                        a.wrapping_add(b),
+                                    )),
+                                    <$tyop>::Sub => <LangValue as ::core::convert::From<
+                                        ::lichen_lowlevel::LowValue,
+                                    >>::from(::lichen_lowlevel::LowValue::USize(
+                                        a.wrapping_sub(b),
+                                    )),
+                                    <$tyop>::Leq => <LangValue as ::core::convert::From<
+                                        ::lichen_lowlevel::LowValue,
+                                    >>::from(::lichen_lowlevel::LowValue::USize(
+                                        (a <= b) as usize,
+                                    )),
+                                    _ => unreachable!("all binary operators are handled above"),
+                                }
+                            }
                             <$tyop>::Eq => <LangValue as ::core::convert::From<
                                 ::lichen_lowlevel::LowValue,
                             >>::from(::lichen_lowlevel::LowValue::USize(
-                                (left == right) as usize,
+                                (left.unwrap() == right.unwrap()) as usize,
                             )),
                             _ => unreachable!("all binary operators are handled above"),
                         }

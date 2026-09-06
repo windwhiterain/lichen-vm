@@ -17,3 +17,10 @@ tree-sitter-language = "0.1"
 
 [dev-dependencies]
 tree-sitter = "0.25"
+
+# This crate is NOT a workspace member, so `cargo test --workspace` never builds it and
+# its tests can never block the default run. Testing it is always explicit — invoke it via
+# its own manifest — so the samples test runs by default:
+#   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
+# (the only opt-in gate is `grammar-consistency` in `lichen-language-zed`, which does pull
+# this crate in as a dep and needs the tree-sitter CLI).

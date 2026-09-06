@@ -288,7 +288,7 @@ Box = t => struct<t>
   order = "4"
   output = "(10, 20): <Int, Int>"
 @}
-t = table{ [1, 2] :: 10, [3, 4] :: 20 }
+t = table{ [1, 2] ==> 10, [3, 4] ==> 20 }
 (t{[1, 2]}, t{[3, 4]})
 ```
 
@@ -405,6 +405,18 @@ five # 4
   output = "(Int, string, Int, string): <Type, Type, Type, Type>"
 @}
 (<Int, string><0>, <Int, string><1>, struct<Int, string><0>, struct<Int, string><1>)
+```
+
+### `raw_field.lichen`
+
+```text
+@{
+  order = "12"
+  output = "(Int, string, 1): <Type, Type, Int>"
+@}
+S = struct<.a Int, .b string>
+s = S(.a 1, .b "h")
+(S::a, S::b, s.a)
 ```
 
 <!-- end: examples -->

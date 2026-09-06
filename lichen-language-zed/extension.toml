@@ -83,8 +83,9 @@ languages = ["Lichen"]
 # interpreted relative to the root of the grammar repository.
 #
 # `rev` must be a real Git SHA in `lichen-vm` — set it to the commit that
-# contains the `tree-sitter-lichen/` directory, then `tree-sitter generate` was
-# already run so `src/parser.c` is committed.  `0773b18` is the grammar update
+# contains the `tree-sitter-lichen/` directory.  Zed builds the grammar from the
+# committed `grammar.js` (it runs `tree-sitter generate` itself), so the generated
+# `src/parser.c` need not be committed.  `0773b18` is the grammar update
 # that added the `return` keyword (and regenerated `src/parser.c`); the earlier
 # `9b23892` rev predates `return`, which made the extension's `highlights.scm`
 # fail on load with `Query error ... Invalid node type "return"`.

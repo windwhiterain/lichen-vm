@@ -670,6 +670,7 @@ where
             ExprKind::RawIndex { container, index } => vec![container, index],
             ExprKind::Field { container, key } => vec![container, key],
             ExprKind::NamedField { container, .. } => vec![container],
+            ExprKind::RawNamedField { container, .. } => vec![container],
             ExprKind::Find { container, key } => vec![container, key],
             ExprKind::TypeArray {
                 element_type,
@@ -1027,6 +1028,21 @@ where
         self.any_items(marker).is_some_and(|items| items.len() == 2)
     }
 
+    /// Whether `ty` is a TypeStruct **kind** — `[TypeStruct{id, names}, K]` —
+    /// the `[marker, universe]` form a raw named read `X::a` requires.  This is
+    /// the container type's *own* shape (a struct type value's `ty`), not the
+    /// `[shape, kind]` pair of a struct instance's type (which `.a` reads,
+    /// [`Self::is_struct_type_any`]): the name→index table lies directly at
+    /// `ty[0][1]`.
+    fn is_type_struct_kind_any(&mut self, ty: AnyNodeId) -> bool {
+        let Some(items) = self.any_items(ty) else {
+            return false;
+        };
+        items.len() == 2
+            && self.is_universe_any(items[1].node)
+            && self.is_struct_marker_any(items[0].node)
+    }
+
     /// Whether `ty` is a concrete positional type expression — a tuple type
     /// (`[shape, [TypeTuple, K]]`) or a struct type (`[shape, [id,
     /// [TypeStruct, K]]]`, whose shape is the positional field-type list).
@@ -1166,6 +1182,9 @@ where
             ExprKind::RawIndex { container, index } => self.check_raw_index(e, container, index),
             ExprKind::Field { container, key } => self.check_field(e, container, key),
             ExprKind::NamedField { container, name } => self.check_named_field(e, container, name),
+            ExprKind::RawNamedField { container, name } => {
+                self.check_raw_named_field(e, container, name)
+            }
             ExprKind::Find { container, key } => self.check_table_find(e, container, key),
             ExprKind::Annotation { value, r#type, .. } => self.check_ann(e, value, r#type),
             ExprKind::TypeFunction {
@@ -1620,18 +1639,32 @@ where
     fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
         self.check_expr(left);
         self.check_expr(right);
-        self.check_unify(
-            self.ty[left].unwrap(),
-            self.int_type,
-            self.loc(left, 1),
-            DiagKind::BinOp,
-        );
-        self.check_unify(
-            self.ty[right].unwrap(),
-            self.int_type,
-            self.loc(right, 1),
-            DiagKind::BinOp,
-        );
+        match operator {
+            // `==` compares two *same-typed* values and yields 0/1: the Int
+            // equalities (`s.a == 1`, `x == y`) and the type-value equalities
+            // (`S::a == Int`) — the operands' types must be equal, so a type
+            // value (`: Type`) can be compared with a type constant.
+            BinOp::Eq => self.check_unify(
+                self.ty[left].unwrap(),
+                self.ty[right].unwrap(),
+                self.loc(left, 1),
+                DiagKind::BinOp,
+            ),
+            BinOp::Add | BinOp::Sub | BinOp::Leq => {
+                self.check_unify(
+                    self.ty[left].unwrap(),
+                    self.int_type,
+                    self.loc(left, 1),
+                    DiagKind::BinOp,
+                );
+                self.check_unify(
+                    self.ty[right].unwrap(),
+                    self.int_type,
+                    self.loc(right, 1),
+                    DiagKind::BinOp,
+                );
+            }
+        }
         let operator = match operator {
             BinOp::Add => P::Operator::from(TypeOperator::Add),
             BinOp::Sub => P::Operator::from(TypeOperator::Sub),
@@ -1846,8 +1879,100 @@ where
         pair
     }
 
+    /// A **raw** named component read `X::a` (the glued `::` postfix).  It is
+    /// *not* raw in the no-validation sense of [`Self::check_raw_index`]: the
+    /// container's **type** must be a TypeStruct **kind**
+    /// (`[TypeStruct{id, names}, K]` — the name→index table lies directly at
+    /// `container_ty[0][1]`), a check-time requirement (a concretely non-struct
+    /// container is a diagnostic; an unbound one stays lazy and resolves at the
+    /// apply).  This is the sibling of [`Self::check_named_field`]'s `.a`,
+    /// which instead requires the container's **kind** to be TypeStruct (its
+    /// table at `container_ty[1][0][1]`).
+    ///
+    /// The value is the structural `Index` over the container's value at the
+    /// name table's resolved index (`TableGet(names, name)`); the type is
+    /// element 1 of the read — so `struct<.a Int, .b string>::a` is
+    /// `Int : Type`, the field's *type* as a value (where `X<e>` reads a
+    /// positional component, `X::a` reads a named one).
+    fn check_raw_named_field(
+        &mut self,
+        e: ExprId,
+        container: ExprId,
+        name: &'static str,
+    ) -> NodeId {
+        self.check_expr(container);
+        let container_ty = self.ty[container].unwrap();
+        let concrete = self
+            .module
+            .node_value(AnyNodeId::Dynamic(container_ty))
+            .is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+                )
+            });
+        if concrete && !self.is_type_struct_kind_any(AnyNodeId::Dynamic(container_ty)) {
+            self.record_index_target_error(container_ty, container, 1);
+        }
+        let zero = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(0))),
+        );
+        let one = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::USize(1))),
+        );
+        // names = Index(Index(container_ty, 0), 1) — the struct marker's name
+        // table, read directly from the container's *type*.
+        let marker_ops = self.array_node(self.current_block, &[container_ty, zero]);
+        let marker_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(marker_ops),
+        );
+        let names_ops = self.array_node(self.current_block, &[marker_node, one]);
+        let names_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(names_ops),
+        );
+        // key = TableGet(names, name) — the field's positional index.
+        let name_node = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Str(name))),
+        );
+        let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
+        let key = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::TableGet),
+            Some(key_ops),
+        );
+        self.node_edges.insert(key, self.loc(e, 0));
+        // value = Index(container_value, key); type = Index(value, 1).
+        let container_value = self.value_of(container);
+        let value_ops = self.array_node(self.current_block, &[container_value, key]);
+        let value_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(value_ops),
+        );
+        let ty_ops = self.array_node(self.current_block, &[value_node, one]);
+        let ty_node = self.op_node(
+            self.current_block,
+            P::Operator::from(LowOperator::Index),
+            Some(ty_ops),
+        );
+        self.term[e] = Some(value_node);
+        self.val[e] = None;
+        self.ty[e] = Some(ty_node);
+        value_node
+    }
+
     /// A named field read `a.name`.  The field name is resolved against the
-    /// container type's struct name table (the `struct<a :: T, …>` names) to
+    /// container type's struct name table (the `struct<.a T, …>` names) to
     /// the positional index, then read like a positional slot read
     /// ([`Self::check_field`]): the value is the structural `Index` over the
     /// container's value, the type is the shape slot at the resolved index.
@@ -1949,7 +2074,7 @@ where
         pair
     }
 
-    /// The struct's name→index table (the `struct<a :: T, …>` names) from a
+    /// The struct's name→index table (the `struct<.a T, …>` names) from a
     /// struct type value, or `None` when it is an anonymous struct (no names).
     fn struct_names_any(&mut self, ty: AnyNodeId) -> Option<AnyHandle<[TableItem]>> {
         let items = self.any_items(ty)?;
@@ -2646,7 +2771,7 @@ where
     /// distinct ids) plus the optional name→index table.  It sits in the kind's
     /// marker slot, exactly like a function/tuple/array/table kind's marker, so
     /// a struct type's kind is a standard `[marker, K]` pair.  Fields are
-    /// positional unless a field carries a `name :: Ty` prefix, in which case
+    /// positional unless a field carries a `.name Ty` prefix, in which case
     /// `names` maps each field name to its positional index (the map an
     /// `a.name` read resolves through).
     fn check_type_struct(&mut self, e: ExprId) -> NodeId {
@@ -2755,7 +2880,7 @@ where
         pair
     }
 
-    /// A constant table literal `table { k1 :: v1, k2 :: v2, … }` — the
+    /// A constant table literal `table { k1 ==> v1, k2 ==> v2, … }` — the
     /// entries (interleaved key/value ids in the children arena) are checked
     /// like an array's elements, against a shared key-type cell and a shared
     /// value-type cell, and the value is built eagerly by the lowlevel

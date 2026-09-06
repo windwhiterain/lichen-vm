@@ -425,6 +425,33 @@ fn named_field_read_is_dot_postfix() {
 }
 
 #[test]
+fn raw_named_read_is_glued_double_colon_postfix() {
+    // `S::a` — a raw named component read.  The `::` is glued to the
+    // container (a `Glue` marker precedes it), so the spaced `S :: a` is *not*
+    // this postfix (the table separator that used to read `::` is now `==>`).
+    let Expr::RawNamedField {
+        container, name, ..
+    } = parse_ok("S::a")
+    else {
+        panic!("expected a raw named field read")
+    };
+    assert!(matches!(*container, Expr::Name(n, _, _) if n == "S"));
+    assert_eq!(name, "a");
+    // The glued `::` reads through a struct type value too.
+    let Expr::RawNamedField {
+        container, name, ..
+    } = parse_ok("struct<.a Int, .b string>::a")
+    else {
+        panic!("expected a raw named field read")
+    };
+    assert_eq!(name, "a");
+    assert!(matches!(*container, Expr::StructType(..)));
+    // The spaced `::` is not glued, so it is not a postfix — it is a parse
+    // error (a bare `::` infix has no meaning now that tables use `==>`).
+    let _ = parse_err("S :: a");
+}
+
+#[test]
 fn struct_instantiation_is_adjacent_parens() {
     // `C(f1, f2)` — the `(` directly after the callee (no space) is
     // struct instantiation, not a function apply.

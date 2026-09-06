@@ -14,3 +14,12 @@ node_modules/
 # tree-sitter scratch
 *.o
 *.wasm
+
+# tree-sitter generated files: these are build outputs of `grammar.js` (the source
+# of truth) and are regenerated in-tree by `bindings/rust/build.rs` (via the pinned
+# `tree-sitter-cli`) when they are missing or older than the grammar. Only
+# `grammar.js` + the `.scm` queries are committed.
+src/parser.c
+src/grammar.json
+src/node-types.json
+src/tree_sitter/

@@ -842,6 +842,62 @@ fn a_named_field_read_on_a_non_struct_is_rejected() {
 }
 
 #[test]
+fn a_raw_named_read_requires_a_type_struct_container() {
+    // `X::a` requires the container's *type* to be a TypeStruct kind, so a
+    // concretely non-struct container is a check-time error (unlike the truly
+    // raw `X<e>`, which never validates).
+    let d = diags("a = 5; a::x");
+    let check = d[0]
+        .check
+        .as_ref()
+        .expect("a raw named read on a non-struct is a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::IndexTarget);
+}
+
+#[test]
+fn a_raw_named_read_yields_the_field_type() {
+    // `S::a` reads field `a`'s *type* (as a value) from the struct type value
+    // `S`; `s.a` reads field `a`'s *value* from the struct instance `s`.
+    assert_eq!(
+        evaluate("S = struct<.a Int, .b string>; S::a"),
+        LangValue::TypeValue(TypeValue::TypeInt)
+    );
+    assert_eq!(
+        evaluate("S = struct<.a Int, .b string>; S::b"),
+        LangValue::TypeValue(TypeValue::TypeString)
+    );
+    assert_eq!(
+        usize_of(&evaluate(
+            "S = struct<.a Int, .b string>; s = S(.a 1, .b \"h\"); s.a"
+        )),
+        1
+    );
+    // The instance read is an Int, so `s.a == 1` is a valid int comparison.
+    assert_eq!(
+        usize_of(&evaluate(
+            "S = struct<.a Int, .b string>; s = S(.a 1, .b \"h\"); s.a == 1"
+        )),
+        1
+    );
+    // `==` is generalized: a `Type`-typed value compares against a type
+    // constant by value, so `S::a == Int` is 1 and `S::a == string` is 0.
+    assert_eq!(
+        usize_of(&evaluate("S = struct<.a Int, .b string>; S::a == Int")),
+        1
+    );
+    assert_eq!(
+        usize_of(&evaluate("S = struct<.a Int, .b string>; S::a == string")),
+        0
+    );
+    // Comparing values of different types is still rejected.
+    assert!(
+        diags("S = struct<.a Int, .b string>; S::a == 1")
+            .iter()
+            .any(|d| d.check.as_ref().is_some_and(|c| c.kind == DiagKind::BinOp))
+    );
+}
+
+#[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Two functions each contain their own struct occurrence — each body's
     // `Fresh` node is its own, so the nominal ids stay distinct across the

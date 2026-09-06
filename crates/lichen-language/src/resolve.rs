@@ -292,6 +292,7 @@ impl Resolver {
                 self.resolve_expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.resolve_expr(container),
+            Expr::RawNamedField { container, .. } => self.resolve_expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.resolve_expr(container);
                 self.resolve_expr(key);
@@ -582,6 +583,13 @@ impl KeyWriter {
                 container, name, ..
             } => {
                 self.u(24);
+                self.expr(container);
+                self.str(name);
+            }
+            Expr::RawNamedField {
+                container, name, ..
+            } => {
+                self.u(28);
                 self.expr(container);
                 self.str(name);
             }

@@ -1214,6 +1214,7 @@ fn classify_token_kind(
         // Operators: arrows, annotations, separators-of-fields, and math.
         TokenKind::Arrow
         | TokenKind::FatArrow
+        | TokenKind::TableArrow
         | TokenKind::Colon
         | TokenKind::DoubleColon
         | TokenKind::Hash
@@ -1359,6 +1360,7 @@ impl<'a> NameClass<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
+            Expr::RawNamedField { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -1603,6 +1605,7 @@ impl Walk {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
+            Expr::RawNamedField { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);
@@ -1897,6 +1900,7 @@ impl<'a> ScopeCapture<'a> {
                 self.expr(key);
             }
             Expr::NamedFieldRead { container, .. } => self.expr(container),
+            Expr::RawNamedField { container, .. } => self.expr(container),
             Expr::TableFind { container, key, .. } => {
                 self.expr(container);
                 self.expr(key);

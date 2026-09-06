@@ -67,11 +67,12 @@ block    := (bstmt sep)* ['return' expr]            -- statements + an explicit 
 bstmt    := ['pub'] stmt                            -- a block statement (`pub` marks one as a struct field)
 postfix  := glue ( '[' expr ']'                     -- index  e[i]
                  | '<' expr '>'                     -- raw index  X<e>  (no type validation)
+                 | '::' name                        -- raw named read  X::a  (TypeStruct type)
                  | '{' expr '}'                     -- table lookup  t{k}
                  | '(' fields ')' )                 -- field read  a(k)  or instantiation  A(…)
            | '.' name                               -- named field read  a.name
 element  := '~'n? expr                              -- shallow marker (inside array literals only)
-pair     := expr '::' expr                          -- table entry: deep-equal key :: value
+pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
            | expr                                   -- unnamed (positional) struct field
 fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read paren content
@@ -164,8 +165,8 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   branches extend maximally like a lambda body.  It desugars to the lazy index
   `[e2, e1][cond]` — the condition (`0`/`1`) selects the branch, and the
   untaken branch is never evaluated.
-- **Tables.**  `table { k1 :: v1, k2 :: v2, … }` is a constant table literal;
-  each entry is a deep-equal `key :: value` pair (the double colon is not part
+- **Tables.**  `table { k1 ==> v1, k2 ==> v2, … }` is a constant table literal;
+  each entry is a deep-equal `key ==> value` pair (the table arrow is not part
   of the expression grammar, so it unambiguously separates the pair).
   `table {}` is the empty table.  `t{k}` (a glued `{`) is a table lookup
   returning the entry whose stored key is deep-content-equal to `k`.
@@ -181,8 +182,8 @@ types.  `[1, 2]` is an array value and `(1, 2)` a tuple value; `array<Int, 3>`
 is the array type of length 3, `<Int, Type>` the tuple type, and
 `struct<Int, Type>` a nominal struct type.
 
-All four postfix delimiters — `(` `{` `<` `[` — are **postfix-only when glued**
-to the preceding token.  The lexer emits a zero-width `Glue` token immediately
+All five postfix delimiters — `(` `{` `<` `[` `::` — are **postfix-only when
+glued** to the preceding token.  The lexer emits a zero-width `Glue` token immediately
 before any of them that is adjacent (no trivia between) to the previous
 token; the parser reads `Glue` to decide postfix versus application.  A spaced
 delimiter is a fresh atom — an argument of an application:
@@ -201,6 +202,15 @@ delimiter is a fresh atom — an argument of an application:
   tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
   type is now **keyword-led** — `array<T, n>` (an `array` form in §2), never the
   postfix `<` form.
+- `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
+  whose type must itself be a TypeStruct kind (the name table lies there, at
+  `container_ty[0][1]`).  It reads the field's *type* as a value — `struct<.a
+  Int, .b string>::a` is `Int : Type` — and is check-time: a concretely
+  non-struct container is a diagnostic, an unbound one stays lazy.  It is the
+  named sibling of `X<e>`; `.` (`.a`) is the guarded field read over a struct
+  *instance*, whose kind (not type) must be TypeStruct.  A spaced `::` is not a
+  postfix (it would be a bare infix, now ungrammatical since the table
+  separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
   `(`) applies `f` to the tuple.  A glued `(` after a container is a field/
   slot read (`a(0)`).  A fresh atom may itself open with a glued delimiter,
@@ -341,6 +351,18 @@ span back to the original file.
   container stays lazy and resolves at the apply.  This is the syntax the
   array type used to occupy — the array type is now the keyword-led
   `array<T, n>`.
+- **The raw named read `X::a`.**  The glued `::` postfix reads field `a` from a
+  **TypeStruct value** — the container's *type* must itself be a TypeStruct
+  kind (`[TypeStruct{id, names}, K]`, the name→index table centred right there
+  at `container_ty[0][1]`) — a *check-time* requirement, not the no-validation
+  of `X<e>`.  It yields the field's *type* as a value, so
+  `struct<.a Int, .b string>::a` is `Int : Type`; its sibling `.a` reads a
+  field *value* from a struct instance (whose *kind* must be TypeStruct, table
+  at `container_ty[1][0][1]`).  Because `::` now means this read, the table
+  literal's key/value separator is spelled `==>`.  `==` is generalized to
+  compare any two same-typed values (an `Int` or a type value): `S::a == Int`
+  is `1`, `S::a == string` is `0`, while a cross-type comparison is a check-time
+  `BinOp` error.
 - **Nominal struct types.**  `struct<T1, ..., Tn>` is a *new type* with
   positional fields; a field may carry an optional name prefix (`.name`), so
   `struct<.x Int, .y Type>` names its fields.  The leading `.` unambiguously
@@ -424,6 +446,7 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `<T1, …, Tn>` | `TypeTuple(range)` |
 | `struct<T1, …, Tn>` / `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads like `a(k)` |
+| `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value |
 | `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
 | `[e1, …, en]` | `Array(range)` |
 | `array<T, n>` | `TypeArray { element_type, length }` |

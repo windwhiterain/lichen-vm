@@ -23,7 +23,7 @@ lichen-language-server  (LSP binary) ── cargo test (lib unit tests + stdio L
         ▼
 lichen-language       (frontend)      ── cargo test (the grammar/check/session suite)
         │
-        └── tree-sitter-lichen (grammar) ── cargo test (parse every sample, no ERROR nodes)
+        └── tree-sitter-lichen (grammar) ── opt-in test (parse every sample, no ERROR nodes)
 ```
 
 Each layer reuses the frontend from `lichen-language` (see
@@ -81,16 +81,22 @@ makes the grammar `Query::new` fail on load with `Invalid node type "return"`. T
 be reachable from the public `repository`; `d799ade` is the current pin, pushed to `origin/dev`
 and containing `tree-sitter-lichen/`.
 
-### 4. Grammar
+### 4. Grammar (run by the developer who changes `grammar.js`)
+
+`tree-sitter-lichen` is **not a workspace member** (Zed builds the grammar itself from the
+committed `grammar.js`), so it is tested against its own manifest, and the samples parse runs
+by default there. The generated `src/parser.c` is not committed; `build.rs` regenerates it when
+it is missing or stale, so this needs a `tree-sitter` CLI on PATH (`cargo install tree-sitter-cli`
+once):
 
 ```bash
-cargo test -p tree-sitter-lichen
+cargo test --manifest-path tree-sitter-lichen/Cargo.toml
 ```
 
-`tests/samples.rs` parses every `.lichen` sample under
-`examples/` and `tests/fixtures/readme`, plus a set of edge
-cases, and asserts the root node has no ERROR nodes. Green means the grammar accepts the
-whole corpus.
+`tests/samples.rs` parses every `.lichen` sample under `examples/` and
+`tests/fixtures/readme`, plus a set of edge cases, and asserts the root node has no ERROR
+nodes. It is deliberately opt-in, so a plain `cargo test --workspace` never builds the
+grammar and never needs the tree-sitter CLI — whoever changes `grammar.js` runs it locally.
 
 Zed reads queries from the extension's `languages/lichen/`, not the grammar repo, so the
 two copies of `highlights.scm`/`outline.scm` stay in sync by hand. A quick semantic check
@@ -181,7 +187,7 @@ release-lichen.yml`), which builds the supported host triples on GitHub's runner
 | WASM build | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | OK, 216,803 bytes |
 | `zed:api-version` | byte-scan of the built `.wasm` | Present, `00 00 00 07 00 00` (= 0.7.0) |
 | Manifests | `tomllib` parse of `extension.toml` + `config.toml` | OK; grammar `rev` exists |
-| Grammar | `cargo test -p tree-sitter-lichen` | 2 passed |
+| Grammar | `cargo test --manifest-path tree-sitter-lichen/Cargo.toml` | 2 passed |
 | LSP server | `cargo test -p lichen-language-server` | 27 passed (21 lib + 3 smoke + 3 stmt) |
 | Frontend | `cargo test -p lichen-language` | 319 passed |
 | LSP on `$PATH` | `Get-Command lichen-language-server` | `~/.cargo/bin/lichen-language-server.exe` |
@@ -247,16 +253,17 @@ Windows here):
 | `cargo fmt --check` | `cargo fmt -p lichen-language-zed -p lichen-language-server -- --check` | **clean** |
 | verify it compiles | `cargo check -p lichen-language-zed` | **ok** |
 | build the WASM + section | `cargo build -p lichen-language-zed --features zed --target wasm32-wasip2 --release` | **ok** (216 KB) |
-| run the crate's tests | `cargo test -p lichen-language -p lichen-language-server -p tree-sitter-lichen` | **348 passed** |
+| run the crate's tests | `cargo test -p lichen-language -p lichen-language-server` | **348 passed** |
 | load grammar + validate `.scm` | `tree-sitter query languages/lichen/{highlights,outline}.scm <sample>.lichen` | **ok** |
-| guard the grammar `rev` | `cargo test -p lichen-language-zed --test grammar_consistency` | **passes; fails if `rev` goes stale** |
+| guard the grammar `rev` (opt-in) | `cargo test -p lichen-language-zed --features grammar-consistency --test grammar_consistency` | **passes; fails if `rev` goes stale** |
 | `cargo clippy … -D warnings` | `cargo clippy -p lichen-language-zed --all-features -- -D warnings` | **fails at `lichen-highlevel` (not the plugin)** |
 
 The LSP stdio test and the grammar query check are the two that the manual "Install Dev
 Extension" flow never covers, and both run headless here.
 
 The **`grammar_consistency` guard** is the automation that stops the `rev` going stale again
-(the `return` bug was exactly this). It does two things, both locally and in CI:
+(the `return` bug was exactly this). It runs via the opt-in `grammar-consistency` feature and
+does two things:
 
 1. compiles every `.scm` in `languages/lichen/` + `tree-sitter-lichen/queries/` against the
    current grammar via `Query::new` — a query referencing a node the grammar lacks fails here;
@@ -264,9 +271,13 @@ The **`grammar_consistency` guard** is the automation that stops the `rev` going
    grammar or its queries changed after the pinned `rev`, the test fails and prints the `rev`
    to set.
 
-So the loop is: edit `tree-sitter-lichen` → `tree-sitter generate` → commit → **bump the
-`rev` in `extension.toml` to that commit** (the guard tells you the SHA) → reinstall. The guard
-needs a git checkout (it shells out to `git`), which holds for both CI and a normal dev clone.
+So the loop is: edit `tree-sitter-lichen/grammar.js` → regenerate (`tree-sitter generate`, or let
+`build.rs` do it on build) → test locally (`cargo test --manifest-path
+tree-sitter-lichen/Cargo.toml`) → **bump the `rev` in
+`extension.toml` to that commit** (the guard tells you the SHA) → reinstall. The guard is
+opt-in (`--features grammar-consistency`) and needs a git checkout (it shells out to `git`);
+the generated files are not committed, so the committed grammar surface is `grammar.js` + the
+`.scm` queries.
 
 **The strict `-D warnings` clippy check still fails further up the dependency tree** — a
 monorepo-wide lint backlog, not a problem in the plugin. Two of the original blockers are now

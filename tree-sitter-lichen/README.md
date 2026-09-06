@@ -17,11 +17,17 @@ bracket-matching, not semantic correctness.  It:
 
 ## Usage
 
-Regenerate the parser after editing `grammar.js`:
+The generated files (`src/parser.c`, `src/node-types.json`, `src/tree_sitter/`) are build
+outputs of `grammar.js` and are **not committed**. Regenerate them after editing `grammar.js`:
 
 ```sh
 tree-sitter generate
 ```
+
+`bindings/rust/build.rs` also regenerates them automatically when they are missing or older
+than `grammar.js`, so building the Rust crate works from a clean checkout. It needs a
+`tree-sitter` CLI on PATH (`cargo install tree-sitter-cli`, or your preferred method); it
+prints that if it is missing.
 
 Parse a file:
 
@@ -37,8 +43,8 @@ tree-sitter query queries/highlights.scm path/to/file.lichen
 
 ## Layout
 
-- `grammar.js` — the grammar definition (source of truth).
-- `src/parser.c`, `src/tree_sitter/`, `src/node-types.json` — generated output.
+- `grammar.js` — the grammar definition (source of truth, committed).
+- `src/parser.c`, `src/tree_sitter/`, `src/node-types.json` — generated output (gitignored; regenerated from `grammar.js` on demand).
 - `queries/` — canonical tree-sitter queries (highlighting etc.).
 - `bindings/rust/` — Rust crate (`tree-sitter-lichen`), compiled from `src/parser.c`.
 - `package.json`, `tree-sitter.json` — grammar package config.
