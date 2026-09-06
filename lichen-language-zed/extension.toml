@@ -85,7 +85,7 @@ languages = ["Lichen"]
 # fail on load with `Query error ... Invalid node type "return"`.
 #
 # The `repository` is the public HTTPS remote and `rev` is a commit pushed to
-# `origin/v1`, so a registry install (or any machine without a local clone) can
+# `origin/dev`, so a registry install (or any machine without a local clone) can
 # clone the repo and check out `rev`. For local development only, you may
 # temporarily point `repository` at your local checkout (`file:///…`) and keep the
 # same `rev`.
