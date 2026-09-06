@@ -217,7 +217,10 @@ mod zed_impl {
             RELEASE_REPO,
             GithubReleaseOptions {
                 require_assets: true,
-                pre_release: true,
+                // Toolchain releases are published as full/latest releases (see the
+                // release-lichen workflow's `prerelease` input); don't require a
+                // pre-release, or nothing is found once the newest release is real.
+                pre_release: false,
             },
         )
         .map_err(|e| format!("cannot query lichen-vm releases: {e}"))?;
