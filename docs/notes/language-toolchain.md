@@ -251,7 +251,7 @@ not pull the tokio/tower async stack.
   live both in `tree-sitter-lichen/queries/` and (mirrored) in the extension's
   `languages/lichen/`, because Zed reads queries from the extension directory.
 - **Grammar `rev`:** pinned to `d799ade` (a commit containing `tree-sitter-lichen/`
-  and pushed to `origin/v1`), with `[grammars.lichen]` `repository` pointing at the
+  and pushed to `origin/dev`), with `[grammars.lichen]` `repository` pointing at the
   public HTTPS remote (`https://github.com/windwhiterain/lichen-vm`). The pinned
   `rev` must stay reachable from that remote and in sync with the grammar/query
   paths (the `grammar_consistency` test guards this) so a registry install can clone

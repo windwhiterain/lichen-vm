@@ -185,8 +185,8 @@ say "leg 3: native plugin (lichen-std-native) via a local git core_repo"
 # A local clone of this repo is the "local git URL"; the generated compositor
 # emits a [patch] redirecting lichen-std-native's hardcoded GitHub core deps to
 # this local source, so the composed compiler builds offline.  It clones the
-# worktree's **current HEAD** (the feature branch, which carries the composed-
-# compiler native-package fix) — not `v1`, which predates it.
+# worktree's **current HEAD** (the checked-out branch, which carries the
+# composed-compiler native-package fix) so the plugin core resolves from here.
 if [ ! -d "$REPO_CLONE/.git" ]; then
   git clone --quiet "$(file_url "$ROOT")" "$REPO_CLONE" \
     || fail "clone repo as the local git URL"
