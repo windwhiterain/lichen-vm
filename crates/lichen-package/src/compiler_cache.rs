@@ -36,6 +36,10 @@ pub fn root() -> PathBuf {
 /// sets, so a fixed name is unambiguous in each slot).
 pub const COMPILER_NAME: &str = "project";
 
+/// The language-server name a cached build is produced under (the `name` baked
+/// into the `lichen-language-server-<name>` binary).
+pub const LSP_NAME: &str = "project";
+
 /// The cache key for a plugin set: a stable hash of the lichen-library version
 /// and every plugin's (name, resolved version), sorted so the same set in any
 /// order keys identically.  Each plugin must already be fetched so its source
@@ -74,6 +78,15 @@ fn resolve(key: &str) -> Option<PathBuf> {
     if bin.is_file() { Some(bin) } else { None }
 }
 
+/// The path of a cached language-server binary for `key`, when it has been built.
+fn resolve_lsp(key: &str) -> Option<PathBuf> {
+    let bin = dir(key)
+        .join("target")
+        .join("release")
+        .join(plugin::server_bin_name(LSP_NAME));
+    if bin.is_file() { Some(bin) } else { None }
+}
+
 /// Ensure a compiler built over `plugins` (with `leaves`) is cached and return
 /// its binary path.  On a cache hit it is reused; on a miss it is built (a
 /// `cargo build` of a generated crate) into the lichen-home cache slot.
@@ -88,5 +101,25 @@ pub fn ensure(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<Pa
     }
     let dir = dir(&key);
     let build = plugin::rebuild(&dir, COMPILER_NAME, core_repo, plugins, leaves)?;
+    Ok(build.bin)
+}
+
+/// Ensure a language server composed over `plugins` (with `leaves`) is cached
+/// and return its binary path.  On a cache hit it is reused; on a miss it is
+/// built (a `cargo build` of a generated bin-only crate) into the same
+/// lichen-home cache slot as the compiler.  Only a **non-empty** plugin set
+/// needs a composed server; the empty set resolves to the shipping
+/// `lichen-language-server` (see [`crate::toolchain::resolve_lsp_for`]).
+///
+/// Each plugin must already be fetched (its source-cache `HEAD` is read for
+/// the cache key).  `core_repo` is the repository (or local checkout path) the
+/// core crates and toolchain come from.
+pub fn ensure_lsp(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<PathBuf, String> {
+    let key = key(plugins).map_err(|e| format!("cannot key the LSP cache: {e}"))?;
+    if let Some(bin) = resolve_lsp(&key) {
+        return Ok(bin);
+    }
+    let dir = dir(&key);
+    let build = plugin::rebuild_lsp(&dir, LSP_NAME, core_repo, plugins, leaves)?;
     Ok(build.bin)
 }

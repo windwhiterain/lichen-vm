@@ -28,6 +28,13 @@ repository = "https://github.com/windwhiterain/lichen-vm"
 # at `$LICHEN_HOME/tools/liche`; how it was installed does not matter. Run `liche
 # update` to move the package manager (and the toolchain it installs) to a later
 # commit.
+#
+# The extension passes the worktree root as `--project <root>` so that a project
+# importing a *native plugin* composes its own language server over that plugin
+# set (`liche path language-server --project <root>` builds/caches the composed
+# server into the plugin-set LSP slot, understanding the plugin's leaves for
+# diagnostics / hover / go-to-definition). A project without native plugins uses
+# the shipping server.
 [language_servers.lichen-language-server]
 name = "Lichen Language Server"
 languages = ["Lichen"]
