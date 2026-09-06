@@ -7,7 +7,7 @@
 # `bin/`, forks a fresh `$LICHEN_HOME` so it never touches `~/.lichen`, and runs
 # the package manager end-to-end:
 #
-#   1. shipping run/build + the device-cache (artifact + registry + cache gc)
+#   1. shipping run/build + the device-cache (artifact + registry + clean)
 #   2. a real `.lichen` git dependency (a local `file://` fixture repo),
 #      fetched and resolved offline
 #   3. a native plugin (`lichen-std-native`) composed into a compiler, built
@@ -147,8 +147,10 @@ expect_grep "$out" "type: Int" "build add -> type: Int"
 [ -f "$LICHEN_HOME/registry" ] || fail "the device registry was not written"
 pass "artifact .module + registry exist under \$LICHEN_HOME"
 
-out="$(lichen cache gc)" || fail "lichen cache gc"
-expect_grep "$out" "reclaimed 0" "cache gc -> reclaimed 0"
+# `clean` reclaims only the per-plugin-set compiler cache slots
+# (`$LICHEN_HOME/compilers/<key>`); a shipping-only home has none, so it says so.
+out="$(lichen clean)" || fail "lichen clean"
+expect_grep "$out" "no plugin compiler caches" "clean (no plugin slots) -> no plugin compiler caches"
 
 # ---------------------------------------------------------------------------
 # 2. a real .lichen git dependency (local file:// fixture, offline)

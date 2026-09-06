@@ -27,7 +27,8 @@ There is **no project manifest**: dependencies are declared per file.
 - `lichen` (crates/lichen-package) — the project workflow.  Owns the
   **preprocessor import path** (which dependency alias resolves to which file)
   and drives the compiler binary (or a plugin-built one) for a project.  It
-  depends only on `lichen-preprocess`, not on the language/VM stack.
+  depends only on `lichen-preprocess` (+ the type-independent
+  `lichen-registry`), not on the language/VM stack.
 
 ## Declaring dependencies
 
@@ -113,12 +114,15 @@ rebuild-plugin [<file|dir>]` is the explicit form of the same build.
 
 ## CLI
 
-`lichen fetch/run/build/clean/install/rebuild-plugin/cache`, plus `--version` /
-`--help`.  `run`, `build`, `clean`, and `cache gc` fetch the file's
-`depend`s/`plug`s into the source cache, then **spawn the compiler binary**
-(`run`/`build` to compile & run the program — the plugin-built compiler from the
-cache when the program imports a native plugin, else the shipped
-`lichen-compiler`; `clean`/`cache gc` to reclaim device-cache artifacts) — the
-package manager never compiles or GCs in-process, and never links the
-language/VM stack.  A directory target processes every `.lichen` file in it,
-each with its own dependencies.
+The `lichen` command surface is declared with **clap** (derive) in
+`crates/lichen-package/src/main.rs`: `fetch/run/build/clean/install/update/path/
+rebuild-plugin`, plus `--version` / `--help`.  `run` and `build` fetch the
+file's `depend`s/`plug`s into the source cache, then **spawn the compiler
+binary** (the plugin-built compiler from the cache when the program imports a
+native plugin, else the shipped `lichen-compiler`) — the package manager never
+compiles in-process.  `clean` is the exception: it opens each plugin-composed
+compiler cache slot's registry (`<lichendir>/compilers/<key>`, a
+`lichen_registry::DeviceRegistry`) and calls `gc()` directly, so no compiler
+subprocess and no language/VM dependency — the registry layer is
+type-independent, in `crates/lichen-registry`.  A directory target processes
+every `.lichen` file in it, each with its own dependencies.

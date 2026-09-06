@@ -436,7 +436,7 @@ where
         }
         let device = self.device.as_ref().expect("the device store");
         let Ok((module, export_index)) =
-            device.load_artifact::<P, P::Codec>(file_id, key, hash, &modules)
+            crate::persist::load_artifact::<P, P::Codec>(device, file_id, key, hash, &modules)
         else {
             return Ok(None);
         };

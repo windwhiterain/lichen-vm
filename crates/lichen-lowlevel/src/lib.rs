@@ -432,26 +432,11 @@ new_key_type! {pub struct NodeId;}
 /// stores them verbatim and resolves the key through the shared registry —
 /// no per-importer retarget, no re-based copies, and the same payload is
 /// shared by every importer.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct ModuleKey(u64);
-
-impl ModuleKey {
-    /// The key's compact index value.
-    pub const fn as_raw(self) -> u64 {
-        self.0
-    }
-    /// Build a key from its compact index value — the device registry's
-    /// allocation unit.
-    pub const fn from_raw(index: u64) -> Self {
-        ModuleKey(index)
-    }
-}
-
-impl std::fmt::Debug for ModuleKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ModuleKey({})", self.0)
-    }
-}
+/// The device key naming a compiled module — defined in the `lichen-registry`
+/// crate (the type-independent persistence layer) and re-exported here so the
+/// lowlevel's registry and serialization can name modules without coupling to
+/// the language stack.
+pub use lichen_registry::ModuleKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaticNodeId {
     /// The target module — [`StaticModule::key`].  Refs are absolute from

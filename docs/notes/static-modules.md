@@ -2,8 +2,10 @@
 
 > Status: current
 > Points at: `crates/lichen-lowlevel/src/static_module.rs` and `lib.rs` (`Registry`,
-> `StaticModule`, `ModuleKey`, `AnyNodeId`), plus
-> `crates/lichen-language/src/persist.rs` (the persistent device store).
+> `StaticModule`, `AnyNodeId`), `crates/lichen-registry` (`ModuleKey`, the byte
+> codec, the disk `DeviceRegistry` — the type-independent device layer), and
+> `crates/lichen-language/src/persist.rs` (the vocabulary artifact codec that
+> drives the store).
 
 A **static module** is a compiled, frozen program fragment that importers use *in
 place* — its values are read, never copied. This is the mechanism the package store
@@ -44,7 +46,8 @@ after reclamation under a different `hash` is recognized as a new artifact.
 ## Persistent device store
 
 Under `~/.lichen` (`$LICHEN_HOME` overrides; `crate::persist::lichendir()`), the
-**device registry** (`persist::DeviceRegistry`) owns the keys and the **file-ID
+**device registry** (`DeviceRegistry`, defined in `crates/lichen-registry`,
+re-exported as `persist::DeviceRegistry`) owns the keys and the **file-ID
 keyed** artifact files (`artifacts/<sha256(file_id)>.module`). A **file ID** is a
 compiled unit's identity: an on-disk `.lichen` file's canonical path, or
 `virtual:<name>` for an embedded source. Each file keeps **one** cache slot —

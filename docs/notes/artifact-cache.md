@@ -2,9 +2,12 @@
 
 > Status: implemented (landed) — this note records *what exists* and what the
 > toolchain reuses; it is not a proposal to build.
-> Points at: `crates/lichen-language/src/persist.rs` (the store + serialization),
-> `crates/lichen-language/src/package.rs` (the package store that drives it),
-> `crates/lichen-lowlevel/src/static_module.rs` (the frozen artifact).
+> Points at: `crates/lichen-registry` (the type-independent device layer: the
+> byte reader/writer, `ModuleKey`, the disk `DeviceRegistry`, the hashes),
+> `crates/lichen-language/src/persist.rs` (the vocabulary artifact codec +
+> `load_artifact`, which re-exports the registry layer for the old `persist::*`
+> paths), `crates/lichen-language/src/package.rs` (the package store that drives
+> it), `crates/lichen-lowlevel/src/static_module.rs` (the frozen artifact).
 
 The request "**no matter how many processes, serialize artifacts, manage their
 dirtiness carefully, and share them as much as possible**" is answered by code
@@ -35,7 +38,7 @@ and it is **yes: it already does.**
 
 ## Dirtiness = a transitive, deterministic content hash
 
-`persist.rs`:
+`lichen-registry::device` (re-exported as `persist::artifact_hash`):
 
 ```rust
 pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash
@@ -59,7 +62,8 @@ actually changed is recompiled."
 
 ## Cross-process sharing
 
-`DeviceRegistry` (`persist.rs`) is the disk store under the CLI's `~/.lichen`
+`DeviceRegistry` (defined in `crates/lichen-registry/src/device.rs`, re-exported
+as `persist::DeviceRegistry`) is the disk store under the CLI's `~/.lichen`
 (`persist::lichendir`, or `$LICHEN_HOME`):
 
 - **keys are stable across processes** — `ModuleKey` is a compact index the
@@ -77,6 +81,20 @@ actually changed is recompiled."
 - **bounding** — `gc` is a *clean* that removes every artifact whose file ID is
   not a `.lichen` path and not a `virtual:` path, and `remove(file_id)` drops one
   file's slot, each reclaiming keys and deleting artifact files;
+
+**The store is split in two.**  Everything above that never names a program
+value or operator — the byte reader/writer, `ModuleKey`, the `DeviceRegistry`
+(key allocation, the file-ID → entry table, the `mkdir` lock, the registry file
+format) and the hashes — lives in the leaf [`crates/lichen-registry`](../../crates/lichen-registry),
+so a consumer can open a cache and reclaim artifacts without linking the
+language/VM stack.  `crates/lichen-language/src/persist.rs` keeps only the
+vocabulary half (`ArtifactCodec`, the artifact container serialization,
+`load_artifact`) and re-exports the registry items so the old
+`persist::{DeviceRegistry, ModuleKey, artifact_hash, …}` paths keep resolving.
+The package manager sits on that seam: `lichen clean` opens each plugin-composed
+compiler slot's registry (`<lichendir>/compilers/<key>`) and calls `gc()`
+itself, while `lichen-compiler cache gc` reclaims a compiler's own cache root
+(see [package-manager](package-manager.md)).
 
 `PackageStore` (`package.rs`), with `with_cache_dir(dir)`, drives it:
 

@@ -31,6 +31,8 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
+
 use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_utils::extend::AsEnum;
@@ -53,6 +55,48 @@ use crate::program::GcdOp;
 /// `main`).  A shipping compiler registers nothing (`&[]`), so its store is
 /// exactly as before — the plugin-built path is opt-in.
 pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
+
+/// The compiler CLI surface: a single positional program path (the default
+/// `run` action) or an explicit subcommand (`run`, `build`, `cache gc`).
+///
+/// The command name is overridden at runtime from `argv[0]` (see
+/// [`main_with_native_packages`]) so a plugin-built `lichen-compiler-<name>`
+/// reports its own name in usage/help.
+#[derive(Parser)]
+#[command(name = "lichen-compiler", version)]
+struct Cli {
+    /// A program to run when no subcommand is given: a `.lichen` file, or a
+    /// directory scanned for `.lichen` files.
+    #[arg(value_name = "program")]
+    program: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Compile & run a program (a file, or every `.lichen` file in a directory).
+    Run {
+        /// The program to compile & run.
+        path: PathBuf,
+    },
+    /// Compile a program and print its exported type.
+    Build {
+        /// The program file to build.
+        path: PathBuf,
+    },
+    /// Manage the device/artifact cache.
+    Cache {
+        #[command(subcommand)]
+        command: CacheCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// Reclaim every artifact no live source chain references.
+    Gc,
+}
 
 /// Run the compiler CLI with the process arguments, using the lichen home as
 /// the device/artifact cache root (the shipping compiler's cache).  The
@@ -113,66 +157,40 @@ where
         + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
-    let mut args = std::env::args();
-    let bin = args
-        .next()
-        .map(|p| {
-            PathBuf::from(&p)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "lichen-compiler".to_string())
-        })
-        .unwrap_or_else(|| "lichen-compiler".to_string());
-    let usage = format!("usage: {bin} [run|build|cache gc] <program.lichen | directory>");
-
-    let Some(arg) = args.next() else {
-        eprintln!("{usage}");
-        return ExitCode::FAILURE;
+    // The program name is read from argv[0] so a plugin-built
+    // `lichen-compiler-<name>` reports its own name in usage/help.  clap's
+    // `Command::name` takes a `'static` string (clap's `Str`), so the name is
+    // leaked once — harmless for a short-lived CLI process.
+    let bin: &'static str = Box::leak(
+        std::env::args()
+            .next()
+            .map(|p| {
+                PathBuf::from(&p)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "lichen-compiler".to_string())
+            })
+            .unwrap_or_else(|| "lichen-compiler".to_string())
+            .into_boxed_str(),
+    );
+    let matches = Cli::command().name(bin).get_matches();
+    let cli = match Cli::from_arg_matches(&matches) {
+        Ok(cli) => cli,
+        Err(e) => e.exit(),
     };
-    match arg.as_str() {
-        "-h" | "--help" => {
-            println!("{usage}");
-            ExitCode::SUCCESS
-        }
-        "-V" | "--version" => {
-            println!("lichen-compiler {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        "cache" => {
-            if args.next().as_deref() != Some("gc") || args.next().is_some() {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
+    match cli.command {
+        Some(Command::Run { path }) => run_path::<P>(cache_root, &path, native),
+        Some(Command::Build { path }) => build_file::<P>(cache_root, &path, native),
+        Some(Command::Cache {
+            command: CacheCommand::Gc,
+        }) => cache_gc::<P>(cache_root),
+        None => {
+            if let Some(program) = cli.program {
+                run_path::<P>(cache_root, &program, native)
+            } else {
+                eprintln!("{}", Cli::command().name(bin).render_help());
+                ExitCode::FAILURE
             }
-            cache_gc::<P>(cache_root)
-        }
-        "run" => {
-            let Some(path) = args.next() else {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
-            };
-            if args.next().is_some() {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
-            }
-            run_path::<P>(cache_root, &PathBuf::from(path), native)
-        }
-        "build" => {
-            let Some(path) = args.next() else {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
-            };
-            if args.next().is_some() {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
-            }
-            build_file::<P>(cache_root, &PathBuf::from(path), native)
-        }
-        path_arg => {
-            if args.next().is_some() {
-                eprintln!("{usage}");
-                return ExitCode::FAILURE;
-            }
-            run_path::<P>(cache_root, &PathBuf::from(path_arg), native)
         }
     }
 }

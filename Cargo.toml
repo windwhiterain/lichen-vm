@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/lichen-span",
     "crates/lichen-utils",
+    "crates/lichen-registry",
     "crates/lichen-language-lex",
     "crates/lichen-language-parser",
     "crates/lichen-preprocess",
