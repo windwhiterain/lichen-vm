@@ -5,6 +5,13 @@ edition = "2024"
 description = "A standard-library native plugin for lichen: a Rust-backed `SortOp` that sorts a lichen `[usize]` array."
 
 [dependencies]
-lichen-highlevel = { path = "../crates/lichen-highlevel" }
-lichen-lowlevel = { path = "../crates/lichen-lowlevel" }
-lichen-utils = { path = "../crates/lichen-utils" }
+# These are **git** deps (to the same lichen-vm repo), not `path` deps to the
+# workspace members, so a *compositor* — an externally-generated plugin compiler
+# crate that depends on this plugin via git — resolves the whole core subtree
+# from git rather than through path deps into another workspace (which cargo
+# cannot fresh-resolve; see `liche-package/src/plugin.rs`).  The crate is still a
+# workspace *member*: the repo-root `[workspace]` patches these git deps back to
+# the local path members for the monorepo's own build.
+lichen-highlevel = { git = "https://github.com/windwhiterain/lichen-vm", package = "lichen-highlevel" }
+lichen-lowlevel = { git = "https://github.com/windwhiterain/lichen-vm", package = "lichen-lowlevel" }
+lichen-utils = { git = "https://github.com/windwhiterain/lichen-vm", package = "lichen-utils" }

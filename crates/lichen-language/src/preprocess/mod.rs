@@ -9,23 +9,22 @@
 //! language crate's [`StaticNodeId`].
 //!
 //! The two orchestrators [`preprocess`] and [`stage_depends`] keep their
-//! original signatures — generic over the program's value/operator vocabularies
-//! `V`/`O` and its artifact codec `C` — so the language crate's `PackageStore`,
-//! CLI, and run paths call them exactly as before.  Internally they delegate to
-//! [`lichen_preprocess`], which only knows the [`lichen_preprocess::ImportResolver`]
-//! trait; the language crate's [`PackageStore`] implements that trait.
+//! original signatures — generic over a single program type `P` (the
+//! associated-type collector, whose `P::Codec` is the artifact codec) — so the
+//! language crate's `PackageStore`, CLI, and run paths call them exactly as
+//! before.  Internally they delegate to [`lichen_preprocess`], which only knows
+//! the [`lichen_preprocess::ImportResolver`] trait; the language crate's
+//! [`PackageStore`] implements that trait.
 
 use std::path::Path;
 
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::program::{TypeOperator, ValueType};
-use lichen_lowlevel::{LowOperator, OperatorExt, StaticNodeId};
-use lichen_utils::extend::AsEnum;
+use lichen_lowlevel::StaticNodeId;
 
-use crate::CompiledProgram;
+use crate::LangProgramShape;
 use crate::diag::Diag;
 use crate::package::PackageStore;
-use crate::persist::ArtifactCodec;
 use crate::program::GcdOp;
 
 /// The block scanner / directive helpers and the preprocessor's data types,
@@ -52,24 +51,15 @@ pub type Preprocessed<'a> = lichen_preprocess::Preprocessed<'a, StaticNodeId>;
 /// [`stage_depends`]); everything after is the isolated preprocessor's pure
 /// block handling.  The preprocessor only knows [`ImportResolver`]; the
 /// [`PackageStore`] implements it.
-pub fn preprocess<'a, V, O, C>(
+pub fn preprocess<'a, P>(
     raw: &'a str,
     base: Option<&Path>,
-    store: &mut PackageStore<V, O, C>,
-) -> (Preprocessed<'a>, Vec<Diag<CompiledProgram<V, O>>>)
+    store: &mut PackageStore<P>,
+) -> (Preprocessed<'a>, Vec<Diag<P>>)
 where
-    V: ValueType + From<ComputeValue> + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P: LangProgramShape,
+    P::Value: ValueType + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     let (pre, diags) = lichen_preprocess::preprocess::<StaticNodeId, _>(raw, base, store);
     (pre, diags.into_iter().map(Diag::from_preprocess).collect())
@@ -79,23 +69,11 @@ where
 /// `store` as vendored aliases, resolving each against the lichen-home source
 /// cache.  The compiler never fetches git sources itself — see
 /// [`lichen_preprocess::stage_depends`].
-pub fn stage_depends<V, O, C>(
-    store: &mut PackageStore<V, O, C>,
-    source: &str,
-) -> Vec<Diag<CompiledProgram<V, O>>>
+pub fn stage_depends<P>(store: &mut PackageStore<P>, source: &str) -> Vec<Diag<P>>
 where
-    V: ValueType + From<ComputeValue> + 'static,
-    O: OperatorExt<CompiledProgram<V, O>>
-        + AsEnum<LowOperator>
-        + From<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq
-        + From<GcdOp>
-        + From<TypeOperator>
-        + From<ComputeOperator>
-        + 'static,
-    C: ArtifactCodec<CompiledProgram<V, O>> + Default,
+    P: LangProgramShape,
+    P::Value: ValueType + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
 {
     lichen_preprocess::stage_depends::<StaticNodeId, _>(store, source)
         .into_iter()

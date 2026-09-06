@@ -126,6 +126,12 @@ for settled per-file artifacts, and [`BufferSession`](incremental-parse-compile.
 for the live buffer**, rather than building a second cache. See
 [`artifact-cache.md`](artifact-cache.md) for the whole mechanism.
 
+The store is **scoped per plugin set**: a plugin-built compiler uses its own
+`<lichendir>/compilers/<key>/` as the artifact-cache root (via
+`liche_language::cli::main_with_cache_dir`), so its compile artifacts never
+collide with (or reuse) another vocabulary's — only the shipping compiler uses
+the base `lichendir()` root.
+
 ## The artifact contract (what the tools import)
 
 Concretely, the shared artifacts — all re-exported from `crates/lichen-language`:
@@ -176,7 +182,12 @@ frontend stays a single source of truth for the *syntax*; resolution for
     `completion_at`, `lsp_diagnostics`, and `semantic_tokens`/`semantic_tokens_lsp`
     on top of it.  `completion_at` offers the names in scope at the cursor (the
     same scope set that an unresolved name's "did you mean" clause uses), and the
-    `resolve`-layer diagnostics name the closest in-scope candidates too.
+    `resolve`-layer diagnostics name the closest in-scope candidates too.  After a
+    `.` it offers the container's **field** names instead: an imported module's
+    exported fields (read from its `Static` type) or a local struct binding's
+    fields (read from its checked struct type).  The *field-access* (named-field
+    miss) diagnostic appends the same did-you-mean clause against the struct's
+    actual fields, so the error and the completion share one candidate set.
 - `src/bin/lichen-language-server.rs` — a [`tower_lsp::LanguageServer`] (stdlib
   JSON-RPC transport via `LspService`/`Server`): `initialize` (capabilities:
   full text-sync, hover, definition, `completionProvider`,
@@ -261,8 +272,19 @@ not pull the tokio/tower async stack.
   ```text
   liche install language-server   # install the prebuilt server into Lichen Home
   liche path language-server      # print its path (installing if absent)
+  liche path language-server --project <dir>  # compose+print a server over <dir>'s plugins
   liche update                    # update the package manager to the latest commit
   ```
+
+- **Per-project plugin-set LSP.** A project that imports a *native plugin* gets a
+  `liche-language-server` built over that plugin set (`liche path language-server
+  --project <dir>`, which the Zed extension calls with `--project <worktree
+  root>`), so the server understands the plugin's value/operator leaves for
+  diagnostics / hover / go-to-definition. The composed server is cached
+  plugin-set-keyed under `$LICHEN_HOME/compilers/<key>/` (mirroring the compiler
+  cache); a project with no plugins falls back to the shipping server. The
+  tooling is generic over one program type `P` (see `lichen_language::LangProgramShape`),
+  so the same `Doc`/server services the shipping and the composed vocabulary.
 
   Without `liche` (or the server) Zed reports "`lichen-language-server` not found
   on `$PATH`" when a `.lichen` buffer is opened.

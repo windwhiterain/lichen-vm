@@ -19,6 +19,12 @@
 //! package manager's own commit, and prints the binary path. The package manager
 //! is located on `$PATH` or at `$LICHEN_HOME/tools/liche`; how it was installed
 //! does not matter (see `docs/notes/language-toolchain.md`).
+//!
+//! When the worktree root is available, the extension passes it as
+//! `--project <root>` so that a project importing a **native plugin** composes
+//! its own language server over that plugin set (`liche path language-server
+//! --project <root>` builds/caches the composed server into the plugin-set LSP
+//! slot, understanding the plugin's leaves for diagnostics / hover / definition).
 
 pub const LANGUAGE_NAME: &str = "Lichen";
 pub const LANGUAGE_ID: &str = "lichen";
@@ -119,12 +125,23 @@ mod zed_impl {
 
     /// Ensure the server is installed (asking the `liche` package manager, which
     /// installs the prebuilt compiler + language server into Lichen Home at its
-    /// own commit) and return its absolute path.
+    /// own commit) and return its absolute path.  When the worktree root is
+    /// available it is passed as `--project <root>` so a project with native
+    /// plugins composes its own server; when no root is available the shipping
+    /// server is resolved.
     fn resolve_via_liche(worktree: &Worktree) -> Result<String, String> {
         let liche = liche_binary(worktree)?;
         let mut command = Command::new(liche.as_str())
             .arg("path")
             .arg("language-server");
+        // A project with native plugins composes its own server over the plugin
+        // set (`--project <root>`); the fallback (no `--project`) resolves the
+        // shipping server.  `root_path()` always returns a string, so an empty
+        // root is treated as "unavailable" and skipped.
+        let root = worktree.root_path();
+        if !root.is_empty() {
+            command = command.arg("--project").arg(root);
+        }
         let out = command
             .output()
             .map_err(|e| format!("cannot run `{liche} path language-server`: {e}"))?;

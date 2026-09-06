@@ -177,6 +177,13 @@ where
         self.show_struct_id = true;
     }
 
+    /// The module this printer renders from — for a renderer that needs to walk
+    /// the module alongside a rendered type (e.g. a [`DiagKind::NamedField`]
+    /// diagnostic's did-you-mean clause, which enumerates the struct's fields).
+    pub fn module(&self) -> &'a Module<P> {
+        self.module
+    }
+
     /// Render a type node; an unbound cell renders as its class name.
     pub fn node(&mut self, node: NodeId) -> String {
         if self.path.contains(&node) {
@@ -1075,6 +1082,47 @@ where
         }
     }
     out
+}
+
+/// The named-field list of a struct **type term** (`[shape, kind]`), read from
+/// the type's kind marker `[id, names]`.  `None` when `node` is not a concrete
+/// struct type (an unbound cell, a tuple, an array, a function).  A `None`
+/// entry is a positional (unnamed) field; a `Some(name)` entry is a
+/// `name :: Ty` field.
+///
+/// This is the read-only counterpart to the checker's `struct_names_any`, for a
+/// renderer that only has the module (e.g. the did-you-mean clause on a
+/// [`DiagKind::NamedField`] diagnostic, which needs the struct's field names).
+pub fn struct_type_named_fields<P: HighProgram>(
+    module: &Module<P>,
+    node: NodeId,
+) -> Option<Vec<Option<&'static str>>>
+where
+    P::Value: ValueType,
+{
+    // The type term `[shape, kind]`.
+    let ty = module.node_value(AnyNodeId::Dynamic(node))?;
+    let LowValue::Array(ty_arr) = ty.as_enum()? else {
+        return None;
+    };
+    let tys = ty_arr.items();
+    if tys.len() != 2 {
+        return None;
+    }
+    // The shape (the positional field-type list) gives the field count.
+    let LowValue::Array(shape) = module.node_value(tys[0].node)?.as_enum()? else {
+        return None;
+    };
+    let field_count = shape.items().len();
+    // The kind `[marker, K]`: only a struct kind carries a name table.
+    let LowValue::Array(kind) = module.node_value(tys[1].node)?.as_enum()? else {
+        return None;
+    };
+    let kind_items = kind.items();
+    if !kind_is_struct(module, kind_items) {
+        return None;
+    }
+    Some(struct_field_names(module, kind_items, field_count))
 }
 
 /// The nominal id of a struct type, read from its kind's marker `[id, names]`

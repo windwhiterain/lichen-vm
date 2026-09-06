@@ -17,8 +17,11 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
+use lichen_highlevel::program::{TypeOperator, ValueType};
+use lichen_language::LangProgramShape;
 use lichen_language::ast::{Binding, Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
@@ -28,10 +31,11 @@ use lichen_language::package::PackageStore;
 use lichen_language::parse;
 use lichen_language::preprocess;
 use lichen_language::preprocess::ResolvedImport;
-use lichen_language::program::{LangOperator, LangValue};
-use lichen_language::render::{print_type_lang, print_value_lang};
+use lichen_language::program::GcdOp;
+use lichen_language::render::{print_type_lang, print_value_lang, struct_type_named_fields};
 use lichen_language::{build_report, frontend_at};
 use lichen_lowlevel::{AnyNodeId, LowValue};
+use lichen_utils::extend::AsEnum;
 
 use crate::lsp::{
     self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData,
@@ -98,8 +102,10 @@ pub struct Reference {
     pub definition: Option<usize>,
 }
 
-/// A parsed + checked source, ready for editor lookups.
-pub struct Doc {
+/// A parsed + checked source, ready for editor lookups.  Generic over the
+/// compiled program `P` (the associated-type collector), so the same editor
+/// view serves the shipping vocabulary and a plugin-composed one.
+pub struct Doc<P: LangProgramShape> {
     /// The full source text.
     pub source: String,
     /// Byte offset at which each line begins (line 1 = 0).
@@ -113,7 +119,7 @@ pub struct Doc {
     /// The parsed AST — the frontend's parser output.
     pub program: Program,
     /// The full diagnostic set (lex + parse + resolve + check).
-    pub diagnostics: Vec<Diag<lichen_language::program::LangProgram>>,
+    pub diagnostics: Vec<Diag<P>>,
     /// Every definition site, in declaration order.
     pub defs: Vec<Definition>,
     /// Span of a name *use* → index into [`Doc::defs`].
@@ -148,9 +154,23 @@ pub struct Doc {
     /// container is the module's imported `Static`, so hovering a field
     /// *access* renders the field's value:type too (not just "field of module").
     module_field_types: HashMap<(String, String), StatementValue>,
+    /// Per imported-module binding: the module's exported field names (for the
+    /// field-access completion `math.…`).  Read from each import `Static` node's
+    /// struct type, so a module's *own* fields are offered (not just the ones
+    /// accessed in this file).
+    module_fields: HashMap<String, Vec<String>>,
+    /// Per top-level statement whose checked type is a concrete struct: its
+    /// named-field list (for the field-access completion `point.…`).  Keyed by
+    /// the statement index so a resolved container can reach its struct's
+    /// fields.
+    struct_fields_by_stmt: HashMap<usize, Vec<String>>,
 }
 
-impl Doc {
+impl<P: LangProgramShape> Doc<P>
+where
+    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+{
     /// Parse, lower and check `source`, keeping the frontend artifacts and
     /// indexing name resolution.  The leading `@{…@}` preprocessor block (with
     /// its `import`/metadata directives) is cut out and resolved first, so a
@@ -160,7 +180,7 @@ impl Doc {
     /// Imports resolve against the current directory (`base = None`); use
     /// [`Doc::new_with_base`] for a file whose `@import` lines should resolve
     /// relative to the file (the LSP server's case).
-    pub fn new(source: impl Into<String>) -> Doc {
+    pub fn new(source: impl Into<String>) -> Doc<P> {
         Doc::new_with_base(source, None)
     }
 
@@ -169,7 +189,7 @@ impl Doc {
     /// to it — a relative import `"math.lichen"` in `dir/main.lichen` loads
     /// `dir/math.lichen`.  `None` keeps the pre-LSP behavior (relative to the
     /// current directory).
-    pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc {
+    pub fn new_with_base(source: impl Into<String>, base: Option<&Path>) -> Doc<P> {
         let source = source.into();
         let line_starts = lex::line_starts(&source);
 
@@ -177,7 +197,7 @@ impl Doc {
         // input, resolving imports through a fresh in-memory package store so
         // the shared registry can serve any loaded imports.  `base` lets the
         // store resolve relative `@import` paths against the file's directory.
-        let mut store = PackageStore::<LangValue, LangOperator>::new();
+        let mut store = PackageStore::<P>::new();
         let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
 
         // The frontend artifacts (for the editor index): tokens + AST in
@@ -190,10 +210,12 @@ impl Doc {
 
         // The full pipeline diagnostics (lex + parse + resolve + check):
         // preprocess first, then the frontend over the preprocessed code, then
-        // the checker over the IR.  All spans are absolute.
+        // the checker over the IR.  All spans are absolute.  The frontend
+        // diagnostics are program-blind (they carry no checker build), so
+        // re-type them onto the caller's program marker before the report.
         let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
-        diagnostics.extend(frontend.diagnostics);
-        let report = build_report(
+        diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
+        let report = build_report::<P>(
             frontend.ir,
             Some(frontend.span_index),
             diagnostics,
@@ -209,6 +231,10 @@ impl Doc {
         // find it in the IR and read its type for the hover.  Borrowed here so
         // `report.build` is still owned by the match below.
         let mut import_ty: HashMap<Span, String> = HashMap::new();
+        // Per imported-module binding: its exported field names (for the
+        // `math.…` field completion).  Read from the import `Static` node's
+        // struct type, so a module's *own* fields are offered.
+        let mut module_fields: HashMap<String, Vec<String>> = HashMap::new();
         if let Some(build) = &report.build {
             for imp in &pre.imports {
                 let eid = span_index.as_ref().and_then(|s| {
@@ -225,6 +251,14 @@ impl Doc {
                     && let Some(t) = build.ty[eid]
                 {
                     import_ty.insert(imp.span, print_type_lang(&build.module, t));
+                    if let Some(names) = struct_type_named_fields(&build.module, t) {
+                        let fields = names
+                            .into_iter()
+                            .flatten()
+                            .map(|n| n.to_string())
+                            .collect::<Vec<_>>();
+                        module_fields.insert(imp.name.clone(), fields);
+                    }
                 }
             }
         }
@@ -240,94 +274,172 @@ impl Doc {
         // A read-only per-statement type/value snapshot.  It is computed here,
         // once, by reading the built module's cached values — never by
         // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
-        let (statements, stmt_starts, field_types, module_field_types) = match report.build {
-            Some(build) => {
-                let mut statements = Vec::new();
-                let mut starts = Vec::new();
-                for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
-                    // The IR statement's own span points at its *value*
-                    // expression; for the span index use the AST statement's
-                    // start (the binding name / bare-expression start), which
-                    // is where the statement begins in the source.  Statements
-                    // align 1:1 with `program.statements` in source order.
-                    let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
-                        Some(Stmt::Binding(b)) => {
-                            (b.span, lsp::offset_of_span(&line_starts, b.span))
-                        }
-                        Some(Stmt::Expr(e)) => {
-                            let s = e.span();
-                            (s, lsp::offset_of_span(&line_starts, s))
-                        }
-                        None => {
-                            let s = span_index
-                                .as_ref()
-                                .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
-                                .unwrap_or((0, 0));
-                            (s, lsp::offset_of_span(&line_starts, s))
-                        }
-                    };
-                    let ty = match build.ty[id] {
-                        Some(t) => print_type_lang(&build.module, t),
-                        None => String::new(),
-                    };
-                    let value = build.val[id].and_then(|vn| {
-                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                            // A `Parameterized` value is a deferred (lazy /
-                            // recursive) binding — report type only, never force.
-                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value_lang(
-                                &build.module,
-                                v,
-                                build.ty[id].unwrap_or_default(),
-                            )),
-                            None => None,
-                        }
-                    });
-                    statements.push(StatementValue { span, ty, value });
-                    starts.push(start as u32);
-                }
-                // A struct-block field's value:type snapshot, keyed by field
-                // name.  A `RecordBlock` emits a `Record` node whose value is a
-                // tuple of the field values (parallel to its `struct_names`),
-                // so we read each field's value/type from the checker.  Field
-                // names are not IR nodes, hence this name-keyed table — it is
-                // what lets hovering a field *definition* (`succ` in
-                // `{succ = x => x + 1}`) render `Function : Int -> Int`.
-                let mut field_types: HashMap<String, StatementValue> = HashMap::new();
-                for id in 0..build.ir.expr.len() {
-                    let eid = ExprId(id as u32);
-                    let lichen_highlevel::ir::ExprKind::Record { value, names } =
-                        build.ir[eid].kind
-                    else {
-                        continue;
-                    };
-                    let lichen_highlevel::ir::ExprKind::Tuple(tuple_range) = build.ir[value].kind
-                    else {
-                        continue;
-                    };
-                    let vals =
-                        &build.ir.children[tuple_range.start as usize..tuple_range.end as usize];
-                    let field_names =
-                        &build.ir.struct_names[names.start as usize..names.end as usize];
-                    for (name, &val_id) in field_names.iter().zip(vals.iter()) {
-                        let Some(name) = name else { continue };
-                        let ty = match build.ty[val_id] {
+        let (statements, stmt_starts, field_types, module_field_types, struct_fields_by_stmt) =
+            match report.build {
+                Some(build) => {
+                    let mut statements = Vec::new();
+                    let mut starts = Vec::new();
+                    // Per top-level struct binding: its named-field list (for the
+                    // `point.…` field completion), indexed by statement.
+                    let mut struct_fields_by_stmt: HashMap<usize, Vec<String>> = HashMap::new();
+                    for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
+                        // The IR statement's own span points at its *value*
+                        // expression; for the span index use the AST statement's
+                        // start (the binding name / bare-expression start), which
+                        // is where the statement begins in the source.  Statements
+                        // align 1:1 with `program.statements` in source order.
+                        let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
+                            Some(Stmt::Binding(b)) => {
+                                (b.span, lsp::offset_of_span(&line_starts, b.span))
+                            }
+                            Some(Stmt::Expr(e)) => {
+                                let s = e.span();
+                                (s, lsp::offset_of_span(&line_starts, s))
+                            }
+                            None => {
+                                let s = span_index
+                                    .as_ref()
+                                    .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
+                                    .unwrap_or((0, 0));
+                                (s, lsp::offset_of_span(&line_starts, s))
+                            }
+                        };
+                        let ty_node = build.ty[id];
+                        let ty = match ty_node {
                             Some(t) => print_type_lang(&build.module, t),
                             None => String::new(),
                         };
-                        let value = build.val[val_id].and_then(|vn| {
+                        // A concrete struct binding offers its fields after a `.`.
+                        if let Some(t) = ty_node
+                            && let Some(names) = struct_type_named_fields(&build.module, t)
+                        {
+                            struct_fields_by_stmt.insert(
+                                i,
+                                names.into_iter().flatten().map(|n| n.to_string()).collect(),
+                            );
+                        }
+                        let value = build.val[id].and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                Some(LangValue::LowValue(LowValue::Parameterized)) => None,
+                                // A `Parameterized` value is a deferred (lazy /
+                                // recursive) binding — report type only, never force.
+                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
+                                    None
+                                }
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
-                                    build.ty[val_id].unwrap_or_default(),
+                                    build.ty[id].unwrap_or_default(),
                                 )),
                                 None => None,
                             }
                         });
-                        field_types.insert(
-                            name.to_string(),
+                        statements.push(StatementValue { span, ty, value });
+                        starts.push(start as u32);
+                    }
+                    // A struct-block field's value:type snapshot, keyed by field
+                    // name.  A `RecordBlock` emits a `Record` node whose value is a
+                    // tuple of the field values (parallel to its `struct_names`),
+                    // so we read each field's value/type from the checker.  Field
+                    // names are not IR nodes, hence this name-keyed table — it is
+                    // what lets hovering a field *definition* (`succ` in
+                    // `{succ = x => x + 1}`) render `Function : Int -> Int`.
+                    let mut field_types: HashMap<String, StatementValue> = HashMap::new();
+                    for id in 0..build.ir.expr.len() {
+                        let eid = ExprId(id as u32);
+                        let lichen_highlevel::ir::ExprKind::Record { value, names } =
+                            build.ir[eid].kind
+                        else {
+                            continue;
+                        };
+                        let lichen_highlevel::ir::ExprKind::Tuple(tuple_range) =
+                            build.ir[value].kind
+                        else {
+                            continue;
+                        };
+                        let vals = &build.ir.children
+                            [tuple_range.start as usize..tuple_range.end as usize];
+                        let field_names =
+                            &build.ir.struct_names[names.start as usize..names.end as usize];
+                        for (name, &val_id) in field_names.iter().zip(vals.iter()) {
+                            let Some(name) = name else { continue };
+                            let ty = match build.ty[val_id] {
+                                Some(t) => print_type_lang(&build.module, t),
+                                None => String::new(),
+                            };
+                            let value = build.val[val_id].and_then(|vn| {
+                                match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                                    Some(v)
+                                        if matches!(v.as_enum(), Some(LowValue::Parameterized)) =>
+                                    {
+                                        None
+                                    }
+                                    Some(v) => Some(print_value_lang(
+                                        &build.module,
+                                        v,
+                                        build.ty[val_id].unwrap_or_default(),
+                                    )),
+                                    None => None,
+                                }
+                            });
+                            field_types.insert(
+                                name.to_string(),
+                                StatementValue {
+                                    span: (0, 0),
+                                    ty,
+                                    value,
+                                },
+                            );
+                        }
+                    }
+                    // A field *access* on an imported module (`math.succ`): the
+                    // compiler lowers it to a `NamedField` IR node whose container
+                    // is the module's imported `Static`.  The field's value node
+                    // resolves (read below), but the field-access node's *type* slot
+                    // stays a lazy cell (`?a`), so the field's type is read from the
+                    // module's own rendered `struct<...>` type.  The table is keyed
+                    // by `(import binding name, field name)`.
+                    let mut module_field_types: HashMap<(String, String), StatementValue> =
+                        HashMap::new();
+                    for id in 0..build.ir.expr.len() {
+                        let eid = ExprId(id as u32);
+                        let lichen_highlevel::ir::ExprKind::NamedField { container, name } =
+                            build.ir[eid].kind
+                        else {
+                            continue;
+                        };
+                        let lichen_highlevel::ir::ExprKind::Static { .. } =
+                            build.ir[container].kind
+                        else {
+                            continue;
+                        };
+                        let Some(container_span) = span_index
+                            .as_ref()
+                            .and_then(|idx| idx.get(container.0 as usize).copied().flatten())
+                        else {
+                            continue;
+                        };
+                        let Some(&module_name) = import_name_by_span.get(&container_span) else {
+                            continue;
+                        };
+                        let ty = import_ty
+                            .get(&container_span)
+                            .and_then(|mty| field_type_in_struct(mty, name))
+                            .unwrap_or_default();
+                        let value = build.val[eid].and_then(|vn| {
+                            match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
+                                    None
+                                }
+                                Some(v) => Some(print_value_lang(
+                                    &build.module,
+                                    v,
+                                    build.ty[eid].unwrap_or_default(),
+                                )),
+                                None => None,
+                            }
+                        });
+                        module_field_types.insert(
+                            (module_name.to_string(), name.to_string()),
                             StatementValue {
                                 span: (0, 0),
                                 ty,
@@ -335,64 +447,22 @@ impl Doc {
                             },
                         );
                     }
+                    (
+                        statements,
+                        starts,
+                        field_types,
+                        module_field_types,
+                        struct_fields_by_stmt,
+                    )
                 }
-                // A field *access* on an imported module (`math.succ`): the
-                // compiler lowers it to a `NamedField` IR node whose container
-                // is the module's imported `Static`.  The field's value node
-                // resolves (read below), but the field-access node's *type* slot
-                // stays a lazy cell (`?a`), so the field's type is read from the
-                // module's own rendered `struct<...>` type.  The table is keyed
-                // by `(import binding name, field name)`.
-                let mut module_field_types: HashMap<(String, String), StatementValue> =
-                    HashMap::new();
-                for id in 0..build.ir.expr.len() {
-                    let eid = ExprId(id as u32);
-                    let lichen_highlevel::ir::ExprKind::NamedField { container, name } =
-                        build.ir[eid].kind
-                    else {
-                        continue;
-                    };
-                    let lichen_highlevel::ir::ExprKind::Static { .. } = build.ir[container].kind
-                    else {
-                        continue;
-                    };
-                    let Some(container_span) = span_index
-                        .as_ref()
-                        .and_then(|idx| idx.get(container.0 as usize).copied().flatten())
-                    else {
-                        continue;
-                    };
-                    let Some(&module_name) = import_name_by_span.get(&container_span) else {
-                        continue;
-                    };
-                    let ty = import_ty
-                        .get(&container_span)
-                        .and_then(|mty| field_type_in_struct(mty, name))
-                        .unwrap_or_default();
-                    let value = build.val[eid].and_then(|vn| {
-                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                            Some(LangValue::LowValue(LowValue::Parameterized)) => None,
-                            Some(v) => Some(print_value_lang(
-                                &build.module,
-                                v,
-                                build.ty[eid].unwrap_or_default(),
-                            )),
-                            None => None,
-                        }
-                    });
-                    module_field_types.insert(
-                        (module_name.to_string(), name.to_string()),
-                        StatementValue {
-                            span: (0, 0),
-                            ty,
-                            value,
-                        },
-                    );
-                }
-                (statements, starts, field_types, module_field_types)
-            }
-            None => (Vec::new(), Vec::new(), HashMap::new(), HashMap::new()),
-        };
+                None => (
+                    Vec::new(),
+                    Vec::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                    HashMap::new(),
+                ),
+            };
 
         let (defs, resolve, def_index) = index(&program, &pre.imports);
         // Map each statement's span (a binding's name span, or an
@@ -445,6 +515,8 @@ impl Doc {
             import_by_span,
             field_types,
             module_field_types,
+            module_fields,
+            struct_fields_by_stmt,
         }
     }
 
@@ -615,15 +687,20 @@ impl Doc {
     ///
     /// The item's `text_edit` replaces the typed word with the chosen name; the
     /// `detail` shows the name's checked type (or the imported module) where the
-    /// build produced one.  Field access (`a.…`) is not completed yet.
+    /// build produced one.  After a `.` the container's *field* names are
+    /// offered instead (an imported module's exported fields, or a local struct
+    /// binding's fields).
     pub fn completion_at(&self, position: Position) -> Vec<CompletionItem> {
         let Some(offset) = self.offset_of(position) else {
             return Vec::new();
         };
-        // Field access (`a.…`) is not completed yet: offering bare names right
-        // after a `.` would be wrong, so skip when the cursor follows a dot.
-        if self.prev_token_is_dot(offset) {
-            return Vec::new();
+        // Field access (`a.…`): offer the container's struct fields instead of
+        // bare names (which would be wrong right after a `.`).  Detected from
+        // the tokens around the cursor (a `.` immediately before the cursor or
+        // before the partial field name), so a partially-typed field is still a
+        // field access.
+        if self.in_field_access(offset) {
+            return self.field_completion(offset);
         }
         let (prefix, replace) = self.completion_word(offset);
         let imports: Vec<(String, Span)> = self
@@ -639,21 +716,132 @@ impl Doc {
             .collect()
     }
 
-    /// Whether the token immediately before byte `offset` is a `.` (a field
-    /// access), i.e. the token whose range ends at or before `offset`.
-    fn prev_token_is_dot(&self, offset: usize) -> bool {
-        self.tokens
+    /// Completion for a field access `container.…`: offer the container's struct
+    /// fields — an imported module's exported fields ([`Doc::module_fields`]),
+    /// or a local struct binding's fields ([`Doc::struct_fields_by_stmt`]).
+    /// Empty when the container is not a knowable struct (an unbound, non-
+    /// binding, or non-struct container), so nothing is offered after a `.` on
+    /// e.g. a call result.
+    fn field_completion(&self, offset: usize) -> Vec<CompletionItem> {
+        let Some(dot_idx) = self
+            .tokens
             .iter()
-            .rev()
-            .find(|t| (t.range.1 as usize) <= offset)
-            .is_some_and(|t| t.kind == TokenKind::Dot)
+            .rposition(|t| (t.range.1 as usize) <= offset && t.kind == TokenKind::Dot)
+        else {
+            return Vec::new();
+        };
+        // The container is the token immediately before the `.`.
+        if dot_idx < 1 {
+            return Vec::new();
+        }
+        let container = &self.tokens[dot_idx - 1];
+        let TokenKind::Name(container_name) = &container.kind else {
+            return Vec::new();
+        };
+        // The partial field name, if any: a Name token right after the dot that
+        // ends at/before the cursor.  Otherwise the cursor is right after the
+        // dot and nothing is typed yet (insert at the cursor).
+        let (prefix, replace) = match self.tokens.get(dot_idx + 1) {
+            Some(field)
+                if matches!(field.kind, TokenKind::Name(_))
+                    && (field.range.1 as usize) <= offset =>
+            {
+                let TokenKind::Name(name) = &field.kind else {
+                    unreachable!();
+                };
+                (name.clone(), (field.range.0, field.range.1))
+            }
+            _ => (String::new(), (offset as u32, offset as u32)),
+        };
+        self.container_field_names(container.span)
+            .into_iter()
+            .filter(|name| name.starts_with(&prefix))
+            .map(|name| self.field_completion_item(container_name, &name, replace))
+            .collect()
+    }
+
+    /// The named fields of a `container.…` container: an imported module's
+    /// exported fields (keyed by import binding), or a local struct binding's
+    /// fields (keyed by statement index).  Empty when the container is not a
+    /// knowable struct.
+    fn container_field_names(&self, container_span: Span) -> Vec<String> {
+        let Some(def_idx) = self.resolve.get(&container_span).copied() else {
+            return Vec::new();
+        };
+        let def = &self.defs[def_idx];
+        if let Some(import_i) = self.import_by_span.get(&def.span).copied() {
+            let module = &self.imports[import_i].name;
+            return self.module_fields.get(module).cloned().unwrap_or_default();
+        }
+        if let Some(stmt_i) = self.stmt_by_span.get(&def.span).copied() {
+            return self
+                .struct_fields_by_stmt
+                .get(&stmt_i)
+                .cloned()
+                .unwrap_or_default();
+        }
+        Vec::new()
+    }
+
+    /// A completion item for one struct field of a `container.…` access: a
+    /// FIELD kind, with the field's `value : type` (where the build produced
+    /// one) as `detail`.  Field names are not bindings, so the detail comes from
+    /// the field tables, not [`Doc::def_detail`].  An imported module's field
+    /// resolves through [`Doc::module_field_types`]; a local struct field
+    /// through [`Doc::field_types`].
+    fn field_completion_item(
+        &self,
+        container_name: &str,
+        name: &str,
+        replace: (u32, u32),
+    ) -> CompletionItem {
+        let detail = if self.imports.iter().any(|im| im.name == container_name) {
+            self.module_field_types
+                .get(&(container_name.to_string(), name.to_string()))
+                .map(|sv| sv.ty.clone())
+        } else {
+            // A local struct field: the detail is the flat field table (a field
+            // name is not an IR node, so this file's struct-block snapshot).
+            self.field_types.get(name).map(|sv| sv.ty.clone())
+        };
+        let range = lsp::range_from_byte_range(&self.source, &self.line_starts, replace);
+        CompletionItem {
+            label: name.to_string(),
+            kind: Some(CompletionItemKind::FIELD),
+            detail,
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: name.to_string(),
+            })),
+            insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+            ..Default::default()
+        }
+    }
+
+    /// Whether the cursor at byte `offset` is in a field access: the token
+    /// immediately before the cursor is a `.` (nothing typed yet, `a.`), or it
+    /// is a partial field name whose immediate predecessor is a `.` (`a.x` with
+    /// the cursor on/after `x`).
+    fn in_field_access(&self, offset: usize) -> bool {
+        let Some(prev_idx) = self
+            .tokens
+            .iter()
+            .rposition(|t| (t.range.1 as usize) <= offset)
+        else {
+            return false;
+        };
+        match &self.tokens[prev_idx].kind {
+            TokenKind::Dot => true,
+            TokenKind::Name(_) => prev_idx > 0 && self.tokens[prev_idx - 1].kind == TokenKind::Dot,
+            _ => false,
+        }
     }
 
     /// The word being completed at `offset` and the byte range it spans, so a
     /// completing edit replaces just that word.  On a `Name` token the word is
     /// the whole token (an editor-typed partial identifier); anywhere else it is
-    /// empty and the edit inserts at the cursor.  Field access (a `.` prefix) is
-    /// not completed.
+    /// empty and the edit inserts at the cursor.  For a field access (`a.…`) the
+    /// word is the partial field name typed after the dot.
     fn completion_word(&self, offset: usize) -> (String, (u32, u32)) {
         let is_name = |t: &Token| matches!(t.kind, TokenKind::Name(_));
         // Cursor strictly inside a token (the usual mid-typing case).
@@ -1761,7 +1949,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn doc(source: &str) -> Doc {
+    fn doc(source: &str) -> Doc<lichen_language::program::LangProgram> {
         Doc::new(source)
     }
 
@@ -1891,6 +2079,102 @@ mod tests {
                 .iter()
                 .any(|i| i.label == "x" && i.detail.as_deref() == Some("Int")),
             "expected a `x` completion with `Int` detail, got {items:?}"
+        );
+    }
+
+    #[test]
+    fn field_access_error_suggests_a_close_field() {
+        // `point.sux` reads a struct field the container has no such field for;
+        // the diagnostic appends the struct's actually-close field name as a
+        // did-you-mean clause (the LSP diagnostic surfaces it).
+        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.sux\n");
+        let msgs: Vec<String> = d
+            .lsp_diagnostics()
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            msgs.iter()
+                .any(|m| m.contains("no field") && m.contains("did you mean 'sub'?")),
+            "expected a field-access did-you-mean, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn completion_after_a_dot_offers_the_structs_fields() {
+        // Typing `point.s` offers the struct's own field `sub` — never the bare
+        // container name (`point`) or an unrelated in-scope name.
+        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.s\n");
+        let items = d.completion_at(Position {
+            line: 1,
+            character: 7,
+        });
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            labels.contains(&"sub".to_string()),
+            "expected the struct field `sub`, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"point".to_string()),
+            "bare names are not offered after a dot, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"x".to_string()),
+            "a field with a different prefix is filtered, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn field_completion_is_filtered_by_the_typed_prefix() {
+        // Typing `y` after `point.` offers only the field(s) sharing that prefix.
+        let d = doc("point = { x = 1, y = 2, sub = 3 }\npoint.y\n");
+        let items = d.completion_at(Position {
+            line: 1,
+            character: 7,
+        });
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            labels.contains(&"y".to_string()) && !labels.contains(&"x".to_string()),
+            "the field completion should be prefix-filtered, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_after_a_module_dot_offers_the_modules_fields() {
+        // `math.s` after the import: the module's *own* exported fields are
+        // offered (read from its struct type), filtered to the typed prefix —
+        // not the bare import binding, and not a field the file never accessed.
+        let dir = temp_dir("modcomp");
+        write(
+            &dir,
+            "math.lichen",
+            "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
+        );
+        let main_path = write(
+            &dir,
+            "main.lichen",
+            "@{\n  math = import \"math.lichen\"\n@}\nmath.s\n",
+        );
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
+            fs::read_to_string(&main_path).unwrap(),
+            Some(main_path.as_path()),
+        );
+        let items = d.completion_at(Position {
+            line: 3,
+            character: 6,
+        });
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            labels.contains(&"succ".to_string()),
+            "expected the module field `succ`, got {labels:?}"
+        );
+        assert!(
+            labels.iter().all(|l| l.starts_with('s')),
+            "the module completion should be prefix-filtered, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"math".to_string()),
+            "the import binding is not a field, got {labels:?}"
         );
     }
 
@@ -2106,7 +2390,7 @@ mod tests {
             "@{order = \"5\"\nmath = import \"math.lichen\"\ngeo = import \"geometry.lichen\"\noutput = \"(42, 10, 7): <Int, Int, Int>\"@}\n(math.succ 41, geo.double 5, geo.inc_twice 5)\n",
         );
 
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -2134,7 +2418,7 @@ mod tests {
             "main.lichen",
             "@{\n  math = import \"math.lichen\"\n@}\nmath.succ 41\n",
         );
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -2186,7 +2470,7 @@ mod tests {
         let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../lichen-language/examples/programs/import");
         let main_path = examples.join("_.lichen");
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),
             Some(main_path.as_path()),
         );
@@ -2256,7 +2540,7 @@ mod tests {
             "math.lichen",
             "{\n  succ = x => x + 1\n  add = x => y => x + y\n}\n",
         );
-        let d = Doc::new_with_base(
+        let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&math_path).unwrap(),
             Some(math_path.as_path()),
         );

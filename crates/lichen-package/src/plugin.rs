@@ -1,30 +1,44 @@
-//! Rebuilding the compiler for a native plugin.
+//! Rebuilding the compiler / language server for a native plugin.
 //!
 //! A *native plugin* (see [`docs/notes/plugin-taxonomy.md`]) extends the
 //! compiler's value/operator vocabulary at **compile time**: it contributes
-//! enum leaves to the `Program` marker, so a compiler that knows a plugin
-//! must be built with that plugin composed into its vocabulary.  That is what
-//! this module does — "when a native plugin is imported, rebuild the
-//! compiler."
+//! enum leaves to the `Program` marker, so a compiler (or the language server)
+//! that knows a plugin must be built with that plugin composed into its
+//! vocabulary.  That is what this module does — "when a native plugin is
+//! imported, rebuild the compiler (or the LSP server)."
 //!
-//! The mechanism: generate a compiler crate under a caller-chosen directory
-//! (the package manager's compiler cache under the lichen home — see
+//! The mechanism: generate a crate under a caller-chosen directory (the package
+//! manager's compiler cache under the lichen home — see
 //! [`crate::compiler_cache`]) that depends on the plugin (from git or a local
 //! path) and composes its vocabulary with the shipping leaves via
 //! `lichen_language::lang_compose_vocabulary!`, then run `cargo build` and
-//! report the produced `lichen-compiler` binary.
+//! report the produced binary.  [`rebuild`] builds the *compiler*
+//! (`lichen-compiler-<name>`); [`rebuild_lsp`] builds the *language server*
+//! (`lichen-language-server-<name>`), which drives the shared generic
+//! [`liche_language_server::server::main`] over the composed program.
+//!
+//! **Structure of the generated crate.**  Both the compiler crate and the
+//! language-server crate are generated **bin-only**: `src/main.rs` holds the
+//! composition *and* the `main`.  In a lib+bin package `crate::` refers to the
+//! *binary* crate (which has no composition), so `crate::LangProgram` — used by
+//! both `cli::main::<crate::LangProgram>()` (compiler) and
+//! `server::main::<crate::LangProgram>()` (LSP) — would not resolve there.  The
+//! bin-only shape makes the composed `LangProgram` a root item of the binary
+//! crate, so both entry points resolve it.
 //!
 //! **Status:** the *composition* scaffold is real — the generated crate
 //! `cargo check`s once the plugin's leaves exist.  The language layer's
-//! tooling (package store, run, render, CLI) is generic over a program's
-//! value/operator vocabularies (see `lichen_language::CompiledProgram`), so a
-//! generated compiler routes through the shared [`lichen_language::cli`] over
-//! its own composed vocabulary.  The one open piece is the plugin's **artifact
-//! codec**: a built compiler currently runs in memory only (`NoPersist` — no
-//! `~/.lichen` device cache) because a per-leaf codec protocol that lets the
-//! composition macro emit a `ProgramCodec` is the tracked follow-up in
-//! [`docs/notes/plugin-taxonomy.md`].  A rebuild over the shipping plugin set
-//! produces a fully working compiler.
+//! tooling (package store, run, render, CLI, server) is generic over a
+//! program's value/operator vocabularies (see `lichen_language::LangProgramShape`),
+//! so a generated compiler routes through the shared [`lichen_language::cli`]
+//! and a generated server through the shared
+//! [`liche_language_server::server`] over its own composed vocabulary.  The
+//! composition macro emits a **per-leaf [`ProgramCodec`]** (persistent — see
+//! `liche_language::persist`), so a built compiler writes a real device cache;
+//! a generated compiler scopes that artifact cache to its **own plugin-set
+//! slot** (`<lichendir>/compilers/<key>`, [`write_compiler_main_rs`]), so its
+//! compile artifacts are isolated per vocabulary and never collide with (or
+//! reuse) another plugin set's artifacts for the same file ID.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -75,6 +89,14 @@ pub struct CompilerBuild {
     pub bin: PathBuf,
 }
 
+/// The program generated for a language-server build.
+pub struct ServerBuild {
+    /// The generated crate directory.
+    pub dir: PathBuf,
+    /// The produced binary path (after `build`).
+    pub bin: PathBuf,
+}
+
 /// Rebuild the compiler: generate a compiler crate at `dir` (the cache slot)
 /// composing `leaves` with the plugin dependencies (if any), then `cargo build`
 /// it.  Returns the produced binary path.
@@ -90,9 +112,14 @@ pub fn rebuild(
     }
     std::fs::create_dir_all(dir.join("src"))
         .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    write_cargo_toml(dir, name, core_repo, plugins)?;
-    write_lib_rs(dir, plugins, leaves)?;
-    write_main_rs(dir)?;
+    write_cargo_toml(
+        dir,
+        &format!("lichen-compiler-{name}"),
+        core_repo,
+        plugins,
+        "",
+    )?;
+    write_compiler_main_rs(dir, plugins, leaves)?;
 
     let out = Command::new("cargo")
         .args(["build", "--release"])
@@ -112,6 +139,56 @@ pub fn rebuild(
     })
 }
 
+/// Rebuild the language server: generate a **bin-only** crate at `dir` (the
+/// cache slot) composing `leaves` with the plugin dependencies (if any), then
+/// `cargo build` it.  The generated `main` drives the shared generic server over
+/// the composed program (`liche_language_server::server::main::<crate::LangProgram>()`),
+/// so the produced server understands the plugin's leaves for
+/// diagnostics / hover / go-to-definition.
+pub fn rebuild_lsp(
+    dir: &Path,
+    name: &str,
+    core_repo: &str,
+    plugins: &[Depend],
+    leaves: &Leaves,
+) -> Result<ServerBuild, String> {
+    if !cargo_available() {
+        return Err(
+            "`cargo` is required to rebuild the language server, but it is not on $PATH".into(),
+        );
+    }
+    std::fs::create_dir_all(dir.join("src"))
+        .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+    write_cargo_toml(
+        dir,
+        &format!("lichen-language-server-{name}"),
+        core_repo,
+        plugins,
+        &format!("\n{}", server_dep(core_repo)),
+    )?;
+    write_server_main_rs(dir, plugins, leaves)?;
+
+    let out = Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("cannot run cargo build: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "rebuild failed:\n{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    let bin = dir
+        .join("target")
+        .join("release")
+        .join(server_bin_name(name));
+    Ok(ServerBuild {
+        dir: dir.to_path_buf(),
+        bin,
+    })
+}
+
 /// Whether `cargo` is on `$PATH`.
 pub fn cargo_available() -> bool {
     Command::new("cargo")
@@ -126,43 +203,49 @@ pub fn bin_name(name: &str) -> String {
     if cfg!(windows) { format!("{n}.exe") } else { n }
 }
 
-/// The generated crate's `Cargo.toml`: depends on the language crate and the
-/// plugin dependencies (from a local path when `git` is a path that exists).
+/// The compiled binary name for a language server named `name`.
+pub fn server_bin_name(name: &str) -> String {
+    let n = format!("lichen-language-server-{name}");
+    if cfg!(windows) { format!("{n}.exe") } else { n }
+}
+
+/// The `liche-language-server` dependency line for a generated crate: a local
+/// path dep (in `core_repo/crates/liche-language-server`) when `core_repo` is a
+/// directory here, else a git dep, both without the default `server` feature
+/// (so the server's own default is not double-enlisted) and with `server`
+/// enabled explicitly.
+fn server_dep(core_repo: &str) -> String {
+    if std::path::Path::new(core_repo).is_dir() {
+        let rel = format!("{core_repo}/crates/liche-language-server");
+        format!(
+            "liche-language-server = {{ path = \"{rel}\", default-features = false, features = [\"server\"] }}"
+        )
+    } else {
+        format!(
+            "liche-language-server = {{ git = \"{core_repo}\", default-features = false, features = [\"server\"] }}"
+        )
+    }
+}
+
+/// The generated crate's `Cargo.toml`: depends on the language crate, the
+/// plugin dependencies (from a local path when `git` is a path that exists),
+/// core crates from `core_repo` (a local checkout path or a git URL), and any
+/// `extra_deps` (the language-server dependency for an LSP crate).
+///
+/// `package_name` is the generated package's name (e.g.
+/// `lichen-compiler-{name}` or `lichen-language-server-{name}`); the binary
+/// target is auto-detected from `src/main.rs` (bin-only) or both `src/lib.rs`
+/// and `src/main.rs` (lib+bin).
 fn write_cargo_toml(
     dir: &Path,
-    name: &str,
+    package_name: &str,
     core_repo: &str,
     plugins: &[Depend],
+    extra_deps: &str,
 ) -> Result<(), String> {
-    let mut plugin_lines = String::new();
-    for dep in plugins {
-        let crate_name = git::crate_name(dep);
-        if std::path::Path::new(&dep.url).exists() {
-            plugin_lines.push_str(&format!("{crate_name} = {{ path = \"{}\" }}\n", dep.url));
-        } else {
-            let rev = git::checkout(dep)
-                .map(|r| format!(", rev = \"{r}\""))
-                .unwrap_or_default();
-            plugin_lines.push_str(&format!(
-                "{crate_name} = {{ git = \"{}\"{rev} }}\n",
-                dep.url
-            ));
-        }
-    }
-    // Core crates come from a local checkout (path deps) when `core_repo` is a
-    // directory here, else from git.
-    let core_is_path = std::path::Path::new(core_repo).is_dir();
-    let core_dep = |crate_name: &str| -> String {
-        if core_is_path {
-            let rel = format!("{core_repo}/crates/{crate_name}");
-            format!("{crate_name} = {{ path = \"{rel}\" }}")
-        } else {
-            format!("{crate_name} = {{ git = \"{core_repo}\" }}")
-        }
-    };
     let toml = format!(
         r#"[package]
-name = "lichen-compiler-{name}"
+name = "{package_name}"
 version = "0.1.0"
 edition = "2024"
 
@@ -174,16 +257,62 @@ edition = "2024"
 {core_perspective}
 {core_doc}
 {core_utils}
-{plugin_lines}"#,
-        core_language = core_dep("lichen-language"),
-        core_lowlevel = core_dep("lichen-lowlevel"),
-        core_highlevel = core_dep("lichen-highlevel"),
-        core_compute = core_dep("lichen-compute"),
-        core_perspective = core_dep("lichen-perspective"),
-        core_doc = core_dep("lichen-doc"),
-        core_utils = core_dep("lichen-utils"),
+{plugin_lines}{extra_deps}"#,
+        package_name = package_name,
+        core_language = core_dep_line(core_repo, "lichen-language"),
+        core_lowlevel = core_dep_line(core_repo, "lichen-lowlevel"),
+        core_highlevel = core_dep_line(core_repo, "lichen-highlevel"),
+        core_compute = core_dep_line(core_repo, "lichen-compute"),
+        core_perspective = core_dep_line(core_repo, "lichen-perspective"),
+        core_doc = core_dep_line(core_repo, "lichen-doc"),
+        core_utils = core_dep_line(core_repo, "lichen-utils"),
+        plugin_lines = plugin_lines(plugins),
+        extra_deps = extra_deps,
     );
     std::fs::write(dir.join("Cargo.toml"), toml).map_err(|e| format!("write Cargo.toml: {e}"))
+}
+
+/// A single core-crate dependency line for the generated crate: a local path
+/// dep (`{core_repo}/crates/{crate_name}`) when `core_repo` is a directory
+/// here, else a git dep.  A git `core_repo` names the workspace member via
+/// `package = <crate_name>` (the repo root is a virtual workspace, so without
+/// it cargo looks for a package there and fails).
+fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
+    if std::path::Path::new(core_repo).is_dir() {
+        let rel = format!("{core_repo}/crates/{crate_name}");
+        format!("{crate_name} = {{ path = \"{rel}\" }}")
+    } else {
+        format!("{crate_name} = {{ git = \"{core_repo}\", package = \"{crate_name}\" }}")
+    }
+}
+
+/// The plugin dependency lines for a generated crate: each plugin from a local
+/// path when its `url` is a path that exists, else from git (with the pinned
+/// `rev`/`branch`/`tag` if any).
+fn plugin_lines(plugins: &[Depend]) -> String {
+    let mut plugin_lines = String::new();
+    for dep in plugins {
+        let crate_name = git::crate_name(dep);
+        if std::path::Path::new(&dep.url).exists() {
+            plugin_lines.push_str(&format!("{crate_name} = {{ path = \"{}\" }}\n", dep.url));
+        } else {
+            let rev = git::checkout(dep)
+                .map(|r| format!(", rev = \"{r}\""))
+                .unwrap_or_default();
+            // A remote plugin is a **git** dep on a crate inside the plugin
+            // repo's workspace (e.g. `liche-std-native` inside the lichen-vm
+            // monorepo).  `package = <crate_name>` names the workspace member
+            // so cargo finds it in the repo (without it, cargo looks for a
+            // package at the repo root and fails).  The plugin's own core deps
+            // are git too, so cargo resolves the whole subtree from git — a
+            // path dep into the workspace is what it cannot fresh-resolve.
+            plugin_lines.push_str(&format!(
+                "{crate_name} = {{ git = \"{}\", package = \"{crate_name}\"{rev}}}\n",
+                dep.url
+            ));
+        }
+    }
+    plugin_lines
 }
 
 /// The Rust crate identifier for a plugin dependency — its crate name with
@@ -195,11 +324,13 @@ fn crate_ident(dep: &Depend) -> String {
     git::crate_name(dep).replace('-', "_")
 }
 
-/// The generated crate's `src/lib.rs`: compose the program marker over the
-/// shipping leaves plus the plugin's contributed leaves.  The shipping leaves
-/// are spelled inline (with the `plugins = [...]` arm composing each native
-/// plugin's own leaves via its `<crate>_leaves` macro — no config file).
-fn write_lib_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
+/// The composed-vocabulary body shared by the compiler (`src/lib.rs`) and the
+/// language server (`src/main.rs`): the `lang_compose_vocabulary!` invocation
+/// over the shipping plus plugin leaves, closing with the composed `LangProgram`
+/// and its `Program` alias.  Both generated crates put this at the crate root,
+/// so `LangProgram` is available as `<crate>::LangProgram` (the bin-only server
+/// crate resolves it from `main`).
+fn compose_source(plugins: &[Depend], leaves: &Leaves) -> String {
     let mut attrs = String::new();
     for (ty, variant) in &leaves.attrs {
         attrs.push_str(&format!("        {ty} as {variant};\n"));
@@ -217,11 +348,8 @@ fn write_lib_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), S
         let ident = crate_ident(dep);
         plugin_line.push_str(&format!("    {ident} as {ident}_leaves;\n"));
     }
-    let lines = format!(
-        r#"//! A compiler built over the project's plugin set.  Generated by
-//! `lichen rebuild-plugin`; re-run it whenever the native-plugin set changes.
-
-// The value/operator/attribute vocabulary and the program marker, composed
+    format!(
+        r#"// The value/operator/attribute vocabulary and the program marker, composed
 // from the shipping leaves plus each plugin's own leaf macro (the
 // `plugins = [<crate> as <crate>_leaves; ...]` arm stitches their leaves in —
 // no config file).
@@ -237,32 +365,110 @@ lichen_language::lang_compose_vocabulary! {{
 {plugin_line}    ];
 }}
 
-/// The composed program marker for this compiler build.
+/// The composed program marker for this build.
 pub type Program = LangProgram;
 "#,
         attrs = attrs,
         values = values,
         operators = operators,
         plugin_line = plugin_line,
-    );
-    std::fs::write(dir.join("src/lib.rs"), lines).map_err(|e| format!("write src/lib.rs: {e}"))
+    )
 }
 
-/// The generated crate's `src/main.rs`: a thin compiler CLI over the language
-/// crate's library.  It shares [`lichen_language::cli`], so a plugin-built
-/// compiler speaks the same dialect as the shipped `lichen-compiler` and is
-/// already depend-aware (resolving `depend` directives against the source
-/// cache).
-fn write_main_rs(dir: &Path) -> Result<(), String> {
-    // The generated compiler routes the shared `lichen_language::cli` over its
-    // own composed vocabulary (`crate::LangValue`/`crate::LangOperator`).  The
-    // composition macro emits a `ProgramCodec` for that vocabulary (per-leaf
-    // value/operator codecs), so the CLI drives a real `~/.lichen` device
-    // cache: the plugin's own leaves serialize through their codecs, exactly
-    // like the shipping compiler's leaves do.
-    let lines = r#"fn main() -> std::process::ExitCode {
-    lichen_language::cli::main::<crate::LangValue, crate::LangOperator, crate::ProgramCodec>()
-}
-"#;
+/// The generated crate's `src/main.rs` (the **bin-only** compiler): the
+/// composition at the crate root, then the shared [`lichen_language::cli`]
+/// over the composed program.  A compiler must be **bin-only** (not lib+bin)
+/// so `<crate>::LangProgram` resolves from the binary crate's root — in a
+/// lib+bin package `crate::` refers to the binary crate, which would have no
+/// composition, so `cli::main::<crate::LangProgram>()` would not compile.
+///
+/// The generated `main` runs the compiler with its **own plugin-set cache
+/// slot** as the artifact-cache root, so the compiled-artifact store is scoped
+/// per vocabulary: a rebuilt compiler never shares (or reuses) another plugin
+/// set's artifacts for the same file ID (see `liche_language::cli` and
+/// `docs/notes/artifact-cache.md`).
+fn write_compiler_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
+    // The slot directory base name IS the plugin-set cache key — the same key
+    // [compiler_cache::key] used to place this build in `compilers/<key>/`.
+    let key = dir
+        .file_name()
+        .map(|k| k.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let lines = format!(
+        r#"//! A compiler built over the project's plugin set.  Generated by
+//! `lichen rebuild-plugin`; re-run it whenever the native-plugin set changes.
+
+{compose}
+
+fn main() -> std::process::ExitCode {{
+    // Scope the compiled-artifact cache to this plugin-set slot, so a compiler
+    // for a different plugin set never collides with (or reuses) this
+    // vocabulary's artifacts for the same file ID.
+    let cache_root = lichen_language::persist::lichendir()
+        .join("compilers")
+        .join("{key}");
+    lichen_language::cli::main_with_cache_dir::<crate::LangProgram>(&cache_root)
+}}
+"#,
+        compose = compose_source(plugins, leaves),
+        key = key,
+    );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
+}
+
+/// The generated crate's `src/main.rs` (the **bin-only** language server): the
+/// composition at the crate root, then a `main` that drives the shared generic
+/// server over the composed program.  Because the composition lives in the
+/// binary crate's root, `<crate>::LangProgram` (used by `server::main`) is the
+/// composed program — see the module docs for why a bin-only crate, not
+/// lib+bin.
+fn write_server_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
+    let lines = format!(
+        r#"//! A language server composed over the project's plugin set.  Generated by
+//! `liche path language-server --project`; re-run it whenever the
+//! native-plugin set changes.
+
+{compose}
+
+fn main() {{
+    liche_language_server::server::main::<crate::LangProgram>()
+}}
+"#,
+        compose = compose_source(plugins, leaves),
+    );
+    std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
+}
+
+#[cfg(test)]
+mod generated_main_tests {
+    use super::*;
+
+    #[test]
+    fn compiler_main_scopes_the_artifact_cache_to_its_plugin_set_slot() {
+        let dir = std::env::temp_dir().join(format!("lichen-plugin-main-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A compiler is built into `compilers/<key>/`; its generated `main`
+        // must scope the compile-artifact cache to that slot, not the shared
+        // lichen home (so a different plugin set never reuses this vocabulary's
+        // artifacts for the same file ID).
+        let key = "deadbeef";
+        let slot = dir.join(key);
+        std::fs::create_dir_all(slot.join("src")).unwrap();
+        write_compiler_main_rs(&slot, &[], &Leaves::shipping()).expect("write the generated main");
+        let main = std::fs::read_to_string(slot.join("src/main.rs")).unwrap();
+        assert!(
+            main.contains("main_with_cache_dir"),
+            "the generated compiler must scope its cache:\n{main}"
+        );
+        assert!(
+            main.contains(&format!(".join(\"{key}\")")),
+            "the generated compiler must root its cache at its own slot:\n{main}"
+        );
+        assert!(
+            main.contains("lichen_language::persist::lichendir()"),
+            "the generated compiler must root the cache under the lichen home:\n{main}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
