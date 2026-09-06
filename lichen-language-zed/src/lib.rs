@@ -57,7 +57,7 @@ mod zed_impl {
     use zed_extension_api::{
         self as zed, Architecture, Command, Extension, GithubReleaseOptions, LanguageServerId,
         LanguageServerInstallationStatus, Os, Worktree, current_platform, latest_github_release,
-        make_file_executable, set_language_server_installation_status,
+        set_language_server_installation_status,
     };
 
     use crate::{LANGUAGE_SERVER_BINARY, LichenExtension};
@@ -247,8 +247,23 @@ mod zed_impl {
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
-        make_file_executable(home)
-            .map_err(|e| format!("cannot mark `{LICHEN_BIN}` executable: {e}"))?;
+        // The downloaded binary lives in Lichen Home, outside the extension host's
+        // sandbox — `make_file_executable` only allows paths in the extension work
+        // dir (it rejects anything else with "cannot write to path").  Make it
+        // executable by spawning a real `chmod` instead (a no-op on Windows, where
+        // the `.exe` is already executable).
+        if !on_windows() {
+            let out = Command::new("chmod")
+                .args(["+x", home])
+                .output()
+                .map_err(|e| format!("cannot run chmod on `{LICHEN_BIN}`: {e}"))?;
+            if out.status != Some(0) {
+                return Err(format!(
+                    "cannot mark `{LICHEN_BIN}` executable: {}",
+                    String::from_utf8_lossy(&out.stderr).trim()
+                ));
+            }
+        }
         Ok(())
     }
 

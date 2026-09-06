@@ -42,6 +42,11 @@ kind = "process:exec"
 command = "curl"
 args = ["**"]
 
+[[capabilities]]
+kind = "process:exec"
+command = "chmod"
+args = ["**"]
+
 # The language server Zed should launch for Lichen buffers. It is *not* bundled
 # with the extension (per Zed's publishing rules); the extension's
 # `language_server_command` supplies the command.

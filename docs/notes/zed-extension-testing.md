@@ -130,8 +130,9 @@ manager: `lichen path language-server` installs the **prebuilt** compiler + lang
 manager's own commit and prints the binary path. `lichen` is the single canonical copy at
 `$LICHEN_HOME/tools/lichen` (or a `lichen` on `$PATH`); with neither, on a fresh machine the
 extension downloads the prebuilt package manager from the repo's GitHub release into that same
-`$LICHEN_HOME/tools` slot via `curl` (`make_file_executable`, see
-[`release.sh`](../../scripts/release.sh), which triggers the
+`$LICHEN_HOME/tools` slot via `curl`, then makes it executable with a spawned `chmod` (the host's
+`make_file_executable` only allows paths inside the extension work dir, so it can't touch Lichen
+Home — see [`release.sh`](../../scripts/release.sh), which triggers the
 `release-lichen` CI workflow) before resolving the server. Using the canonical copy means a
 later `liche update` (which refreshes exactly `$LICHEN_HOME/tools/lichen`) stays in sync with what
 the extension runs. Run it
