@@ -309,17 +309,33 @@ impl<P: Program> Module<P> {
                 }
                 // A pending *field/positional read* over an (ultimately)
                 // unbound container, unified against a *type value*, is
-                // deferred by joining the classes.  The read's own type is a
+                // unified by joining the classes.  The read's own type is a
                 // `[value,type]`-shaped pair too, so once the container binds
                 // to a concrete struct the read resolves to the field's actual
-                // type and the join pins it — a genuine mismatch is caught
-                // then, at apply time, not masked here.  The deferral is
-                // deliberately narrow: only an `Index` read (neither a
-                // resolved read nor e.g. arithmetic or a dependent-type
-                // branch) and only against a type value (not a scalar), so an
-                // unresolvable real computation still records an error.
+                // type, and a genuine mismatch surfaces at apply time against
+                // the actual container (the computation, when it runs, must
+                // reconcile with the value the other side carried).  The
+                // deferral is deliberately narrow: only an `Index` read
+                // (neither a resolved read nor e.g. arithmetic or a
+                // dependent-type branch) and only against a type value (not a
+                // scalar), so an unresolvable real computation still records an
+                // error.
                 if (pending_a && self.is_pending_index_read(ra) && self.class_holds_type(rb))
                     || (pending_b && self.is_pending_index_read(rb) && self.class_holds_type(ra))
+                {
+                    self.add_equality(ra, rb);
+                    return true;
+                }
+                // A pending *field/positional read* unified against another
+                // pending field read — both over (ultimately) unbound
+                // containers — is unified the same way.  Neither half has a
+                // concrete value yet, so there is nothing to compare now; the
+                // two lazy reads resolve to a common type later, at apply
+                // time, when their containers bind.
+                if pending_a
+                    && pending_b
+                    && self.is_pending_index_read(ra)
+                    && self.is_pending_index_read(rb)
                 {
                     self.add_equality(ra, rb);
                     return true;
@@ -694,6 +710,24 @@ impl<P: Program> Module<P> {
         true
     }
 
+    /// The concrete value `rep`'s class has already committed, if any — the
+    /// side of a deferred unification that is not the pending computation
+    /// itself.  Scans the member list rather than reading only the
+    /// representative's slot, because a bare [`Self::add_equality`] merge
+    /// leaves the committed value where it was (the representative may be the
+    /// value-less pending op node).
+    fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
+        let mut member = rep;
+        loop {
+            if let Some(value) = self.nodes[member].value {
+                if !is_unbound(Some(value)) {
+                    return Some(value);
+                }
+            }
+            member = self.nodes[member].meta().next?;
+        }
+    }
+
     /// Force the first unevaluated operation in `rep`'s class.  When the
     /// computation resolves, its value is replicated to the class's pure
     /// cells so reads stay locally correct — operation-bearing members keep
@@ -709,15 +743,95 @@ impl<P: Program> Module<P> {
             member = self.nodes[member].meta().next?;
         }
         let block = self.nodes[member].block;
+        // Capture the value the class already committed *before* forcing — the
+        // outcome of a pending computation must reconcile with it (a pending
+        // computation unified against a concrete value defers the check to
+        // this moment, per [`Self::unify_inner`]).  The committed value lives
+        // on whichever member carries it, not necessarily the representative
+        // (a bare `add_equality` merge leaves it where it was), so scan.
+        let prior = self.class_committed_value(rep);
         let value = self.evaluate_node(Dyn(member), Some(block));
         if is_unbound(Some(value)) {
             return None;
+        }
+        // The computation resolved: it must agree with the value its class was
+        // unified against.  A free cell in the committed value is a wildcard
+        // (it binds to the computed result); a concrete conflict is the
+        // deferred error surfacing now, at the moment the computation ran.
+        if let Some(prior) = prior {
+            let mut path = Vec::new();
+            if !self.reconcile_value(prior, value, &mut path) {
+                self.unify_errors.push(UnifyError {
+                    root_a: rep,
+                    root_b: member,
+                    steps: Vec::new(),
+                    a: rep,
+                    b: member,
+                    value_a: Some(prior),
+                    value_b: Some(value),
+                });
+            }
         }
         // Route through the single write API: it replicates the value to the
         // class's unbound pure-cell members (the same set the loop below
         // visited) and to the representative itself.
         self.write_node_value(rep, Some(value));
         Some(value)
+    }
+
+    /// Whether a computed result `b` is compatible with the value `a` that a
+    /// class committed (the other side of a deferred unification).  An unbound
+    /// cell on either side is a wildcard — it binds to the other — so a free
+    /// pattern element (`?elem`) matches whatever the computation produced;
+    /// two concrete values must agree.  Arrays recurse elementwise; a cycle is
+    /// cut by the path guard (the self-referential universe).  Pure, read-only:
+    /// the counterpart of [`Self::key_eq`](crate::table::Module::key_eq), but
+    /// tolerant of the unbound cells a checked class may still hold.
+    fn reconcile_value(
+        &self,
+        a: P::Value,
+        b: P::Value,
+        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+    ) -> bool {
+        // A free (unbound) cell matches anything — it resolves by binding.
+        if is_unbound(Some(a)) || is_unbound(Some(b)) {
+            return true;
+        }
+        match (a.as_enum(), b.as_enum()) {
+            (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
+                let (left, right) = (pa.items(), pb.items());
+                left.len() == right.len()
+                    && left
+                        .iter()
+                        .zip(right.iter())
+                        .all(|(ia, ib)| self.reconcile_node(ia.node, ib.node, path))
+            }
+            _ => a.value_eq(&b),
+        }
+    }
+
+    /// [`Self::reconcile_value`] at the node level.
+    fn reconcile_node(
+        &self,
+        a: AnyNodeId,
+        b: AnyNodeId,
+        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+    ) -> bool {
+        if a == b {
+            return true;
+        }
+        if path.contains(&(a, b)) || path.contains(&(b, a)) {
+            return true;
+        }
+        path.push((a, b));
+        let ok = match (self.node_value(a), self.node_value(b)) {
+            (Some(va), Some(vb)) => self.reconcile_value(va, vb, path),
+            // A node without a value is unknown (free or released) — a
+            // wildcard, never a conflict.
+            _ => true,
+        };
+        path.pop();
+        ok
     }
 
     fn record_error(

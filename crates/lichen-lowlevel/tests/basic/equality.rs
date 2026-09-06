@@ -175,6 +175,66 @@ fn binding_one_member_binds_the_whole_class() {
 }
 
 #[test]
+fn forced_pending_reconciles_against_committed_class_value() {
+    // A pending computation bound to a concrete value defers the check to when
+    // the computation runs: `force_pending` reconciles the computed result
+    // against the value its class already committed, erroring on a concrete
+    // conflict (the deferred check surfacing now).
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // A lazy `Index` read over a *concrete* array, so forcing it resolves.
+    let e0 = usize_node(&mut m, root, 5);
+    let e1 = usize_node(&mut m, root, 3);
+    let arr = array_node(&mut m, root, &[e0, e1], None);
+    let idx = usize_node(&mut m, root, 0);
+    let operands = array_node(&mut m, root, &[arr, idx], None);
+    let read = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
+    // The class is unified (deferred) against a *conflicting* committed value:
+    // the read resolves to 5, but the class committed 99.
+    let committed = usize_node(&mut m, root, 99);
+    m.add_equality(read, committed);
+    // Forcing the read runs the computation and must reconcile with 99 → error.
+    let five = usize_node(&mut m, root, 5);
+    m.unify(read, five);
+    assert_eq!(
+        m.unify_errors.len(),
+        1,
+        "a forced computation that conflicts with its committed value must error"
+    );
+}
+
+#[test]
+fn forced_pending_matching_its_committed_value_is_clean() {
+    // The same read resolved against a *matching* committed value is fine.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let e0 = usize_node(&mut m, root, 5);
+    let e1 = usize_node(&mut m, root, 3);
+    let arr = array_node(&mut m, root, &[e0, e1], None);
+    let idx = usize_node(&mut m, root, 0);
+    let operands = array_node(&mut m, root, &[arr, idx], None);
+    let read = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
+    let committed = usize_node(&mut m, root, 5);
+    m.add_equality(read, committed);
+    let five = usize_node(&mut m, root, 5);
+    m.unify(read, five);
+    assert!(
+        m.unify_errors.is_empty(),
+        "a forced computation that matches its committed value is not an error"
+    );
+}
+
+#[test]
 fn equal_values_merge_and_unequal_values_conflict() {
     let mut m = Module::new();
     let block = m.add_block(None);

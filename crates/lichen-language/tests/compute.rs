@@ -364,73 +364,77 @@ compute.launch
 }
 
 #[test]
-fn parallel_plrun_pget_scalar() {
-    // `compute.parallel` lifts a curried `?a -> USize -> ?b` index function into
-    // a parallel kernel; `plrun k cfg n` runs it over the index range `[0, n)`
-    // with `cfg` fixed and returns a `Buffer`; `pget buf i` reads element `i`.
-    //   f = cfg => i => cfg + i  ⇒  f 10 i = 10 + i
-    //   plrun k 10 4  ⇒  [10, 11, 12, 13];  pget p 2 = 12.
+fn parallel_range_write_is_map() {
+    // `compute.range n` yields the loop index `i ∈ [0, n)`; the index function
+    // writes `i + i` into the output buffer at index `i`.  `plrun k cfg` runs
+    // over `[0, cfg(0))` (the count is fixed at cfg position 0) and returns the
+    // output buffer.  `out = [0, 2, 4, 6]`; `read [out, 2] = 4`.
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-k = compute.parallel (cfg => i => cfg + i)
-p = compute.plrun k (10, 4)
-compute.pget p 2
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + i]
+}
+k = compute.parallel f
+out = compute.plrun k (4,)
+compute.read [out, 2]
 "#);
-    assert_eq!(out, "12: Int", "parallel plrun/pget produced: {out:?}");
+    assert_eq!(out, "4: Int", "parallel range/write map produced: {out:?}");
 }
 
 #[test]
-fn parallel_plrun_pcollect_array() {
-    // `pcollect buf` collects the whole buffer into a lichen array.  The array
-    // value is `[10, 11, 12]`; its length cell is a runtime count, so the type
-    // renders with an unbound length marker.
+fn parallel_read_input_buffer() {
+    // A first kernel writes a buffer `[10, 11, 12]`; a second kernel reads it
+    // (`cfg(1)(0)`, the input buffer tuple at cfg position 1) and doubles it.
+    //   f2: out[i] = f1.out[i] + f1.out[i] = (i + 10) + (i + 10).
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-f = cfg => i => cfg + i
-k = compute.parallel f
-p = compute.plrun k (10, 3)
-compute.pcollect p
+f1 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+k1 = compute.parallel f1
+inbuf = compute.plrun k1 (3,)
+f2 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a + a]
+}
+k2 = compute.parallel f2
+out = compute.plrun k2 (3, (inbuf,))
+compute.read [out, 1]
 "#);
     assert!(
-        out.starts_with("[10, 11, 12]:"),
-        "parallel pcollect produced: {out:?}"
+        out.starts_with("22:"),
+        "parallel read/write produced: {out:?}"
     );
 }
 
 #[test]
-fn parallel_tuple_config() {
-    // A tuple config: the kernel's domain is `<<Int, Int>, USize>` flattened to
-    // three wasm locals — `cfg(0) + cfg(1) + i` reads the two config scalars and
-    // the index.  `plrun k ((3, 4), 2)` ⇒ [3+4+0, 3+4+1] = [7, 8].
+fn parallel_write_only_collects_whole_buffer() {
+    // `compute.collect out` materialises the whole output buffer into an array.
     let out = run(r#"
 @{
   compute = import "compute.lichen"
 @}
-f = (cfg : <Int, Int>) => i => cfg(0) + cfg(1) + i
-k = compute.parallel f
-p = compute.plrun k ((3, 4), 2)
-compute.pget p 1
-"#);
-    assert_eq!(out, "8: Int", "tuple-config parallel produced: {out:?}");
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 1]
 }
-
-#[test]
-fn parallel_kernel_renders_by_name() {
-    // A `parallel` result is a kernel struct whose `.sig` is the lifted
-    // `?a -> USize -> ?b` — so it renders as the struct with that signature in
-    // its `.sig` field.
-    let out = run(r#"
-@{ compute = import "compute.lichen" @}
-f = cfg => i => cfg + i
 k = compute.parallel f
-k
+out = compute.plrun k (3,)
+compute.collect out
 "#);
-    assert_eq!(
-        out, "(ParKernel, parameterized): struct<.native [?a, ?b], .sig Int -> Int -> Int>",
-        "parallel value/type: {out:?}"
+    assert!(
+        out.starts_with("[1, 2, 3]:"),
+        "parallel collect produced: {out:?}"
     );
 }
