@@ -4,7 +4,7 @@
 //! `name = depend "url"` directives in each `@{…@}` meta block: it fetches them
 //! (`fetch`), fetches the toolchain binaries (`install`), rebuilds the
 //! compiler for a native plugin (`rebuild-plugin`), and reclaims the device
-//! cache (`clean` / `cache gc`).
+//! cache (`clean`).
 //!
 //! The `run` and `build` commands orchestrate the workflow but **delegate the
 //! actual compilation to the compiler binary** — they fetch the dependencies
@@ -12,74 +12,120 @@
 //! `lichen-compiler-<name>`) as a subprocess.  The package manager never
 //! compiles a program in-process, so a compiler rebuilt with a native plugin
 //! is the one that actually runs the program.
+//!
+//! `clean` is the exception: the package manager reclaims the plugin-set
+//! compiler cache slots itself, opening each slot's [`lichen_registry::DeviceRegistry`]
+//! and calling `gc()` — no compiler subprocess, and no language/VM dependency
+//! (the registry layer is type-independent, in `lichen-registry`).
+//!
+//! The command surface is declared with clap (derive); each command's runtime
+//! work stays in the `cmd_*` functions below.
 
-use std::env::Args;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use clap::{Parser, Subcommand};
+
 use lichen_package::{DEFAULT_REPO, Depend, Project, compiler_cache, git, plugin, toolchain};
-use lichen_preprocess::{block_depends, split_block};
+use lichen_preprocess::{block_depends, lichendir, split_block};
+use lichen_registry::DeviceRegistry;
 
-const USAGE: &str = "\
-usage: lichen <command> [args]
+#[derive(Parser)]
+#[command(
+    name = "lichen",
+    bin_name = "lichen",
+    version,
+    about = "The lichen package manager: resolve git dependencies, fetch the toolchain binaries, and own the preprocessor import path."
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
 
-commands:
-  fetch <file|dir>                                      fetch the git deps declared
-                                                        by the file(s)' `depend` block
-  run <file|dir> [--repo <u>]                  fetch, then compile & run via
-                                                        the compiler binary
-  build <file> [--repo <u>]                    fetch, then compile & print the
-                                                        exported type via the compiler
-                                                        binary
-  clean                                                 reclaim device-cache artifacts
-  install <compiler|language-server|all> [--repo <u>]  install a prebuilt toolchain binary
-                                                        into Lichen Home, from the release at
-                                                        this binary's own commit
-  update [--repo <u>]                                  update the package manager itself to the
-                                                        repository's latest released commit
-  path <compiler|language-server> [--repo <u>]  print the resolved toolchain
-              [--project <dir>]                 binary path (installing it into
-                                                Lichen Home if absent); for
-                                                language-server, --project
-                                                <dir> composes a server over the
-                                                project's native plugins
-  rebuild-plugin [<file|dir>] [--repo <u>]            build (or reuse) a cached
-                                                        compiler over the project's
-                                                        native plugins
-  cache gc                                              reclaim device-cache artifacts
-  --help, -h                                            print this help
-  --version, -V                                         print the version
-";
+#[derive(Subcommand)]
+enum Command {
+    /// Fetch the git deps declared by the file(s)' `depend` block.
+    Fetch {
+        /// A `.lichen` file, or a directory scanned for `.lichen` files.
+        target: PathBuf,
+    },
+
+    /// Fetch, then compile & run via the compiler binary.
+    Run {
+        /// A `.lichen` file, or a directory scanned for `.lichen` files.
+        target: PathBuf,
+        /// The repository (or local checkout / git URL) the core crates come from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+    },
+
+    /// Fetch, then compile & print the exported type via the compiler binary.
+    Build {
+        /// A `.lichen` file.
+        target: PathBuf,
+        /// The repository (or local checkout / git URL) the core crates come from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+    },
+
+    /// Reclaim device-cache artifacts.
+    Clean,
+
+    /// Install a prebuilt toolchain binary into Lichen Home.
+    Install {
+        /// The tool to install: `compiler`, `language-server`, or `all`.
+        tool: String,
+        /// The repository the release asset is fetched from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+    },
+
+    /// Update the package manager itself to the repository's latest release.
+    Update {
+        /// The repository to update from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+    },
+
+    /// Print the resolved toolchain binary path (installing it if absent).
+    Path {
+        /// The tool: `compiler` or `language-server`.
+        tool: String,
+        /// The repository the release asset is fetched from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+        /// For `language-server`: compose a server over the project's native
+        /// plugins rooted at this directory.
+        #[arg(long)]
+        project: Option<PathBuf>,
+    },
+
+    /// Build (or reuse) a cached compiler over the project's native plugins.
+    RebuildPlugin {
+        /// A `.lichen` file or directory to collect plugins from (default: the
+        /// current project).
+        target: Option<PathBuf>,
+        /// The repository (or local checkout / git URL) the core crates come from.
+        #[arg(long, default_value = DEFAULT_REPO)]
+        repo: String,
+    },
+}
 
 fn main() -> ExitCode {
-    let mut args = std::env::args();
-    let _program = args.next();
-    let Some(arg) = args.next() else {
-        eprintln!("{USAGE}");
-        return ExitCode::FAILURE;
-    };
-    match arg.as_str() {
-        "-h" | "--help" => {
-            println!("{USAGE}");
-            ExitCode::SUCCESS
-        }
-        "-V" | "--version" => {
-            println!("lichen {}", env!("CARGO_PKG_VERSION"));
-            ExitCode::SUCCESS
-        }
-        "fetch" => cmd_fetch(&mut args),
-        "run" => cmd_run(&mut args),
-        "build" => cmd_build(&mut args),
-        "clean" => cmd_clean(&mut args),
-        "install" => cmd_install(&mut args),
-        "update" => cmd_update(&mut args),
-        "path" => cmd_path(&mut args),
-        "rebuild-plugin" => cmd_rebuild_plugin(&mut args),
-        "cache" => cmd_cache(&mut args),
-        other => {
-            eprintln!("unknown command: {other}\n{USAGE}");
-            ExitCode::FAILURE
-        }
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Fetch { target } => cmd_fetch(&target),
+        Command::Run { target, repo } => cmd_run(target, &repo),
+        Command::Build { target, repo } => cmd_build(target, &repo),
+        Command::Clean => cmd_clean(),
+        Command::Install { tool, repo } => cmd_install(&tool, &repo),
+        Command::Update { repo } => cmd_update(&repo),
+        Command::Path {
+            tool,
+            repo,
+            project,
+        } => cmd_path(&tool, &repo, project),
+        Command::RebuildPlugin { target, repo } => cmd_rebuild_plugin(target, &repo),
     }
 }
 
@@ -90,10 +136,6 @@ fn load_current() -> Result<Project, ExitCode> {
         eprintln!("{e}");
         ExitCode::FAILURE
     })
-}
-
-fn take(args: &mut Args) -> Option<String> {
-    args.next()
 }
 
 /// The dependencies declared by a source's `@{…@}` block (`depend` and `plug`
@@ -137,67 +179,54 @@ fn collect_depends(target: &Path) -> Vec<Depend> {
     out
 }
 
+/// Fetch every dependency into the lichen-home source cache, printing each
+/// fetched `alias -> dir`.  Returns an error (with the failing alias) on the
+/// first failure, so callers can abort instead of half-fetching.
+fn fetch_depends(depends: &[Depend]) -> Result<(), String> {
+    for dep in depends {
+        let alias = git::alias_of(dep);
+        match git::fetch(dep) {
+            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
+            Err(e) => return Err(format!("failed to fetch {alias}: {e}")),
+        }
+    }
+    Ok(())
+}
+
 /// Fetch the `depend` directives of every source under `target` into the
 /// lichen-home source cache.
-fn cmd_fetch(args: &mut Args) -> ExitCode {
-    let Some(target) = take(args).map(PathBuf::from) else {
-        eprintln!("usage: lichen fetch <file|dir>");
-        return ExitCode::FAILURE;
-    };
+fn cmd_fetch(target: &Path) -> ExitCode {
     if !target.exists() {
         eprintln!("cannot fetch: {} does not exist", target.display());
         return ExitCode::FAILURE;
     }
-    let depends = collect_depends(&target);
-    let mut fetched = 0;
-    for dep in &depends {
-        let alias = git::alias_of(dep);
-        match git::fetch(dep) {
-            Ok(dir) => {
-                println!("fetched {alias} -> {}", dir.display());
-                fetched += 1;
-            }
-            Err(e) => {
-                eprintln!("failed to fetch {alias}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    if fetched == 0 {
+    let depends = collect_depends(target);
+    if depends.is_empty() {
         println!(
-            "nothing to fetch (no `depend` directives in {}",
+            "nothing to fetch (no `depend` directives in {})",
             target.display()
         );
+        return ExitCode::SUCCESS;
     }
-    ExitCode::SUCCESS
+    match fetch_depends(&depends) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
-fn cmd_run(args: &mut Args) -> ExitCode {
-    let Some(target) = take(args).map(PathBuf::from) else {
-        eprintln!("usage: lichen run <file|dir> [--repo <u>]");
-        return ExitCode::FAILURE;
-    };
-    let repo = match take_repo(args, DEFAULT_REPO) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    delegate(&target, "run", &repo)
+fn cmd_run(target: PathBuf, repo: &str) -> ExitCode {
+    delegate(&target, "run", repo)
 }
 
-fn cmd_build(args: &mut Args) -> ExitCode {
-    let Some(target) = take(args).map(PathBuf::from) else {
-        eprintln!("usage: lichen build <file> [--repo <u>]");
-        return ExitCode::FAILURE;
-    };
+fn cmd_build(target: PathBuf, repo: &str) -> ExitCode {
     if target.is_dir() {
         eprintln!("usage: lichen build <file> (a directory is only valid for `run`)");
         return ExitCode::FAILURE;
     }
-    let repo = match take_repo(args, DEFAULT_REPO) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    delegate(&target, "build", &repo)
+    delegate(&target, "build", repo)
 }
 
 /// The shared `run`/`build` workflow: fetch the target's dependencies into the
@@ -215,15 +244,9 @@ fn delegate(target: &Path, sub: &str, core_repo: &str) -> ExitCode {
         return ExitCode::FAILURE;
     }
     let depends = collect_depends(target);
-    for dep in &depends {
-        let alias = git::alias_of(dep);
-        match git::fetch(dep) {
-            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
-            Err(e) => {
-                eprintln!("failed to fetch {alias}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+    if let Err(e) = fetch_depends(&depends) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
     }
     let bin = match select_compiler(&depends, core_repo) {
         Ok(bin) => bin,
@@ -290,64 +313,52 @@ fn spawn_compiler(bin: &Path, args: &[&str]) -> ExitCode {
 }
 
 /// `lichen clean`: reclaim every device-cache artifact that is no longer a
-/// live `.lichen` (or `virtual:`) source slot.
+/// live `.lichen` (or `virtual:`) source slot, in **every plugin-composed
+/// compiler cache slot** under the lichen home (`compilers/<key>`).
 ///
-/// The package manager never touches the device cache itself — it delegates the
-/// `cache gc` to the compiler binary, which owns the device cache.  (This keeps
-/// the package manager depending only on the preprocessor crate, not the
-/// language/VM stack.)
-fn cmd_clean(_args: &mut Args) -> ExitCode {
-    let Some(bin) = stock_compiler() else {
-        eprintln!(
-            "no `lichen-compiler` on $PATH (or next to `lichen`); run `lichen install compiler`"
-        );
-        return ExitCode::FAILURE;
-    };
-    spawn_compiler(&bin, &["cache", "gc"])
-}
-
-fn cmd_cache(args: &mut Args) -> ExitCode {
-    let Some(sub) = take(args) else {
-        eprintln!("usage: lichen cache gc");
-        return ExitCode::FAILURE;
-    };
-    if sub != "gc" || take(args).is_some() {
-        eprintln!("usage: lichen cache gc");
-        return ExitCode::FAILURE;
-    }
-    cmd_clean(args)
-}
-
-/// Parse a trailing `--repo <u>` (and reject anything else).
-fn take_repo(args: &mut Args, default: &str) -> Result<String, ExitCode> {
-    let mut repo = default.to_string();
-    while let Some(flag) = take(args) {
-        if flag == "--repo" {
-            repo = take(args).unwrap_or(repo);
-        } else {
-            eprintln!("unknown flag: {flag}");
-            return Err(ExitCode::FAILURE);
+/// The package manager owns the clean now: it opens each plugin-set slot's
+/// [`lichen_registry::DeviceRegistry`] and calls `gc()` directly, so it never
+/// needs to spawn (or even install) the compiler binary.  The registry layer
+/// is type-independent (`lichen-registry`), so this pulls no language/VM
+/// stack.  The shipping compiler's own base cache root (`lichendir()`) is
+/// untouched — `clean` reclaims only the per-plugin-set slots.
+fn cmd_clean() -> ExitCode {
+    let compilers_dir = lichendir().join("compilers");
+    match std::fs::read_dir(&compilers_dir) {
+        Ok(entries) => {
+            let mut slots: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.is_dir())
+                .collect();
+            slots.sort();
+            for slot in slots {
+                let mut registry = DeviceRegistry::open(slot.clone());
+                let removed = registry.gc();
+                println!(
+                    "reclaimed {removed} cached artifact(s) from {}",
+                    slot.display()
+                );
+            }
+        }
+        Err(_) => {
+            println!(
+                "no plugin compiler caches under {}",
+                compilers_dir.display()
+            );
         }
     }
-    Ok(repo)
+    ExitCode::SUCCESS
 }
 
 /// `lichen install <tool>`: install a prebuilt toolchain binary into Lichen Home
 /// from the GitHub release at this binary's own commit (so the package manager and
 /// the toolchain are always the same revision).
-fn cmd_install(args: &mut Args) -> ExitCode {
-    let Some(tool) = take(args) else {
-        eprintln!("usage: lichen install <compiler|language-server|all> [--repo <u>]");
-        return ExitCode::FAILURE;
-    };
-    let repo = match take_repo(args, DEFAULT_REPO) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    let tools: Vec<toolchain::Tool> = match tool.as_str() {
+fn cmd_install(tool: &str, repo: &str) -> ExitCode {
+    let tools: Vec<toolchain::Tool> = match tool {
         "all" => toolchain::Tool::ALL_PLUGIN_SENSITIVE.to_vec(),
         _ => {
-            let Some(t) = toolchain::Tool::from_name(&tool) else {
+            let Some(t) = toolchain::Tool::from_name(tool) else {
                 eprintln!("unknown tool: {tool}");
                 return ExitCode::FAILURE;
             };
@@ -355,7 +366,7 @@ fn cmd_install(args: &mut Args) -> ExitCode {
         }
     };
     for t in tools {
-        match toolchain::install(t, &repo) {
+        match toolchain::install(t, repo) {
             Ok(path) => println!("installed {} -> {}", t.bin_name(), path.display()),
             Err(e) => {
                 eprintln!("failed to install {}: {e}", t.bin_name());
@@ -366,14 +377,10 @@ fn cmd_install(args: &mut Args) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `lichen update`: update the package manager itself to the repo's latest commit,
+/// `lichen update`: update the package manager itself to the repo's latest release,
 /// written to `$LICHEN_HOME/tools/lichen`.
-fn cmd_update(args: &mut Args) -> ExitCode {
-    let repo = match take_repo(args, DEFAULT_REPO) {
-        Ok(r) => r,
-        Err(code) => return code,
-    };
-    match toolchain::update(&repo) {
+fn cmd_update(repo: &str) -> ExitCode {
+    match toolchain::update(repo) {
         Ok(None) => {
             println!("lichen is already at the latest release");
             ExitCode::SUCCESS
@@ -398,30 +405,8 @@ fn cmd_update(args: &mut Args) -> ExitCode {
 /// into Lichen Home first if it is absent.  For `language-server`, an optional
 /// `--project <dir>` gathers the project's native-plugin set and composes a
 /// server over it (built + cached into the plugin-set LSP slot).
-fn cmd_path(args: &mut Args) -> ExitCode {
-    let Some(tool) = take(args) else {
-        eprintln!("usage: lichen path <compiler|language-server> [--repo <u>] [--project <dir>]");
-        return ExitCode::FAILURE;
-    };
-    let mut repo = DEFAULT_REPO.to_string();
-    let mut project: Option<PathBuf> = None;
-    while let Some(flag) = take(args) {
-        match flag.as_str() {
-            "--repo" => repo = take(args).unwrap_or(repo),
-            "--project" => {
-                let Some(dir) = take(args) else {
-                    eprintln!("--project requires a directory");
-                    return ExitCode::FAILURE;
-                };
-                project = Some(PathBuf::from(dir));
-            }
-            other => {
-                eprintln!("unknown flag: {other}");
-                return ExitCode::FAILURE;
-            }
-        }
-    }
-    let Some(t) = toolchain::Tool::from_name(&tool) else {
+fn cmd_path(tool: &str, repo: &str, project: Option<PathBuf>) -> ExitCode {
+    let Some(t) = toolchain::Tool::from_name(tool) else {
         eprintln!("unknown tool: {tool}");
         return ExitCode::FAILURE;
     };
@@ -430,10 +415,10 @@ fn cmd_path(args: &mut Args) -> ExitCode {
     // set falls through to the standard shipping resolution below.
     if t == toolchain::Tool::LanguageServer {
         if let Some(dir) = project {
-            return cmd_path_lsp_project(&dir, &repo);
+            return cmd_path_lsp_project(&dir, repo);
         }
     }
-    resolve_and_print(t, &repo)
+    resolve_and_print(t, repo)
 }
 
 /// `lichen path language-server --project <dir>`: gather the project's native
@@ -456,15 +441,9 @@ fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
     // Fetch each plugin so its resolved version can key the LSP cache, then
     // ensure a composed server over the plugin set (or fall through to the
     // shipping server when there are no native plugins).
-    for dep in &plugins {
-        let alias = git::alias_of(dep);
-        match git::fetch(dep) {
-            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
-            Err(e) => {
-                eprintln!("failed to fetch {alias}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+    if let Err(e) = fetch_depends(&plugins) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
     }
     if plugins.is_empty() {
         return resolve_and_print(toolchain::Tool::LanguageServer, repo);
@@ -506,23 +485,11 @@ fn resolve_and_print(t: toolchain::Tool, repo: &str) -> ExitCode {
     }
 }
 
-fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
+fn cmd_rebuild_plugin(target: Option<PathBuf>, repo: &str) -> ExitCode {
     let project = match load_current() {
         Ok(p) => p,
         Err(code) => return code,
     };
-    let mut repo = DEFAULT_REPO.to_string();
-    let mut target: Option<PathBuf> = None;
-    while let Some(v) = take(args) {
-        if v == "--repo" {
-            repo = take(args).unwrap_or(repo);
-        } else if v.starts_with('-') {
-            eprintln!("unknown flag: {v}");
-            return ExitCode::FAILURE;
-        } else {
-            target = Some(PathBuf::from(v));
-        }
-    }
     let target = target.unwrap_or_else(|| project.dir.clone());
     let plugins: Vec<Depend> = collect_depends(&target)
         .into_iter()
@@ -533,18 +500,12 @@ fn cmd_rebuild_plugin(args: &mut Args) -> ExitCode {
     }
     // Fetch the plugins so their resolved versions can key the cache, then
     // build (or reuse) a plugin-composed compiler into the lichen-home cache.
-    for dep in &plugins {
-        let alias = git::alias_of(dep);
-        match git::fetch(dep) {
-            Ok(dir) => println!("fetched {alias} -> {}", dir.display()),
-            Err(e) => {
-                eprintln!("failed to fetch {alias}: {e}");
-                return ExitCode::FAILURE;
-            }
-        }
+    if let Err(e) = fetch_depends(&plugins) {
+        eprintln!("{e}");
+        return ExitCode::FAILURE;
     }
     let leaves = plugin::Leaves::shipping();
-    match compiler_cache::ensure(&repo, &plugins, &leaves) {
+    match compiler_cache::ensure(repo, &plugins, &leaves) {
         Ok(bin) => {
             println!("rebuilt compiler: {}", bin.display());
             ExitCode::SUCCESS

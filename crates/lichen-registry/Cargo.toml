@@ -1,0 +1,9 @@
+[package]
+name = "lichen-registry"
+version = "0.1.0"
+edition = "2024"
+description = "The type-independent half of the device persistence layer: the binary byte codec, the device module key, and the content-addressed artifact registry (open/alloc/publish/verify/gc/remove)."
+
+[dependencies]
+lichen-utils = { path = "../lichen-utils" }
+sha2 = "0.10"

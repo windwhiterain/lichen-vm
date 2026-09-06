@@ -65,12 +65,14 @@ old signatures — generic over `V`/`O`/`C` and returning `Diag<CompiledProgram<
 `lichen-language-server` call them unchanged.  `lichen-package::preprocess` is likewise
 a pure re-export.
 
-## The package manager now depends only on the preprocessor
+## The package manager now depends only on the preprocessor + the registry
 
 `crates/lichen-package` depends on `lichen-preprocess` (+ `lichen-utils` for the
-cache-key hash) — **not** `lichen-language`.  Its `clean`/`cache gc` commands
-delegate to the compiler binary (`lichen-compiler cache gc`), like `run`/`build`
-already delegate, so it never constructs a `PackageStore` or names a `LangValue`.
+cache-key hash) and the type-independent `lichen-registry` — **not**
+`lichen-language`.  Its `run`/`build` commands delegate the compilation to the
+compiler binary, and `clean` opens each plugin-composed compiler slot's
+[`DeviceRegistry`](artifact-cache.md) and calls `gc()` itself, so it never
+constructs a `PackageStore` or names a `LangValue`.
 The plugin-built compiler path (`plugin.rs`) only references `lichen-language` in
 the *generated* crate's source, never as a compile dependency.
 

@@ -18,13 +18,13 @@ project manifest** — dependencies are declared per file.
 lichen fetch <file|dir>                        fetch the git deps declared by the file(s)' `depend` block
 lichen run <file|dir>                          fetch, then compile & run via the compiler binary
 lichen build <file>                            fetch, then compile & print the type via the compiler binary
-lichen clean                                   reclaim device-cache artifacts
+lichen clean                                   reclaim the plugin-composed compiler
+                                                 cache slots (device-cache artifacts)
 lichen install <compiler|language-server|all>  install a prebuilt toolchain binary into Lichen Home
 lichen path <compiler|language-server>         print the resolved toolchain binary path (installing if absent)
 lichen update                                  update the package manager itself to the repo's latest commit
 lichen rebuild-plugin [<file|dir>] [--repo <u>] build (or reuse) a cached compiler
                                                  over the project's native plugins
-lichen cache gc                                reclaim device-cache artifacts
 ```
 
 ## Toolchain model: prebuilt releases into Lichen Home
