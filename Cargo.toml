@@ -18,8 +18,15 @@ members = [
     "lichen-language-zed",
     "crates/lichen-package",
     "lichen-std-native",
-    "tree-sitter-lichen",
 ]
+# `tree-sitter-lichen` is deliberately NOT a workspace member: it is a standalone
+# dev tool for the grammar. Zed builds the grammar itself from `grammar.js`, and
+# the only other consumer (the grammar consistency test) is opt-in, so the default
+# `cargo test --workspace` / WASM build never builds it and never needs the
+# tree-sitter CLI. It is pulled in on demand as an optional dep when the
+# `grammar-consistency` feature is enabled, or tested directly via its manifest:
+#   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
+exclude = ["tree-sitter-lichen"]
 
 # `lichen-std-native` declares its core deps as **git** deps (to this same
 # repo) so an external compose crate (a generated plugin-built compiler) can

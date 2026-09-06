@@ -1,6 +1,10 @@
 //! Parse every sample `.lichen` program and assert the grammar produces no
 //! ERROR nodes.  This exercises `src/parser.c` through the `tree-sitter`
 //! runtime and the `tree-sitter-lichen` Rust binding.
+//!
+//! This crate is not a workspace member, so `cargo test --workspace` never builds it;
+//! run its tests explicitly (via its own manifest) and this runs by default:
+//!   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
 
 use std::fs;
 use std::path::{Path, PathBuf};
