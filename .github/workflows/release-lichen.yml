@@ -1,9 +1,9 @@
 name: release-lichen-toolchain
 
 # Builds the prebuilt toolchain binaries (`lichen`, `lichen-compiler`,
-# `lichen-language-server`) for each host and publishes them to a GitHub release
-# tagged at the checked-out commit. The `lichen` package manager installs those
-# assets into Lichen Home from
+# `lichen-language-server`) for each supported host and publishes them to a GitHub
+# release tagged at the checked-out commit. The `lichen` package manager installs
+# those assets into Lichen Home from
 # `https://github.com/windwhiterain/lichen-vm/releases/download/<commit>/<asset>`,
 # so the asset name must match `toolchain::asset_name` (ie.
 # `<bin>-<host-target>[.exe]`, where `<host-target>` is the Rust host triple).
@@ -12,9 +12,19 @@ name: release-lichen-toolchain
 # the release tag is the commit SHA, which equals the `LICHEN_BUILD_COMMIT` that
 # `lichen` embeds at build time (keeping the toolchain at the same revision as the
 # package manager).
+#
+# By default the release is published as a **full/latest** release. Set the
+# `prerelease` input (or `scripts/release.sh --prerelease`) to publish it as a
+# pre-release instead.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Publish the toolchain as a pre-release instead of a full release"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-lichen-${{ github.sha }}
@@ -32,9 +42,6 @@ jobs:
             suffix: ""
           - os: macos-latest
             triple: aarch64-apple-darwin
-            suffix: ""
-          - os: macos-13
-            triple: x86_64-apple-darwin
             suffix: ""
           - os: windows-latest
             triple: x86_64-pc-windows-msvc
@@ -83,5 +90,5 @@ jobs:
           tag_name: ${{ github.sha }}
           name: "lichen toolchain ${{ github.sha }}"
           draft: false
-          prerelease: true
+          prerelease: ${{ inputs.prerelease }}
           files: dist/**/*
