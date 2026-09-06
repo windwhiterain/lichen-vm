@@ -2,12 +2,13 @@
 //!
 //! The native part injects a [`ComputeValue`] vocabulary — the **`Kernel`**
 //! value (a compiled, runnable wasm artifact), a **`ParKernel`** value, a
-//! **`Buffer`** value, and the **`TypeBuffer`** kind marker — plus the first-class
-//! **`Native` Operator values** (`jit`, `launch`, `call`, `parallel`, `plrun`,
-//! `pget`, `pcollect`), and the [`ComputeOperator`]s
-//! `Jit`/`Launch`/`Call`/`Parallel`/`ParLaunch`/`BufferGet`/`BufferCollect`,
-//! whose [`OperatorExt::run`] does the wasm compile/execute and the global
-//! kernel/buffer registries.
+//! **`Buffer`** value, and the **`TypeBuffer`**/`TypeWrite` kind markers — plus
+//! the first-class **`Native` Operator values** (`jit`, `launch`, `call`,
+//! `parallel`, `plrun`, `range`, `read`, `write`, `collect`), and the
+//! [`ComputeOperator`]s
+//! `Jit`/`Launch`/`Call`/`Parallel`/`ParLaunch`/`Range`/`Read`/`Write`/
+//! `BufferCollect`, whose [`OperatorExt::run`] does the wasm compile/execute
+//! and the global kernel/buffer registries.
 //!
 //! A **kernel value is a lichen struct** `struct<.native _, .sig sig>`: the
 //! `.native` field holds the opaque artifact (a `Kernel`/`ParKernel`), the
@@ -37,8 +38,11 @@
 //! - `launch k a` reads `k.native`/`k.sig`, gates the `.sig` (a function type,
 //!   binding the domain/codomain lazily), unifies `a` against the domain, and
 //!   its result is the kernel's codomain — a function-style apply over a kernel.
-//! - `parallel f` lifts a curried `?a -> USize -> ?b` into a parallel kernel
-//!   struct; `plrun k (cfg, n)` runs it over `[0, n)` into a `Buffer`.
+//! - `parallel f` lifts a single-arg `?cfg -> Write` index function into a
+//!   parallel kernel struct (`cfg = (n, (buffer…))` — the count is `cfg(0)`,
+//!   the input buffers a tuple at `cfg(1)`); `plrun k cfg` runs it over
+//!   `[0, cfg(0))` into a `Buffer`, the index function reading inputs via
+//!   `compute.read [cfg(1)(k), i]` and writing via `compute.write [n, i, val]`.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,8 +54,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowShape, LowValue,
-    Module, ModuleKey, NodeId, OperatorExt, Program, StaticModule,
+    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module,
+    ModuleKey, NodeId, OperatorExt, Program, StaticModule,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -148,6 +152,12 @@ enum KernelInstr {
     /// argument; the caller's launch-time assembler resolves this to an
     /// in-module `call` to the callee kernel's assembled function index.
     CallKernel(KernelId),
+    /// Call the host `read(cfg_pos, idx)` import — the stack holds
+    /// `[cfg_pos, idx]`.
+    BufferReadCall,
+    /// Call the host `write(out_pos, idx, val)` import — the stack holds
+    /// `[out_pos, idx, val]`.
+    BufferWriteCall,
 }
 
 /// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
@@ -189,6 +199,9 @@ pub enum ComputeValue {
     /// The kind marker of buffer types — a buffer's type is
     /// `[element_type, [TypeBuffer, Type]]`.
     TypeBuffer,
+    /// The kind marker of write types — a `Write`'s type is
+    /// `[element_type, [TypeWrite, Type]]`.
+    TypeWrite,
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -203,14 +216,23 @@ pub enum ComputeOperator {
     /// `[kernel, arg]` operand — a cross-kernel call: run kernel `k` (a
     /// `.native` extracted from a kernel struct) on `arg` → the result.
     Call,
-    /// Compile a curried `?a -> USize -> ?b` function to a parallel kernel
-    /// (flattened `(?a, USize) -> ?b`) → a `ParKernel` value.
+    /// Compile a `?cfg -> ?write` index function to a parallel kernel
+    /// (the kernel body is lowered over the loop index) → a `ParKernel` value.
     Parallel,
-    /// `[parallel_kernel, cfg, count]` operand — run the parallel kernel over
-    /// the index range `[0, count)` → a `Buffer` value.
+    /// `[parallel_kernel, cfg]` operand — run the parallel kernel over the
+    /// index range `[0, cfg(0))` (the count is fixed at cfg position 0) →
+    /// a `Buffer` value.
     ParLaunch,
-    /// `[buffer, index]` operand — read one buffer element → `?b`.
-    BufferGet,
+    /// `[n]` operand — the loop index of the current parallel invocation,
+    /// `i ∈ [0, n)`.  Kernel-only; the VM sees `Parameterized`.
+    Range,
+    /// `[buffer, index]` operand — read one buffer element → `?b`.  Inside a
+    /// kernel this lowers to a host `read` import; at the VM it reads a
+    /// `Buffer` value's element (the post-`plrun` read).
+    Read,
+    /// `[length, index, value]` operand — a pending parallel write.  Kernel-only
+    /// (lowers to a host `write` import); the VM sees `Parameterized`.
+    Write,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
 }
@@ -232,7 +254,7 @@ impl ValueCodec for ComputeValue {
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) {
         match value {
-            ComputeValue::TypeBuffer => w.u8(0),
+            ComputeValue::TypeBuffer | ComputeValue::TypeWrite => w.u8(0),
             ComputeValue::Kernel(_) | ComputeValue::ParKernel(_) | ComputeValue::Buffer(_) => {
                 panic!("serializing a compute value (Kernel/ParKernel/Buffer are runtime-only)")
             }
@@ -248,6 +270,7 @@ impl ValueCodec for ComputeValue {
     ) -> Result<Self, String> {
         Ok(match r.u8()? {
             0 => ComputeValue::TypeBuffer,
+            1 => ComputeValue::TypeWrite,
             tag => return Err(format!("unknown compute-value tag {tag}")),
         })
     }
@@ -261,7 +284,9 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Call
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
-            | ComputeOperator::BufferGet
+            | ComputeOperator::Range
+            | ComputeOperator::Read
+            | ComputeOperator::Write
             | ComputeOperator::BufferCollect => {
                 panic!("serializing a compute operator (Jit/Launch/... are runtime-only)")
             }
@@ -421,7 +446,7 @@ where
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("ParLaunch expects an operand array of [kernel, (cfg, count)]")
+                    unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
                 };
                 let operands = operands.items();
                 let Some(ComputeValue::ParKernel(id)) = module
@@ -430,38 +455,50 @@ where
                 else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                // The tuple argument `(cfg, count)`: element 0 is the config
-                // (a scalar `USize` or a (nested) tuple of scalars, flattened
-                // like a `Launch` argument), element 1 is the `USize` count.
-                let Ok(tuple_node) = dyn_node(operands[1].node) else {
+                // The cfg value `(n, (buffer…))`.  Element 0 is the count `n`;
+                // element 1 is a tuple of input `Buffer` values.
+                let Ok(cfg_node) = dyn_node(operands[1].node) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let Some(tuple_items) = module.array_items(tuple_node) else {
+                let Some(cfg_items) = module.array_items(cfg_node) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let mut cfg_args: Vec<i64> = Vec::new();
-                match tuple_items
+                // count = cfg(0), an `Int`/`USize`.
+                let count = match cfg_items
                     .first()
-                    .and_then(|item| module.node_value(item.node))
-                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-                {
-                    Some(LowValue::USize(n)) => cfg_args.push(n as i64),
-                    Some(LowValue::Array(_)) => {
-                        if !collect_args(module, tuple_items[0].node, &mut cfg_args) {
-                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                        }
-                    }
-                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
-                };
-                let count = match tuple_items
-                    .get(1)
                     .and_then(|item| module.node_value(item.node))
                     .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
                 {
                     Some(LowValue::USize(n)) => n,
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
-                match run_parallel_kernel(id, &cfg_args, count) {
+                // input buffers = cfg(1), a tuple of `Buffer` values.
+                let mut inputs: Vec<Vec<i64>> = Vec::new();
+                if let Some(buf_tuple) = cfg_items.get(1)
+                    && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
+                    && let Some(buf_items) = module.array_items(buf_tuple_node)
+                {
+                    for item in buf_items {
+                        match module
+                            .node_value(item.node)
+                            .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                        {
+                            Some(ComputeValue::Buffer(bid)) => {
+                                if let Some(data) = buffer_results(bid) {
+                                    inputs.push(data);
+                                } else {
+                                    return <P::Value as From<LowValue>>::from(
+                                        LowValue::Parameterized,
+                                    );
+                                }
+                            }
+                            _ => {
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
+                        }
+                    }
+                }
+                match run_parallel_kernel(id, count, inputs) {
                     Ok(results) => {
                         let bid = alloc_buffer_id();
                         buffers().lock().unwrap().insert(bid, results);
@@ -470,7 +507,7 @@ where
                     Err(..) => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 }
             }
-            ComputeOperator::BufferGet => {
+            ComputeOperator::Read => {
                 if matches!(
                     AsEnum::<LowValue>::as_enum(&operand),
                     Some(LowValue::Parameterized)
@@ -478,7 +515,7 @@ where
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
-                    unreachable!("BufferGet expects an operand array of [buffer, index]")
+                    unreachable!("Read expects an operand array of [buffer, index]")
                 };
                 let operands = operands.items();
                 let Some(ComputeValue::Buffer(id)) = module
@@ -501,6 +538,12 @@ where
                     }
                     None => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 }
+            }
+            ComputeOperator::Range | ComputeOperator::Write => {
+                // Kernel-only operators: `range`/`write` are lowered by the
+                // parallel JIT to the index/write host imports and never reach
+                // the VM as a standalone apply.  Stay lazy.
+                <P::Value as From<LowValue>>::from(LowValue::Parameterized)
             }
             ComputeOperator::BufferCollect => {
                 if matches!(
@@ -657,36 +700,17 @@ where
     Ok(KernelFragment { param_shape, body })
 }
 
-/// The [`FunctionId`] of the value `node` denotes, if it is (or reaches) a
-/// function value.  Looks through a `[value, type]` pair and a `value_of`
-/// extraction before reading the `LowValue::Function`.
-fn inner_function_id<P>(module: &Module<P>, node: NodeId) -> Result<FunctionId, String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let value_node = pair_value_node(module, node)
-        .or_else(|| value_of_node(module, node))
-        .unwrap_or(node);
-    match module
-        .node_value(AnyNodeId::Dynamic(value_node))
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-    {
-        Some(LowValue::Function(AnyFunctionId::Dynamic(fid))) => Ok(fid),
-        _ => Err("parallel kernel's outer body must be an index function `i => ?b`".into()),
-    }
-}
-
-/// Lower a curried `?a -> USize -> ?b` function into a **parallel kernel** — a
-/// [`KernelFragment`] whose domain is the flattened tuple `(?a, USize)` and
-/// whose body is the inner function's body, traced with two parameter slots
-/// (the config group then the index scalar).
+/// Lower a single-arg `?cfg -> ?write` index function into a **parallel
+/// kernel** — a [`KernelFragment`] whose wasm signature is `(n, index)` (the
+/// count scalar from `cfg(0)`, then the loop index) and whose body is the
+/// index function's body traced with `range`/`read`/`write` host calls.
 ///
 /// `parallel` is the data-parallel lift: running it over the index range
-/// `[0, n)` computes `f cfg i` for each `i` into a [`Buffer`], so the index
-/// (the inner function's parameter) is the *last* scalar of the domain and the
-/// config `?a` is the first group.
+/// `[0, cfg(0))` computes the index function once per index.  The `cfg` is
+/// `(n, (buffer…))` — `cfg(0)` is the count `n` (a wasm scalar param), and the
+/// buffer tuple at `cfg(1)` is host-side (each buffer read via a `read`
+/// import by its position inside the tuple).  The loop index comes from
+/// `compute.range n` (a kernel-only op yielding the index param).
 fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
@@ -700,56 +724,35 @@ where
         return Err("static (imported) functions are not kernel-compilable v1".into());
     };
     let cfg_pair = module.functions[fid].parameter;
-    let cfg_shape = kernel_param_shape(module, cfg_pair)?;
-    match &cfg_shape {
-        LowShape::USize | LowShape::Tuple(_) => {}
-        _ => {
-            return Err(
-                "parallel kernel config domain must be a scalar or a tuple of scalars".into(),
-            );
-        }
-    }
-    // The outer body is the inner index function `i => ?b`.
-    let inner_fid = inner_function_id(module, module.functions[fid].r#return)?;
-    let inner = &module.functions[inner_fid];
-    let i_pair = inner.parameter;
-    let body = inner.r#return;
-    let i_shape = kernel_param_shape(module, i_pair)?;
-    match &i_shape {
-        LowShape::USize => {}
-        _ => return Err("parallel kernel index parameter must be a scalar USize".into()),
-    }
-    // The kernel's result is the inner body's value (through a `[value,type]`
-    // pair, or a bare value node).
+    let body = module.functions[fid].r#return;
+    // The kernel's result is the index function's body value (a `Write`, v1
+    // single output), through a `[value, type]` pair or a bare value node.
     let ret_value = match module.array_items(body) {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
+    // `cfg = (n, (buffer…))`.  `cfg(0)` is the scalar count `n` — the only
+    // scalar wasm param from cfg; the buffer tuple is host-side (read via the
+    // `read` import by its position in `cfg(1)`).  Model the cfg's scalar part
+    // as a `Tuple([USize])` so the emitter maps `cfg(0)` → `local.get 0`.
     let cfg_value = pair_value_node(module, cfg_pair)
-        .ok_or_else(|| "parallel config parameter is not a [value, type] pair".to_string())?;
-    let i_value = pair_value_node(module, i_pair)
-        .ok_or_else(|| "parallel index parameter is not a [value, type] pair".to_string())?;
+        .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
+    let cfg_shape = LowShape::Tuple(vec![LowShape::USize]);
     module.set_node_shape(cfg_value, Some(cfg_shape.clone()));
-    module.set_node_shape(i_value, Some(i_shape.clone()));
-    let cfg_arity = flat_arity(&cfg_shape);
-    let params = vec![
-        ParamSlot {
-            pair: cfg_pair,
-            value: cfg_value,
-            shape: cfg_shape.clone(),
-            base: 0,
-        },
-        ParamSlot {
-            pair: i_pair,
-            value: i_value,
-            shape: i_shape.clone(),
-            base: cfg_arity,
-        },
-    ];
+    let params = vec![ParamSlot {
+        pair: cfg_pair,
+        value: cfg_value,
+        shape: cfg_shape,
+        base: 0,
+    }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
     emit_node(module, &params, ret_value, &mut body_instr)?;
+    // The index function writes into the output buffer (side effects); leave a
+    // dummy scalar on the stack so the shared `assemble_module`'s `-> i64`
+    // signature holds for the write-only kernel.
+    body_instr.push(KernelInstr::Const(0));
     Ok(KernelFragment {
-        param_shape: LowShape::Tuple(vec![cfg_shape, i_shape]),
+        param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
         body: body_instr,
     })
 }
@@ -762,17 +765,43 @@ where
 /// single-kernel set this is the degenerate link — one fragment = one module;
 /// for a kernel that cross-calls others it is the launch-time assembly that
 /// pulls the relative kernel set into one module.
+#[allow(clippy::needless_range_loop)]
 fn assemble_module(
     ordered: &[KernelFragment],
     index: &HashMap<KernelId, u32>,
 ) -> Result<Vec<u8>, String> {
     use wasm_encoder::{
-        CodeSection, ExportKind, ExportSection, Function, FunctionSection, Instruction,
-        Module as WasmModule, TypeSection, ValType,
+        CodeSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
+        ImportSection, Instruction, Module as WasmModule, TypeSection, ValType,
     };
 
-    // Type section: one (param-arity) -> i64 signature per distinct arity.
+    // A fragment that lowers buffer `read`/`write` calls declares the two host
+    // imports (function indices 0 and 1); the defined functions then start at
+    // `base` (2).  A pure scalar kernel has no imports (base 0).
+    let uses_imports = ordered.iter().any(|f| {
+        f.body.iter().any(|i| {
+            matches!(
+                i,
+                KernelInstr::BufferReadCall | KernelInstr::BufferWriteCall
+            )
+        })
+    });
+    let base: u32 = if uses_imports { 2 } else { 0 };
+
+    // Type section: the import signatures (if any), then one
+    // `(param-arity) -> i64` signature per distinct arity.
     let mut types = TypeSection::new();
+    let (mut read_ty, mut write_ty) = (0u32, 0u32);
+    if uses_imports {
+        read_ty = types.len();
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
+        write_ty = types.len();
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
+    }
     let mut type_index_by_arity: HashMap<usize, u32> = HashMap::new();
     let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
     for frag in ordered {
@@ -789,19 +818,25 @@ fn assemble_module(
 
     let mut wasm = WasmModule::new();
     wasm.section(&types);
+    if uses_imports {
+        let mut imports = ImportSection::new();
+        imports.import("env", "read", EntityType::Function(read_ty));
+        imports.import("env", "write", EntityType::Function(write_ty));
+        wasm.section(&imports);
+    }
     let mut funcs = FunctionSection::new();
     for &ti in &func_types {
         funcs.function(ti);
     }
     wasm.section(&funcs);
     let mut exports = ExportSection::new();
-    exports.export("main", ExportKind::Func, 0);
+    exports.export("main", ExportKind::Func, base);
     wasm.section(&exports);
 
     let mut code = CodeSection::new();
     for frag in ordered {
         let mut body = Function::new([]);
-        lower_body(&frag.body, index, &mut body)?;
+        lower_body(&frag.body, index, base, &mut body)?;
         body.instruction(&Instruction::End);
         code.function(&body);
     }
@@ -811,10 +846,14 @@ fn assemble_module(
 
 /// Lower a sequence of abstract [`KernelInstr`]s into a wasm function body.
 /// `index` resolves each cross-kernel `CallKernel` to the callee's in-module
-/// function index (assigned by the launch-time assembly).
+/// function index (assigned by the launch-time assembly), offset by `base`
+/// (the number of leading host-import function indices, so a defined function
+/// `i` is wasm index `base + i`).  `BufferReadCall`/`BufferWriteCall` lower to
+/// the `read` (index 0) and `write` (index 1) imports.
 fn lower_body(
     body: &[KernelInstr],
     index: &HashMap<KernelId, u32>,
+    base: u32,
     out: &mut wasm_encoder::Function,
 ) -> Result<(), String> {
     use wasm_encoder::Instruction;
@@ -853,7 +892,15 @@ fn lower_body(
                 let target = *index.get(kid).ok_or_else(|| {
                     format!("cross-kernel call to kernel {kid} is not in the assembled set")
                 })?;
-                out.instruction(&Instruction::Call(target));
+                out.instruction(&Instruction::Call(base + target));
+            }
+            KernelInstr::BufferReadCall => {
+                // The host `read(cfg_pos, idx)` import — function index 0.
+                out.instruction(&Instruction::Call(0));
+            }
+            KernelInstr::BufferWriteCall => {
+                // The host `write(out_pos, idx, val)` import — function index 1.
+                out.instruction(&Instruction::Call(1));
             }
         }
     }
@@ -1049,6 +1096,21 @@ where
                         return emit_node(module, params, value_node, body);
                     }
                 }
+                // A constant index into a concrete array value selects that
+                // element — the wrapper's slot-read destructuring
+                // (`read [a, b]` → `x(0)/x(1)`, `write [a, b, c]` →
+                // `x(0)/x(1)/x(2)`) leaves `Index(arg_array, k)` ops whose
+                // target is a materialized array value.  `value_of` above only
+                // peels index 0, so handle every constant `k` here.
+                if let Some(k) = usize_value(module, index) {
+                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
+                        if let Some(items) = module.array_items(array_value) {
+                            if let Some(item) = items.get(k) {
+                                return emit_node(module, params, dyn_node(item.node)?, body);
+                            }
+                        }
+                    }
+                }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
                 // 2-element array value indexed by a *computed* (non-constant)
                 // selector, a wasm `select`.  The array may be reached through
@@ -1131,6 +1193,76 @@ where
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
                 return emit_cross_kernel_call(module, params, kernel, arg, body);
             }
+            // The loop index of the current parallel invocation.  The index is
+            // the wasm param immediately after the cfg scalar params.
+            ComputeOperator::Range => {
+                let index_local: usize = params.iter().map(|p| flat_arity(&p.shape)).sum();
+                body.push(KernelInstr::LocalGet(index_local as u32));
+                return Ok(());
+            }
+            // Read an input buffer element: `read [cfg(1)(k), idx]` → the host
+            // `read(cfg_pos=k, idx)` import.  The buffer node is a cfg buffer
+            // tuple slot; its position is the compile-time cfg_pos.
+            ComputeOperator::Read => {
+                let (buf, idx) = operand_pair(module, operation.operand)?;
+                // The buffer operand comes through the wrapper's slot-read
+                // destructuring: `read = x => $read(x(0), x(1))` applied to
+                // `[cfg(1)(k), idx]` leaves `Index(arg_array, 0)` where
+                // `arg_array` is the materialized argument array.  Resolve
+                // that to the actual buffer node (the cfg buffer-tuple slot)
+                // so `parallel_buffer_pos` recognizes it, exactly like the
+                // `Index` emitter peels a constant array element.
+                let mut buf = buf;
+                for _ in 0..8 {
+                    let target_oi = match module.nodes[buf].operation.as_ref() {
+                        Some(op)
+                            if matches!(
+                                AsEnum::<LowOperator>::as_enum(&op.operator),
+                                Some(LowOperator::Index)
+                            ) =>
+                        {
+                            operand_pair(module, op.operand).ok()
+                        }
+                        _ => None,
+                    };
+                    let Some((target, index)) = target_oi else {
+                        break;
+                    };
+                    let Some(k) = usize_value(module, index) else {
+                        break;
+                    };
+                    let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
+                        break;
+                    };
+                    let Some(items) = module.array_items(array_value) else {
+                        break;
+                    };
+                    let Some(item) = items.get(k) else { break };
+                    buf = dyn_node(item.node)?;
+                }
+                let pos = parallel_buffer_pos(module, params, buf).ok_or_else(|| {
+                    "read's buffer argument is not a cfg buffer tuple slot (cfg(1)(k))".to_string()
+                })?;
+                body.push(KernelInstr::Const(pos as i64));
+                emit_node(module, params, idx, body)?;
+                body.push(KernelInstr::BufferReadCall);
+                return Ok(());
+            }
+            // A pending write: `write [n, idx, val]` → the host
+            // `write(out_pos=0, idx, val)` import (v1 single output buffer).
+            ComputeOperator::Write => {
+                let operand = operation
+                    .operand
+                    .ok_or_else(|| "write operand array is missing".to_string())?;
+                let items = operand_items(module, operand)?;
+                let idx = dyn_node(items[1].node)?;
+                let val = dyn_node(items[2].node)?;
+                body.push(KernelInstr::Const(0)); // out_pos
+                emit_node(module, params, idx, body)?;
+                emit_node(module, params, val, body)?;
+                body.push(KernelInstr::BufferWriteCall);
+                return Ok(());
+            }
             // Jitting another function from *inside* a kernel body is not a v1
             // cross-kernel call; launching a parallel kernel from inside a body
             // is likewise deferred.
@@ -1144,6 +1276,46 @@ where
     Err(format!(
         "unsupported operation in kernel body: {op:?} (kernel-safe subset is scalar arith)"
     ))
+}
+
+/// The buffer's cfg position, if `node` is a cfg buffer-tuple slot
+/// `cfg(1)(k)` in a parallel kernel — the position `k` the host `read` import
+/// reads.  `params[0]` is the cfg parameter slot; its `.value` is the cfg tuple
+/// value node, and the buffer tuple lives at `cfg(1)`.
+fn parallel_buffer_pos<P>(module: &Module<P>, params: &[ParamSlot], node: NodeId) -> Option<usize>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let cfg_value = params.first()?.value;
+    let operation = module.nodes[node].operation?;
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&operation.operator),
+        Some(LowOperator::Index)
+    ) {
+        return None;
+    }
+    let (target, index) = operand_pair(module, operation.operand).ok()?;
+    let k = usize_value(module, index)?;
+    let target_op = module.nodes[target].operation?;
+    if !matches!(
+        AsEnum::<LowOperator>::as_enum(&target_op.operator),
+        Some(LowOperator::Index)
+    ) {
+        return None;
+    }
+    let (tt, ti) = operand_pair(module, target_op.operand).ok()?;
+    // The body's cfg reads reference the cfg value through `Index(cfg_pair, 0)`
+    // (a read node) rather than the value node itself, so compare the two cfg
+    // value slots by *equality class* (as the `emit_node` parameter-read path
+    // does) instead of node identity.
+    if equality_rep(module, tt) != equality_rep(module, cfg_value)
+        || usize_value(module, ti) != Some(1)
+    {
+        return None;
+    }
+    Some(k)
 }
 
 /// Emit a cross-kernel call (style 2): the (scalar) argument expression, then
@@ -1541,65 +1713,114 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     Ok(result as usize)
 }
 
+/// The execution state a parallel kernel's host imports read/write against:
+/// the input buffers (indexed by cfg position) and the single output buffer
+/// (indexed by element).  Carried as the wasmi [`wasmi::Store`] data, so the
+/// `read`/`write` imports reach it through `Caller::data`/`data_mut`.
+struct ParallelState {
+    /// The input buffers (the cfg buffer tuple), indexed by cfg position.
+    inputs: Vec<Vec<i64>>,
+    /// The output buffer being written (v1: a single buffer, length `count`).
+    output: Vec<i64>,
+}
+
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
-/// flattened-kernel `(?a, USize) -> ?b` once per index with the (already
-/// flattened) config argument vector fixed, and collect the `?b` results into a
-/// `Vec<i64>`.
+/// index function once per index with `cfg(0) = count` and the cfg input
+/// buffers fixed, and collecting the writes into the output buffer.
 ///
-/// The indices are distributed across a bounded pool of scoped threads (one
-/// chunk per worker, so a large range is genuinely concurrent — the "parallel"
-/// of the data-parallel lift), each worker running its own [`run_kernel`] on the
-/// kernel's relative launch set.  Results are placed back in index order, so the
-/// buffer is deterministic regardless of scheduling.
-fn run_parallel_kernel(id: KernelId, cfg_args: &[i64], count: usize) -> Result<Vec<i64>, String> {
-    // Warm the kernel once: this validates the fragment, the assembly, and the
-    // config arity, so a broken parallel kernel fails fast (before threads).
-    let _ = run_kernel(id, &[cfg_args, &[0]].concat())?;
-    let mut results = vec![0i64; count];
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(1)
-        .min(count.max(1));
-    if workers <= 1 || count <= 1 {
-        for i in 0..count {
-            let args = [cfg_args, &[i as i64]].concat();
-            results[i] = run_kernel(id, &args)? as i64;
-        }
-        return Ok(results);
+/// The kernel is a wasm function with two host imports — `read(cfg_pos, idx)`
+/// reads an input buffer element, `write(out_pos, idx, val)` writes an output
+/// buffer element — wired to the host-side input/output buffers through the
+/// [`ParallelState`] the store carries.  The kernel is called once per index;
+/// the writes accumulate into the output buffer (last write to a slot wins, a
+/// scatter).  v1 runs sequentially (the data-parallelism is logical); a worker
+/// pool is future work.
+fn run_parallel_kernel(
+    id: KernelId,
+    count: usize,
+    inputs: Vec<Vec<i64>>,
+) -> Result<Vec<i64>, String> {
+    let fragment = kernels()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+    let ordered = vec![fragment];
+    let index: HashMap<KernelId, u32> = [(id, 0)].into();
+
+    let bytes = assemble_module(&ordered, &index)?;
+    let engine = wasmi::Engine::default();
+    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+    let output = vec![0i64; count];
+    let mut store = wasmi::Store::new(&engine, ParallelState { inputs, output });
+    let mut linker = wasmi::Linker::new(&engine);
+
+    let read_ty = wasmi::FuncType::new(
+        [wasmi::ValType::I64, wasmi::ValType::I64],
+        [wasmi::ValType::I64],
+    );
+    let write_ty = wasmi::FuncType::new(
+        [
+            wasmi::ValType::I64,
+            wasmi::ValType::I64,
+            wasmi::ValType::I64,
+        ],
+        [],
+    );
+    linker
+        .func_new(
+            "env",
+            "read",
+            read_ty,
+            |caller: wasmi::Caller<'_, ParallelState>,
+             params: &[wasmi::Val],
+             results: &mut [wasmi::Val]| {
+                let pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
+                let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
+                let value = caller
+                    .data()
+                    .inputs
+                    .get(pos)
+                    .and_then(|v| v.get(idx))
+                    .copied()
+                    .unwrap_or(0);
+                results[0] = wasmi::Val::I64(value);
+                Ok(())
+            },
+        )
+        .map_err(|e| e.to_string())?;
+    linker
+        .func_new(
+            "env",
+            "write",
+            write_ty,
+            |mut caller: wasmi::Caller<'_, ParallelState>,
+             params: &[wasmi::Val],
+             _results: &mut [wasmi::Val]| {
+                let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
+                let value = params.get(2).and_then(|v| v.i64()).unwrap_or(0);
+                if let Some(slot) = caller.data_mut().output.get_mut(idx) {
+                    *slot = value;
+                }
+                Ok(())
+            },
+        )
+        .map_err(|e| e.to_string())?;
+
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| e.to_string())?;
+    let main = instance
+        .get_func(&store, "main")
+        .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
+    for i in 0..count {
+        let args = [wasmi::Val::I64(count as i64), wasmi::Val::I64(i as i64)];
+        let mut outputs = [wasmi::Val::I64(0)];
+        main.call(&mut store, &args, &mut outputs)
+            .map_err(|e| e.to_string())?;
     }
-    std::thread::scope(|scope| {
-        let chunk = count.div_ceil(workers);
-        let cfg = cfg_args.to_vec();
-        let mut handles: Vec<(usize, std::thread::ScopedJoinHandle<'_, Vec<i64>>)> = Vec::new();
-        for w in 0..workers {
-            let lo = w * chunk;
-            if lo >= count {
-                break;
-            }
-            let hi = (lo + chunk).min(count);
-            let cfg = cfg.clone();
-            handles.push((
-                lo,
-                scope.spawn(move || {
-                    let mut out = Vec::with_capacity(hi - lo);
-                    for i in lo..hi {
-                        let args = [cfg.as_slice(), &[i as i64]].concat();
-                        match run_kernel(id, &args) {
-                            Ok(value) => out.push(value as i64),
-                            Err(e) => eprintln!("parallel kernel index {i} failed: {e}"),
-                        }
-                    }
-                    out
-                }),
-            ));
-        }
-        // Join in index order and copy into the result vector.
-        for (lo, handle) in handles {
-            let vals = handle.join().expect("parallel worker panicked");
-            results[lo..lo + vals.len()].copy_from_slice(&vals);
-        }
-    });
-    Ok(results)
+    Ok(store.into_data().output)
 }
 
 // --- Native-op registry: the plugin's opt-in to the native-plugin contract --
@@ -1635,16 +1856,20 @@ macro_rules! compute_native_ops {
         static CALL: $crate::CallOp = $crate::CallOp;
         static PARALLEL: $crate::ParallelOp = $crate::ParallelOp;
         static PARLAUNCH: $crate::ParLaunchOp = $crate::ParLaunchOp;
-        static PGET: $crate::BufferGetOp = $crate::BufferGetOp;
-        static PCOLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
+        static RANGE: $crate::RangeOp = $crate::RangeOp;
+        static READ: $crate::ReadOp = $crate::ReadOp;
+        static WRITE: $crate::WriteOp = $crate::WriteOp;
+        static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
             ("jit", &JIT as &dyn $crate::NativeOp<$program>),
             ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
             ("call", &CALL as &dyn $crate::NativeOp<$program>),
             ("parallel", &PARALLEL as &dyn $crate::NativeOp<$program>),
             ("plrun", &PARLAUNCH as &dyn $crate::NativeOp<$program>),
-            ("pget", &PGET as &dyn $crate::NativeOp<$program>),
-            ("pcollect", &PCOLLECT as &dyn $crate::NativeOp<$program>),
+            ("range", &RANGE as &dyn $crate::NativeOp<$program>),
+            ("read", &READ as &dyn $crate::NativeOp<$program>),
+            ("write", &WRITE as &dyn $crate::NativeOp<$program>),
+            ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
         ];
         Box::leak(ops.into_boxed_slice()) as $crate::NativeOps<$program>
     }};
@@ -1789,21 +2014,30 @@ where
     }
 }
 
-/// `$parallel(f)` — compile a curried `?a -> USize -> ?b` index function into a
-/// parallel kernel.  The curried-arrow gate verifies `f` is a two-argument
-/// function whose first argument is the config and whose second is a `USize`
-/// index (bound through the `Int` type cell), binding the config `?a` and
-/// element `?b` to fresh cells for the buffer ops to read.
+/// `$parallel(f)` — compile a single-arg `?cfg -> ?write` index function into a
+/// parallel kernel.  The function-ness gate verifies `f` is a function; the
+/// body is lowered over the loop index (from `compute.range n`) and the cfg
+/// buffers (read via `compute.read`).
 pub struct ParallelOp;
 
-/// `$plrun(pk, cfg, n)` — run a parallel kernel over the index range `[0, n)`
-/// with config `cfg` fixed, collecting the `n` element results into a `Buffer`.
+/// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg(0))`
+/// with the input buffers from `cfg(1)` fixed, collecting the writes into a
+/// `Buffer`.  The count is `cfg(0)`.
 pub struct ParLaunchOp;
 
-/// `$pget(buf, i)` — read element `i` of a buffer.
-pub struct BufferGetOp;
+/// `$range(n)` — the loop index `i ∈ [0, n)` of the current parallel
+/// invocation.  Kernel-only (lowers to the index parameter).
+pub struct RangeOp;
 
-/// `$pcollect(buf)` — collect a whole buffer into a lichen array `[?b]`.
+/// `$read(buf, i)` — read one buffer element → `?b`.  In-kernel this lowers to
+/// the host `read` import; at the VM it reads a `Buffer` value's element.
+pub struct ReadOp;
+
+/// `$write(n, i, val)` — a pending parallel write into the output buffer at `i`
+/// (length `n`).  Kernel-only (lowers to the host `write` import).
+pub struct WriteOp;
+
+/// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
 pub struct BufferCollectOp;
 
 impl<P> NativeOp<P> for ParallelOp
@@ -1814,19 +2048,15 @@ where
 {
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let f = &args[0];
-        // Curried-arrow gate: `f : ?a -> r0`.
+        // Function-ness gate: `f : ?cfg -> ?write` (a single-arg index function;
+        // the loop index comes from `compute.range n` inside the body, not a
+        // second function parameter).
         let d0 = ctx.fresh();
-        let r0 = ctx.fresh();
-        let outer_shape = ctx.array_node(&[d0, r0]);
+        let c0 = ctx.fresh();
+        let outer_shape = ctx.array_node(&[d0, c0]);
         let fn_kind = ctx.kind_expr(ctx.function_type_marker_node());
         let fn_ty = ctx.array_node(&[outer_shape, fn_kind]);
         ctx.check_unify(f.ty, fn_ty, loc.clone(), DiagKind::Guard);
-        // Inner-arrow gate: `r0 : Int -> ?b` — the index is a `USize`/`Int`.
-        let b = ctx.fresh();
-        let inner_shape = ctx.array_node(&[ctx.int_type(), b]);
-        let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
-        let inner_ty = ctx.array_node(&[inner_shape, inner_kind]);
-        ctx.check_unify(r0, inner_ty, loc.clone(), DiagKind::Guard);
         // The bare native parallel kernel artifact — the lichen wrapper wraps
         // this value into a `kernel` struct (`.native`).  Opaque: typed `_`.
         let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(f.value));
@@ -1846,52 +2076,47 @@ where
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator> + From<LowOperator>,
 {
-    /// `$plrun(native, sig, a)` — run parallel kernel `native` over `a`.  The
-    /// lichen wrapper extracts `.native`/`.sig` out of the kernel struct; the
-    /// native op only gates the signature (a lifted `?d0 -> (Int -> ?b)`) and
-    /// the `(config, count)` argument, and never re-parses the struct.
+    /// `$plrun(native, sig, a)` — run parallel kernel `native` over `a` (the
+    /// `cfg`).  The lichen wrapper extracts `.native`/`.sig` out of the kernel
+    /// struct; the native op gates the signature as `?cfg -> Write` and the
+    /// `cfg` argument against the domain, and types the result as a `Buffer`
+    /// whose element type is the `Write`'s element type.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let native = &args[0];
         let sig = &args[1];
         let a = &args[2];
-        // The signature value is the lifted `?d0 -> (Int -> ?b)` function type:
-        // gate it, binding the config cell and the element cell.  The element
-        // type `?b` is read *lazily* out of the signature (`Index(Index(Index(
-        // Index(sig.ty,0),1),0),1)`) so the frozen `$plrun` template's generic
-        // kernel resolves it once a concrete kernel struct binds at apply time,
-        // and the buffer result type `[b, [TypeBuffer, Type]]` then carries the
-        // real element type instead of an unbound `?a`.
-        let d0 = ctx.fresh();
-        let mid = ctx.fresh();
+        // The signature is a single-arg function `?cfg -> Write`.  Read the
+        // signature *lazily* (like `LaunchOp`) so the frozen `$plrun` template's
+        // generic kernel resolves its codomain once a concrete kernel struct
+        // binds at apply time:
+        //   sig_shape = Index(sig.ty, 0)   → [?cfg, write_ty]
+        //   write_ty  = Index(sig_shape, 1) → the Write type
+        //   b         = Index(write_ty, 0)  → the output element type `?b`
         let zero = ctx.value_node(<P::Value as From<LowValue>>::from(LowValue::USize(0)));
         let one = ctx.value_node(<P::Value as From<LowValue>>::from(LowValue::USize(1)));
         let sig_shape_ops = ctx.array_node(&[sig.ty, zero]);
         let sig_shape = ctx.op_node(P::Operator::from(LowOperator::Index), Some(sig_shape_ops));
-        let inner_ty_ops = ctx.array_node(&[sig_shape, one]);
-        let inner_ty = ctx.op_node(P::Operator::from(LowOperator::Index), Some(inner_ty_ops));
-        let inner_shape_ops = ctx.array_node(&[inner_ty, zero]);
-        let inner_shape = ctx.op_node(P::Operator::from(LowOperator::Index), Some(inner_shape_ops));
-        let b_ops = ctx.array_node(&[inner_shape, one]);
+        let write_ty_ops = ctx.array_node(&[sig_shape, one]);
+        let write_ty = ctx.op_node(P::Operator::from(LowOperator::Index), Some(write_ty_ops));
+        let b_ops = ctx.array_node(&[write_ty, zero]);
         let b = ctx.op_node(P::Operator::from(LowOperator::Index), Some(b_ops));
-        let pat_inner_shape = ctx.array_node(&[mid, b]);
-        let inner_kind = ctx.kind_expr(ctx.function_type_marker_node());
-        let inner_ty_pat = ctx.array_node(&[pat_inner_shape, inner_kind]);
-        let sig_shape_pat = ctx.array_node(&[d0, inner_ty_pat]);
+        // Gate the signature as `[?cfg, write_ty]` function type and the
+        // codomain as a `Write` type `[b, [TypeWrite, Type]]`, so `b` resolves
+        // to the actual output element type.
+        let d0 = ctx.fresh();
+        let sig_shape_pat = ctx.array_node(&[d0, write_ty]);
         let sig_kind = ctx.kind_expr(ctx.function_type_marker_node());
         let sig_ty = ctx.array_node(&[sig_shape_pat, sig_kind]);
         ctx.check_unify(sig.ty, sig_ty, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(mid, ctx.int_type(), loc.clone(), DiagKind::Guard);
-        // The argument is a `(config, count)` tuple: unify `a`'s type with a
-        // 2-tuple, binding the config cell to the domain `?d0` and the count to a
-        // `USize`.
-        let cfg_cell = ctx.fresh();
-        let n_cell = ctx.fresh();
-        let tuple_shape = ctx.array_node(&[cfg_cell, n_cell]);
-        let tuple_kind = ctx.kind_expr(ctx.tuple_type_marker_node());
-        let tuple_ty = ctx.array_node(&[tuple_shape, tuple_kind]);
-        ctx.check_unify(a.ty, tuple_ty, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(cfg_cell, d0, loc.clone(), DiagKind::Guard);
-        ctx.check_unify(n_cell, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeWrite,
+        ));
+        let write_kind = ctx.kind_expr(write_marker);
+        let write_ty_pat = ctx.array_node(&[b, write_kind]);
+        ctx.check_unify(write_ty, write_ty_pat, loc.clone(), DiagKind::Guard);
+        // The argument is the `cfg = (n, (buffer…))`; unify it against the
+        // kernel's domain.
+        ctx.check_unify(a.ty, d0, loc.clone(), DiagKind::Guard);
         // Buffer result type: `[?b, [TypeBuffer, Type]]`.
         let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeBuffer,
@@ -1912,16 +2137,42 @@ where
     }
 }
 
-impl<P> NativeOp<P> for BufferGetOp
+impl<P> NativeOp<P> for RangeOp
 where
     P: HighProgram,
     P::Value: ValueType + From<ComputeValue>,
     P::Operator: From<ComputeOperator>,
 {
+    /// `$range(n)` — the loop index of the current parallel invocation.  Gate
+    /// `n` as `Int`; the operation is kernel-only (lowers to the index param),
+    /// so the result type is `Int`.
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let n = &args[0];
+        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        let operands = ctx.array_node(&[n.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Range), Some(operands));
+        let pair = ctx.array_node(&[op, ctx.int_type()]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: ctx.int_type(),
+        }
+    }
+}
+
+impl<P> NativeOp<P> for ReadOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$read(buf, i)` — read one buffer element.  Buffer gate
+    /// `buf : [?b, [TypeBuffer, Type]]` (binding the element type), index gate
+    /// `Int`; the result is the element type `?b`.  In-kernel this lowers to the
+    /// host `read` import; at the VM it reads a buffer value's element.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let b = &args[0];
         let i = &args[1];
-        // Buffer gate: `b : [?b, [TypeBuffer, Type]]`, binding the element type.
         let elem = ctx.fresh();
         let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeBuffer,
@@ -1931,15 +2182,49 @@ where
         ctx.check_unify(b.ty, buf_ty, loc.clone(), DiagKind::Guard);
         ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
         let operands = ctx.array_node(&[b.value, i.value]);
-        let op = ctx.op_node(
-            P::Operator::from(ComputeOperator::BufferGet),
-            Some(operands),
-        );
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Read), Some(operands));
         let pair = ctx.array_node(&[op, elem]);
         NativeApply {
             node: pair,
             val: None,
             ty: elem,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for WriteOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$write(n, i, val)` — a pending parallel write into the output buffer at
+    /// index `i` (length `n`).  Gate `n` and `i` as `Int`, `val` as the element
+    /// type `?b`; the result is a `Write` type `[?b, [TypeWrite, Type]]`.
+    /// Kernel-only (lowers to the host `write` import).
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let n = &args[0];
+        let i = &args[1];
+        let val = &args[2];
+        ctx.check_unify(n.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        ctx.check_unify(i.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        // The `Write`'s element type is pinned to the canonical `Int` (v1: the
+        // val must be an `Int`), so the kernel signature's codomain carries a
+        // *concrete* element type — `compute.read` then returns `Int` and a
+        // dependent index function (`a + a`) typechecks.
+        ctx.check_unify(val.ty, ctx.int_type(), loc.clone(), DiagKind::Guard);
+        let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
+            ComputeValue::TypeWrite,
+        ));
+        let write_kind = ctx.kind_expr(write_marker);
+        let write_ty = ctx.array_node(&[ctx.int_type(), write_kind]);
+        let operands = ctx.array_node(&[n.value, i.value, val.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Write), Some(operands));
+        let pair = ctx.array_node(&[op, write_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: write_ty,
         }
     }
 }
