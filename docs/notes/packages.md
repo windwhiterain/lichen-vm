@@ -16,7 +16,7 @@ never see it; the code to compile is everything after the block.
 ## Import
 
 - The block syntax is the only import form: `@{ _p = import "geometry.lichen" @}`.
-- A dependency is declared first (`geo = depend "url" sub = "liche-std"`),
+- A dependency is declared first (`geo = depend "url" sub = "lichen-std"`),
   fetched into the lichen-home source cache, and staged on the import path — then
   `_geo = import "geo"` resolves into it (into the repo's `sub` subdirectory when
   one is given).

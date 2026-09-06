@@ -154,7 +154,7 @@ macro_rules! lang_compose_vocabulary {
         ///
         /// This is a **local newtype** around the highlevel's
         /// [`::lichen_highlevel::program::ProgramImpl`] marker, not a type
-        /// alias.  A composition site *inside* `liche_language` may implement
+        /// alias.  A composition site *inside* `lichen_language` may implement
         /// any trait for an alias of its own types, but an **external**
         /// composition site (a plugin-built compiler crate; `std_native.rs`'s
         /// `HostProgram`) cannot: writing `impl ProgramCodecOf for

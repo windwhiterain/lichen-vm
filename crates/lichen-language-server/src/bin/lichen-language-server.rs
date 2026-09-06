@@ -3,12 +3,12 @@
 //!
 //! All of the actual editor behavior — span↔position conversion, name
 //! resolution, the shared frontend artefacts — lives in the
-//! `lichen-language-server` library (see [`liche_language_server::server`] and
-//! [`liche_language_server::analysis::Doc`]).  This binary is a thin wrapper
+//! `lichen-language-server` library (see [`lichen_language_server::server`] and
+//! [`lichen_language_server::analysis::Doc`]).  This binary is a thin wrapper
 //! that drives the shared generic server over the shipping
-//! [`LangProgram`](liche_language::program::LangProgram); a plugin-built server
-//! (composed by the `liche` package manager over a project's plugin set) is the
-//! same [`liche_language_server::server::main`] instantiated with its composed
+//! [`LangProgram`](lichen_language::program::LangProgram); a plugin-built server
+//! (composed by the `lichen` package manager over a project's plugin set) is the
+//! same [`lichen_language_server::server::main`] instantiated with its composed
 //! program instead.
 //!
 //! Run it directly, or install it as the LSP binary that a Zed extension launches:

@@ -124,22 +124,22 @@ is the whole signal.
 ### 7. Toolchain in Lichen Home
 
 The extension does not bundle the server (Zed's publishing rules); `language_server_command`
-resolves it with `Worktree::which` (which searches `$PATH`), else drives the `liche` package
-manager: `liche path language-server` installs the **prebuilt** compiler + language server into
+resolves it with `Worktree::which` (which searches `$PATH`), else drives the `lichen` package
+manager: `lichen path language-server` installs the **prebuilt** compiler + language server into
 **Lichen Home** (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-manager's own commit and prints the binary path. `liche` is found on `$PATH` or at
-`$LICHEN_HOME/tools/liche`. Run it by hand:
+manager's own commit and prints the binary path. `lichen` is found on `$PATH` or at
+`$LICHEN_HOME/tools/lichen`. Run it by hand:
 
 ```powershell
-liche install language-server
-liche path language-server       # prints the binary path (installing if absent)
-liche update                     # move the package manager to the latest commit
+lichen install language-server
+lichen path language-server       # prints the binary path (installing if absent)
+lichen update                     # move the package manager to the latest commit
 ```
 
 Check the server resolves:
 
 ```powershell
-liche path language-server   # must print an existing path under ~/.lichen
+lichen path language-server   # must print an existing path under ~/.lichen
 ```
 
 If it is missing, Zed reports "`lichen-language-server` not found on `$PATH`" when a

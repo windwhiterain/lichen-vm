@@ -21,17 +21,17 @@ repository = "https://github.com/windwhiterain/lichen-vm"
 # `language_server_command` supplies the command.
 #
 # On first launch, if the server is not already on `$PATH`, the extension reports
-# install progress to Zed and asks the `liche` package manager to ensure it is
-# present: `liche path language-server` installs the *prebuilt* compiler + language
+# install progress to Zed and asks the `lichen` package manager to ensure it is
+# present: `lichen path language-server` installs the *prebuilt* compiler + language
 # server into Lichen Home (`$LICHEN_HOME`, default `~/.lichen`) at the package
-# manager's own commit and prints the binary path. `liche` is found on `$PATH` or
-# at `$LICHEN_HOME/tools/liche`; how it was installed does not matter. Run `liche
+# manager's own commit and prints the binary path. `lichen` is found on `$PATH` or
+# at `$LICHEN_HOME/tools/lichen`; how it was installed does not matter. Run `lichen
 # update` to move the package manager (and the toolchain it installs) to a later
 # commit.
 #
 # The extension passes the worktree root as `--project <root>` so that a project
 # importing a *native plugin* composes its own language server over that plugin
-# set (`liche path language-server --project <root>` builds/caches the composed
+# set (`lichen path language-server --project <root>` builds/caches the composed
 # server into the plugin-set LSP slot, understanding the plugin's leaves for
 # diagnostics / hover / go-to-definition). A project without native plugins uses
 # the shipping server.

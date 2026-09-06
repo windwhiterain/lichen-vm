@@ -27,7 +27,7 @@
 //! its composed value/operator vocabularies carry [`ComputeValue`],
 //! [`ComputeOperator`], [`LowOperator`], and [`TypeOperator`] (all leaves of
 //! `LangProgram`'s `enum_ext!` composition).  A host composes those leaves
-//! and wires the plugin's native registry itself (see the `liche-language`
+//! and wires the plugin's native registry itself (see the `lichen-language`
 //! crate's `package.rs`).
 //!
 //! ## Type-checking coverage
@@ -1618,7 +1618,7 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 /// Assemble `lichen-compute`'s private native-operator registry for a host
 /// program `$program`, expanding to a `&'static` [`NativeOps`].
 ///
-/// Invoked by a host that composes the plugin (see `liche-language`'s
+/// Invoked by a host that composes the plugin (see `lichen-language`'s
 /// `package.rs`), so the `$jit`/`$launch` names stay private to the plugin's
 /// own embedded source.  The host names only the plugin crate and its program
 /// marker — never the plugin's op structs — so this is the composition point a

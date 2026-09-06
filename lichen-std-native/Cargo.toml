@@ -9,7 +9,7 @@ description = "A standard-library native plugin for lichen: a Rust-backed `SortO
 # workspace members, so a *compositor* — an externally-generated plugin compiler
 # crate that depends on this plugin via git — resolves the whole core subtree
 # from git rather than through path deps into another workspace (which cargo
-# cannot fresh-resolve; see `liche-package/src/plugin.rs`).  The crate is still a
+# cannot fresh-resolve; see `lichen-package/src/plugin.rs`).  The crate is still a
 # workspace *member*: the repo-root `[workspace]` patches these git deps back to
 # the local path members for the monorepo's own build.
 lichen-highlevel = { git = "https://github.com/windwhiterain/lichen-vm", package = "lichen-highlevel" }

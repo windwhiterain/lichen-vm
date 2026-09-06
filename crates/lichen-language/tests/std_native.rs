@@ -47,7 +47,7 @@ use host::{LangOperator, LangValue};
 
 /// The program marker the frontend/checker drive over the composed vocabulary.
 ///
-/// [`liche_language::program::LangAttr`] fixes the attribute set to the
+/// [`lichen_language::program::LangAttr`] fixes the attribute set to the
 /// language's shipping `LangAttr`, so the composed operator vocabulary must
 /// implement [`lichen_lowlevel::OperatorExt`] for *that* program — the
 /// `lang_compose_vocabulary!` macro generates it only for its own

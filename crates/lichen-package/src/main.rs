@@ -332,7 +332,7 @@ fn take_repo(args: &mut Args, default: &str) -> Result<String, ExitCode> {
     Ok(repo)
 }
 
-/// `liche install <tool>`: install a prebuilt toolchain binary into Lichen Home
+/// `lichen install <tool>`: install a prebuilt toolchain binary into Lichen Home
 /// from the GitHub release at this binary's own commit (so the package manager and
 /// the toolchain are always the same revision).
 fn cmd_install(args: &mut Args) -> ExitCode {
@@ -366,8 +366,8 @@ fn cmd_install(args: &mut Args) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// `liche update`: update the package manager itself to the repo's latest commit,
-/// written to `$LICHEN_HOME/tools/liche`.
+/// `lichen update`: update the package manager itself to the repo's latest commit,
+/// written to `$LICHEN_HOME/tools/lichen`.
 fn cmd_update(args: &mut Args) -> ExitCode {
     let repo = match take_repo(args, DEFAULT_REPO) {
         Ok(r) => r,
@@ -394,7 +394,7 @@ fn cmd_update(args: &mut Args) -> ExitCode {
     }
 }
 
-/// `liche path <tool>`: print the resolved toolchain binary path, installing it
+/// `lichen path <tool>`: print the resolved toolchain binary path, installing it
 /// into Lichen Home first if it is absent.  For `language-server`, an optional
 /// `--project <dir>` gathers the project's native-plugin set and composes a
 /// server over it (built + cached into the plugin-set LSP slot).
@@ -436,7 +436,7 @@ fn cmd_path(args: &mut Args) -> ExitCode {
     resolve_and_print(t, &repo)
 }
 
-/// `liche path language-server --project <dir>`: gather the project's native
+/// `lichen path language-server --project <dir>`: gather the project's native
 /// plugin set from the `.lichen` sources under `dir`, fetch each plugin, and
 /// resolve the language server for the set.  With plugins, a composed server is
 /// ensured (built + cached into the plugin-set LSP slot) and its path printed;

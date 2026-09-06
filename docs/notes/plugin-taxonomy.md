@@ -156,13 +156,13 @@ plugin — it invents syntax/IR/persist, so no fixed host can pull it unchanged.
   checker-message wording) on top.
 - **The language layer's tooling is generic over the program**: the package
   store, run, render, and CLI are parameterized by a program's value/operator
-  vocabularies (`liche_language::CompiledProgram<V, O>`), with the attr type
+  vocabularies (`lichen_language::CompiledProgram<V, O>`), with the attr type
   fixed to the language's `LangAttr`.  So a compiler built over an additional
-  native plugin routes through the shared `liche_language::cli` over its own
+  native plugin routes through the shared `lichen_language::cli` over its own
   composed vocabulary, and the composition macro emits a **per-leaf
-  [`ProgramCodec`]** (`liche_language::persist`) so a built compiler writes a
+  [`ProgramCodec`]** (`lichen_language::persist`) so a built compiler writes a
   real device cache.  The compiler's **artifact cache is scoped per plugin
-  set**: `liche_language::cli` takes an explicit cache root, and a generated
+  set**: `lichen_language::cli` takes an explicit cache root, and a generated
   compiler passes its own plugin-set slot (`<lichendir>/compilers/<key>`), so
   its compile artifacts never collide with (or reuse) another plugin set's —
   each vocabulary reads/writes its own `artifacts/` store.

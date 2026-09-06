@@ -147,7 +147,7 @@ pub trait ArtifactCodec<P: Program> {
 /// collector) rather than the value/operator leaves plus a separate `C` codec.
 ///
 /// A codec is not an associated type of the lowlevel [`Program`] trait — it is a
-/// serialization concern layered on top by `liche-language` — so this trait is
+/// serialization concern layered on top by `lichen-language` — so this trait is
 /// the seam that folds the codec into the collector.  The
 /// [`lang_compose_vocabulary!`](crate::lang_compose_vocabulary) macro implements
 /// it for every composed program, binding `Codec` to the [`ProgramCodec`] that
@@ -890,7 +890,7 @@ impl Drop for RegistryLock {
 // `lichen_language::persist::{lichendir, sources_root}` paths resolve.
 pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 
-// `hex` is re-exported above from `liche_utils::hash`.
+// `hex` is re-exported above from `lichen_utils::hash`.
 
 // ---------------------------------------------------------------------------
 // Registry file serialization

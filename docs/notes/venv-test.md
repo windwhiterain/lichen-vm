@@ -22,23 +22,23 @@ scripts/venv-test.sh --no-build  # reuse existing bin staging
 
 ## What it verifies
 
-**Leg 1 — shipping `run`/`build` + the device cache.** `liche run` on `42` and
-`1 + 2` prints `42: Int` / `3: Int`; a directory `run` prints each file; `liche
+**Leg 1 — shipping `run`/`build` + the device cache.** `lichen run` on `42` and
+`1 + 2` prints `42: Int` / `3: Int`; a directory `run` prints each file; `lichen
 build` prints `built …` **and** `type: Int`; a compiled artifact
 (`artifacts/<sha256(file_id)>.module`) and a `registry` are written under the
-fresh `$LICHEN_HOME`; `liche cache gc` reports `reclaimed 0`. This pins the
+fresh `$LICHEN_HOME`; `lichen cache gc` reports `reclaimed 0`. This pins the
 shipping compiler's `run`/`build`/persist path (see
 [`artifact-cache.md`](artifact-cache.md)).
 
 **Leg 2 — a real `.lichen` git dependency.** A tiny `file://` git fixture repo
 holds a `.lichen` library (`_.lichen` = `x => x + 1`); a project `depend`s it
-and `import`s it. `liche fetch` clones it into `sources/math`, then `liche run`
+and `import`s it. `lichen fetch` clones it into `sources/math`, then `lichen run`
 resolves the import and prints `Function: Int -> Int`. Fully offline — this is
 the package manager's dependency-fetch + import-resolution path (see
 [`package-manager.md`](package-manager.md)).
 
 **Leg 3 — a native plugin via a local git URL.** A project `plugin`-depends on
-`liche-std-native`; `liche run --repo file://<local clone>` builds a composed
+`lichen-std-native`; `lichen run --repo file://<local clone>` builds a composed
 compiler into `$LICHEN_HOME/compilers/<plugin-set-key>/` and drives it, scoping
 its artifact cache to that slot (see
 [`plugin-taxonomy.md`](plugin-taxonomy.md)). The composed compiler registers each
@@ -50,12 +50,12 @@ network** — see below.
 ## Accepting a local git URL
 
 The package manager normally resolves a native plugin's **core** crates from
-`DEFAULT_REPO` (GitHub), and a native plugin (e.g. `liche-std-native`) declares
+`DEFAULT_REPO` (GitHub), and a native plugin (e.g. `lichen-std-native`) declares
 its own core crates as **git** deps to that same canonical repo. Building a
 composed compiler therefore needs GitHub — unless the core repo is redirected to
 a **local** source.
 
-`liche run` / `liche build` / `liche rebuild-plugin` accept `--repo <u>`, where
+`lichen run` / `lichen build` / `lichen rebuild-plugin` accept `--repo <u>`, where
 `<u>` may be a local `file://` URL (or a bare checkout path). When `--repo`
 differs from `DEFAULT_REPO`, the generated compositor's `Cargo.toml` now emits a
 `[patch."https://github.com/windwhiterain/lichen-vm"]` section (see

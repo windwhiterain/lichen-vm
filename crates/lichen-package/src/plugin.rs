@@ -15,7 +15,7 @@
 //! report the produced binary.  [`rebuild`] builds the *compiler*
 //! (`lichen-compiler-<name>`); [`rebuild_lsp`] builds the *language server*
 //! (`lichen-language-server-<name>`), which drives the shared generic
-//! [`liche_language_server::server::main`] over the composed program.
+//! [`lichen_language_server::server::main`] over the composed program.
 //!
 //! **Structure of the generated crate.**  Both the compiler crate and the
 //! language-server crate are generated **bin-only**: `src/main.rs` holds the
@@ -32,9 +32,9 @@
 //! program's value/operator vocabularies (see `lichen_language::LangProgramShape`),
 //! so a generated compiler routes through the shared [`lichen_language::cli`]
 //! and a generated server through the shared
-//! [`liche_language_server::server`] over its own composed vocabulary.  The
+//! [`lichen_language_server::server`] over its own composed vocabulary.  The
 //! composition macro emits a **per-leaf [`ProgramCodec`]** (persistent — see
-//! `liche_language::persist`), so a built compiler writes a real device cache;
+//! `lichen_language::persist`), so a built compiler writes a real device cache;
 //! a generated compiler scopes that artifact cache to its **own plugin-set
 //! slot** (`<lichendir>/compilers/<key>`, [`write_compiler_main_rs`]), so its
 //! compile artifacts are isolated per vocabulary and never collide with (or
@@ -142,7 +142,7 @@ pub fn rebuild(
 /// Rebuild the language server: generate a **bin-only** crate at `dir` (the
 /// cache slot) composing `leaves` with the plugin dependencies (if any), then
 /// `cargo build` it.  The generated `main` drives the shared generic server over
-/// the composed program (`liche_language_server::server::main::<crate::LangProgram>()`),
+/// the composed program (`lichen_language_server::server::main::<crate::LangProgram>()`),
 /// so the produced server understands the plugin's leaves for
 /// diagnostics / hover / go-to-definition.
 pub fn rebuild_lsp(
@@ -209,20 +209,20 @@ pub fn server_bin_name(name: &str) -> String {
     if cfg!(windows) { format!("{n}.exe") } else { n }
 }
 
-/// The `liche-language-server` dependency line for a generated crate: a local
-/// path dep (in `core_repo/crates/liche-language-server`) when `core_repo` is a
+/// The `lichen-language-server` dependency line for a generated crate: a local
+/// path dep (in `core_repo/crates/lichen-language-server`) when `core_repo` is a
 /// directory here, else a git dep, both without the default `server` feature
 /// (so the server's own default is not double-enlisted) and with `server`
 /// enabled explicitly.
 fn server_dep(core_repo: &str) -> String {
     if std::path::Path::new(core_repo).is_dir() {
-        let rel = format!("{core_repo}/crates/liche-language-server");
+        let rel = format!("{core_repo}/crates/lichen-language-server");
         format!(
-            "liche-language-server = {{ path = \"{rel}\", default-features = false, features = [\"server\"] }}"
+            "lichen-language-server = {{ path = \"{rel}\", default-features = false, features = [\"server\"] }}"
         )
     } else {
         format!(
-            "liche-language-server = {{ git = \"{core_repo}\", default-features = false, features = [\"server\"] }}"
+            "lichen-language-server = {{ git = \"{core_repo}\", default-features = false, features = [\"server\"] }}"
         )
     }
 }
@@ -288,7 +288,7 @@ fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
 }
 
 /// The `[patch]` section emitted when the generated crate is built against a
-/// **non-default** `core_repo`.  A native plugin (e.g. `liche-std-native`)
+/// **non-default** `core_repo`.  A native plugin (e.g. `lichen-std-native`)
 /// declares its own core crates as **git** deps to the canonical repo
 /// ([`crate::toolchain::DEFAULT_REPO`]), so a local `core_repo` (a `file://`
 /// checkout of the same repo) must add a `[patch]` redirecting those deps to
@@ -330,7 +330,7 @@ fn plugin_lines(plugins: &[Depend]) -> String {
                 .map(|r| format!(", rev = \"{r}\""))
                 .unwrap_or_default();
             // A remote plugin is a **git** dep on a crate inside the plugin
-            // repo's workspace (e.g. `liche-std-native` inside the lichen-vm
+            // repo's workspace (e.g. `lichen-std-native` inside the lichen-vm
             // monorepo).  `package = <crate_name>` names the workspace member
             // so cargo finds it in the repo (without it, cargo looks for a
             // package at the repo root and fails).  The plugin's own core deps
@@ -439,7 +439,7 @@ fn native_package_lines(plugins: &[Depend]) -> String {
 /// The generated `main` runs the compiler with its **own plugin-set cache
 /// slot** as the artifact-cache root, so the compiled-artifact store is scoped
 /// per vocabulary: a rebuilt compiler never shares (or reuses) another plugin
-/// set's artifacts for the same file ID (see `liche_language::cli` and
+/// set's artifacts for the same file ID (see `lichen_language::cli` and
 /// `docs/notes/artifact-cache.md`).
 fn write_compiler_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
     // The slot directory base name IS the plugin-set cache key — the same key
@@ -484,13 +484,13 @@ fn main() -> std::process::ExitCode {{
 fn write_server_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
     let lines = format!(
         r#"//! A language server composed over the project's plugin set.  Generated by
-//! `liche path language-server --project`; re-run it whenever the
+//! `lichen path language-server --project`; re-run it whenever the
 //! native-plugin set changes.
 
 {compose}
 
 fn main() {{
-    liche_language_server::server::main::<crate::LangProgram>()
+    lichen_language_server::server::main::<crate::LangProgram>()
 }}
 "#,
         compose = compose_source(plugins, leaves),

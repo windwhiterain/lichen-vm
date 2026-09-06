@@ -19,7 +19,7 @@
 //! source (no copy), and only the metadata values (tiny) are owned.
 //!
 //! This crate is **isolated**: it depends only on the shared source-position
-//! protocol ([`liche_span`]) and its own block lexer/parser (`logos`).  It
+//! protocol ([`lichen_span`]) and its own block lexer/parser (`logos`).  It
 //! never names a compile vocabulary or a package store.  Resolving an
 //! `import "path"` against a package store is delegated to a caller through
 //! the [`ImportResolver`] trait, and the only vocabulary-bound data it

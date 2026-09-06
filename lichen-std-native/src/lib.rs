@@ -8,7 +8,7 @@
 //! program-generic [`OperatorExt`] `run` so a host can execute it.
 //!
 //! A host composes it with
-//! `liche_language::lang_compose_vocabulary! { … plugins = [ lichen_std_native as lichen_std_native_leaves; ]; }`
+//! `lichen_language::lang_compose_vocabulary! { … plugins = [ lichen_std_native as lichen_std_native_leaves; ]; }`
 //! (the plugin's `lichen_std_native_leaves!` macro contributes the `SortOp` leaf),
 //! then drives the produced compiler.  The plugin also wires the **native-call
 //! extension point** ([`NativeOp`]) over [`SortOp`] and carries an embedded
@@ -176,7 +176,7 @@ macro_rules! lichen_std_native_ops {
 }
 
 /// Contribute this plugin's vocabulary leaves into a
-/// [`liche_language::lang_compose_vocabulary!`] composition (see the
+/// [`lichen_language::lang_compose_vocabulary!`] composition (see the
 /// `lichen-compute` [`liche_leaves!`] protocol): it hands back the `SortOp`
 /// operator leaf, threading the composition's accumulator.
 ///

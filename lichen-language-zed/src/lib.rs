@@ -13,16 +13,16 @@
 //! The extension does **not** bundle `lichen-language-server` (Zed's publishing
 //! rules forbid shipping a standalone LSP binary in the extension). On first
 //! launch, if the server is not already on `$PATH`, the extension reports install
-//! progress to Zed and asks the `liche` package manager to ensure it is present:
-//! `liche path language-server` installs the **prebuilt** compiler + language
+//! progress to Zed and asks the `lichen` package manager to ensure it is present:
+//! `lichen path language-server` installs the **prebuilt** compiler + language
 //! server into **Lichen Home** (`$LICHEN_HOME`, defaulting to `~/.lichen`) at the
 //! package manager's own commit, and prints the binary path. The package manager
-//! is located on `$PATH` or at `$LICHEN_HOME/tools/liche`; how it was installed
+//! is located on `$PATH` or at `$LICHEN_HOME/tools/lichen`; how it was installed
 //! does not matter (see `docs/notes/language-toolchain.md`).
 //!
 //! When the worktree root is available, the extension passes it as
 //! `--project <root>` so that a project importing a **native plugin** composes
-//! its own language server over that plugin set (`liche path language-server
+//! its own language server over that plugin set (`lichen path language-server
 //! --project <root>` builds/caches the composed server into the plugin-set LSP
 //! slot, understanding the plugin's leaves for diagnostics / hover / definition).
 
@@ -65,11 +65,11 @@ mod zed_impl {
                 &LanguageServerInstallationStatus::Downloading,
             );
 
-            // The toolchain is managed by the `liche` package manager, which
+            // The toolchain is managed by the `lichen` package manager, which
             // installs the prebuilt compiler + language server into Lichen Home
             // at its own commit. Ask it to ensure the server is present and print
             // its path, then hand that path to Zed.
-            match resolve_via_liche(worktree) {
+            match resolve_via_lichen(worktree) {
                 Ok(path) => {
                     set_language_server_installation_status(
                         language_server_id,
@@ -88,7 +88,7 @@ mod zed_impl {
         }
     }
 
-    /// Whether the current OS is Windows (affects the `liche` executable suffix).
+    /// Whether the current OS is Windows (affects the `lichen` executable suffix).
     fn on_windows() -> bool {
         matches!(current_platform().0, Os::Windows)
     }
@@ -99,7 +99,7 @@ mod zed_impl {
     }
 
     /// Resolve `$LICHEN_HOME`, defaulting to `~/.lichen` (per
-    /// `liche_language::persist::lichendir`).
+    /// `lichen_language::persist::lichendir`).
     fn lichen_home(worktree: &Worktree) -> String {
         let vars = shell_env(worktree);
         if let Some((_, home)) = vars.iter().find(|(k, _)| k == "LICHEN_HOME") {
@@ -113,25 +113,25 @@ mod zed_impl {
         format!("{home}/.lichen")
     }
 
-    /// Locate the `liche` package manager: on `$PATH`, else the canonical copy in
-    /// `$LICHEN_HOME/tools/liche`.
-    fn liche_binary(worktree: &Worktree) -> Result<String, String> {
-        if let Some(path) = worktree.which("liche") {
+    /// Locate the `lichen` package manager: on `$PATH`, else the canonical copy in
+    /// `$LICHEN_HOME/tools/lichen`.
+    fn lichen_binary(worktree: &Worktree) -> Result<String, String> {
+        if let Some(path) = worktree.which("lichen") {
             return Ok(path);
         }
-        let exe = if on_windows() { "liche.exe" } else { "liche" };
+        let exe = if on_windows() { "lichen.exe" } else { "lichen" };
         Ok(format!("{}/tools/{exe}", lichen_home(worktree)))
     }
 
-    /// Ensure the server is installed (asking the `liche` package manager, which
+    /// Ensure the server is installed (asking the `lichen` package manager, which
     /// installs the prebuilt compiler + language server into Lichen Home at its
     /// own commit) and return its absolute path.  When the worktree root is
     /// available it is passed as `--project <root>` so a project with native
     /// plugins composes its own server; when no root is available the shipping
     /// server is resolved.
-    fn resolve_via_liche(worktree: &Worktree) -> Result<String, String> {
-        let liche = liche_binary(worktree)?;
-        let mut command = Command::new(liche.as_str())
+    fn resolve_via_lichen(worktree: &Worktree) -> Result<String, String> {
+        let lichen = lichen_binary(worktree)?;
+        let mut command = Command::new(lichen.as_str())
             .arg("path")
             .arg("language-server");
         // A project with native plugins composes its own server over the plugin
@@ -144,16 +144,16 @@ mod zed_impl {
         }
         let out = command
             .output()
-            .map_err(|e| format!("cannot run `{liche} path language-server`: {e}"))?;
+            .map_err(|e| format!("cannot run `{lichen} path language-server`: {e}"))?;
         if out.status != Some(0) {
             return Err(format!(
-                "`{liche} path language-server` failed: {}",
+                "`{lichen} path language-server` failed: {}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
         let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if path.is_empty() {
-            Err("`liche path language-server` returned an empty path".to_string())
+            Err("`lichen path language-server` returned an empty path".to_string())
         } else {
             Ok(path)
         }

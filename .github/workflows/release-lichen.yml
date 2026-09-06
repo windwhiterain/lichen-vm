@@ -1,8 +1,8 @@
-name: release-liche-toolchain
+name: release-lichen-toolchain
 
-# Builds the prebuilt toolchain binaries (`liche`, `lichen-compiler`,
+# Builds the prebuilt toolchain binaries (`lichen`, `lichen-compiler`,
 # `lichen-language-server`) for each host and publishes them to a GitHub release
-# tagged at the checked-out commit. The `liche` package manager installs those
+# tagged at the checked-out commit. The `lichen` package manager installs those
 # assets into Lichen Home from
 # `https://github.com/windwhiterain/lichen-vm/releases/download/<commit>/<asset>`,
 # so the asset name must match `toolchain::asset_name` (ie.
@@ -10,14 +10,14 @@ name: release-liche-toolchain
 #
 # Trigger manually (workflow_dispatch) after tagging the commit you want to ship:
 # the release tag is the commit SHA, which equals the `LICHEN_BUILD_COMMIT` that
-# `liche` embeds at build time (keeping the toolchain at the same revision as the
+# `lichen` embeds at build time (keeping the toolchain at the same revision as the
 # package manager).
 
 on:
   workflow_dispatch: {}
 
 concurrency:
-  group: release-liche-${{ github.sha }}
+  group: release-lichen-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -54,8 +54,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp "target/release/liche${{ matrix.suffix }}" \
-             "dist/liche-${{ matrix.triple }}${{ matrix.suffix }}"
+          cp "target/release/lichen${{ matrix.suffix }}" \
+             "dist/lichen-${{ matrix.triple }}${{ matrix.suffix }}"
           cp "target/release/lichen-compiler${{ matrix.suffix }}" \
              "dist/lichen-compiler-${{ matrix.triple }}${{ matrix.suffix }}"
           cp "target/release/lichen-language-server${{ matrix.suffix }}" \

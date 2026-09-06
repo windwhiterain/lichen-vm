@@ -4,7 +4,7 @@
 //! `Depend` git-dependency type, and the preprocessor's import path
 //! ([`lichen_preprocess::lichendir`] / [`lichen_preprocess::sources_root`])
 //! all live in `crates/lichen-preprocess`.  This module is a thin shim that
-//! re-exports them (so the existing `liche_language::preprocess::*` paths
+//! re-exports them (so the existing `lichen_language::preprocess::*` paths
 //! resolve unchanged) and pins the vocabulary-bound export handle to the
 //! language crate's [`StaticNodeId`].
 //!

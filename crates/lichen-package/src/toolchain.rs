@@ -27,7 +27,7 @@ use crate::plugin;
 pub const DEFAULT_REPO: &str = "https://github.com/windwhiterain/lichen-vm";
 
 /// The package manager's own binary name.
-pub const PACKAGE_MANAGER_BIN: &str = "liche";
+pub const PACKAGE_MANAGER_BIN: &str = "lichen";
 
 /// The commit this `lichen` binary was compiled from, if known.
 ///
@@ -80,7 +80,7 @@ impl Tool {
     /// Parse a tool by name, tolerating a leading `lichen-` or the short form.
     pub fn from_name(name: &str) -> Option<Tool> {
         match name {
-            "compiler" | "liche-compiler" | "lichen-compiler" | "run" => Some(Tool::Compiler),
+            "compiler" | "lichen-compiler" | "run" => Some(Tool::Compiler),
             "language-server" | "lichen-language-server" | "lsp" | "server" => {
                 Some(Tool::LanguageServer)
             }
@@ -299,7 +299,7 @@ pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
 }
 
 /// Self-update the package manager to the repo's latest commit. The updated binary
-/// is written to `$LICHEN_HOME/tools/liche` (the canonical copy the extension and
+/// is written to `$LICHEN_HOME/tools/lichen` (the canonical copy the extension and
 /// the CLI resolve from); a copy on `$PATH` elsewhere is left for the user to
 /// refresh. Returns `Ok(None)` when already current, else the new commit.
 pub fn update(repo: &str) -> Result<Option<String>, String> {

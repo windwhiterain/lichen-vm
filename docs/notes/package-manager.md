@@ -75,7 +75,7 @@ and registers each alias with the shared store via
 `import "alias/sub.lichen"` relative to the vendored dir.  A file-like first
 segment (`math.lichen`) never hits the alias map.
 
-`liche-preprocess` only knows an [`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs)
+`lichen-preprocess` only knows an [`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs)
 trait for import resolution — it never names a package store or a compile
 vocabulary.  The language crate's `PackageStore` implements that trait (adapting
 its `PackageHandle`/`Diag`), and the package manager drives the scanner through
@@ -98,7 +98,7 @@ plugins, then ensure a compiler over them in a **cache under the lichen home**
 (`<lichendir>/compilers/<key>/`), keyed by the lichen-library version and every
 plugin's resolved version (its `HEAD` in the fetched source cache).  A cache
 hit reuses the binary; a miss generates a compiler crate (composing the plugin
-set via `liche_language::lang_compose_vocabulary!`) and runs `cargo build`,
+set via `lichen_language::lang_compose_vocabulary!`) and runs `cargo build`,
 then drives the produced `lichen-compiler-<name>` binary.  `lichen
 rebuild-plugin [<file|dir>]` is the explicit form of the same build.
 

@@ -1,7 +1,7 @@
 //! The lexer: source text -> tokens, each with a (line, column) span.
 //!
 //! This crate consumes the shared source-position protocol from
-//! [`liche_span`] — the [`Span`] type and the byte→(line, col) mapping
+//! [`lichen_span`] — the [`Span`] type and the byte→(line, col) mapping
 //! ([`line_starts`], [`line_col`]), re-exported here so `lichen_language_lex::Span`
 //! still resolves — and produces the token stream.  Nothing above it (the
 //! parser, the language crate) needs its own span type — the parser consumes

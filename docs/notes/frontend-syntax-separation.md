@@ -267,8 +267,8 @@ type rather than the lexer.  The orchestrator `preprocess`/`stage_depends` do
 not stay vocabulary-bound: they go through a small
 [`ImportResolver`](../../crates/lichen-preprocess/src/lib.rs) trait and are generic
 only over the export handle type.  The language crate re-exports them (a
-`pub use` shim) so the existing `liche_language::preprocess::*` and
-`liche_language::preprocess::{split_block, block_directives, block_metadata}`
+`pub use` shim) so the existing `lichen_language::preprocess::*` and
+`lichen_language::preprocess::{split_block, block_directives, block_metadata}`
 paths (used by `readme`/`sync-readme` and the server) resolve unchanged.
 
 ## Migration plan (each step keeps `cargo check`/`cargo test` green)

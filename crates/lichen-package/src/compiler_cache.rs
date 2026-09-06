@@ -56,7 +56,7 @@ pub fn key(plugins: &[Depend]) -> Result<String, String> {
     // is versioned by this crate's own version (the package manager and the
     // core crates are released together, so `CARGO_PKG_VERSION` is the
     // toolchain version — the key a change to any core crate should bump).
-    let mut spec = format!("liche-language={}", env!("CARGO_PKG_VERSION"));
+    let mut spec = format!("lichen-language={}", env!("CARGO_PKG_VERSION"));
     for part in &parts {
         spec.push('&');
         spec.push_str(part);

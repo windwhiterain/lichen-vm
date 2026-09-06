@@ -45,8 +45,8 @@ There are two classes, living in different places under Lichen Home
   (no-extra-plugin) binaries into the base key; a project that imports extra
   plugins gets a locally composed compiler (see `compiler_cache`) in its own key.
 - **Non-plugin-sensitive** (formatter — not shipped yet, and the package manager
-  itself): a single fixed binary at `tools/<name>`. `$LICHEN_HOME/tools/liche` is
-  the canonical copy the Zed extension resolves, and `liche update` refreshes it.
+  itself): a single fixed binary at `tools/<name>`. `$LICHEN_HOME/tools/lichen` is
+  the canonical copy the Zed extension resolves, and `lichen update` refreshes it.
 
 `lichen run`/`build` **delegate the actual compilation to the compiler
 binary** (spawned as a subprocess), so a plugin-built compiler is the one that

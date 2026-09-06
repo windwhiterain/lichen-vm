@@ -128,7 +128,7 @@ for the live buffer**, rather than building a second cache. See
 
 The store is **scoped per plugin set**: a plugin-built compiler uses its own
 `<lichendir>/compilers/<key>/` as the artifact-cache root (via
-`liche_language::cli::main_with_cache_dir`), so its compile artifacts never
+`lichen_language::cli::main_with_cache_dir`), so its compile artifacts never
 collide with (or reuse) another vocabulary's — only the shipping compiler uses
 the base `lichendir()` root.
 
@@ -262,22 +262,22 @@ not pull the tokio/tower async stack.
 - **The toolchain is installed into Lichen Home, on demand.** The extension does
   not bundle `lichen-language-server` (per Zed's publishing rules). On first
   launch, if `Worktree::which` cannot find it, the extension reports install
-  progress to Zed and runs `liche path language-server`, which installs the
+  progress to Zed and runs `lichen path language-server`, which installs the
   **prebuilt** compiler + language server into **Lichen Home**
   (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-  manager's own commit, then prints the binary path; `liche` is found on `$PATH` or
-  at `$LICHEN_HOME/tools/liche`. Run it by hand and restart Zed, or `liche update`
+  manager's own commit, then prints the binary path; `lichen` is found on `$PATH` or
+  at `$LICHEN_HOME/tools/lichen`. Run it by hand and restart Zed, or `lichen update`
   to move the package manager (and the toolchain it installs) to a later commit:
 
   ```text
-  liche install language-server   # install the prebuilt server into Lichen Home
-  liche path language-server      # print its path (installing if absent)
-  liche path language-server --project <dir>  # compose+print a server over <dir>'s plugins
-  liche update                    # update the package manager to the latest commit
+  lichen install language-server   # install the prebuilt server into Lichen Home
+  lichen path language-server      # print its path (installing if absent)
+  lichen path language-server --project <dir>  # compose+print a server over <dir>'s plugins
+  lichen update                    # update the package manager to the latest commit
   ```
 
 - **Per-project plugin-set LSP.** A project that imports a *native plugin* gets a
-  `liche-language-server` built over that plugin set (`liche path language-server
+  `lichen-language-server` built over that plugin set (`lichen path language-server
   --project <dir>`, which the Zed extension calls with `--project <worktree
   root>`), so the server understands the plugin's value/operator leaves for
   diagnostics / hover / go-to-definition. The composed server is cached
@@ -286,12 +286,12 @@ not pull the tokio/tower async stack.
   tooling is generic over one program type `P` (see `lichen_language::LangProgramShape`),
   so the same `Doc`/server services the shipping and the composed vocabulary.
 
-  Without `liche` (or the server) Zed reports "`lichen-language-server` not found
+  Without `lichen` (or the server) Zed reports "`lichen-language-server` not found
   on `$PATH`" when a `.lichen` buffer is opened.
 
 ## Fitting future tools into the model
 
-- **Formatter** — a `[[bin]]` in `liche-language-server` (the tooling crate),
+- **Formatter** — a `[[bin]]` in `lichen-language-server` (the tooling crate),
   using `lex::Token`s (byte ranges) + `ast` to re-print. It must *not* touch the
   checker; it prints the tree the parser produced, so a formatting round-trip is
   guaranteed to parse back to the same AST.

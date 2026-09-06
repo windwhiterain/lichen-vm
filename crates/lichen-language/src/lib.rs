@@ -103,7 +103,7 @@ pub type CompiledProgram<V, O> = lichen_highlevel::program::ProgramImpl<
     HighGlobalExt,
 >;
 
-/// The version of the lichen library (`liche-language`).  The package manager
+/// The version of the lichen library (`lichen-language`).  The package manager
 /// keys its compiler cache by this — a change to the library means any
 /// previously built compiler binary is stale and must be rebuilt.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

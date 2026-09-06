@@ -50,7 +50,7 @@ The preprocessor never names a package store or a compile vocabulary.
   implements it for `E = StaticNodeId`, adapting its own `PackageHandle`/`Diag`.
 - **Data types are generic over the export handle `E`** (`Preprocessed<'_ , E>`,
   `ResolvedImport<E>`).  The language crate pins `E = StaticNodeId` via type
-  aliases in its shim, so `liche_language::preprocess::{Preprocessed,
+  aliases in its shim, so `lichen_language::preprocess::{Preprocessed,
   ResolvedImport}` keep their old non-generic names.
 - **Diagnostics are program-blind**: `PreprocessDiag { span, message }` (no
   checker payload, no program marker).  The language crate widens it to its
@@ -62,7 +62,7 @@ The preprocessor never names a package store or a compile vocabulary.
 items plus two generic wrappers (`preprocess`, `stage_depends`) that keep their
 old signatures — generic over `V`/`O`/`C` and returning `Diag<CompiledProgram<V,O>>`
 — so `package.rs`, `run.rs`, `compile.rs`, `readme.rs`, `cli.rs`, and
-`lichen-language-server` call them unchanged.  `liche-package::preprocess` is likewise
+`lichen-language-server` call them unchanged.  `lichen-package::preprocess` is likewise
 a pure re-export.
 
 ## The package manager now depends only on the preprocessor
@@ -71,7 +71,7 @@ a pure re-export.
 cache-key hash) — **not** `lichen-language`.  Its `clean`/`cache gc` commands
 delegate to the compiler binary (`lichen-compiler cache gc`), like `run`/`build`
 already delegate, so it never constructs a `PackageStore` or names a `LangValue`.
-The plugin-built compiler path (`plugin.rs`) only references `liche-language` in
+The plugin-built compiler path (`plugin.rs`) only references `lichen-language` in
 the *generated* crate's source, never as a compile dependency.
 
 ## Notes

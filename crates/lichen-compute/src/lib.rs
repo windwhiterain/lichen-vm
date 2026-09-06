@@ -30,7 +30,7 @@ pub use compute::{
 };
 
 /// Contribute this plugin's vocabulary leaves into a
-/// [`liche_language::lang_compose_vocabulary!`] composition.  A native plugin
+/// [`lichen_language::lang_compose_vocabulary!`] composition.  A native plugin
 /// exports this leaf macro; the package manager lists the plugin in the
 /// composition's `plugins = [...]` as `<crate> as <crate>_leaves`, and this
 /// macro hands its value / operator leaves back to the composition's

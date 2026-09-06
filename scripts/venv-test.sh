@@ -10,7 +10,7 @@
 #   1. shipping run/build + the device-cache (artifact + registry + cache gc)
 #   2. a real `.lichen` git dependency (a local `file://` fixture repo),
 #      fetched and resolved offline
-#   3. a native plugin (`liche-std-native`) composed into a compiler, built
+#   3. a native plugin (`lichen-std-native`) composed into a compiler, built
 #      offline against a LOCAL git URL of this repo (`--repo file://…`), with the
 #      composed compiler scoping its artifact cache to its plugin-set slot
 #
@@ -127,17 +127,17 @@ say "leg 1: shipping run/build and the device cache"
 write_lichen "$PROJECT/hello.lichen" "42"
 write_lichen "$PROJECT/add.lichen"   "1 + 2"
 
-out="$(lichen run "$PROJECT/hello.lichen")" || fail "liche run hello"
+out="$(lichen run "$PROJECT/hello.lichen")" || fail "lichen run hello"
 expect_grep "$out" "42: Int" "run hello -> 42: Int"
 
-out="$(lichen run "$PROJECT/add.lichen")" || fail "liche run add"
+out="$(lichen run "$PROJECT/add.lichen")" || fail "lichen run add"
 expect_grep "$out" "3: Int" "run add -> 3: Int"
 
-out="$(lichen run "$PROJECT")" || fail "liche run dir"
+out="$(lichen run "$PROJECT")" || fail "lichen run dir"
 expect_grep "$out" "hello.lichen: 42: Int" "run dir -> hello.lichen: 42: Int"
 expect_grep "$out" "add.lichen: 3: Int" "run dir -> add.lichen: 3: Int"
 
-out="$(lichen build "$PROJECT/add.lichen")" || fail "liche build add"
+out="$(lichen build "$PROJECT/add.lichen")" || fail "lichen build add"
 expect_grep "$out" "built" "build add -> built"
 expect_grep "$out" "type: Int" "build add -> type: Int"
 
@@ -147,7 +147,7 @@ expect_grep "$out" "type: Int" "build add -> type: Int"
 [ -f "$LICHEN_HOME/registry" ] || fail "the device registry was not written"
 pass "artifact .module + registry exist under \$LICHEN_HOME"
 
-out="$(lichen cache gc)" || fail "liche cache gc"
+out="$(lichen cache gc)" || fail "lichen cache gc"
 expect_grep "$out" "reclaimed 0" "cache gc -> reclaimed 0"
 
 # ---------------------------------------------------------------------------
@@ -169,16 +169,16 @@ write_lichen "$PROJECT/usemath.lichen" <<EOF
 x => math x
 EOF
 
-out="$(lichen fetch "$PROJECT/usemath.lichen")" || fail "liche fetch usemath"
+out="$(lichen fetch "$PROJECT/usemath.lichen")" || fail "lichen fetch usemath"
 expect_grep "$out" "fetched math" "fetch -> fetched math"
 
-out="$(lichen run "$PROJECT/usemath.lichen")" || fail "liche run usemath"
+out="$(lichen run "$PROJECT/usemath.lichen")" || fail "lichen run usemath"
 expect_grep "$out" "Function: Int -> Int" "run usemath -> Function: Int -> Int"
 
 # ---------------------------------------------------------------------------
-# 3. a native plugin (liche-std-native) composed offline via a local git URL
+# 3. a native plugin (lichen-std-native) composed offline via a local git URL
 # ---------------------------------------------------------------------------
-say "leg 3: native plugin (liche-std-native) via a local git core_repo"
+say "leg 3: native plugin (lichen-std-native) via a local git core_repo"
 
 # A local clone of this repo is the "local git URL"; the generated compositor
 # emits a [patch] redirecting lichen-std-native's hardcoded GitHub core deps to
@@ -202,7 +202,7 @@ std.sort [3, 1, 2]
 EOF
 
 out="$(lichen run "$PROJECT/sort.lichen" --repo "$NATIVE_REPO")" \
-  || fail "liche run sort.lichen (native plugin)"
+  || fail "lichen run sort.lichen (native plugin)"
 
 # The composed compiler was built into the plugin-set slot, scoping its artifact
 # cache there (see write_compiler_main_rs).
