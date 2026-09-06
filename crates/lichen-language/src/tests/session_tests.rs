@@ -4,7 +4,7 @@
 
 use lichen_highlevel::ir::ExprKind;
 
-use super::{edit_span, signature_full, signature_reuse, splice_program};
+use super::{edit_span, splice_program};
 use crate::ast::{Expr, Stmt};
 use crate::diag::Stage;
 use crate::lex;
@@ -130,13 +130,10 @@ fn growing_an_error_block_reuses_the_established_build() {
 
     // Grow the broken region: `(2` → `(22` — only the masked error block grew.
     // The beyond-error content is unchanged, so the build is reused.
-    let before = r1.signature;
+    let before = r1.key;
     sess.push("2");
     let r2 = sess.compile();
-    assert_eq!(
-        r2.signature, before,
-        "the clean content signature is unchanged"
-    );
+    assert_eq!(r2.key, before, "the clean content signature is unchanged");
     assert!(r2.reused, "the established build is reused");
     assert_eq!(
         r2.build.as_ref().map(|b| b.ok),
@@ -155,13 +152,13 @@ fn growing_an_error_block_reuses_the_established_build() {
 fn changing_clean_content_invalidates_the_cache() {
     let mut sess = BufferSession::<LangValue, LangOperator>::new("a = 1\nf = x => a + x\nf 2\n");
     let r0 = sess.compile();
-    let sig0 = r0.signature;
+    let sig0 = r0.key;
 
     // A clean-content edit (adding a real binding) must change the signature
     // and trigger a fresh build, not a stale reuse.
     sess.push("g = 5\n");
     let r1 = sess.compile();
-    assert_ne!(r1.signature, sig0);
+    assert_ne!(r1.key, sig0);
     assert!(!r1.reused, "a clean-content change is a fresh build");
 }
 
@@ -176,14 +173,11 @@ fn typing_inside_an_unclosed_region_reuses_every_keystroke() {
     sess.push("fix1 = (1");
     let r0 = sess.compile();
     assert!(!r0.reused, "the new binding is a clean change");
-    let sig = r0.signature;
+    let sig = r0.key;
     for digit in ["2", "3", "4"] {
         sess.push(digit);
         let r = sess.compile();
-        assert_eq!(
-            r.signature, sig,
-            "'{digit}': the clean signature is unchanged"
-        );
+        assert_eq!(r.key, sig, "'{digit}': the clean signature is unchanged");
         assert!(
             r.reused,
             "'{digit}': a keystroke inside the mask reuses the build"
@@ -212,7 +206,7 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
         Some(true),
         "the unresolved name is masked, not fatal"
     );
-    let sig = r1.signature;
+    let sig = r1.key;
     for ch in "ery_long_variable_name".chars() {
         sess.push(&ch.to_string());
         let r = sess.compile();
@@ -220,7 +214,7 @@ fn typing_a_long_unresolved_name_reuses_after_the_first_character() {
             r.reused,
             "extending an unresolved name reuses the established build"
         );
-        assert_eq!(r.signature, sig, "the resolved structure is unchanged");
+        assert_eq!(r.key, sig, "the resolved structure is unchanged");
         assert_eq!(r.build.as_ref().map(|b| b.ok), Some(true));
         // The *current* name's resolve diagnostic is refreshed, not stale.
         assert!(
@@ -239,11 +233,11 @@ fn renaming_a_binding_consistently_reuses() {
     let mut sess = BufferSession::<LangValue, LangOperator>::new("f = x => x + 1\nf 2\n");
     let r0 = sess.compile();
     assert!(!r0.reused);
-    let sig = r0.signature;
+    let sig = r0.key;
     sess.replace(0..sess.len(), "g = x => x + 1\ng 2\n");
     let r1 = sess.compile();
     assert_eq!(
-        r1.signature, sig,
+        r1.key, sig,
         "a consistent rename keeps the resolved structure"
     );
     assert!(
@@ -269,17 +263,17 @@ fn diag_set(report: &crate::session::SessionReport<crate::program::LangProgram>)
 /// flag is intentionally excluded: it depends on the session's *history* (a
 /// fresh session's first compile is never reused), not on the source, so it is
 /// not comparable across differently-warmed sessions.  What must match is the
-/// resolved structure (signature), the check outcome, and the diagnostics.
+/// resolved structure (content key), the check outcome, and the diagnostics.
 #[derive(PartialEq, Debug)]
 struct ReportShape {
-    signature: u64,
+    key: Vec<u64>,
     build_ok: Option<bool>,
     diagnostics: Vec<String>,
 }
 
 fn shape(report: &crate::session::SessionReport<crate::program::LangProgram>) -> ReportShape {
     ReportShape {
-        signature: report.signature,
+        key: report.key.clone(),
         build_ok: report.build.as_ref().map(|b| b.ok),
         diagnostics: diag_set(report),
     }
@@ -397,40 +391,21 @@ fn a_splice_ending_in_a_binding_is_a_record_program() {
 }
 
 #[test]
-fn the_incremental_signature_equals_the_full_signature() {
-    // The incremental signature (`signature_reuse`, driven by the splice's
-    // window) must produce the SAME combined signature, per-statement hashes,
-    // and diagnostics as a whole-program `signature_full` walk — confirming the
-    // reuse is sound and that the loop actually reuses, not just falls back.
-    let base = "a = 1\nf = x => a + x\nf 2\n";
-    let bt = lex::lex(base).tokens;
-    let bp = parse::parse(&bt).program;
-    let bsig = signature_full(&bp);
-    for new in [
-        "a = 1\nf = x => a + x\nf 22\n",
-        "a = 1\nf = x => a + 1\nf 2\n",
-        "g = 1\nf = x => a + x\nf 2\n",
-        "a = 1\nf = x => a + x\nf 2\nner",
-        "a = 1\nz = 3\nf = x => a + x\nf 2\n",
-    ] {
-        let nt = lex::lex(new).tokens;
-        let (a, b, d) = edit_span(base, new);
-        let out = splice_program(&bt, &bp, &nt, a, b, d).unwrap_or_else(|| {
-            panic!("{new:?} should be spliceable");
-        });
-        // The window must actually be reused (a real incremental re-sign), not a
-        // whole-program fallback: verify the reuse path matches the full walk.
-        let reuse = signature_reuse(&out.program, &bsig, out.lo, out.hi, out.reuse);
-        let full = signature_full(&out.program);
-        assert_eq!(reuse.combined, full.combined, "combined for {new:?}");
-        assert_eq!(
-            reuse.stmt_hashes, full.stmt_hashes,
-            "per-statement hashes for {new:?}"
-        );
-        assert_eq!(
-            reuse.diagnostics.len(),
-            full.diagnostics.len(),
-            "diagnostics for {new:?}"
-        );
-    }
+fn the_resolved_content_key_tracks_resolution_not_spelling() {
+    // The resolver's `content_key` is name-free and exact: a consistent rename
+    // leaves it unchanged (so the session reuses), while a literal or
+    // structural change moves it (so the session rebuilds).
+    let key_of = |src: &str| -> Vec<u64> {
+        let tokens = lex::lex(src).tokens;
+        let mut program = parse::parse(&tokens).program;
+        crate::resolve::resolve(&mut program, &[]);
+        crate::resolve::content_key(&program)
+    };
+    let base = key_of("f = x => x + 1\nf 2\n");
+    assert_eq!(key_of("g = x => x + 1\ng 2\n"), base, "a rename reuses");
+    assert_ne!(
+        key_of("f = x => x + 2\nf 2\n"),
+        base,
+        "a value edit rebuilds"
+    );
 }

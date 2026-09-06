@@ -3,23 +3,22 @@
 //!
 //! The frontend absorbs every error at its own layer — a recovered parse error
 //! and an *unresolved name* both lower to the **same** inert [`ExprKind::ErrorBlock`]
-//! (see [`crate::compile::Compiler`]), so the lowering is total and the checker
-//! sees stable, name-free effective content.  The session tracks a
-//! **name-resolved content signature**: a hash over the tree *shape* with every
-//! name replaced by the binding it resolves to (a stable slot, not its spelling)
-//! or a single **unresolved** sentinel.  So an edit that only extends an
-//! unresolved name (the editor's typing case), rewrites an error block, or
-//! consistently renames a binding, leaves the signature unchanged and reuses the
-//! established [`IR`] + [`Build`] — only the fresh frontend/resolve diagnostics
-//! are re-derived.  This is the `T1` tier's user-facing behaviour: typing a new
-//! unfinished piece never re-derives the established program.
+//! (see [`crate::compile`]), so the lowering is total and the checker sees
+//! stable, name-free effective content.  The session runs the resolver
+//! ([`crate::resolve`]) on every compile and tracks the **resolved content key**:
+//! a name-free serialization over the resolver's `BinderId`s (names encoded by
+//! the binding they resolve to, error blocks opaque, spans dropped).  An edit
+//! that only extends an unresolved name (the editor's typing case), rewrites an
+//! error block, or consistently renames a binding leaves the key unchanged and
+//! reuses the established [`IR`] + [`Build`] — only the fresh frontend/resolve
+//! diagnostics are re-derived.  This is the `T1` tier's user-facing behaviour:
+//! typing a new unfinished piece never re-derives the established program.
 //!
-//! The reuse is content-addressed (a `signature → build` cache), so it is sound
+//! The reuse is key-addressed (a `content-key → build` cache), so it is sound
 //! for an arbitrary edit that leaves the resolved structure alone — not just an
 //! append.  A general edit that changes the resolved structure falls back to a
 //! full re-lower + re-check.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use lichen_highlevel::checker::Build;
@@ -27,18 +26,16 @@ use lichen_highlevel::native::no_native_ops;
 use lichen_highlevel::program::{HighProgram, TypeOperator, ValueType};
 use lichen_lowlevel::{LowOperator, OperatorExt};
 use lichen_utils::extend::AsEnum;
-use sha2::Digest;
 
-use crate::ast::{BinOp, BlockStmt, Expr, Program, Stmt, TypeConst};
+use crate::ast::{BlockStmt, Program, Stmt};
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
-use crate::program::{GcdOp, LangProgram};
-use crate::suggest;
+use crate::program::GcdOp;
 use crate::{CompiledProgram, ParseDiag, Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
-/// is cheap to hold) plus every diagnostic, and the content signature the
+/// is cheap to hold) plus every diagnostic, and the resolved content key the
 /// compile ran under.
 #[derive(Clone)]
 pub struct SessionReport<P: HighProgram>
@@ -52,10 +49,12 @@ where
     /// Lex + parse (always fresh) and the checker's rendered failures (from the
     /// reused or freshly built [`Build`]).
     pub diagnostics: Vec<Diag<P>>,
-    /// The beyond-error content signature this report was compiled under —
-    /// equal across edits that only change error blocks.
-    pub signature: u64,
-    /// Whether the established build was reused because the content signature
+    /// The resolved content key (a name-free serialization over the resolver's
+    /// `BinderId`s) this report was compiled under — equal across edits that
+    /// only change an error block, extend an unresolved name, or consistently
+    /// rename a binding.
+    pub key: Vec<u64>,
+    /// Whether the established build was reused because the resolved content key
     /// was unchanged (`true`) rather than freshly re-lowered and re-checked.
     pub reused: bool,
 }
@@ -99,21 +98,18 @@ struct LastState {
     source: String,
     tokens: Vec<lex::Token>,
     program: Program,
-    /// The name-resolved content signature (with its per-statement hashes) of
-    /// the snapshot's program — reused to sign the next compile incrementally.
-    sig: SignatureOut,
 }
 
 struct Cache<P: HighProgram>
 where
     P::Value: ValueType,
 {
-    /// The beyond-error content signature the cached build was compiled under.
-    signature: u64,
+    /// The resolved content key the cached build was compiled under.
+    key: Vec<u64>,
     /// The cached build, shared with any report that reused it.
     build: Option<Arc<Build<P>>>,
     /// The checker's rendered diagnostics for that build — static across edits
-    /// that keep the clean content (the fresh frontend diagnostics are
+    /// that keep the resolved content (the fresh frontend diagnostics are
     /// re-derived per call).
     check_diagnostics: Vec<Diag<P>>,
 }
@@ -175,19 +171,23 @@ where
         self.source.replace_range(range, text);
     }
 
-    /// The beyond-error content signature of the last compile.
-    pub fn signature(&self) -> u64 {
-        self.cache.as_ref().map(|c| c.signature).unwrap_or(0)
+    /// The resolved content key of the last compile.
+    pub fn key(&self) -> Vec<u64> {
+        self.cache
+            .as_ref()
+            .map(|c| c.key.clone())
+            .unwrap_or_default()
     }
 
     /// Compile and check the current buffer.
     ///
     /// Lexes and parses the source (to re-derive the frontend diagnostics and
-    /// the current resolved structure), computes the **name-resolved** content
-    /// signature, and **reuses the cached build when it is unchanged** — so an
-    /// edit that only extends an unresolved name (or an error block, or a
-    /// consistent rename) never re-lowers or re-checks the established program.
-    /// A changed signature re-lowers and re-checks, then refreshes the cache.
+    /// the current resolved structure), runs the resolver (assigning `BinderId`s
+    /// and emitting the resolve diagnostics), computes the **resolved content
+    /// key**, and **reuses the cached build when it is unchanged** — so an edit
+    /// that only extends an unresolved name (or an error block, or a consistent
+    /// rename) never re-lowers or re-checks the established program.  A changed
+    /// key re-lowers and re-checks, then refreshes the cache.
     ///
     /// When the previous compile left a [`LastState`] snapshot, lexing is
     /// **incremental** (`lex::lex_resume` over the edit span) rather than a
@@ -225,9 +225,8 @@ where
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
-        // whole buffer (the result is identical either way).  The window extent
-        // feeds the incremental signature.
-        let (mut program, errors, window) = match (&self.last, edit) {
+        // whole buffer (the result is identical either way).
+        let (mut program, errors, _window) = match (&self.last, edit) {
             (Some(prev), Some((a, b, delta))) => {
                 match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
                     Some(out) => {
@@ -236,9 +235,8 @@ where
                             errors,
                             lo,
                             hi,
-                            reuse,
                         } = out;
-                        (program, errors, Some((lo, hi, reuse)))
+                        (program, errors, Some((lo, hi)))
                     }
                     None => {
                         let p = full_parse(&tokens);
@@ -253,35 +251,20 @@ where
         };
         diagnostics.extend(errors.into_iter().map(Diag::from_parse));
 
-        // Resolution-aware signature of the *name-resolved* structure, plus the
-        // current resolve diagnostics — computed from the parsed AST, without
-        // lowering.  When the splice gave us a window and a previous signature,
-        // sign **incrementally** (reuse the untouched statements' hashes, re-sign
-        // only the window + any binding-shifted tail).
-        let sig_out = match (&self.last, window) {
-            (Some(prev), Some((lo, hi, reuse))) => {
-                // A change in the program's shape (tail ↔ record) changes how
-                // *every* top-level statement is signed — a record program (a
-                // module) signs its statements with their `pub`/field identity,
-                // a tail program signs them as plain statements.  So the
-                // previous per-statement hashes are not reusable across the
-                // shape change; re-sign the whole program.
-                if program.expr.is_some() != prev.program.expr.is_some() {
-                    signature_full(&program)
-                } else {
-                    signature_reuse(&program, &prev.sig, lo, hi, reuse)
-                }
-            }
-            _ => signature_full(&program),
-        };
-        let signature = sig_out.combined;
-        diagnostics.extend(sig_out.diagnostics.iter().cloned().map(|d| d.retype()));
+        // Resolve: the single resolution authority — assigns a `BinderId` to
+        // each binder, writes it into the AST's resolve fields, and emits the
+        // resolve diagnostics.  Then the resolved content key: a name-free,
+        // digest-free serialization over those `BinderId`s, which is what the
+        // lowering actually consumes.
+        let resolved = crate::resolve::resolve(&mut program, &[]);
+        let key = crate::resolve::content_key(&program);
+        diagnostics.extend(resolved.diagnostics.iter().cloned().map(|d| d.retype()));
 
-        // Reuse: the name-resolved structure is unchanged, so the established
-        // build is exactly right.  Only the (fresh, above) frontend/resolve
-        // diagnostics moved; the lowering and check are skipped entirely.
+        // Reuse: the resolved content is unchanged, so the established build is
+        // exactly right.  Only the (fresh, above) frontend/resolve diagnostics
+        // moved; the lowering and check are skipped entirely.
         if let Some(cache) = &self.cache
-            && cache.signature == signature
+            && cache.key == key
         {
             if let Some(build) = &cache.build {
                 let mut all = diagnostics;
@@ -290,22 +273,20 @@ where
                     source: self.source.clone(),
                     tokens,
                     program,
-                    sig: sig_out,
                 });
                 return SessionReport {
                     build: Some(Arc::clone(build)),
                     diagnostics: all,
-                    signature,
+                    key,
                     reused: true,
                 };
             }
         }
 
-        // Rebuild: resolve (already distinct from the reuse decision) then lower
-        // (total) and check.  The resolve diagnostics were already produced by
-        // the resolver the session ran above (the frontend source of truth), so
-        // the lowering's own are discarded.
-        let (ir, span_index, _) = crate::compile::compile_with_imports(&mut program, &[]);
+        // Rebuild: lower the already-resolved program (total) and check.  The
+        // session ran the resolver itself, so it lowers via `compile_resolved`
+        // rather than `compile_with_imports` (which would resolve again).
+        let (ir, span_index) = crate::compile::compile_resolved(&program, &resolved.import_binders);
         let report: Report<CompiledProgram<V, O>> = build_report::<V, O>(
             Some(ir),
             Some(span_index),
@@ -321,7 +302,7 @@ where
             .collect();
         let build = report.build.map(Arc::new);
         self.cache = Some(Cache {
-            signature,
+            key: key.clone(),
             build: build.clone(),
             check_diagnostics: check_diagnostics.clone(),
         });
@@ -329,12 +310,11 @@ where
             source: self.source.clone(),
             tokens,
             program,
-            sig: sig_out,
         });
         SessionReport {
             build,
             diagnostics: report.diagnostics,
-            signature,
+            key,
             reused: false,
         }
     }
@@ -560,664 +540,21 @@ fn splice_program(
         stmt_ranges: ranges,
     };
     program.error_blocks = crate::parse::collect_error_blocks(&program);
-    // The incremental signature may reuse the suffix hashes only when the window
-    // replaced the *same number* of logical statements (so the suffix indices
-    // still line up) AND no binding name changed (so its resolution is the same).
-    let old_window_end = hi.min(old_program.statements.len());
-    let reuse = win_stmts.len() == hi - lo
-        && splt_binding_names_unchanged(&old_program.statements[lo..old_window_end], &win_stmts);
     Some(SpliceOut {
         program,
         errors: win_errors,
         lo,
         hi: lo + win_stmts.len(),
-        reuse,
     })
 }
 
-/// Whether the window changed the *set/order of binding names* — the signal for
-/// whether reusing the prefix/suffix statement hashes is sound.  A binding name
-/// change (an insert/remove/reorder) shifts the global slot assignment and so
-/// can re-resolve statements outside the window; a value edit, name extension,
-/// or error-block growth does not.
-fn splt_binding_names_unchanged(old_window: &[BlockStmt], new_window: &[BlockStmt]) -> bool {
-    binding_names(old_window) == binding_names(new_window)
-}
-
-/// The ordered binding names of a statement slice (block-wide and restrictive).
-fn binding_names(stmts: &[BlockStmt]) -> Vec<&str> {
-    stmts
-        .iter()
-        .filter_map(|bs| match &bs.stmt {
-            Stmt::Binding(b) => Some(b.name.as_str()),
-            Stmt::Expr(_) => None,
-        })
-        .collect()
-}
-
-/// The outcome of a window splice: the fresh frontend, plus the window extent
-/// (in the new program's logical-statement index space) and whether the
-/// window's binding-names are unchanged — the inputs for an incremental
-/// signature.
+/// The outcome of a window splice: the fresh frontend plus the window extent
+/// (in the new program's logical-statement index space).
 struct SpliceOut {
     program: Program,
     errors: Vec<ParseDiag>,
     lo: usize,
     hi: usize,
-    reuse: bool,
-}
-
-/// The outcome of a signature pass: the combined beyond-error content
-/// signature, the resolve-layer diagnostics, and (for reuse) the per-statement
-/// resolved hashes and whether each emitted a diagnostic.
-struct SignatureOut {
-    combined: u64,
-    /// The resolve-layer diagnostics (frontend — no checker build).
-    diagnostics: Vec<Diag<LangProgram>>,
-    stmt_hashes: Vec<u64>,
-    stmt_had_diag: Vec<bool>,
-}
-
-/// The full (whole-program) name-resolved content signature.
-fn signature_full(program: &Program) -> SignatureOut {
-    let mut sig = Sig::new();
-    sig.hash_program(program);
-    SignatureOut {
-        combined: sig.combined(),
-        diagnostics: sig.diagnostics,
-        stmt_hashes: sig.stmt_hashes,
-        stmt_had_diag: sig.stmt_had_diag,
-    }
-}
-
-/// The **incremental** name-resolved content signature: reuse the previous
-/// per-statement hashes outside the re-sign window and re-sign only the window
-/// `[lo, hi)` (and, unless `reuse_suffix`, the tail after it).
-///
-/// `prev` is the previous compile's [`SignatureOut`].  A statement is reused
-/// only when it is outside the window, it is before the window or (with
-/// `reuse_suffix`) after it, and it emitted no resolve diagnostic (else its
-/// diagnostic would be dropped).  The scope state is re-derived for the whole
-/// program (block-wide pre-enter + per-statement restrictive frames), so the
-/// emitted hashes are identical to [`signature_full`], but the expensive
-/// expression walk runs only over the re-sign window and its tail.
-fn signature_reuse(
-    program: &Program,
-    prev: &SignatureOut,
-    lo: usize,
-    hi: usize,
-    reuse_suffix: bool,
-) -> SignatureOut {
-    let mut sig = Sig::new();
-    sig.hash_program_reuse(program, prev, lo, hi, reuse_suffix);
-    SignatureOut {
-        combined: sig.combined(),
-        diagnostics: sig.diagnostics,
-        stmt_hashes: sig.stmt_hashes,
-        stmt_had_diag: sig.stmt_had_diag,
-    }
-}
-
-/// The signature walk, carrying the hasher + the name-resolution state.  The
-/// scope handling mirrors [`crate::compile::Compiler`] exactly — a scope's
-/// block-wide bindings are pre-entered before any value, restrictive `let`
-/// bindings enter after their value (a fresh frame), a lambda enters its
-/// parameter for the body, and blocks push/pop their own scope — so the
-/// resolution this signature signs is the one the lowering actually uses.
-///
-/// It also emits the resolve-layer diagnostics for every unresolved name,
-/// so the session reports the *current* name's error even when the build is
-/// reused and the lowering is skipped.
-///
-/// The walk produces the signature as a **vector of per-statement resolved
-/// hashes** — one per *top-level* logical statement (each hashing its own
-/// subtree, including any nested block), plus the final expression — aligned
-/// with [`Program::stmt_ranges`], so the session can re-derive *only* the
-/// statements a user edit touched and re-combine the rest.  The combined
-/// [`Sig::combined`] is an order-sensitive fold over those hashes.
-struct Sig {
-    /// The hasher for the statement currently being signed.
-    cur: sha2::Sha256,
-    /// Per-statement resolved hashes (one per top-level logical statement,
-    /// plus the program's final expression), in source order.
-    stmt_hashes: Vec<u64>,
-    /// Whether each corresponding statement emitted a resolve diagnostic (a
-    /// name that did not resolve).  Such a statement's *hash* is reusable but
-    /// its diagnostic is not — it must be re-signed to re-emit the error at
-    /// the current position.
-    stmt_had_diag: Vec<bool>,
-    scopes: Vec<HashMap<String, usize>>,
-    next_slot: usize,
-    diagnostics: Vec<Diag<LangProgram>>,
-}
-
-impl Sig {
-    fn new() -> Self {
-        Sig {
-            cur: sha2::Sha256::new(),
-            stmt_hashes: Vec::new(),
-            stmt_had_diag: Vec::new(),
-            scopes: Vec::new(),
-            next_slot: 0,
-            diagnostics: Vec::new(),
-        }
-    }
-
-    /// The order-sensitive combined signature over the per-statement hashes.
-    fn combined(&self) -> u64 {
-        let mut h = sha2::Sha256::new();
-        for sh in &self.stmt_hashes {
-            h.update(&sh.to_le_bytes());
-        }
-        u64::from_le_bytes(h.finalize().as_slice()[..8].try_into().unwrap())
-    }
-
-    fn slot(&mut self, name: &str) -> usize {
-        let s = self.next_slot;
-        self.next_slot += 1;
-        self.scopes
-            .last_mut()
-            .expect("a scope frame is pushed before entering a binding")
-            .insert(name.to_string(), s);
-        s
-    }
-
-    fn lookup(&self, name: &str) -> Option<usize> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|frame| frame.get(name).copied())
-    }
-
-    /// Hash a *use* by its resolution outcome: the binding slot if it
-    /// resolves, or a single spelling-free sentinel (plus a resolve diagnostic)
-    /// if it does not.
-    fn hash_name(&mut self, name: &str, span: &(u32, u32)) {
-        match self.lookup(name) {
-            Some(slot) => {
-                self.cur.update(&[1]);
-                self.cur.update(&slot.to_le_bytes());
-            }
-            None => {
-                self.cur.update(&[0]);
-                let in_scope: Vec<&str> = self
-                    .scopes
-                    .iter()
-                    .flat_map(|frame| frame.keys())
-                    .map(|s| s.as_str())
-                    .collect();
-                self.diagnostics.push(Diag::new(
-                    Stage::Resolve,
-                    *span,
-                    suggest::unresolved_message(name, in_scope),
-                ));
-            }
-        }
-    }
-
-    /// A scope (a program, a `{ … }` block): pre-enter the block-wide
-    /// binding names, then hash the statements and the value.  When `record`,
-    /// each top-level statement (and the final value) is signed into its own
-    /// per-statement hash; when not (a nested block), the content is folded
-    /// into the enclosing statement's hasher instead, so the enclosing hash
-    /// covers the whole subtree.
-    fn hash_scope(&mut self, statements: &[Stmt], expr: Option<&Expr>, record: bool) {
-        let base = self.scopes.len();
-        self.scopes.push(HashMap::new());
-        for stmt in statements {
-            if let Stmt::Binding(b) = stmt {
-                if !b.restrictive {
-                    self.slot(&b.name);
-                }
-            }
-        }
-        for stmt in statements {
-            if record {
-                let diag_before = self.diagnostics.len();
-                self.begin_stmt();
-                self.hash_stmt(stmt);
-                self.record_stmt();
-                self.stmt_had_diag
-                    .push(self.diagnostics.len() > diag_before);
-            } else {
-                self.hash_stmt(stmt);
-            }
-        }
-        if let Some(e) = expr {
-            if record {
-                let diag_before = self.diagnostics.len();
-                self.begin_stmt();
-                self.cur.update(&[2]);
-                self.hash_expr(e);
-                self.record_stmt();
-                self.stmt_had_diag
-                    .push(self.diagnostics.len() > diag_before);
-            } else {
-                self.cur.update(&[2]);
-                self.hash_expr(e);
-            }
-        }
-        self.scopes.truncate(base);
-    }
-
-    /// Begin a new per-statement hash.
-    fn begin_stmt(&mut self) {
-        self.cur = sha2::Sha256::new();
-    }
-
-    /// Finalize the current statement's hash into the result list.
-    fn record_stmt(&mut self) {
-        let v = u64::from_le_bytes(
-            self.cur.clone().finalize().as_slice()[..8]
-                .try_into()
-                .expect("sha256 is at least 8 bytes"),
-        );
-        self.stmt_hashes.push(v);
-    }
-
-    fn hash_stmt(&mut self, stmt: &Stmt) {
-        match stmt {
-            // `let a = e` — the value is hashed before `a` is visible; a
-            // fresh frame is pushed for the name (visible only to later
-            // statements), mirroring the compiler.
-            Stmt::Binding(b) if b.restrictive => {
-                self.cur.update(&[0]);
-                self.hash_expr(&b.value);
-                self.scopes.push(HashMap::new());
-                self.slot(&b.name);
-            }
-            // Block-wide binding — the name was pre-entered; only the value
-            // (and its resolution) is signed.
-            Stmt::Binding(b) => {
-                self.cur.update(&[0]);
-                self.hash_expr(&b.value);
-            }
-            Stmt::Expr(e) => {
-                self.cur.update(&[1]);
-                self.hash_expr(e);
-            }
-        }
-    }
-
-    fn hash_program(&mut self, program: &Program) {
-        self.hash_scope_program(&program.statements, program.expr.as_ref(), true);
-    }
-
-    /// Hash a top-level block statement list with an optional tail (the
-    /// program shape).  Mirrors [`hash_scope`] (a `{ … }` block) but keeps the
-    /// `pub`/`let`-vs-field identity of a statement, which matters for the
-    /// record-program (module) case.  When `record`, each statement (and the
-    /// tail) is signed into its own per-statement hash; when not, the content
-    /// folds into the enclosing hasher.
-    fn hash_scope_program(&mut self, statements: &[BlockStmt], expr: Option<&Expr>, record: bool) {
-        let base = self.scopes.len();
-        self.scopes.push(HashMap::new());
-        for bs in statements {
-            if let Stmt::Binding(b) = &bs.stmt {
-                if !b.restrictive {
-                    self.slot(&b.name);
-                }
-            }
-        }
-        // A record program (no tail) is a module: a statement's field identity
-        // (its `let`-vs-field nature and `pub` mark) is part of the signed
-        // content, exactly as for an `Expr::RecordBlock`.  A tail program
-        // drops `pub` (the compiler ignores it), so it signs statements like a
-        // block body would.
-        let module = expr.is_none();
-        for bs in statements {
-            if record {
-                let diag_before = self.diagnostics.len();
-                self.begin_stmt();
-                if module {
-                    self.hash_record_field(bs);
-                } else {
-                    self.hash_stmt(&bs.stmt);
-                }
-                self.record_stmt();
-                self.stmt_had_diag
-                    .push(self.diagnostics.len() > diag_before);
-            } else if module {
-                self.hash_record_field(bs);
-            } else {
-                self.hash_stmt(&bs.stmt);
-            }
-        }
-        if let Some(e) = expr {
-            if record {
-                let diag_before = self.diagnostics.len();
-                self.begin_stmt();
-                self.cur.update(&[2]);
-                self.hash_expr(e);
-                self.record_stmt();
-                self.stmt_had_diag
-                    .push(self.diagnostics.len() > diag_before);
-            } else {
-                self.cur.update(&[2]);
-                self.hash_expr(e);
-            }
-        }
-        self.scopes.truncate(base);
-    }
-
-    /// Hash a record field (a module's statement) — the field's name, its
-    /// `let`-vs-field nature, and its `pub` mark, then the value.  Mirrors the
-    /// [`Expr::RecordBlock`] hashing in [`hash_expr`], so a module's top-level
-    /// statements sign exactly like the fields of an equivalent `{ … }` block.
-    fn hash_record_field(&mut self, bs: &BlockStmt) {
-        let (name, field) = match &bs.stmt {
-            Stmt::Binding(b) => (Some(b.name.as_str()), !b.restrictive),
-            Stmt::Expr(_) => (None, true),
-        };
-        self.cur
-            .update(&[name.is_some() as u8, field as u8, bs.public as u8]);
-        if let Some(name) = name {
-            self.cur.update(name.as_bytes());
-        }
-        let value = match &bs.stmt {
-            Stmt::Binding(b) => &b.value,
-            Stmt::Expr(e) => e,
-        };
-        self.hash_expr(value);
-    }
-
-    /// The incremental top-level walk: reuse [`prev`]'s per-statement hashes
-    /// outside the re-sign window and re-sign the rest.  See [`signature_reuse`].
-    fn hash_program_reuse(
-        &mut self,
-        program: &Program,
-        prev: &SignatureOut,
-        lo: usize,
-        hi: usize,
-        reuse_suffix: bool,
-    ) {
-        let n = program.statements.len() + usize::from(program.expr.is_some());
-        let base = self.scopes.len();
-        self.scopes.push(HashMap::new());
-        for bs in &program.statements {
-            if let Stmt::Binding(b) = &bs.stmt {
-                if !b.restrictive {
-                    self.slot(&b.name);
-                }
-            }
-        }
-        for i in 0..n {
-            let in_window = i >= lo && i < hi;
-            let before_window = i < lo;
-            let after_window = i >= hi;
-            let reusable = !in_window
-                && (before_window || (reuse_suffix && after_window))
-                && i < prev.stmt_hashes.len()
-                && !prev.stmt_had_diag[i];
-            if reusable {
-                self.advance_stmt(program, i);
-                self.stmt_hashes.push(prev.stmt_hashes[i]);
-                self.stmt_had_diag.push(false);
-            } else {
-                let diag_before = self.diagnostics.len();
-                self.begin_stmt();
-                self.hash_logical_stmt(program, i);
-                self.record_stmt();
-                self.stmt_had_diag
-                    .push(self.diagnostics.len() > diag_before);
-            }
-        }
-        self.scopes.truncate(base);
-    }
-
-    /// After reusing a statement's hash, still advance the scope so later
-    /// statements resolve against its binding (a restrictive `let` becomes
-    /// visible to them; a block-wide name was already pre-entered).
-    fn advance_stmt(&mut self, program: &Program, i: usize) {
-        if let Some(bs) = program.statements.get(i) {
-            if let Stmt::Binding(b) = &bs.stmt {
-                if b.restrictive {
-                    self.scopes.push(HashMap::new());
-                    self.slot(&b.name);
-                }
-            }
-        }
-    }
-
-    /// Sign logical statement `i`: `program.statements[i]`, or the program's
-    /// tail expression (index `statements.len()`, only when there is one).
-    fn hash_logical_stmt(&mut self, program: &Program, i: usize) {
-        if let Some(bs) = program.statements.get(i) {
-            // A record program's statements are fields (pub-significant); a
-            // tail program's are plain statements (pub dropped).
-            if program.expr.is_none() {
-                self.hash_record_field(bs);
-            } else {
-                self.hash_stmt(&bs.stmt);
-            }
-        } else if let Some(e) = &program.expr {
-            self.cur.update(&[2]);
-            self.hash_expr(e);
-        }
-    }
-
-    fn hash_opt_expr(&mut self, e: &Option<Box<Expr>>) {
-        match e {
-            Some(inner) => {
-                self.cur.update(&[1]);
-                self.hash_expr(inner);
-            }
-            None => self.cur.update(&[0]),
-        }
-    }
-
-    /// Hash the structure of an AST expression, excluding source spans and
-    /// the *content* of a recovered error block.  Names are signed by their
-    /// resolution outcome; an [`Expr::Err`] and an unresolved name are both
-    /// spelling-free sentinels.
-    fn hash_expr(&mut self, e: &Expr) {
-        match e {
-            Expr::Int(n, _) => {
-                self.cur.update(&[0]);
-                self.cur.update(&n.to_le_bytes());
-            }
-            Expr::Str(s, _) => {
-                self.cur.update(&[24]);
-                self.cur.update(s.as_bytes());
-            }
-            Expr::TypeConst(c, _) => {
-                self.cur.update(&[1]);
-                self.cur.update(&[match c {
-                    TypeConst::Int => 0,
-                    TypeConst::Type => 1,
-                    TypeConst::String => 2,
-                }]);
-            }
-            Expr::Name(name, span, _) => {
-                self.cur.update(&[2]);
-                self.hash_name(name, span);
-            }
-            Expr::Placeholder(_) => self.cur.update(&[3]),
-            // The recovered-error region / an unresolved name: content-free,
-            // position-only.
-            Expr::Err { .. } => self.cur.update(&[4]),
-            // The bare `type_of` atom — content-free (it is a keyword form).
-            Expr::TypeOf(_) => self.cur.update(&[26]),
-            Expr::Lambda {
-                parameter,
-                parameter_type,
-                parameter_perspective,
-                r#return,
-                ..
-            } => {
-                self.cur.update(&[5]);
-                let base = self.scopes.len();
-                self.scopes.push(HashMap::new());
-                self.slot(parameter);
-                self.hash_opt_expr(parameter_type);
-                self.cur.update(&[6]);
-                self.hash_opt_expr(parameter_perspective);
-                self.cur.update(&[7]);
-                self.hash_expr(r#return);
-                self.scopes.truncate(base);
-            }
-            Expr::Apply {
-                function, argument, ..
-            } => {
-                self.cur.update(&[8]);
-                self.hash_expr(function);
-                self.hash_expr(argument);
-            }
-            Expr::BinOp {
-                operator,
-                left,
-                right,
-                ..
-            } => {
-                self.cur.update(&[9]);
-                self.cur.update(&[match operator {
-                    BinOp::Add => 0,
-                    BinOp::Sub => 1,
-                    BinOp::Leq => 2,
-                    BinOp::Eq => 3,
-                }]);
-                self.hash_expr(left);
-                self.hash_expr(right);
-            }
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                self.cur.update(&[10]);
-                self.hash_expr(condition);
-                self.hash_expr(then_branch);
-                self.hash_expr(else_branch);
-            }
-            Expr::Assert { value, .. } => {
-                self.cur.update(&[11]);
-                self.hash_expr(value);
-            }
-            Expr::NativeCall { op, args, .. } => {
-                self.cur.update(&[12]);
-                self.cur.update(op.as_bytes());
-                for a in args {
-                    self.hash_expr(a);
-                }
-            }
-            Expr::Index { array, index, .. } => {
-                self.cur.update(&[13]);
-                self.hash_expr(array);
-                self.hash_expr(index);
-            }
-            Expr::FieldRead { container, key, .. } => {
-                self.cur.update(&[14]);
-                self.hash_expr(container);
-                self.hash_expr(key);
-            }
-            Expr::NamedFieldRead {
-                container, name, ..
-            } => {
-                self.cur.update(&[24]);
-                self.hash_expr(container);
-                self.cur.update(name.as_bytes());
-            }
-            Expr::TableFind { container, key, .. } => {
-                self.cur.update(&[15]);
-                self.hash_expr(container);
-                self.hash_expr(key);
-            }
-            Expr::Annotation {
-                value,
-                r#type,
-                perspective,
-                ..
-            } => {
-                self.cur.update(&[16]);
-                self.hash_expr(value);
-                self.hash_opt_expr(r#type);
-                self.hash_opt_expr(perspective);
-            }
-            Expr::Arrow {
-                parameter,
-                r#return,
-                ..
-            } => {
-                self.cur.update(&[17]);
-                self.hash_expr(parameter);
-                self.hash_expr(r#return);
-            }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
-                self.cur.update(&[18]);
-                for el in elems {
-                    self.hash_expr(el);
-                }
-            }
-            Expr::StructType(fields, _) => {
-                self.cur.update(&[18]);
-                for field in fields {
-                    // The field's optional name is part of its identity: a
-                    // named field is distinct from an unnamed one of the same
-                    // type.
-                    self.cur.update(&[field.name.is_some() as u8]);
-                    if let Some(name) = &field.name {
-                        self.cur.update(name.as_bytes());
-                    }
-                    self.hash_expr(&field.ty);
-                }
-            }
-            Expr::StructInst { callee, fields, .. } => {
-                self.cur.update(&[19]);
-                self.hash_expr(callee);
-                for f in fields {
-                    // The argument's optional name is part of its identity: a
-                    // named argument is distinct from a positional one of the
-                    // same value.
-                    self.cur.update(&[f.name.is_some() as u8]);
-                    if let Some(name) = &f.name {
-                        self.cur.update(name.as_bytes());
-                    }
-                    self.hash_expr(&f.value);
-                }
-            }
-            Expr::Table(entries, _) => {
-                self.cur.update(&[20]);
-                for (k, v) in entries {
-                    self.hash_expr(k);
-                    self.hash_expr(v);
-                }
-            }
-            Expr::Shallow(inner, depth, _) => {
-                self.cur.update(&[21]);
-                self.cur.update(&depth.to_le_bytes());
-                self.hash_expr(inner);
-            }
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                self.cur.update(&[22]);
-                self.hash_expr(element_type);
-                self.hash_expr(length);
-            }
-            Expr::Block {
-                statements, expr, ..
-            } => {
-                self.cur.update(&[23]);
-                self.hash_scope(statements, Some(expr), false);
-            }
-            Expr::RecordBlock { fields, .. } => {
-                self.cur.update(&[25]);
-                for f in fields {
-                    // The field's name, its `let`-vs-field nature, and its
-                    // `pub` mark are part of its identity.
-                    self.cur
-                        .update(&[f.name.is_some() as u8, f.field as u8, f.public as u8]);
-                    if let Some(name) = &f.name {
-                        self.cur.update(name.as_bytes());
-                    }
-                    self.hash_expr(&f.value);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

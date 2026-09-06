@@ -84,8 +84,10 @@ pub fn compile_with_imports(
 
 /// Lower a *resolved* program.  `program` must already carry its `BinderId`
 /// annotations (from [`crate::resolve`]); `import_binders` are the base-scope
-/// import binders the resolver assigned, each lowering to a `Static` node.
-fn compile_resolved(
+/// import binders the resolver assigned, each lowering to a `Static` node.  The
+/// incremental session calls this directly (it already ran the resolver for its
+/// reuse decision), so resolution is not repeated.
+pub(crate) fn compile_resolved(
     program: &Program,
     import_binders: &[crate::resolve::ImportBinder],
 ) -> (IR<LangAttr>, SpanIndex) {

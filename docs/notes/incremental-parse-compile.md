@@ -20,15 +20,17 @@
 >   the lower layers (compile → check) keep seeing the same effective,
 >   name-free content no matter which error happened above — the checker needs
 >   exactly one skip path, not a growing zoo of error nodes.
-> * *T1* — a `BufferSession` (`crates/lichen-language/src/session.rs`) tracks a
->   **name-resolved content signature**: a hash over the tree *shape* with every
->   name replaced by the binding it resolves to (a stable slot, not its
->   spelling) or a single **unresolved** sentinel.  Extending an unresolved name
->   (the long-identifier typing case), rewriting an error block, or consistently
->   renaming a binding leaves the signature unchanged → the established
->   `IR`+`Build` is reused and only the fresh frontend/resolve diagnostics are
->   re-derived.  An edit that changes the resolved structure re-lowers and
->   re-checks (the debounced-rebuild fallback).
+> * *T1* — a `BufferSession` (`crates/lichen-language/src/session.rs`) runs the
+>   `resolve` stage (a single `BinderId` resolver,
+>   `crates/lichen-language/src/resolve.rs`) on every compile and tracks the
+>   **resolved content key**: a name-free, digest-free serialization over the
+>   resolver's `BinderId`s (each name replaced by the binding it resolves to,
+>   error blocks opaque, spans dropped).  Extending an unresolved name (the
+>   long-identifier typing case), rewriting an error block, or consistently
+>   renaming a binding leaves the key unchanged → the established `IR`+`Build` is
+>   reused and only the fresh frontend/resolve diagnostics are re-derived.  An
+>   edit that changes the resolved structure re-lowers and re-checks (the
+>   debounced-rebuild fallback).
 >
 > **Implemented (the O(edit) lex / parse primitives — T2's heart):**
 > - `lex::lex_resume` — re-lex only the region an edit touched, reusing the old
@@ -44,9 +46,14 @@
 >   range** (`Vec<(usize, usize)>`, one per statement + one for the final expr);
 >   tokens own byte ranges, so the session maps a changed byte region → token
 >   indices → statements for re-parsing.  No byte-range duplication.
-> - `Sig` (session signature) is now **per-statement**: `stmt_hashes: Vec<u64>`
->   plus an order-sensitive `combined()`, so the high (AST) layer can re-derive
->   only the statements an edit touched instead of re-hashing the whole tree.
+> - **Name resolution is a single stage** (`resolve.rs`): the resolver assigns
+>   each binder a dense `BinderId` and writes it into the AST's resolve fields
+>   (`Expr::Name` use, `Binding`, lambda parameter, record field), and is the
+>   only authority for the scope rules.  The compiler reads those fields through
+>   a `BinderId → ExprId` map (one IR node per binder) instead of re-resolving —
+>   the "a use is the binder's own id" graph-sharing invariant holds by
+>   construction.  The session's reuse compares the resolver's `BinderId`
+>   annotations (via `content_key`) directly rather than hashing resolution.
 >
 > **Implemented (the `BufferSession::compile` splice — T2's wiring):**
 > - `BufferSession` keeps a `LastState` snapshot (source, tokens, program) the
@@ -63,19 +70,19 @@
 >   lying outside the window (whose diagnostic must not be dropped), or a
 >   trailing binding (the whole-program parser owns that "must end with an
 >   expression" error).
-> - The **signature is now incremental too**: `Sig` signs one hash per *top-level*
->   logical statement (each covering its own subtree), aligned with
->   `Program::stmt_ranges`.  `compile` re-signs **only** the spl
->   window plus a binding-shifted tail, and reuses the untouched statements'
->   hashes — so a keystroke re-hashes `O(edit)`, not the whole AST.  It
->   re-signs everything when the window's binding names change (a slot shift) or
->   the statement count changed, which keeps it sound.
+> - **The reuse gate is digest-free**: the session re-resolves the spliced
+>   program and compares its `content_key` (a name-free serialization over the
+>   resolver's `BinderId`s, error blocks opaque).  Equal key ⇒ the resolved
+>   structure is unchanged ⇒ the established build is reused; no `sha2` digest
+>   and no collision ambiguity.  The splice's window still bounds the re-parse,
+>   but the reuse decision re-walks the (small, already re-parsed) program
+>   rather than diffing per-statement hashes.
 >
 > **Not yet wired / not implemented:**
 > - T3 memoized check (`done`/`check_into` resume) and T4 true
 >   unification-state checkpoint/rollback.
 >
-> Points at: `crates/lichen-language/src/{lex,parse,compile,lib,session}.rs`,
+> Points at: `crates/lichen-language/src/{lex,parse,resolve,compile,lib,session}.rs`,
 > `crates/lichen-highlevel/src/{ir,checker}.rs`.
 
 ## 1. The two principles
