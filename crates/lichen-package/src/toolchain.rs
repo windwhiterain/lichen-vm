@@ -163,31 +163,73 @@ pub fn tool_dest_path(tool: Tool) -> Result<PathBuf, String> {
 // Prebuilt-release fetch.
 // ---------------------------------------------------------------------------
 
-/// The commit the toolchain release should come from: this binary's own commit,
-/// else the repo's default-branch tip.
-fn toolchain_commit(repo: &str) -> Result<String, String> {
-    if let Some(commit) = self_commit() {
-        return Ok(commit.to_string());
-    }
-    default_branch_tip(repo)
+/// The commit the toolchain release should come from: this binary's own commit.
+/// A `lichen` built outside a git checkout has no pinned commit, so it cannot
+/// install a same-commit toolchain — the caller is told to `liche update` rather
+/// than silently chasing the repo tip (which may have no release, since the user
+/// publishes manually).
+fn toolchain_commit() -> Result<String, String> {
+    self_commit().map(str::to_string).ok_or_else(|| {
+        "cannot pin the toolchain to a commit: this `lichen` was built outside a \
+         git checkout; run `liche update` to align to a published release"
+            .to_string()
+    })
 }
 
-/// The default-branch tip SHA of `repo` (as `git ls-remote <repo> HEAD`).
-fn default_branch_tip(repo: &str) -> Result<String, String> {
-    let out = Command::new("git")
-        .args(["ls-remote", repo, "HEAD"])
+/// The SHA tag of the newest published GitHub release for `repo`.
+///
+/// GitHub's release list is newest-first and includes pre-releases, so its first
+/// entry is the latest.  This decouples `lichen update` from the repository tip,
+/// which may have no release (the user publishes manually).
+fn latest_release_tag(repo: &str) -> Result<String, String> {
+    let slug = github_owner_repo(repo)?;
+    let url = format!("https://api.github.com/repos/{slug}/releases?per_page=1");
+    let out = Command::new("curl")
+        .args(["-sS", "-L", "--fail", url.as_str()])
         .output()
-        .map_err(|e| format!("cannot query {repo}: {e}"))?;
-    let sha = String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .unwrap_or("")
-        .to_string();
-    if sha.is_empty() {
-        Err(format!("no default branch found for {repo}"))
-    } else {
-        Ok(sha)
+        .map_err(|e| format!("cannot query GitHub releases: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "cannot query GitHub releases: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
     }
+    let releases: Vec<Release> = serde_json::from_slice(&out.stdout)
+        .map_err(|e| format!("cannot parse GitHub releases: {e}"))?;
+    releases
+        .into_iter()
+        .next()
+        .map(|r| r.tag_name)
+        .ok_or_else(|| "no GitHub release published yet; publish the toolchain first".to_string())
+}
+
+/// `owner/repo` from a GitHub URL (`https://github.com/o/r[.git]`,
+/// `git@github.com:o/r[.git]`, `ssh://git@github.com/o/r`).
+fn github_owner_repo(repo: &str) -> Result<String, String> {
+    let trimmed = repo.trim_end_matches('/');
+    let cleaned = trimmed.strip_suffix(".git").unwrap_or(trimmed);
+    let path = if let Some(idx) = cleaned.find("://") {
+        let rest = &cleaned[idx + 3..];
+        rest.split_once('/').map(|(_, p)| p).unwrap_or(rest)
+    } else if let Some((_, path)) = cleaned.split_once(':') {
+        path
+    } else {
+        cleaned
+    };
+    let path = path.strip_suffix(".git").unwrap_or(path);
+    if path.split('/').count() == 2 && !path.starts_with('/') {
+        Ok(path.to_string())
+    } else {
+        Err(format!(
+            "unsupported repository URL for release lookup: {repo}"
+        ))
+    }
+}
+
+/// A single GitHub release entry (the fields we read).
+#[derive(serde::Deserialize)]
+struct Release {
+    tag_name: String,
 }
 
 /// The GitHub release asset download URL for `bin` at `commit`.
@@ -248,14 +290,20 @@ fn make_executable(path: &PathBuf) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 /// Install (refresh) `tool` from the prebuilt release at the package manager's own
-/// commit into Lichen Home. Returns the installed binary path.
+/// commit into Lichen Home. Returns the installed binary path. If the release at
+/// that commit is missing, the error hints at `lichen update`.
 pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     let bin = tool.bin_name();
-    let commit = toolchain_commit(repo)?;
+    let commit = toolchain_commit()?;
     let url = asset_url(repo, &commit, bin);
     let dest = tool_dest_path(tool)?;
-    download(&url, &dest)?;
-    Ok(dest)
+    match download(&url, &dest) {
+        Ok(()) => Ok(dest),
+        Err(e) => Err(format!(
+            "{e}; if `{bin}` was not published at `{commit}` (this `lichen`'s own \
+             commit), run `liche update`"
+        )),
+    }
 }
 
 /// Resolve the shipped binary for `tool`: the Lichen Home copy first, then `$PATH`.
@@ -298,12 +346,12 @@ pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
     Ok(Some(bin))
 }
 
-/// Self-update the package manager to the repo's latest commit. The updated binary
-/// is written to `$LICHEN_HOME/tools/lichen` (the canonical copy the extension and
-/// the CLI resolve from); a copy on `$PATH` elsewhere is left for the user to
-/// refresh. Returns `Ok(None)` when already current, else the new commit.
+/// Self-update the package manager to the repo's **latest published release**. The
+/// updated binary is written to `$LICHEN_HOME/tools/lichen` (the canonical copy the
+/// extension and the CLI resolve from); a copy on `$PATH` elsewhere is left for the
+/// user to refresh. Returns `Ok(None)` when already current, else the new commit.
 pub fn update(repo: &str) -> Result<Option<String>, String> {
-    let commit = default_branch_tip(repo)?;
+    let commit = latest_release_tag(repo)?;
     if self_commit().is_some_and(|c| c == commit) {
         return Ok(None);
     }
@@ -344,5 +392,36 @@ pub fn find(tool: Tool) -> Option<PathBuf> {
         Some(candidate)
     } else {
         find_on_path(&exe)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::github_owner_repo;
+
+    #[test]
+    fn parses_github_repo_urls() {
+        assert_eq!(
+            github_owner_repo("https://github.com/windwhiterain/lichen-vm").unwrap(),
+            "windwhiterain/lichen-vm"
+        );
+        assert_eq!(
+            github_owner_repo("https://github.com/windwhiterain/lichen-vm.git").unwrap(),
+            "windwhiterain/lichen-vm"
+        );
+        assert_eq!(
+            github_owner_repo("git@github.com:windwhiterain/lichen-vm").unwrap(),
+            "windwhiterain/lichen-vm"
+        );
+        assert_eq!(
+            github_owner_repo("ssh://git@github.com/windwhiterain/lichen-vm").unwrap(),
+            "windwhiterain/lichen-vm"
+        );
+    }
+
+    #[test]
+    fn rejects_non_github_urls() {
+        assert!(github_owner_repo("C:\\dev\\lichen-vm").is_err());
+        assert!(github_owner_repo("https://example.com/just-one-segment").is_err());
     }
 }

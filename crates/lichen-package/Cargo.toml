@@ -16,3 +16,5 @@ path = "src/main.rs"
 [dependencies]
 lichen-preprocess = { path = "../lichen-preprocess" }
 lichen-utils = { path = "../lichen-utils" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

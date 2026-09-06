@@ -36,7 +36,7 @@ commands:
                                                         into Lichen Home, from the release at
                                                         this binary's own commit
   update [--repo <u>]                                  update the package manager itself to the
-                                                        repository's latest commit
+                                                        repository's latest released commit
   path <compiler|language-server> [--repo <u>]  print the resolved toolchain
               [--project <dir>]                 binary path (installing it into
                                                 Lichen Home if absent); for
@@ -375,7 +375,7 @@ fn cmd_update(args: &mut Args) -> ExitCode {
     };
     match toolchain::update(&repo) {
         Ok(None) => {
-            println!("lichen is already at the latest commit");
+            println!("lichen is already at the latest release");
             ExitCode::SUCCESS
         }
         Ok(Some(commit)) => {

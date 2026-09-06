@@ -637,6 +637,8 @@ version = "0.1.0"
 dependencies = [
  "lichen-preprocess",
  "lichen-utils",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -140,7 +140,7 @@ by hand:
 ```powershell
 lichen install language-server
 lichen path language-server       # prints the binary path (installing if absent)
-lichen update                     # move the package manager to the latest commit
+lichen update                     # move the package manager to the latest release
 ```
 
 Check the server resolves:

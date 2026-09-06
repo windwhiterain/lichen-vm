@@ -272,15 +272,19 @@ not pull the tokio/tower async stack.
   `curl` (mirroring `toolchain::download`) and then runs it. Because the extension
   uses this canonical copy, a later `liche update` — which refreshes exactly
   `$LICHEN_HOME/tools/lichen` — stays in sync with what the extension runs (it
-  never keeps a private copy of its own). Run it
+  never keeps a private copy of its own). `liche install` and `liche path` always
+  fetch the toolchain at the running package manager's **own commit** (so a
+  same-revision toolchain); `liche update` moves it to the **latest published
+  release** rather than the repo tip, so a manual-release workflow never leaves
+  `update` looking for an unpublished commit. Run it
   by hand and restart Zed, or `lichen update` to move the package manager (and the
-  toolchain it installs) to a later commit:
+  toolchain it installs) to the latest release:
 
   ```text
   lichen install language-server   # install the prebuilt server into Lichen Home
   lichen path language-server      # print its path (installing if absent)
   lichen path language-server --project <dir>  # compose+print a server over <dir>'s plugins
-  lichen update                    # update the package manager to the latest commit
+  lichen update                    # update the package manager to the latest release
   ```
 
 - **Per-project plugin-set LSP.** A project that imports a *native plugin* gets a
