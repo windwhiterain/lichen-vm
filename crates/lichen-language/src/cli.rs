@@ -31,6 +31,7 @@ use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_utils::extend::AsEnum;
 
@@ -39,6 +40,19 @@ use crate::package::PackageStore;
 use crate::persist::{self, ArtifactCodec};
 use crate::preprocess::stage_depends;
 use crate::program::GcdOp;
+
+/// One native plugin package to register on the store a compiler evaluates
+/// against: `(virtual_path, embedded_source, private_native_ops)`.  A
+/// plugin-built compiler's generated `main` supplies one entry per plugin, so
+/// the plugin's wrapper source is compiled against its own private native-op
+/// registry and served by name (`<alias>.lichen`) — see
+/// [`PackageStore::register_native`](crate::package::PackageStore::register_native).
+///
+/// `native_ops` is the plugin's per-module registry; the wrapper const and the
+/// ops macro are named from the plugin crate (see `crate::plugin`'s generated
+/// `main`).  A shipping compiler registers nothing (`&[]`), so its store is
+/// exactly as before — the plugin-built path is opt-in.
+pub type NativePackage<P> = (&'static str, &'static str, NativeOps<P>);
 
 /// Run the compiler CLI with the process arguments, using the lichen home as
 /// the device/artifact cache root (the shipping compiler's cache).  The
@@ -68,6 +82,29 @@ where
 /// reuses) another vocabulary's artifacts — see
 /// `docs/notes/artifact-cache.md`.
 pub fn main_with_cache_dir<P>(cache_root: &Path) -> ExitCode
+where
+    P: LangProgramShape,
+    P::Value: ValueType
+        + AsEnum<lichen_compute::ComputeValue>
+        + From<lichen_compute::ComputeValue>
+        + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
+{
+    main_with_native_packages::<P>(cache_root, &[])
+}
+
+/// [`Self::main`] with an explicit **device/artifact cache root** and a set of
+/// **native plugin packages** to register on the store each program is
+/// evaluated against.
+///
+/// This is the plugin-built compiler's entry: a generated `main` passes one
+/// `(virtual_path, embedded_source, native_ops)` triple per plugin, so the
+/// plugin's wrapper source (e.g. `std.lichen`) is compiled against the
+/// plugin's private native-op registry and served by name — the same store the
+/// program runs through, exactly as the reference `std_native` test's
+/// `register_native` plug.  A shipping compiler calls [`Self::main_with_cache_dir`]
+/// with the empty set, keeping its store native-free.
+pub fn main_with_native_packages<P>(cache_root: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -117,7 +154,7 @@ where
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            run_path::<P>(cache_root, &PathBuf::from(path))
+            run_path::<P>(cache_root, &PathBuf::from(path), native)
         }
         "build" => {
             let Some(path) = args.next() else {
@@ -128,19 +165,19 @@ where
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            build_file::<P>(cache_root, &PathBuf::from(path))
+            build_file::<P>(cache_root, &PathBuf::from(path), native)
         }
         path_arg => {
             if args.next().is_some() {
                 eprintln!("{usage}");
                 return ExitCode::FAILURE;
             }
-            run_path::<P>(cache_root, &PathBuf::from(path_arg))
+            run_path::<P>(cache_root, &PathBuf::from(path_arg), native)
         }
     }
 }
 
-fn run_path<P>(cache_root: &Path, path: &Path) -> ExitCode
+fn run_path<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -150,9 +187,9 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     if path.is_dir() {
-        run_directory::<P>(cache_root, path)
+        run_directory::<P>(cache_root, path, native)
     } else {
-        run_file::<P>(cache_root, path)
+        run_file::<P>(cache_root, path, native)
     }
 }
 
@@ -185,7 +222,17 @@ where
 /// and reports a diagnostic when one has not been fetched.  The device cache
 /// root is the caller's artifact/cache root (the lichen home for the shipping
 /// compiler, the per-plugin-set slot for a plugin-built compiler).
-fn staged_store<P>(source: &str, cache_root: &Path) -> (PackageStore<P>, Vec<crate::diag::Diag<P>>)
+///
+/// Each native plugin package in `native` is registered on the store **after**
+/// the file's own dependencies are staged, so the block's `import "<alias>"`
+/// resolves the plugin's wrapper as a native virtual package (compiled against
+/// the plugin's private native-op registry) on this same store — the same
+/// `register_native` plug the reference `std_native` test uses.
+fn staged_store<P>(
+    source: &str,
+    cache_root: &Path,
+    native: &[NativePackage<P>],
+) -> (PackageStore<P>, Vec<crate::diag::Diag<P>>)
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -202,11 +249,20 @@ where
     } else {
         PackageStore::new()
     };
-    let diags = stage_depends::<P>(&mut store, source);
+    let mut diags = stage_depends::<P>(&mut store, source);
+    for &(virtual_path, wrapper, native_ops) in native {
+        if let Err(e) = store.register_native(virtual_path, wrapper, native_ops) {
+            diags.push(crate::diag::Diag::new(
+                crate::diag::Stage::Preprocess,
+                (0, 0),
+                format!("cannot register native package {virtual_path}: {e}"),
+            ));
+        }
+    }
     (store, diags)
 }
 
-fn run_file<P>(cache_root: &Path, path: &Path) -> ExitCode
+fn run_file<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -222,7 +278,7 @@ where
             return ExitCode::FAILURE;
         }
     };
-    let (mut store, diags) = staged_store::<P>(&source, cache_root);
+    let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
     if !diags.is_empty() {
         print!("{}", crate::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
@@ -239,7 +295,7 @@ where
     }
 }
 
-fn run_directory<P>(cache_root: &Path, dir: &Path) -> ExitCode
+fn run_directory<P>(cache_root: &Path, dir: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -270,7 +326,7 @@ where
                 continue;
             }
         };
-        let (mut store, diags) = staged_store::<P>(&source, cache_root);
+        let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
         if !diags.is_empty() {
             failed += 1;
             eprintln!("{}: failed to stage dependencies", file.display());
@@ -295,7 +351,7 @@ where
     }
 }
 
-fn build_file<P>(cache_root: &Path, path: &Path) -> ExitCode
+fn build_file<P>(cache_root: &Path, path: &Path, native: &[NativePackage<P>]) -> ExitCode
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -305,7 +361,7 @@ where
     P::Operator: From<GcdOp> + From<TypeOperator> + From<lichen_compute::ComputeOperator> + 'static,
 {
     let source = std::fs::read_to_string(path).unwrap_or_default();
-    let (mut store, diags) = staged_store::<P>(&source, cache_root);
+    let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
     if !diags.is_empty() {
         print!("{}", crate::render::render_all(&source, &diags));
         return ExitCode::FAILURE;

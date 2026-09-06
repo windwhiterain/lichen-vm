@@ -26,9 +26,9 @@ usage: lichen <command> [args]
 commands:
   fetch <file|dir>                                      fetch the git deps declared
                                                         by the file(s)' `depend` block
-  run <file|dir>                                        fetch, then compile & run via
+  run <file|dir> [--repo <u>]                  fetch, then compile & run via
                                                         the compiler binary
-  build <file>                                          fetch, then compile & print the
+  build <file> [--repo <u>]                    fetch, then compile & print the
                                                         exported type via the compiler
                                                         binary
   clean                                                 reclaim device-cache artifacts
@@ -174,22 +174,30 @@ fn cmd_fetch(args: &mut Args) -> ExitCode {
 
 fn cmd_run(args: &mut Args) -> ExitCode {
     let Some(target) = take(args).map(PathBuf::from) else {
-        eprintln!("usage: lichen run <file|dir>");
+        eprintln!("usage: lichen run <file|dir> [--repo <u>]");
         return ExitCode::FAILURE;
     };
-    delegate(&target, "run")
+    let repo = match take_repo(args, DEFAULT_REPO) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    delegate(&target, "run", &repo)
 }
 
 fn cmd_build(args: &mut Args) -> ExitCode {
     let Some(target) = take(args).map(PathBuf::from) else {
-        eprintln!("usage: lichen build <file>");
+        eprintln!("usage: lichen build <file> [--repo <u>]");
         return ExitCode::FAILURE;
     };
     if target.is_dir() {
         eprintln!("usage: lichen build <file> (a directory is only valid for `run`)");
         return ExitCode::FAILURE;
     }
-    delegate(&target, "build")
+    let repo = match take_repo(args, DEFAULT_REPO) {
+        Ok(r) => r,
+        Err(code) => return code,
+    };
+    delegate(&target, "build", &repo)
 }
 
 /// The shared `run`/`build` workflow: fetch the target's dependencies into the
@@ -197,7 +205,11 @@ fn cmd_build(args: &mut Args) -> ExitCode {
 /// lichen-home compiler cache, when the target imports a native plugin, else
 /// the shipped compiler), and delegate the actual compilation to it as a
 /// subprocess.
-fn delegate(target: &Path, sub: &str) -> ExitCode {
+///
+/// `core_repo` is the repository (or local checkout path / git URL) the
+/// compositor's core crates come from; a local (non-default) `core_repo` lets
+/// the generated compositor build offline (see [`plugin::core_patch`]).
+fn delegate(target: &Path, sub: &str, core_repo: &str) -> ExitCode {
     if !target.exists() {
         eprintln!("cannot {sub}: {} does not exist", target.display());
         return ExitCode::FAILURE;
@@ -213,7 +225,7 @@ fn delegate(target: &Path, sub: &str) -> ExitCode {
             }
         }
     }
-    let bin = match select_compiler(&depends) {
+    let bin = match select_compiler(&depends, core_repo) {
         Ok(bin) => bin,
         Err(e) => {
             eprintln!("{e}");
@@ -231,8 +243,9 @@ fn delegate(target: &Path, sub: &str) -> ExitCode {
 /// `lichen-compiler`.
 ///
 /// The plugin set must already be fetched ([`crate::git::fetch`]) so its
-/// resolved version can key the cache.
-fn select_compiler(depends: &[Depend]) -> Result<PathBuf, String> {
+/// resolved version can key the cache.  `core_repo` is the repository (or
+/// local checkout path / git URL) the compositor's core crates come from.
+fn select_compiler(depends: &[Depend], core_repo: &str) -> Result<PathBuf, String> {
     let plugins: Vec<Depend> = depends.iter().filter(|dep| dep.plugin).cloned().collect();
     if plugins.is_empty() {
         return stock_compiler().ok_or_else(|| {
@@ -240,7 +253,7 @@ fn select_compiler(depends: &[Depend]) -> Result<PathBuf, String> {
                 .to_string()
         });
     }
-    compiler_cache::ensure(DEFAULT_REPO, &plugins, &plugin::Leaves::shipping())
+    compiler_cache::ensure(core_repo, &plugins, &plugin::Leaves::shipping())
 }
 
 /// The shipped compiler binary: an installed one, else a sibling

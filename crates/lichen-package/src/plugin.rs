@@ -257,7 +257,7 @@ edition = "2024"
 {core_perspective}
 {core_doc}
 {core_utils}
-{plugin_lines}{extra_deps}"#,
+{plugin_lines}{extra_deps}{core_patch}"#,
         package_name = package_name,
         core_language = core_dep_line(core_repo, "lichen-language"),
         core_lowlevel = core_dep_line(core_repo, "lichen-lowlevel"),
@@ -268,6 +268,7 @@ edition = "2024"
         core_utils = core_dep_line(core_repo, "lichen-utils"),
         plugin_lines = plugin_lines(plugins),
         extra_deps = extra_deps,
+        core_patch = core_patch(core_repo),
     );
     std::fs::write(dir.join("Cargo.toml"), toml).map_err(|e| format!("write Cargo.toml: {e}"))
 }
@@ -284,6 +285,35 @@ fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
     } else {
         format!("{crate_name} = {{ git = \"{core_repo}\", package = \"{crate_name}\" }}")
     }
+}
+
+/// The `[patch]` section emitted when the generated crate is built against a
+/// **non-default** `core_repo`.  A native plugin (e.g. `liche-std-native`)
+/// declares its own core crates as **git** deps to the canonical repo
+/// ([`crate::toolchain::DEFAULT_REPO`]), so a local `core_repo` (a `file://`
+/// checkout of the same repo) must add a `[patch]` redirecting those deps to
+/// the local source — otherwise cargo reaches out to the canonical repo (the
+/// network dependency the harness is avoiding) and, worse, the plugin's git
+/// core crates would be *distinct* crate instances from the compositor's own
+/// and the plugins' trait impls would not unify (the type-unification break
+/// the workspace root's `[patch]` already solves for the monorepo's build).
+///
+/// Only the core crates the plugin set links against are patched (the ones a
+/// native plugin git-deps), not every core crate, to keep the redirect minimal.
+/// When `core_repo` is the canonical repo itself, no patch is needed (the
+/// plugin's git deps already point at the same source).
+fn core_patch(core_repo: &str) -> String {
+    if core_repo == crate::toolchain::DEFAULT_REPO {
+        return String::new();
+    }
+    let mut out = String::from("\n[patch.\"");
+    out.push_str(crate::toolchain::DEFAULT_REPO);
+    out.push_str("\"]\n");
+    for crate_name in ["lichen-utils", "lichen-lowlevel", "lichen-highlevel"] {
+        out.push_str(&core_dep_line(core_repo, crate_name));
+        out.push('\n');
+    }
+    out
 }
 
 /// The plugin dependency lines for a generated crate: each plugin from a local
@@ -375,6 +405,30 @@ pub type Program = LangProgram;
     )
 }
 
+/// The `register_native` slots a plugin's embedded wrapper against its private
+/// native-op registry, served as a native virtual package at `<alias>.lichen`.
+/// A plugin-built compiler's `main` hands one `(virtual_path, wrapper, ops)`
+/// tuple per plugin to `cli::main_with_native_packages`, so the plugin's
+/// `$sort` (etc.) resolves privately — and the wrapper is compiled on the same
+/// store the program evaluates against, exactly as the reference
+/// `std_native` test's `register_native` plug.
+///
+/// The wrapper is `<crate_ident>::WRAPPER_SOURCE` and the ops registry is
+/// `<crate_ident>::<crate_ident>_ops!(crate::LangProgram)` — the plugin's
+/// `WRAPPER_SOURCE` const and the `<crate>_ops!` macro, both named from the
+/// plugin's crate ident (the Cargo.toml dependency key with `-`→`_`).
+fn native_package_lines(plugins: &[Depend]) -> String {
+    let mut out = String::new();
+    for dep in plugins {
+        let ident = crate_ident(dep);
+        let alias = dep.alias();
+        out.push_str(&format!(
+            "            (\"{alias}.lichen\", {ident}::WRAPPER_SOURCE, {ident}::{ident}_ops!(crate::LangProgram)),\n"
+        ));
+    }
+    out
+}
+
 /// The generated crate's `src/main.rs` (the **bin-only** compiler): the
 /// composition at the crate root, then the shared [`lichen_language::cli`]
 /// over the composed program.  A compiler must be **bin-only** (not lib+bin)
@@ -407,11 +461,16 @@ fn main() -> std::process::ExitCode {{
     let cache_root = lichen_language::persist::lichendir()
         .join("compilers")
         .join("{key}");
-    lichen_language::cli::main_with_cache_dir::<crate::LangProgram>(&cache_root)
+    lichen_language::cli::main_with_native_packages::<crate::LangProgram>(
+        &cache_root,
+        &[
+{native}        ],
+    )
 }}
 "#,
         compose = compose_source(plugins, leaves),
         key = key,
+        native = native_package_lines(plugins),
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
@@ -458,8 +517,8 @@ mod generated_main_tests {
         write_compiler_main_rs(&slot, &[], &Leaves::shipping()).expect("write the generated main");
         let main = std::fs::read_to_string(slot.join("src/main.rs")).unwrap();
         assert!(
-            main.contains("main_with_cache_dir"),
-            "the generated compiler must scope its cache:\n{main}"
+            main.contains("main_with_native_packages"),
+            "the generated compiler must register the plugin's native packages:\n{main}"
         );
         assert!(
             main.contains(&format!(".join(\"{key}\")")),
@@ -470,5 +529,54 @@ mod generated_main_tests {
             "the generated compiler must root the cache under the lichen home:\n{main}"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn native_package_lines_register_each_plugins_wrapper() {
+        // A generated compiler must register each plugin's native package so its
+        // wrapper (`$sort` etc.) resolves against the plugin's own registry —
+        // the tuple shape `cli::main_with_native_packages` expects.
+        let dep = Depend {
+            url: "file:///C:/work/lichen-vm".into(),
+            name: "std".into(),
+            rev: None,
+            branch: None,
+            tag: None,
+            package: Some("lichen-std-native".into()),
+            sub: Some("lichen-std-native/src".into()),
+            plugin: true,
+        };
+        let lines = native_package_lines(&[dep]);
+        assert!(
+            lines.contains(
+                "(\"std.lichen\", lichen_std_native::WRAPPER_SOURCE, \
+                 lichen_std_native::lichen_std_native_ops!(crate::LangProgram)),"
+            ),
+            "must register the plugin's wrapper at its alias:\n{lines}"
+        );
+        assert!(native_package_lines(&[]).is_empty());
+    }
+
+    #[test]
+    fn core_patch_redirects_plugin_core_deps_to_a_local_repo() {
+        // A local (non-default) core_repo must add a `[patch]` redirecting the
+        // crates a native plugin git-deps against the canonical repo to the
+        // local source, so the generated compositor resolves offline.
+        let patch = core_patch("file:///C:/work/lichen-vm");
+        assert!(
+            patch.contains("[patch.\"https://github.com/windwhiterain/lichen-vm\"]"),
+            "must patch the canonical repo:\n{patch}"
+        );
+        for crate_name in ["lichen-utils", "lichen-lowlevel", "lichen-highlevel"] {
+            assert!(
+                patch.contains(&format!(
+                    "git = \"file:///C:/work/lichen-vm\", package = \"{crate_name}\""
+                )),
+                "must redirect {crate_name} to the local repo:\n{patch}"
+            );
+        }
+        // The default (canonical) core_repo needs no patch — its git deps already
+        // point at the same source.
+        assert_eq!(core_patch("https://github.com/windwhiterain/lichen-vm"), "");
     }
 }
