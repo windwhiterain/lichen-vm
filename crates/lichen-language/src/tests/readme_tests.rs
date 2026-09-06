@@ -25,7 +25,7 @@ fn a_synced_region_is_a_noop() {
 #[test]
 fn renders_the_tree_grouped_and_ordered() {
     // Render the controlled fixture tree, not the live example set: the real
-    // `examples/programs/` is a moving spec, so asserting its names here
+    // `examples/` is a moving spec, so asserting its names here
     // would force a test edit for every example added/renamed/reordered.
     // The fixture exercises the same behaviours the live tree does: files at
     // several `order =` values, a tie broken by name, an undeclared entry

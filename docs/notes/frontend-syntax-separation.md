@@ -316,7 +316,7 @@ Per [`AGENTS.md`](../../AGENTS.md), after each step:
 cargo check            # compilation passes
 cargo test             # behaviour correct (lex/parse/session/pipeline/readme/lsp/highlevel checker)
 cargo fix --allow-dirty && cargo fmt   # final tidy
-cargo run -p lichen-language -- crates/lichen-language/examples/programs   # example parity
+cargo run -p lichen-language -- examples   # example parity
 ```
 
 The lex/parser move is a pure relocation (types unchanged, `Span` a transparent alias).

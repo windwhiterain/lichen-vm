@@ -322,8 +322,7 @@ fn the_repo_import_example_loads() {
     // `geometry.lichen` itself imports `math.lichen` (a transitive relative
     // import).  Driving the real server against this file must resolve every
     // import relative to the file's directory — no "cannot load package".
-    let examples =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs/import");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import");
     let main_path = examples.join("_.lichen");
     let uri = Url::from_file_path(&main_path).unwrap();
 

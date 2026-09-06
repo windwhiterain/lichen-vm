@@ -1,7 +1,7 @@
 //! Tree-sitter Rust binding for the Lichen grammar.
 //!
 //! In-tree tests exercise the parser against the sample programs under
-//! `crates/lichen-language/examples/programs/`.
+//! `examples/`.
 
 use tree_sitter_language::LanguageFn;
 

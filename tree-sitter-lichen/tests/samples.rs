@@ -27,7 +27,7 @@ fn walk(dir: &Path, acc: &mut Vec<PathBuf>) {
 fn sample_dirs() -> Vec<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     vec![
-        root.join("../crates/lichen-language/examples/programs"),
+        root.join("../examples"),
         root.join("../crates/lichen-language/tests/fixtures/readme"),
     ]
 }

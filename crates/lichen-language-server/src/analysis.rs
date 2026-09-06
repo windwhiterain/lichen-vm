@@ -2530,8 +2530,8 @@ mod tests {
         // of an imported module (`math.succ`, `geo.double`, `geo.inc_twice`)
         // renders the field's `value : type` (the module's field table), not
         // "field of imported module `X`" and never "unresolved".
-        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../lichen-language/examples/programs/import");
+        let examples =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/import");
         let main_path = examples.join("_.lichen");
         let d: Doc<lichen_language::program::LangProgram> = Doc::new_with_base(
             fs::read_to_string(&main_path).unwrap(),

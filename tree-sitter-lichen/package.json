@@ -6,7 +6,7 @@
   "scripts": {
     "generate": "tree-sitter generate",
     "test": "tree-sitter test",
-    "parse-examples": "tree-sitter parse \"../crates/lichen-language/examples/programs\""
+    "parse-examples": "tree-sitter parse \"../examples\""
   },
   "keywords": ["tree-sitter", "parser", "lichen"],
   "license": "MIT",

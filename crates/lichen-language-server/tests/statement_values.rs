@@ -86,7 +86,7 @@ fn compute_kernel_bindings_render_by_name_not_raw_layout() {
     // `TypeKernel` means no renderer special-case: the value renders by name via
     // the compute vocabulary hook (`Kernel`) and the type renders as the struct
     // `struct<.native <_>, .sig Int -> Int>` — not the raw recursive-pair layout.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
 
@@ -127,7 +127,7 @@ fn compute_wrapper_functions_hover_with_named_type_variables() {
     // an opaque bare `? -> ? -> ? -> ?` — the LSP-visible half of the same
     // "raw layout" bug for the wrapper functions themselves.  A `jit` result is
     // a kernel struct, so its type renders as `struct<.native <_>, .sig ?>`.
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../lichen-language/examples/programs");
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples");
     let source = std::fs::read_to_string(dir.join("compute_jit.lichen")).unwrap();
     let doc = ShipsDoc::new_with_base(source, Some(&dir));
 

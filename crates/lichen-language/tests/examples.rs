@@ -1,4 +1,4 @@
-//! The example programs in `examples/programs/` — at any depth, including
+//! The example programs in `examples/` — at any depth, including
 //! each directory's `_.lichen` — are the living spec: each must compile and
 //! run.  The top-level README embeds each program's whole source file, whose
 //! `output =` metadata is rewritten to its *actual* output (computed by the

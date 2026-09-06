@@ -1,4 +1,4 @@
-//! The example programs in `examples/programs/` are the living spec, and the
+//! The example programs in `examples/` are the living spec, and the
 //! top-level README embeds them.  This test keeps everything in sync
 //! automatically: each example's `output =` metadata entry is rewritten to its
 //! actual output (appended when missing), and when the README's embedded
@@ -23,7 +23,7 @@ fn readme_embeds_the_current_example_programs() {
     if content != expected {
         fs::write(&path, expected).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         eprintln!(
-            "{}: example section out of sync with examples/programs/ — rewrote it",
+            "{}: example section out of sync with examples/ — rewrote it",
             path.display()
         );
     }

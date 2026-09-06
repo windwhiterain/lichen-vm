@@ -1,5 +1,5 @@
 //! Regenerate the example section of the top-level README from
-//! `examples/programs/`.
+//! `examples/`.
 //!
 //! Run with: `cargo run -p lichen-language --bin sync-readme`
 //!

@@ -88,7 +88,7 @@ cargo test -p tree-sitter-lichen
 ```
 
 `tests/samples.rs` parses every `.lichen` sample under
-`crates/lichen-language/examples/programs` and `tests/fixtures/readme`, plus a set of edge
+`examples/` and `tests/fixtures/readme`, plus a set of edge
 cases, and asserts the root node has no ERROR nodes. Green means the grammar accepts the
 whole corpus.
 

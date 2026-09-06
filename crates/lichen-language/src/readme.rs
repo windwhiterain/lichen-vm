@@ -1,7 +1,7 @@
-//! Keeping the README example section in sync with `examples/programs/`.
+//! Keeping the README example section in sync with the top-level `examples/`.
 //!
 //! The example programs are the single source of truth for the top-level
-//! README's example section: [`render_examples`] walks `examples/programs/`
+//! README's example section: [`render_examples`] walks `examples/`
 //! as a tree, and every directory under it renders as one unit — opened by
 //! the directory's `_.lichen` program, followed by the files it contains,
 //! with nested directories rendering the same way to any depth, one heading
@@ -52,7 +52,7 @@ pub fn crate_dir() -> &'static Path {
 /// The directory holding the example programs — a tree of files and
 /// directories, where each directory renders as one unit.
 pub fn example_dir() -> PathBuf {
-    crate_dir().join("examples").join("programs")
+    crate_dir().join("..").join("..").join("examples")
 }
 
 /// The top-level README that carries the generated section.
@@ -231,7 +231,7 @@ fn render_entry(entry: &Entry, level: usize) -> String {
 
 /// Render every example program as the markdown section between the markers.
 ///
-/// `examples/programs/` is walked as a tree: each directory renders as one
+/// `examples/` is walked as a tree: each directory renders as one
 /// unit — a heading named by its path relative to the example directory,
 /// opened by its `_.lichen` program when it has one, then its files and
 /// nested directories, ordered by their `order =` metadata (a directory's
@@ -246,7 +246,7 @@ pub fn render_examples() -> String {
 /// Render every example program under `dir` as the markdown section between
 /// the markers.
 ///
-/// [`render_examples`] renders the live `examples/programs/` tree; this takes
+/// [`render_examples`] renders the live `examples/` tree; this takes
 /// a base directory so the unit tests drive the same rendering logic from a
 /// controlled fixture instead of the live example set (which is a moving spec,
 /// so asserting it in a unit test would force a test edit per add/rename/
