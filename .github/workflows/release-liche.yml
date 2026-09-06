@@ -1,0 +1,86 @@
+name: release-liche-toolchain
+
+# Builds the prebuilt toolchain binaries (`liche`, `lichen-compiler`,
+# `lichen-language-server`) for each host and publishes them to a GitHub release
+# tagged at the checked-out commit. The `liche` package manager installs those
+# assets into Lichen Home from
+# `https://github.com/windwhiterain/lichen-vm/releases/download/<commit>/<asset>`,
+# so the asset name must match `toolchain::asset_name` (ie.
+# `<bin>-<host-target>[.exe]`, where `<host-target>` is the Rust host triple).
+#
+# Trigger manually (workflow_dispatch) after tagging the commit you want to ship:
+# the release tag is the commit SHA, which equals the `LICHEN_BUILD_COMMIT` that
+# `liche` embeds at build time (keeping the toolchain at the same revision as the
+# package manager).
+
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: release-liche-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build ${{ matrix.triple }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+            suffix: ""
+          - os: macos-latest
+            triple: aarch64-apple-darwin
+            suffix: ""
+          - os: macos-13
+            triple: x86_64-apple-darwin
+            suffix: ""
+          - os: windows-latest
+            triple: x86_64-pc-windows-msvc
+            suffix: ".exe"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the toolchain binaries
+        run: |
+          cargo build --release --locked \
+            -p lichen-package \
+            -p lichen-language \
+            -p lichen-language-server
+      - name: Stage release assets
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/liche${{ matrix.suffix }}" \
+             "dist/liche-${{ matrix.triple }}${{ matrix.suffix }}"
+          cp "target/release/lichen-compiler${{ matrix.suffix }}" \
+             "dist/lichen-compiler-${{ matrix.triple }}${{ matrix.suffix }}"
+          cp "target/release/lichen-language-server${{ matrix.suffix }}" \
+             "dist/lichen-language-server-${{ matrix.triple }}${{ matrix.suffix }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: toolchain-${{ matrix.triple }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Create/update the toolchain release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.sha }}
+          name: "lichen toolchain ${{ github.sha }}"
+          draft: false
+          prerelease: true
+          files: dist/**/*

@@ -120,20 +120,25 @@ The extension and server both reuse this crate, so its suite
 compute/doc tests) is the real behavioral guarantee. Green here, plus the two crates above,
 is the whole signal.
 
-### 7. LSP binary on `$PATH`
+### 7. Toolchain in Lichen Home
 
 The extension does not bundle the server (Zed's publishing rules); `language_server_command`
-resolves it with `Worktree::which`, which searches `$PATH`. Install it once, then restart
-Zed:
-
-```bash
-cargo install --path crates/lichen-language-server     # → ~/.cargo/bin/lichen-language-server
-```
-
-Check it is visible:
+resolves it with `Worktree::which` (which searches `$PATH`), else drives the `liche` package
+manager: `liche path language-server` installs the **prebuilt** compiler + language server into
+**Lichen Home** (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
+manager's own commit and prints the binary path. `liche` is found on `$PATH` or at
+`$LICHEN_HOME/tools/liche`. Run it by hand:
 
 ```powershell
-Get-Command lichen-language-server   # must resolve; ~/.cargo/bin must be on $PATH
+liche install language-server
+liche path language-server       # prints the binary path (installing if absent)
+liche update                     # move the package manager to the latest commit
+```
+
+Check the server resolves:
+
+```powershell
+liche path language-server   # must print an existing path under ~/.lichen
 ```
 
 If it is missing, Zed reports "`lichen-language-server` not found on `$PATH`" when a
