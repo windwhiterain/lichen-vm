@@ -38,6 +38,7 @@ pub mod readme;
 pub mod render;
 pub mod run;
 pub mod session;
+pub mod suggest;
 
 use std::sync::{Arc, RwLock};
 

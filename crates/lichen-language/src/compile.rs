@@ -50,6 +50,7 @@ use crate::ast::{Binding, Expr, Program, RecordField, Stmt, TypeConst};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, LangProgram, Perspective};
+use crate::suggest;
 use lichen_doc::Doc;
 
 /// `ExprId` → the source span the expr lowers from.  Built here, exactly where
@@ -401,10 +402,18 @@ impl Compiler {
                     // to the same inert `ErrorBlock` the parse layer reuses,
                     // so the region is masked and the checker skips it; the
                     // lower layers keep seeing the same effective content.
+                    // When the typo is close to a name that is in scope, the
+                    // message names the candidate(s) (a did-you-mean clause).
+                    let in_scope: Vec<&str> = self
+                        .scopes
+                        .iter()
+                        .flat_map(|frame| frame.keys())
+                        .map(|s| s.as_str())
+                        .collect();
                     self.diagnostics.push(Diag::new(
                         Stage::Resolve,
                         *span,
-                        format!("unresolved name '{name}'"),
+                        suggest::unresolved_message(name, in_scope),
                     ));
                     self.alloc(ExprKind::ErrorBlock, span)
                 }

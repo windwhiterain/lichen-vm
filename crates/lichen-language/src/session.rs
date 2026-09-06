@@ -34,6 +34,7 @@ use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
 use crate::program::{GcdOp, LangProgram};
+use crate::suggest;
 use crate::{CompiledProgram, ParseDiag, Report, build_report};
 
 /// The result of a [`BufferSession::compile`]: the checked build (shared, so it
@@ -738,10 +739,16 @@ impl Sig {
             }
             None => {
                 self.cur.update(&[0]);
+                let in_scope: Vec<&str> = self
+                    .scopes
+                    .iter()
+                    .flat_map(|frame| frame.keys())
+                    .map(|s| s.as_str())
+                    .collect();
                 self.diagnostics.push(Diag::new(
                     Stage::Resolve,
                     *span,
-                    format!("unresolved name '{name}'"),
+                    suggest::unresolved_message(name, in_scope),
                 ));
             }
         }

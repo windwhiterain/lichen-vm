@@ -19,7 +19,7 @@ use std::path::Path;
 
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
-use lichen_language::ast::{Expr, Program, Stmt};
+use lichen_language::ast::{Binding, Expr, Program, Stmt};
 use lichen_language::diag::{Diag, Stage};
 use lichen_language::lex;
 use lichen_language::lex::Span;
@@ -36,6 +36,9 @@ use lichen_lowlevel::{AnyNodeId, LowValue};
 use crate::lsp::{
     self, Diagnostic, DiagnosticSeverity, Position, Range, SemanticTokenData,
     SemanticTokenModifier, SemanticTokenType, SemanticTokens,
+};
+use crate::lsp_types::{
+    CompletionItem, CompletionItemKind, CompletionTextEdit, InsertTextFormat, TextEdit,
 };
 
 /// A definition site: a binding name or a lambda parameter.
@@ -602,6 +605,127 @@ impl Doc {
             }
         }
         None
+    }
+
+    /// Completion items for a cursor position: every name that is *in scope* at
+    /// that point of the document, filtered by the word being typed.  The names
+    /// are those visible under the compiler's scope rules (mirrored by [`index`]),
+    /// so a completion never proposes a name that is not actually usable there —
+    /// the same knowledge that powers the unresolved-name "did you mean" clause.
+    ///
+    /// The item's `text_edit` replaces the typed word with the chosen name; the
+    /// `detail` shows the name's checked type (or the imported module) where the
+    /// build produced one.  Field access (`a.…`) is not completed yet.
+    pub fn completion_at(&self, position: Position) -> Vec<CompletionItem> {
+        let Some(offset) = self.offset_of(position) else {
+            return Vec::new();
+        };
+        // Field access (`a.…`) is not completed yet: offering bare names right
+        // after a `.` would be wrong, so skip when the cursor follows a dot.
+        if self.prev_token_is_dot(offset) {
+            return Vec::new();
+        }
+        let (prefix, replace) = self.completion_word(offset);
+        let imports: Vec<(String, Span)> = self
+            .imports
+            .iter()
+            .map(|i| (i.name.clone(), i.span))
+            .collect();
+        let in_scope = scope_names_at(&self.program, &imports, &self.line_starts, offset);
+        in_scope
+            .into_iter()
+            .filter(|(name, _)| name.starts_with(&prefix))
+            .map(|(name, span)| self.completion_item(name, span, replace))
+            .collect()
+    }
+
+    /// Whether the token immediately before byte `offset` is a `.` (a field
+    /// access), i.e. the token whose range ends at or before `offset`.
+    fn prev_token_is_dot(&self, offset: usize) -> bool {
+        self.tokens
+            .iter()
+            .rev()
+            .find(|t| (t.range.1 as usize) <= offset)
+            .is_some_and(|t| t.kind == TokenKind::Dot)
+    }
+
+    /// The word being completed at `offset` and the byte range it spans, so a
+    /// completing edit replaces just that word.  On a `Name` token the word is
+    /// the whole token (an editor-typed partial identifier); anywhere else it is
+    /// empty and the edit inserts at the cursor.  Field access (a `.` prefix) is
+    /// not completed.
+    fn completion_word(&self, offset: usize) -> (String, (u32, u32)) {
+        let is_name = |t: &Token| matches!(t.kind, TokenKind::Name(_));
+        // Cursor strictly inside a token (the usual mid-typing case).
+        if let Some(t) = self.token_at(offset) {
+            if is_name(t) {
+                let TokenKind::Name(name) = &t.kind else {
+                    unreachable!();
+                };
+                return (name.clone(), (t.range.0, t.range.1));
+            }
+            // On a non-name token: nothing to complete.
+            return (String::new(), (offset as u32, offset as u32));
+        }
+        // Cursor exactly at a token boundary: a Name that starts or ends here
+        // (so completing with the cursor just past the typed prefix still
+        // replaces that prefix).  Non-name boundary tokens (a separator, a
+        // delimiter) are skipped.
+        if let Some(t) = self
+            .tokens
+            .iter()
+            .find(|t| is_name(t) && (t.range.0 as usize == offset || t.range.1 as usize == offset))
+        {
+            let TokenKind::Name(name) = &t.kind else {
+                unreachable!();
+            };
+            return (name.clone(), (t.range.0, t.range.1));
+        }
+        (String::new(), (offset as u32, offset as u32))
+    }
+
+    /// A completion item for one in-scope name: a module for an imported
+    /// binding, a function when its checked type is an arrow, else a variable.
+    /// `detail` carries the name's checked type or module path.
+    fn completion_item(&self, name: String, span: Span, replace: (u32, u32)) -> CompletionItem {
+        let detail = self.def_detail(span);
+        let kind = if self.import_by_span.contains_key(&span) {
+            Some(CompletionItemKind::MODULE)
+        } else if detail.as_deref().is_some_and(|d| d.contains("->")) {
+            Some(CompletionItemKind::FUNCTION)
+        } else {
+            Some(CompletionItemKind::VARIABLE)
+        };
+        let range = lsp::range_from_byte_range(&self.source, &self.line_starts, replace);
+        CompletionItem {
+            label: name.clone(),
+            kind,
+            detail,
+            text_edit: Some(CompletionTextEdit::Edit(TextEdit {
+                range,
+                new_text: name.clone(),
+            })),
+            insert_text_format: Some(InsertTextFormat::PLAIN_TEXT),
+            ..Default::default()
+        }
+    }
+
+    /// The informational `detail` for a completion (an in-scope name identified
+    /// by its definition `span`): an imported module's path/type, or a binding's
+    /// checked type from the read-only statement snapshot.  `None` when the
+    /// build computed neither (a lambda parameter, an unresolved import).
+    fn def_detail(&self, span: Span) -> Option<String> {
+        if let Some(i) = self.import_by_span.get(&span) {
+            let imp = &self.imports[*i];
+            return Some(match &imp.ty {
+                Some(ty) => format!("imported module : {ty}"),
+                None => format!("imported module (from `{}`)", imp.path),
+            });
+        }
+        let def = self.defs.get(self.def_index.get(&span).copied()?)?;
+        let stmt_i = self.stmt_by_span.get(&def.span).copied()?;
+        let sv = &self.statements[stmt_i];
+        (!sv.ty.is_empty()).then(|| sv.ty.clone())
     }
 
     /// When the hovered name is a field access (`math.succ`, `point.x`), the
@@ -1345,6 +1469,288 @@ impl Walk {
     }
 }
 
+// ---------------------------------------------------------------------------
+// In-scope names at a position, for completion.
+//
+// The compiler reports an *unresolved name* and — with the same scope knowledge
+// — the "did you mean" candidates.  The editor wants the same set for completion:
+// the names visible at the cursor.  This walk mirrors [`index`]'s scope rules
+// (block-wide bindings pre-entered, restrictive `let` after its value, a lambda
+// parameter in body scope) and, by visiting statements/expressions in source
+// order, snapshots the scope stack at the point it crosses the cursor.  That is
+// exactly the name set both the diagnostic suggestion and the completion use.
+
+/// The names in scope at byte `offset`: `(name, definition-span)` pairs,
+/// innermost scope first, deduplicated (a name shadowing an outer one is listed
+/// once).  See [`ScopeCapture`] for the traversal contract.
+fn scope_names_at(
+    program: &Program,
+    imports: &[(String, Span)],
+    line_starts: &[usize],
+    offset: usize,
+) -> Vec<(String, Span)> {
+    let mut w = ScopeCapture {
+        scopes: Vec::new(),
+        line_starts,
+        offset,
+        result: None,
+    };
+    // Seed the imported bindings into a base frame, mirroring [`index`].
+    if !imports.is_empty() {
+        let mut frame = HashMap::new();
+        for (name, span) in imports {
+            frame.insert(name.clone(), *span);
+        }
+        w.scopes.push(frame);
+    }
+    let top_stmts: Vec<Stmt> = program
+        .statements
+        .iter()
+        .map(|bs| bs.stmt.clone())
+        .collect();
+    w.scope(&top_stmts, program.expr.as_ref());
+    w.result.unwrap_or_default()
+}
+
+/// The scope-stack snapshot used by [`scope_names_at`].
+struct ScopeCapture<'a> {
+    /// The active scope frames, innermost last; each frame is name → def span.
+    scopes: Vec<HashMap<String, Span>>,
+    line_starts: &'a [usize],
+    offset: usize,
+    /// The captured in-scope names, once the walk reaches the offset.
+    result: Option<Vec<(String, Span)>>,
+}
+
+impl<'a> ScopeCapture<'a> {
+    fn enter(&mut self, name: &str, span: Span) {
+        self.scopes
+            .last_mut()
+            .expect("a scope frame is pushed")
+            .insert(name.to_string(), span);
+    }
+
+    /// At the first node whose start is at/past the cursor, snapshot the scope.
+    fn check(&mut self, span: Span) {
+        if self.result.is_some() {
+            return;
+        }
+        if lsp::offset_of_span(self.line_starts, span) >= self.offset {
+            self.capture();
+        }
+    }
+
+    fn capture(&mut self) {
+        if self.result.is_some() {
+            return;
+        }
+        let mut out: Vec<(String, Span)> = Vec::new();
+        for frame in self.scopes.iter().rev() {
+            for (name, span) in frame {
+                if !out.iter().any(|(n, _)| n == name) {
+                    out.push((name.clone(), *span));
+                }
+            }
+        }
+        self.result = Some(out);
+    }
+
+    fn scope(&mut self, statements: &[Stmt], expr: Option<&Expr>) {
+        if self.result.is_some() {
+            return;
+        }
+        let base = self.scopes.len();
+        self.scopes.push(HashMap::new());
+        for stmt in statements {
+            if let Stmt::Binding(b) = stmt
+                && !b.restrictive
+            {
+                self.enter(&b.name, b.span);
+            }
+        }
+        for stmt in statements {
+            self.stmt(stmt);
+            if self.result.is_some() {
+                break;
+            }
+        }
+        if self.result.is_none() {
+            if let Some(e) = expr {
+                self.expr(e);
+            }
+        }
+        self.scopes.truncate(base);
+    }
+
+    fn stmt(&mut self, s: &Stmt) {
+        if self.result.is_some() {
+            return;
+        }
+        match s {
+            Stmt::Binding(b) => {
+                self.expr(&b.value);
+                if self.result.is_some() {
+                    return;
+                }
+                if b.restrictive {
+                    self.scopes.push(HashMap::new());
+                    self.enter(&b.name, b.span);
+                }
+            }
+            Stmt::Expr(e) => self.expr(e),
+        }
+    }
+
+    fn expr(&mut self, e: &Expr) {
+        if self.result.is_some() {
+            return;
+        }
+        self.check(e.span());
+        if self.result.is_some() {
+            return;
+        }
+        match e {
+            Expr::Int(..)
+            | Expr::Str(..)
+            | Expr::TypeConst(..)
+            | Expr::Placeholder(..)
+            | Expr::Err { .. }
+            | Expr::TypeOf(..)
+            | Expr::Name(..) => {}
+            Expr::Lambda {
+                parameter,
+                parameter_span,
+                parameter_type,
+                parameter_perspective,
+                r#return,
+                ..
+            } => {
+                let base = self.scopes.len();
+                self.scopes.push(HashMap::new());
+                self.enter(parameter, *parameter_span);
+                if let Some(t) = parameter_type {
+                    self.expr(t);
+                }
+                if let Some(p) = parameter_perspective {
+                    self.expr(p);
+                }
+                self.expr(r#return);
+                self.scopes.truncate(base);
+            }
+            Expr::Apply {
+                function, argument, ..
+            } => {
+                self.expr(function);
+                self.expr(argument);
+            }
+            Expr::BinOp { left, right, .. } => {
+                self.expr(left);
+                self.expr(right);
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                self.expr(condition);
+                self.expr(then_branch);
+                self.expr(else_branch);
+            }
+            Expr::Assert { value, .. } => self.expr(value),
+            Expr::NativeCall { args, .. } => {
+                for a in args {
+                    self.expr(a);
+                }
+            }
+            Expr::Index { array, index, .. } => {
+                self.expr(array);
+                self.expr(index);
+            }
+            Expr::FieldRead { container, key, .. } => {
+                self.expr(container);
+                self.expr(key);
+            }
+            Expr::NamedFieldRead { container, .. } => self.expr(container),
+            Expr::TableFind { container, key, .. } => {
+                self.expr(container);
+                self.expr(key);
+            }
+            Expr::Annotation {
+                value,
+                r#type,
+                perspective,
+                ..
+            } => {
+                self.expr(value);
+                if let Some(t) = r#type {
+                    self.expr(t);
+                }
+                if let Some(p) = perspective {
+                    self.expr(p);
+                }
+            }
+            Expr::Arrow {
+                parameter,
+                r#return,
+                ..
+            } => {
+                self.expr(parameter);
+                self.expr(r#return);
+            }
+            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
+                for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::StructType(fields, _) => {
+                for f in fields {
+                    self.expr(&f.ty);
+                }
+            }
+            Expr::StructInst { callee, fields, .. } => {
+                self.expr(callee);
+                for f in fields {
+                    self.expr(&f.value);
+                }
+            }
+            Expr::Table(entries, _) => {
+                for (k, v) in entries {
+                    self.expr(k);
+                    self.expr(v);
+                }
+            }
+            Expr::Shallow(inner, _, _) => self.expr(inner),
+            Expr::TypeArray {
+                element_type,
+                length,
+                ..
+            } => {
+                self.expr(element_type);
+                self.expr(length);
+            }
+            Expr::Block {
+                statements, expr, ..
+            } => self.scope(statements, Some(expr)),
+            Expr::RecordBlock { fields, .. } => {
+                let stmts: Vec<Stmt> = fields
+                    .iter()
+                    .map(|f| match &f.name {
+                        Some(name) => Stmt::Binding(Binding {
+                            name: name.clone(),
+                            value: f.value.clone(),
+                            span: f.span,
+                            restrictive: !f.field,
+                        }),
+                        None => Stmt::Expr(f.value.clone()),
+                    })
+                    .collect();
+                self.scope(&stmts, None);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1388,6 +1794,101 @@ mod tests {
         assert!(
             msgs.iter().any(|m| m.contains("unresolved name 'unknown'")),
             "expected an unresolved-name diagnostic, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn unresolved_name_with_a_close_candidate_suggests_it() {
+        // The block-wide binding `unknown` is in scope at the `unkown` use, so
+        // the diagnostic names it via a did-you-mean clause.
+        let d = doc("unknown = 1\nunkown");
+        let msgs: Vec<String> = d
+            .lsp_diagnostics()
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m.contains("did you mean 'unknown'?")),
+            "expected a did-you-mean suggestion, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn unresolved_name_without_a_close_candidate_stays_plain() {
+        // `y` shares no first character with the in-scope `x`, so the message
+        // is unchanged (the exact diagnostic the CLI/render tests rely on).
+        let d = doc("x => y");
+        let msgs: Vec<String> = d
+            .lsp_diagnostics()
+            .iter()
+            .map(|d| d.message.clone())
+            .collect();
+        assert!(
+            msgs.iter().any(|m| m == "unresolved name 'y'"),
+            "expected the plain message, got {msgs:?}"
+        );
+    }
+
+    #[test]
+    fn completion_offers_in_scope_names_filtered_by_the_prefix() {
+        // Typing `a` at the tail offers the block-wide `aa` (in scope) but not
+        // `bb` (different prefix).
+        let d = doc("aa = 1\nbb = 2\na");
+        let items = d.completion_at(Position {
+            line: 2,
+            character: 0,
+        });
+        let labels: Vec<String> = items.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            labels.contains(&"aa".to_string()),
+            "expected `aa` in the completion, got {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"bb".to_string()),
+            "`bb` should be filtered by the prefix, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_is_scope_aware_a_block_local_is_not_offered_outside() {
+        // Inside the block, `inner` is in scope and completes.
+        let d = doc("a = 1\n{inner = 2; inner}\ninner");
+        let inside = d.completion_at(Position {
+            line: 1,
+            character: 12,
+        });
+        let inside_labels: Vec<String> = inside.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            inside_labels.contains(&"inner".to_string()),
+            "`inner` should complete inside its block, got {inside_labels:?}"
+        );
+        // After the block closes, `inner` is out of scope — completing `inner`
+        // at the tail offers nothing (the block's bindings are gone).
+        let outside = d.completion_at(Position {
+            line: 2,
+            character: 0,
+        });
+        let outside_labels: Vec<String> = outside.iter().map(|i| i.label.clone()).collect();
+        assert!(
+            !outside_labels.contains(&"inner".to_string()),
+            "`inner` must not be offered outside its block, got {outside_labels:?}"
+        );
+    }
+
+    #[test]
+    fn completion_items_carry_a_worked_type_detail() {
+        // The binding `x = 3` has a concrete type `Int`, which the completion
+        // surfaces as `detail`.
+        let d = doc("x = 3\nx");
+        let items = d.completion_at(Position {
+            line: 1,
+            character: 0,
+        });
+        assert!(
+            items
+                .iter()
+                .any(|i| i.label == "x" && i.detail.as_deref() == Some("Int")),
+            "expected a `x` completion with `Int` detail, got {items:?}"
         );
     }
 

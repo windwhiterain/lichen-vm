@@ -119,6 +119,18 @@ fn an_unresolved_name_is_a_resolve_diagnostic() {
 }
 
 #[test]
+fn an_unresolved_name_near_an_in_scope_name_suggests_it() {
+    // `unknown` is a block-wide binding, so it is in scope when the typo `unkown`
+    // is compiled — the resolve diagnostic names it via a did-you-mean clause.
+    let err = compile_err("unknown = 1\nunkown");
+    assert_eq!(err.stage, Stage::Resolve);
+    assert_eq!(
+        err.message,
+        "unresolved name 'unkown', did you mean 'unknown'?"
+    );
+}
+
+#[test]
 fn a_type_position_underscore_compiles_to_a_placeholder() {
     // x => x : _ — the annotation's type is the placeholder kind.
     let ir = compile_ok("x => x : _");

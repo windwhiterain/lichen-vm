@@ -92,6 +92,10 @@ fn handshake_and_features() {
         init.contains("semanticTokensProvider"),
         "initialize resp = {init}"
     );
+    assert!(
+        init.contains("completionProvider"),
+        "initialize resp = {init}"
+    );
 
     // initialized (notification), then open a document that has an unresolved name.
     send(
@@ -130,14 +134,30 @@ fn handshake_and_features() {
         "definition resp = {definition}"
     );
 
+    // completion on the `a` use in `b = a + unknown` (line 1, character 4):
+    // the in-scope name `a` is offered, filtered to the typed prefix.
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
+    );
+    let completion = read_frame(&mut stdout);
+    assert!(
+        completion.contains("\"id\":4"),
+        "completion resp = {completion}"
+    );
+    assert!(
+        completion.contains("\"label\":\"a\""),
+        "completion resp = {completion}"
+    );
+
     // semanticTokens/full — Lichen's own parser drives the highlight payload.
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.lichen"}}}"#,
+        r#"{"jsonrpc":"2.0","id":5,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.lichen"}}}"#,
     );
     let tokens = read_frame(&mut stdout);
     assert!(
-        tokens.contains("\"id\":4"),
+        tokens.contains("\"id\":5"),
         "semanticTokens resp = {tokens}"
     );
     assert!(
@@ -148,10 +168,10 @@ fn handshake_and_features() {
     // shutdown, then exit.
     send(
         &mut stdin,
-        r#"{"jsonrpc":"2.0","id":5,"method":"shutdown","params":null}"#,
+        r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":null}"#,
     );
     let shutdown = read_frame(&mut stdout);
-    assert!(shutdown.contains("\"id\":5"), "shutdown resp = {shutdown}");
+    assert!(shutdown.contains("\"id\":6"), "shutdown resp = {shutdown}");
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
