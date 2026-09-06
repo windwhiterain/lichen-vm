@@ -166,7 +166,7 @@ macro_rules! lang_compose_vocabulary {
         #[repr(transparent)]
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct LangProgram(
-            ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, LangAttr>,
+            ::lichen_highlevel::program::ProgramImpl<LangValue, LangOperator, $crate::program::LangAttr>,
         );
 
         // The marker's `Program`/`HighProgram` wiring, delegating the
@@ -184,7 +184,12 @@ macro_rules! lang_compose_vocabulary {
         }
 
         impl ::lichen_highlevel::program::HighProgram for LangProgram {
-            type Attr = LangAttr;
+            // The attribute set is fixed by the language design (Perspective +
+            // Doc), not by the composition — so every composed program reuses
+            // the language crate's own `LangAttr`.  That is what lets a
+            // plugin-built program satisfy `LangProgramShape`/the frontend's
+            // `IR<program::LangAttr>` and drive the shared `cli`/`server`.
+            type Attr = $crate::program::LangAttr;
             type Literal = ::lichen_highlevel::program::HighProgramLiteral;
         }
 
