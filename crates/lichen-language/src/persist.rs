@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lichen_highlevel::program::HighProgram;
-pub use lichen_lowlevel::codec::{ARENA_ALIGN, Reader, Writer, arena_base};
+pub use lichen_lowlevel::codec::{Reader, Writer, arena_align, arena_base};
 use lichen_lowlevel::{
     LocalNodeId, LowShape, Program, StaticFunction, StaticModule, StaticNode, StaticOperation,
 };
@@ -213,7 +213,7 @@ where
     w.u32(3); // format version
     w.u64(module.key.as_raw());
     w.bytes(&hash);
-    w.u64(ARENA_ALIGN as u64);
+    w.u64(arena_align::<P>() as u64);
     w.u64(export.index as u64);
     w.u64(module.arena.len() as u64);
     w.bytes(&module.arena);
@@ -397,7 +397,7 @@ where
         return Err("artifact hash does not match its file".into());
     }
     let max_align = r.u64()? as usize;
-    if max_align != ARENA_ALIGN {
+    if max_align != arena_align::<P>() {
         return Err("artifact payload alignment mismatch".into());
     }
     let export = LocalNodeId {
@@ -405,7 +405,7 @@ where
     };
     let arena_len = r.u64()? as usize;
     let arena = r.take(arena_len)?.to_vec();
-    let base = arena_base(&arena);
+    let base = arena_base::<P>(&arena);
 
     let node_count = r.u64()? as usize;
     let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_count);

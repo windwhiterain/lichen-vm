@@ -248,9 +248,12 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn set_handle(&mut self, _payload: AnyHandle<[u8]>) {
         unreachable!()
     }
-    /// Available if [`Self::is_handle()`].
+    /// The payload alignment ext handle values need (a power of two).
+    /// Available if [`Self::is_handle()`]; a vocabulary with no handle
+    /// payloads has no alignment need, so the default is 1 — this keeps
+    /// [`crate::codec::arena_align`] total for every program.
     fn alignment() -> usize {
-        unreachable!()
+        1
     }
     /// Full equality of two values: handle payloads compare by content
     /// (same variant, byte-wise against the pointed-to allocation), every
@@ -926,7 +929,10 @@ impl<P: Program> Module<P> {
     /// source→statics node map.  Convenience over
     /// [`Registry::freeze_mapped`].
     pub fn freeze_mapped(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
-        debug_assert!(
+        // Hard in release too: a self-freeze (reachable only through a raw
+        // pointer, since the borrows of `self` and `source` exclude it)
+        // deadlocks on the registry write lock.
+        assert!(
             !std::ptr::eq(self, source),
             "freezing a module into itself would deadlock its registry lock"
         );
