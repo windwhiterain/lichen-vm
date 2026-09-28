@@ -17,6 +17,7 @@ pub mod ir;
 pub mod native;
 pub mod plugin;
 pub mod program;
+pub mod shape;
 
 // The vocabularies are themselves extension points: a downstream composes
 // its own union with `lichen_utils::enum_ext!`, listing every layer's enum

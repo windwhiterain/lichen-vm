@@ -40,6 +40,7 @@ use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep, Schema};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
+use crate::shape;
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -747,11 +748,13 @@ where
         let value_tail = self.ir.schema(value).tail.clone();
         let pos = value_tail.iter().position(|m| m == marker)?;
         let pair = self.term[value]?;
-        let items = self.any_items(AnyNodeId::Dynamic(pair))?;
-        items.get(2 + pos).and_then(|item| match item.node {
-            AnyNodeId::Dynamic(n) => Some(n),
-            AnyNodeId::Static(_) => None,
-        })
+        let items = shape::array_items(&self.module, AnyNodeId::Dynamic(pair))?;
+        items
+            .get(shape::attr_slot(pos))
+            .and_then(|item| match item.node {
+                AnyNodeId::Dynamic(n) => Some(n),
+                AnyNodeId::Static(_) => None,
+            })
     }
 
     /// The value of an expression: element 0 of its pair.  For expressions
@@ -870,7 +873,7 @@ where
         self.module.unify(a, b);
         if self.module.unify_errors.len() > before {
             let err = &self.module.unify_errors[before];
-            let path = tag_descent(&self.module, loc.path.clone(), b, &err.steps);
+            let path = shape::tag_descent(&self.module, loc.path.clone(), b, &err.steps);
             self.diary.push(DiaryEntry {
                 error_index: before,
                 a,
@@ -917,7 +920,7 @@ where
                 self.module.unify_errors.truncate(before);
             } else {
                 let err = &self.module.unify_errors[before];
-                let path = tag_descent(&self.module, loc.path.clone(), b, &err.steps);
+                let path = shape::tag_descent(&self.module, loc.path.clone(), b, &err.steps);
                 self.diary.push(DiaryEntry {
                     error_index: before,
                     a,
@@ -942,128 +945,11 @@ where
         self.check_term(e)
     }
 
-    /// The array items behind either a dynamic node or a static ref.
-    fn any_items(&self, id: AnyNodeId) -> Option<&'static [ArrayItem]> {
-        let value = self.module.node_value(id)?;
-        let LowValue::Array(array) = value.as_enum()? else {
-            return None;
-        };
-        Some(array.items())
-    }
-
-    /// Whether a static ref names the canonical universe.  A frozen universe
-    /// is a 2-item self-referential array (`[Type, itself]`), so it is
-    /// recognized by content instead of equality classes.
-    fn is_static_universe(&self, sref: lichen_lowlevel::StaticNodeId) -> bool {
-        let Some(items) = self.any_items(AnyNodeId::Static(sref)) else {
-            return false;
-        };
-        items.len() == 2
-            && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
-            && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
-    }
-
-    fn is_universe_any(&mut self, id: AnyNodeId) -> bool {
-        match id {
-            AnyNodeId::Dynamic(node) => {
-                self.module.equality_representative(node)
-                    == self.module.equality_representative(self.type_expr)
-            }
-            AnyNodeId::Static(sref) => self.is_static_universe(sref),
-        }
-    }
-
-    /// Whether `kind` is the kind expression `[marker, K]`.
-    fn kind_marker_is_any(&mut self, kind: AnyNodeId, marker: P::Value) -> bool {
-        let Some(items) = self.any_items(kind) else {
-            return false;
-        };
-        items.len() == 2
-            && self.module.node_value(items[0].node) == Some(marker)
-            && self.is_universe_any(items[1].node)
-    }
-
-    fn kind_marker_is(&mut self, kind: NodeId, marker: P::Value) -> bool {
-        self.kind_marker_is_any(AnyNodeId::Dynamic(kind), marker)
-    }
-
-    /// Whether `ty` is a concrete function type expression:
-    /// `[shape, [FunctionType, K]]`.  The function-ness guard skips these —
-    /// only concretely *non*-function types are caught statically.
-    fn is_function_type_any(&mut self, ty: AnyNodeId) -> bool {
-        let Some(items) = self.any_items(ty) else {
-            return false;
-        };
-        items.len() == 2 && self.kind_marker_is_any(items[1].node, P::Value::function_type_marker())
-    }
-
-    fn is_function_type(&mut self, ty: NodeId) -> bool {
-        self.is_function_type_any(AnyNodeId::Dynamic(ty))
-    }
-
-    /// Whether `ty` is a struct type: `[shape, [TypeStruct{id, names}, K]]`.
-    /// The kind's marker slot holds the two-field `TypeStruct` value (the
-    /// nominal id + the optional name table), so the kind is a standard
-    /// `[marker, K]` pair whose marker is a 2-element array.
-    fn is_struct_type_any(&mut self, ty: AnyNodeId) -> bool {
-        let Some(items) = self.any_items(ty) else {
-            return false;
-        };
-        if items.len() != 2 {
-            return false;
-        }
-        let Some(kind_items) = self.any_items(items[1].node) else {
-            return false;
-        };
-        kind_items.len() == 2
-            && self.is_universe_any(kind_items[1].node)
-            && self.is_struct_marker_any(kind_items[0].node)
-    }
-
-    /// Whether a value is a struct marker: the two-field `TypeStruct{id, names}`
-    /// value, encoded as a 2-element array `[id, names]`.  No other kind's
-    /// marker is an array(the function/tuple/array/table markers are plain
-    /// type-constant values), so a 2-element array marker names a struct.
-    fn is_struct_marker_any(&self, marker: AnyNodeId) -> bool {
-        self.any_items(marker).is_some_and(|items| items.len() == 2)
-    }
-
-    /// Whether `ty` is a TypeStruct **kind** — `[TypeStruct{id, names}, K]` —
-    /// the `[marker, universe]` form a raw named read `X::a` requires.  This is
-    /// the container type's *own* shape (a struct type value's `ty`), not the
-    /// `[shape, kind]` pair of a struct instance's type (which `.a` reads,
-    /// [`Self::is_struct_type_any`]): the name→index table lies directly at
-    /// `ty[0][1]`.
-    fn is_type_struct_kind_any(&mut self, ty: AnyNodeId) -> bool {
-        let Some(items) = self.any_items(ty) else {
-            return false;
-        };
-        items.len() == 2
-            && self.is_universe_any(items[1].node)
-            && self.is_struct_marker_any(items[0].node)
-    }
-
-    /// Whether `ty` is a concrete positional type expression — a tuple type
-    /// (`[shape, [TypeTuple, K]]`) or a struct type (`[shape, [id,
-    /// [TypeStruct, K]]]`, whose shape is the positional field-type list).
-    /// The field-read guard (`a(k)`) skips these; an array reads with
-    /// `a[i]` (its type is pinned, so misuse fails the pin unify), a table
-    /// with `t{k}`, and only concretely *non*-positional types are caught
-    /// statically here.
-    fn is_positional_type_any(&mut self, ty: AnyNodeId) -> bool {
-        let Some(items) = self.any_items(ty) else {
-            return false;
-        };
-        if items.len() != 2 {
-            return false;
-        }
-        self.kind_marker_is_any(items[1].node, P::Value::tuple_type_marker())
-            || self.is_struct_type_any(ty)
-    }
-
-    fn is_positional_type(&mut self, ty: NodeId) -> bool {
-        self.is_positional_type_any(AnyNodeId::Dynamic(ty))
-    }
+    // The encoding accessors and shape predicates this checker was built
+    // around (`shape_of`/`kind_of`, the universe check, the `is_*` family)
+    // live in [`crate::shape`] — the single authority for the pair/type
+    // encoding — and are called from here with `self.type_expr` as the
+    // canonical universe node.
 
     fn check_term(&mut self, e: ExprId) -> NodeId {
         // The IR is a graph: statement bindings pre-resolve every use of a
@@ -1553,7 +1439,7 @@ where
                     None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
                 )
             });
-        if concrete && !self.is_function_type(function_ty) {
+        if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
             let shape = self.array_node(self.current_block, &[d, c]);
@@ -1813,7 +1699,7 @@ where
                     None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
                 )
             });
-        if concrete && !self.is_positional_type(container_ty) {
+        if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
             let error_index = self.module.unify_errors.len();
             self.module.unify_errors.push(UnifyError {
                 root_a: container_ty,
@@ -1898,7 +1784,13 @@ where
                     None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
                 )
             });
-        if concrete && !self.is_type_struct_kind_any(AnyNodeId::Dynamic(container_ty)) {
+        if concrete
+            && !shape::is_type_struct_kind_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(container_ty),
+            )
+        {
             self.record_index_target_error(container_ty, container, 1);
         }
         let zero = self.alloc_node(
@@ -1983,7 +1875,11 @@ where
                 )
             });
         if concrete {
-            if !self.is_struct_type_any(AnyNodeId::Dynamic(container_ty)) {
+            if !shape::is_struct_type_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(container_ty),
+            ) {
                 self.record_index_target_error(container_ty, container, 1);
             } else if self
                 .named_field_index_any(AnyNodeId::Dynamic(container_ty), name)
@@ -2064,16 +1960,18 @@ where
     /// The struct's name→index table (the `struct<.a T, …>` names) from a
     /// struct type value, or `None` when it is an anonymous struct (no names).
     fn struct_names_any(&mut self, ty: AnyNodeId) -> Option<AnyHandle<[TableItem]>> {
-        let items = self.any_items(ty)?;
+        let items = shape::array_items(&self.module, ty)?;
         if items.len() != 2 {
             return None;
         }
-        let kind_items = self.any_items(items[1].node)?;
-        if kind_items.len() != 2 || !self.is_universe_any(kind_items[1].node) {
+        let kind_items = shape::array_items(&self.module, items[1].node)?;
+        if kind_items.len() != 2
+            || !shape::is_universe_any(&mut self.module, self.type_expr, kind_items[1].node)
+        {
             return None;
         }
         // The struct marker `[id, names]`; its second field is the name table.
-        let marker_items = self.any_items(kind_items[0].node)?;
+        let marker_items = shape::array_items(&self.module, kind_items[0].node)?;
         let Some(names_item) = marker_items.get(1) else {
             return None;
         };
@@ -2430,7 +2328,12 @@ where
                     // dynamic array construction below.
                     let shape = self.module.as_dynamic(items[0].node, self.current_block);
                     let kind = self.module.as_dynamic(items[1].node, self.current_block);
-                    if self.kind_marker_is(kind, P::Value::tuple_type_marker()) {
+                    if shape::kind_marker_is(
+                        &mut self.module,
+                        self.type_expr,
+                        kind,
+                        P::Value::tuple_type_marker(),
+                    ) {
                         shape
                     } else {
                         value_ty
@@ -2500,7 +2403,7 @@ where
             .module
             .array_items(type_pair)
             .and_then(|items| items.get(0))
-            .and_then(|item| self.any_items(item.node))
+            .and_then(|item| shape::array_items(&self.module, item.node))
             .map(|items| items.len());
         // `assign[pos]` = the argument index supplying definition position
         // `pos`.  `valid` flips when a structural mismatch is recorded.
@@ -3055,9 +2958,9 @@ where
     /// unify `steps`.
     fn loc(&self, e: ExprId, slot: usize) -> Loc {
         let step = match slot {
-            0 => LocStep::Value,
-            1 => LocStep::Type,
-            n => LocStep::Attr(n - 2),
+            shape::PAIR_VALUE_SLOT => LocStep::Value,
+            shape::PAIR_TYPE_SLOT => LocStep::Type,
+            n => LocStep::Attr(shape::attr_index(n)),
         };
         Loc {
             expr: e,
@@ -3071,63 +2974,6 @@ where
             .rev()
             .find_map(|scope| scope.get(&target).copied())
             .expect("unresolved parameter (frontend bug)")
-    }
-}
-
-/// The full-parse walk: append a [`LocStep`] for each unify `step`,
-/// classifying the current node as an expression's `[value, type]` pair
-/// (→ `Value`/`Type`/`Attr`) or a tuple/array/struct shape (→ `Shape` then
-/// `Elem`).
-///
-/// `start` is the unify's `b`-side top operand (`root_b`); the walk tracks the
-/// `step.b` child as it descends.  Both sides of a unify are structurally
-/// parallel (unification only descends where both are arrays), so the shape
-/// tags are identical whichever side is tracked — the `b` side is just the one
-/// the source-blind location is anchored to.
-pub(crate) fn tag_descent<P: lichen_lowlevel::Program>(
-    module: &Module<P>,
-    mut path: Vec<LocStep>,
-    start: NodeId,
-    steps: &[lichen_lowlevel::UnifyStep],
-) -> Vec<LocStep> {
-    let mut cur = start;
-    let mut in_shape = false;
-    for step in steps {
-        let tag = if in_shape {
-            in_shape = false;
-            LocStep::Elem(step.index)
-        } else if step.index == 0 {
-            if slot0_is_shape(module, cur) {
-                in_shape = true;
-                LocStep::Shape
-            } else {
-                LocStep::Value
-            }
-        } else if step.index == 1 {
-            LocStep::Type
-        } else {
-            LocStep::Attr(step.index - 2)
-        };
-        path.push(tag);
-        cur = step.b;
-    }
-    path
-}
-
-/// Whether `node`'s element 0 is a list — a tuple/array/struct structure (a
-/// "shape") rather than an expression's `[value, type]` pair.
-fn slot0_is_shape<P: lichen_lowlevel::Program>(module: &Module<P>, node: NodeId) -> bool {
-    let Some(items) = module.array_items(node) else {
-        return false;
-    };
-    if items.is_empty() {
-        return false;
-    }
-    match items[0].node {
-        AnyNodeId::Dynamic(child) => module.array_items(child).is_some(),
-        // A static element is a leaf (a package export); it is never a
-        // tuple/array/struct shape we descend into.
-        AnyNodeId::Static(_) => false,
     }
 }
 
