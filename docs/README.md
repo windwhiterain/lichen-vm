@@ -51,6 +51,11 @@ Every note opens with a `> Status:` line:
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language` (`lex`/`parse`/`compile`), `lichen-highlevel` (`checker`) | proposed |
 | [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language` (`lex`/`parse`/`ast`/`diag`/`compile`), `lichen-language-lex` / `lichen-language-parser` (proposed) | proposed |
 | [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
+| [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | proposed |
+| [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-compute` | proposed |
+
+> The table above is known to lag the `notes/` folder (several shipped notes
+> are unindexed); reindexing is Phase 5 of the cleanup plan.
 
 ## The language spec
 
