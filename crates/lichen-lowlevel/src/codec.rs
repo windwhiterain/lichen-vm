@@ -139,6 +139,9 @@ impl ValueCodec for LowValue {
                 panic!("serializing a frozen module that carries a dynamic function ref")
             }
             LowValue::None => w.u8(3),
+            // Tag 7 is additive: artifacts written before `Void` existed
+            // never carry it, and tag 3 keeps meaning the `None` unit value.
+            LowValue::Void => w.u8(7),
             LowValue::Parameterized => w.u8(4),
             LowValue::Str(s) => {
                 w.u8(5);
@@ -189,6 +192,7 @@ impl ValueCodec for LowValue {
                 }))
             }
             3 => LowValue::None,
+            7 => LowValue::Void,
             4 => LowValue::Parameterized,
             5 => {
                 let len = r.u32()? as usize;

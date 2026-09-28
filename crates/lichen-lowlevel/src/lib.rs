@@ -107,6 +107,14 @@ pub enum LowValue {
     Table(AnyHandle<[TableItem]>),
     Function(AnyFunctionId),
     None,
+    /// Computed nothing: the yield of a failed read (an out-of-bounds
+    /// index, a table miss — each produced together with a recorded
+    /// [`EvalError`], so consumers *propagate* it instead of
+    /// re-reporting), the anonymous struct's "no name table" marker, and
+    /// the no-operand sentinel the VM hands a nullary extension operator.
+    /// A concrete, decided value — distinct from both the [`Self::None`]
+    /// unit value and the unbound [`Self::Parameterized`] marker.
+    Void,
     Parameterized,
 }
 
@@ -226,8 +234,9 @@ pub enum LowOperator {
     /// - `operand[1]`: key.
     ///
     /// A table read: the key is force-evaluated, deep-content-hashed, and
-    /// matched against the table's sorted entries; a miss (or a key that is
-    /// still unbound) records a [`EvalError`] and yields [`LowValue::None`].
+    /// matched against the table's sorted entries; a miss (no entry for
+    /// the key, or a target/key that is still unbound or a computed
+    /// nothing) records a [`EvalError`] and yields [`LowValue::Void`].
     TableGet,
 }
 
@@ -311,6 +320,8 @@ pub struct StaticOperation<P: Program> {
 
 /// A class is unbound while it carries no value or only the lazy marker.
 /// The highlevel checker uses the same rule for its diagnostics.
+/// [`LowValue::Void`] (a computed failure) and [`LowValue::None`] (the
+/// unit value) are concrete values, never unbound.
 pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }

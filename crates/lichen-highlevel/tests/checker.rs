@@ -1326,10 +1326,10 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
     ));
     // an anonymous struct carries no name table — the marker's second field
-    // is `None`.
+    // is the `Void` marker (a computed nothing, not the `None` unit value).
     assert_eq!(
         b.module.node_value(AnyNodeId::Dynamic(marker_ids[1])),
-        Some(HighProgramValue::LowValue(LowValue::None))
+        Some(HighProgramValue::LowValue(LowValue::Void))
     );
     // one source occurrence consumed exactly one fresh id
     assert_eq!(

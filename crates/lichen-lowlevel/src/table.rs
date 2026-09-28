@@ -18,9 +18,11 @@
 //! Keys are force-evaluated when the table is built — hashing needs the
 //! decided content — so a stored key is fully concrete and its hash is
 //! stable for the table's whole life.  A key that cannot be forced concrete
-//! (its subtree holds an unbound cell or a parameterized computation)
-//! records a [`EvalError::TableKeyUnbound`] and drops the entry.  Values
-//! are stored as lazy refs and read on demand, like array items.
+//! (its subtree holds an unbound cell or a parameterized computation) or
+//! whose content is a computed nothing ([`LowValue::Void`], the residue of
+//! a failed read) records a [`EvalError::TableKeyUnbound`] and drops the
+//! entry.  Values are stored as lazy refs and read on demand, like array
+//! items.
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvalError, LowValue,
@@ -85,7 +87,10 @@ impl<P: Program> Module<P> {
 
     /// The deep content hash of `key`, or `None` when the key's subtree is
     /// not fully concrete — its content is not yet decided, so nothing can
-    /// be hashed or matched (a build drops the entry, a read misses).
+    /// be hashed or matched (a build drops the entry, a read misses) — or
+    /// when the content holds a [`LowValue::Void`], the residue of an
+    /// already-recorded failed read: not hashable, same class as an unbound
+    /// subtree.
     pub(crate) fn key_hash(&mut self, key: AnyNodeId) -> Option<u64> {
         match key {
             Dyn(node) => {
@@ -104,7 +109,7 @@ impl<P: Program> Module<P> {
             }
         }
         let mut path = Vec::new();
-        Some(self.hash_inner(key, &mut path, 0))
+        self.hash_inner(key, &mut path, 0)
     }
 
     /// The recursive content hash — [`ValueExt::value_eq`]'s comparison
@@ -113,10 +118,10 @@ impl<P: Program> Module<P> {
     /// positionally, and a table value (as key content) hashes by identity.
     /// A cycle is cut by the path check: a revisited node mixes in the
     /// cycle token at its revisit depth, so two equal cyclic structures
-    /// hash equal.
-    fn hash_inner(&self, id: AnyNodeId, path: &mut Vec<AnyNodeId>, depth: usize) -> u64 {
+    /// hash equal.  [`None`] is "not hashable" (see [`Self::key_hash`]).
+    fn hash_inner(&self, id: AnyNodeId, path: &mut Vec<AnyNodeId>, depth: usize) -> Option<u64> {
         if path.contains(&id) {
-            return mix(CYCLE_TOKEN ^ depth as u64);
+            return Some(mix(CYCLE_TOKEN ^ depth as u64));
         }
         path.push(id);
         let value = self.node_value(id).unwrap_or_else(|| {
@@ -129,12 +134,24 @@ impl<P: Program> Module<P> {
                 mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64)))
             }
             Some(LowValue::None) => NONE_TOKEN,
+            // A computed nothing is never key content: it is a failed
+            // read's residue, so the key is not hashable — the same class
+            // as an unbound subtree (a build drops the entry, a read
+            // misses).
+            Some(LowValue::Void) => {
+                path.pop();
+                return None;
+            }
             Some(LowValue::Parameterized) => PARAM_TOKEN,
             Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => mix(id_hash(function)),
             Some(LowValue::Function(AnyFunctionId::Static(sref))) => mix(id_hash(sref)),
-            Some(LowValue::Array(array)) => array.items().iter().fold(ARRAY_SEED, |h, item| {
-                mix(h ^ self.hash_inner(item.node, path, depth + 1))
-            }),
+            Some(LowValue::Array(array)) => {
+                let mut h = ARRAY_SEED;
+                for item in array.items() {
+                    h = mix(h ^ self.hash_inner(item.node, path, depth + 1)?);
+                }
+                h
+            }
             // A table keyed by identity (user directive) — the payload's
             // identity, matching [`AnyHandle`]'s `PartialEq`.
             Some(LowValue::Table(table)) => mix(match table {
@@ -146,7 +163,7 @@ impl<P: Program> Module<P> {
             None => unreachable!("a structural value is one of the variants above"),
         };
         path.pop();
-        h
+        Some(h)
     }
 
     /// Pure, coinductive structural equality of two key nodes — the

@@ -530,6 +530,21 @@ fn an_assert_on_a_non_one_value_fails() {
 }
 
 #[test]
+fn an_assert_on_a_failed_read_fails_with_none() {
+    // `!([1, 2][5])` — the condition is a failed read: its residue is the
+    // concrete computed-nothing value, so the assert FAILS (an unbound
+    // condition would stay untriggered) and the value spells `none`.
+    let d = diags("!([1, 2][5])");
+    assert!(
+        d.iter().any(|d| {
+            d.check.as_ref().is_some_and(|c| c.kind == DiagKind::Assert)
+                && d.message == "assertion failed: expected 1, found none"
+        }),
+        "the assert fails on the computed-nothing value: {d:?}"
+    );
+}
+
+#[test]
 fn an_assert_in_a_function_body_checks_per_call() {
     // The body's assert cannot resolve at normalize (x is unbound), so the
     // apply clones it and re-checks against the argument — the failure is
@@ -1173,6 +1188,29 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
         report.ok(),
         "a named-instantiation field read through a parameter must check: {:?}",
         report.diagnostics
+    );
+}
+
+#[test]
+fn a_lazy_named_read_over_an_anonymous_struct_is_a_reported_miss() {
+    // `apply = s => s.x` applied to a positional (anonymous) struct
+    // instance: the read's name lookup only resolves at the apply, where the
+    // struct's "no name table" marker makes it a recorded table miss — never
+    // a panic, and never a false non-termination report.
+    let d = diags("S = struct<Int, Type>\na = S(1, Int)\napply = s => s.x\napply (a)");
+    assert!(
+        d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::TableMiss)),
+        "the read is a table miss: {d:?}"
+    );
+    assert!(
+        !d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::NonTerminating)),
+        "no false non-termination report: {d:?}"
     );
 }
 

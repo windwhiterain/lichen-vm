@@ -215,7 +215,7 @@ where
         }
         DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
         DiagKind::TableKeyUnbound => {
-            "table key is not concrete (it depends on an unbound value) — the entry is dropped"
+            "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
                 .to_string()
         }
         DiagKind::Assert => {
@@ -223,7 +223,7 @@ where
             // structural `LowValue` view.
             let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                 Some(LowValue::USize(n)) => n.to_string(),
-                Some(LowValue::None) => "none".to_string(),
+                Some(LowValue::None | LowValue::Void) => "none".to_string(),
                 Some(other) => format!("{other:?}"),
                 None => "—".to_string(),
             };

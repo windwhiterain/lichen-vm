@@ -67,8 +67,9 @@ fn index_out_of_bounds_records_an_eval_error() {
 
     let value = m.evaluate_node_deep(index, None);
 
-    // No panic, no element: the failure is recorded as facts instead.
-    assert!(matches!(value, TestValue::LowValue(LowValue::None)));
+    // No panic, no element: the failure is recorded as facts instead, and
+    // the read yields the computed-nothing value.
+    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::Index {
         index,
@@ -102,7 +103,7 @@ fn out_of_bounds_index_is_recorded_once_and_in_bounds_still_selects() {
 
     assert!(matches!(
         m.evaluate_node_deep(index, None),
-        TestValue::LowValue(LowValue::None)
+        TestValue::LowValue(LowValue::Void)
     ));
     assert_eq!(m.eval_errors.len(), 1);
     // Re-evaluating the same node reads the cached error result — no
@@ -152,7 +153,7 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     assert_eq!(m.eval_errors.len(), 1);
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(oob)),
-        Some(TestValue::LowValue(LowValue::None))
+        Some(TestValue::LowValue(LowValue::Void))
     ));
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(param)),

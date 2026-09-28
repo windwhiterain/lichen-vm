@@ -189,6 +189,16 @@ fn a_compound_annotation_rejects_a_narrower_declared_perspective() {
 // becomes `# 4`; `(x # 4) # 8` is not (uniform-4 does not entail uniform-8).
 
 #[test]
+fn a_failed_read_in_an_attribute_renders_as_none() {
+    // The argument's perspective is a failed read — a computed nothing, a
+    // concrete value.  The mismatch spells it `none`, never a fresh `?a`
+    // class variable.
+    let source = "f = x # 4 => x\nf (5 # [1,2][3])";
+    assert!(!ok(source));
+    assert_eq!(message(source), "expected 4, found none");
+}
+
+#[test]
 fn a_requirement_subtype_annotation_replaces_the_provider() {
     // `(5 # 8) # 4` — the provider is 8 (the value is uniform over 8 threads);
     // `# 4` requires uniform over 4, and 4 | 8, so it checks.  The annotation

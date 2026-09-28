@@ -23,7 +23,9 @@ pub enum EvalError {
     },
     /// A [`LowOperator::TableGet`] that found no entry for the key, or
     /// whose key is still unbound (a not-yet-concrete key can match nothing
-    /// — the table's stored keys are all concrete).  `table` is the
+    /// — the table's stored keys are all concrete), or whose target or key
+    /// is a computed nothing (a [`LowValue::Void`] never matches: it is the
+    /// residue of an already-recorded failure, not a key).  `table` is the
     /// container operand node, `key` the key node.
     TableMiss { table: AnyNodeId, key: AnyNodeId },
     /// A table build dropped an entry whose key could not be forced to a
@@ -84,17 +86,25 @@ impl<P: Program> Module<P> {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
                             }
+                            // A computed-nothing index propagates: the
+                            // read's own failure was recorded where the
+                            // `Void` was produced.
+                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
                             Some(LowValue::USize(index)) => {
                                 match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                                     Some(LowValue::Parameterized) => {
                                         P::Value::from(LowValue::Parameterized)
                                     }
+                                    // A computed-nothing target propagates
+                                    // the same way — no second diagnostic.
+                                    Some(LowValue::Void) => P::Value::from(LowValue::Void),
                                     Some(LowValue::Array(array)) => {
                                         let array = array.items();
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
-                                        // and yield no value instead of panicking
-                                        // in raw slice indexing.
+                                        // and yield a computed nothing (`Void`)
+                                        // instead of panicking in raw slice
+                                        // indexing.
                                         if index < array.len() {
                                             // A read of a pure cell is a
                                             // reference, not a snapshot:
@@ -125,7 +135,7 @@ impl<P: Program> Module<P> {
                                                 index_value: index,
                                                 length: array.len(),
                                             });
-                                            P::Value::from(LowValue::None)
+                                            P::Value::from(LowValue::Void)
                                         }
                                     }
                                     _ => unreachable!("Index target must be an array"),
@@ -147,7 +157,12 @@ impl<P: Program> Module<P> {
                             value
                         }
                     }
-                    None => P::Value::from(LowValue::None),
+                    // A nullary operator (e.g. `TypeOperator::Fresh`) has no
+                    // operand node: the honest stand-in is the computed-nothing
+                    // value — never the `None` unit value, which a program can
+                    // genuinely produce.  (`OperatorExt::run` takes the operand
+                    // by value, so the absence is spelled as a value.)
+                    None => P::Value::from(LowValue::Void),
                 };
                 operator.run(operand, block, self)
             }
@@ -221,7 +236,7 @@ impl<P: Program> Module<P> {
                                 // absent key.
                                 let Some(hash) = self.key_hash(key) else {
                                     self.eval_errors.push(EvalError::TableMiss { table, key });
-                                    return P::Value::from(LowValue::None);
+                                    return P::Value::from(LowValue::Void);
                                 };
                                 let items = payload.items();
                                 let start = items.partition_point(|item| item.hash < hash);
@@ -256,9 +271,17 @@ impl<P: Program> Module<P> {
                                     },
                                     None => {
                                         self.eval_errors.push(EvalError::TableMiss { table, key });
-                                        P::Value::from(LowValue::None)
+                                        P::Value::from(LowValue::Void)
                                     }
                                 }
+                            }
+                            // A computed-nothing target (e.g. the anonymous
+                            // struct's "no name table" marker behind a lazy
+                            // named read) is a miss like any other: recorded,
+                            // never a panic.
+                            Some(LowValue::Void) => {
+                                self.eval_errors.push(EvalError::TableMiss { table, key });
+                                P::Value::from(LowValue::Void)
                             }
                             _ => unreachable!("TableGet target must be a table"),
                         }

@@ -129,11 +129,14 @@ where
     }
 
     /// The slot value of an attribute node, read from the module — a helper
-    /// for [`Self::render`].  Returns the value as a `LowValue` enum.
+    /// for [`Self::render`].  Returns the value as a `LowValue` enum.  Only
+    /// the unbound marker is filtered (an unbound slot spells nothing); a
+    /// computed nothing ([`LowValue::Void`]) is a concrete slot value and
+    /// passes through.
     fn slot_value(&self, module: &Module<P>, slot: NodeId) -> Option<LowValue> {
         module
             .node_value(AnyNodeId::Dynamic(slot))
             .and_then(|v| v.as_enum())
-            .filter(|v| !matches!(v, LowValue::None | LowValue::Parameterized))
+            .filter(|v| !matches!(v, LowValue::Parameterized))
     }
 }
