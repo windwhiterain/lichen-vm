@@ -1,9 +1,10 @@
 # Incremental parsing / compilation for a typing editor
 
-> Status: partially implemented — the T1 heart plus the O(edit) lex and
-> statement-region re-parse primitives are landed; the session splice and
-> T3/T4 remain.  Nothing here reflects work that was not done; the implemented
-> stages are marked below.
+> Status: current — the T1 heart, the O(edit) lex and statement-region
+> re-parse primitives, and the `BufferSession::compile` splice are landed and
+> described as shipped below; T3 (memoized check) and T4 (unification-state
+> checkpoint/rollback) remain proposed.  Nothing here reflects work that was
+> not done; the implemented stages are marked below.
 >
 > **Implemented (the "T1" heart):**
 > - *Step 1* — the `Placeholder` / `ErrorBlock` split: `Expr::Err` now carries a
@@ -82,7 +83,9 @@
 > - T3 memoized check (`done`/`check_into` resume) and T4 true
 >   unification-state checkpoint/rollback.
 >
-> Points at: `crates/lichen-language/src/{lex,parse,resolve,compile,lib,session}.rs`,
+> Points at: `crates/lichen-language-lex` (`lex_resume`),
+> `crates/lichen-language-parser` (`parse_statement_region*`, `Program::stmt_ranges`),
+> `crates/lichen-language/src/{resolve,compile,lib,session}.rs`,
 > `crates/lichen-highlevel/src/{ir,checker}.rs`.
 
 ## 1. The two principles
@@ -104,14 +107,14 @@ Together they give exactly the requested behavior: a user typing a new
 unfinished piece only ever mutates an error block, so nothing below it is
 re-derived.
 
-## 2. The current leak (why this matters)
+## 2. The leak this closed (why it mattered)
 
 The codebase already obeys P1 at the **lex** boundary: `lex_with` emits a
 diagnostic and *skips* the offending character, so the parser never sees a lex
 error. That is the model to generalize.
 
-It **violates** P1 at the **parse → compile** boundary, and this is precisely
-the conflation:
+It **violated** P1 at the **parse → compile** boundary, and this is precisely
+the conflation (the pre-fix code):
 
 ```rust
 // compile.rs
@@ -119,26 +122,26 @@ Expr::Placeholder(span) => self.alloc(ExprKind::Placeholder, span), // a real `_
 Expr::Err(span) => self.alloc(ExprKind::Placeholder, span),         // a recovered error
 ```
 
-A recovered parse error becomes the **same** highlevel construct as an
-intentional `_`. The checker then treats it as a real inference hole
+A recovered parse error became the **same** highlevel construct as an
+intentional `_`. The checker then treated it as a real inference hole
 (`checker.rs` `ExprKind::Placeholder => { fresh_cell(); fresh_cell(); … }`). So
-the highlevel cannot tell "I typed `_` on purpose" from "the parser recovered a
+the highlevel could not tell "I typed `_` on purpose" from "the parser recovered a
 broken region here". Consequences:
 
-- The highlevel *does* carry the parser's error, just disguised.
-- The error block participates in unification as if it were real code, so the
-  **lowlevel/check unify** path can emit a *type* "expected X, found Y" from a
+- The highlevel *did* carry the parser's error, just disguised.
+- The error block participated in unification as if it were real code, so the
+  **lowlevel/check unify** path could emit a *type* "expected X, found Y" from a
   region the user is still typing. Note this is a lowlevel/type message — **not**
   the parser's own diagnostic; the parser also emits its *syntactic*
   "expected X, found Y" (chumsky `RichReason::ExpectedFound`,
   in `parse::diag_from`), which is a distinct message and is unaffected by the
   masking decision below.
-- There is no way to mask the error region for a diff, because it is not
+- There was no way to mask the error region for a diff, because it was not
   distinguished from real code.
 
-To fix it, split the two meanings: a real `_` stays `ExprKind::Placeholder`;
-a recovered-error region becomes an explicit error block that stops at the
-frontend.
+The fix (landed): split the two meanings — a real `_` stays
+`ExprKind::Placeholder`; a recovered-error region becomes an explicit error
+block that stops at the frontend.
 
 ## 3. Why reuse is structurally possible here
 

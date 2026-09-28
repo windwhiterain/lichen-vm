@@ -1,6 +1,6 @@
 # The top level is a block: record programs (modules)
 
-> Status: implemented
+> Status: current
 > Points at: [`crates/lichen-language-parser`](../../crates/lichen-language-parser/)
 > (`src/parse.rs`, `src/ast.rs`), [`crates/lichen-language`](../../crates/lichen-language/)
 > (`src/compile.rs`, `src/session.rs`),

@@ -1,6 +1,6 @@
 # `_` is a placeholder anywhere (type and value)
 
-> Status: **implemented** on `feature/placeholder-anywhere`.  Supersedes the
+> Status: current — landed.  Supersedes the
 > "type position only" rule in [`language-spec.md`](../language-spec.md).  The
 > incremental-parse note
 > [`incremental-parse-compile.md`](incremental-parse-compile.md) still describes
