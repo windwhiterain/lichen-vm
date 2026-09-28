@@ -2791,17 +2791,20 @@ where
         pair
     }
 
-    /// The struct name→index table value for a field-name list: `None` when
-    /// every field is unnamed (an anonymous positional struct), otherwise a
-    /// constant `Table` mapping each field name to its positional index.  The
-    /// table's keys are the field names (string values), its values the field
-    /// indices — the map an `a.name` read resolves through.
+    /// The struct name→index table value for a field-name list: the
+    /// [`LowValue::Void`] marker when every field is unnamed (an anonymous
+    /// positional struct has no name table — a *computed nothing*, not the
+    /// unit value), otherwise a constant `Table` mapping each field name to
+    /// its positional index.  The table's keys are the field names (string
+    /// values), its values the field indices — the map an `a.name` read
+    /// resolves through.  A named read over the marker misses with a
+    /// recorded [`EvalError::TableMiss`], never a panic.
     fn build_struct_names(&mut self, names: &[Option<&'static str>]) -> NodeId {
         if names.iter().all(|n| n.is_none()) {
             return self.alloc_node(
                 self.current_block,
                 None,
-                Some(P::Value::from(LowValue::None)),
+                Some(P::Value::from(LowValue::Void)),
             );
         }
         let mut entries = Vec::new();

@@ -179,7 +179,10 @@ where
         }
         // Runtime evaluation failures (an out-of-bounds index, a table read).
         // The value and type evaluation of the same expression each record
-        // one, so identical facts collapse to a single diagnostic.
+        // one, so identical facts collapse to a single diagnostic — the key
+        // is the failure's *kind and blamed node*, so two genuinely
+        // different failures (two out-of-bounds reads, a dropped build key
+        // and a later read miss) never collapse into each other.
         let mut seen = HashSet::new();
         for err in &self.module.eval_errors {
             let key = match err {
@@ -187,8 +190,9 @@ where
                     index,
                     index_value,
                     length,
-                } => (Some(*index), Some(*index_value), Some(*length)),
-                _ => (None, None, None),
+                } => (0, Some(*index), Some(*index_value), Some(*length)),
+                EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
+                EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
             };
             if !seen.insert(key) {
                 continue;
