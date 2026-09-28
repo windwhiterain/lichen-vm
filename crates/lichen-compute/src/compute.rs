@@ -254,7 +254,8 @@ impl ValueCodec for ComputeValue {
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) {
         match value {
-            ComputeValue::TypeBuffer | ComputeValue::TypeWrite => w.u8(0),
+            ComputeValue::TypeBuffer => w.u8(0),
+            ComputeValue::TypeWrite => w.u8(1),
             ComputeValue::Kernel(_) | ComputeValue::ParKernel(_) | ComputeValue::Buffer(_) => {
                 panic!("serializing a compute value (Kernel/ParKernel/Buffer are runtime-only)")
             }

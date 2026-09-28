@@ -611,6 +611,7 @@ mod codec_roundtrip {
             LangValue::TypeValue(TypeValue::TypeString),
             LangValue::TypeValue(TypeValue::TypeId(7)),
             LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeBuffer),
+            LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeWrite),
         ];
         for &v in values {
             assert_eq!(roundtrip_value(v), v, "value did not round-trip");
