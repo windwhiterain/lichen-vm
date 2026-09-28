@@ -246,124 +246,12 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
-        // The type-level operator leaf's own [`::lichen_lowlevel::OperatorExt`]
-        // impl (in `lichen_highlevel`) is tied to `ProgramImpl` — it dispatches
-        // against `Module<ProgramImpl<…>>`, not an arbitrary `P`.  Since this
-        // composition's `LangProgram` is now a local newtype, that impl no
-        // longer covers it, so the composed vocabulary needs its own
-        // `OperatorExt<LangProgram>` impl for the `$tyop` leaf, running the
-        // same semantics against `Module<LangProgram>`.  (Every other leaf —
-        // `LowOperator`, `GcdOp`, the plugin operators — already has a generic
-        // `impl<P: Program> OperatorExt<P>`, so it works for `LangProgram`
-        // unchanged.)
-        impl ::lichen_lowlevel::OperatorExt<LangProgram> for $tyop {
-            fn run(
-                &self,
-                operand: LangValue,
-                _block: ::lichen_lowlevel::BlockId,
-                module: &mut ::lichen_lowlevel::Module<LangProgram>,
-            ) -> LangValue {
-                match self {
-                    <$tyop>::Fresh => {
-                        let id = ::lichen_utils::compose::AsField::<
-                            ::lichen_highlevel::program::HighGlobal,
-                        >::get_mut(&mut module.global_ext)
-                        .next_type_id();
-                        <LangValue as ::lichen_highlevel::program::ValueType>::type_id_value(id)
-                    }
-                    <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq | <$tyop>::Eq => {
-                        if matches!(
-                            <LangValue as ::lichen_utils::extend::AsEnum<
-                                ::lichen_lowlevel::LowValue,
-                            >>::as_enum(&operand),
-                            Some(::lichen_lowlevel::LowValue::Parameterized)
-                        ) {
-                            return <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        }
-                        let Some(::lichen_lowlevel::LowValue::Array(operands)) =
-                            <LangValue as ::lichen_utils::extend::AsEnum<
-                                ::lichen_lowlevel::LowValue,
-                            >>::as_enum(&operand)
-                        else {
-                            unreachable!("binary operators expect an operand array of [left, right]")
-                        };
-                        let operands = operands.items();
-                        let left = module.node_value(operands[0].node);
-                        let right = module.node_value(operands[1].node);
-                        let unbound = |v: &Option<LangValue>| match v {
-                            None => true,
-                            Some(value) => matches!(
-                                <LangValue as ::lichen_utils::extend::AsEnum<
-                                    ::lichen_lowlevel::LowValue,
-                                >>::as_enum(value),
-                                Some(::lichen_lowlevel::LowValue::Parameterized)
-                            ),
-                        };
-                        if unbound(&left) || unbound(&right) {
-                            return <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        }
-                        // `==` compares any two same-typed values (an `Int`, or a
-                        // type value); `+ - <=` are Int-only and read USizes.
-                        match self {
-                            <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq => {
-                                let to_usize = |v: &LangValue| -> Option<usize> {
-                                    <LangValue as ::lichen_utils::extend::AsEnum<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::as_enum(v)
-                                    .and_then(|value| match value {
-                                        ::lichen_lowlevel::LowValue::USize(n) => Some(n),
-                                        _ => None,
-                                    })
-                                };
-                                let (Some(a), Some(b)) = (
-                                    to_usize(left.as_ref().unwrap()),
-                                    to_usize(right.as_ref().unwrap()),
-                                ) else {
-                                    return <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                                };
-                                match self {
-                                    <$tyop>::Add => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        a.wrapping_add(b),
-                                    )),
-                                    <$tyop>::Sub => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        a.wrapping_sub(b),
-                                    )),
-                                    <$tyop>::Leq => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        (a <= b) as usize,
-                                    )),
-                                    _ => unreachable!("all binary operators are handled above"),
-                                }
-                            }
-                            <$tyop>::Eq => <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::USize(
-                                (left.unwrap() == right.unwrap()) as usize,
-                            )),
-                            _ => unreachable!("all binary operators are handled above"),
-                        }
-                    }
-                }
-            }
-        }
-
         // The operator union's `run` is a uniform dispatch: each leaf handles
         // itself (the structural lowlevel operator is unreachable — the VM
         // routes it through `AsEnum` first; the type operators run through
-        // their own [`::lichen_lowlevel::OperatorExt`] impl; each plugin
-        // operator runs its own).  This is the arm that lets a composed
-        // program's operators actually execute.
+        // their program-generic [`::lichen_lowlevel::OperatorExt`] impl in the
+        // highlevel; each plugin operator runs its own).  This is the arm that
+        // lets a composed program's operators actually execute.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,
