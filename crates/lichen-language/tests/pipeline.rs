@@ -711,6 +711,47 @@ fn a_self_nested_struct_checks_without_overflow() {
     }
 }
 
+#[test]
+fn a_self_referential_field_read_checks_without_overflow() {
+    // `a = a(0)`, `a = a.x`, `a = a::x` — a block-wide binding referencing
+    // itself through a field read.  The frontend transplants the value's kind
+    // into the binding's placeholder, so a block root may be *any* expression
+    // kind and the checker's cycle cut gates on block-root membership alone;
+    // these three kinds fell through the old hand-maintained kind list and
+    // overflowed the stack.  Each now checks like the `a = a + 1` control:
+    // no diagnostics, and the root deep-evaluates to the lazy parameterized
+    // marker instead of hanging.
+    for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a", "a = a::x; a"] {
+        let (mut module, root) = run(source);
+        assert!(
+            matches!(
+                module.evaluate_node_deep(root, None),
+                LangValue::LowValue(LowValue::Parameterized)
+            ),
+            "{source:?} must yield the parameterized marker like the control"
+        );
+    }
+}
+
+#[test]
+fn a_self_referential_record_checks_without_overflow() {
+    // `a = {x = a}` — a self-reference through a record block (the fourth
+    // kind the old skeleton gate missed).  The record value is concrete — a
+    // one-field struct whose single element is the knot itself — so the deep
+    // evaluation terminates on the runtime cycle guard rather than yielding
+    // the bare parameterized marker.
+    let (mut module, root) = run("a = {x = a}; a");
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 1, "the record carries its one field");
+    assert!(
+        matches!(
+            module.node_value(AnyNodeId::Dynamic(ids[0])),
+            Some(LangValue::LowValue(LowValue::Array(_)))
+        ),
+        "the field is the record itself (the evaluated knot)"
+    );
+}
+
 // --- struct types ------------------------------------------------------------
 
 #[test]

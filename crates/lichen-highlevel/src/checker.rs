@@ -1081,29 +1081,16 @@ where
         // so pre-registering a skeleton for one would only add spurious cells
         // that poison the apply-time unify (a placeholder reached through an
         // index-typed apply would stay an unbound `?a` instead of binding to
-        // the actual type).  Gate the skeleton on `block_roots`.
-        let skeleton = if self.ir.block_roots.contains(&e)
-            && matches!(
-                self.ir[e].kind,
-                ExprKind::Apply { .. }
-                    | ExprKind::BinOp { .. }
-                    | ExprKind::Instantiate { .. }
-                    | ExprKind::Assert { .. }
-                    | ExprKind::Index { .. }
-                    | ExprKind::RawIndex { .. }
-                    | ExprKind::Find { .. }
-                    | ExprKind::Annotation { .. }
-                    | ExprKind::TypeFunction { .. }
-                    | ExprKind::Tuple(_)
-                    | ExprKind::TypeTuple(_)
-                    | ExprKind::TypeStruct { .. }
-                    | ExprKind::Array(_)
-                    | ExprKind::Table(_)
-                    | ExprKind::ShallowArray { .. }
-                    | ExprKind::TypeArray { .. }
-                    | ExprKind::TypeOf { .. }
-                    | ExprKind::NativeCall { .. }
-            ) {
+        // the actual type).  Gate the skeleton on `block_roots` membership
+        // alone, never on the expression kind: the frontend transplants the
+        // binding value's kind into the placeholder, so a block root may be
+        // *any* kind — a hand-maintained kind list silently misses a variant
+        // (a self-reference through an unlisted kind re-enters this check
+        // forever, a stack overflow).  For a childless kind the skeleton is
+        // inert — nothing re-enters during its descent — and the epilogue
+        // binds it away; a `Function` block root pre-registers its own pair
+        // in `check_lam` before its body compiles, overwriting the skeleton.
+        let skeleton = if self.ir.block_roots.contains(&e) {
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
             let skel = self.array_node(self.current_block, &[vc, tc]);
@@ -3154,6 +3141,8 @@ where
             self.int_marker
         } else if value == P::Value::string_marker() {
             self.string_marker
+        } else if value == P::Value::type_marker() {
+            self.type_marker
         } else if value == P::Value::function_type_marker() {
             self.function_type_marker
         } else if value == P::Value::tuple_type_marker() {

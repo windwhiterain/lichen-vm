@@ -109,6 +109,29 @@ where
     }
 }
 
+/// A probe literal that builds the `Type` marker through
+/// [`Ctx::value_node`] — the path a downstream type-constant extension takes
+/// when it encodes a kind marker as a plain value node.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TypeMarkerLit;
+
+impl<P> LiteralExt<P> for TypeMarkerLit
+where
+    P: Program,
+    P::Value: ValueType,
+{
+    fn build(&self, ctx: &mut dyn Ctx<P>) -> LiteralBuild {
+        let value_node = ctx.value_node(P::Value::type_marker());
+        let ty = ctx.universe();
+        let pair = ctx.pair(value_node, ty);
+        LiteralBuild {
+            pair,
+            value: value_node,
+            ty,
+        }
+    }
+}
+
 lichen_utils::enum_ext! {
     #[derive(Debug, Clone, Copy, PartialEq)]
     pub enum ProbeLiteral {
@@ -117,6 +140,7 @@ lichen_utils::enum_ext! {
     + IntTypeLit as IntType;
     + TypeTypeLit as TypeType;
     + FloatLit as Float;
+    + TypeMarkerLit as TypeMarker;
 }
 
 /// The probe program marker: the probe value and literal vocabularies with no
@@ -130,6 +154,7 @@ impl LiteralExt<ProbeProgram> for ProbeLiteral {
             ProbeLiteral::IntType(lit) => lit.build(ctx),
             ProbeLiteral::TypeType(lit) => lit.build(ctx),
             ProbeLiteral::Float(lit) => lit.build(ctx),
+            ProbeLiteral::TypeMarker(lit) => lit.build(ctx),
         }
     }
 }
@@ -184,6 +209,20 @@ fn the_checker_runs_on_an_extended_union() {
         .map(|item| dyn_node(item.node))
         .collect::<Vec<_>>();
     assert_eq!(ids, &[float_value, build.type_expr]);
+}
+
+#[test]
+fn value_node_shares_the_canonical_type_marker() {
+    // `Ctx::value_node(Type)` must return the checker's installed shared
+    // type-marker node, exactly like the other seven kind markers — a fresh
+    // node would fork the marker's identity (the canonical `Type : Type`
+    // universe references the installed one).
+    let mut ir: IR<NoAttr, ProbeLiteral> = IR::new();
+    let marker = ir.alloc(ExprKind::Literal(ProbeLiteral::TypeMarker(TypeMarkerLit)));
+    ir.set_root(marker);
+    let build = Checker::<ProbeProgram>::build(ir);
+    assert!(build.ok, "the type-marker literal must check");
+    assert_eq!(build.val[marker.0 as usize], Some(build.type_marker));
 }
 
 #[test]
