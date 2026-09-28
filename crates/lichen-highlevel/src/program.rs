@@ -18,7 +18,7 @@ use std::sync::Arc;
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     BlockId, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program,
-    StaticModule, ValueExt,
+    StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -490,16 +490,19 @@ pub enum TypeOperator {
     /// source occurrence and the cached value is reused wherever the struct
     /// type it tags is referenced.
     Fresh,
-    /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare
-    /// and yield `USize(0/1)` — no `Bool` value exists, the comparison
-    /// result drives the lazy `Index` branch of an `if` directly.
+    /// Binary operators over `[left, right]`.  `Add`/`Sub` compute on
+    /// `Int` operands; `Leq`/`Eq` compare and yield `USize(0/1)` — no
+    /// `Bool` value exists, the comparison result drives the lazy `Index`
+    /// branch of an `if` directly.  `Eq` is the generalized equality
+    /// (docs/language-spec.md): it compares any two *same-typed* values
+    /// whole (two `Int`s, or two type values — `S::a == Int` is `1`),
+    /// while a cross-type comparison is a check-time error (the checker
+    /// unifies the operand types; `+ - <=` pin both to `Int`).
     ///
-    /// Operand: `[left, right]`.  The lowlevel deep-evaluates the operand
-    /// and gates on its parameterized subtree before calling `run`, so an
-    /// unbound operand (a template parameter during the definition pass)
-    /// is already the lazy marker; the checker pins both operand types to
-    /// `Int`, so a wrong-shape operand here is an invariant violation, not
-    /// a user error.
+    /// The lowlevel deep-evaluates the operand and gates on its
+    /// parameterized subtree before calling `run`, so an unbound operand
+    /// (a template parameter during the definition pass) is already the
+    /// lazy marker, and `run` stays lazy on any unbound side.
     Add,
     Sub,
     Leq,
@@ -595,16 +598,18 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType, L> OperatorExt<ProgramImpl<V, HighProgramOperator, NoAttr, L>>
-    for HighProgramOperator
+impl<V, A, L, G> OperatorExt<ProgramImpl<V, HighProgramOperator, A, L, G>> for HighProgramOperator
 where
+    V: ValueType,
+    A: AttrSpec,
     L: std::fmt::Debug + Copy + PartialEq,
+    G: GlobalExt + AsField<HighGlobal>,
 {
     fn run(
         &self,
         operand: V,
         _block: BlockId,
-        module: &mut Module<ProgramImpl<V, HighProgramOperator, NoAttr, L>>,
+        module: &mut Module<ProgramImpl<V, HighProgramOperator, A, L, G>>,
     ) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
@@ -613,85 +618,88 @@ where
                 unreachable!("structural operators are dispatched by the VM")
             }
             // The type-level operators are the highlevel's own computation —
-            // delegated to the generic [`OperatorExt`] impl for [`TypeOperator`],
-            // so any composed union reuses the same semantics.
+            // delegated to the program-generic [`OperatorExt`] impl for
+            // [`TypeOperator`], so any composed union reuses the same
+            // semantics.
             HighProgramOperator::TypeOperator(op) => op.run(operand, _block, module),
         }
     }
 }
 
 /// The highlevel's own type-level operators, dispatched as an extension
-/// operator by *any* composed program that carries them.  The run semantics
-/// live here, generic over the program's value vocabulary `V`, so the
-/// shipped `LangProgram`, a composed plugin compiler's program, and the
-/// highlevel's own default `HighProgramOperator` all share the same Fresh and
-/// integer operator behaviour (they differ only in which union wraps them).
-impl<V, O, A, L, G> OperatorExt<ProgramImpl<V, O, A, L, G>> for TypeOperator
+/// operator by *any* program whose value vocabulary implements [`ValueType`]
+/// and whose global state carries the [`HighGlobal`] component — the shipped
+/// `LangProgram`, a plugin-built compiler's program, and the highlevel's own
+/// default `HighProgramOperator` program all share this one impl (they differ
+/// only in which union wraps the operator).  The semantics are the
+/// spec-documented ones: `==` is the generalized equality over any two
+/// same-typed values, `+ - <=` are Int-only.
+impl<P> OperatorExt<P> for TypeOperator
 where
-    V: ValueType,
-    A: AttrSpec,
-    L: std::fmt::Debug + Copy + PartialEq,
-    G: GlobalExt + AsField<HighGlobal>,
-    O: OperatorExt<ProgramImpl<V, O, A, L, G>>
-        + From<LowOperator>
-        + AsEnum<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq,
+    P: Program,
+    P::Value: ValueType,
+    P::GlobalExt: AsField<HighGlobal>,
 {
-    fn run(
-        &self,
-        operand: V,
-        _block: BlockId,
-        module: &mut Module<ProgramImpl<V, O, A, L, G>>,
-    ) -> V {
+    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                V::type_id_value(id)
+                P::Value::type_id_value(id)
             }
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return V::from(LowValue::Parameterized);
+                    return P::Value::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
                 let operands = operands.items();
-                // A non-USize operand is a *reported* type error, not an
-                // invariant violation: the checker pins both operands to
-                // `Int`, so a wrong shape only arrives here through an
-                // argument unify that already failed (recording the
-                // diagnostic) — stay lazy instead of panicking.
-                let Some(left) = module
-                    .node_value(operands[0].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return V::from(LowValue::Parameterized);
-                };
-                let Some(right) = module
-                    .node_value(operands[1].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return V::from(LowValue::Parameterized);
+                // An unbound side (an empty slot or the lazy marker) keeps
+                // the operator lazy.
+                let left = module.node_value(operands[0].node);
+                let right = module.node_value(operands[1].node);
+                if is_unbound(left) || is_unbound(right) {
+                    return P::Value::from(LowValue::Parameterized);
+                }
+                let (Some(left), Some(right)) = (left, right) else {
+                    unreachable!("is_unbound covers the empty slot")
                 };
                 match self {
-                    TypeOperator::Add => V::from(LowValue::USize(left.wrapping_add(right))),
-                    TypeOperator::Sub => V::from(LowValue::USize(left.wrapping_sub(right))),
-                    TypeOperator::Leq => V::from(LowValue::USize((left <= right) as usize)),
-                    TypeOperator::Eq => V::from(LowValue::USize((left == right) as usize)),
-                    _ => unreachable!("all binary operators are handled above"),
+                    // A non-USize operand is a *reported* type error, not an
+                    // invariant violation: the checker pins both operands to
+                    // `Int`, so a wrong shape only arrives here through an
+                    // argument unify that already failed (recording the
+                    // diagnostic) — stay lazy instead of panicking.
+                    TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq => {
+                        let to_usize = |value: &P::Value| match value.as_enum() {
+                            Some(LowValue::USize(n)) => Some(n),
+                            _ => None,
+                        };
+                        let (Some(left), Some(right)) = (to_usize(&left), to_usize(&right)) else {
+                            return P::Value::from(LowValue::Parameterized);
+                        };
+                        match self {
+                            TypeOperator::Add => {
+                                P::Value::from(LowValue::USize(left.wrapping_add(right)))
+                            }
+                            TypeOperator::Sub => {
+                                P::Value::from(LowValue::USize(left.wrapping_sub(right)))
+                            }
+                            TypeOperator::Leq => {
+                                P::Value::from(LowValue::USize((left <= right) as usize))
+                            }
+                            _ => unreachable!("the Int operators are handled above"),
+                        }
+                    }
+                    // `==` is the generalized equality: it compares the two
+                    // values whole (two `Int`s, or two type values).  The
+                    // checker unifies the operands' types, so a cross-type
+                    // comparison is already a reported error before `run`.
+                    TypeOperator::Eq => P::Value::from(LowValue::USize((left == right) as usize)),
+                    TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                 }
             }
         }
