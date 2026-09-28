@@ -1625,9 +1625,11 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : Int<_> — the length is inferred from the literal.
-    let ids = array_ids(evaluate("[1, 2, 3] : Int<_>"));
-    assert_eq!(ids.len(), 3);
+    // [1, 2, 3] : array<Int, _> — the length is inferred from the literal,
+    // so the rendered output type pins it.
+    let out = lichen_language::run::evaluate("[1, 2, 3] : array<Int, _>")
+        .expect("the placeholder length should infer");
+    assert_eq!(out, "[1, 2, 3]: array<Int, 3>");
 }
 
 #[test]

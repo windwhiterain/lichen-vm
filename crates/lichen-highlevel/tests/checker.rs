@@ -1772,8 +1772,8 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : Int<_> — the placeholder length binds to the element
-    // count.
+    // [1, 2, 3] : array<Int, _> — the placeholder length binds to the
+    // element count.
     let mut ir = IR::new();
     let e1 = int(&mut ir, 1);
     let e2 = int(&mut ir, 2);
@@ -1784,7 +1784,7 @@ fn an_underscore_in_the_array_length_position() {
     let t = type_array(&mut ir, it, h);
     let a = ann(&mut ir, arr, t);
     let mut b = build(a, ir);
-    assert!(b.ok, "[1, 2, 3] : Int<_> should check");
+    assert!(b.ok, "[1, 2, 3] : array<Int, _> should check");
     // The annotated type's length slot unifies with the literal's length 3.
     let ann_shape = array_ids(&b, b.ty[a].unwrap())[0];
     let length_slot = array_ids(&b, ann_shape)[1];
