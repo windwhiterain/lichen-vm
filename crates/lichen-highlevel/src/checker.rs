@@ -129,7 +129,22 @@ pub struct Checker<P: HighProgram + 'static>
 where
     P::Value: ValueType,
 {
-    ir: IR<P::Attr, P::Literal>,
+    /// The frontend's IR, shared and **read-only**.  The checker produces its
+    /// own side tables for anything it derives (a merged attribute tail is
+    /// [`Self::schema_tail`], not an IR rewrite).
+    ///
+    /// Holding it behind an `Arc` is what makes that a compiler-checked fact
+    /// rather than a convention: the rewrite this replaced did compile, and
+    /// `self.ir.set_kind(…)` no longer does — `E0596`, cannot borrow data in
+    /// an `Arc` as mutable.  One route remains, `Arc::get_mut`, and it is
+    /// deliberately not closed: it needs two steps and names itself in review,
+    /// whereas the accidental form was one call that type-checked.  Closing it
+    /// would mean either a second live handle for the whole check or an `&IR`
+    /// lifetime threaded onto every `Build` consumer in three crates — a much
+    /// larger change than the remaining gap is worth.
+    ///
+    /// [`Build`] hands the same `Arc` back out.
+    ir: Arc<IR<P::Attr, P::Literal>>,
     module: Module<P>,
     pub current_block: BlockId,
     /// The attribute extension registry: maps an attribute marker
@@ -326,7 +341,11 @@ pub struct Build<P: HighProgram>
 where
     P::Value: ValueType,
 {
-    pub ir: IR<P::Attr, P::Literal>,
+    /// The IR this build checked, shared with the [`Checker`] that read it.
+    /// Shared rather than moved so the checker could hold it read-only; treat
+    /// it as the frontend's, not the checker's — anything the checker derived
+    /// from it lives on this struct.
+    pub ir: Arc<IR<P::Attr, P::Literal>>,
     pub module: Module<P>,
     pub term: Vec<Option<NodeId>>,
     pub val: Vec<Option<NodeId>>,
@@ -467,7 +486,7 @@ where
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {
-            ir,
+            ir: Arc::new(ir),
             module,
             current_block: root_block,
             attr_ext,

@@ -661,13 +661,23 @@ the experiment.
   (an unbound signature resolves at apply time), so `shape::function_type_parts`
   does not apply to them either.  Recording the reason beats guessing at it.
 
+- **The checker's IR is now read-only by construction — LANDED.**  `Checker`
+  holds `Arc<IR>` and `Build` hands the same handle back out, so the Phase 4
+  contract is enforced rather than merely true: the rewrite that broke it
+  (`self.ir.set_schema`) compiled before, and `self.ir.set_kind(…)` no longer
+  does — measured, `E0596: cannot borrow data in an Arc as mutable`.  The four
+  public entry points still take `IR` by value, so no caller changed, and every
+  reader on `build.ir` is a field or index access that `Deref` passes through
+  unchanged.  **One route is left open on purpose**: `Arc::get_mut` still
+  compiles, because the reference count is 1 for the whole check.  Closing it
+  means either keeping a second live handle for the duration or threading an
+  `&IR` lifetime onto every `Build` consumer across three crates — a far larger
+  change than the residual gap is worth, and the escape is two deliberate steps
+  that name themselves in review, where the accidental form was one call that
+  type-checked.
+
 #### Still open
 
-- **`Checker's ir: IR` is held by value**, so the read-only-IR contract restored
-  in Phase 4 is true today but not enforced — a future writer could break it and
-  the compiler would not object.  A shared reference would let the type system
-  reject the class; it also collides with `Build`, which currently moves the IR
-  out.  This is the one Phase 4 item not attempted.
 - **Two `Ctx` sites that reach the constant through the public
   `AttrExt::missing_slot` contract** (`attr.rs` and `lichen-perspective`) still
   allocate per occurrence.  They are not the same shape as the interned sites —
