@@ -218,11 +218,17 @@ where
     /// layer renders only these as `DiagKind::Assert`; a bounds guard fires
     /// a separate `EvalError::Index`, so rendering both would double report.
     user_asserts: HashSet<NodeId>,
-    /// The value nodes of recursive bindings' functions, collected by
-    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates them before
-    /// the definition pass (proving them concrete), so a recursive reference
-    /// stays in place instead of cloning the function per application.
-    recursive_func_nodes: Vec<NodeId>,
+    /// The value node of **every** lambda in the program, collected by
+    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates all of
+    /// them before the definition pass (proving them concrete), so a
+    /// recursive reference stays in place instead of cloning the function per
+    /// application.
+    ///
+    /// The write is deliberately unconditional: a lambda that does not
+    /// reference itself contributes its value node too, and deep-evaluating
+    /// it is idempotent, so narrowing the field to the recursive ones would
+    /// change nothing about the pass.
+    lambda_value_nodes: Vec<NodeId>,
     /// The top-level statements the definition pass found **non-terminating**
     /// (the VM's apply/depth guard fired while evaluating the statement's
     /// value).  Each is recorded as a source-blind [`Loc`] so the diagnostics
@@ -423,7 +429,7 @@ where
             apply_edges: HashMap::new(),
             node_edges: HashMap::new(),
             user_asserts: HashSet::new(),
-            recursive_func_nodes: Vec::new(),
+            lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
             force_failed: false,
             markers: Markers::default(),
@@ -452,15 +458,15 @@ where
         }
         let root_term = checker.check_expr(root);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
-        // Prove the recursive bindings' function values concrete before the
-        // definition pass: a recursive reference (the apply in the body)
-        // then stays in place, so every recursion level re-applies the
+        // Prove every lambda's function value concrete before the definition
+        // pass: a recursive reference (the apply in the body) then stays in
+        // place, so every recursion level re-applies the
         // template — whose own parameter is never deep-evaluated and is
         // cloned fresh per level.  Without this, the deep pass evaluates the
         // parameter clone of the first application, a second application
         // reuses the already-bound clone instead of cloning it fresh, and
         // the argument unify conflicts (the recursion cannot descend).
-        for &func_node in &checker.recursive_func_nodes {
+        for &func_node in &checker.lambda_value_nodes {
             checker.module.evaluate_node_deep(func_node, None);
         }
         // The definition pass: run the program so the apply-time type checks
@@ -740,6 +746,35 @@ where
         self.array_node(self.current_block, &[id, names])
     }
 
+    /// The struct type's full encoding — the field-type `shape`, the `kind`
+    /// `[TypeStruct{id, names}, K]`, and the `[shape, kind]` wrapper pair —
+    /// built from the caller's nominal `id` node, the field types and the
+    /// field names:
+    ///
+    /// ```text
+    /// wrapper = [ shape, kind ]
+    /// shape   = [ field types… ]
+    /// kind    = [ TypeStruct{id, names}, K ]
+    /// ```
+    ///
+    /// The single construction point for the layout [`shape`](crate::shape)
+    /// documents but deliberately never builds.  The `id` stays the caller's
+    /// because its per-occurrence freshness is a policy of the emitting rule,
+    /// not part of the encoding.
+    fn struct_type_type(
+        &mut self,
+        id: NodeId,
+        field_tys: &[NodeId],
+        field_names: &[Option<&'static str>],
+    ) -> (NodeId, NodeId, NodeId) {
+        let shape = self.array_node(self.current_block, field_tys);
+        let names = self.build_struct_names(field_names);
+        let marker = self.struct_marker_node(id, names);
+        let kind = self.kind_expr(self.current_block, marker);
+        let wrapper = self.array_node(self.current_block, &[shape, kind]);
+        (shape, kind, wrapper)
+    }
+
     /// A lazy structural read down a constant index `path` from `base`: the
     /// nested `Index` op chain `Index(…Index(base, path[0])…, path[n])` that
     /// resolves when `base` binds — the runtime form of a constant encoding
@@ -862,20 +897,6 @@ where
     /// failed equality unify.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.module.class_value(node)
-    }
-
-    /// The canonical universe node `[Type, ↺]` (`Type : Type`) — the kind slip a
-    /// type expression's kind slot closes on (`[marker, Type]`).  Native
-    /// operator extensions build type expressions with it.
-    pub fn type_expr_node(&self) -> NodeId {
-        self.type_expr
-    }
-
-    /// The canonical, shared `[int, Type]` type expression — the type of every
-    /// int value.  A native operator extension (e.g. `jit`) compares a
-    /// function's signature against it.
-    pub fn int_type_node(&self) -> NodeId {
-        self.int_type
     }
 
     // --- the check -------------------------------------------------------
@@ -1178,12 +1199,7 @@ where
                 );
             }
         }
-        let operator = match operator {
-            BinOp::Add => P::Operator::from(TypeOperator::Add),
-            BinOp::Sub => P::Operator::from(TypeOperator::Sub),
-            BinOp::Leq => P::Operator::from(TypeOperator::Leq),
-            BinOp::Eq => P::Operator::from(TypeOperator::Eq),
-        };
+        let operator = P::Operator::from(TypeOperator::from(operator));
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);

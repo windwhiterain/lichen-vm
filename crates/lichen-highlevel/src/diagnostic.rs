@@ -29,8 +29,8 @@ use crate::{
 
 /// What kind of check a unification failure implements — drives the
 /// expected/found direction of a [`Diag::Mismatch`]'s `a`/`b`.  All are
-/// *type-mismatch* constructs; the coarse value/type/kind discrimination is
-/// [`Loc::kind`].
+/// *type-mismatch* constructs; each variant names its own expected/found
+/// category, so there is no separate coarse value/type discrimination.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum DiagKind {
     /// `inner : T` — expected = the annotation's type value.

@@ -372,11 +372,7 @@ where
             P::Operator::from(TypeOperator::Fresh),
             None,
         );
-        let shape = self.array_node(self.current_block, &tys);
-        let names_node = self.build_struct_names(field_names);
-        let marker = self.struct_marker_node(id, names_node);
-        let kind = self.kind_expr(self.current_block, marker);
-        let struct_ty = self.array_node(self.current_block, &[shape, kind]);
+        let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
         self.term[e] = Some(pair);
@@ -459,6 +455,9 @@ where
             // callee is rejected there.
             let id = self.fresh_cell();
             let names = self.fresh_cell();
+            // Kind only, so `Self::struct_type_type` does not apply: the pin
+            // has no field-type shape to wrap, and its marker's two fields are
+            // unbound cells rather than a `Fresh` id and a name table.
             let marker = self.struct_marker_node(id, names);
             let kind = self.kind_expr(self.current_block, marker);
             self.check_unify(
@@ -785,12 +784,7 @@ where
             P::Operator::from(TypeOperator::Fresh),
             None,
         );
-        let shape = self.array_node(self.current_block, &tys);
-        let names_node = self.build_struct_names(&names);
-        // TypeStruct{id, names} — the two-field struct marker.
-        let marker = self.struct_marker_node(id, names_node);
-        let kind = self.kind_expr(self.current_block, marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
+        let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);
         self.ty[e] = Some(kind);
@@ -805,7 +799,7 @@ where
     /// values), its values the field indices — the map an `a.name` read
     /// resolves through.  A named read over the marker misses with a
     /// recorded [`EvalError::TableMiss`], never a panic.
-    fn build_struct_names(&mut self, names: &[Option<&'static str>]) -> NodeId {
+    pub(super) fn build_struct_names(&mut self, names: &[Option<&'static str>]) -> NodeId {
         if names.iter().all(|n| n.is_none()) {
             return self.alloc_node(
                 self.current_block,

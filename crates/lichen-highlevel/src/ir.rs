@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use crate::attr::{AttrSpec, NoAttr};
-use crate::program::HighProgramLiteral;
+use crate::program::{HighProgramLiteral, TypeOperator};
 
 /// The static schema of an expression: which compile-time attributes ride on
 /// its runtime pair and in which order.  `tail` is index-aligned with the
@@ -38,14 +38,6 @@ impl<A> Default for Schema<A> {
     }
 }
 
-impl<A> Schema<A> {
-    /// The runtime pair's arity: the `[value, type]` head plus one slot per
-    /// attribute (`shape::attr_slot(tail.len())`).
-    pub fn arity(&self) -> usize {
-        crate::shape::attr_slot(self.tail.len())
-    }
-}
-
 /// An interned index into [`IR::schema_table`].  `0` is always the default
 /// (empty-`tail`) schema, so a fresh [`IR::alloc`] needs no write.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +53,22 @@ pub enum BinOp {
     Sub,
     Leq,
     Eq,
+}
+
+/// Every [`BinOp`] names the [`TypeOperator`] the checker runs: the two enums
+/// spell the same four operators, so the checker converts once here instead
+/// of repeating the mapping at each site.  [`TypeOperator::Fresh`] is the
+/// other direction and has no [`BinOp`] spelling — it mints a nominal struct
+/// id, which no source operator does.
+impl From<BinOp> for TypeOperator {
+    fn from(operator: BinOp) -> Self {
+        match operator {
+            BinOp::Add => TypeOperator::Add,
+            BinOp::Sub => TypeOperator::Sub,
+            BinOp::Leq => TypeOperator::Leq,
+            BinOp::Eq => TypeOperator::Eq,
+        }
+    }
 }
 
 /// A dense index into [`IR::expr`].  References are pre-resolved: a
@@ -123,42 +131,6 @@ pub enum LocStep {
     Shape,
     /// Element `i` of a tuple/array/struct shape.
     Elem(usize),
-}
-
-/// The coarse category that begins a [`Loc`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LocKind {
-    /// The expression's value slot (leading [`LocStep::Value`]).
-    Value,
-    /// The expression's type slot, or a further link of the type chain
-    /// (leading [`LocStep::Type`]).
-    Type,
-    /// The expression's attribute-tail slot (leading [`LocStep::Attr`]).
-    Attribute,
-}
-
-impl Loc {
-    /// The coarse category the location denotes.
-    pub fn kind(&self) -> LocKind {
-        match self.path.first() {
-            None | Some(LocStep::Value) => LocKind::Value,
-            Some(LocStep::Type) => LocKind::Type,
-            Some(LocStep::Attr(_)) => LocKind::Attribute,
-            // A shape / element only appears deeper in a type's chain; the
-            // leading slot is still the type of the surrounding pair.
-            Some(LocStep::Shape) | Some(LocStep::Elem(_)) => LocKind::Type,
-        }
-    }
-
-    /// How many `[value, type]` pairings the location descends: how many
-    /// leading [`LocStep::Type`]s (the first is the type, the second is the
-    /// type's type, and so on, unbounded).
-    pub fn type_depth(&self) -> usize {
-        self.path
-            .iter()
-            .take_while(|s| **s == LocStep::Type)
-            .count()
-    }
 }
 
 /// The highlevel program: a pure expression tree, generic over the
