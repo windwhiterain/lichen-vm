@@ -430,7 +430,12 @@ span back to the original file.
   single-expression `C(e)` stays the positional slot read) lowers to
   `Instantiate`; there is no frontend callee-kind dispatch, the checker
   decides whether the callee is a struct type, and a callee that is not one
-  fails at check time.  Indexing an instance reads
+  fails at check time (the `InstantiateCallee` diagnostic — structs are
+  nominal, so a tuple or function type cannot instantiate).  An unbound
+  callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
+  non-struct actual callee fails the apply's argument check per call; a
+  call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
+  so the static checks see the concrete struct type.  Indexing an instance reads
   its positional fields: `s(1, 2)[0]` is the first field, and its type is
   the corresponding field type (an out-of-bounds field index is an
   `IndexOutOfBounds` diagnostic).  A struct instance with named fields also
@@ -451,7 +456,11 @@ span back to the original file.
   offending argument: an unknown field (`StructUnknownField`), a duplicate
   (`StructDuplicateField`), a field left unsupplied (`StructMissingField`),
   an excess positional argument (`StructExcessField`), and a `.name`
-  argument against an anonymous struct (`StructAnonymousField`).  After
+  argument against an anonymous struct (`StructAnonymousField`).  The name
+  table — and so the reorder — must be statically known: through an unbound
+  callee (a parameter) a named argument is an `InstantiateNamesNotStatic`
+  diagnostic ("named arguments require a statically known struct type").
+  After
   reordering, each argument's type is checked against its field's type as
   usual.
 - **Dependent array types (pinning).**  The length of `array<T, n>` is an arbitrary

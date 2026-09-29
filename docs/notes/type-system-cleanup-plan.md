@@ -1,12 +1,15 @@
 # Type-system cleanup and standardization plan
 
 > Status: **Phase 0 complete** (B1–B8 all landed on `fix/type-system-phase0`);
+> **D3 landed** (`fix/phase1-instantiate`: the checker is total and
+> type-directed for `Instantiate`, with the nominal callee check);
 > Phases 1+ pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
-> unification (no occurs check) as the designed semantics. D3 = make the
-> *frontend* recognize struct instantiation at parse/compile time (semantic
-> recognition rejected). D4 = open — see analysis below. D5 = compute JIT out
+> unification (no occurs check) as the designed semantics. D3 = syntactic
+> recognition at parse time (already the reality); the checker is total +
+> type-directed with a nominal callee check. D4 = open — see analysis below.
+> D5 = compute JIT out
 > of scope for now; the future JIT decoupling is to be built on the
 > low-type layer — see [lowlevel-low-types](lowlevel-low-types.md).
 > Basis: five-point survey of `lichen-lowlevel`, `lichen-highlevel` (checker,
@@ -176,11 +179,26 @@ These change or bless semantics; each needs an explicit decision (§7):
   equi-recursive unification as the designed semantics and spec it; (b) add
   an occurs check with a universe whitelist (risks breaking
   `struct_recursion.lichen`-style programs).
-- **D3 — struct instantiation through a parameter.** Today a struct type
-  arriving via a parameter falls through to plain application and *panics*
-  (spec-admitted hole, language-spec.md:388-393). Options: recognize
-  semantically (check the callee's runtime type), or make it a clean
-  diagnostic instead of a panic.
+- **D3 — struct instantiation recognition.** ~~Today a struct type
+  arriving via a parameter falls through to plain application and *panics*~~
+  **Stale premise**: the frontend parses every glued `X(args)` (except the
+  single comma-free positional read) as `Instantiate` unconditionally —
+  recognition is already syntactic, and the parameter case already works
+  positionally via deferral.  The live defects were checker-side: a panic on
+  a call-result callee, no nominality check (a tuple/function type could
+  "instantiate"), false named-arg diagnostics for non-concrete callees, and
+  a frontend alias-placeholder bug.  **Landed** (`fix/phase1-instantiate`):
+  the checker is total and type-directed for `Instantiate` — a concretely
+  non-struct callee is an `InstantiateCallee` diagnostic at the callee, an
+  unbound callee is pinned to a struct kind (re-checked per apply), a
+  call-result callee is force-evaluated at check time, and named arguments
+  through a non-statically-known callee are an honest
+  `InstantiateNamesNotStatic` diagnostic.  Known limitation (left for Phase
+  2's unification-hook extraction, D1): the deferred field-list check of a
+  param-dependent call-result callee relies on the lowlevel's
+  pending-`Index` deferral (`class_holds_type`), which only accepts a
+  2-element concrete other side — a ≠2-field struct shape there reports at
+  check time instead of at the apply.
 - **D4 — `Type : Type` wording.** Compound types are *not* typed by `Type`
   (they carry `[marker, Type]` kinds), contradicting the README/spec
   wording. Decide the honest statement and spec it.
@@ -195,7 +213,7 @@ These change or bless semantics; each needs an explicit decision (§7):
 |---|---|---|
 | D1 | Lowlevel/highlevel boundary | **A**: extract a `Program` unification hook; lowlevel becomes honestly untyped |
 | D2 | Occurs check | **Document** equi-recursive unification (no occurs check) as designed semantics |
-| D3 | Struct-through-parameter | **Frontend recognition at parse/compile time** (semantic runtime recognition rejected) |
+| D3 | Struct instantiation recognition | **Syntactic at parse time (already the reality); the checker total + type-directed with a nominal callee check** — landed on `fix/phase1-instantiate` |
 | D4 | `Type : Type` statement | **Open** — suspected not to be a real universe rule; `Type` is a terminal structure on the type chain, not a supertype. Analyze in Phase 4 |
 | D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now |
 
