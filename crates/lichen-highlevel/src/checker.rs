@@ -46,7 +46,7 @@ use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
-use crate::shape::for_each_kind_marker;
+use crate::shape::{self, for_each_kind_marker};
 
 mod annotations;
 mod diagnostics;
@@ -781,6 +781,21 @@ where
         self.array_node(block, &[marker, self.type_expr])
     }
 
+    /// The function type expression `[[domain, codomain], [FunctionType,
+    /// K]]` — the single construction point for the arrow encoding.  The
+    /// block is explicit because the two lambda-site arrows are built into
+    /// the shell's own block, not the current one.
+    ///
+    /// Deliberately **not** registered in [`Checker::arrows`]: that set feeds
+    /// the type printer (a member renders as `T -> U`), so it holds only
+    /// source-level arrows.  The caller decides membership — see
+    /// [`crate::program::Ctx::arrow`].
+    pub(super) fn arrow(&mut self, block: BlockId, domain: NodeId, codomain: NodeId) -> NodeId {
+        let shape = self.array_node(block, &[domain, codomain]);
+        let kind = self.kind_expr(block, self.markers.function_type_marker);
+        self.array_node(block, &[shape, kind])
+    }
+
     /// The struct marker node `[TypeId, names]` — the two-field kind marker
     /// of a struct type (layout:
     /// [`shape::STRUCT_MARKER_ID_SLOT`](crate::shape::STRUCT_MARKER_ID_SLOT) /
@@ -1076,10 +1091,19 @@ where
             } => {
                 let parameter_ty = self.check_type_element(parameter);
                 let return_ty = self.check_type_element(r#return);
-                let shape = self.array_node(self.current_block, &[parameter_ty, return_ty]);
+                let pair = self.arrow(self.current_block, parameter_ty, return_ty);
+                // A source `T -> U` prints as an arrow, so its shape joins
+                // `arrows`; a *pattern* arrow (the apply's function-ness
+                // guard) deliberately does not — see [`Self::arrow`].
+                let parts = shape::function_type_parts(&mut self.module, self.type_expr, pair)
+                    .expect("a freshly built arrow is a function type");
+                let shape = self.module.as_dynamic(parts, self.current_block);
+                let pair_items = shape::array_items(&self.module, AnyNodeId::Dynamic(pair))
+                    .expect("a freshly built arrow is a pair");
+                let kind = self
+                    .module
+                    .as_dynamic(pair_items[shape::TYPE_KIND_SLOT].node, self.current_block);
                 self.arrows.insert(shape);
-                let kind = self.kind_expr(self.current_block, self.markers.function_type_marker);
-                let pair = self.array_node(self.current_block, &[shape, kind]);
                 self.term[e] = Some(pair);
                 self.val[e] = Some(shape);
                 self.ty[e] = Some(kind);
@@ -1385,6 +1409,10 @@ where
 
     fn kind_expr(&mut self, marker: NodeId) -> NodeId {
         Checker::kind_expr(self, self.current_block, marker)
+    }
+
+    fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId {
+        Checker::arrow(self, self.current_block, domain, codomain)
     }
 
     fn fresh(&mut self) -> NodeId {

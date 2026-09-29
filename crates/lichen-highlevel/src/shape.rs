@@ -388,6 +388,45 @@ where
     is_function_type_any(module, universe, AnyNodeId::Dynamic(ty))
 }
 
+/// The two halves of a concrete function type expression
+/// `[[domain, codomain], [FunctionType, K]]` — the reader symmetric with
+/// the encoding every arrow build site produces.  `None` when `ty` is not a
+/// concrete function type: an unbound cell, a type of another kind, or a
+/// function type whose kind does not close on the universe.
+///
+/// The **shape is returned unwrapped** — the `[domain, codomain]` node
+/// itself, not a futures pair — because every caller either reads its two
+/// elements or inserts it into the checker's `arrows` set, which keys on that
+/// node's identity (see [`is_function_type_any`] for the recognition
+/// contract this mirrors).
+pub fn function_type_parts_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> Option<AnyNodeId>
+where
+    P::Value: ValueType,
+{
+    if !is_function_type_any(module, universe, ty) {
+        return None;
+    }
+    shape_of(module, ty)
+}
+
+/// [`function_type_parts_any`] over a dynamic node — the `[domain,
+/// codomain]` shape node of `ty`, or `None` when `ty` is not a concrete
+/// function type.
+pub fn function_type_parts<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: NodeId,
+) -> Option<AnyNodeId>
+where
+    P::Value: ValueType,
+{
+    function_type_parts_any(module, universe, AnyNodeId::Dynamic(ty))
+}
+
 /// Whether `ty` is a struct type: `[shape, [TypeStruct{id, names}, K]]`.
 /// The kind's marker slot holds the two-field `TypeStruct` value (the
 /// nominal id + the optional name table), so the kind is a standard
