@@ -24,7 +24,7 @@ where
     pub(super) fn check_lam(
         &mut self,
         e: ExprId,
-        depth: u32,
+        parent_expr: Option<ExprId>,
         parameter_type: Option<ExprId>,
         parameter_attribute: Option<ExprId>,
         parameter: ExprId,
@@ -41,21 +41,15 @@ where
         //
         // `parent` is the enclosing function: a nested closure's nodes then
         // read as members of the enclosing template too, while a sibling's do
-        // not (the mutual-recursion invariant).  The lexical parent is the
-        // innermost enclosing function whose definition depth is one less: a
-        // genuinely-nested closure joins the enclosing template, while a
-        // same-depth sibling binding (mutual recursion — compiled here
-        // because the body references it) hangs under nothing.  Its closure
-        // then stays outside this template, referenced in place, so the
-        // recursion re-applies the sibling's never-bound template instead of a
-        // bound instance.
-        let parent = self
-            .function_stack
-            .iter()
-            .rposition(|&(_, d)| d + 1 == depth)
-            .map(|i| self.function_stack[i].0);
+        // not (the mutual-recursion invariant).  The link itself is the
+        // frontend's [`ExprKind::Function::parent`], resolved here through
+        // [`Checker::function_of`] — which function that *is* is decided where
+        // the lambda's syntax was compiled, not here; see the frontend's
+        // `fn_parents` invariant for the sibling rule it encodes.
+        let parent = parent_expr.and_then(|p| self.function_of.get(&p).copied());
         let function = self.module.begin_function(return_block, parent);
-        self.function_stack.push((function, depth));
+        self.function_of.insert(e, function);
+        self.function_stack.push((function, Some(e)));
         let value_cell = self.fresh_cell();
         let type_cell = self.fresh_cell();
         // The parameter *is* the pair `[value, type]`; the cells live in the

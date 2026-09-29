@@ -144,10 +144,11 @@ where
     /// `lichen-compute`'s `jit`/`launch`) supplies its own slice.
     native_ops: NativeOps<P>,
     scopes: Vec<HashMap<ExprId, Binding>>,
-    /// The lexical function stack: one `(id, depth)` entry per enclosing
-    /// lambda whose body is being compiled, innermost last — `depth` is the
-    /// frontend's lexical depth ([`ExprKind::Function::depth`], the value
-    /// at the lambda's definition point).  The innermost entry is the
+    /// The lexical function stack: one entry per enclosing lambda whose body
+    /// is being compiled, innermost last — each entry carries the IR
+    /// expression id it was compiled from, so a nested closure's
+    /// [`ExprKind::Function::parent`] link resolves to a [`FunctionId`] via
+    /// [`Self::function_of`].  The innermost entry is the
     /// current function ([`Checker::current_function`]): every node the
     /// checker allocates is tagged with it (its template membership
     /// back-pointer) and registered in its scope
@@ -156,13 +157,19 @@ where
     /// [`Function::asserts`](lichen_lowlevel::Function::asserts).
     /// [`Checker::check_lam`]
     /// pushes its shell while the body compiles and pops on exit — the old
-    /// per-frame block bookkeeping is gone, the lexical nesting lives in
-    /// [`Function::parent`](lichen_lowlevel::Function::parent), and the depth
-    /// keeps *sibling* bindings
-    /// disjoint: a lambda compiled while another lambda's body is being
-    /// checked may be a same-depth sibling (mutual recursion), which hangs
-    /// under nothing, never under the lambda being checked.
-    function_stack: Vec<(FunctionId, u32)>,
+    /// per-frame block bookkeeping is gone, and the lexical nesting lives in
+    /// [`Function::parent`](lichen_lowlevel::Function::parent).  Which
+    /// function *is* the parent is decided by the frontend when it compiled
+    /// the lambda's syntax (see the language crate's `fn_parents`), not
+    /// here: a lambda compiled while another lambda's body is being checked
+    /// may be a sibling of it (mutual recursion), which hangs under nothing,
+    /// never under the lambda being checked.
+    function_stack: Vec<(FunctionId, Option<ExprId>)>,
+    /// Every lambda's allocated [`FunctionId`], keyed by its IR expression id
+    /// — the `ExprId` → `FunctionId` resolution behind a
+    /// [`ExprKind::Function::parent`] link, filled in by
+    /// [`Checker::check_lam`] as each function's shell is begun.
+    function_of: HashMap<ExprId, FunctionId>,
     /// The compiled pair node `[value, type]` per expression.
     term: Vec<Option<NodeId>>,
     /// Element 0 of the pair (the value).  `None` for call results, whose
@@ -444,6 +451,7 @@ where
             native_ops,
             scopes: Vec::new(),
             function_stack: Vec::new(),
+            function_of: HashMap::new(),
             term: vec![None; n],
             val: vec![None; n],
             ty: vec![None; n],
@@ -1031,10 +1039,11 @@ where
                 parameter_type,
                 parameter_attribute,
                 r#return,
-                depth,
+                parent,
+                ..
             } => self.check_lam(
                 e,
-                depth,
+                parent,
                 parameter_type,
                 parameter_attribute,
                 parameter,
