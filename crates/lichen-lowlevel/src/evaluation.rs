@@ -2,7 +2,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvaluatedDeep, LowOperator,
-    LowValue, Module, NodeId, OperatorExt as _, Program,
+    LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -271,48 +271,37 @@ impl<P: Program> Module<P> {
                             }
                             Some(LowValue::Table(payload)) => {
                                 // The key is force-evaluated and
-                                // deep-content-hashed; an unforceable key
-                                // can match nothing (the stored keys are
-                                // all concrete) and misses like any other
-                                // absent key.
-                                let Some(hash) = self.key_hash(key) else {
-                                    self.eval_errors.push(EvalError::TableMiss { table, key });
-                                    return P::Value::from(LowValue::Void);
-                                };
-                                let items = payload.items();
-                                let start = items.partition_point(|item| item.hash < hash);
-                                let mut path = Vec::new();
-                                let mut found = None;
-                                for item in &items[start..] {
-                                    if item.hash != hash {
-                                        break;
+                                // deep-content-hashed; a key that is
+                                // decided-and-absent misses like any other
+                                // absent key.  A key that is not *decided
+                                // yet* (a lambda parameter mid-apply, a lazy
+                                // computation with unbound operands) is not a
+                                // miss: the lookup has not happened yet, so
+                                // the read stays lazy and a later pass, with
+                                // the key bound, decides it.
+                                match self.key_state(key) {
+                                    KeyState::Undecided => {
+                                        return P::Value::from(LowValue::Parameterized);
                                     }
-                                    if self.key_eq(key, item.key, &mut path) {
-                                        found = Some(item.value);
-                                        break;
-                                    }
-                                }
-                                match found {
-                                    // A read of a pure cell is a reference,
-                                    // not a snapshot — joining the reader
-                                    // to the cell's class lets a later bind
-                                    // reach it through replication, like an
-                                    // array `Index` read.
-                                    Some(element) => match element {
-                                        Dyn(element) => {
-                                            self.alias_read(node, element);
-                                            self.evaluate_node(Dyn(element), Some(block))
-                                        }
-                                        // A static element is immutable —
-                                        // no class to join — and its value
-                                        // is absolute, so the read result
-                                        // caches into this node like any
-                                        // other.
-                                        AnyNodeId::Static(sref) => self.static_read(sref),
-                                    },
-                                    None => {
+                                    KeyState::Unhashable => {
                                         self.eval_errors.push(EvalError::TableMiss { table, key });
-                                        P::Value::from(LowValue::Void)
+                                        return P::Value::from(LowValue::Void);
+                                    }
+                                    KeyState::Hashed(hash) => {
+                                        let items = payload.items();
+                                        let start = items.partition_point(|item| item.hash < hash);
+                                        let mut path = Vec::new();
+                                        let mut found = None;
+                                        for item in &items[start..] {
+                                            if item.hash != hash {
+                                                break;
+                                            }
+                                            if self.key_eq(key, item.key, &mut path) {
+                                                found = Some(item.value);
+                                                break;
+                                            }
+                                        }
+                                        self.finish_table_get(node, found, block)
                                     }
                                 }
                             }
@@ -372,6 +361,53 @@ impl<P: Program> Module<P> {
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
         self.evaluate_node_deep_inner(Dyn(node), current, false, true)
+    }
+
+    /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
+    /// found element is read by reference (joining the reader to the cell's
+    /// class lets a later bind reach it through replication, like an array
+    /// `Index` read), and an absent one is a miss — recorded, never a panic.
+    fn finish_table_get(
+        &mut self,
+        node: NodeId,
+        found: Option<AnyNodeId>,
+        block: BlockId,
+    ) -> P::Value {
+        match found {
+            Some(Dyn(element)) => {
+                self.alias_read(node, element);
+                self.evaluate_node(Dyn(element), Some(block))
+            }
+            // A static element is immutable — no class to join — and its value
+            // is absolute, so the read result caches into this node like any
+            // other.
+            Some(AnyNodeId::Static(sref)) => self.static_read(sref),
+            None => {
+                let (table, key) = self.table_get_operands(node);
+                self.eval_errors.push(EvalError::TableMiss { table, key });
+                P::Value::from(LowValue::Void)
+            }
+        }
+    }
+
+    /// The `[table, key]` operand nodes of a `TableGet`, for attributing a
+    /// miss.  The read has already proved the operand is a 2-element array, so
+    /// the shape holds here.
+    fn table_get_operands(&self, node: NodeId) -> (AnyNodeId, AnyNodeId) {
+        let operand = self.nodes[node]
+            .operation
+            .and_then(|op| op.operand)
+            .expect("a TableGet node reached the miss path carries its operand");
+        match self
+            .node_value(Dyn(operand))
+            .and_then(|value| value.as_enum())
+        {
+            Some(LowValue::Array(array)) => {
+                let items = array.items();
+                (items[0].node, items[1].node)
+            }
+            _ => unreachable!("a TableGet operand is the [table, key] array"),
+        }
     }
 
     /// Shared core of the deep and forced passes.  `skip_shallow` keeps the

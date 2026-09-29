@@ -56,6 +56,21 @@ const CYCLE_TOKEN: u64 = 0x6379_636c_0000_0003; // "cycl"
 /// The fold seed for an array's positional item hashes.
 const ARRAY_SEED: u64 = 0xa22e_b3e1_0000_0004;
 
+/// Why a table key has (or has not) a content hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyState {
+    /// The key's content is decided and hashed.
+    Hashed(u64),
+    /// The key is not decided yet — an unbound cell, a lazy computation whose
+    /// operands are not bound.  It may still become a real key, so a read
+    /// must stay lazy rather than miss.
+    Undecided,
+    /// The key is decided and will never be key content (it holds a
+    /// [`LowValue::Void`](crate::LowValue::Void), the residue of a failed
+    /// read).  A read can miss.
+    Unhashable,
+}
+
 impl<P: Program> Module<P> {
     /// Build a constant table value from raw `(key, value)` node pairs (see
     /// the module docs).  Every key is force-evaluated first
@@ -92,6 +107,24 @@ impl<P: Program> Module<P> {
     /// already-recorded failed read: not hashable, same class as an unbound
     /// subtree.
     pub(crate) fn key_hash(&mut self, key: AnyNodeId) -> Option<u64> {
+        match self.key_state(key) {
+            KeyState::Hashed(hash) => Some(hash),
+            // Not decidable yet, or not key content at all — both mean "this
+            // key cannot match", and the caller decides what that costs.
+            KeyState::Undecided | KeyState::Unhashable => None,
+        }
+    }
+
+    /// [`Self::key_hash`] with the two reasons for "no hash" kept apart.
+    ///
+    /// They are different facts and the callers pay differently for them: a
+    /// build drops the entry either way, but a **read** must only record a
+    /// miss when the key is decided and simply absent.  A key that is still
+    /// undecided (a lambda parameter mid-apply, a lazy computation whose
+    /// operands are not bound yet) may become a real key later, so the read
+    /// stays lazy instead of reporting a miss for a lookup that has not
+    /// happened yet.
+    pub(crate) fn key_state(&mut self, key: AnyNodeId) -> KeyState {
         match key {
             Dyn(node) => {
                 self.evaluate_node_forced(node, None);
@@ -99,17 +132,20 @@ impl<P: Program> Module<P> {
                     .evaluated_deep
                     .is_some_and(|e| e.parameterized)
                 {
-                    return None;
+                    return KeyState::Undecided;
                 }
             }
             AnyNodeId::Static(sref) => {
                 if self.static_module(sref.module).nodes[sref.index.index].parameterized {
-                    return None;
+                    return KeyState::Undecided;
                 }
             }
         }
         let mut path = Vec::new();
-        self.hash_inner(key, &mut path, 0)
+        match self.hash_inner(key, &mut path, 0) {
+            Some(hash) => KeyState::Hashed(hash),
+            None => KeyState::Unhashable,
+        }
     }
 
     /// The recursive content hash — [`ValueExt::value_eq`]'s comparison

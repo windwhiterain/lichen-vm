@@ -135,10 +135,22 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     };
     assert_eq!(dropped, AnyNodeId::Dynamic(key));
 
-    // Reading with an unbound key misses (it can match nothing).
+    // Reading with a still-unbound key does **not** miss: the key is undecided,
+    // not absent, so the lookup has not happened yet and the read stays lazy
+    // for a later pass, when the key is bound.  (A key that is *decided* and
+    // not key content — a `Void` — does miss; see the next test.)
     let get = table_get(&mut m, root, t, key);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::Parameterized),
+        "an undecided key leaves the read lazy"
+    );
+    assert_eq!(
+        m.eval_errors.len(),
+        1,
+        "and records no miss — only the build's dropped entry is reported"
+    );
 }
 
 #[test]
