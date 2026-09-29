@@ -58,6 +58,7 @@ primary  := int_literal
           | 'type_of'                             -- first-class function: reads its argument's type
           | '_'                                     -- inference placeholder (any position)
           | name
+          | '$' name '(' expr (sep expr)* sep? ')'  -- native-operator call  $name(args…)
           | '(' expr ')'                            -- grouping (transparent)
           | '(' expr (sep expr)* sep? ')'           -- tuple value (always a Tuple)
           | '[' element (sep element)* ']'          -- array literal
@@ -87,7 +88,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 
 - **Keywords:** `Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
   `else`, `return`, `pub`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
-  `::`, `==>`,
+  `$`, `::`, `==>`,
   `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
@@ -192,6 +193,20 @@ farg     := '.' name expr                         -- named instantiation argumen
   with `~` (`~e`, `~2 e`): a *shallow* marker that keeps the value slot at
   each of the first `n` levels of the element's type spine shallow (a bare
   `~` marks the whole subtree).  `~` is accepted nowhere else.
+- **Native operators.**  `$name(args…)` is an atom: a `$`, a plain name, and a
+  parenthesized comma-separated argument list — `$jit(f)`, `$launch(f, n)`,
+  `$noop()`.  A trailing separator is tolerated, there is no named-argument
+  form, and the parens are required — `$jit f` is a parse error.  The `$` makes
+  it a distinct atom: `$name` is not a name, so
+  it can be neither bound nor referenced without the prefix, and what a
+  `name = $op(a)` statement binds is the *result*.  `name` resolves only
+  against the private native-operator registry of the module being compiled,
+  which is empty for an ordinary file — so a `$` form is written only in a
+  plugin's own embedded source, and two plugins each registering `$jit` never
+  collide.  The checker compiles the arguments and adopts the `[value, type]`
+  pair the plugin's operator returns; it has no knowledge of what the operator
+  does or what its types are, so the check-and-emit is a private contract
+  between a plugin and its own source.
 
 ### 2.1 Delimiters, postfix forms, and adjacency (Glue)
 
@@ -260,6 +275,12 @@ it.  Inside the block is a set of statements, Separator-separated:
   resolves into the fetched source (or its `sub` subdirectory, for a monorepo
   source).  The language compiler itself does not fetch — it only parses and
   surfaces the directive.
+- `name = plug "url" [rev = "…"] [branch = "…"] [tag = "…"] [package = "…"]
+  [sub = "…"]` declares a **native plugin** bound to `name`: a Rust crate that
+  extends the compiler's value/operator vocabulary, fetched and composed into a
+  rebuilt compiler the same way.  A `plug` is always a plugin and never a plain
+  import, so it takes the same options as a `depend` minus the `plugin` flag
+  (which is what a `plug` implies).
 
 A string is `"…"` with no escape characters and may span newlines; its content
 is any character except `"` or `@`.  `@` is reserved for the block delimiters,
@@ -523,8 +544,8 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
 | `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |
-| `e : T` | `Annotation { value, type: Some(compile(T)), attribute: None }` |
-| `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attribute: Some(compile(p)) }` — the annotated node's schema gains the `[Perspective]` tail |
+| `e : T` | `Annotation { value, type: Some(compile(T)), attributes: <an empty range> }` — `attributes` holds one value expression per schema-tail entry, and a bare `:` annotation has no tail, so the range is empty |
+| `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attributes: <a range over compile(p)> }` — the attribute expression lands in the children range **positionally aligned** with the schema tail it annotates (an `e : T # p ? d` pairs `attributes[0]` with `[Perspective]` and `attributes[1]` with `[Doc]`), and the tail is stamped onto the annotated node's schema |
 | `_` (any position — type or value) | `Placeholder` |
 | `T1 -> T2` | `TypeFunction { parameter, return }` (domain, codomain) |
 | `(e1, …, en)` | `Tuple(range)` |
