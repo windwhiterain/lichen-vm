@@ -13,13 +13,15 @@ Every expression evaluates to a **pair of two graph nodes**: the value and its t
 Because the pair is *just data*, the checker and the runtime are the same thing —
 unifying is a runtime operation, so **checking happens while building**. Types are
 first-class values (`Int`, `Type`, function/tuple/array types) living in the pair's
-type slot; `Type : Type` holds in a single universe, so there is no separate kind
-system — a "kinding" mistake is an ordinary type error. This is why the README says
+type slot; `Type : Type` holds — the type chain closes in a cycle at `Type`,
+which is its terminal, not a supertype — and there is no separate kind
+system: a "kinding" mistake is an ordinary type error. This is why the README says
 "the runtime *is* the typechecker."
 
 ## Layering
 
-The workspace is four crates, one per layer:
+The workspace's core is four crates, one per layer — the other members sit around
+them (`Cargo.toml` is the full list):
 
 ```
 lichen-language   frontend: text → highlevel IR → checked program

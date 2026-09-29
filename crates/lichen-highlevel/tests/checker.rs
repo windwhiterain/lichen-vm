@@ -109,7 +109,7 @@ fn named_type_struct(ir: &mut IR, fields: &[(ExprId, &'static str)]) -> ExprId {
 fn array(ir: &mut IR, elements: &[ExprId]) -> ExprId {
     ir.alloc_array(elements)
 }
-/// The real array type: `Array(int, 3)` = `int[3]`.
+/// The real array type: `array<Int, 3>`.
 fn type_array(ir: &mut IR, element_type: ExprId, length: ExprId) -> ExprId {
     ir.alloc(ExprKind::TypeArray {
         element_type,
@@ -164,9 +164,11 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
     array.items().iter().map(|item| item.shallow).collect()
 }
 
-/// Whether the given ids form the int type — a `[int, Type]` pair.  Literals
-/// rebuild their type per occurrence, so it is content-equal to the shared
-/// `Build::int_type` node but never node-identical to it.
+/// Whether the given ids form the int type — a `[int, Type]` pair.  The two
+/// slots are matched differently, on purpose: element 0 is the marker and is
+/// matched by *content*, because a literal rebuilds its type per occurrence and
+/// so is never the shared `Build::int_type` node; element 1 is the universe and
+/// is compared by node identity against the canonical `b.type_expr`.
 fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[NodeId]) -> bool {
     ids.len() == 2
         && matches!(
@@ -176,14 +178,13 @@ fn is_int_type_ids(b: &lichen_highlevel::checker::Build<ProgramImpl>, ids: &[Nod
         && ids[1] == b.type_expr
 }
 
-/// Whether `node` is the int type — content-equal to a rebuilt `[int, Type]`
-/// pair (literals rebuild their type per occurrence, so it is not the shared
-/// `Build::int_type` node, but the same structure).
+/// Whether `node` is the int type — the two-slot test `is_int_type_ids` states.
 fn is_int_type(b: &lichen_highlevel::checker::Build<ProgramImpl>, node: NodeId) -> bool {
     is_int_type_ids(b, &array_ids(b, node))
 }
 
-/// Whether an evaluated value is the int type pair `[int, Type]`.
+/// Whether an evaluated value is the int type pair `[int, Type]` — the
+/// two-slot test `is_int_type_ids` states, on the evaluated ids.
 fn is_int_type_value(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     value: HighProgramValue,
@@ -1063,11 +1064,14 @@ fn tuple_length_mismatch_reports_both_sides() {
     assert_eq!(array_ids(&b, array_ids(&b, diags[0].b)[0]).len(), 1);
 }
 
-// --- call result annotations are lazy --------------------------------------
-// A call's result type cell is a lazy record: the runtime apply does not
-// force it (evaluating a polymorphic template yields the parameterized
-// marker), so an annotation on a call result simply binds the cell at check
-// time — it is never compared against the runtime result in v1.
+// --- call result annotations are checked, not just bound --------------------
+// A call's result type cell is a lazy record (the runtime apply does not force
+// it), so an annotation on a call result only *binds* the cell at check time.
+// The check happens later and elsewhere: the apply's evaluation syncs that
+// cell with the callee's return pair, and a disagreement between the
+// annotation and the real return type is a reported failure.  The two tests
+// below pin it from both directions — a call through a parameter and a direct
+// apply — each as a `Runtime` diagnostic.
 
 #[test]
 fn a_call_result_annotation_is_checked_against_the_return_type() {

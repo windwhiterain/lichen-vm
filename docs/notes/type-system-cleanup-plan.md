@@ -24,10 +24,15 @@
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
 > recognition at parse time (already the reality); the checker is total +
-> type-directed with a nominal callee check. D4 = open — see analysis below.
-> D5 = compute JIT out
-> of scope for now; the future JIT decoupling is to be built on the
-> low-type layer — see [lowlevel-low-types](lowlevel-low-types.md).
+> type-directed with a nominal callee check. D4 = resolved — `Type` is the
+> terminal of the type chain, not a supertype: the chain closes in a cycle at
+> `Type`, and that cycle is what admits recursive types (analysis below; the
+> statement is now in the [spec](../language-spec.md) §3 and the
+> [README](../../README.md)). D5 = compute JIT out of scope for now; the
+> checker encoding is labelled unstable for external consumers — see
+> [checker-encoding-instability](checker-encoding-instability.md) — and the
+> future JIT decoupling is to be built on the low-type layer — see
+> [lowlevel-low-types](lowlevel-low-types.md).
 > Basis: five-point survey of `lichen-lowlevel`, `lichen-highlevel` (checker,
 > IR, program), `lichen-utils` / `lichen-compute` / `lichen-perspective`, and
 > the docs/tests, performed 2025 — findings cited inline as `file:line`.
@@ -183,12 +188,22 @@ Either way, independent of D1:
   `ApplyError`/`UnifyError` stay put, and so do `assert_errors`: they are the
   error contexts only the unify/apply site can build.  What D1 removes is the
   *encoding* knowledge (`[shape, [marker, universe]]`), and that is gone.
-- Replace length-delta error detection (`unify_errors.len()` before/after)
+- ~~Replace length-delta error detection (`unify_errors.len()` before/after)
   and truncation-based suppression with a `Result`-returning unify API; keep
-  the error vec only as a rendering buffer.
-- Resolve the `LowValue::None` ambiguity (B8): `is_unbound` should match only
+  the error vec only as a rendering buffer.~~ **Done** (Phase 3c, branch
+  `refactor/phase3-diag`), but by a different mechanism: the measurement moved
+  *inside* the lowlevel.  `Module::try_unify(a, b) -> (NodeId, Range<usize>)`
+  returns the range of `unify_errors` the call itself produced, empty on
+  success (`equality.rs:118-122`), so no caller measures a length delta and no
+  `Result`-returning API was needed; `check_unify` fills the owned range and
+  `check_unify_relaxed` truncates exactly it.  The vec remains the rendering
+  buffer, as proposed.  (Detail under §5, "Kill the fabricated-`UnifyError`
+  diagnostic channel".)
+- ~~Resolve the `LowValue::None` ambiguity (B8): `is_unbound` should match only
   `Parameterized`; a nullary-op result and an error yield need distinct
-  representation.
+  representation.~~ **Done in Phase 0, as B8** (`816b886`): `LowValue::Void` is
+  the computed-nothing value and `is_unbound` matches `Parameterized` only —
+  see the B8 row in §2.
 - Consolidate the four parallel structural-descent implementations
   (`unify_inner`, `reconcile_*`, `key_eq`, `hash_inner`) around one walker
   with policy flags, or formally document why they must differ.
@@ -409,8 +424,8 @@ These change or bless semantics; each needs an explicit decision (§7):
 | D1 | Lowlevel/highlevel boundary | **A**: extract a `Program` unification hook; lowlevel becomes honestly untyped |
 | D2 | Occurs check | **Document** equi-recursive unification (no occurs check) as designed semantics |
 | D3 | Struct instantiation recognition | **Syntactic at parse time (already the reality); the checker total + type-directed with a nominal callee check** — landed on `fix/phase1-instantiate` |
-| D4 | `Type : Type` statement | **Open** — suspected not to be a real universe rule; `Type` is a terminal structure on the type chain, not a supertype. Analyze in Phase 4 |
-| D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now |
+| D4 | `Type : Type` statement | **Terminal, not supertype** — the chain closes in a cycle at `Type`, and that cycle is what admits recursive types; no subtyping, a compound type is typed by its kind. Landed in the [spec](../language-spec.md) §3 and the [README](../../README.md) |
+| D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now: [checker-encoding-instability](checker-encoding-instability.md) |
 
 ## 8. Tests and documentation (Phase 5, continuous)
 
@@ -420,14 +435,22 @@ These change or bless semantics; each needs an explicit decision (§7):
   sharing half of let-polymorphism. (The codec round-trip property test
   arrived with Phase 1c.)
 - ~~Fix the vacuous `Int<_>` test (B3)~~ (done in Phase 0) and the
-  contradictory test docs (tests/checker.rs:167-184, 1066-1070).
+  contradictory test docs (tests/checker.rs:167-184, 1066-1070) — **the test
+  docs are done** (Phase 4 documentation sync): the `is_int_type` helpers
+  now state the marker-slot / type-slot contract, and the "call result
+  annotations are lazy" section header is replaced by what the two tests below
+  it pin.  The tests themselves were not changed.
 - ~~Sync the spec~~ (**done**, `docs/phase1-spec-sync`): `array<T, n>`
   spellings, `type_of`, named instantiation arguments, the missing §4
   compile-table rows, the equi-recursive statement (D2), the honest
-  `Type : Type` wording (D4), `!` assert semantics.
+  `Type : Type` wording (D4), `!` assert semantics.  (The §4 table was finished
+  in the Phase 4 documentation sync: the `Static` and `NativeCall` rows were
+  added and the `RecordBlock` row was corrected to the `Record` variant.)
 - ~~Rebuild `docs/README.md`'s index~~ (**done**: all 32 notes indexed,
   statuses normalized; `frontend-syntax-separation.md` marked current;
-  `lichen-compute-parallel.md` found superseded and marked historical).
+  `lichen-compute-parallel.md` found superseded and marked historical; the
+  index carries 33 after the checker-encoding note arrived with the Phase 4
+  documentation sync).
 
 ## 9. Sequencing
 
