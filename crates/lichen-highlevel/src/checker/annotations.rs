@@ -8,7 +8,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{ExprId, ExprKind, Schema};
+use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
@@ -106,7 +106,7 @@ where
     /// to *preserve* a slot an annotation does not spell (`(x # 8 ? doc) # 4`
     /// keeps the doc).  `None` when the value's schema has no such slot.
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
-        let value_tail = self.ir.schema(value).tail.clone();
+        let value_tail = self.schema_tail(value).to_vec();
         let pos = value_tail.iter().position(|m| m == marker)?;
         let pair = self.term[value]?;
         let items = shape::array_items(&self.module, AnyNodeId::Dynamic(pair))?;
@@ -174,7 +174,7 @@ where
         // `AttrExt` — it never names a concrete attribute, so the mechanism is
         // generic over the attribute set.
         let own_tail = self.ir.schema(e).clone().tail;
-        let value_tail = self.ir.schema(value).clone().tail;
+        let value_tail = self.schema_tail(value).to_vec();
         // Contract with the frontend: an annotation's attribute value
         // expressions are emitted in the canonical attribute order, the same
         // order the merged tail is sorted into below — that is what makes the
@@ -184,9 +184,11 @@ where
             "an annotation's schema tail must be in the canonical attribute order"
         );
         let tail = self.merge_slots(value_tail, own_tail.clone());
-        // Re-stamp the node so every later reader (the apply-time attribute
-        // check, the renderer's attribute listing) sees the full slot set.
-        self.ir.set_schema(e, Schema { tail: tail.clone() });
+        // Record the merged tail in the checker's own table — the IR is the
+        // frontend's, and this tail is a product of checking it, so later
+        // readers (and the renderer) read it from
+        // [`Checker::schema_tail`](super::Checker::schema_tail) instead.
+        self.merged_tails.insert(e, tail.clone());
         let attrs = self.ir.annotation_attrs(e).to_vec();
         let mut slots: Vec<NodeId> = Vec::with_capacity(tail.len());
         let mut constraint_slot: Option<NodeId> = None;

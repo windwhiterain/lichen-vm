@@ -268,7 +268,7 @@ where
             let loc2 = self.loc(e, 2);
             ext.unify_slots(self, arg_missing, param_slot, loc2);
         } else if self.attr[argument].is_some() {
-            let marker = self.ir.schema(argument).tail[0];
+            let marker = self.schema_tail(argument)[0];
             let ext = (self.attr_ext)(&marker);
             let found_attr = self.attr[argument].unwrap();
             // The declared side of an unannotated parameter is the attribute's

@@ -47,7 +47,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
         {
             // Render only the attributes the root expression actually carries.
             let attr_ext = lang_attr_ext::<LangProgram>();
-            let tail = &build.ir.schema(build.ir.root).tail;
+            let tail = &build.root_schema_tail;
             let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
             if attrs.is_empty() {
                 String::new()
@@ -105,7 +105,7 @@ where
         {
             // Render only the attributes the root expression actually carries.
             let attr_ext = lang_attr_ext::<P>();
-            let tail = &build.ir.schema(build.ir.root).tail;
+            let tail = &build.root_schema_tail;
             let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
             if attrs.is_empty() {
                 String::new()

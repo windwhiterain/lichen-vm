@@ -261,6 +261,20 @@ fn an_annotated_parameter_prints_its_pinned_type() {
     assert_eq!(lichen_language::run::evaluate("5 : _").unwrap(), "5: Int");
 }
 
+/// The root being an annotation over an already-annotated value: the rendered
+/// output must list the **merged** attribute set — the slot the annotation
+/// spelled next to the one it preserved.  Only the runtime pair carries that
+/// width, so a renderer reading the frontend's own IR stamp silently drops the
+/// preserved slot (rendering `5 # 4` instead of `5 # 4 ? tag = 7`).
+#[test]
+fn a_root_annotation_renders_the_merged_attribute_tail() {
+    let source = "Doc = struct<.tag Int>\nfive = 5 # 8 ? Doc(.tag 7)\nfive # 4";
+    assert_eq!(
+        lichen_language::run::evaluate(source).unwrap(),
+        "5 # 4 ? tag = 7: Int"
+    );
+}
+
 #[test]
 fn a_binding_can_shadow_an_earlier_one() {
     assert_eq!(usize_of(&evaluate("a = 1; a = 2; a")), 2);
