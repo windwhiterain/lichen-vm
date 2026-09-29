@@ -258,6 +258,25 @@ where
     string_type: NodeId,
     /// The canonical universe `[Type, ↺]` — the self-referential `Type : Type`.
     type_expr: NodeId,
+    // The two shared index constants, allocated once by
+    // `install_constants` and referenced wherever a pair is read by position.
+    //
+    // Invariant: they are allocated **before any function exists**, so they
+    // carry no function tag and belong to no template.  That is what makes
+    // sharing them safe: the apply clone walk's membership test (see
+    // `Function::nodes` / `Node::function`) leaves an untagged node
+    // referenced in place rather than cloning it, which is exactly the old
+    // per-occurrence behaviour observed through one node instead of several.
+    // The kind markers already rely on the same property; see the Phase 1
+    // notes in `docs/notes/type-system-cleanup-plan.md`.
+    /// The shared `USize(0)` node — element 0 of an expression's pair.
+    zero_value: NodeId,
+    /// The shared `USize(1)` node — element 1 of an expression's pair.
+    one_value: NodeId,
+    /// The interned field-name nodes — one per unique field name, so every
+    /// occurrence of `.a` reads the same key node (see
+    /// [`Self::name_node`]).
+    name_nodes: HashMap<&'static str, NodeId>,
 }
 
 /// The highlevel structure of one application's argument edge, recorded by
@@ -463,6 +482,9 @@ where
             int_type: NodeId::default(),
             string_type: NodeId::default(),
             type_expr: NodeId::default(),
+            zero_value: NodeId::default(),
+            one_value: NodeId::default(),
+            name_nodes: HashMap::new(),
         };
         checker.install_constants();
         // Prove the canonical structures concrete before the definition
@@ -677,6 +699,43 @@ where
         self.type_expr = universe;
         self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
         self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
+        // The two positional-read constants, `Index(pair, 0)` and
+        // `Index(pair, 1)`'s subscripts.  Allocated here, before any
+        // function exists, so they belong to no template (see the fields'
+        // invariant) and are shared like the markers above.
+        self.zero_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(0))));
+        self.one_value = self.alloc_node(root, None, Some(P::Value::from(LowValue::USize(1))));
+    }
+
+    /// The shared `USize(0)` node — the `Index(pair, 0)` subscript every
+    /// value read and every pair-slot descent uses.
+    pub(super) fn zero(&self) -> NodeId {
+        self.zero_value
+    }
+
+    /// The shared `USize(1)` node — the `Index(pair, 1)` subscript every
+    /// type read uses.
+    pub(super) fn one(&self) -> NodeId {
+        self.one_value
+    }
+
+    /// The interned `Str(name)` key node for a field name — one node per
+    /// unique name, shared across every read of it (a `TableGet(names, name)`
+    /// only compares content, and the frontend already interns the string
+    /// side, so one node per name is enough).  Allocated in the root block
+    /// the first time the name is asked for, hence outside every function's
+    /// template like the constants above.
+    pub(super) fn name_node(&mut self, name: &'static str) -> NodeId {
+        if let Some(&node) = self.name_nodes.get(name) {
+            return node;
+        }
+        let node = self.alloc_node(
+            self.current_block,
+            None,
+            Some(P::Value::from(LowValue::Str(name))),
+        );
+        self.name_nodes.insert(name, node);
+        node
     }
 
     // --- allocation ------------------------------------------------------
@@ -841,20 +900,13 @@ where
     /// offset, walked for both struct name-table paths
     /// ([`shape::STRUCT_TYPE_NAMES_PATH`](crate::shape::STRUCT_TYPE_NAMES_PATH),
     /// [`shape::STRUCT_KIND_NAMES_PATH`](crate::shape::STRUCT_KIND_NAMES_PATH)).
-    /// `zero`/`one` are the caller's already-allocated slot constants, reused
-    /// per step.
-    fn lazy_index_path(
-        &mut self,
-        base: NodeId,
-        path: &[usize],
-        zero: NodeId,
-        one: NodeId,
-    ) -> NodeId {
+    /// Each step's subscript is the shared positional constant.
+    fn lazy_index_path(&mut self, base: NodeId, path: &[usize]) -> NodeId {
         // Both name-table paths descend 2-element structures only.
         debug_assert!(path.iter().all(|&slot| slot <= 1));
         let mut node = base;
         for &slot in path {
-            let index = if slot == 0 { zero } else { one };
+            let index = if slot == 0 { self.zero() } else { self.one() };
             let ops = self.array_node(self.current_block, &[node, index]);
             node = self.op_node(
                 self.current_block,
@@ -900,12 +952,7 @@ where
             return value;
         }
         let pair = self.term[e].expect("expression must be compiled");
-        let zero = self.module.add_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(0))),
-        );
-        let operands = self.array_node(self.current_block, &[pair, zero]);
+        let operands = self.array_node(self.current_block, &[pair, self.zero()]);
         let index = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -927,18 +974,14 @@ where
     /// clone rewrites the parameter pair to the argument's).
     fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
         self.check_expr(value);
-        let one = self.module.add_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(1))),
-        );
-        let operands = self.array_node(self.current_block, &[self.term[value].unwrap(), one]);
+        let operands =
+            self.array_node(self.current_block, &[self.term[value].unwrap(), self.one()]);
         let pair = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(operands),
         );
-        let ty_operands = self.array_node(self.current_block, &[pair, one]);
+        let ty_operands = self.array_node(self.current_block, &[pair, self.one()]);
         let ty = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
