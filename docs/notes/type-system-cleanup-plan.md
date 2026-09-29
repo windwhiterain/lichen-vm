@@ -152,14 +152,24 @@ Either way, independent of D1:
 - ~~Remove `assert_spans` (source positions), `user_asserts`, and the
   checker-shaped `ApplyError`/`UnifyError` attribution fields from the
   lowlevel `Module`; diagnostics attribution becomes a highlevel-side table
-  keyed by node id.~~ **Dropped, with a reason** (Phase 2): these are *not*
-  type knowledge.  They are opaque host metadata keyed by node id, and the
-  lowlevel's apply path is what must *propagate* them — a per-call assert
-  clone inherits its condition's span and user-facing flag, which is a
-  property of the clone machinery, not of types.  Moving the storage to the
-  highlevel would buy a new propagation hook through the hottest path in the
-  runtime and change no typing decision.  The *encoding* knowledge (`[shape,
-  [marker, universe]]`) is what D1 removes, and it is gone.
+  keyed by node id.~~ **Moving, via a secondary map** (Phase 2; the objection
+  below was to the hook, not the goal — the superior ruled the move in).
+  The lowlevel stops owning `user_asserts` and `assert_spans`: an assert
+  worklist entry carries the **template** condition beside the live one (a
+  clone's provenance — a fact of the clone machinery, not of types) and
+  `AssertError` records that template, so rendering looks the highlevel-side
+  table up by it.  The highlevel already kept its own `user_asserts` set; it
+  becomes authoritative and gains the span map.  Two findings make this a net
+  subtraction rather than a move plus a hook:
+  - `assert_spans` had **no writer anywhere** — its only writes were the two
+    clone-propagation paths reading an always-empty map, i.e. dead code;
+  - rendering located an assert through `node_edges` keyed by the **live**
+    condition, so a per-call clone's assert could never resolve a span; the
+    template key fixes that as a side effect.
+
+  `ApplyError`/`UnifyError` stay put, and so do `assert_errors`: they are the
+  error contexts only the unify/apply site can build.  What D1 removes is the
+  *encoding* knowledge (`[shape, [marker, universe]]`), and that is gone.
 - Replace length-delta error detection (`unify_errors.len()` before/after)
   and truncation-based suppression with a `Result`-returning unify API; keep
   the error vec only as a rendering buffer.
@@ -230,7 +240,13 @@ These change or bless semantics; each needs an explicit decision (§7):
   positional path was never arity-limited.  The real constraint on that path
   is the named one above, and it is a decision, not a gap: a lazy
   definition-order reorder is inexpressible (the lazy vocabulary has no
-  scatter/gather, and name tables unify by handle, not by content).
+  scatter/gather, and name tables unify by handle, not by content).  **It
+  cannot be fixed by being smarter about static analysis**: lichen binds
+  names per apply, and whether the value arriving *is* a struct type is
+  knowable only at that apply, never at the definition — "is this callee a
+  struct" is a per-call-site fact by construction.  Any scheme that decided it
+  earlier would have to add declarative constraints the language does not
+  have.  The honest diagnostic is the end state, not a waypoint.
 - **D4 — `Type : Type` wording.** Compound types are *not* typed by `Type`
   (they carry `[marker, Type]` kinds), contradicting the README/spec
   wording. Decide the honest statement and spec it.
