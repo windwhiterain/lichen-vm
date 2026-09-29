@@ -159,6 +159,9 @@ where
                 printer.node(d.a)
             )
         }
+        DiagKind::RuntimeIndexTarget => {
+            "this value is not a container — it has no element to read".to_string()
+        }
         DiagKind::NamedField => {
             let base = format!(
                 "no field with this name in the struct type {}",

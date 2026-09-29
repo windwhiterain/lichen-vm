@@ -32,6 +32,13 @@ pub enum EvalError {
     /// concrete value (its subtree holds an unbound cell or a parameterized
     /// computation) — hashing needs the key's decided content.
     TableKeyUnbound { key: AnyNodeId },
+    /// A [`LowOperator::Index`] whose target is not an array at all — a read
+    /// of a scalar, a function, a table, or a type-level node.  Reachable from
+    /// source (a field read applied to something that is not a container), so
+    /// it is a recorded failure and a computed nothing, never an internal
+    /// error: `target` is the container operand node, so the highlevel can
+    /// attribute the diagnostic to the expression that was indexed.
+    IndexTarget { target: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -138,7 +145,18 @@ impl<P: Program> Module<P> {
                                             P::Value::from(LowValue::Void)
                                         }
                                     }
-                                    _ => unreachable!("Index target must be an array"),
+                                    // Indexing something that is not an
+                                    // array is a user error (a field read
+                                    // applied to a non-container), not an
+                                    // invariant violation: record it and
+                                    // yield a computed nothing, as the
+                                    // out-of-bounds read above does.
+                                    _ => {
+                                        self.eval_errors.push(EvalError::IndexTarget {
+                                            target: operands[0].node,
+                                        });
+                                        P::Value::from(LowValue::Void)
+                                    }
                                 }
                             }
                             _ => unreachable!("Index needs a USize index node"),

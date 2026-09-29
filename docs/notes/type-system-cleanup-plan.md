@@ -12,8 +12,8 @@
 > carries only the worklist and the errors, and a failure is attributed
 > through the **template** condition a clone descends from, so a host table
 > keyed by that template resolves the user-facing flag and the span (§4). The
-> rest of Phase 3 — the fabricated-`UnifyError` channel, `check_lam` surgery,
-> the panic discipline — is pending.
+> rest of Phase 3 — `check_lam` surgery, the remaining panic sites — is
+> pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -234,6 +234,21 @@ Either way, independent of D1:
   diagnostics (user-reachable) or `debug_assert` + graceful fallback
   (frontend-bug-only); non-termination stops using `catch_unwind` as control
   flow if the budget guards can report instead.
+  - **First case done: the `Index` target.** A read whose runtime target is not
+    an array was `unreachable!`, so `f = s => s.x; f (1)` — and every
+    parameter-borne named read whose argument is not a named-field struct —
+    panicked the compiler, then reported a bogus "this binding never
+    terminates" (the caught guard had inflated the depth counters).  It is now
+    an `EvalError::IndexTarget` and a computed nothing, exactly like the
+    out-of-bounds read beside it.
+  - **A failed approach worth recording**: pinning the container's type to a
+    struct kind in `check_named_field` when it is not concrete (the move D3
+    uses for an instantiation callee) *breaks* `lichen-compute`.  The generic
+    kernel wrapper's `.native`/`.sig` reads must stay lazy until an apply binds
+    a concrete kernel struct; the pin unifies earlier, exposes targets that are
+    not arrays, and every compute test fails.  A check-time pin is not a
+    general answer here — the deferral is the answer, and the lowlevel simply
+    must not panic on what it eventually finds.
 - Intern `USize(0)`/`USize(1)` and field-name nodes instead of re-allocating
   them ~20 times.
 - Remove dead API (`type_expr_node`, `int_type_node`, `Schema::arity`,

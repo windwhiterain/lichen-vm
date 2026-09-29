@@ -90,6 +90,13 @@ pub enum DiagKind {
     TableMiss,
     /// A table build dropped a non-concrete key (see [`Diag::TableKeyUnbound`]).
     TableKeyUnbound,
+    /// A read whose **runtime** target turned out not to be a container — the
+    /// lowlevel's [`EvalError::IndexTarget`](lichen_lowlevel::EvalError::IndexTarget)
+    /// reached the diagnostics as a fact about a *value*, with no type to
+    /// print, so the wording is self-contained.  Distinct from
+    /// [`Self::IndexTarget`], which reports a *type* the checker refused to
+    /// index and therefore names that type.
+    RuntimeIndexTarget,
     /// A top-level binding whose value computation never terminates — the VM's
     /// apply/depth guard fired while the build evaluated the user-written
     /// statement.  The checker reports this as an error instead of panicking.
@@ -262,6 +269,7 @@ where
                 } => (0, Some(*index), Some(*index_value), Some(*length)),
                 EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
                 EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
+                EvalError::IndexTarget { target } => (3, Some(*target), None, None),
             };
             if !seen.insert(key) {
                 continue;
@@ -300,6 +308,21 @@ where
                 EvalError::TableKeyUnbound { key } => out.push(Diag {
                     loc: self.node_loc(*key),
                     kind: DiagKind::TableKeyUnbound,
+                    a: NodeId::default(),
+                    b: NodeId::default(),
+                    value_a: None,
+                    value_b: None,
+                    assert_value: None,
+                    index: None,
+                    length: None,
+                    field: None,
+                    error_index: None,
+                }),
+                // A read applied to a non-container: the value itself is the
+                // fact here, so this kind carries no type to print.
+                EvalError::IndexTarget { target } => out.push(Diag {
+                    loc: self.node_loc(*target),
+                    kind: DiagKind::RuntimeIndexTarget,
                     a: NodeId::default(),
                     b: NodeId::default(),
                     value_a: None,
