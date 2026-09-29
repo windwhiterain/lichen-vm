@@ -35,7 +35,7 @@ use lichen_lowlevel::{
 
 use lichen_utils::extend::AsEnum;
 
-use crate::attr::AttrExt;
+use crate::attr::{AttrExt, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep, Schema};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
@@ -806,28 +806,23 @@ where
         }
     }
 
-    /// The slot an attribute marker occupies below the `[value, type]` head,
-    /// dispatched through the attribute registry.
-    fn slot_of(&self, m: &P::Attr) -> usize {
-        (self.attr_ext)(m).slot()
-    }
-
     /// Merge an annotation's *spelled* attribute slots into a value's existing
     /// slot set, producing the resulting expression's full schema tail.  The
-    /// annotation **replaces** the slots it names (same `slot()`) and
-    /// **preserves** every slot it does not — so `(x # 8 ? doc) # 4` keeps the
-    /// doc while re-checking the perspective.  Ordered by `slot()` so the
-    /// runtime pair stays positionally consistent.
+    /// annotation **replaces** the slots it names (the same
+    /// [`AttrSet::order_index`]) and **preserves** every slot it does not — so
+    /// `(x # 8 ? doc) # 4` keeps the doc while re-checking the perspective.
+    /// Ordered by the canonical attribute order, so the runtime pair stays
+    /// positionally consistent.
     fn merge_slots(&self, value_tail: Vec<P::Attr>, own_tail: Vec<P::Attr>) -> Vec<P::Attr> {
         let mut result = value_tail;
         for m in own_tail {
-            let s = self.slot_of(&m);
-            match result.iter().position(|x| self.slot_of(x) == s) {
+            let s = m.order_index();
+            match result.iter().position(|x| x.order_index() == s) {
                 Some(pos) => result[pos] = m,
                 None => result.push(m),
             }
         }
-        result.sort_by_key(|m| self.slot_of(m));
+        result.sort_by_key(|m| m.order_index());
         result
     }
 
@@ -2215,6 +2210,14 @@ where
         // generic over the attribute set.
         let own_tail = self.ir.schema(e).clone().tail;
         let value_tail = self.ir.schema(value).clone().tail;
+        // Contract with the frontend: an annotation's attribute value
+        // expressions are emitted in the canonical attribute order, the same
+        // order the merged tail is sorted into below — that is what makes the
+        // positional `attrs[i]` ↔ `tail[i]` pairing well defined.
+        debug_assert!(
+            own_tail.is_sorted_by_key(|m| m.order_index()),
+            "an annotation's schema tail must be in the canonical attribute order"
+        );
         let tail = self.merge_slots(value_tail, own_tail.clone());
         // Re-stamp the node so every later reader (the apply-time attribute
         // check, the renderer's attribute listing) sees the full slot set.
@@ -2229,7 +2232,7 @@ where
             // exactly the slots it replaces; everything else is preserved.)
             let spelled = own_tail
                 .iter()
-                .any(|m| self.slot_of(m) == self.slot_of(marker));
+                .any(|m| m.order_index() == marker.order_index());
             if spelled {
                 let pe = attrs
                     .get(attr_idx)

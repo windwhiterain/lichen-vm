@@ -39,9 +39,10 @@ impl<A> Default for Schema<A> {
 }
 
 impl<A> Schema<A> {
-    /// The runtime pair's arity: 2 (value, type) + one slot per attribute.
+    /// The runtime pair's arity: the `[value, type]` head plus one slot per
+    /// attribute (`shape::attr_slot(tail.len())`).
     pub fn arity(&self) -> usize {
-        self.tail.len() + 2
+        crate::shape::attr_slot(self.tail.len())
     }
 }
 

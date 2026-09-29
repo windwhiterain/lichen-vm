@@ -1,6 +1,6 @@
 //! The program-generic pretty printer core: the type printer, the value
 //! printer, and the attribute-list / struct-field renderers.  All generic over
-//! `P: HighProgram`, so a host and a plugin that spells its own attribute slot
+//! `P: HighProgram`, so a host and a plugin that contributes an attribute
 //! (e.g. `lichen-doc`'s `? name = "…"`) reuse the same machinery.
 //!
 //! Everything here reads the top of the recursive-pair encoding and spells it
@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::program::{HighProgram, ValueType};
+use lichen_highlevel::shape;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -79,10 +80,12 @@ where
     };
     let mut parts = Vec::new();
     for (i, marker) in tail.iter().enumerate() {
-        let slot = values.get(2 + i).and_then(|item| match item.node {
-            AnyNodeId::Dynamic(n) => Some(n),
-            AnyNodeId::Static(_) => None,
-        });
+        let slot = values
+            .get(shape::attr_slot(i))
+            .and_then(|item| match item.node {
+                AnyNodeId::Dynamic(n) => Some(n),
+                AnyNodeId::Static(_) => None,
+            });
         if let Some(slot) = slot
             && let Some(spelling) = attr_ext(marker).render(module, slot)
         {

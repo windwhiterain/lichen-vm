@@ -2,19 +2,24 @@
 //!
 //! A [`Schema`](crate::ir::Schema) names *which* compile-time attribute an
 //! expression carries; an attribute's **lowering behaviour** lives in an
-//! [`AttrExt`].  The checker is attribute-agnostic: it reads the schema,
-//! builds the runtime pair at exactly the schema's arity, and pads an absent
-//! attribute with the extension's `missing_slot` at every unify site — it
-//! never names "perspective = gcd, missing = 0".  Every attribute's slot is
-//! the annotation value's `[value, type]` term pair (the uniform shape): a
-//! perspective's lattice value is that pair's element 0, a doc's metadata is
-//! the whole pair.  Those semantics live only in a concrete attribute (in a
-//! language layer, e.g. `Perspective` in `lichen-perspective`) and in the
-//! operator it emits.
+//! [`AttrExt`], and *where* it sits in the pair is the composed attribute
+//! set's business ([`AttrSet::order_index`]).  The checker is
+//! attribute-agnostic: it reads the schema, builds the runtime pair at exactly
+//! the schema's arity, and pads an absent attribute with the extension's
+//! `missing_slot` at every unify site — it never names "perspective = gcd,
+//! missing = 0".  Every attribute's slot is the annotation value's
+//! `[value, type]` term pair (the uniform shape): a perspective's lattice
+//! value is that pair's element 0, a doc's metadata is the whole pair.  Those
+//! semantics live only in a concrete attribute (in a language layer, e.g.
+//! `Perspective` in `lichen-perspective`) and in the operator it emits.
 //!
 //! A concrete attribute is a marker implementing [`AttrSpec`]; highlevel ships
 //! two of them — `NoAttr` (the default, an empty attribute whose extension is
 //! never reached) and the trait plumbing — while a language adds its own.
+//! A marker supplies *behaviour* only: it never names a slot number.  The
+//! order a set of attributes occupies the pair in is the **canonical
+//! attribute order**, declared once by the composition (see
+//! [`AttrSet`]) and read by everyone who lays attributes out.
 
 use lichen_lowlevel::{AnyNodeId, LowValue, Module, NodeId};
 
@@ -28,12 +33,45 @@ use lichen_utils::extend::AsEnum;
 /// attribute type travels in a `Copy` program marker.
 pub trait AttrSpec: Clone + Copy + PartialEq + Eq + std::fmt::Debug + 'static {}
 
+/// A composed attribute **set** — the type a [`Schema`](crate::ir::Schema)
+/// tail holds (one entry per attached attribute) — together with its
+/// **canonical order**.
+///
+/// The order is the single allocation authority for pair slots: the attribute
+/// at order index `i` occupies pair slot [`shape::attr_slot(i)`], and the
+/// frontend's tail, the checker's slot merge, the apply-time attribute check
+/// and every reader agree because they all ask the set instead of keeping
+/// their own list.  A composition implements this by *deriving* the index
+/// from its manifest's `attrs` list (see
+/// `lichen_language::lang_compose_vocabulary!`), which is what makes slot
+/// assignment collision-free by construction: no attribute can claim an index
+/// that is not its position, so adding one is a one-list edit.
+///
+/// [`shape::attr_slot(i)`]: crate::shape::attr_slot
+pub trait AttrSet: AttrSpec {
+    /// This attribute's index in the set's canonical order — `0` for the first
+    /// attribute, which sits at pair slot [`shape::attr_slot(0)`].  It is an
+    /// *order*, not a pair slot: an expression's pair is dense over the
+    /// attributes it actually carries, so the pair slot of a carried
+    /// attribute is its position in that expression's schema tail.
+    ///
+    /// [`shape::attr_slot(0)`]: crate::shape::attr_slot
+    fn order_index(&self) -> usize;
+}
+
 /// The highlevel's default attribute: a program with no attribute extension.
 /// Its `AttrExt` is never reached — no schema carries it — so the checker's
 /// attribute machinery is inert.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct NoAttr;
 impl AttrSpec for NoAttr {}
+impl AttrSet for NoAttr {
+    /// The inert set holds exactly one attribute, which is therefore the first
+    /// by construction; no schema ever carries it, so the index is never read.
+    fn order_index(&self) -> usize {
+        0
+    }
+}
 
 /// The compile-time lowering behaviour of one attribute.
 ///
@@ -41,14 +79,15 @@ impl AttrSpec for NoAttr {}
 /// children (their meet), an absent occurrence reads `missing_value`, and two
 /// slots unify by `unify_slots`".  Every concrete operation an attribute needs
 /// is supplied here, by the layer that defines the attribute.
+///
+/// **No layout here.**  Which pair slot an attribute occupies is *not* a
+/// property of its behaviour: it is its position in the composed set's
+/// canonical order ([`AttrSet::order_index`]), so a plugin supplies semantics
+/// and the composition assigns the slot.
 pub trait AttrExt<P: HighProgram>
 where
     P::Value: ValueType,
 {
-    /// The slot this attribute occupies below the `[value, type]` head
-    /// (a first attribute → 2, so the pair is `[value, type, attr]`).
-    fn slot(&self) -> usize;
-
     /// The value read for an *absent* occurrence of this attribute.  A
     /// perspective reads `USize(0)`: neutral in `gcd`, concrete in equality
     /// unify.

@@ -23,7 +23,7 @@ use lichen_lowlevel::{
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-use crate::attr::{AttrSpec, NoAttr};
+use crate::attr::{AttrSet, NoAttr};
 use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
 use crate::shape::for_each_kind_marker;
@@ -592,7 +592,7 @@ lichen_utils::enum_ext! {
 impl<V, A, L, G> OperatorExt<ProgramImpl<V, HighProgramOperator, A, L, G>> for HighProgramOperator
 where
     V: ValueType,
-    A: AttrSpec,
+    A: AttrSet,
     L: std::fmt::Debug + Copy + PartialEq,
     G: GlobalExt + AsField<HighGlobal>,
 {
@@ -706,11 +706,13 @@ where
 /// `Perspective`); the checker never names a concrete attribute, only
 /// `Self::Attr`.
 pub trait HighProgram: Program {
-    /// The compile-time attribute type an expression's schema may carry.
-    /// `NoAttr` (highlevel's empty attribute) is the default — a program with
-    /// no attribute extension — while a language plugs in its own (e.g.
-    /// `Perspective`).
-    type Attr: AttrSpec;
+    /// The compile-time attribute type an expression's schema may carry: a
+    /// composed attribute *set* ([`AttrSet`]), which also owns the canonical
+    /// order the checker lays attributes out in.  `NoAttr` (highlevel's inert
+    /// single-attribute set) is the default — a program with no attribute
+    /// extension — while a language plugs in its own (e.g. the composed
+    /// `Perspective` + `Doc` set).
+    type Attr: AttrSet;
     /// The literal vocabulary — a downstream's composed `enum_ext!` union (or
     /// the built-in [`HighProgramLiteral`] for the default).  Every literal
     /// node carries a value of this type; the checker builds it through
@@ -732,7 +734,7 @@ pub trait HighProgram: Program {
 pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
-    A: AttrSpec = NoAttr,
+    A: AttrSet = NoAttr,
     L = HighProgramLiteral,
     G: GlobalExt = HighGlobalExt,
 >(#[doc(hidden)] pub PhantomData<(V, O, A, L, G)>);
@@ -746,7 +748,7 @@ impl<V, O, A, L, G> std::fmt::Debug for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -757,7 +759,7 @@ impl<V, O, A, L, G> Clone for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn clone(&self) -> Self {
@@ -768,7 +770,7 @@ impl<V, O, A, L, G> Copy for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
 }
@@ -776,7 +778,7 @@ impl<V, O, A, L, G> PartialEq for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn eq(&self, _other: &Self) -> bool {
@@ -787,7 +789,7 @@ where
 impl<V, O, A, L, G> Program for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
-    A: AttrSpec,
+    A: AttrSet,
     L: std::fmt::Debug + Copy + PartialEq,
     G: GlobalExt,
     O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>
@@ -806,7 +808,7 @@ where
 impl<V, O, A, L, G> HighProgram for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
-    A: AttrSpec,
+    A: AttrSet,
     L: LiteralExt<ProgramImpl<V, O, A, L, G>>,
     G: GlobalExt,
     O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>

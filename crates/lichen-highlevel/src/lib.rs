@@ -23,7 +23,7 @@ pub mod shape;
 // its own union with `lichen_utils::enum_ext!`, listing every layer's enum
 // directly — `+ LowValue as LowValue; + TypeValue as TypeValue;` plus its
 // own variants.  Each layer provides a plain enum; nothing nests.
-pub use attr::{AttrExt, AttrSpec, NoAttr};
+pub use attr::{AttrExt, AttrSet, AttrSpec, NoAttr};
 pub use native::{NativeApply, NativeArg, NativeOp, NativeOps, no_native_ops};
 pub use plugin::NativePlugin;
 pub use program::{
