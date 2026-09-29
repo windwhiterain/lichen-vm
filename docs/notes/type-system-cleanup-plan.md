@@ -1,7 +1,9 @@
 # Type-system cleanup and standardization plan
 
-> Status: **Phase 0 complete** (B1–B8 all landed on `fix/type-system-phase0`);
-> Phases 1+ pending.
+> Status: **Phase 0 complete**; **Phase 1a complete** (shape authority
+> module `lichen-highlevel/src/shape.rs` + kind-marker registry); Phase 1b
+> (attribute slots) / 1c (codec tags) / D3 (instantiation totality) in
+> progress; Phases 2+ pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = make the
@@ -176,11 +178,17 @@ These change or bless semantics; each needs an explicit decision (§7):
   equi-recursive unification as the designed semantics and spec it; (b) add
   an occurs check with a universe whitelist (risks breaking
   `struct_recursion.lichen`-style programs).
-- **D3 — struct instantiation through a parameter.** Today a struct type
-  arriving via a parameter falls through to plain application and *panics*
-  (spec-admitted hole, language-spec.md:388-393). Options: recognize
-  semantically (check the callee's runtime type), or make it a clean
-  diagnostic instead of a panic.
+- **D3 — struct instantiation recognition.** ~~Today a struct type arriving
+  via a parameter falls through to plain application and *panics*~~
+  **Stale premise**: since `a5d8db7` the frontend parses every glued
+  `X(args)` (except the single comma-free positional read) as `Instantiate`
+  unconditionally — recognition is already syntactic, and the parameter case
+  already works positionally via deferral. The live defects are checker-side:
+  a panic on a call-result callee, no nominality check (a tuple/function
+  type can "instantiate"), false named-arg diagnostics for non-concrete
+  callees, and a frontend alias-placeholder bug. Fix: the checker becomes
+  total and type-directed for `Instantiate` (nominal check approved), the
+  frontend contributes spans only.
 - **D4 — `Type : Type` wording.** Compound types are *not* typed by `Type`
   (they carry `[marker, Type]` kinds), contradicting the README/spec
   wording. Decide the honest statement and spec it.
@@ -195,7 +203,7 @@ These change or bless semantics; each needs an explicit decision (§7):
 |---|---|---|
 | D1 | Lowlevel/highlevel boundary | **A**: extract a `Program` unification hook; lowlevel becomes honestly untyped |
 | D2 | Occurs check | **Document** equi-recursive unification (no occurs check) as designed semantics |
-| D3 | Struct-through-parameter | **Frontend recognition at parse/compile time** (semantic runtime recognition rejected) |
+| D3 | Struct instantiation recognition | **Syntactic at parse time (already the reality since `a5d8db7`); the checker becomes total + type-directed with a nominal callee check** (revised after analysis found the panic premise stale) |
 | D4 | `Type : Type` statement | **Open** — suspected not to be a real universe rule; `Type` is a terminal structure on the type chain, not a supertype. Analyze in Phase 4 |
 | D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now |
 
@@ -204,16 +212,17 @@ These change or bless semantics; each needs an explicit decision (§7):
 - Add the missing coverage identified by the survey: highlevel-level tests
   for `NamedField`/`RawIndex`/`RawNamedField`/`Find`/`Record`/`Static`/
   `NativeCall`, negative error-path tests for raw reads, the monomorphic
-  sharing half of let-polymorphism, and a codec round-trip property test
-  (would have caught B2).
-- Fix the vacuous `Int<_>` test (B3) and the contradictory test docs
-  (tests/checker.rs:167-184, 1066-1070).
-- Sync the spec: `array<T, n>` spelling in §3, `type_of`, named
-  instantiation arguments, the missing §4 compile-table rows
-  (`table`, `Find`, `if`, `!`, shallow markers), the deferral rule, and the
-  occurs-check statement.
-- Rebuild `docs/README.md`'s index (14 → 30 notes), unify the status legend,
-  and mark `frontend-syntax-separation.md` implemented.
+  sharing half of let-polymorphism. (The codec round-trip property test
+  arrived with Phase 1c.)
+- ~~Fix the vacuous `Int<_>` test (B3)~~ (done in Phase 0) and the
+  contradictory test docs (tests/checker.rs:167-184, 1066-1070).
+- ~~Sync the spec~~ (**done**, `docs/phase1-spec-sync`): `array<T, n>`
+  spellings, `type_of`, named instantiation arguments, the missing §4
+  compile-table rows, the equi-recursive statement (D2), the honest
+  `Type : Type` wording (D4), `!` assert semantics.
+- ~~Rebuild `docs/README.md`'s index~~ (**done**: all 32 notes indexed,
+  statuses normalized; `frontend-syntax-separation.md` marked current;
+  `lichen-compute-parallel.md` found superseded and marked historical).
 
 ## 9. Sequencing
 
