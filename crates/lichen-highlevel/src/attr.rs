@@ -49,6 +49,16 @@ pub trait AttrSpec: Clone + Copy + PartialEq + Eq + std::fmt::Debug + 'static {}
 ///
 /// [`shape::attr_slot(i)`]: crate::shape::attr_slot
 pub trait AttrSet: AttrSpec {
+    /// Every attribute this set can carry, in the canonical order.  The
+    /// attribute at index `i` occupies pair slot [`shape::attr_slot(i)`], so
+    /// this slice *is* the pair layout.  A composition emits it from its
+    /// manifest list; the invariant that makes it collision-free is that
+    /// [`Self::order_index`] is an attribute's position in it (checked by
+    /// [`order_is_canonical`]).
+    ///
+    /// [`shape::attr_slot(i)`]: crate::shape::attr_slot
+    const ORDER: &'static [Self];
+
     /// This attribute's index in the set's canonical order — `0` for the first
     /// attribute, which sits at pair slot [`shape::attr_slot(0)`].  It is an
     /// *order*, not a pair slot: an expression's pair is dense over the
@@ -59,6 +69,18 @@ pub trait AttrSet: AttrSpec {
     fn order_index(&self) -> usize;
 }
 
+/// Whether a set's canonical order is well formed: every attribute's
+/// [`AttrSet::order_index`] is its position in [`AttrSet::ORDER`], so no two
+/// attributes of the set can claim the same slot.  A generated set asserts this
+/// at build time (a `const`-evaluated check in the composition macro); a
+/// hand-written set is checked in debug builds when a checker is built over it.
+pub fn order_is_canonical<A: AttrSet>() -> bool {
+    A::ORDER
+        .iter()
+        .enumerate()
+        .all(|(position, attr)| attr.order_index() == position)
+}
+
 /// The highlevel's default attribute: a program with no attribute extension.
 /// Its `AttrExt` is never reached — no schema carries it — so the checker's
 /// attribute machinery is inert.
@@ -66,8 +88,12 @@ pub trait AttrSet: AttrSpec {
 pub struct NoAttr;
 impl AttrSpec for NoAttr {}
 impl AttrSet for NoAttr {
-    /// The inert set holds exactly one attribute, which is therefore the first
-    /// by construction; no schema ever carries it, so the index is never read.
+    /// The inert set holds exactly one attribute, so its order is the
+    /// single-member list; no schema ever carries it, so the index is never
+    /// read.
+    const ORDER: &'static [Self] = &[NoAttr];
+
+    /// The first (and only) attribute of the inert set.
     fn order_index(&self) -> usize {
         0
     }

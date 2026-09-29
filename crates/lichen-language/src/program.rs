@@ -185,6 +185,9 @@ macro_rules! lang_compose_vocabulary {
         }
 
         impl ::lichen_highlevel::attr::AttrSet for LangAttr {
+            /// The canonical order as data — the pair layout itself.
+            const ORDER: &'static [Self] = LANG_ATTR_ORDER;
+
             /// The attribute's index in the canonical order — the single
             /// authority for the pair-slot layout, so the pair slot of the
             /// `i`-th attribute is `attr_slot(i)`.

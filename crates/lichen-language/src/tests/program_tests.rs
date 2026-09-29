@@ -1,6 +1,26 @@
 use super::*;
+use lichen_highlevel::attr::AttrSet;
+use lichen_highlevel::shape;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, BlockId, LowValue, Module, OperatorExt};
 use lichen_utils::extend::AsEnum;
+
+/// The canonical attribute order is the pair layout, and the layout is what
+/// an already-compiled artifact encodes — so the order is a compatibility
+/// contract, like the codec tags: reordering the manifest silently renumbers
+/// every persisted pair.  This pins it (the composition's build-time check
+/// pins the *mechanism*: index == position).
+#[test]
+fn the_canonical_order_is_the_persisted_pair_layout() {
+    assert_eq!(
+        LANG_ATTR_ORDER,
+        [LangAttr::Perspective(Perspective), LangAttr::Doc(Doc)]
+    );
+    assert_eq!(
+        shape::attr_slot(LangAttr::Perspective(Perspective).order_index()),
+        2
+    );
+    assert_eq!(shape::attr_slot(LangAttr::Doc(Doc).order_index()), 3);
+}
 
 /// Feed `values` (as the operand array) to the language's `Gcd` operator
 /// and return the computed meet.

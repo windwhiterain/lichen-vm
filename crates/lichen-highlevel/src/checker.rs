@@ -350,6 +350,13 @@ where
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
         native_ops: NativeOps<P>,
     ) -> Build<P> {
+        // The attribute set's canonical order is the pair layout; a generated
+        // set proves it at build time, and a hand-written one is checked here
+        // (once per program) so no two attributes can claim the same slot.
+        debug_assert!(
+            crate::attr::order_is_canonical::<P::Attr>(),
+            "an attribute's canonical index must be its position in the set's order"
+        );
         // The lowlevel's default application guard (10k nested calls) sits
         // below what a thread stack survives once the checker's per-call
         // machinery (clone, unify, deep pass) is on the stack — a
