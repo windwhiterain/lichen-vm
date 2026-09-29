@@ -1,10 +1,11 @@
 # Type-system cleanup and standardization plan
 
-> Status: **Phase 0 complete**; **Phase 1a/1c complete** (shape authority
-> module `lichen-highlevel/src/shape.rs`, kind-marker registry,
-> single-sourced codec tags); **D3 landed** (the checker is total and
-> type-directed for `Instantiate`, with the nominal callee check);
-> Phase 1b (attribute slots) / Phase 2 (unification hook) pending.
+> Status: **Phase 0 complete**; **Phase 1a/1b/1c complete** (shape authority
+> module `lichen-highlevel/src/shape.rs`, kind-marker registry, single-sourced
+> attribute slots — the canonical attribute order is the composition's `attrs`
+> manifest order — and single-sourced codec tags); **D3 landed** (the checker is
+> total and type-directed for `Instantiate`, with the nominal callee check);
+> Phase 2 (unification hook) pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -97,12 +98,21 @@ One new module in `lichen-highlevel` (working name `shape.rs`) becomes the
   `TypeValue` variants, `ValueType` methods, `Ctx` accessors, `Checker`
   fields, `Build` fields, and codec tags are all *derived* from it — adding a
   marker touches one place.
-- Attribute slot assignment becomes manifest-driven: the composition macro
-  assigns slot numbers and *statically rejects collisions*; `Perspective`'s
-  `2` and `Doc`'s `3` stop being cross-crate magic numbers
-  (perspective.rs:174, doc.rs:67). The three uncoordinated slot orders
-  (`merge_slots` sort, frontend tail order, positional `annotation_attrs`)
-  are reduced to one.
+- Attribute slot assignment is manifest-driven: the composition's
+  `attrs = [ … ]` list **is** the canonical attribute order.  The
+  composition derives from it the order as data (`LANG_ATTR_ORDER`), each
+  attribute's index (`AttrSet::order_index`, the pair slot being
+  `shape::attr_slot(i)`), and a build-time assertion that every index is its
+  position; the frontend sorts a spelled annotation's attributes into that
+  order and the checker sorts a merged tail into it, so the three
+  uncoordinated orders (`merge_slots` sort, frontend tail order, positional
+  `annotation_attrs`) are one, and `AttrExt::slot()` (with `Perspective`'s
+  `2` and `Doc`'s `3`) is gone.  **Landed** (Phase 1b).  The order is a
+  compatibility contract like the codec tags, so it is pinned by a test; the
+  residual hand step is the *syntax* (the frontend's `Expr::Annotation` has a
+  fixed field per attribute kind), not the layout.  `Perspective`'s `2` /
+  `Doc`'s `3` as cross-crate magic numbers (perspective.rs:174, doc.rs:67)
+  are deleted with it.  See [attributes.md](attributes.md).
 - Persisted codec tags are stored in the kind-marker registry entries (not
   derived from declaration order — the tag is the compatibility contract and
   must survive list reordering) with both codec sides generated from the one

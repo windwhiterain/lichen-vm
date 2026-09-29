@@ -28,7 +28,10 @@ It contributes, in any combination:
   plugin-provided `#[macro_export] macro_rules! <name>_native_ops` that, for a
   host program `$program`, expands to a `NativeOps` value (the host invokes it
   to build its private per-module registry);
-- **an attribute** — an `AttrSpec` marker + `AttrExt<P>` provider;
+- **an attribute** — an `AttrSpec` marker + `AttrExt<P>` provider, listed in
+  the host composition's `attrs` manifest, which is also where its pair slot
+  comes from (the manifest's declaration order *is* the canonical attribute
+  order — see [attributes.md](attributes.md));
 - **a `GlobalExt` component** — composed by the host with
   [`compose_ext!`](lichen_utils::compose_ext).
 

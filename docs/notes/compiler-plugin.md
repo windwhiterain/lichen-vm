@@ -132,6 +132,15 @@ Then a host composes it: `lichen-language`'s `program.rs` composes
 plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
 `compute.lichen` import.
 
+## Extension point 5: a compile-time attribute
+
+A plugin can contribute an *attribute* — a marker (`AttrSpec`) plus its lowering
+behaviour (`AttrExt<P>`: missing value, combine, unify, subtype, label, render),
+listed in the host composition's `attrs` manifest. The checker then carries the
+attribute as a compile-time `Schema` and materialises its slot at lowering; the
+marker never names a slot number, because the manifest's order *is* the
+canonical attribute order (see [attributes.md](attributes.md)).
+
 ## The shape of the contract
 
 The contraction is that the core is **ignorant**: the lowlevel knows only the shape of
