@@ -26,20 +26,28 @@ It reads the same conventions out of raw nodes:
 - `value_of_node` (`compute.rs:1406-1440`) follows a `value_of` extraction — an
   `Index(pair, 0)` over a pair node — down to the pair's value slot, the same
   access path the checker itself uses to reach most values.
-- The native operators build kinded types by hand out of array positions: a
-  function type as `[shape, [FunctionType marker, universe]]`, assembled with
-  `ctx.array_node`, `ctx.universe()` and
-  `ctx.value_node(P::Value::function_type_marker())` (`compute.rs:1903-1985`,
-  `2001-2015`, `2050-2137`), and they read a kernel signature's domain and
-  codomain through raw `Index` chains — `Index(sig.ty, 0)`, then
-  `Index(sig_shape, 0)` / `Index(sig_shape, 1)`.
+- The native operators read a kernel signature's domain and codomain through
+  raw `Index` chains — `Index(sig.ty, 0)`, then `Index(sig_shape, 0)` /
+  `Index(sig_shape, 1)`.
+
+**The write side was closed in Phase 5.**  All four native operators used to
+assemble a function type by hand out of array positions —
+`ctx.array_node`, `ctx.universe()`, `ctx.value_node(P::Value::function_type_marker())`
+— and two of them hand-built the `[marker, universe]` kind outright rather than
+going through `Ctx::kind_expr`.  They now all call the one constructor,
+`ctx.arrow(domain, codomain)` (`Checker::arrow_parts` behind it), with the same
+three nodes allocated in the same order, so the artifact is byte-identical.
+The **read** side is deliberately still raw: a signature that is not yet bound
+has to resolve at apply time, so those two sites must keep the lazy `Index`
+chain and cannot use `shape::function_type_parts`, which needs a bound type.
 
 None of that goes through `shape`, so an encoding change does not stop the JIT
 from compiling: it makes it compile against an encoding that no longer exists,
 and the damage is wrong kernel code rather than a build error. This is the "any
 encoding change breaks it silently" the cleanup plan records
 ([type-system-cleanup-plan](type-system-cleanup-plan.md) §1). Decision D5
-deferred cleaning this component up and asked for this label instead.
+deferred cleaning this component up and asked for this label instead; Phase 5
+narrowed the label to the read side rather than removing it.
 
 ## What "unstable" means here
 

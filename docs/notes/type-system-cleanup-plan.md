@@ -1,19 +1,20 @@
 # Type-system cleanup and standardization plan
 
-> Status: **Phases 0–4 complete.** Phase 4 closed the remaining structural
-> items (the five dead declarations, `recursive_func_nodes` under its real name
-> `lambda_value_nodes`, one struct-type builder, one `BinOp` → `TypeOperator`
-> conversion), restored the checker's read-only-IR contract (a merged attribute
-> tail is the checker's own, carried on `Build` for the renderer), and removed
-> panics-as-control-flow: a budget guard now records which limit was exceeded
-> and the non-termination diagnostic names it, so no `catch_unwind` remains and
-> a genuine internal panic propagates with a real backtrace instead of being
-> relabelled "this binding never terminates". A survey run before Phase 4 found
-> a **user-reachable crash the Phase 3 census had missed**: a raw read of a
-> table through a call result re-entered the same `TableGet` while it was still
-> being evaluated and hit `unreachable!`, escaping the compiler entirely on
-> `build` and `run`; it is fixed at the root — the `visiting` mark now has one
-> owner, scoped to the evaluation attempt, released by a `Drop` guard.
+> Status: **Phases 0–5 complete.** Phase 5 closed the last four open items
+> (an explicit parent link from the frontend, one arrow constructor adopted by
+> every crate including `lichen-compute`, the constant and name interning, and
+> the two wrong spec rows) and **measured two more and refused them** with the
+> numbers that settled it.  Two further user-reachable crashes were found
+> outside the census's method — including one in a crate it never surveyed —
+> and are recorded where the census lives.  Phase 4 closed the remaining
+> structural items (the five dead declarations, `recursive_func_nodes` under its
+> real name `lambda_value_nodes`, one struct-type builder, one `BinOp` →
+> `TypeOperator` conversion), restored the checker's read-only-IR contract (a
+> merged attribute tail is the checker's own, carried on `Build` for the
+> renderer), and removed panics-as-control-flow: a budget guard now records
+> which limit was exceeded and the non-termination diagnostic names it, so no
+> `catch_unwind` remains and a genuine internal panic propagates with a real
+> backtrace instead of being relabelled "this binding never terminates".
 > Phase 0 (B1–B8); Phase 1 (the `shape`
 > encoding authority, the kind-marker registry, single-sourced codec tags and
 > attribute slots); D3 (the `Instantiate` check is total and type-directed,
@@ -409,6 +410,39 @@ Either way, independent of D1:
   also made the budget work below safe.  Both programs now compile and
   evaluate to `parameterized: Int`.
 
+  #### The census is not closed — two more, and one crate never surveyed
+
+  Both of these were found *after* the census was written, neither by its own
+  method, and the second one not in either crate it covered.
+
+  1. **An unregistered native operator** — `Checker::check_native_call`
+     resolved the `$name` against the module's private registry with an
+     `expect`, on the stated invariant that "a native op name must be validated
+     by the frontend against the module's registry".  **That invariant was
+     never established**: `native_ops`' own field doc asserted it, the frontend
+     has no access to the registry (it says so itself), and there is no
+     validation site anywhere in `lichen-language`.  So `x = $nosuchop(1)` in
+     an ordinary file exited 101.  The checker owns the registry, so the
+     checker owns the check: it is now a `NativeOpUnresolved` guard at the `$`,
+     and the three comments that claimed otherwise — the field, the empty
+     default, and the panic message — state the truth.
+  2. **`crates/lichen-language` was never surveyed at all** — 53 production
+     panic sites, against the 90 the census classified across two other crates.
+     Enumerated and probed: **none is user-reachable.**  The `run`/`build`
+     `report.build` unwraps are guarded by the fact that `build` is `None` only
+     when resolve produced no IR, and resolve always emits a diagnostic; the
+     `path.file_name()` unwraps in the CLI are downstream of a successful
+     package load, so a bare `.` or `..` argument is refused with a diagnostic
+     first; `readme.rs`'s seven are in a module the shipped CLI never reaches
+     (it has exactly `Run` and `Build`); `package.rs`'s registry panics are
+     process-lifetime invariants whose message even says "restart the process".
+     Ten adversarial programs (empty source, bare `.` as an argument and as a
+     body, 400-entry table, 60-deep lambda chain, self-reference, bad metadata)
+     all reported honestly.  The one defect the sweep did find was a comment
+     still claiming a non-terminating program "panics at the VM's
+     recursion-depth guard" — true until the budget work removed that panic.
+
+
   - **A failed approach worth recording**: pinning the container's type to a
     struct kind in `check_named_field` when it is not concrete (the move D3
     uses for an instantiation callee) *breaks* `lichen-compute`.  The generic
@@ -551,71 +585,94 @@ These change or bless semantics; each needs an explicit decision (§7):
 Each phase ends with `cargo check` + the *affected* crate tests only
 (per workspace policy), `cargo fmt`, and a docs sync.
 
-### Still open after Phase 4
+### Phase 5: the remaining items, and what measuring them cost
 
-Nothing below is scheduled; each is recorded because it is a real remaining
-improvability, not because it is owed.
+Four of the six open items were closed.  Two were **measured and refused**,
+and the measurements are the finding — they are recorded here so nobody repeats
+the experiment.
 
-- **The four structural descents in the lowlevel** — `unify_inner`,
-  `reconcile_node`, `key_eq`, `hash_value` — share a spine (the cycle guard and
-  the array elementwise descent are each written four times) behind four
-  genuinely different policies: a cycle is an *error* for unification and
-  *equal* for the other three; a value-less node is bind / wildcard /
-  mismatch / undecided respectively.  `reconcile_node` and `key_eq` are already
-  the same twelve lines apart from two arms.  Unifying them buys readability,
-  not correctness, and the policy enum would be wider than the duplication it
-  replaces.
-- **The lexical depth that decides a lambda's parent** (`checker/lambda.rs`) —
-  one expression, and it encodes a real rule (a same-depth sibling must not
-  hang under the lambda being checked, or mutual recursion re-applies a
-  template).  Replacing it with a parent link the frontend supplies means
-  reserving the function node's id *before* its body compiles, and a wrong
-  parent would silently change template membership rather than fail to compile.
-- **Interning** — **landed** for the highlevel: the `USize(0)`/`USize(1)`
-  constants and the field-name nodes are now installed once per build by
-  `Checker::install_constants` (the constants) and `Checker::name_node` (the
-  names), replacing 14 + 3 per-occurrence allocations.  See below for the
-  `lichen-compute` constants, which are still per-occurrence.
-- **The arrow / function-type encoding** — **landed** for the highlevel: all
-  three build sites now go through `Checker::arrow_parts` /
-  `Ctx::arrow`, and `shape::function_type_parts` is the symmetric reader.
-  Still per-site in `lichen-compute`: 4 build sites (2 of which hand-build the
-  `[marker, universe]` kind instead of using `Ctx::kind_expr`) and 2 read
-  sites that index the arrow's shape directly.  See below.
+- **The lambda's parent is now an explicit link — LANDED.**  `ExprKind::Function`
+  carries `parent: Option<ExprId>`, the frontend reserves the function node's id
+  *before* its body compiles (the same reserve-then-stamp discipline a
+  block-wide binding already used), and the checker resolves it through a
+  `function_of` map.  `depth` is gone from the IR, the frontend and the test
+  helpers.  The rule it encoded — a same-depth sibling must hang under nothing,
+  or mutual recursion re-applies a never-bound template — moved to the
+  frontend, where the parent is now actually decided, and is written out there.
+  Agreement with the old arithmetic was **proved by instrumentation**, not by
+  reasoning: both parents were computed on every lambda and asserted equal
+  across the whole suite and every example, with the instrument itself
+  verified live by deliberately breaking the link.  That earned its keep —
+  it caught a missed `Expr::TypeOf` push *and* a real latent bug: the
+  block-wide transplant copied a value's kind into the pre-reserved
+  placeholder without rewiring the ids inside it, so a nested closure's parent
+  named a node that is never compiled and never gets a `FunctionId`.  The old
+  depth arithmetic was **id-independent** and could not see that; an explicit
+  link can, and does.  Fixed with a `repoint`.
+- **The arrow / function-type encoding — LANDED, in every crate.**  One
+  constructor, `Checker::arrow_parts` (with `Checker::arrow` / `Ctx::arrow`
+  delegating), and the symmetric reader `shape::function_type_parts`.  All three
+  highlevel build sites and all four `lichen-compute` build sites go through
+  it; `JitOp::build` and `LaunchOp::build` no longer hand-build the
+  `[marker, universe]` kind.  `Ctx::arrow` does not touch the `arrows` set, so
+  no `compute` site started registering one, and all four allocate their three
+  nodes in the same order as before — which is why the artifact is byte-identical
+  rather than merely example-compatible.
+- **Interning `USize(0)` / `USize(1)` / field names — LANDED for the highlevel.**
+  `Checker::install_constants` now installs the two constants alongside the
+  kind markers, and `Checker::name_node` interns the name nodes, replacing 14 +
+  3 per-occurrence allocations.  This also removed an inconsistency: two sites
+  called `module.add_node` directly, bypassing `alloc_node`, so a constant
+  allocated inside a function body was neither tagged nor registered.  The
+  constants are safe to share because they are installed **before any function
+  exists**, so they belong to no template and the clone walk returns them in
+  place (`function.rs`'s membership test) — the property the kind markers have
+  always relied on.
+- **Both spec rows — LANDED.**  The two `Annotation` rows now name the real
+  payload (`attributes: ChildRange`, positionally aligned with the schema tail);
+  `$name(args)` is documented in §2 as what it is — a lexed atom, parenthesized,
+  no named-argument form — along with the `plug` directive that was a real
+  keyword with no spec coverage at all.
+
+#### Refused, with the number that settled it
+
+- **The four lowlevel structural descents — measured, it does not pay.**  A
+  full attempt behind a policy enum cost **+262 lines** before any of the four
+  sites even converted; the best design (two of four) was still net positive.
+  Four policy enums plus a struct is ~200 lines, each site shrinks by ~12, and
+  the per-variant logic could not become a policy field at all — whether a
+  `Table` compares by identity is a *variant* question, not a *shape* question,
+  so every call site still needed its own `arms` method.  The finding is
+  stronger than the line count: **`#[stacksafe]` is a per-entry guard**, so
+  splitting one logical comparison frame across a `spine`/`descend`/`arms`
+  trio makes each array element allocate another 2 MiB fiber instead of
+  reusing the guarded stack.  The lowlevel test `cyclic_keys_hash_and_compare_equal`
+  went from 0.84s to **266 seconds** and then died with `unable to allocate
+  fiber`.  A correct version would have to funnel the recursion through exactly
+  one guarded entry per frame, which puts the array descent back in each call
+  site — i.e. un-shares the spine that was the point.  The four walks stay
+  duplicated, and the duplication is now understood rather than merely noted.
+- **The `lichen-compute` subscript constants — deliberately left per-occurrence.**
+  They are allocated inside a native operator's `build`, which runs with a
+  current function on the stack, so a shared node would be tagged into the
+  operator's own template scope and **cloned per apply** instead of referenced
+  in place — the opposite of what sharing buys.  That is a semantic change, not
+  a port, and the two read sites also must keep their lazy `Index` chain
+  (an unbound signature resolves at apply time), so `shape::function_type_parts`
+  does not apply to them either.  Recording the reason beats guessing at it.
+
+#### Still open
+
 - **`Checker's ir: IR` is held by value**, so the read-only-IR contract restored
-  in Phase 4 is true today but not enforced.  Making it a shared reference would
-  let the compiler reject the class; it also collides with `Build`, which
-  currently moves the IR out.
-- **Two spec rows remain wrong**: the two `Annotation` rows name a field the IR
-  does not have (`attribute` vs `attributes: ChildRange`), and `$name(args)` is
-  real lexed syntax that §2 never mentions.  Both were found and left: the
-  first is a question about how much IR payload the table should carry, the
-  second is a section the sync did not touch.
+  in Phase 4 is true today but not enforced — a future writer could break it and
+  the compiler would not object.  A shared reference would let the type system
+  reject the class; it also collides with `Build`, which currently moves the IR
+  out.  This is the one Phase 4 item not attempted.
+- **Two `Ctx` sites that reach the constant through the public
+  `AttrExt::missing_slot` contract** (`attr.rs` and `lichen-perspective`) still
+  allocate per occurrence.  They are not the same shape as the interned sites —
+  the missing value is the *attribute's* to define, and `Doc`'s is not even a
+  `USize` — so interning them means routing every attribute's missing value
+  through the checker's table, which is a design question rather than a
+  dedup.
 
-### Remaining: the `lichen-compute` adoption
-
-`crates/lichen-compute/src/compute.rs` still hand-builds the arrow encoding at
-four sites and reads it back at two.  The helpers it should adopt:
-
-- **Build** — replace each three-node hand assembly with a single
-  `ctx.arrow(domain, codomain)`.  Two sites (`JitOp::build`, `LaunchOp::build`)
-  additionally hand-build the `[marker, universe]` kind; those are the ones the
-  replacement must fix, because `Ctx::arrow` routes through `Ctx::kind_expr`.
-  The other two (`ParallelOp::build`, `ParLaunchOp::build`) already use
-  `ctx.kind_expr` and keep identical node order, so their replacement is purely
-  textual.  **`Ctx::arrow` does not touch the checker's `arrows` set**, and none
-  of these four sites ever registered anything in it — so adopting it changes
-  nothing about rendering.
-- **Read** — the two sites that extract domain and codomain by indexing the
-  arrow's shape (`LaunchOp::build`'s `d`/`c`, `ParLaunchOp::build`'s
-  `write_ty`) currently spell `Index(Index(sig.ty, 0), 0|1)` against hand-made
-  `zero`/`one` nodes.  They must keep **reading lazily through `Index`** — an
-  unbound signature has to resolve at apply time — so they cannot simply call
-  `shape::function_type_parts` (which requires a bound type).  They should keep
-  the `Index` chain and adopt the *shared* subscript constants instead of
-  allocating their own, once a `Ctx` accessor for them exists.
-- **The `USize(0)`/`USize(1)` constants** — the two native-op sites each
-  allocate their own through `ctx.value_node`.  They belong to a *native op*
-  invoked under a function that may later be cloned, so interning them is the
-  same shared-node question the highlevel constants answered; it needs its own
-  verification, not a mechanical port.

@@ -1,3 +1,5 @@
 target/
 .zcode
 .soil
+# per-task worktrees, created and deleted per AGENTS.md
+.worktrees/

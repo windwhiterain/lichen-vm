@@ -28,10 +28,11 @@ use lichen_utils::extend::AsEnum;
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///
 /// On failure the diagnostics (frontend and checker) are returned.  A
-/// terminating program evaluates to its value; a non-terminating one (a
-/// recursive function whose recursion never reaches a base case) panics at
-/// the VM's recursion-depth guard — that is the designed behavior of the
-/// core (an upper limit on nested applications), not a diagnostic.
+/// terminating program evaluates to its value.  A non-terminating one (a
+/// recursive function whose recursion never reaches a base case) exhausts a
+/// VM budget, which is a recorded failure rather than an abort: the guard
+/// latches [`BudgetExhausted`] instead of unwinding, and the checker turns it
+/// into a `NonTerminating` diagnostic naming the budget and its limit.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     let report = compile(source);
     if !report.diagnostics.is_empty() {
