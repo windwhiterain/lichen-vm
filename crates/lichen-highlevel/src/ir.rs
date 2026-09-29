@@ -201,10 +201,15 @@ pub enum ExprKind<L> {
     /// parameter's own `ExprId`.
     Parameter,
     /// `{ parameter, return }` — the parameter is a [`ExprKind::Parameter`].
-    /// `depth` is the count of enclosing function scopes at declaration (0
-    /// for a top-level function).  The checker uses it to keep sibling
-    /// functions' template scopes disjoint while absorbing truly-nested
-    /// closures into their parent's template.
+    /// `parent` is the enclosing function's IR node — the explicit link the
+    /// checker hands to `begin_function` as this function's
+    /// [`Function::parent`](lichen_lowlevel::Function::parent).  It keeps
+    /// sibling functions' template scopes disjoint while absorbing
+    /// truly-nested closures into their parent's template; it is carried in
+    /// the IR because a `Function` node is allocated *after* its body, so the
+    /// enclosing function's id is not known to the checker at that point.
+    /// `None` for a top-level function (and for the mutual-recursion sibling
+    /// case — see the frontend's `fn_parents` invariant).
     Function {
         parameter: ExprId,
         /// The annotated parameter's type (`x : T => e`): compiled *in
@@ -222,7 +227,7 @@ pub enum ExprKind<L> {
         /// and the checker compiles it in body scope).
         parameter_attribute: Option<ExprId>,
         r#return: ExprId,
-        depth: u32,
+        parent: Option<ExprId>,
     },
     /// `{ function, argument }`.
     Apply { function: ExprId, argument: ExprId },
@@ -461,6 +466,7 @@ impl<L> ExprKind<L> {
                 parameter_type,
                 parameter_attribute,
                 r#return,
+                parent,
                 ..
             } => {
                 fix(parameter);
@@ -469,6 +475,9 @@ impl<L> ExprKind<L> {
                 }
                 if let Some(parameter_attribute) = parameter_attribute {
                     fix(parameter_attribute);
+                }
+                if let Some(parent) = parent {
+                    fix(parent);
                 }
                 fix(r#return);
             }
@@ -609,6 +618,15 @@ impl<A: AttrSpec, L> IR<A, L> {
     /// The schema of an expression.
     pub fn schema(&self, e: ExprId) -> &Schema<A> {
         &self.schema_table[self.schemas[e.0 as usize].0 as usize]
+    }
+
+    /// Stamp an already-allocated node with its real kind — the write half of
+    /// the reserve-then-fill discipline a block-wide binding and a `Function`
+    /// both use, where a node's id must exist before its own subtree compiles
+    /// (a self/mutual reference, a nested closure's parent link) but its kind
+    /// is only known after.
+    pub fn set_kind(&mut self, e: ExprId, kind: ExprKind<L>) {
+        self.expr[e.0 as usize].kind = kind;
     }
 
     pub fn alloc_tuple(&mut self, elements: &[ExprId]) -> ExprId {

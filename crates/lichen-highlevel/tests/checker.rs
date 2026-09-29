@@ -11,7 +11,7 @@ use lichen_highlevel::program::{
     HighGlobal, HighProgramLiteral, HighProgramValue, IntLit, IntTypeLit, ProgramImpl, TypeTypeLit,
     TypeValue,
 };
-use lichen_lowlevel::{AnyNodeId, LowValue, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, FunctionId, LowValue, NodeId};
 use lichen_utils::compose::AsField;
 
 // --- hand-built IR helpers (the language frontend will produce these) -----
@@ -39,23 +39,57 @@ fn param(ir: &mut IR) -> ExprId {
     ir.alloc(ExprKind::Parameter)
 }
 fn lam(ir: &mut IR, b: ExprId, body: ExprId) -> ExprId {
-    lam_at(ir, b, body, 0)
+    lam_at(ir, b, body, None)
 }
-/// A lambda at a given lexical depth — the count of enclosing function
-/// scopes (0 = top-level).  The checker uses this to absorb a nested closure
-/// into its parent's template while keeping siblings' templates disjoint.
-fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, depth: u32) -> ExprId {
-    lam_at_typed(ir, b, None, body, depth)
+/// A lambda whose enclosing function is `parent` — the explicit link the
+/// checker turns into [`Function::parent`](lichen_lowlevel::Function::parent).
+/// A nested closure joins the enclosing template; `None` is top level (or the
+/// mutual-recursion sibling case), which hangs under nothing.
+///
+/// Note the allocation order: a nested lambda may be built *before* the
+/// lambda enclosing it (hence needing a reserved id, see `lam_in`).
+fn lam_at(ir: &mut IR, b: ExprId, body: ExprId, parent: Option<ExprId>) -> ExprId {
+    lam_at_typed(ir, b, None, body, parent)
 }
 /// A lambda whose parameter carries its annotated type — `x : T => e`.
-fn lam_at_typed(ir: &mut IR, b: ExprId, t: Option<ExprId>, body: ExprId, depth: u32) -> ExprId {
+fn lam_at_typed(
+    ir: &mut IR,
+    b: ExprId,
+    t: Option<ExprId>,
+    body: ExprId,
+    parent: Option<ExprId>,
+) -> ExprId {
     ir.alloc(ExprKind::Function {
         parameter: b,
         parameter_type: t,
         parameter_attribute: None,
         r#return: body,
-        depth,
+        parent,
     })
+}
+/// A lambda nested inside another that is **not allocated yet**: reserves the
+/// enclosing node's id first, so the inner lambda's parent link can name it,
+/// then fills the reserved node's kind in (the same reserve-then-stamp
+/// discipline the frontend's `fn_parents` uses).  Returns `(enclosing, inner)`.
+fn lam_nested(
+    ir: &mut IR,
+    inner_b: ExprId,
+    inner_body: ExprId,
+    outer_b: ExprId,
+) -> (ExprId, ExprId) {
+    let reserved = ir.alloc(ExprKind::Placeholder);
+    let inner = lam_at(ir, inner_b, inner_body, Some(reserved));
+    ir.set_kind(
+        reserved,
+        ExprKind::Function {
+            parameter: outer_b,
+            parameter_type: None,
+            parameter_attribute: None,
+            r#return: inner,
+            parent: None,
+        },
+    );
+    (reserved, inner)
 }
 fn app(ir: &mut IR, f: ExprId, x: ExprId) -> ExprId {
     ir.alloc(ExprKind::Apply {
@@ -616,9 +650,20 @@ fn let_bound_functions_are_polymorphic() {
     let call2 = app(&mut ir, b1, type_val); // a second use of id
     let t2 = ty(&mut ir);
     let body2 = ann(&mut ir, call2, t2);
-    let inner_lam = lam_at(&mut ir, b2, body2, 1);
+    let (outer_lam, inner_lam) = lam_nested(&mut ir, b2, body2, b1);
     let inner = app(&mut ir, inner_lam, a);
-    let outer_lam = lam(&mut ir, b1, inner);
+    // The enclosing lambda's own return is the applied inner one, so its
+    // reserved node's kind must be re-stamped after `inner` exists.
+    ir.set_kind(
+        outer_lam,
+        ExprKind::Function {
+            parameter: b1,
+            parameter_type: None,
+            parameter_attribute: None,
+            r#return: inner,
+            parent: None,
+        },
+    );
     let whole = app(&mut ir, outer_lam, id);
     let b = build(whole, ir);
     assert!(
@@ -674,8 +719,7 @@ fn types_are_first_class() {
     let tval = int_t(&mut ir);
     let bx = param(&mut ir);
     let body = ann(&mut ir, bx, bt); // (x : T) — both uses are parameter ids
-    let l = lam_at(&mut ir, bx, body, 1);
-    let t_lam = lam(&mut ir, bt, l);
+    let (t_lam, _inner) = lam_nested(&mut ir, bx, body, bt);
     let whole = app(&mut ir, t_lam, tval);
     let b = build(whole, ir);
     assert!(b.ok, "(\\T. \\x. (x : T)) int should check");
@@ -1135,8 +1179,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
     let x = param(&mut ir);
     let y = param(&mut ir);
     let f2_body = array(&mut ir, &[a, b, x, y]);
-    let f2 = lam_at(&mut ir, y, f2_body, 1);
-    let f1 = lam(&mut ir, x, f2);
+    let (f1, _f2) = lam_nested(&mut ir, y, f2_body, x);
     let three = int(&mut ir, 3);
     let four = int(&mut ir, 4);
     let call1 = app(&mut ir, f1, three);
@@ -1154,6 +1197,65 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
             "element {n} must be a bound value, not the leaked parameter"
         );
     }
+}
+
+/// The [`FunctionId`](lichen_lowlevel::FunctionId) this lambda expression
+/// compiled to — read off the expression's compiled value node.
+fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> FunctionId {
+    let node = b.val[e].expect("the lambda compiled to a value node");
+    let value = b
+        .module
+        .node_value(AnyNodeId::Dynamic(node))
+        .expect("the lambda's value node is written");
+    let HighProgramValue::LowValue(LowValue::Function(AnyFunctionId::Dynamic(id))) = value else {
+        panic!("expected a function value, got {value:?}");
+    };
+    id
+}
+
+#[test]
+fn a_nested_lambda_hangs_under_its_enclosing_function() {
+    // The nesting half of the parent rule: a closure in a lambda's body joins
+    // the enclosing template, so the outer function's own `nodes` include the
+    // inner closure's nodes and the apply clone copies them per call.
+    let mut ir = IR::new();
+    let a = int(&mut ir, 1);
+    let x = param(&mut ir);
+    let y = param(&mut ir);
+    let (outer, inner) = lam_nested(&mut ir, y, a, x);
+    let b = build(outer, ir);
+    assert!(b.ok, "the nested closure must check");
+    let outer_id = function_of(&b, outer);
+    let inner_id = function_of(&b, inner);
+    assert_eq!(
+        b.module.functions[inner_id].parent,
+        Some(outer_id),
+        "the inner closure's parent is the enclosing function"
+    );
+}
+
+#[test]
+fn a_sibling_lambda_hangs_under_nothing() {
+    // The mutual-recursion sibling half: two lambdas at the same level are
+    // siblings, not nested — each hangs under nothing, so neither template
+    // absorbs the other and the recursion re-applies the sibling's
+    // never-bound template (see `examples/mutual_recursion.lichen`).
+    let mut ir = IR::new();
+    let x = param(&mut ir);
+    let sibling = lam(&mut ir, x, x);
+    let other = lam(&mut ir, x, sibling);
+    let b = build(other, ir);
+    assert!(b.ok, "the sibling binding must check");
+    assert_eq!(
+        b.module.functions[function_of(&b, sibling)].parent,
+        None,
+        "a same-level sibling hangs under nothing"
+    );
+    assert_eq!(
+        b.module.functions[function_of(&b, other)].parent,
+        None,
+        "the enclosing lambda is itself top level"
+    );
 }
 
 // --- indexing -------------------------------------------------------------
@@ -2338,7 +2440,7 @@ fn an_annotated_array_parameter_bounds_are_checked_in_body() {
     let arr_ty = type_array(&mut ir, elem_t, length);
     let five = int(&mut ir, 5);
     let body = index(&mut ir, xs, five);
-    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, 0);
+    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, None);
     let b = build(f, ir);
     assert!(!b.ok, "xs[5] against array<Int, 3> must fail");
     assert!(b.module.unify_errors.is_empty(), "no unification failed");
@@ -2365,7 +2467,7 @@ fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
     let arr_ty = type_array(&mut ir, elem_t, length);
     let one = int(&mut ir, 1);
     let body = index(&mut ir, xs, one);
-    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, 0);
+    let f = lam_at_typed(&mut ir, xs, Some(arr_ty), body, None);
     let a = int(&mut ir, 7);
     let b2 = int(&mut ir, 8);
     let c = int(&mut ir, 9);

@@ -169,13 +169,24 @@ struct Compiler {
     /// the IR's graph-sharing invariant.  Filled as binders are emitted, read
     /// by name uses.  Keyed by the resolver's dense `BinderId`.
     binder_to_expr: Vec<Option<ExprId>>,
-    /// The count of enclosing function scopes at the current compilation
-    /// point — the `depth` carried on each lambda's [`ExprKind::Function`],
-    /// which the checker uses to make sibling functions' template scopes
-    /// disjoint while absorbing nested closures into their parent's scope.
-    /// Incremented only around a lambda's `r#return` compilation (a lambda's
-    /// own depth is the value *before* its body opens).
-    fn_depth: usize,
+    /// The `Function` nodes enclosing the current compilation point, each one
+    /// a **reserved id** pushed before its own parameter and body compile —
+    /// hence stacking ids, not tabs: a nested closure's parent link is filled
+    /// in as the closure's own kind *after* its body compiles, so the enclosing
+    /// node's id must already exist and be reachable from here.  The reserved
+    /// node carries `Placeholder` until the real kind overwrites it, exactly
+    /// as a block-wide binding does.
+    ///
+    /// The invariant this encodes (the mutual-recursion sibling rule): the
+    /// parent is pushed only for the span of the **body**, never for the
+    /// parameter's type or attribute — a lambda sitting in this lambda's own
+    /// annotation is a same-level sibling of it, not a nested child.  A
+    /// same-depth sibling binding compiled here only because this lambda's
+    /// body references it therefore finds nothing to hang under, so its
+    /// closure stays outside this template, referenced in place: the
+    /// recursion re-applies the sibling's never-bound template instead of a
+    /// bound instance.
+    fn_parents: Vec<ExprId>,
     /// The interned native-operator names — a `$name`'s name is interned to a
     /// `&'static str` (leaked once per unique name), because an
     /// `ExprKind::NativeCall`'s op field is a `&'static str` (the `ExprKind`
@@ -195,7 +206,7 @@ impl Compiler {
         Compiler {
             ir: IR::new(),
             binder_to_expr: Vec::new(),
-            fn_depth: 0,
+            fn_parents: Vec::new(),
             op_names: HashMap::new(),
             str_names: HashMap::new(),
             spans: Vec::new(),
@@ -283,7 +294,13 @@ impl Compiler {
                         self.set_binder(binder, value);
                         value
                     } else {
-                        self.ir.expr[p.0 as usize].kind = self.ir.expr[value.0 as usize].kind;
+                        self.ir.set_kind(p, self.ir.expr[value.0 as usize].kind);
+                        // The transplanted kind is identity-sensitive, unlike
+                        // the depth it replaced: anything inside it naming the
+                        // now-dead `value` id (a nested closure's parent link)
+                        // must be re-pointed at `p`, since only `p` is ever
+                        // compiled — `value` never receives a node of its own.
+                        self.ir.repoint(value, p);
                         self.spans[p.0 as usize] = self.spans[value.0 as usize];
                         // The schema (an attribute tail, e.g. `# p` or `? e`)
                         // rides the *expression*, not the kind, so the
@@ -391,22 +408,30 @@ impl Compiler {
             // parameter's pair `[value, type]` is the argument's pair at each
             // apply, and the body reads element 1 of it (the argument's
             // type).  No scope is pushed: the parameter has no name, its
-            // single use is the body's `TypeOf` itself.  The depth matches a
-            // lambda written at this position.
+            // single use is the body's `TypeOf` itself.  Like a lambda, it is
+            // reserved before its body compiles and pushed as the enclosing
+            // `fn_parents` entry (see [`Self::fn_parents`]).
             Expr::TypeOf(span) => {
-                let depth = self.fn_depth as u32;
+                let parent = self.fn_parents.last().copied();
+                let id = self.alloc(ExprKind::Placeholder, span);
                 let parameter = self.alloc(ExprKind::Parameter, span);
-                let body = self.alloc(ExprKind::TypeOf { value: parameter }, span);
-                self.alloc(
+                let body = {
+                    self.fn_parents.push(id);
+                    let body = self.alloc(ExprKind::TypeOf { value: parameter }, span);
+                    self.fn_parents.pop();
+                    body
+                };
+                self.ir.set_kind(
+                    id,
                     ExprKind::Function {
                         parameter,
                         parameter_type: None,
                         parameter_attribute: None,
                         r#return: body,
-                        depth,
+                        parent,
                     },
-                    span,
-                )
+                );
+                id
             }
             Expr::Name(name, span, binder) => match binder {
                 Some(id) => self.binder(*id),
@@ -436,7 +461,11 @@ impl Compiler {
                 r#return,
                 span,
             } => {
-                let depth = self.fn_depth as u32;
+                let parent = self.fn_parents.last().copied();
+                // Reserved before the parameter and body compile — see
+                // `Self::fn_parents`: a nested closure names this node as its
+                // parent while this node is still a bare `Placeholder`.
+                let function_id = self.alloc(ExprKind::Placeholder, span);
                 let parameter_id = self.alloc(ExprKind::Parameter, parameter_span);
                 // A `x # n` parameter carries the perspective tail in its
                 // static schema — the checker reads `schema(parameter).tail[0]`
@@ -460,22 +489,26 @@ impl Compiler {
                 let parameter_type = parameter_type.as_ref().map(|t| self.compile_expr(t));
                 let parameter_attribute =
                     parameter_perspective.as_ref().map(|p| self.compile_expr(p));
+                // Pushed for the **body** only, never for the parameter's type
+                // or attribute: a lambda sitting in this lambda's own
+                // annotation is a sibling of it, not a nested child.
                 let body = {
-                    self.fn_depth += 1;
+                    self.fn_parents.push(function_id);
                     let body = self.compile_expr(r#return);
-                    self.fn_depth -= 1;
+                    self.fn_parents.pop();
                     body
                 };
-                self.alloc(
+                self.ir.set_kind(
+                    function_id,
                     ExprKind::Function {
                         parameter: parameter_id,
                         parameter_type,
                         parameter_attribute,
                         r#return: body,
-                        depth,
+                        parent,
                     },
-                    span,
-                )
+                );
+                function_id
             }
             Expr::Apply {
                 function,
