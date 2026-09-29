@@ -6,11 +6,11 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
-use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId, UnifyError};
+use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
-use crate::diagnostic::{DiagKind, DiaryEntry};
+use crate::diagnostic::DiagKind;
 use crate::ir::{ExprId, ExprKind};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
@@ -54,24 +54,13 @@ where
                 )
             });
         if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
-            let error_index = self.module.unify_errors.len();
-            self.module.unify_errors.push(UnifyError {
-                root_a: container_ty,
-                root_b: container_ty,
-                steps: Vec::new(),
-                a: container_ty,
-                b: container_ty,
-                value_a: self.module.node_value(AnyNodeId::Dynamic(container_ty)),
-                value_b: self.module.node_value(AnyNodeId::Dynamic(container_ty)),
-            });
-            self.diary.push(DiaryEntry {
-                error_index,
-                a: container_ty,
-                b: container_ty,
-                loc: self.loc(container, 1),
-                kind: DiagKind::IndexTarget,
-                field: None,
-            });
+            self.record_guard(
+                container_ty,
+                container_ty,
+                self.loc(container, 1),
+                DiagKind::IndexTarget,
+                None,
+            );
         }
         let zero = self.alloc_node(
             self.current_block,
@@ -145,7 +134,15 @@ where
                 AnyNodeId::Dynamic(container_ty),
             )
         {
-            self.record_index_target_error(container_ty, container, 1);
+            // A concretely non-struct-kind container: the guard refuses the
+            // read — reported, never a runtime panic.
+            self.record_guard(
+                container_ty,
+                container_ty,
+                self.loc(container, 1),
+                DiagKind::IndexTarget,
+                None,
+            );
         }
         let zero = self.alloc_node(
             self.current_block,
@@ -229,12 +226,27 @@ where
                 self.type_expr,
                 AnyNodeId::Dynamic(container_ty),
             ) {
-                self.record_index_target_error(container_ty, container, 1);
+                self.record_guard(
+                    container_ty,
+                    container_ty,
+                    self.loc(container, 1),
+                    DiagKind::IndexTarget,
+                    None,
+                );
             } else if self
                 .named_field_index_any(AnyNodeId::Dynamic(container_ty), name)
                 .is_none()
             {
-                self.record_named_field_error(container_ty, container, 1, name);
+                // The container is a struct but has no field of this name: the
+                // offending name rides in the entry, so the language layer can
+                // append a did-you-mean clause.
+                self.record_guard(
+                    container_ty,
+                    container_ty,
+                    self.loc(container, 1),
+                    DiagKind::NamedField,
+                    Some(name),
+                );
             }
         }
         let zero = self.alloc_node(
@@ -418,11 +430,19 @@ where
                 AnyNodeId::Dynamic(callee_ty),
             )
         {
+            // Non-struct (structs are nominal): record a diagnostic at the
+            // callee's type slot, never a runtime panic.
+            self.record_guard(
+                type_pair,
+                type_pair,
+                self.loc(type_expr, 1),
+                DiagKind::InstantiateCallee,
+                None,
+            );
             // Nominality: only a struct type instantiates.  The field checks
             // are skipped — against a non-struct callee they would only
             // cascade.  The instance still gets a term (the call-order value
             // under the callee's pair), so the descent stays total.
-            self.record_instantiate_callee_error(type_pair, type_expr);
             let value_node = self.value_of(value);
             let pair = self.pair_of(value_node, type_pair);
             self.term[e] = Some(pair);
@@ -587,7 +607,7 @@ where
             };
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
-                    self.record_struct_error(elem_ids[i], type_pair, *name, kind);
+                    self.record_guard(type_pair, type_pair, self.loc(elem_ids[i], 0), kind, *name);
                 }
             }
             return (self.value_of(value), self.ty[value].unwrap(), false);
@@ -614,11 +634,12 @@ where
                             assign.resize(pos + 1, None);
                         }
                         if assign[pos].is_some() {
-                            self.record_struct_error(
-                                elem_ids[i],
+                            self.record_guard(
                                 type_pair,
-                                Some(name),
+                                type_pair,
+                                self.loc(elem_ids[i], 0),
                                 DiagKind::StructDuplicateField,
+                                Some(name),
                             );
                             valid = false;
                         } else {
@@ -626,11 +647,12 @@ where
                         }
                     }
                     None => {
-                        self.record_struct_error(
-                            elem_ids[i],
+                        self.record_guard(
                             type_pair,
-                            Some(name),
+                            type_pair,
+                            self.loc(elem_ids[i], 0),
                             DiagKind::StructUnknownField,
+                            Some(name),
                         );
                         valid = false;
                     }
@@ -649,11 +671,12 @@ where
                     next += 1;
                 } else if assign.len() >= def_len.unwrap_or(assign.len() + 1) {
                     // Every definition position is claimed; this is an excess.
-                    self.record_struct_error(
-                        elem_ids[i],
+                    self.record_guard(
                         type_pair,
-                        None,
+                        type_pair,
+                        self.loc(elem_ids[i], 0),
                         DiagKind::StructExcessField,
+                        None,
                     );
                     valid = false;
                 } else if next == assign.len() {
@@ -671,7 +694,13 @@ where
             for pos in 0..def_len {
                 if assign[pos].is_none() {
                     let name = self.struct_field_name(type_pair, pos);
-                    self.record_struct_error(e, type_pair, name, DiagKind::StructMissingField);
+                    self.record_guard(
+                        type_pair,
+                        type_pair,
+                        self.loc(e, 0),
+                        DiagKind::StructMissingField,
+                        name,
+                    );
                     valid = false;
                 }
             }

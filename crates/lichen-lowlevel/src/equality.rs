@@ -106,6 +106,21 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// [`Self::unify`], reporting the range of [`Self::unify_errors`] this
+    /// call produced — **empty on success**.  The range is this call's own
+    /// failures, so a caller never has to infer ownership from a length
+    /// delta taken around the call.
+    ///
+    /// Invariant: `unify_errors` is append-only, so the range `before..len`
+    /// names exactly the entries this call appended and stays valid for as
+    /// long as nothing truncates the vec — which is what makes it safe for a
+    /// caller to suppress *its own* failures by [`Vec::truncate`].
+    pub fn try_unify(&mut self, a: NodeId, b: NodeId) -> (NodeId, std::ops::Range<usize>) {
+        let before = self.unify_errors.len();
+        let representative = self.unify(a, b);
+        (representative, before..self.unify_errors.len())
+    }
+
     /// Structurally unify the classes of `a` and `b`.
     ///
     /// Unification is over values: a class holding no value and no pending
