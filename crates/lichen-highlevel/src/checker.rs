@@ -185,6 +185,12 @@ where
     /// cell.  The apply uses it (or `missing` for an unannotated parameter) to
     /// run the attribute equality check.
     function_param_attr: HashMap<ExprId, (P::Attr, NodeId)>,
+    /// The checker's own per-annotation **merged** attribute tails, keyed by
+    /// the annotation expression id.  The IR is the frontend's (its stamped
+    /// tail records only what the source spelled), while this tail merges the
+    /// value's with the annotation's — a product of checking, so the checker
+    /// owns it rather than writing it back into the IR.
+    merged_tails: HashMap<ExprId, Vec<P::Attr>>,
     /// The checker's own check sequence, attributed for diagnostics: one entry
     /// per check the checker issued, recording the `unify_errors` entries that
     /// check owns (empty when it produced none) plus its span and check kind.
@@ -280,6 +286,13 @@ where
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
+    /// The root expression's attribute tail — its own tail merged with every
+    /// annotation's, as the checker computed it ([`Checker::schema_tail`]).
+    /// Index-aligned with the *runtime* pair's attribute slots
+    /// (`build.root_term`), which the checker already built at the merged
+    /// width, so a renderer walks it rather than the IR's own stamp (which
+    /// holds only what the source spelled).
+    pub root_schema_tail: Vec<P::Attr>,
     /// The installed shared kind-marker nodes — the complete registry set
     /// (see [`Markers`]).
     pub markers: Markers,
@@ -417,6 +430,7 @@ where
             ty: vec![None; n],
             attr: vec![None; n],
             function_param_attr: HashMap::new(),
+            merged_tails: HashMap::new(),
             diary: Vec::new(),
             check_seq: 0,
             arrows: HashSet::new(),
@@ -557,6 +571,7 @@ where
             && checker.module.assert_errors.is_empty()
             && checker.nonterminating.is_empty();
         let root_val = checker.value_of(root);
+        let root_schema_tail = checker.schema_tail(root).to_vec();
         // The definition pass above evaluates the program's applies; each
         // apply's runtime evaluation syncs its result cell with the return
         // pair, so an unannotated call's root type is the return type by the
@@ -573,6 +588,7 @@ where
             root_term,
             root_val,
             root_ty,
+            root_schema_tail,
             markers: checker.markers,
             int_marker: checker.markers.int_marker,
             string_marker: checker.markers.string_marker,
@@ -598,6 +614,18 @@ where
     /// non-function apply, which the runtime panics on).
     fn check_failed(&self) -> bool {
         !self.module.unify_errors.is_empty() || self.diary.iter().any(|e| e.errors.is_empty())
+    }
+
+    /// The attribute tail a checked expression carries: an annotation's
+    /// **merged** tail (the value's tail merged with the annotation's spelled
+    /// slots) when the checker recorded one, else the frontend's own IR stamp.
+    /// The fallback is why readers need no knowledge of which expressions the
+    /// table covers: every other tail (a parameter's `x # n`, a transplanted
+    /// binding's, the frontend's own stamps) lives only in the IR.
+    fn schema_tail(&self, e: ExprId) -> &[P::Attr] {
+        self.merged_tails
+            .get(&e)
+            .map_or_else(|| self.ir.schema(e).tail.as_slice(), |tail| tail.as_slice())
     }
 
     /// The type constants as plain nodes in the root block (types are
