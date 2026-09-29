@@ -26,6 +26,7 @@ use lichen_utils::extend::AsEnum;
 use crate::attr::{AttrSpec, NoAttr};
 use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
+use crate::shape::for_each_kind_marker;
 
 /// The fresh-nominal-type-id state — one extension component of
 /// [`HighGlobalExt`].
@@ -104,6 +105,18 @@ pub struct LiteralBuild {
     pub ty: NodeId,
 }
 
+// The marker-node accessors are generated from the registry — one
+// `fn …_marker_node(&self) -> NodeId` per marker, each returning the
+// checker's installed shared node for it.
+macro_rules! define_ctx_marker_accessors {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $(
+            #[doc = concat!("The installed `", $display, "` marker node.")]
+            fn $node_fn(&self) -> NodeId;
+        )*
+    };
+}
+
 /// The curated safe context an extension point sees — the program-generic
 /// subset of the checker's *encoding* surface.  This is the "who encode, who
 /// parse" boundary: the highlevel owns the `[value, type]` grammar, and an
@@ -143,26 +156,13 @@ pub trait Ctx<P: Program> {
     /// across occurrences, since diagnostics are attributed by the lowlevel
     /// unify trace and the checker's edges (never by span-on-node).
     fn int_type(&self) -> NodeId;
-    /// The installed `int` marker node.
-    fn int_marker_node(&self) -> NodeId;
     /// The canonical, shared `[string, Type]` type expression — the type of
     /// every `Str` value and the pair of the `string` type constant.  Shared
     /// across occurrences like [`Self::int_type`].
     fn string_type(&self) -> NodeId;
-    /// The installed `string` marker node.
-    fn string_marker_node(&self) -> NodeId;
-    /// The installed `Type` marker node.
-    fn type_marker_node(&self) -> NodeId;
-    /// The installed `FunctionType` kind marker node.
-    fn function_type_marker_node(&self) -> NodeId;
-    /// The installed `TupleType` kind marker node.
-    fn tuple_type_marker_node(&self) -> NodeId;
-    /// The installed `ArrayType` kind marker node.
-    fn array_type_marker_node(&self) -> NodeId;
-    /// The installed `TypeStruct` kind marker node.
-    fn type_struct_marker_node(&self) -> NodeId;
-    /// The installed `TypeTable` kind marker node.
-    fn table_type_marker_node(&self) -> NodeId;
+    // The 8 marker-node accessors (`int_marker_node`, `string_marker_node`,
+    // `type_marker_node`, …) are registry-derived — one per kind marker.
+    for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification — an extension's type check, executed
     /// through the highlevel's own discipline (diary-attributed).
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind);
@@ -338,44 +338,34 @@ where
     }
 }
 
-/// The highlevel's own value extension — a plain enum of the type constants,
-/// provided whole for the compositions below (and for a language crate
-/// composing its own vocabulary from [`LowValue`] + this).
-///
-/// Every variant is a *type constant*: its own type is the canonical
-/// universe (`Type : Type`), which makes the composed vocabulary's literal
-/// build a one-arm answer for this whole branch.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TypeValue {
-    /// The `int` type constant.
-    TypeInt,
-    /// The `string` type constant — the builtin immutable string value.
-    TypeString,
-    /// The `Type` constant — the canonical universe node itself
-    /// (`Type : Type`).
-    TypeType,
-    /// The kind marker of function type expressions — the pair's second
-    /// element is a `Function` value.
-    TypeFunction,
-    /// The kind marker of tuple type expressions — the shape is the
-    /// element-type list.
-    TypeTuple,
-    /// The kind marker of array type expressions — the shape is
-    /// `[element type, length]`.
-    TypeArray,
-    /// The kind marker of struct type expressions — the shape is
-    /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
-    /// the positional field-type list.
-    TypeStruct,
-    /// The kind marker of table type expressions — the shape is
-    /// `[key type, value type]`.
-    TypeTable,
-    /// A nominal type id — a struct type's identity marker, living at
-    /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
-    /// different ids don't (nominal identity), and an id never unifies
-    /// with the structural markers above.
-    TypeId(usize),
+// The 8 kind-marker variants are generated from the registry
+// ([`crate::shape::for_each_kind_marker`]) — adding or removing a marker
+// touches that one list.  `TypeId` is NOT a kind marker (it carries the
+// nominal id a struct marker references) and is spelled out below.
+macro_rules! define_type_value {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        /// The highlevel's own value extension — a plain enum of the type constants,
+        /// provided whole for the compositions below (and for a language crate
+        /// composing its own vocabulary from [`LowValue`] + this).
+        ///
+        /// Every variant is a *type constant*: its own type is the canonical
+        /// universe (`Type : Type`), which makes the composed vocabulary's literal
+        /// build a one-arm answer for this whole branch.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum TypeValue {
+            $(
+                $(#[$doc])*
+                $variant,
+            )*
+            /// A nominal type id — a struct type's identity marker, living at
+            /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
+            /// different ids don't (nominal identity), and an id never unifies
+            /// with the structural markers above.
+            TypeId(usize),
+        }
+    };
 }
+for_each_kind_marker!(define_type_value);
 
 impl TypeValue {
     /// The nominal type id carried by a `TypeId` value, if this is one.
@@ -412,31 +402,36 @@ impl ValueExt for HighProgramValue {
     }
 }
 
+// The marker methods are generated from the registry with default bodies:
+// any vocabulary carrying the `TypeValue` leaf whole (an `enum_ext!`
+// composition, which generates `From<TypeValue>`) gets every marker for
+// free; an impl may still override individual methods.
+macro_rules! define_value_type_marker_methods {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $(
+            $(#[$doc])*
+            fn $marker_fn() -> Self {
+                Self::from(TypeValue::$variant)
+            }
+        )*
+    };
+}
+
 /// The value→type contract a value vocabulary must satisfy to flow through
 /// the checker: the type-constant markers it installs, the value→type
 /// mapping for constants, and the kind classification the checker's
 /// structural type checks dispatch on.  Every value union — the highlevel's
 /// own [`HighProgramValue`] or an extended one — implements this; the
 /// checker is generic over it.
-pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
-    /// The `int` type marker — `USize` literals pair with `[Self::int_marker(), K]`.
-    fn int_marker() -> Self;
-    /// The `string` type marker — `Str` literals pair with `[Self::string_marker(), K]`.
-    fn string_marker() -> Self;
-    /// The `Type` marker — the canonical universe node itself (`Type : Type`).
-    fn type_marker() -> Self;
-    /// The kind marker of function type expressions.
-    fn function_type_marker() -> Self;
-    /// The kind marker of tuple type expressions.
-    fn tuple_type_marker() -> Self;
-    /// The kind marker of array type expressions.
-    fn array_type_marker() -> Self;
-    /// The kind marker of struct type expressions — the shape is
-    /// `[TypeId(n), fields_types_array]`.
-    fn type_struct_marker() -> Self;
-    /// The kind marker of table type expressions — the shape is
-    /// `[key type, value type]`.
-    fn table_type_marker() -> Self;
+///
+/// The 8 kind-marker methods are registry-derived
+/// ([`crate::shape::for_each_kind_marker`]) with default bodies over
+/// `From<TypeValue>`; an implementation spells only [`Self::type_id`] and
+/// [`Self::type_id_value`].
+pub trait ValueType:
+    ValueExt + From<LowValue> + AsEnum<LowValue> + From<TypeValue> + Clone
+{
+    for_each_kind_marker!(define_value_type_marker_methods);
     /// The nominal id of a struct type value, if this is one.
     fn type_id(&self) -> Option<usize>;
     /// A nominal type id value — what the checker's `Fresh` operator yields.
@@ -444,30 +439,6 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
 }
 
 impl ValueType for HighProgramValue {
-    fn int_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeInt)
-    }
-    fn string_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeString)
-    }
-    fn type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeType)
-    }
-    fn function_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeFunction)
-    }
-    fn tuple_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTuple)
-    }
-    fn array_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeArray)
-    }
-    fn type_struct_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeStruct)
-    }
-    fn table_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTable)
-    }
     fn type_id(&self) -> Option<usize> {
         match self {
             Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),

@@ -284,7 +284,7 @@ where
             // pair slot or a tuple/array shape, so the language can build the
             // diagnostic without re-deriving the type grammar.
             let path =
-                crate::checker::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
+                crate::shape::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
             let loc = self.apply_edges.get(&apply.apply_node).map(|edge| Loc {
                 expr: edge.argument_expr,
                 path,
