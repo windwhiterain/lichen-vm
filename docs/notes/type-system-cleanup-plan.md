@@ -6,8 +6,10 @@
 > manifest order — and single-sourced codec tags); **D3 landed** (the checker is
 > total and type-directed for `Instantiate`, with the nominal callee check);
 > **Phase 2 landed** (D1: the unification deferral policy is a `Program` hook —
-> `defer_pending` — and the lowlevel is untyped). Phase 3 (checker structure)
-> pending.
+> `defer_pending` — and the lowlevel is untyped); **Phase 3a landed** (the
+> `checker.rs` module split: the checking rules now live in five sibling
+> modules beside the root). The rest of Phase 3 — the fabricated-`UnifyError`
+> channel, `check_lam` surgery, the panic discipline — is pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -182,18 +184,27 @@ Either way, independent of D1:
 
 ## 5. Checker structural cleanup (Phase 3)
 
-- Split `checker.rs` (3254 lines) into submodules along its natural seams:
-  shape predicates (→ Phase 1 module), lambda/apply, structs/fields,
-  arrays/tables, annotations/attributes, diagnostics glue.
+- ~~Split `checker.rs` (3254 lines) into submodules along its natural
+  seams~~ (**done**, Phase 3a, branch `refactor/phase3-split`): the shape
+  predicates went to the Phase 1 `shape` module, and the rules now sit in
+  `checker/{lambda,structs,indexing,annotations,diagnostics}.rs` beside the
+  `checker.rs` root, which keeps the state, the node construction every check
+  shares, the per-kind dispatch, the `Build`/`Ctx` plumbing, and the passes.
+  Root 1333 / structs 810 / indexing 404 / lambda 338 / annotations 286 /
+  diagnostics 223 lines.  Pure code motion: the only edits are the
+  `pub(super)` the boundary requires (the root's dispatch and the sibling
+  modules call each other) and four doc links that had to become explicit
+  paths.  The fabricated-error channel is the remaining part of this group.
 - Kill the fabricated-`UnifyError` diagnostic channel
-  (`record_*_error` ×3, `checker.rs:2128-2669`): a first-class `Diag` channel
-  where "a unify error exists" again means "a unification failed".
-- `check_lam` registry surgery (`checker.rs:1362-1406`): build the function
+  (`record_*_error` ×4, `checker/diagnostics.rs:100-204`): a first-class
+  `Diag` channel where "a unify error exists" again means "a unification
+  failed".
+- `check_lam` registry surgery (`checker/lambda.rs:24-228`): build the function
   shell *before* the parameter nodes (a small lowlevel API addition) so no
   `retain`/overwrite dance and no temporarily-invalid `Function` record.
-- Replace lexical-depth parent arithmetic (`checker.rs:1374-1378`) with an
+- Replace lexical-depth parent arithmetic (`checker/lambda.rs:81-86`) with an
   explicit parent link supplied by the frontend in the IR.
-- Stop mutating the input IR (`set_schema` at `checker.rs:2257`): merged
+- Stop mutating the input IR (`set_schema` in `checker/annotations.rs`): merged
   schemas go into a checker-owned side table; restore the documented
   "checker only reads the IR" contract.
 - Deduplicate: struct-pair construction ×2, arrow encoding ×5,
