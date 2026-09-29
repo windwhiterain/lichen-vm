@@ -1910,11 +1910,10 @@ where
         // binding the domain/codomain the signature value carries.
         let d = ctx.fresh();
         let c = ctx.fresh();
-        let shape = ctx.array_node(&[d, c]);
-        let fn_marker = ctx.value_node(P::Value::function_type_marker());
-        let universe = ctx.universe();
-        let kind = ctx.array_node(&[fn_marker, universe]);
-        let fn_ty = ctx.array_node(&[shape, kind]);
+        // Built through the highlevel's single arrow construction point: the
+        // three nodes it allocates (shape, kind, pair) are the same three this
+        // site allocated before, in the same order.
+        let fn_ty = ctx.arrow(d, c);
         ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
 
         // The bare native kernel artifact — the lichen wrapper wraps this value
@@ -1965,11 +1964,7 @@ where
         let d = ctx.op_node(P::Operator::from(LowOperator::Index), Some(d_ops));
         let c_ops = ctx.array_node(&[sig_shape, one]);
         let c = ctx.op_node(P::Operator::from(LowOperator::Index), Some(c_ops));
-        let shape = ctx.array_node(&[d, c]);
-        let fn_marker = ctx.value_node(P::Value::function_type_marker());
-        let universe = ctx.universe();
-        let kind = ctx.array_node(&[fn_marker, universe]);
-        let fn_ty = ctx.array_node(&[shape, kind]);
+        let fn_ty = ctx.arrow(d, c);
         ctx.check_unify(sig.ty, fn_ty, loc.clone(), DiagKind::Guard);
         // Unify the argument against the kernel's domain.
         ctx.check_unify(a.ty, d, loc.clone(), DiagKind::Guard);
@@ -2058,9 +2053,7 @@ where
         // second function parameter).
         let d0 = ctx.fresh();
         let c0 = ctx.fresh();
-        let outer_shape = ctx.array_node(&[d0, c0]);
-        let fn_kind = ctx.kind_expr(ctx.function_type_marker_node());
-        let fn_ty = ctx.array_node(&[outer_shape, fn_kind]);
+        let fn_ty = ctx.arrow(d0, c0);
         ctx.check_unify(f.ty, fn_ty, loc.clone(), DiagKind::Guard);
         // The bare native parallel kernel artifact — the lichen wrapper wraps
         // this value into a `kernel` struct (`.native`).  Opaque: typed `_`.
@@ -2109,9 +2102,7 @@ where
         // codomain as a `Write` type `[b, [TypeWrite, Type]]`, so `b` resolves
         // to the actual output element type.
         let d0 = ctx.fresh();
-        let sig_shape_pat = ctx.array_node(&[d0, write_ty]);
-        let sig_kind = ctx.kind_expr(ctx.function_type_marker_node());
-        let sig_ty = ctx.array_node(&[sig_shape_pat, sig_kind]);
+        let sig_ty = ctx.arrow(d0, write_ty);
         ctx.check_unify(sig.ty, sig_ty, loc.clone(), DiagKind::Guard);
         let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
             ComputeValue::TypeWrite,
