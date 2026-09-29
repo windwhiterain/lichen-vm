@@ -8,8 +8,8 @@ fn annotated_rec_scratch() {
     let build = report.build.unwrap();
     for (i, e) in build.diary.iter().enumerate() {
         println!(
-            "diary {i}: error_index={} kind={:?} a={:?} b={:?}",
-            e.error_index, e.kind, e.a, e.b
+            "diary {i}: errors={:?} seq={} kind={:?} a={:?} b={:?}",
+            e.errors, e.seq, e.kind, e.a, e.b
         );
     }
     for (i, err) in build.module.unify_errors.iter().enumerate() {
