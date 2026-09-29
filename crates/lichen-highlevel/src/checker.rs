@@ -34,12 +34,11 @@
 //! and the passes that drive them.
 
 use std::collections::{HashMap, HashSet};
-use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, RwLock};
 
 use lichen_lowlevel::{
-    AnyNodeId, ArrayItem, BlockId, FunctionId, LowOperator, LowValue, Module, NodeId, Operation,
-    Registry,
+    AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
+    NodeId, Operation, Registry,
 };
 
 use crate::attr::AttrExt;
@@ -236,17 +235,18 @@ where
     /// change nothing about the pass.
     lambda_value_nodes: Vec<NodeId>,
     /// The top-level statements the definition pass found **non-terminating**
-    /// (the VM's apply/depth guard fired while evaluating the statement's
-    /// value).  Each is recorded as a source-blind [`Loc`] so the diagnostics
-    /// layer can point at the binding the user wrote.  Option B: the build
-    /// evaluates every user-written top-level statement and reports a
-    /// non-terminating one as an error instead of panicking.
-    nonterminating: Vec<Loc>,
+    /// (the VM's apply/depth guard refused the walk evaluating the statement's
+    /// value).  Each carries a source-blind [`Loc`] so the diagnostics layer
+    /// can point at the binding the user wrote, plus the budget the guard
+    /// recorded, so the message can name it.  Option B: the build evaluates
+    /// every user-written top-level statement and reports a non-terminating
+    /// one as an error instead of panicking.
+    nonterminating: Vec<NonTerminating>,
     /// A forced callee evaluation ([`Checker::check_instantiate`]) already hit
-    /// the VM's apply/depth guard once.  The guard leaves the module's
-    /// depth/total counters inflated, so every later force would trip it
-    /// immediately — never force again; the build's statement pass reports
-    /// the non-termination.
+    /// the VM's apply/depth guard once.  A refused walk leaves the module's
+    /// graph partly evaluated, so every later force could trip the guard
+    /// again — never force again; the build's statement pass reports the
+    /// non-termination.
     force_failed: bool,
     // The installed shared marker nodes — one per kind marker, allocated by
     // `install_constants`; registry-derived (see [`Markers`]).
@@ -274,11 +274,24 @@ pub struct ApplyEdge {
     pub apply_expr: ExprId,
 }
 
-/// The result of building a program: the compiled Module plus the checker's
-/// records.  `ok` is false when any unification failed (`unify_errors` is
-/// non-empty), any runtime evaluation failed (`eval_errors`), or any assert
-/// failed (`assert_errors`); rendering diagnostics from those is future
-/// work.
+/// One non-terminating statement the definition pass abandoned: where it is,
+/// and the budget the VM's guard refused on.
+#[derive(Clone, Debug)]
+pub struct NonTerminating {
+    /// Where the abandoned binding is.
+    pub loc: Loc,
+    /// The budget that ran out — recorded by the lowlevel instead of
+    /// panicking, so the diagnostic can name what was exceeded and by how
+    /// much it was bounded.  `None` only if the guard's own record is
+    /// somehow absent, which the reporting sites below never allow.
+    pub budget: Option<BudgetExhausted>,
+}
+
+/// The result of one [`Checker::build`]: the module the lowlevel built, the
+/// per-expression nodes the checker attributed, and everything the layers
+/// above need to render, trace, or freeze it — plus the pass records that let
+/// [`Build::diagnostics`](crate::diagnostic::Build::diagnostics) attribute a
+/// lowlevel failure back to the expression that produced it.
 pub struct Build<P: HighProgram>
 where
     P::Value: ValueType,
@@ -330,7 +343,7 @@ where
     /// The top-level statements the definition pass found non-terminating (see
     /// [`Checker::nonterminating`]) — the source-blind locations of the
     /// user-written bindings the build reports as non-termination errors.
-    pub nonterminating: Vec<Loc>,
+    pub nonterminating: Vec<NonTerminating>,
     pub ok: bool,
 }
 
@@ -521,36 +534,40 @@ where
             }
         }
         // Option B: evaluate every user-written top-level statement, so each
-        // one's value is computed — and a non-terminating one (the VM's
-        // apply/depth guard fired) is caught here and reported as a
-        // diagnostic rather than panicking.  After a caught guard the module's
-        // depth/total counters are left inflated, so stop evaluating.
+        // one's value is computed — and a non-terminating one, which the VM
+        // refused instead of panicking (see `Module::budget_exhausted`), is
+        // reported as a diagnostic rather than aborting the build.
         if !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
                 let Some(term) = checker.term[s] else {
                     continue;
                 };
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    checker.module.evaluate_node_deep(term, None)
-                }));
-                if result.is_err() {
-                    checker.nonterminating.push(Loc {
+                checker.module.evaluate_node_deep(term, None);
+                // Copied out: the borrow of `checker.module` must end before
+                // the `nonterminating` push below.
+                let Some(budget) = checker.module.budget_exhausted else {
+                    continue;
+                };
+                checker.nonterminating.push(NonTerminating {
+                    loc: Loc {
                         expr: s,
                         path: Vec::new(),
-                    });
-                    fatal = true;
-                    break;
-                }
+                    },
+                    budget: Some(budget),
+                });
+                fatal = true;
+                break;
             }
             if !fatal {
-                let result = catch_unwind(AssertUnwindSafe(|| {
-                    checker.module.evaluate_node_deep(root_term, None)
-                }));
-                if result.is_err() {
-                    checker.nonterminating.push(Loc {
-                        expr: root,
-                        path: Vec::new(),
+                checker.module.evaluate_node_deep(root_term, None);
+                if let Some(budget) = checker.module.budget_exhausted {
+                    checker.nonterminating.push(NonTerminating {
+                        loc: Loc {
+                            expr: root,
+                            path: Vec::new(),
+                        },
+                        budget: Some(budget),
                     });
                 }
             }

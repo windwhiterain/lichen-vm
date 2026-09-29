@@ -24,9 +24,9 @@ mod static_module;
 mod table;
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, EvalError, EvaluatedDeep, Function,
-    FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId, Operation, OperatorExt,
-    Program, StaticHandle, ValueExt,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,
+    EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId,
+    Operation, OperatorExt, Program, StaticHandle, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;

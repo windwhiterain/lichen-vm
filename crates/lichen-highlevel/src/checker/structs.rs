@@ -4,8 +4,6 @@
 //! named reads of a field, and for the positional and named instantiations that
 //! check a value against a struct's field list.
 
-use std::panic::{AssertUnwindSafe, catch_unwind};
-
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
@@ -408,13 +406,11 @@ where
         // parameter stays lazy (the checks below defer to the apply), and a
         // non-terminating one trips the VM's guard: leave it lazy — the
         // build's statement pass evaluates the statement again and reports
-        // the `NonTerminating` diagnostic.  After a caught guard the module's
-        // counters are inflated, so never force twice.
+        // the `NonTerminating` diagnostic.  A refused callee leaves a partly
+        // walked graph, so never force twice.
         if self.module.array_items(type_pair).is_none() && !self.force_failed {
-            let forced = catch_unwind(AssertUnwindSafe(|| {
-                self.module.evaluate_node_deep(type_pair, None);
-            }));
-            self.force_failed = forced.is_err();
+            self.module.evaluate_node_deep(type_pair, None);
+            self.force_failed = self.module.budget_exhausted.is_some();
         }
         let callee_ty = self.ty[type_expr].unwrap();
         let concrete = self.type_is_concrete(callee_ty);

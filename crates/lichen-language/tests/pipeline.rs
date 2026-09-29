@@ -657,12 +657,27 @@ fn a_blockwide_binding_need_not_be_a_lambda() {
 }
 
 #[test]
-#[should_panic(expected = "recursion depth exceeded")]
-fn a_non_terminating_recursive_function_panics_at_the_guard() {
+fn a_non_terminating_recursive_function_is_reported_at_the_guard() {
     // No base case: the definition pass runs the recursion forever, and the
-    // VM's application-depth guard panics instead of exhausting memory —
-    // the designed behavior of the core, not a diagnostic.
-    let _ = compile("f = n => f n; f 3");
+    // VM's application-depth guard refuses the walk — reported as a
+    // `NonTerminating` diagnostic instead of panicking the build.
+    let report = compile("f = n => f n; f 3");
+    let nonterminating: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| {
+            d.stage == Stage::Check
+                && d.check
+                    .as_ref()
+                    .is_some_and(|c| c.kind == DiagKind::NonTerminating)
+        })
+        .collect();
+    assert_eq!(nonterminating.len(), 1, "one NonTerminating diagnostic");
+    assert!(
+        nonterminating[0].message.contains("500"),
+        "the message must name the exceeded budget's limit: {:?}",
+        nonterminating[0].message
+    );
 }
 
 // --- block-wide visibility --------------------------------------------------

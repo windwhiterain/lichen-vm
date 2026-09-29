@@ -398,8 +398,7 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     assert_eq!(m.functions.len(), 2); // cross-references stay in place
 }
 #[test]
-#[should_panic(expected = "recursion depth exceeded")]
-fn non_terminating_apply_panics_at_depth_limit() {
+fn non_terminating_apply_records_the_depth_budget() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let (func_node, _) = unconditional_self_apply(&mut m);
@@ -407,20 +406,27 @@ fn non_terminating_apply_panics_at_depth_limit() {
     let arg = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::ApplyDepth { limit: 4 }),
+        "the nested-apply guard must record its budget instead of panicking"
+    );
 }
 #[test]
-#[should_panic(expected = "recursion depth exceeded")]
-fn definition_pass_on_non_terminating_body_panics() {
+fn definition_pass_on_non_terminating_body_records_the_depth_budget() {
     let mut m = Module::new();
     let (_, function) = unconditional_self_apply(&mut m);
     m.apply_depth_limit = 4;
     // The unconditional self-apply is in the direct value path, so the
     // definition pass nests applications forever instead of staying lazy.
     m.evaluate_node_deep(m.functions[function].r#return, None);
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::ApplyDepth { limit: 4 })
+    );
 }
 #[test]
-#[should_panic(expected = "recursion depth exceeded")]
-fn deep_evaluating_an_infinite_stream_panics() {
+fn deep_evaluating_an_infinite_stream_records_the_deep_budget() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // f(x) = [x, f(x)]: each apply level terminates, but deep evaluation
@@ -430,10 +436,14 @@ fn deep_evaluating_an_infinite_stream_panics() {
     let arg = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::EvaluateDepth { limit: 8 }),
+        "the deep-evaluation guard must record its budget instead of panicking"
+    );
 }
 #[test]
-#[should_panic(expected = "too many function applications")]
-fn flattened_recursion_panics_at_the_total_apply_budget() {
+fn flattened_recursion_records_the_total_apply_budget() {
     let mut m = Module::new();
     let root = m.add_block(None);
     // f(x) = [f(x), 0]: the return is a *cached pair* whose element is the
@@ -463,4 +473,9 @@ fn flattened_recursion_panics_at_the_total_apply_budget() {
     let arg = u128_node(&mut m, root, 1);
     let call = call_node(&mut m, root, func_node, arg);
     m.evaluate_node_deep(call, None);
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::ApplyTotal { limit: 4 }),
+        "the total-apply guard must record its budget instead of panicking"
+    );
 }

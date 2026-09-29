@@ -19,7 +19,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use lichen_lowlevel::{AnyNodeId, EvalError, LowValue, NodeId, Program};
+use lichen_lowlevel::{AnyNodeId, BudgetExhausted, EvalError, LowValue, NodeId, Program};
 
 use crate::{
     checker::Build,
@@ -175,6 +175,11 @@ pub struct Diag<P: Program> {
     /// where the struct has no such field, or a `struct<...>` instantiation
     /// mismatch.
     pub field: Option<String>,
+    /// The budget the VM's guard refused on — the reason a non-termination
+    /// diagnostic exists at all ([`DiagKind::NonTerminating`]).  `None` for
+    /// every other kind; [`None`] for this kind means the record predates the
+    /// budget being recorded, which the panel builders no longer produce.
+    pub budget: Option<BudgetExhausted>,
     /// Which `Module::unify_errors` entry a mismatch came from — the key back
     /// to its diary entry, for callers that re-render.
     pub error_index: Option<usize>,
@@ -204,9 +209,9 @@ where
     /// failures (deduplicated) and the user-facing asserts.
     pub fn diagnostics(&self) -> Vec<Diag<P>> {
         let mut out = Vec::new();
-        for loc in &self.nonterminating {
+        for entry in &self.nonterminating {
             out.push(Diag {
-                loc: Some(loc.clone()),
+                loc: Some(entry.loc.clone()),
                 kind: DiagKind::NonTerminating,
                 a: NodeId::default(),
                 b: NodeId::default(),
@@ -216,6 +221,7 @@ where
                 index: None,
                 length: None,
                 field: None,
+                budget: entry.budget,
                 error_index: None,
             });
         }
@@ -243,6 +249,7 @@ where
                         index: None,
                         length: None,
                         field: entry.field.clone(),
+                        budget: None,
                         error_index: None,
                     },
                 ));
@@ -290,6 +297,7 @@ where
                     index_value,
                     length,
                 } => out.push(Diag {
+                    budget: None,
                     loc: self.node_loc(*index),
                     kind: DiagKind::IndexOutOfBounds,
                     a: NodeId::default(),
@@ -303,6 +311,7 @@ where
                     error_index: None,
                 }),
                 EvalError::TableMiss { key, .. } => out.push(Diag {
+                    budget: None,
                     loc: self.node_loc(*key),
                     kind: DiagKind::TableMiss,
                     a: NodeId::default(),
@@ -316,6 +325,7 @@ where
                     error_index: None,
                 }),
                 EvalError::TableKeyUnbound { key } => out.push(Diag {
+                    budget: None,
                     loc: self.node_loc(*key),
                     kind: DiagKind::TableKeyUnbound,
                     a: NodeId::default(),
@@ -331,6 +341,7 @@ where
                 // A read applied to a non-container: the value itself is the
                 // fact here, so this kind carries no type to print.
                 EvalError::IndexTarget { target } => out.push(Diag {
+                    budget: None,
                     loc: self.node_loc(*target),
                     kind: DiagKind::RuntimeIndexTarget,
                     a: NodeId::default(),
@@ -347,6 +358,7 @@ where
                 // non-container target beside it, the value itself is the
                 // fact, so this kind carries no type to print.
                 EvalError::IndexSubscript { subscript } => out.push(Diag {
+                    budget: None,
                     loc: self.node_loc(*subscript),
                     kind: DiagKind::RuntimeIndexSubscript,
                     a: NodeId::default(),
@@ -373,6 +385,7 @@ where
             };
             if self.user_asserts.contains(&template) {
                 out.push(Diag {
+                    budget: None,
                     loc: self.node_edges.get(&template).cloned(),
                     kind: DiagKind::Assert,
                     a: NodeId::default(),
@@ -426,6 +439,7 @@ where
                 path,
             });
             return Diag {
+                budget: None,
                 loc,
                 kind: DiagKind::Runtime,
                 a: apply.parameter_type,
@@ -454,6 +468,7 @@ where
         let kind = entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime);
         let field = entry.map(|e| e.field.clone()).flatten();
         Diag {
+            budget: None,
             loc,
             kind,
             a,
