@@ -73,8 +73,10 @@ arity-checked by the struct itself.
    `&Doc` dispatch stay).
 7. **`crates/lichen-language/src/doc.rs`** — `Doc::render` now opens the `[value, type]`
    slot and renders via `render_struct_fields_named` (the doc value's struct type chain); the
-   label semantics (`slot()==3`, `is_label`, `combine`→no-doc, relaxed `unify_slots`,
-   `is_subtype`→true) stay.
+   label semantics (`is_label`, `combine`→no-doc, relaxed `unify_slots`,
+   `is_subtype`→true) stay.  The slot itself is no longer declared here — `AttrExt::slot()`
+   is gone, and a label's slot is its position in the composition's `attrs` manifest
+   (see [attributes](attributes.md)).
 8. **`crates/lichen-highlevel/src/checker.rs`** — `check_ann` label branch: the runtime render
    slot for a label is the annotation value expression's `[value, type]` term pair
    (`self.term[pe]`); a constraint keeps its bare lifted value. `attr[e]` (constraint) is

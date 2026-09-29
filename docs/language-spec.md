@@ -539,9 +539,11 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
 | `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
 | `X<e>` | `RawIndex { container, index }` — a raw, unvalidated element read |
+| `$name(args)` | `NativeCall { op, args }` — a native operator registered by the compiling module's plugin; `op` is a private name resolved only against that module's registry, and the checker adopts the `[value, type]` pair the plugin's builder returns |
+| a use of an `@{…@}`-imported package name, or of one of its direct exports | `Static { export }` — the value is read out of the shared registry by its export ref; the checker materializes the pair and leaves the payload in the package's static arena |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
-| `{ x = 1; …; y = 2 }` (no tail) | `RecordBlock { fields }` — a struct-returning block; each field carries an optional name, its value, a `pub` mark, and a `field` flag (false for a `let` local) |
-| `{ …; return e }` | `Block { statements, expr: e }` — the `return` expression is the block's tail |
+| `{ x = 1; …; y = 2 }` (no tail) | `Record { value, names }` — a struct-returning block (the frontend's `RecordBlock` node): `value` is a tuple of the emitted field values and `names` a range of each field's optional name, index-aligned with the tuple; the checker builds the anonymous struct type from the element types |
+| `{ …; return e }` | the `return` expression's own node (the frontend's `Block` node carries it as the block's `expr`) — the block's value is its tail, and the `return` may sit anywhere among the statements |
 
 There is no desugar step: bindings are graph sharing, and a block-wide
 binding reserves a placeholder id, compiles its value, then fills the id with
