@@ -212,6 +212,49 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
 }
 
 #[test]
+fn an_undecided_read_leaves_no_cycle_for_the_next_pass() {
+    // A `TableGet` whose key is undecided answers `Parameterized`, and that
+    // answer is deliberately *not* cached — the next evaluation re-runs the
+    // read.  The attempt must therefore release the node's visiting mark:
+    // leaving it set makes the next evaluation see an ordinary re-read as a
+    // cycle and panic (`cycle detected: node ... is being evaluated`).
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let key = usize_node(&mut m, root, 1);
+    let value = usize_node(&mut m, root, 10);
+    let t = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))],
+    );
+    // A key that stays undecided: an unbound cell.
+    let other_key = m.add_node(
+        root,
+        None,
+        Some(TestValue::LowValue(LowValue::Parameterized)),
+    );
+    let get = table_get(&mut m, root, t, other_key);
+
+    let read = m.evaluate_node_deep(get, None);
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::Parameterized),
+        "an undecided key leaves the read lazy"
+    );
+    assert_eq!(m.eval_errors.len(), 0, "an undecided key records no miss");
+
+    // The second pass — the checker's statement pass then root pass, or a
+    // later forced read — re-evaluates the same node.  A visiting mark leaked
+    // by the first attempt panics here.
+    let again = m.evaluate_node_deep(get, None);
+    assert_eq!(
+        again,
+        TestValue::LowValue(LowValue::Parameterized),
+        "the re-read is still undecided, not a cycle"
+    );
+}
+
+#[test]
 fn cyclic_keys_hash_and_compare_equal() {
     let mut m = Module::new();
     let root = m.add_block(None);

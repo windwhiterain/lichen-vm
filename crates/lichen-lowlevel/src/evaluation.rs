@@ -61,15 +61,44 @@ impl<P: Program> Module<P> {
         // refs, shared arena) and return.  Nothing is evaluated, cached
         // into importer nodes, or marked — the static module already solved
         // it.
-        let node = match node {
-            Dyn(node) => node,
-            AnyNodeId::Static(sref) => return self.static_read(sref),
-        };
+        match node {
+            Dyn(node) => self.evaluate_node_body(node, referer),
+            AnyNodeId::Static(sref) => self.static_read(sref),
+        }
+    }
+
+    /// Marks `node` visiting for the duration of one evaluation attempt.
+    ///
+    /// Invariant: an evaluation attempt owns `Node::visiting` for exactly its
+    /// own frame and clears it on every exit — a cached answer, a lazy
+    /// (`Parameterized`) answer, and an unwinding panic alike.  A node is
+    /// therefore never left flagged visiting once no frame is computing it,
+    /// because the next evaluation of that node must not read the stale flag
+    /// as a cycle: a node the postlude deliberately declined to cache (a
+    /// `Parameterized` answer) is evaluated again by a later pass, and before
+    /// this invariant that second attempt saw `visiting == true` and panicked.
+    fn retain_node(&mut self, node: NodeId) {
+        self.nodes[node].visiting = true;
+    }
+
+    /// The [`Self::retain_node`] release — see the invariant there.
+    fn release_node(&mut self, node: NodeId) {
+        self.nodes[node].visiting = false;
+    }
+
+    /// The body of [`Self::evaluate_node`] — everything after the static-ref
+    /// leaf rule, which [`Self::evaluate_node`] handles before the mark is
+    /// taken: a static node has no visit mark to own.
+    #[stacksafe]
+    fn evaluate_node_body(&mut self, node: NodeId, referer: Option<BlockId>) -> P::Value {
         let block = self.nodes[node].block;
         debug_assert!(
             self.blocks.contains_key(block),
             "node {node:?} references released block {block:?}"
         );
+        // A child-block root delegates whole: [`Self::evaluate_block`] runs
+        // the deep pass, which takes its own marks.  Returning before this
+        // frame takes one keeps ownership flat — one attempt, one mark.
         if let Some(referer) = referer
             && self.blocks[block].parent == Some(referer)
         {
@@ -78,10 +107,27 @@ impl<P: Program> Module<P> {
         if let Some(value) = self.nodes[node].value {
             return value;
         }
+        // A node flagged visiting with no cached value is being computed by an
+        // inner frame, so this read is genuinely cyclic.  The flag is cleared
+        // on every exit from the attempt that set it (see the invariant on
+        // [`Self::retain_node`]), so it always means an active frame rather
+        // than a leaked one.
         if self.nodes[node].visiting {
             unreachable!("cycle detected: node {node:?} is being evaluated");
         }
-        self.nodes[node].visiting = true;
+        self.retain_node(node);
+        let value = self.evaluate_node_operation(node);
+        self.release_node(node);
+        value
+    }
+
+    /// The operation dispatch of [`Self::evaluate_node`]: compute this node's
+    /// operation, then apply the postlude that decides whether the answer is
+    /// cached.  Runs between [`Self::retain_node`] and
+    /// [`Self::release_node`], so an early return here cannot leak the mark.
+    #[stacksafe]
+    fn evaluate_node_operation(&mut self, node: NodeId) -> P::Value {
+        let block = self.nodes[node].block;
         let operation = self.nodes[node].operation.unwrap();
         let operator = operation.operator;
         let value = match operator.as_enum() {
@@ -335,7 +381,6 @@ impl<P: Program> Module<P> {
             // see the member's concrete value when the class later merges.
             self.write_node_value(node, Some(value));
         }
-        self.nodes[node].visiting = false;
         value
     }
 
@@ -440,7 +485,10 @@ impl<P: Program> Module<P> {
         // already holds its cached value, so re-entering it would only loop.
         // A node marked visiting with no cached value is an *operation* cycle
         // mid-computation — it falls through so [`Self::evaluate_node`]'s
-        // own guard panics, as before.
+        // own guard panics, as before.  The flag's lifetime is exactly one
+        // evaluation attempt (see the invariant on `retain_node`), so a
+        // visiting node with no value is always one an outer frame is
+        // computing right now.
         if self.nodes[node].visiting
             && let Some(value) = self.nodes[node].value
         {
@@ -468,6 +516,9 @@ impl<P: Program> Module<P> {
         }
         let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.as_enum() {
+            // The descent below may reach `node` again through the array's own
+            // items (a self-referential value), so it is marked for the
+            // duration: the same structural-cycle cut as the entry above.
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
             for item in array.items() {
