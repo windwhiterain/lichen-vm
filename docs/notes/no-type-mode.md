@@ -1,6 +1,6 @@
 # No type mode: `(a, b)` is always a tuple value, `<a, b>` always a type
 
-> Status: **implemented** on `feature/no-type-mode`.  Follows
+> Status: current — landed.  Follows
 > [`placeholder-anywhere.md`](placeholder-anywhere.md) (which made `_` a
 > placeholder in any position).  Companion change to
 > [`language-spec.md`](../language-spec.md), specifically the "One grammar, no

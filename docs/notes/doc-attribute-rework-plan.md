@@ -1,7 +1,7 @@
 # Plan: make the doc attribute a plain, generic struct-typed value
 
-> Status: **implemented** in the isolated worktree (`doc-attr-rewrite`,
-> `C:\resource\lichen-vm-docrewrite`) off clean `v1`; merged to `v1`.
+> Status: current — implemented and merged; the doc attribute is a plain,
+> generic struct-typed value as designed below.
 > Target: `crates/lichen-language/{lex,parse,ast,compile,checker,render,run,program,doc}.rs`,
 > `crates/lichen-language/tests/doc.rs`, `crates/lichen-language-server/src/analysis.rs`,
 > `crates/lichen-highlevel/src/attr.rs`, `docs/notes/attributes.md`, `docs/language-spec.md`.

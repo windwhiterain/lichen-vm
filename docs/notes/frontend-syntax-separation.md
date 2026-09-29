@@ -1,28 +1,32 @@
 # Separating the lexer & parser from the language
 
-> Status: proposed
-> Points at: [`crates/lichen-language`](../../crates/lichen-language/) (`src/lex.rs`,
-> `src/parse.rs`, `src/ast.rs`, `src/diag.rs`, `src/compile.rs`, `src/lib.rs`,
-> `src/preprocess/`), [`crates/lichen-highlevel`](../../crates/lichen-highlevel/)
-> (`src/ir.rs`), [`crates/lichen-language-server`](../../crates/lichen-language-server/)
-> (`src/analysis.rs`), and the language spec.
-> Design principle (revised): **`lex` owns the source span; the parser consumes the
+> Status: current — the split landed exactly as designed below:
+> [`crates/lichen-language-lex`](../../crates/lichen-language-lex/) owns `Span`
+> and the tokens,
+> [`crates/lichen-language-parser`](../../crates/lichen-language-parser/) owns
+> the AST and the parser, `lichen-highlevel` is span-free, and
+> [`crates/lichen-language`](../../crates/lichen-language/) re-exports both
+> crates (`pub use lichen_language_lex as lex; pub use lichen_language_parser as
+> parse; pub use lichen_language_parser::ast;`) so the old module paths hold.
+> The migration plan at the bottom records how it was executed; the coupling
+> inventory records the pre-split state it replaced.
+> Design principle: **`lex` owns the source span; the parser consumes the
 > token's span; `highlevel` is span-free.**
 
-## The problem
+## The problem (pre-split)
 
-Today `crates/lichen-language` is one crate that owns both the *syntax* front-end and
-the *language* semantics, and the syntax half is pulled up into the type-system stack:
+Before the split `crates/lichen-language` was one crate that owned both the *syntax* front-end and
+the *language* semantics, and the syntax half was pulled up into the type-system stack:
 
 ```
 text ──lex──▶ tokens ──parse──▶ AST ──lower──▶ IR ──check──▶ Build
         (src/lex.rs)     (src/parse.rs)   (src/compile.rs)   (lichen-highlevel)
 ```
 
-Worse, **`Span` is defined in `lichen-highlevel`** (`pub type Span = (u32, u32)` in
-`ir.rs`), so the type-system stack *owns* the source-position vocabulary. `lex.rs`,
-`parse.rs`, `ast.rs`, `diag.rs`, and `compile.rs` all import it from there, and the
-highlevel IR stores a span on every node (`Expr { kind, span }`), threading it through
+Worse, **`Span` was defined in `lichen-highlevel`** (`pub type Span = (u32, u32)` in
+`ir.rs`), so the type-system stack *owned* the source-position vocabulary. The lexer,
+parser, AST, diagnostics, and lowering all imported it from there, and the
+highlevel IR stored a span on every node (`Expr { kind, span }`), threading it through
 every `alloc*` method.
 
 The downsides:
@@ -39,7 +43,7 @@ The downsides:
 - **The syntax is not independently reusable.** An editor that wants to re-lex/parse a
   buffer and stop must import the whole dependency tree.
 
-## The target dependency graph
+## The dependency graph
 
 The crate split is pinned by this graph (arrows read *"flows into / is consumed by"*;
 the compile-time `depends on` edges are the reverse):
@@ -80,7 +84,10 @@ source ──lex──▶ Token{ range, span: Span }     Span DEFINED IN lex
    `ExprId → Span` index, built during lowering, consulted only when it maps a checker
    message back to a source caret.
 
-## Current coupling (inventory)
+## Pre-split coupling (inventory, historical)
+
+The inventory that motivated the split, kept for context.  Every row landed
+per the structure below:
 
 | File | Depends on (outside the crate) | Role |
 |---|---|---|
@@ -112,9 +119,9 @@ Existing external consumers of the syntax surface:
 | `crates/lichen-language-server/src/lsp.rs` | `lex::line_col` / `lex::line_starts` (and the `Span` type) |
 | `crates/lichen-language/tests/pipeline.rs` | `diag::Stage` |
 
-## Target structure
+## The structure
 
-Two new crates plus the span-freed highlevel:
+Two crates plus the span-freed highlevel (all landed):
 
 ```
 crates/lichen-language-lex/
@@ -135,7 +142,7 @@ The `Span` type lives in `lichen-language-lex`; the AST and parser live in
 `lichen-language-parser` and import `Span`/`Token` from the lex crate. Nowhere in
 `lichen-highlevel` is a span. `language` re-exports both crates so existing paths hold.
 
-What moves, what stays:
+What moved, what stayed:
 
 | Piece | Destination | Why |
 |---|---|---|
@@ -271,7 +278,9 @@ only over the export handle type.  The language crate re-exports them (a
 `lichen_language::preprocess::{split_block, block_directives, block_metadata}`
 paths (used by `readme`/`sync-readme` and the server) resolve unchanged.
 
-## Migration plan (each step keeps `cargo check`/`cargo test` green)
+## Migration (executed)
+
+The split was executed in these steps, each keeping `cargo check`/`cargo test` green:
 
 1. **Scaffold the lex crate.** Add `crates/lichen-language-lex` (dep `logos` only),
    register in workspace `members`. Move `Span`, `line_starts`, `line_col`, `byte_range`,

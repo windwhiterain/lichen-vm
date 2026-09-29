@@ -1,6 +1,6 @@
 # The tree-sitter generated-files testing method
 
-> Status: **resolved.**  The generated parser files are **not committed**; they are
+> Status: current — the settled testing method.  The generated parser files are **not committed**; they are
 > regenerated from `grammar.js` at build time.  The grammar tooling is **fully decoupled**
 > from the workspace: the default `cargo test --workspace` and the Zed WASM build never build
 > the grammar and never need the tree-sitter CLI.  Grammar changes are tested locally by the

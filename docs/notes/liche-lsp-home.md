@@ -1,6 +1,6 @@
 # Lichen Home for the LSP: persist the cache, self-heal = (re)create lazily
 
-> Status: implemented (landed).
+> Status: current.
 > Points at: `crates/lichen-language-server/src/{home.rs,server.rs,analysis.rs}`
 > (the change), `crates/lichen-language/src/{package.rs,persist.rs}` (the store
 > that already exists), and the notes

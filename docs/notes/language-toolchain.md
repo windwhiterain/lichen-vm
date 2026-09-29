@@ -1,6 +1,6 @@
 # Language toolchain: one frontend, many tools
 
-> Status: design (current)
+> Status: current — the design below is the shipped toolchain layer.
 > Points at: the crate boundaries below, the frontend in
 > [`crates/lichen-language`](../../crates/lichen-language/), and the two new tool
 > crates `lichen-language-server` and `lichen-language-zed`.

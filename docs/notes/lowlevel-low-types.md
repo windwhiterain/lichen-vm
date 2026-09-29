@@ -1,7 +1,7 @@
 # Low types: a variant-tag layer for a lowlevel-based JIT
 
-> Status: design discussion (recorded 2025, from the type-system cleanup
-> review). Not approved yet; relates to decision D5 in
+> Status: proposed — a design discussion (recorded 2025, from the type-system
+> cleanup review), not approved yet; relates to decision D5 in
 > [type-system-cleanup-plan](type-system-cleanup-plan.md) and to
 > [lichen-lowlevel-shape](lichen-lowlevel-shape.md).
 
