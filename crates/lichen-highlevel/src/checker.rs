@@ -746,6 +746,35 @@ where
         self.array_node(self.current_block, &[id, names])
     }
 
+    /// The struct type's full encoding — the field-type `shape`, the `kind`
+    /// `[TypeStruct{id, names}, K]`, and the `[shape, kind]` wrapper pair —
+    /// built from the caller's nominal `id` node, the field types and the
+    /// field names:
+    ///
+    /// ```text
+    /// wrapper = [ shape, kind ]
+    /// shape   = [ field types… ]
+    /// kind    = [ TypeStruct{id, names}, K ]
+    /// ```
+    ///
+    /// The single construction point for the layout [`shape`](crate::shape)
+    /// documents but deliberately never builds.  The `id` stays the caller's
+    /// because its per-occurrence freshness is a policy of the emitting rule,
+    /// not part of the encoding.
+    fn struct_type_type(
+        &mut self,
+        id: NodeId,
+        field_tys: &[NodeId],
+        field_names: &[Option<&'static str>],
+    ) -> (NodeId, NodeId, NodeId) {
+        let shape = self.array_node(self.current_block, field_tys);
+        let names = self.build_struct_names(field_names);
+        let marker = self.struct_marker_node(id, names);
+        let kind = self.kind_expr(self.current_block, marker);
+        let wrapper = self.array_node(self.current_block, &[shape, kind]);
+        (shape, kind, wrapper)
+    }
+
     /// A lazy structural read down a constant index `path` from `base`: the
     /// nested `Index` op chain `Index(…Index(base, path[0])…, path[n])` that
     /// resolves when `base` binds — the runtime form of a constant encoding
