@@ -39,6 +39,13 @@ pub enum EvalError {
     /// error: `target` is the container operand node, so the highlevel can
     /// attribute the diagnostic to the expression that was indexed.
     IndexTarget { target: AnyNodeId },
+    /// A [`LowOperator::Index`] whose **subscript** is not an index at all —
+    /// a read through a string, a tuple, a function, a table.  Reachable from
+    /// source (`a[i]` with `i : string`, and the same through a parameter), so
+    /// it is a recorded failure and a computed nothing: `subscript` is the
+    /// index operand node, so the highlevel can attribute the diagnostic to
+    /// the expression that was used as a subscript.
+    IndexSubscript { subscript: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -145,12 +152,16 @@ impl<P: Program> Module<P> {
                                             P::Value::from(LowValue::Void)
                                         }
                                     }
-                                    // Indexing something that is not an
-                                    // array is a user error (a field read
-                                    // applied to a non-container), not an
-                                    // invariant violation: record it and
-                                    // yield a computed nothing, as the
-                                    // out-of-bounds read above does.
+                                    // The read's operands are a *pair*: every
+                                    // failure mode of reading is a user error
+                                    // (a field read applied to something that is
+                                    // not a container, of an element that does
+                                    // not exist, or through a subscript that is
+                                    // not an index), never an invariant
+                                    // violation — record it and yield a computed
+                                    // nothing.  A late binding still reaches this
+                                    // position through the `Void`/`Parameterized`
+                                    // arms, so nothing that could resolve is lost.
                                     _ => {
                                         self.eval_errors.push(EvalError::IndexTarget {
                                             target: operands[0].node,
@@ -159,7 +170,19 @@ impl<P: Program> Module<P> {
                                     }
                                 }
                             }
-                            _ => unreachable!("Index needs a USize index node"),
+                            // A subscript that is concretely not an index —
+                            // a string, a tuple, a function — is the same
+                            // class of user error as a non-container target
+                            // (neither is expressible in the type encoding,
+                            // so the checker cannot reject either one
+                            // statically): recorded, with the subscript node
+                            // carrying the fact, and a computed nothing.
+                            _ => {
+                                self.eval_errors.push(EvalError::IndexSubscript {
+                                    subscript: operands[1].node,
+                                });
+                                P::Value::from(LowValue::Void)
+                            }
                         }
                     }
                     _ => unreachable!("Index operand must be an array of [array, index]"),

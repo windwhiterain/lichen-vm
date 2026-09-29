@@ -162,6 +162,12 @@ where
         DiagKind::RuntimeIndexTarget => {
             "this value is not a container — it has no element to read".to_string()
         }
+        DiagKind::RuntimeIndexSubscript => {
+            "this value is not an index — an element can only be read by position".to_string()
+        }
+        DiagKind::ImportExport => {
+            "this package's export is not a value — a package must end in a value".to_string()
+        }
         DiagKind::NamedField => {
             let base = format!(
                 "no field with this name in the struct type {}",
