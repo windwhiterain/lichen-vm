@@ -101,8 +101,11 @@ One new module in `lichen-highlevel` (working name `shape.rs`) becomes the
   (perspective.rs:174, doc.rs:67). The three uncoordinated slot orders
   (`merge_slots` sort, frontend tail order, positional `annotation_attrs`)
   are reduced to one.
-- Persisted codec tags are derived from declaration order with a round-trip
-  property test, replacing the hand-maintained two-sided tables
+- Persisted codec tags are stored in the kind-marker registry entries (not
+  derived from declaration order — the tag is the compatibility contract and
+  must survive list reordering) with both codec sides generated from the one
+  list, plus a round-trip property test iterating the registry-derived
+  variant lists, replacing the hand-maintained two-sided tables
   (program.rs:515-580, codec.rs:99-238).
 
 This phase changes no semantics; it is the prerequisite that makes every
