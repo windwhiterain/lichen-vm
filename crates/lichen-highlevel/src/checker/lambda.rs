@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, Function, LowOperator, LowValue, NodeId};
+use lichen_lowlevel::{AnyFunctionId, AnyNodeId, LowOperator, LowValue, NodeId};
 
 use lichen_utils::extend::AsEnum;
 
@@ -33,6 +33,29 @@ where
         let return_block = self.module.add_block(None);
         let saved = self.current_block;
         self.current_block = return_block;
+        // The function shell exists *before* any of its nodes, and the stack
+        // entry goes in with it: the allocation helper tags and registers
+        // every node against the function currently being built, so the
+        // parameter's cells and pair are this template's from the start —
+        // nothing has to be moved, re-tagged, or overwritten afterwards.
+        //
+        // `parent` is the enclosing function: a nested closure's nodes then
+        // read as members of the enclosing template too, while a sibling's do
+        // not (the mutual-recursion invariant).  The lexical parent is the
+        // innermost enclosing function whose definition depth is one less: a
+        // genuinely-nested closure joins the enclosing template, while a
+        // same-depth sibling binding (mutual recursion — compiled here
+        // because the body references it) hangs under nothing.  Its closure
+        // then stays outside this template, referenced in place, so the
+        // recursion re-applies the sibling's never-bound template instead of a
+        // bound instance.
+        let parent = self
+            .function_stack
+            .iter()
+            .rposition(|&(_, d)| d + 1 == depth)
+            .map(|i| self.function_stack[i].0);
+        let function = self.module.begin_function(return_block, parent);
+        self.function_stack.push((function, depth));
         let value_cell = self.fresh_cell();
         let type_cell = self.fresh_cell();
         // The parameter *is* the pair `[value, type]`; the cells live in the
@@ -58,60 +81,11 @@ where
             }
             None => self.array_node(return_block, &[value_cell, type_cell]),
         };
-        // The function shell: its id exists from the start of the body, so
-        // every node compiled below is tagged with it and registered in its
-        // scope — the template the apply clone walk recognizes by chain
-        // membership.  `parent` is the enclosing function: a nested
-        // closure's nodes then read as members of the enclosing template
-        // too, while a sibling's do not (the mutual-recursion invariant).
-        // The return and parameter slots are placeholders, filled once the
-        // body is checked.
-        let function = self.module.functions.insert(Function {
-            nodes: Vec::new(),
-            r#return: param,
-            parameter: param,
-            asserts: Vec::new(),
-            // The lexical parent is the innermost enclosing function whose
-            // definition depth is one less: a genuinely-nested closure joins
-            // the enclosing template, while a same-depth sibling binding
-            // (mutual recursion — compiled here because the body references
-            // it) hangs under nothing.  Its closure then stays outside this
-            // template, referenced in place, so the recursion re-applies the
-            // sibling's never-bound template instead of a bound instance.
-            parent: self
-                .function_stack
-                .iter()
-                .rposition(|&(_, d)| d + 1 == depth)
-                .map(|i| self.function_stack[i].0),
-            block: return_block,
-        });
-        self.module.blocks[return_block].functions.push(function);
-        // The nodes above predate the shell: the allocation helper
-        // tagged them with (and registered them in) the *enclosing*
-        // function's scope.  They are this function's own — move them into
-        // its scope and retag them, exactly where the helper would have put
-        // them had the shell existed first.
-        let mut param_parts = vec![value_cell, type_cell];
-        if let Some((attr_value, attr_type, attr)) = attr_cell {
-            param_parts.push(attr_value);
-            param_parts.push(attr_type);
-            param_parts.push(attr);
-        }
-        // The parameter pair itself (`param`) belongs to this function's
-        // template scope as well — the lowlevel [`Function`] contract and the
-        // apply clone walk both require `parameter` to be registered in
-        // `nodes`, so the debug gate in `function_apply` holds.
-        param_parts.push(param);
-        if let Some(enclosing) = self.current_function() {
-            self.module.functions[enclosing]
-                .nodes
-                .retain(|&n| !param_parts.contains(&n));
-        }
-        for &node in &param_parts {
-            self.module.nodes[node].function = Some(function);
-        }
-        self.module.functions[function].nodes = param_parts;
-        self.function_stack.push((function, depth));
+        // The return and parameter slots are named once the pair exists; both
+        // are already registered in this function's own scope by the helper
+        // that allocated them (the apply clone walk requires `parameter` to be
+        // a member, and `finish_function` asserts it).
+        self.module.finish_function(function, param, param);
         self.term[parameter] = Some(param);
         self.ty[parameter] = Some(type_cell);
         // A self- or mutually-recursive binding (`fib = n => e`): the IR is a

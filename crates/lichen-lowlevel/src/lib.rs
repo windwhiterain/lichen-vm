@@ -1063,6 +1063,48 @@ impl<P: Program> Module<P> {
         condition
     }
 
+    /// Create a function template's **shell**, before any of its nodes exist.
+    ///
+    /// The record this inserts is deliberately incomplete: its
+    /// [`Function::parameter`] and [`Function::r#return`] are unset until
+    /// [`Self::finish_function`] names them, and nothing may read a function
+    /// in between.  Building the shell first is what lets a compiler emit the
+    /// parameter nodes *into this function's scope*: the node allocator tags
+    /// and registers each node against the function currently being built, so
+    /// a parameter allocated after the shell lands in the right template
+    /// without being moved there afterwards.
+    ///
+    /// `parent` is the enclosing template, or `None` at the top level and for
+    /// a same-depth sibling (see [`Function::parent`]).
+    pub fn begin_function(&mut self, block: BlockId, parent: Option<FunctionId>) -> FunctionId {
+        let function = self.functions.insert(Function {
+            nodes: Vec::new(),
+            r#return: NodeId::default(),
+            parameter: NodeId::default(),
+            parent,
+            asserts: Vec::new(),
+            block,
+        });
+        self.blocks[block].functions.push(function);
+        function
+    }
+
+    /// Complete the shell begun by [`Self::begin_function`], naming the
+    /// return and parameter slots.
+    ///
+    /// Both must already be registered in the function's scope: the apply
+    /// clone walk reads its members through [`Function::nodes`], and
+    /// `parameter` in particular is what it instantiates, so a parameter
+    /// missing from the scope is a construction error, not a runtime one.
+    pub fn finish_function(&mut self, function: FunctionId, r#return: NodeId, parameter: NodeId) {
+        debug_assert!(
+            self.functions[function].nodes.contains(&parameter),
+            "a function's parameter slot must be registered in its own scope before the shell is finished"
+        );
+        self.functions[function].r#return = r#return;
+        self.functions[function].parameter = parameter;
+    }
+
     pub fn add_function(
         &mut self,
         block: BlockId,
@@ -1072,14 +1114,7 @@ impl<P: Program> Module<P> {
         asserts: impl IntoIterator<Item = NodeId>,
     ) -> NodeId {
         let nodes: Vec<NodeId> = nodes.into_iter().collect();
-        let function = self.functions.insert(Function {
-            nodes: Vec::new(),
-            r#return: ret,
-            parameter: param,
-            parent: None,
-            asserts: asserts.into_iter().collect(),
-            block,
-        });
+        let function = self.begin_function(block, None);
         // The passed nodes are this function's template: tag each with its
         // owner, so the apply clone walk's chain membership test recognizes
         // them.  The function id must exist before the tags point at it.
@@ -1087,7 +1122,8 @@ impl<P: Program> Module<P> {
             self.nodes[node].function = Some(function);
         }
         self.functions[function].nodes = nodes;
-        self.blocks[block].functions.push(function);
+        self.functions[function].asserts = asserts.into_iter().collect();
+        self.finish_function(function, ret, param);
         // The value node is the function's own too — tagged with it, so an
         // enclosing template (a nested function's parent link) clones it and
         // instantiates a fresh closure per call instead of referencing the
