@@ -71,8 +71,8 @@ where
 pub type NativeOps<P> = &'static [(&'static str, &'static dyn NativeOp<P>)];
 
 /// The no-op registry of a program with no native operators: no `$name` is
-/// recognised, so the frontend rejects any `$` form (a `NativeCall` that
-/// reaches the checker with an empty registry is a frontend/checker bug).
+/// recognised, so every `$name` call in such a module misses this slice and the
+/// checker reports it as unresolved ([`DiagKind::NativeOpUnresolved`](crate::DiagKind)).
 pub fn no_native_ops<P: HighProgram>() -> NativeOps<P>
 where
     P::Value: ValueType,

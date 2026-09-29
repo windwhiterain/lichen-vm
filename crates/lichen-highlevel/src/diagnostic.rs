@@ -106,6 +106,11 @@ pub enum DiagKind {
     /// reached the diagnostics as a fact about a *value*, with no type to
     /// print, so the wording is self-contained.
     RuntimeIndexSubscript,
+    /// A `$name(args…)` call whose `name` no plugin registered with this
+    /// module — the checker resolves `$name` against the module's own private
+    /// [`NativeOps`](crate::NativeOps) registry, and this is the miss.  `a`/`b`
+    /// are unused; the operator name rides in [`DiaryEntry::field`].
+    NativeOpUnresolved,
     /// A top-level binding whose value computation never terminates — the VM's
     /// apply/depth guard fired while the build evaluated the user-written
     /// statement.  The checker reports this as an error instead of panicking.

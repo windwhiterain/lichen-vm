@@ -234,6 +234,13 @@ where
             "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
                 .to_string()
         }
+        DiagKind::NativeOpUnresolved => match d.field.as_deref() {
+            Some(name) => format!(
+                "unresolved native operator '{name}' — this module composes no plugin registering it"
+            ),
+            None => "unresolved native operator — this module composes no plugin registering it"
+                .to_string(),
+        },
         DiagKind::Assert => {
             // The assert's failed value, rendered generically through the
             // structural `LowValue` view.

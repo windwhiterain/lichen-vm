@@ -1653,6 +1653,21 @@ fn an_unresolved_name_is_reported() {
 }
 
 #[test]
+fn calling_an_unregistered_native_operator_is_a_diagnostic() {
+    // `$name` resolves against the compiling module's own private registry,
+    // which is empty for an ordinary file — so every `$name` is unresolved.
+    // It is reported at the `$` rather than panicking: the frontend compiles
+    // the call blind, so the checker is the first layer that can see the
+    // registry, and the guard makes `Build::ok` false.
+    let d = diags("x = $nosuchop(1)");
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].stage, Stage::Check);
+    assert_eq!(d[0].span, Some((1, 5)), "the caret is on the `$`");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::NativeOpUnresolved);
+}
+
+#[test]
 fn an_annotation_mismatch_reports_expected_and_found() {
     let d = diags("5 : Int -> Int");
     assert_eq!(d.len(), 1);
