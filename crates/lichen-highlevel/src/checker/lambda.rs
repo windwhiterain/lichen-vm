@@ -186,14 +186,12 @@ where
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
         // Built while the current function is still the shell, so these
         // nodes join its scope like the rest of the body.
-        let arrow = self.arrow(return_block, type_cell, self.ty[r#return].unwrap());
+        let (shape, _kind, arrow) =
+            self.arrow_parts(return_block, type_cell, self.ty[r#return].unwrap());
         // The printer needs the arrow's *shape* — an anonymous `[dom, codom]`
         // pair is indistinguishable from a tuple type without it, so only a
         // registered shape renders as `dom -> codom`.
-        let parts = shape::function_type_parts(&mut self.module, self.type_expr, arrow)
-            .expect("a freshly built arrow is a function type");
-        self.arrows
-            .insert(self.module.as_dynamic(parts, return_block));
+        self.arrows.insert(shape);
         // The self-reference's type cell now carries the arrow, so the
         // in-body applications see the function's real type.
         self.module.unify(ty_cell, arrow);
