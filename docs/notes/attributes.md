@@ -1,9 +1,11 @@
 # Extensible attributes (typed perspectives)
 
 > Status: current
-> Points at: `crates/lichen-highlevel/src/attr.rs` (the extension point), `ir.rs`
-> (the `Schema`), `checker.rs` (`check_unify_relaxed`), and
-> `crates/lichen-perspective/src/perspective.rs` (the `Perspective` attribute + `GcdOp`).
+> Points at: `crates/lichen-highlevel/src/attr.rs` (the extension point and the
+> canonical order), `shape.rs` (the pair layout: `attr_slot`), `ir.rs`
+> (the `Schema`), `checker.rs` (`check_ann`), and
+> `crates/lichen-language/src/program.rs` (the `attrs` manifest — the one list
+> that fixes the order).
 > Inspired by [the typed-perspectives paper](../reference/perspectives-paper.md).
 
 A program already wraps every expression in a `[value, type]` pair. The attribute
@@ -32,6 +34,47 @@ uniform shape. A constraint reads its lattice value from that pair's element 0; 
 uses the whole pair. This is what lets the checker's slot handling be attribute-agnostic
 (`# 4` is a real expression `4 : Int`; `? doc` is a real expression `doc : Doc`).
 
+## The canonical attribute order (where a slot comes from)
+
+A pair's attribute slots are a **layout**, and the layout is declared **once**: by the
+host composition's `attrs` manifest, in order.
+
+```
+lang_compose_vocabulary! {
+    attrs = [ Perspective as Perspective; Doc as Doc; ]   // ← the canonical order
+    …
+}
+```
+
+That list *is* the canonical order. The composition derives from it
+
+- `LANG_ATTR_ORDER` — every attribute, in slot order (the `i`-th attribute is at pair
+  slot `attr_slot(i)`, i.e. `PAIR_ATTR_BASE + i` in `lichen-highlevel::shape`);
+- `AttrSet::order_index` — the index the frontend, the checker and every reader ask;
+- a build-time check that each index is its position.
+
+So `Perspective` is the first attribute and `Doc` the second **by declaration, not by a
+number anyone typed**: a plugin's marker supplies `AttrSpec` + `AttrExt` (behaviour) and
+appears in the manifest, and nothing else. The old `AttrExt::slot()` — with
+`Perspective` claiming `2` and `Doc` claiming `3` in their own crates, plus the
+checker's sort and the frontend's push order agreeing by hand — is gone; a mismatch
+used to be a *silent* mis-unification, and there is now no second list to fall out of
+step.
+
+Two consequences worth stating:
+
+- The order is a **compatibility contract**: it is what a compiled artifact's pairs
+  encode, so reordering the manifest renumbers persisted layouts (the same rule the
+  codec tags follow). It is pinned by a test.
+- **No hard limit** on the number of attributes exists in the encoding — a pair's arity
+  is whatever its schema tail says. The only guarantee is the one above: indices are
+  dense and distinct by construction.
+
+An expression's pair is dense over the attributes it *actually carries*: a `? doc`
+alone is `[value, type, doc]`, so "slot 3" is the slot Doc takes in a pair that also
+carries a perspective. Readers go through the tail position, never through a hard
+number.
+
 ## The extension point (`AttrExt`)
 
 The checker is attribute-agnostic: it only knows the *shape* — "an attribute combines
@@ -41,9 +84,13 @@ that defines the attribute; highlevel ships the inert `NoAttr` marker.
 
 ```
 AttrSpec     marker bound (Copy + PartialEq + Eq + Debug)
-AttrExt<P>   slot() / missing_value() / missing_slot() / combine() /
-             unify_slots() / is_subtype()
+AttrSet      the composed set: ORDER + order_index() — the slot layout
+AttrExt<P>   missing_value() / missing_slot() / combine() / unify_slots() /
+             is_subtype() / is_label() / render()
 ```
+
+`AttrExt` carries **no layout**: "which slot" is the set's order, "what the value
+means" is the extension's.
 
 ## Perspective
 
@@ -162,3 +209,16 @@ label's shape is hardcoded.
   lattice value from that pair's element 0 (the checker stores the pair in `attr[e]`,
   the apply-time unify and subtype read the value); a label reads the whole pair (its
   renderer walks the value's type chain).
+- **A slot is an attribute's position in the composition's `attrs` manifest, not a
+  number a plugin declares.** The slot used to be declared three times over (the
+  `AttrExt::slot` impls, the checker's sort, the frontend's tail push order) and
+  agreed only by hand; a plugin attribute was a silent mis-unification away. The
+  manifest order is now the single authority (`AttrSet::ORDER` / `order_index`, the
+  shape module's `attr_slot` for the arithmetic), which makes the order — not a
+  collision — the thing to protect, exactly like the codec tags.
+- The **residual** hand step when the language grows a third attribute: an
+  attribute is a *syntax*, and the frontend's `Expr::Annotation` has one fixed
+  field per attribute kind, so the grammar/AST gains a field and `compile.rs`
+  gains one `(marker, expression)` push. That push needs no slot number and no
+  order knowledge — it is sorted into the canonical order — so the **order**
+  itself stays a one-list edit (the manifest).

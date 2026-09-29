@@ -61,13 +61,6 @@ where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
 {
-    /// The slot this attribute occupies below the `[value, type]` head — a
-    /// second attribute after `Perspective`, so the pair is
-    /// `[value, type, persp, doc]` in the (future) multi-attribute layout.
-    fn slot(&self) -> usize {
-        3
-    }
-
     /// The value read for an *absent* occurrence: *no doc* — spelled as the
     /// unbound marker, because an absent doc is an *unbound cell* by intent:
     /// a real unify binds it, so a doc passes from one side to the other.

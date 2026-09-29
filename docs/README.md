@@ -42,8 +42,8 @@ Every note opens with a `> Status:` line:
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-compute` | proposed |
-| [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phase 0); proposed (Phases 1+) |
-| [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
+| [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0/1a/1b/1c); proposed (Phases 2+) |
+| [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`shape`/`ir`/`checker`), `lichen-language` (`program`/`compile`) | current |
 | [Doc attribute rework plan](notes/doc-attribute-rework-plan.md) | `lichen-language`, `lichen-highlevel` (`attr`), `lichen-language-server` (`analysis`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel` (`program`/`native`), `lichen-compute` | current |
 | [The plugin taxonomy](notes/plugin-taxonomy.md) | `lichen-highlevel` (`plugin`), `lichen-compute`, `lichen-std-native`, `lichen-perspective`, `lichen-language` (`program`/`package`) | current |
