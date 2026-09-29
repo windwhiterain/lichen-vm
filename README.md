@@ -15,7 +15,7 @@ Build type system over untyped lowlevel from IR (intermediate representation).
 
 ### Philosophy:
 - No Curry
-- `Type : Type`
+- `Type : Type`: the type chain closes in a cycle at `Type` (the terminal of the chain, not a supertype) — the cycle is what admits recursive types.
 
 ## [Lowlevel](crates/lichen-lowlevel/)
 
@@ -52,7 +52,7 @@ A minimal language built over highlevel.
 
 Since lichen-highlevel preserve the consistancy of `value : type` pair, as long as input `value : type` pairs are consistant, any evaluated `value : type` pair are.
 
-Warning: `Type : Type` gives you most flexibility, the decidability of the lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
+Warning: lichen has no subtyping, and a compound type is typed by its kind rather than by `Type` (`array<Int, 3> : Type` does not check), so what `Type : Type` buys is that types are ordinary values and a recursive type is an ordinary cyclic one — the cost is that the decidability of a lichen program is your integration's responsibility, e.g. encode your type-system's universes into lichen.
 
 ## Quick start
 
