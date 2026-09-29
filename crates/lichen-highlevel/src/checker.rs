@@ -185,10 +185,19 @@ where
     /// cell.  The apply uses it (or `missing` for an unannotated parameter) to
     /// run the attribute equality check.
     function_param_attr: HashMap<ExprId, (P::Attr, NodeId)>,
-    /// The checker's own unification sequence, attributed for diagnostics:
-    /// each entry records which `unify_errors` entry (if any) the unify
-    /// produced, plus its span and check kind.
+    /// The checker's own check sequence, attributed for diagnostics: one entry
+    /// per check the checker issued, recording the `unify_errors` entries that
+    /// check owns (empty when it produced none) plus its span and check kind.
+    ///
+    /// Invariant: `diary` is in [`Self::check_seq`] order, which is why the
+    /// output order comes from `DiaryEntry::seq` rather than from the vec's
+    /// position — the same numbers would then agree.
     diary: Vec<DiaryEntry>,
+    /// The monotonic recording counter behind [`DiaryEntry::seq`]: the
+    /// checker assigns each recorded check the next value, so two checks are
+    /// always comparable in recording order and the diagnostics come out in
+    /// that order whatever each check contributed.
+    check_seq: usize,
     /// The arrow nodes built by [`Checker::check_lam`] — the type printer
     /// renders these `[param, body]` shapes as `param → body`.
     arrows: HashSet<NodeId>,
@@ -285,7 +294,8 @@ where
     pub string_type: NodeId,
     /// The canonical universe `[Type, ↺]`.
     pub type_expr: NodeId,
-    /// The checker's attributed unification sequence (see [`DiaryEntry`]).
+    /// The checker's attributed checks (see [`DiaryEntry`]) — one per check it
+    /// issued, each owning the `unify_errors` range it produced.
     pub diary: Vec<DiaryEntry>,
     /// Arrow nodes; read by the diagnostics.
     pub arrows: HashSet<NodeId>,
@@ -408,6 +418,7 @@ where
             attr: vec![None; n],
             function_param_attr: HashMap::new(),
             diary: Vec::new(),
+            check_seq: 0,
             arrows: HashSet::new(),
             apply_edges: HashMap::new(),
             node_edges: HashMap::new(),
@@ -463,7 +474,7 @@ where
         // Skipped when the checker-side unifies (annotations,
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
-        if checker.module.unify_errors.is_empty() {
+        if !checker.check_failed() {
             let functions: Vec<lichen_lowlevel::FunctionId> =
                 checker.module.functions.keys().collect();
             for function in functions {
@@ -494,7 +505,7 @@ where
         // apply/depth guard fired) is caught here and reported as a
         // diagnostic rather than panicking.  After a caught guard the module's
         // depth/total counters are left inflated, so stop evaluating.
-        if checker.module.unify_errors.is_empty() {
+        if !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
                 let Some(term) = checker.term[s] else {
@@ -535,10 +546,13 @@ where
         // graph may be broken enough to panic on the forced evaluation), or
         // when a statement was already found non-terminating (the module state
         // is inconsistent after the caught guard).
-        if checker.module.unify_errors.is_empty() && checker.nonterminating.is_empty() {
+        if !checker.check_failed() && checker.nonterminating.is_empty() {
             checker.module.check_asserts();
         }
-        let ok = checker.module.unify_errors.is_empty()
+        // A failed unification or a recorded guard failure is what makes a
+        // build not ok — a guard records a diagnostic without touching the
+        // lowlevel's error vec, so the vec alone no longer decides `ok`.
+        let ok = !checker.check_failed()
             && checker.module.eval_errors.is_empty()
             && checker.module.assert_errors.is_empty()
             && checker.nonterminating.is_empty();
@@ -574,6 +588,16 @@ where
             nonterminating: checker.nonterminating,
             ok,
         }
+    }
+
+    /// Whether any check the checker issued already failed — a failed
+    /// unification **or** a recorded guard failure.  A guard failure is a
+    /// check-time refusal that never reached the lowlevel, so it leaves the
+    /// error vec empty and the vec alone would now miss it; this is why the
+    /// definition pass skips when it holds (the graph may then hit a
+    /// non-function apply, which the runtime panics on).
+    fn check_failed(&self) -> bool {
+        !self.module.unify_errors.is_empty() || self.diary.iter().any(|e| e.errors.is_empty())
     }
 
     /// The type constants as plain nodes in the root block (types are
