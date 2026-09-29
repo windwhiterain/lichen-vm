@@ -51,7 +51,6 @@ fn id_hash(id: impl std::hash::Hash) -> u64 {
 
 /// Distinct content tokens for the marker values and a cycle revisit.
 const NONE_TOKEN: u64 = 0x6e6f_6e65_0000_0001; // "none"
-const PARAM_TOKEN: u64 = 0x7061_7261_0000_0002; // "para"
 const CYCLE_TOKEN: u64 = 0x6379_636c_0000_0003; // "cycl"
 /// The fold seed for an array's positional item hashes.
 const ARRAY_SEED: u64 = 0xa22e_b3e1_0000_0004;
@@ -143,8 +142,9 @@ impl<P: Program> Module<P> {
         }
         let mut path = Vec::new();
         match self.hash_inner(key, &mut path, 0) {
-            Some(hash) => KeyState::Hashed(hash),
-            None => KeyState::Unhashable,
+            Ok(Some(hash)) => KeyState::Hashed(hash),
+            Ok(None) => KeyState::Unhashable,
+            Err(()) => KeyState::Undecided,
         }
     }
 
@@ -154,52 +154,89 @@ impl<P: Program> Module<P> {
     /// positionally, and a table value (as key content) hashes by identity.
     /// A cycle is cut by the path check: a revisited node mixes in the
     /// cycle token at its revisit depth, so two equal cyclic structures
-    /// hash equal.  [`None`] is "not hashable" (see [`Self::key_hash`]).
-    fn hash_inner(&self, id: AnyNodeId, path: &mut Vec<AnyNodeId>, depth: usize) -> Option<u64> {
+    /// hash equal.
+    ///
+    /// The three outcomes match [`KeyState`], because *where* in the key the
+    /// undecided content sits must not change the verdict:
+    /// - `Ok(Some(hash))` — the content is decided and hashed.
+    /// - `Ok(None)` — decided, but never key content (it holds a
+    ///   [`LowValue::Void`](crate::LowValue::Void)): a read can miss.
+    /// - `Err(())` — **undecided**: a node with no value yet, or a value that
+    ///   is still [`LowValue::Parameterized`](crate::LowValue::Parameterized)
+    ///   anywhere in the key's content.  Such a key must not be hashed to a
+    ///   constant: two different undecided keys would then collide, and a
+    ///   lookup could hit an entry it never matched.  The caller keeps the
+    ///   read lazy instead.  (An undecided *top-level* key is caught before
+    ///   this is reached; this arm is for a parameter or a lazy computation
+    ///   *nested inside* the key.)
+    fn hash_inner(
+        &self,
+        id: AnyNodeId,
+        path: &mut Vec<AnyNodeId>,
+        depth: usize,
+    ) -> Result<Option<u64>, ()> {
         if path.contains(&id) {
-            return Some(mix(CYCLE_TOKEN ^ depth as u64));
+            return Ok(Some(mix(CYCLE_TOKEN ^ depth as u64)));
         }
         path.push(id);
-        let value = self.node_value(id).unwrap_or_else(|| {
-            panic!("hashing a key whose subtree holds a node without a value — the deep pass must have resolved it")
-        });
-        let h = match value.as_enum() {
-            Some(LowValue::USize(n)) => mix(n as u64),
+        let hashed = self.hash_value(id, path, depth);
+        path.pop();
+        hashed
+    }
+
+    /// One level of [`Self::hash_inner`]'s content hash, on the assumption that
+    /// `id` has just been pushed onto `path` — so every early return still
+    /// leaves the path for the caller's `pop`.
+    fn hash_value(
+        &self,
+        id: AnyNodeId,
+        path: &mut Vec<AnyNodeId>,
+        depth: usize,
+    ) -> Result<Option<u64>, ()> {
+        let Some(value) = self.node_value(id) else {
+            return Err(());
+        };
+        Ok(match value.as_enum() {
+            Some(LowValue::USize(n)) => Some(mix(n as u64)),
             // A string key hashes by its byte content.
-            Some(LowValue::Str(s)) => {
-                mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64)))
-            }
-            Some(LowValue::None) => NONE_TOKEN,
+            Some(LowValue::Str(s)) => Some(mix(s
+                .as_bytes()
+                .iter()
+                .fold(0u64, |h, &b| mix(h ^ b as u64)))),
+            Some(LowValue::None) => Some(NONE_TOKEN),
             // A computed nothing is never key content: it is a failed
             // read's residue, so the key is not hashable — the same class
             // as an unbound subtree (a build drops the entry, a read
             // misses).
-            Some(LowValue::Void) => {
-                path.pop();
-                return None;
+            Some(LowValue::Void) => None,
+            // Undecided content, wherever it sits in the key: the key cannot
+            // be hashed yet, and must not collapse onto one constant (two
+            // different undecided keys would then collide).
+            Some(LowValue::Parameterized) => return Err(()),
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                Some(mix(id_hash(function)))
             }
-            Some(LowValue::Parameterized) => PARAM_TOKEN,
-            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => mix(id_hash(function)),
-            Some(LowValue::Function(AnyFunctionId::Static(sref))) => mix(id_hash(sref)),
+            Some(LowValue::Function(AnyFunctionId::Static(sref))) => Some(mix(id_hash(sref))),
             Some(LowValue::Array(array)) => {
                 let mut h = ARRAY_SEED;
                 for item in array.items() {
-                    h = mix(h ^ self.hash_inner(item.node, path, depth + 1)?);
+                    match self.hash_inner(item.node, path, depth + 1)? {
+                        Some(item_hash) => h = mix(h ^ item_hash),
+                        None => return Ok(None),
+                    }
                 }
-                h
+                Some(h)
             }
             // A table keyed by identity (user directive) — the payload's
             // identity, matching [`AnyHandle`]'s `PartialEq`.
-            Some(LowValue::Table(table)) => mix(match table {
+            Some(LowValue::Table(table)) => Some(mix(match table {
                 AnyHandle::Dynamic(handle) => handle.0 as *const TableItem as usize as u64,
                 AnyHandle::Static(handle) => {
                     handle.module.as_raw() ^ (handle.offset as *const TableItem as usize as u64)
                 }
-            }),
+            })),
             None => unreachable!("a structural value is one of the variants above"),
-        };
-        path.pop();
-        Some(h)
+        })
     }
 
     /// Pure, coinductive structural equality of two key nodes — the
