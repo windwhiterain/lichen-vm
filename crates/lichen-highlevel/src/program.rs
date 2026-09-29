@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    BlockId, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program,
-    StaticModule, ValueExt, is_unbound,
+    BlockId, Deferral, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt,
+    PendingSides, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -803,6 +803,15 @@ where
     type Operator = O;
     type GlobalExt = G;
     type PackageMeta = HighPackageMeta;
+
+    /// The highlevel's unification deferral policy — see
+    /// [`crate::shape::defer_pending`]: a pending field/positional read may
+    /// merge with a class that holds a type, because "holds a type" is a fact
+    /// about the pair encoding this crate owns.  Everything else falls
+    /// through to the lowlevel's generic (untyped) rules.
+    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
+        crate::shape::defer_pending(module, sides)
+    }
 }
 
 impl<V, O, A, L, G> HighProgram for ProgramImpl<V, O, A, L, G>

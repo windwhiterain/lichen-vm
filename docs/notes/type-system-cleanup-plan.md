@@ -5,7 +5,9 @@
 > attribute slots — the canonical attribute order is the composition's `attrs`
 > manifest order — and single-sourced codec tags); **D3 landed** (the checker is
 > total and type-directed for `Instantiate`, with the nominal callee check);
-> Phase 2 (unification hook) pending.
+> **Phase 2 landed** (D1: the unification deferral policy is a `Program` hook —
+> `defer_pending` — and the lowlevel is untyped). Phase 3 (checker structure)
+> pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -127,12 +129,18 @@ later phase reviewable.
 
 **Decision D1 (see §7)** chooses the direction:
 
-- **Option A — pull type theory up.** The lowlevel unifier's highlevel
-  knowledge (universe recognition, `class_holds_type`, the three deferral
-  rules) moves behind a `Program`-level hook (e.g. a `UnifyPolicy` associated
-  type). The lowlevel becomes honestly untyped; the deferral rules become
-  documented highlevel policy. Cost: touches the hottest, subtlest code in
-  the repo; the hook must not slow the unify loop.
+- **Option A — pull type theory up. LANDED** (`refactor/phase2-hook`): a
+  `Program::defer_pending` hook whose default refuses, plus a `PendingSides`
+  read-only view.  The highlevel states the policy in `shape.rs`, where
+  "this class holds a type" is decided by the encoding authority; the
+  lowlevel keeps only generic graph facts (a pending computation against an
+  all-unbound skeleton, two pending `Index` reads) and gains one honest
+  primitive, `Module::is_self_referential` — a cycle of length one, stated
+  without claiming to know what the cycle means.  `class_holds_type` is gone
+  from the lowlevel.  The wiring lives in the highlevel `ProgramImpl` *and*
+  in `lang_compose_vocabulary!`, so every composed program inherits the
+  policy; a program that states no policy keeps the lowlevel's honest
+  default (conflict).
 - **Option B — push the contract down.** Formally declare the `[value, type]`
   pair grammar and the universe as part of the *lowlevel's* documented
   contract (it is de-facto already), rename the crate's self-description,
@@ -141,10 +149,17 @@ later phase reviewable.
 
 Either way, independent of D1:
 
-- Remove `assert_spans` (source positions), `user_asserts`, and the
+- ~~Remove `assert_spans` (source positions), `user_asserts`, and the
   checker-shaped `ApplyError`/`UnifyError` attribution fields from the
   lowlevel `Module`; diagnostics attribution becomes a highlevel-side table
-  keyed by node id (the lowlevel already supports source-blind `Loc`).
+  keyed by node id.~~ **Dropped, with a reason** (Phase 2): these are *not*
+  type knowledge.  They are opaque host metadata keyed by node id, and the
+  lowlevel's apply path is what must *propagate* them — a per-call assert
+  clone inherits its condition's span and user-facing flag, which is a
+  property of the clone machinery, not of types.  Moving the storage to the
+  highlevel would buy a new propagation hook through the hottest path in the
+  runtime and change no typing decision.  The *encoding* knowledge (`[shape,
+  [marker, universe]]`) is what D1 removes, and it is gone.
 - Replace length-delta error detection (`unify_errors.len()` before/after)
   and truncation-based suppression with a `Result`-returning unify API; keep
   the error vec only as a rendering buffer.
@@ -207,12 +222,15 @@ These change or bless semantics; each needs an explicit decision (§7):
   unbound callee is pinned to a struct kind (re-checked per apply), a
   call-result callee is force-evaluated at check time, and named arguments
   through a non-statically-known callee are an honest
-  `InstantiateNamesNotStatic` diagnostic.  Known limitation (left for Phase
-  2's unification-hook extraction, D1): the deferred field-list check of a
-  param-dependent call-result callee relies on the lowlevel's
-  pending-`Index` deferral (`class_holds_type`), which only accepts a
-  2-element concrete other side — a ≠2-field struct shape there reports at
-  check time instead of at the apply.
+  `InstantiateNamesNotStatic` diagnostic.  ~~A ≠2-field struct through a
+  param-dependent call-result callee was reported to false-error at check
+  time~~ — **not reproducible**: probed on the integrated tree before and
+  after the D1 hook extraction, `f = g => (g (0))(1, 2, 3)` with a 3-field
+  struct checks and evaluates (`(1, 2, 3): struct<Int, Int, Int>`), so the
+  positional path was never arity-limited.  The real constraint on that path
+  is the named one above, and it is a decision, not a gap: a lazy
+  definition-order reorder is inexpressible (the lazy vocabulary has no
+  scatter/gather, and name tables unify by handle, not by content).
 - **D4 — `Type : Type` wording.** Compound types are *not* typed by `Type`
   (they carry `[marker, Type]` kinds), contradicting the README/spec
   wording. Decide the honest statement and spec it.

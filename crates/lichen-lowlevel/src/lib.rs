@@ -53,6 +53,67 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// per-package state (for example highlevel package export refs) without
     /// putting that concept into the lowlevel.
     type PackageMeta: Default;
+
+    /// The unification policy hook: what to do when a unification stalls
+    /// because one or both classes hold a **pending computation** — a class
+    /// with no decided value that carries an unevaluated operation, so
+    /// neither side can be compared yet.
+    ///
+    /// The lowlevel itself stays untyped, so it only merges what is a
+    /// *generic graph fact*: a pending computation against an all-unbound
+    /// skeleton (it holds nothing to erase), and two pending `Index` reads
+    /// (neither has a value to compare).  Every other deferral depends on
+    /// what the values **mean** — a read whose type is being unified against
+    /// a type value, for instance — and that is the program's decision, made
+    /// here.  The default refuses, which is the honest answer for a VM that
+    /// does not know what its values stand for.
+    ///
+    /// The policy is given the module to read (that is how it recognises its
+    /// own encodings) and must not retain the borrow, merge classes, or
+    /// write values.  `None` defers to the lowlevel's generic rules; the
+    /// verdict is only consulted where those rules would otherwise record a
+    /// conflict.
+    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
+        let _ = (module, sides);
+        None
+    }
+}
+
+/// What a [`Program::defer_pending`] policy decided about a stalled
+/// unification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deferral {
+    /// Merge the classes after all: the pending computation resolves later
+    /// and the merge erases nothing.
+    Merge,
+    /// Record the conflict now.
+    Conflict,
+}
+
+/// One side of a stalled unification, as the lowlevel sees it: the class
+/// identity plus the graph facts that need no knowledge of the program's
+/// values.  A policy reads the module for anything beyond these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSide {
+    /// The class's equality-class representative.
+    pub representative: NodeId,
+    /// The class holds an unevaluated operation — a pending computation.
+    pub pending: bool,
+    /// That operation is an `Index` that cannot be resolved yet (its target
+    /// is not a concrete array).
+    pub pending_index_read: bool,
+    /// The class is an all-unbound structure: no value, no operation.
+    pub skeleton: bool,
+    /// The class is a single unbound cell.
+    pub pure_cell: bool,
+}
+
+/// Both sides of a stalled unification — the whole view a policy gets
+/// besides the module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSides {
+    pub a: PendingSide,
+    pub b: PendingSide,
 }
 
 /// Program-global extension state — the marker trait that stances the

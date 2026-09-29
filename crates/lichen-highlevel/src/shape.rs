@@ -31,8 +31,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyHandle, AnyNodeId, ArrayItem, LowValue, Module, NodeId, Program, StaticNodeId, TableItem,
-    UnifyStep,
+    AnyHandle, AnyNodeId, ArrayItem, Deferral, LowValue, Module, NodeId, PendingSides, Program,
+    StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -262,6 +262,62 @@ where
         }
         AnyNodeId::Static(sref) => is_static_universe(module, sref),
     }
+}
+
+// --- unification policy ---------------------------------------------------------
+
+/// Whether `node`'s class holds a **type value**: a kinded type expression
+/// `[shape, [marker, universe]]` — an arrow, tuple, array, struct, table, or
+/// atomic type.  This is the highlevel half of what the lowlevel used to
+/// know: "does this class hold a type" is meaningless without the encoding,
+/// so it lives here, in the module that owns the encoding.
+///
+/// It is what makes [`defer_pending`] sound: a field/positional read's own
+/// *type* is such a pair, so unifying a pending read against a type value is
+/// a type round-trip rather than a value comparison.  A scalar — an `Int`
+/// *value* as opposed to its type — is not a type value, and unifying a read
+/// against one is left to fail.
+pub fn class_holds_type<P: Program>(module: &mut Module<P>, node: NodeId) -> bool
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let rep = module.equality_representative(node);
+    let Some(kind) = kind_of(module, AnyNodeId::Dynamic(rep)) else {
+        return false;
+    };
+    let Some(kind_items) = array_items(module, kind) else {
+        return false;
+    };
+    // The kind's second slot is the universe — the self-referential cycle
+    // every type chain bottoms out at (`K = [Type, ↺]`), recognised by its
+    // cycle shape; see [`Module::is_self_referential`].
+    module.is_self_referential(kind_items[KIND_UNIVERSE_SLOT].node)
+}
+
+/// The highlevel's [`Program::defer_pending`] policy: merge a pending
+/// field/positional **read** with a class that **holds a type**, and nothing
+/// else.
+///
+/// The merge is sound because neither side can be compared yet: the read
+/// resolves to its field's actual type once the container binds, and a
+/// genuine mismatch then surfaces at apply time against the real container
+/// (the computation, when it runs, must reconcile with the value the other
+/// side carried).  The deferral stays deliberately narrow — only an
+/// *unresolvable* `Index` qualifies, never a resolved read nor arithmetic
+/// nor a dependent-type branch — so an unresolvable real computation still
+/// records an error.  Every other case returns `None` and falls through to
+/// the lowlevel's generic rules.
+pub fn defer_pending<P: Program>(module: &mut Module<P>, sides: &PendingSides) -> Option<Deferral>
+where
+    P::Value: AsEnum<LowValue>,
+{
+    let read_against_type = (sides.a.pending
+        && sides.a.pending_index_read
+        && class_holds_type(module, sides.b.representative))
+        || (sides.b.pending
+            && sides.b.pending_index_read
+            && class_holds_type(module, sides.a.representative));
+    read_against_type.then_some(Deferral::Merge)
 }
 
 // --- shape predicates ---------------------------------------------------------
