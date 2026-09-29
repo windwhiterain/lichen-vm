@@ -864,20 +864,6 @@ where
         self.module.class_value(node)
     }
 
-    /// The canonical universe node `[Type, ↺]` (`Type : Type`) — the kind slip a
-    /// type expression's kind slot closes on (`[marker, Type]`).  Native
-    /// operator extensions build type expressions with it.
-    pub fn type_expr_node(&self) -> NodeId {
-        self.type_expr
-    }
-
-    /// The canonical, shared `[int, Type]` type expression — the type of every
-    /// int value.  A native operator extension (e.g. `jit`) compares a
-    /// function's signature against it.
-    pub fn int_type_node(&self) -> NodeId {
-        self.int_type
-    }
-
     // --- the check -------------------------------------------------------
 
     fn check_expr(&mut self, e: ExprId) -> NodeId {

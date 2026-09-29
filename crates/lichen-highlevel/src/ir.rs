@@ -38,14 +38,6 @@ impl<A> Default for Schema<A> {
     }
 }
 
-impl<A> Schema<A> {
-    /// The runtime pair's arity: the `[value, type]` head plus one slot per
-    /// attribute (`shape::attr_slot(tail.len())`).
-    pub fn arity(&self) -> usize {
-        crate::shape::attr_slot(self.tail.len())
-    }
-}
-
 /// An interned index into [`IR::schema_table`].  `0` is always the default
 /// (empty-`tail`) schema, so a fresh [`IR::alloc`] needs no write.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -123,42 +115,6 @@ pub enum LocStep {
     Shape,
     /// Element `i` of a tuple/array/struct shape.
     Elem(usize),
-}
-
-/// The coarse category that begins a [`Loc`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum LocKind {
-    /// The expression's value slot (leading [`LocStep::Value`]).
-    Value,
-    /// The expression's type slot, or a further link of the type chain
-    /// (leading [`LocStep::Type`]).
-    Type,
-    /// The expression's attribute-tail slot (leading [`LocStep::Attr`]).
-    Attribute,
-}
-
-impl Loc {
-    /// The coarse category the location denotes.
-    pub fn kind(&self) -> LocKind {
-        match self.path.first() {
-            None | Some(LocStep::Value) => LocKind::Value,
-            Some(LocStep::Type) => LocKind::Type,
-            Some(LocStep::Attr(_)) => LocKind::Attribute,
-            // A shape / element only appears deeper in a type's chain; the
-            // leading slot is still the type of the surrounding pair.
-            Some(LocStep::Shape) | Some(LocStep::Elem(_)) => LocKind::Type,
-        }
-    }
-
-    /// How many `[value, type]` pairings the location descends: how many
-    /// leading [`LocStep::Type`]s (the first is the type, the second is the
-    /// type's type, and so on, unbounded).
-    pub fn type_depth(&self) -> usize {
-        self.path
-            .iter()
-            .take_while(|s| **s == LocStep::Type)
-            .count()
-    }
 }
 
 /// The highlevel program: a pure expression tree, generic over the
