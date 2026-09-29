@@ -23,7 +23,7 @@
 
 use lichen_highlevel::diagnostic::{Diag as CheckerDiag, DiagKind};
 use lichen_highlevel::program::{HighProgram, ValueType};
-use lichen_lowlevel::{LowValue, Module, NodeId};
+use lichen_lowlevel::{BudgetExhausted, LowValue, Module, NodeId};
 
 use lichen_compute::ComputeValue;
 use lichen_utils::extend::AsEnum;
@@ -245,9 +245,22 @@ where
             };
             format!("assertion failed: expected 1, found {value}")
         }
-        DiagKind::NonTerminating => {
-            "this binding never terminates (non-terminating recursion)".to_string()
-        }
+        DiagKind::NonTerminating => match d.budget {
+            // The lowlevel recorded which guard refused and what it was
+            // bounded by, so the diagnostic names them instead of guessing:
+            // each of the three bounds means a different runaway shape, and
+            // the limit is what the user can raise.
+            Some(BudgetExhausted::ApplyDepth { limit }) => format!(
+                "this binding never terminates — nested applications exceeded {limit} levels (non-terminating recursion)"
+            ),
+            Some(BudgetExhausted::ApplyTotal { limit }) => format!(
+                "this binding never terminates — it applied a function more than {limit} times (non-terminating recursion)"
+            ),
+            Some(BudgetExhausted::EvaluateDepth { limit }) => format!(
+                "this binding never terminates — its value grows deeper than {limit} levels (non-terminating evaluation)"
+            ),
+            None => "this binding never terminates (non-terminating recursion)".to_string(),
+        },
     }
 }
 

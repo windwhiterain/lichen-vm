@@ -1,10 +1,34 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvaluatedDeep, LowOperator,
-    LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
+    AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
+    LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
+
+/// The evaluation-attempt mark of one node — see [`Module::retain_node`] for
+/// the invariant it upholds.  Retained on construction, released on drop,
+/// including on unwind.  It holds the whole module, so the attempt's body is
+/// reached *through* it ([`Self::module`]) rather than through the borrow it
+/// was built from.
+struct VisitGuard<'a, P: Program> {
+    module: &'a mut Module<P>,
+    node: NodeId,
+}
+
+impl<P: Program> VisitGuard<'_, P> {
+    /// Run one evaluation attempt with the mark held.
+    fn run(self, body: impl FnOnce(&mut Module<P>, NodeId) -> P::Value) -> P::Value {
+        let node = self.node;
+        body(self.module, node)
+    }
+}
+
+impl<P: Program> Drop for VisitGuard<'_, P> {
+    fn drop(&mut self) {
+        self.module.nodes[self.node].visiting = false;
+    }
+}
 
 /// A runtime evaluation failure — an out-of-bounds [`LowOperator::Index`], a
 /// table read that misses or whose key is not concrete.  Structured facts
@@ -67,7 +91,7 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Marks `node` visiting for the duration of one evaluation attempt.
+    /// The mark of one evaluation attempt, held until it drops.
     ///
     /// Invariant: an evaluation attempt owns `Node::visiting` for exactly its
     /// own frame and clears it on every exit — a cached answer, a lazy
@@ -77,13 +101,12 @@ impl<P: Program> Module<P> {
     /// as a cycle: a node the postlude deliberately declined to cache (a
     /// `Parameterized` answer) is evaluated again by a later pass, and before
     /// this invariant that second attempt saw `visiting == true` and panicked.
-    fn retain_node(&mut self, node: NodeId) {
+    /// [`Drop`] is what makes the invariant hold on the unwind path, so a
+    /// future internal panic inside an attempt costs one node instead of
+    /// poisoning the module for the rest of the build.
+    fn retain_node(&mut self, node: NodeId) -> VisitGuard<'_, P> {
         self.nodes[node].visiting = true;
-    }
-
-    /// The [`Self::retain_node`] release — see the invariant there.
-    fn release_node(&mut self, node: NodeId) {
-        self.nodes[node].visiting = false;
+        VisitGuard { module: self, node }
     }
 
     /// The body of [`Self::evaluate_node`] — everything after the static-ref
@@ -115,16 +138,14 @@ impl<P: Program> Module<P> {
         if self.nodes[node].visiting {
             unreachable!("cycle detected: node {node:?} is being evaluated");
         }
-        self.retain_node(node);
-        let value = self.evaluate_node_operation(node);
-        self.release_node(node);
-        value
+        let guard = self.retain_node(node);
+        guard.run(|module, node| module.evaluate_node_operation(node))
     }
 
     /// The operation dispatch of [`Self::evaluate_node`]: compute this node's
     /// operation, then apply the postlude that decides whether the answer is
-    /// cached.  Runs between [`Self::retain_node`] and
-    /// [`Self::release_node`], so an early return here cannot leak the mark.
+    /// cached.  Runs while the caller holds the node's [`VisitGuard`], so an
+    /// early return here cannot leak the mark.
     #[stacksafe]
     fn evaluate_node_operation(&mut self, node: NodeId) -> P::Value {
         let block = self.nodes[node].block;
@@ -496,10 +517,24 @@ impl<P: Program> Module<P> {
         }
         self.deep_depth += 1;
         if self.deep_depth > self.evaluate_depth_limit {
-            panic!(
-                "recursion depth exceeded in deep evaluation (limit {}) — non-terminating evaluation?",
-                self.evaluate_depth_limit
-            );
+            if self.budget_exhausted.is_none() {
+                self.budget_exhausted = Some(BudgetExhausted::EvaluateDepth {
+                    limit: self.evaluate_depth_limit,
+                });
+            }
+            // Nothing was computed, and nothing here can ever compute it:
+            // return the computed-nothing value — the same shape the VM gives
+            // a read it declined to perform.  The undecided marker would
+            // promise "try again later", which nothing downstream can honour:
+            // this frame already owns the budget verdict, and a later read
+            // reaches the same refusal.  Unlike the apply frame's refusal
+            // this value is never cached onto a node (this returns before
+            // `evaluate_node`, whose postlude does the writing), so it cannot
+            // be mistaken for a decided proven answer — the node's
+            // `evaluated_deep` stays `None`, "never ran".  The nested counter
+            // deliberately stays inflated, as it did when the guard unwound.
+            self.deep_depth -= 1;
+            return P::Value::from(LowValue::Void);
         }
         // A forced evaluation forces the operand edge of an unevaluated
         // operation before the operation itself runs.  The operand is a

@@ -329,12 +329,11 @@ fn static_recursion_counts_down_through_a_lazy_branch() {
     let g = static_func_value(&mut imp, root, key, 0);
     let arg = u128_node(&mut imp, root, 0);
     let call = call_node(&mut imp, root, g, arg);
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        imp.evaluate_node_deep(call, None)
-    }));
-    assert!(
-        result.is_err(),
-        "the depth guard must trip on static self-apply"
+    imp.evaluate_node_deep(call, None);
+    assert_eq!(
+        imp.budget_exhausted,
+        Some(BudgetExhausted::ApplyDepth { limit: 20 }),
+        "the depth guard must record the budget on static self-apply"
     );
 }
 

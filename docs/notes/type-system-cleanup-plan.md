@@ -87,7 +87,9 @@ compute JIT reverse-engineers the checker's encoding from raw nodes
 Secondary amplifiers: errors flow through global append-only vectors detected
 by length-delta and *suppressed* by truncation (`check_unify_relaxed`,
 `checker.rs:905-934`); panics are used as control flow
-(`catch_unwind` for non-termination, `checker.rs:418-440`); and the docs
+(`catch_unwind` for non-termination, `checker.rs:418-440` — **removed**: the
+budget guards now record `Module::budget_exhausted` instead of panicking, so
+non-termination is no longer control-flow-by-unwind); and the docs
 lag the code (spec still spells `Int<n>`, `type_of` and named instantiation
 are implemented but undocumented, `docs/README.md` indexes 14 of 30 notes).
 
@@ -262,8 +264,12 @@ Either way, independent of D1:
   `unwrap`/`expect`/`unreachable!`/`panic!` in the checker and the lowlevel is
   classified as user-reachable (becomes a diagnostic / recorded failure),
   frontend-bug-only (a `debug_assert!` with the invariant stated), or
-  not-provable (left alone); non-termination stops using `catch_unwind` as
-  control flow if the budget guards can report instead.
+  not-provable (left alone); non-termination **no longer** uses
+  `catch_unwind` as control flow — the three budget guards record
+  `Module::budget_exhausted` (which budget, and its limit) and return a
+  value, and the checker's three former catch sites are field reads.  A
+  genuine internal panic now propagates with its real backtrace instead of
+  being relabelled "this binding never terminates".
 
   ### Panic-discipline census (measured, branch `refactor/phase3-panic`)
 
@@ -314,10 +320,10 @@ Either way, independent of D1:
   | `lowlevel/evaluation.rs:195` | frontend-only | `evaluate_node_deep` sets `evaluated_deep` before returning |
   | `lowlevel/evaluation.rs:327` | frontend-only | a `TableGet` target is a table or a computed nothing; both are armed, and the third case needs the checker to have built the op against a non-table |
   | `lowlevel/evaluation.rs:399` | frontend-only | the `Static` arm above already returned |
-  | `lowlevel/evaluation.rs:415` | by design | the non-termination budget guard; the checker catches it (`catch_unwind`) and reports `NonTerminating` |
+  | `lowlevel/evaluation.rs:415` | **done** | the non-termination budget guard — no longer a panic: it records `Module::budget_exhausted` (the budget and its limit), returns the computed-nothing value, and the checker reads the field |
   | `lowlevel/evaluation.rs:520`, `gc.rs:170` | frontend-only | `garbage_collect` keeps the node it was given |
   | `lowlevel/equality.rs:192` | frontend-only | a `Module` always has a root block; both-sides-static cannot arise from the apply path |
-  | `lowlevel/apply.rs:28`, `34` | by design | the two non-termination budget guards the checker catches |
+  | `lowlevel/apply.rs:28`, `34` | **done** | the two apply budget guards — same conversion: they record `Module::budget_exhausted`, return the undecided marker, and never unwind |
   | `lowlevel/codec.rs:120`, `131`, `139` | frontend-only | a frozen module's payloads were relocated by the freeze layout pass |
   | `lowlevel/lib.rs:315`, `319`, `366`, `903` | frontend-only | total matches inside one impl; the operator arms are dispatched by the VM |
   | `lowlevel/static_module.rs:45`, `747`, `783`, `835` | frontend-only | registration and the phase-2 layout precede every read |

@@ -10,31 +10,53 @@
 
 use std::collections::HashMap;
 
-use crate::{AnyFunctionId, ApplyError, BlockId, LowValue, Module, NodeId, Program};
+use crate::{
+    AnyFunctionId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId, Program,
+};
 use lichen_utils::extend::AsEnum;
 
 impl<P: Program> Module<P> {
     /// Run `body` inside one application frame: bump the nested and total
-    /// apply counters, enforce the budgets, and always pop the nested
-    /// counter when the body returns.  A panic does not unwind the counter,
-    /// matching the previous behaviour (panics abort the run anyway).
+    /// apply counters, enforce the budgets, and pop the nested counter when
+    /// the body returns.
+    ///
+    /// A budget that the frame exceeds is **recorded, not unwound**: the body
+    /// is refused, [`Module::budget_exhausted`] takes the budget and its
+    /// limit, and the frame returns the undecided marker.  The nested counter
+    /// deliberately stays inflated on that path (as it did when the guard
+    /// unwound), so a caller still inside a refused apply cannot re-enter the
+    /// walk.
     pub(super) fn with_apply_frame(
         &mut self,
         body: impl FnOnce(&mut Self) -> P::Value,
     ) -> P::Value {
         self.apply_depth += 1;
         self.apply_total += 1;
-        if self.apply_depth > self.apply_depth_limit {
-            panic!(
-                "recursion depth exceeded in function application (limit {}) — non-terminating recursion?",
-                self.apply_depth_limit
-            );
-        }
-        if self.apply_total > self.apply_total_limit {
-            panic!(
-                "too many function applications (limit {}) — non-terminating recursion?",
-                self.apply_total_limit
-            );
+        let exhausted = if self.apply_depth > self.apply_depth_limit {
+            Some(BudgetExhausted::ApplyDepth {
+                limit: self.apply_depth_limit,
+            })
+        } else if self.apply_total > self.apply_total_limit {
+            Some(BudgetExhausted::ApplyTotal {
+                limit: self.apply_total_limit,
+            })
+        } else {
+            None
+        };
+        if let Some(exhausted) = exhausted {
+            if self.budget_exhausted.is_none() {
+                self.budget_exhausted = Some(exhausted);
+            }
+            // The body never ran, so nothing was computed — and the answer
+            // is *unknown*, not nothing: return the undecided marker, the
+            // same refusal `apply_parameter_check` already issues for a body
+            // it declined to run.  `LowValue::Void` would instead be cached
+            // by the `evaluate_node` postlude as a decided value, letting
+            // the deep pass certify this node concrete (its
+            // `evaluated_deep.parameterized` derives from the cached value)
+            // and every parent array along with it — a proven-concrete
+            // claim about a computation that never happened.
+            return P::Value::from(LowValue::Parameterized);
         }
         let result = body(self);
         self.apply_depth -= 1;

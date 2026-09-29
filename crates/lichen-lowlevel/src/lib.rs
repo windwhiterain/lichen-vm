@@ -683,6 +683,29 @@ pub struct StaticNode<P: Program> {
     pub parameterized: bool,
 }
 
+/// Which evaluation budget a [`Module`] exhausted, and what its limit was.
+///
+/// The budget guards (see [`Module::apply_depth_limit`],
+/// [`Module::apply_total_limit`], [`Module::evaluate_depth_limit`]) refuse to
+/// continue instead of unwinding, and record this — the fact the old
+/// `panic!` message formatted and then threw away.  A host that needs the
+/// non-termination decision reads it after the call; the module keeps no
+/// other trace of the refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetExhausted {
+    /// Nested applications ran deeper than [`Module::apply_depth_limit`] — a
+    /// function applying itself directly, with no base case.
+    ApplyDepth { limit: usize },
+    /// The cumulative application count passed
+    /// [`Module::apply_total_limit`] — the work bound that catches a
+    /// recursion the lazy graph flattens below the nesting guard.
+    ApplyTotal { limit: usize },
+    /// [`Module::evaluate_node_deep`] nested deeper than
+    /// [`Module::evaluate_depth_limit`] — deep-evaluating an infinitely
+    /// growing value.
+    EvaluateDepth { limit: usize },
+}
+
 pub struct Module<P: Program> {
     /// The device's registry — shared with every module executing in the
     /// process.  All static refs resolve through it; the module itself is
@@ -691,26 +714,35 @@ pub struct Module<P: Program> {
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
-    /// Nested-application guard: a run panics when function applications
-    /// nest deeper than this (a non-terminating function applying itself
-    /// directly, e.g. `f(x) = f(x)`).  Defaults to
-    /// [`Self::MAX_APPLY_DEPTH`]; tests lower it to panic fast.
+    /// Nested-application guard: a run records a
+    /// [`BudgetExhausted::ApplyDepth`] when function applications nest
+    /// deeper than this (a non-terminating function applying itself
+    /// directly, e.g. `f(x) = f(x)`) and stops evaluating.  Defaults to
+    /// [`Self::MAX_APPLY_DEPTH`]; tests lower it to trip fast.
     pub apply_depth_limit: usize,
-    /// Total-application guard: a run panics when the *cumulative* number
-    /// of function applications exceeds this — the lazy graph flattens most
+    /// Total-application guard: a run records a
+    /// [`BudgetExhausted::ApplyTotal`] when the *cumulative* number of
+    /// function applications exceeds this — the lazy graph flattens most
     /// recursion (an apply returns its result pair and the outer deep pass
     /// descends into it, so nested depth stays 1 even for an infinite loop
     /// behind a lazy branch, and a wide recursion like fib is never deep at
     /// all), so nested depth alone cannot bound the work.  The total count
     /// bounds both.  Defaults to [`Self::MAX_APPLY_TOTAL`]; tests lower it
-    /// to panic fast.
+    /// to trip fast.
     pub apply_total_limit: usize,
-    /// Deep-evaluation guard: a run panics when [`Self::evaluate_node_deep`]
+    /// Deep-evaluation guard: a run records a
+    /// [`BudgetExhausted::EvaluateDepth`] when [`Self::evaluate_node_deep`]
     /// nests deeper than this (deep-evaluating an infinitely growing value,
     /// e.g. `f(x) = [x, f(x)]`).  Defaults to [`Self::MAX_DEEP_DEPTH`],
     /// which sits above the legitimately ~200k-deep block chains exercised
-    /// by the `#[stacksafe]` tests; tests lower it to panic fast.
+    /// by the `#[stacksafe]` tests; tests lower it to trip fast.
     pub evaluate_depth_limit: usize,
+    /// Which budget a guard refused on, once one has — see
+    /// [`BudgetExhausted`].  Never cleared except by a whole-run reset
+    /// ([`Self::reset_apply_budget`]), because it is *the* record of why the
+    /// last walk stopped: a second walk must know it ran against an already
+    /// abandoned graph rather than discovering the exhaustion again.
+    pub budget_exhausted: Option<BudgetExhausted>,
     pub unify_errors: Vec<UnifyError<P>>,
     /// Runtime evaluation failures (an out-of-bounds [`LowOperator::Index`]),
     /// recorded instead of panicking — same append-only, never-cleared
@@ -968,6 +1000,7 @@ impl<P: Program> Module<P> {
             apply_depth: 0,
             apply_total: 0,
             deep_depth: 0,
+            budget_exhausted: None,
         }
     }
 
@@ -1006,10 +1039,15 @@ impl<P: Program> Module<P> {
     /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
     /// resets them per run keeps the guard while shedding lifetime
     /// accumulation. The limits themselves are unchanged.
+    ///
+    /// [`Self::budget_exhausted`] resets with them: it is a per-run verdict,
+    /// so a host starting a new run must not read the previous run's
+    /// refusal.
     pub fn reset_apply_budget(&mut self) {
         self.apply_depth = 0;
         self.apply_total = 0;
         self.deep_depth = 0;
+        self.budget_exhausted = None;
     }
 
     pub fn add_block(&mut self, parent: Option<BlockId>) -> BlockId {
