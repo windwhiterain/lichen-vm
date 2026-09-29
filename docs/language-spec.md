@@ -1,12 +1,15 @@
 # Language spec (v1)
 
 > Status: current — the single source of truth for the lichen source language.
-> Owned by [`crates/lichen-language`](../crates/lichen-language). This is the one
+> Owned by [`crates/lichen-language`](../crates/lichen-language) together with
+> the lexer/parser crates
+> ([`lichen-language-lex`](../crates/lichen-language-lex),
+> [`lichen-language-parser`](../crates/lichen-language-parser)). This is the one
 > retained early document; feature notes describe the surrounding system and refer
 > here for syntax ([doc index](README.md)).
 
 *A minimal source language that compiles to the highlevel IR
-([`lichen-highlevel`](crates/lichen-highlevel)) and produces proper diagnostics.
+([`lichen-highlevel`](../crates/lichen-highlevel)) and produces proper diagnostics.
 Brainstormed 2026-08-22; the surface decisions (lambda syntax, `let` bindings,
 type literal names, program shape) were settled by the user. Status: spec for the
 `crates/lichen-language` crate.*
@@ -50,7 +53,9 @@ prefix   := '!' apply | apply                       -- prefix assert: `!e` asser
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
 primary  := int_literal
-          | 'Int' | 'Type'                          -- the two type constants
+          | str_literal                           -- "…" (no escapes; the builtin `string` value)
+          | 'Int' | 'string' | 'Type'             -- the three type constants
+          | 'type_of'                             -- first-class function: reads its argument's type
           | '_'                                     -- inference placeholder (any position)
           | name
           | '(' expr ')'                            -- grouping (transparent)
@@ -75,12 +80,14 @@ element  := '~'n? expr                              -- shallow marker (inside ar
 pair     := expr '==>' expr                         -- table entry: deep-equal key ==> value
 sfield   := '.' name expr                           -- named struct field  (a leading '.' marks it)
            | expr                                   -- unnamed (positional) struct field
-fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read paren content
+fields   := (farg (sep farg)* sep?)?             -- instantiation/field-read paren content
+farg     := '.' name expr                         -- named instantiation argument  .x 1
+           | expr                                 -- positional argument
 ```
 
-- **Keywords:** `Int`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
-  `::`,
+- **Keywords:** `Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+  `else`, `return`, `pub`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+  `::`, `==>`,
   `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
@@ -95,7 +102,7 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   lexer never skips any text, so prose lives in the file's leading `@{...@}`
   preprocessor block as metadata strings (see §2.2).  Whitespace (space/tab/cr)
   is trivia; `@` is reserved for the block delimiters and cannot appear in code
-  or in a string.
+  outside a string.
 - **Newlines, semicolons, and commas are all one separator, and a separator is
   never whitespace.**  `\n`, `;`, and `,` lex to the same `Separator` token, and
   their quantity is irrelevant: `a = 1\nb = 2\na`, `a = 1; b = 2; a`, and
@@ -106,12 +113,14 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   cannot continue across a separator: a lambda body must start on the same line
   as `=>` (`x =>\n  x + 1` is a parse error), and a tuple or array cannot be
   broken across lines without parens.
-- **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  `Int`,
-  `Type`, and `struct` are reserved — they cannot be bound or used as names.
+- **Names:** lowercase or mixed-case identifiers (`x`, `id`, `n2`).  The keywords
+  (`Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
+  `else`, `return`, `pub`, `type_of`) are reserved — they cannot be bound or used
+  as names.
 - **The `_` placeholder.**  `_` is an inference placeholder hole in *any*
   position — type and value alike.  In type position (the right side of `:`,
   and the components of the type forms under it) it infers the type from
-  context — `x : _`, `x : Int -> _`, `x : Int<_>`, `x : <Int, _>`,
+  context — `x : _`, `x : Int -> _`, `x : array<Int, _>`, `x : <Int, _>`,
   `struct<Int, _>` — and in value position it is a typed hole: `_ : Int`
   checks as an underdetermined value of type `Int`, and `f _` / `(1, _)`
   leave a hole the context unifies.  `_` is **never a name**: it cannot be
@@ -119,6 +128,10 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   errors.  The discard idiom is gone; use a real name.
 - **Integers:** non-negative decimal literals (`0`, `42`); a literal that
   overflows `usize` is a lex error.
+- **Strings:** `"…"` with no escape characters, and it may span newlines; the
+  content is any character except `"`.  An unterminated string is a lex error.
+  A string is the immutable builtin `string` value — atomic in this universe,
+  exactly like an integer: there is no mutation, indexing, or concatenation.
 - **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` → `<=` / `==`
   → `+` / `-` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
@@ -139,8 +152,13 @@ fields   := (expr (sep expr)* sep?)?                -- instantiation/field-read 
   re-checks the perspective and keeps the doc, `(x # 8 ? a) ? b` keeps the
   perspective and replaces the doc.  A comparison
   (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
-  is a prefix assert: `!e` compiles to the highlevel `assert(e)` — the checker
-  force-evaluates `e` and requires `USize(1)`.  It binds tighter than the binary
+  is a prefix assert: `!e` compiles to the highlevel `assert(e)` — a side
+  constraint, not a unify.  The checker force-evaluates `e` after the
+  definition pass (ignoring laziness) and requires `USize(1)`; a condition
+  that stays lazy (an unbound parameter) is not triggered, and the apply
+  clone re-checks the instantiated condition per call.  The expression
+  itself *is* the condition — an assert checks its subject, it does not
+  replace it — so `!e`'s value and type are `e`'s.  It binds tighter than the binary
   operators but looser than application, so `! f x` asserts `f x` and `! x <= 3`
   is `(!x) <= 3`; assert a comparison by parenthesizing it (`!(x <= 3)`).
 - **Annotated parameters.**  `x : T => e` is a lambda whose parameter is
@@ -189,8 +207,9 @@ token; the parser reads `Glue` to decide postfix versus application.  A spaced
 delimiter is a fresh atom — an argument of an application:
 
 - `a[0]` (glued `[`) is an index; `a [0]` (spaced `[`) **applies** `a` to the
-  array `[0]`.  `a[0][1]` chains, and `[e1, e2][i]` is the language's only
-  conditional form — with an integer index it selects a branch.  An array
+  array `[0]`.  `a[0][1]` chains, and `[e1, e2][i]` is the mechanism under the
+  conditional form (`if` desugars to it) — with an integer index it selects a
+  branch.  An array
   literal in argument position needs no parens when glued, but a spaced
   `f ([1, 2])` applies `f` to the array.
 - `X<e>` (glued `<`) is a **raw index**: element `e` of `X`'s *value*, read
@@ -212,8 +231,10 @@ delimiter is a fresh atom — an argument of an application:
   postfix (it would be a bare infix, now ungrammatical since the table
   separator is `==>`).
 - `A(1, 2)` (glued `(`) is a struct instantiation (see §3); `f (1, 2)` (spaced
-  `(`) applies `f` to the tuple.  A glued `(` after a container is a field/
-  slot read (`a(0)`).  A fresh atom may itself open with a glued delimiter,
+  `(`) applies `f` to the tuple.  A glued `(` holding a single bare expression
+  is always a field/slot read (`a(0)`), never an instantiation — the
+  one-field instantiation is spelled `a(e,)`, mirroring the tuple grammar's
+  comma discipline (`a()` / `a(,)` carry no fields).  A fresh atom may itself open with a glued delimiter,
   e.g. the annotation `x :(Int, Type)` — a tuple *value* of the type-values
   `Int` and `Type` (a tuple type is `x : <Int, Type>`).
 - `t{k}` (glued `{`) is a table lookup; `t {k}` (spaced `{`) applies `t` to
@@ -253,8 +274,8 @@ span back to the original file.
 
 - **Programs are pure expressions.**  The checker compiles the IR, runs the
   definition pass (so apply-time type checks fire), and the program's value is
-  the evaluation of its root: an `Int`, a tuple, an array, a function, or a
-  type expression.
+  the evaluation of its root: an `Int`, a `string`, a tuple, an array, a table,
+  a function, or a type expression.
 - **Statements and bindings.**  A program is a **block body**: a list of
   (possibly `pub`-marked) statements — a `name = expr` binding or a bare
   expression — followed by an optional **tail** expression.  The top level is
@@ -322,11 +343,29 @@ span back to the original file.
   both check, and one binder used at two different types
   (`(id => ((id 5 : Int), (id Type : Type))) (x => x)`) checks as well.  No
   generalize/instantiate special form exists or is needed.
-- **Types are first-class values.**  `Int`, `Type`, function types
+- **Types are first-class values.**  `Int`, `string`, `Type`, function types
   (`T -> U`), tuple types, and array types (`array<T, n>`) are ordinary values that
   can be passed around, bound, and used in type position.  `Type : Type`
-  holds in a single universe; kinding is an ordinary type check (a literal in
-  type position is a kinding error, not a separate "kind system").
+  holds: the type chain `value → type → kind → …` closes **in a cycle at
+  `Type`** — the universe is the self-referential node `K = [Type, K]`.
+  `Type` is the type of the *atomic* type markers (`Int : Type`,
+  `string : Type`, `Type : Type`) and the terminal of every chain; it is
+  **not** a supertype of all types.  A compound type is typed by its kind —
+  a `[marker, Type]` pair — not by `Type` itself: an arrow's type is
+  `[[in, out], [FunctionType, Type]]`, and `array<Int, 3> : Type` *fails*
+  (the array type's type is the kind `[ArrayType, Type]`).  There is no
+  subtyping relation at all (`Int` is not `<: Type`); kinding is an ordinary
+  type check, so a literal in type position is a kinding error, not a separate
+  "kind system".
+- **Unification is equi-recursive — by design.**  There is deliberately **no
+  occurs check**: cyclic types unify, and the universe *requires* a cycle
+  (`K = [Type, K]` above).  A recursive struct type is an ordinary cyclic
+  type — `A = struct<Int, B>; B = struct<Type, A>` checks and runs (see
+  `examples/struct_recursion.lichen`).  This is the approved semantics
+  (decision D2 of
+  [type-system-cleanup-plan](notes/type-system-cleanup-plan.md)), not a
+  caveat: the flip side of `Type : Type`'s flexibility is that decidability
+  of a lichen program is the embedding's responsibility.
 - **Indexing.**  `e[i]` reads the `i`-th element of an array, tuple, or
   struct instance (a struct instance's positional fields are its wrapped
   tuple's elements).  A
@@ -336,8 +375,8 @@ span back to the original file.
   is checked when evaluated.  Indexing a *concretely* non-indexable type —
   a function or an atomic type — is an `IndexTarget`
   diagnostic at check time, not a runtime panic (mirroring the apply
-  guard).  `[then, else][i]` is the language's only
-  conditional form — an integer index selects a branch, and the untaken
+  guard).  `[then, else][i]` is the mechanism under the conditional form
+  (`if c then e1 else e2` desugars to it) — an integer index selects a branch, and the untaken
   branch is never evaluated (the lowlevel `Index` stays lazy on it).
 - **The raw index `X<e>`.**  The glued `<` postfix reads element `e` of `X`'s
   **value** with **no type validation** — no array-type pinning, no
@@ -384,13 +423,19 @@ span back to the original file.
   struct type — wraps the positional tuple in the nominal type: it compiles
   to the dedicated `Instantiate` expression, whose element types are checked
   against the field list (arity and field types must match), and whose type
-  is the struct type itself.  A literal is not a positional value —
-  `s(5)` conflicts.  Instances of different source occurrences are
-  different types, even with the same fields.  The callee is recognized by
-  the frontend from its IR node (the literal `struct<...>` or a name bound
-  to one); a struct type arriving through a parameter is not recognized and
-  falls through to a plain application, which fails at runtime (applying a
-  non-function is a VM panic, not a diagnostic).  Indexing an instance reads
+  is the struct type itself.  Instances of different source occurrences are
+  different types, even with the same fields.  The form is **syntactic**:
+  any `C(f1, …, fn)` with the `(` glued to the callee and the tuple comma
+  discipline (`C()`, `C(,)`, `C(e,)`, `C(e1, …, en)` — the bare
+  single-expression `C(e)` stays the positional slot read) lowers to
+  `Instantiate`; there is no frontend callee-kind dispatch, the checker
+  decides whether the callee is a struct type, and a callee that is not one
+  fails at check time (the `InstantiateCallee` diagnostic — structs are
+  nominal, so a tuple or function type cannot instantiate).  An unbound
+  callee (a parameter, a deferred read) is *pinned* to a struct kind, so a
+  non-struct actual callee fails the apply's argument check per call; a
+  call-result callee (`(mk (Int))(1, 2)`) is force-evaluated at check time,
+  so the static checks see the concrete struct type.  Indexing an instance reads
   its positional fields: `s(1, 2)[0]` is the first field, and its type is
   the corresponding field type (an out-of-bounds field index is an
   `IndexOutOfBounds` diagnostic).  A struct instance with named fields also
@@ -399,21 +444,40 @@ span back to the original file.
   `NamedField` diagnostic; a `a.x` on a non-struct is an `IndexTarget`
   diagnostic).  Values of struct type beyond the wrapped
   tuple are future work.
-- **Dependent array types (pinning).**  The length of `T<e>` is an arbitrary
-  expression, so `Int<n>` where `n` is bound is a legal dependent type.  When
+- **Named instantiation arguments.**  An argument of an instantiation may be
+  prefixed with the same `.name` discriminator a `struct<…>` definition
+  uses: `S = struct<.x Int, .y Type>; S(.y Int, .x 1)`.  The names ride the
+  `Instantiate` expression to the checker, which validates them against the
+  struct type's name table and **reorders** the argument values into the
+  definition's positional order — a later `.b`/`a(0)` read sees the
+  definition's order, not the call's.  Named and positional arguments mix:
+  a positional argument fills the lowest-numbered unclaimed position.  The
+  structural mismatches are their own diagnostics, each pointing at the
+  offending argument: an unknown field (`StructUnknownField`), a duplicate
+  (`StructDuplicateField`), a field left unsupplied (`StructMissingField`),
+  an excess positional argument (`StructExcessField`), and a `.name`
+  argument against an anonymous struct (`StructAnonymousField`).  The name
+  table — and so the reorder — must be statically known: through an unbound
+  callee (a parameter) a named argument is an `InstantiateNamesNotStatic`
+  diagnostic ("named arguments require a statically known struct type").
+  After
+  reordering, each argument's type is checked against its field's type as
+  usual.
+- **Dependent array types (pinning).**  The length of `array<T, n>` is an arbitrary
+  expression, so `array<Int, n>` where `n` is bound is a legal dependent type.  When
   an annotation compares a value against such a type, the length read — an
   unevaluated `Index` over `n`'s value cell — resolves as a pure reference
   and is pinned to the value it must equal: the checker binds `n` to the
   literal's length, so the parameter is monomorphized.
-  `((n => ([1, 2, 3] : Int<n>)) 3)` checks and runs, and applying any other
+  `((n => ([1, 2, 3] : array<Int, n>)) 3)` checks and runs, and applying any other
   length fails at the apply — the pinned value is enforced per application
   (the apply's argument unify compares the cloned parameter, which carries
   the pinned length, against the argument).
 - **The `_` placeholder.**  A `_` in any position compiles to an unbound
   cell: the annotation unifies the value's type against it, so the cell
-  binds to that type — `5 : _` infers `int`, `x => x : _` the arrow
-  `?a → ?a`, and `[1, 2, 3] : Int<_>` the length `3`.  Partial types infer
-  the rest: `((x => x) : (Int -> _)) 5` fixes the input to `int` and infers
+  binds to that type — `5 : _` infers `Int`, `x => x : _` the arrow
+  `?a → ?a`, and `[1, 2, 3] : array<Int, _>` the length `3`.  Partial types infer
+  the rest: `((x => x) : (Int -> _)) 5` fixes the input to `Int` and infers
   the output.  In value position the same hole is a *typed* hole: `_ : Int`
   checks as an underdetermined `Int` value (its value cell stays unbound,
   reading `Parameterized`), and `f _` / `(1, _)` unify the hole's type with
@@ -421,23 +485,44 @@ span back to the original file.
   never raises a kinding error; a `_` that never binds leaves the type
   underdetermined — not an error — and a mismatch against a
   partial type is still an error (`5 : Int -> _` fails).
+- **`type_of`.**  `type_of` is a keyword but an *ordinary first-class
+  function value* — bindable and passable like any other (`f = type_of`),
+  with no special grammar: juxtaposed application is the whole story.
+  `type_of e` reads its argument's **type**: the bare atom compiles to a
+  generic lambda whose body is the highlevel `TypeOf` — element 1 of the
+  argument's `[value, type]` pair, read lazily through the raw lowlevel
+  `Index` (the mirror of the checker's own `value_of`, element 0).  Nothing
+  is forced: a type read of an unbound parameter resolves at the apply.
+  The expression's own halves are the type expression's — the value is its
+  shape, the type its kind — so `type_of e` in a type position is exactly
+  the operand's type: `type_of (1)` is `Int : Type`, `type_of [1, 2]` is
+  `array<Int, 2>`, `type_of Type` is `Type`, and `5 : type_of (1)` checks
+  (see `examples/type_of.lichen`).
 
 ## 4. Compilation: source → IR
 
-Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
-1-based, supplied by the frontend per the IR contract):
+Each AST node compiles to exactly one `ExprKind`.  The IR itself is span-free;
+the frontend tracks positions in its own `SpanIndex` (an `ExprId → span` map,
+spans `(line, column)`, 1-based) filled as each IR node is created:
 
 | source | `ExprKind` |
 |---|---|
-| `5` | `Constant(USize(5))` |
-| `Int` | `Constant(TypeInt)` |
-| `Type` | `Constant(TypeType)` |
+| `5` | `Literal(IntLit(5))` |
+| `"s"` | `Literal(StrLit("s"))` |
+| `Int` | `Literal(IntTypeLit)` |
+| `string` | `Literal(StringTypeLit)` |
+| `Type` | `Literal(TypeTypeLit)` |
 | name use | the binder's own `ExprId` (pre-resolved) |
 | `x => e` | `Function { parameter, parameter_type: None, parameter_attribute: None, return }` — `parameter` is the `Parameter` expr for `x` |
 | `x : T => e` | `Function { parameter, parameter_type: Some(compile(T)), parameter_attribute: None, return }` — the annotated parameter's type, compiled in body scope (the §4.2 desugar kept as an optimization) |
 | `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
+| `a op b` (`+`, `-`, `<=`, `==`) | `BinOp { operator, left, right }` |
+| `!e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
+| `type_of` | a generic `Function { parameter, … }` whose body is `TypeOf { value: parameter }` — element 1 of the argument's `[value, type]` pair, read lazily |
+| `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |
 | `e[i]` | `Index { array, index }` |
+| `a(k)` | `Field { container, key }` — the adjacent single-expression paren form; a positional slot read over a tuple element or struct field |
 | `e : T` | `Annotation { value, type: Some(compile(T)), attribute: None }` |
 | `# p` / `e : T # p` | `Annotation { value, type: Some(compile(T))?, attribute: Some(compile(p)) }` — the annotated node's schema gains the `[Perspective]` tail |
 | `_` (any position — type or value) | `Placeholder` |
@@ -447,9 +532,12 @@ Each AST node compiles to exactly one `ExprKind` (all spans `(line, column)`,
 | `struct<T1, …, Tn>` / `struct<.a T1, .b T2>` | `TypeStruct { fields, names }` — nominal, fresh id per occurrence; the kind is a `[marker, K]` pair whose marker is the two-field `TypeStruct{id, names}` value |
 | `a.name` | `NamedField { container, name }` — the checker resolves `name` through the struct's name→index table to the positional index, then reads like `a(k)` |
 | `X::a` | `RawNamedField { container, name }` — a raw named read over a **TypeStruct value**: the container type (a TypeStruct kind) supplies the name table at `container_ty[0][1]`; yields the field's *type* as a value |
-| `s(1, 2)` (callee a struct type) | `Instantiate { type_expr, value }` |
+| `s(1, 2)` / `s(.x 1, .y 2)` (callee a struct type) | `Instantiate { type_expr, value, names }` — `names` is index-aligned with `value`'s tuple elements (a `.x 1` argument is `Some("x")`, a positional `1` is `None`); the checker reorders named arguments to the definition's positional order |
 | `[e1, …, en]` | `Array(range)` |
+| `[e1, ~e2, ~2 e3]` | `ShallowArray { range, depths }` — any `~`-marked element makes the array shallow: per-element marker depths (0 = unmarked, `usize::MAX` = the bare `~`, n = the value slot shallow at the first n levels of the element's type spine) |
 | `array<T, n>` | `TypeArray { element_type, length }` |
+| `table { k1 ==> v1, … }` | `Table(range)` — the entries interleaved `[k1, v1, k2, v2, …]`; keys share one key cell, values one value cell, and a key that is not concrete is dropped with an error |
+| `t{k}` | `Find { container, key }` — the adjacent brace form; the entry whose stored key is deep-content-equal to `k` |
 | `X<e>` | `RawIndex { container, index }` — a raw, unvalidated element read |
 | `{ a = e; …; e }` | the final expression's own node — statements are scope-entered (bindings), then popped; a non-final statement list is wired into the root as `Index(Tuple([…, e]), n)` |
 | `{ x = 1; …; y = 2 }` (no tail) | `RecordBlock { fields }` — a struct-returning block; each field carries an optional name, its value, a `pub` mark, and a `field` flag (false for a `let` local) |
@@ -482,8 +570,9 @@ only to later statements.  A block `{ a = e; …; e }` does the same and pops
 its scope frames (truncates) at the `}` — inside, the block's names shadow
 outer ones; after the `}`, the outer names are back.  Shadowing is allowed
 (the inner binding wins).  A name in no scope is a **resolve diagnostic** at
-the name's span — the checker's `lookup` panics on unresolved ids, so the
-frontend guarantees resolution before the IR leaves the crate.
+the name's span, and the use lowers to the same inert `ErrorBlock` a recovered
+parse error uses — an opaque leaf the checker skips — so the partial program
+still checks.
 
 ## 5. Diagnostics
 
@@ -505,9 +594,9 @@ classes `a`/`b` and their recorded values, `span`) — which tests and tooling
 match on instead of the message; frontend errors leave it `None`.  The
 frontend *recovers*: lex errors accumulate (an unexpected character is skipped
 and lexing continues), the parser skips a broken statement and reports it,
+an unresolved name lowers to an inert `ErrorBlock` (masked, checker-skipped),
 and the checker still runs on the resulting partial program — so one pass
-reports every problem it can find.  Only an unresolved name (the resolve
-stage) stops the pipeline, since no IR exists to check.  Checker diagnostics
+reports every problem it can find.  Checker diagnostics
 can be many, in order.
 
 ### Rendering

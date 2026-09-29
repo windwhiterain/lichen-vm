@@ -15,7 +15,11 @@ fn passing_assert_records_no_error() {
     let root = m.add_block(None);
     let one = usize_node(&mut m, root, 1);
     let condition = m.add_assert(one);
-    assert_eq!(m.asserts, vec![condition], "the condition is registered");
+    assert_eq!(
+        m.asserts.iter().map(|e| e.condition).collect::<Vec<_>>(),
+        vec![condition],
+        "the condition is registered"
+    );
 
     m.check_asserts();
 
@@ -55,6 +59,39 @@ fn assert_resolves_through_a_computation() {
     m.check_asserts();
 
     assert!(m.assert_errors.is_empty(), "0 + 1 == 1 holds");
+}
+
+#[test]
+fn assert_on_a_computed_nothing_fails() {
+    // A condition whose evaluation fails (an out-of-bounds read) resolves to
+    // the concrete `Void` — a decided value, not an unbound cell — so the
+    // assert FAILS rather than staying untriggered.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = u128_node(&mut m, root, 10);
+    let arr = array_node(&mut m, root, &[a], None);
+    let idx = usize_node(&mut m, root, 5);
+    let operands = array_node(&mut m, root, &[arr, idx], None);
+    let oob = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Index),
+        Some(operands),
+    );
+    m.add_assert(oob);
+
+    m.check_asserts();
+
+    assert_eq!(m.assert_errors.len(), 1, "a `Void` condition fails");
+    assert_eq!(
+        m.assert_errors[0].value,
+        TestValue::LowValue(LowValue::Void),
+        "the failed read's residue is recorded"
+    );
+    assert!(
+        m.asserts.is_empty(),
+        "a decided condition is consumed, not deferred"
+    );
 }
 
 #[test]
@@ -211,7 +248,11 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
 
     m.check_asserts();
 
-    assert_eq!(m.asserts, vec![condition], "still pending");
+    assert_eq!(
+        m.asserts.iter().map(|e| e.condition).collect::<Vec<_>>(),
+        vec![condition],
+        "still pending"
+    );
     assert!(m.assert_errors.is_empty());
 
     // Later unification binds through the cell's class (outside the drain;
@@ -296,7 +337,7 @@ fn gc_prunes_asserts_of_dropped_blocks() {
         "the condition died with its block"
     );
     assert!(
-        !m.asserts.contains(&condition),
+        !m.asserts.iter().any(|e| e.condition == condition),
         "the dropped entry is pruned"
     );
     m.check_asserts();
@@ -350,7 +391,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         "the condition moved with its function"
     );
     assert!(
-        m.asserts.contains(&condition),
+        m.asserts.iter().any(|e| e.condition == condition),
         "the moved entry stays registered"
     );
     m.check_asserts();

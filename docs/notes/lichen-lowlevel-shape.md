@@ -1,6 +1,6 @@
 # lichen-lowlevel: optional static shape for direct bytecode emission
 
-**Status: current** — describes the shipped `LowShape` marker, how it is stored
+> Status: current — describes the shipped `LowShape` marker, how it is stored
 (nothing in the side table; it lives *with* the private `Node::value`), and how
 the compute JIT consumes it to emit multi-arg kernels.  The shape is an
 **analysis result**, not a checker stamp.

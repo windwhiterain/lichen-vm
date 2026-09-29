@@ -1,6 +1,6 @@
 //! The program-generic pretty printer core: the type printer, the value
 //! printer, and the attribute-list / struct-field renderers.  All generic over
-//! `P: HighProgram`, so a host and a plugin that spells its own attribute slot
+//! `P: HighProgram`, so a host and a plugin that contributes an attribute
 //! (e.g. `lichen-doc`'s `? name = "…"`) reuse the same machinery.
 //!
 //! Everything here reads the top of the recursive-pair encoding and spells it
@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::program::{HighProgram, ValueType};
+use lichen_highlevel::shape;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -79,10 +80,12 @@ where
     };
     let mut parts = Vec::new();
     for (i, marker) in tail.iter().enumerate() {
-        let slot = values.get(2 + i).and_then(|item| match item.node {
-            AnyNodeId::Dynamic(n) => Some(n),
-            AnyNodeId::Static(_) => None,
-        });
+        let slot = values
+            .get(shape::attr_slot(i))
+            .and_then(|item| match item.node {
+                AnyNodeId::Dynamic(n) => Some(n),
+                AnyNodeId::Static(_) => None,
+            });
         if let Some(slot) = slot
             && let Some(spelling) = attr_ext(marker).render(module, slot)
         {
@@ -184,19 +187,20 @@ where
         self.module
     }
 
-    /// Render a type node; an unbound cell renders as its class name.
+    /// Render a type node; an unbound cell renders as its class name.  A
+    /// computed nothing ([`LowValue::Void`]) is a concrete value and renders
+    /// as `none` — it is never a fresh class variable.
     pub fn node(&mut self, node: NodeId) -> String {
         if self.path.contains(&node) {
             return "…".to_string();
         }
+        // A value-less node is an unbound cell: the lazy marker is the
+        // honest stand-in so it routes to the class name.
         let value = self
             .module
             .node_value(AnyNodeId::Dynamic(node))
-            .unwrap_or_else(|| P::Value::from(LowValue::None));
-        if matches!(
-            value.as_enum(),
-            Some(LowValue::None | LowValue::Parameterized)
-        ) {
+            .unwrap_or_else(|| P::Value::from(LowValue::Parameterized));
+        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             return self.class_name(node);
         }
         self.path.push(node);
@@ -241,7 +245,8 @@ where
                 LowValue::Array(array) => self.elements(node, array.items()),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
-                LowValue::None | LowValue::Parameterized => {
+                LowValue::None | LowValue::Void => "none".to_string(),
+                LowValue::Parameterized => {
                     unreachable!("handled by node()")
                 }
             };
@@ -417,9 +422,7 @@ where
             return "…".to_string();
         }
         let value = self.module.node_value(AnyNodeId::Static(sref));
-        if value
-            .is_none_or(|v| matches!(v.as_enum(), Some(LowValue::None | LowValue::Parameterized)))
-        {
+        if value.is_none_or(|v| matches!(v.as_enum(), Some(LowValue::Parameterized))) {
             visiting.remove(&sref);
             return self.static_class_name(sref);
         }
@@ -427,7 +430,9 @@ where
         let out = match value.as_enum() {
             Some(LowValue::USize(n)) => n.to_string(),
             Some(LowValue::Str(s)) => format!("\"{s}\""),
-            Some(LowValue::None | LowValue::Parameterized) => self.static_class_name(sref),
+            Some(LowValue::Parameterized) => self.static_class_name(sref),
+            // A computed nothing is a concrete value, never a class letter.
+            Some(LowValue::None | LowValue::Void) => "none".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
             Some(LowValue::Array(array)) => self.static_elements(sref, array.items(), visiting),
@@ -889,6 +894,7 @@ where
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::None => "none".to_string(),
+                LowValue::Void => "none".to_string(),
                 LowValue::Parameterized => "parameterized".to_string(),
                 LowValue::Array(array) => {
                     let elements = array.items();

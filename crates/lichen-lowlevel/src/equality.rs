@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, LowOperator, LowValue, Module, Node, NodeId, Operation,
-    Program, StaticNodeId, ValueExt as _, is_unbound,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, Deferral, LowOperator, LowValue, Module, Node, NodeId,
+    Operation, PendingSide, PendingSides, Program, StaticNodeId, ValueExt as _, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -106,6 +106,21 @@ impl<P: Program> Module<P> {
         }
     }
 
+    /// [`Self::unify`], reporting the range of [`Self::unify_errors`] this
+    /// call produced — **empty on success**.  The range is this call's own
+    /// failures, so a caller never has to infer ownership from a length
+    /// delta taken around the call.
+    ///
+    /// Invariant: `unify_errors` is append-only, so the range `before..len`
+    /// names exactly the entries this call appended and stays valid for as
+    /// long as nothing truncates the vec — which is what makes it safe for a
+    /// caller to suppress *its own* failures by [`Vec::truncate`].
+    pub fn try_unify(&mut self, a: NodeId, b: NodeId) -> (NodeId, std::ops::Range<usize>) {
+        let before = self.unify_errors.len();
+        let representative = self.unify(a, b);
+        (representative, before..self.unify_errors.len())
+    }
+
     /// Structurally unify the classes of `a` and `b`.
     ///
     /// Unification is over values: a class holding no value and no pending
@@ -183,12 +198,17 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// Whether an `AnyNodeId` names a self-referential universe: an array
-    /// whose item points back to itself (dynamically through its class, or
-    /// statically through the frozen self-loop).  Both sides of a universe
-    /// unification are equal by construction — the raw `path` guard would
-    /// otherwise treat the cycle as a conflict.
-    fn is_universe_id(&mut self, id: AnyNodeId) -> bool {
+    /// Whether `id` names a **self-referential two-element array** — a
+    /// 2-element array one of whose elements points back at its own class
+    /// (dynamically through the class, or statically through the frozen
+    /// self-loop).  This is a generic graph shape: it says "this value is a
+    /// cycle of length one", not what the cycle *means*.  The highlevel's
+    /// universe `K = [Type, ↺]` is the canonical instance, but a program
+    /// that recognises its own cycles by meaning (comparing against its
+    /// canonical node) is free to, and does so in `lichen-highlevel`'s
+    /// `shape` module.  The lowlevel needs the shape alone to unify two such
+    /// cycles successfully instead of tripping its cycle guard.
+    pub fn is_self_referential(&mut self, id: AnyNodeId) -> bool {
         match id {
             Dyn(node) => {
                 let rep = self.equality_representative(node);
@@ -208,7 +228,7 @@ impl<P: Program> Module<P> {
                             }
                         }
                         AnyNodeId::Static(_) => {
-                            if self.is_universe_id(item.node) {
+                            if self.is_self_referential(item.node) {
                                 return true;
                             }
                         }
@@ -307,24 +327,38 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                     return true;
                 }
-                // A pending *field/positional read* over an (ultimately)
-                // unbound container, unified against a *type value*, is
-                // unified by joining the classes.  The read's own type is a
-                // `[value,type]`-shaped pair too, so once the container binds
-                // to a concrete struct the read resolves to the field's actual
-                // type, and a genuine mismatch surfaces at apply time against
-                // the actual container (the computation, when it runs, must
-                // reconcile with the value the other side carried).  The
-                // deferral is deliberately narrow: only an `Index` read
-                // (neither a resolved read nor e.g. arithmetic or a
-                // dependent-type branch) and only against a type value (not a
-                // scalar), so an unresolvable real computation still records an
-                // error.
-                if (pending_a && self.is_pending_index_read(ra) && self.class_holds_type(rb))
-                    || (pending_b && self.is_pending_index_read(rb) && self.class_holds_type(ra))
-                {
-                    self.add_equality(ra, rb);
-                    return true;
+                // A pending *field/positional read* whose own type is being
+                // unified against a *type value* is a type round-trip, not a
+                // value comparison: the read resolves to the field's actual
+                // type once the container binds, and a genuine mismatch
+                // surfaces at apply time against the real container.
+                // Recognising "this class holds a type" needs the program's
+                // own encoding, so the decision is the program's — see
+                // [`Program::defer_pending`].  Only an unresolvable `Index`
+                // qualifies (never a resolved read, nor arithmetic or a
+                // dependent-type branch), so an unresolvable real
+                // computation still records an error.
+                let sides = PendingSides {
+                    a: PendingSide {
+                        representative: ra,
+                        pending: pending_a,
+                        pending_index_read: pending_a && self.is_pending_index_read(ra),
+                        skeleton: self.class_is_skeleton(ra),
+                        pure_cell: self.class_is_pure_cell(ra),
+                    },
+                    b: PendingSide {
+                        representative: rb,
+                        pending: pending_b,
+                        pending_index_read: pending_b && self.is_pending_index_read(rb),
+                        skeleton: self.class_is_skeleton(rb),
+                        pure_cell: self.class_is_pure_cell(rb),
+                    },
+                };
+                if let Some(verdict) = P::defer_pending(self, &sides) {
+                    if verdict == Deferral::Merge {
+                        self.add_equality(ra, rb);
+                        return true;
+                    }
                 }
                 // A pending *field/positional read* unified against another
                 // pending field read — both over (ultimately) unbound
@@ -362,7 +396,7 @@ impl<P: Program> Module<P> {
                 // Two self-referential universes are the same structural
                 // value even when one is materialized from a static module;
                 // unifying their cycles should be a success, not a conflict.
-                if self.is_universe_id(Dyn(ra)) && self.is_universe_id(Dyn(rb)) {
+                if self.is_self_referential(Dyn(ra)) && self.is_self_referential(Dyn(rb)) {
                     self.add_equality(ra, rb);
                     return true;
                 }
@@ -596,31 +630,6 @@ impl<P: Program> Module<P> {
             return false;
         }
         self.index_target(op).is_none()
-    }
-
-    /// Whether `rep`'s class holds a *type value* — a `[shape, kind]` pair
-    /// whose kind is `[marker, universe]` (an arrow, tuple, struct, atomic
-    /// type, …).  A field/positional read's TYPE is such a pair, so unifying
-    /// the pending read against a plain type is the safe deferral in
-    /// [`Self::unify_inner`]; unifying against a *scalar* (an `Int` value as
-    /// opposed to its type) is not a type round-trip and is left to fail.
-    fn class_holds_type(&mut self, rep: NodeId) -> bool {
-        let Some(value) = self.nodes[rep].value else {
-            return false;
-        };
-        let Some(LowValue::Array(array)) = value.as_enum() else {
-            return false;
-        };
-        let items = array.items();
-        if items.len() != 2 {
-            return false;
-        }
-        let Some(LowValue::Array(kind)) = self.node_value(items[1].node).and_then(|v| v.as_enum())
-        else {
-            return false;
-        };
-        let kind_items = kind.items();
-        kind_items.len() == 2 && self.is_universe_id(kind_items[1].node)
     }
 
     /// The first pending operation node in `rep`'s class, if any.

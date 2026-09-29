@@ -25,9 +25,9 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
-    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, Program,
-    StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
-    StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
+    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
+    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -145,7 +145,10 @@ impl<P: Program> Module<P> {
                 let baked = !ctx.module.nodes[condition.index].parameterized;
                 let instantiated = module.static_node_apply(condition, &mut ctx);
                 if !baked {
-                    module.asserts.push(instantiated);
+                    module.asserts.push(PendingAssert {
+                        condition: instantiated,
+                        template: static_ref(&ctx.module, condition),
+                    });
                 }
             }
             // The parameter unify: same shape as `function_apply` — re-establish
@@ -343,7 +346,10 @@ impl<P: Program> Module<P> {
             let baked = !ctx.module.nodes[condition.index].parameterized;
             let instantiated = self.static_node_apply(condition, ctx);
             if !baked {
-                self.asserts.push(instantiated);
+                self.asserts.push(PendingAssert {
+                    condition: instantiated,
+                    template: static_ref(&ctx.module, condition),
+                });
             }
             assert_clones.push(instantiated);
         }
@@ -465,6 +471,16 @@ fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNo
         current = parent;
     }
     current
+}
+
+/// The static identity of a node in `module` — the form a host's own
+/// per-node tables can key on when an assert is cloned out of a static
+/// module (the importing module has no dynamic node for the template).
+fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNodeId {
+    AnyNodeId::Static(StaticNodeId {
+        module: module.key,
+        index: node,
+    })
 }
 
 impl<P: Program> StaticModule<P> {
@@ -589,9 +605,17 @@ impl<P: Program> StaticModule<P> {
             offsets.insert((ptr, len), offset);
             cursor = offset + len;
         }
-        let max_align = unique.iter().map(|&(_, _, align)| align).max().unwrap_or(1);
-        let buffer = vec![0u8; cursor + max_align];
-        let base = align_up(buffer.as_ptr() as usize, max_align) as *mut u8;
+        // The arena base derives from the one alignment the artifact codec
+        // derives from the program type ([`crate::codec::arena_align`]) —
+        // never from the payloads that happen to be present — so a
+        // serialized artifact round-trips to the same base.  Every payload
+        // alignment divides it (alignments are powers of two), so each
+        // payload stays aligned at base + offset.
+        let arena_align = crate::codec::arena_align::<P>();
+        let buffer = vec![0u8; cursor + arena_align];
+        let base = align_up(buffer.as_ptr() as usize, arena_align) as *mut u8;
+        // The single payload copy: phase 3 only rewrites refs inside these
+        // arena copies and builds the static handles pointing at them.
         for &(ptr, len, _) in &unique {
             let offset = offsets[&(ptr, len)];
             unsafe { ptr::copy_nonoverlapping(ptr as *const u8, base.add(offset), len) };
@@ -714,8 +738,13 @@ fn rewrite_value<P: Program>(
         Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
-            let offset = offsets[&(handle.0 as *const u8 as usize, bytes)];
-            unsafe { ptr::copy_nonoverlapping(handle.0 as *const u8, base.add(offset), bytes) };
+            // Phase 2 laid out and copied every dynamic payload of the
+            // module, so the lookup is total by construction and the
+            // payload is already in the arena — only the item refs of the
+            // arena copy are rewritten here.
+            let offset = *offsets
+                .get(&(handle.0 as *const u8 as usize, bytes))
+                .expect("phase 2 laid out every dynamic payload of the module");
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut ArrayItem, items.len())
             };
@@ -747,8 +776,11 @@ fn rewrite_value<P: Program>(
         Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
-            let offset = offsets[&(handle.0 as *const u8 as usize, bytes)];
-            unsafe { ptr::copy_nonoverlapping(handle.0 as *const u8, base.add(offset), bytes) };
+            // Same invariant as the array arm: phase 2 already laid out and
+            // copied the payload; only the entry refs are rewritten here.
+            let offset = *offsets
+                .get(&(handle.0 as *const u8 as usize, bytes))
+                .expect("phase 2 laid out every dynamic payload of the module");
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut TableItem, items.len())
             };
@@ -796,8 +828,11 @@ fn rewrite_value<P: Program>(
                 return value;
             }
             let old = value.handle();
-            let offset = offsets[&(old.as_ptr() as usize, old.len())];
-            unsafe { ptr::copy_nonoverlapping(old.as_ptr(), base.add(offset), old.len()) };
+            // Same invariant as the array arm: the payload was copied in
+            // phase 2; only the handle is re-keyed here.
+            let offset = *offsets
+                .get(&(old.as_ptr() as usize, old.len()))
+                .expect("phase 2 laid out every dynamic payload of the module");
             let mut value = value;
             value.set_handle(AnyHandle::Static(StaticHandle {
                 module: key,

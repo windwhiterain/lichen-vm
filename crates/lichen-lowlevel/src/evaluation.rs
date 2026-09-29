@@ -2,7 +2,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvaluatedDeep, LowOperator,
-    LowValue, Module, NodeId, OperatorExt as _, Program,
+    LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -23,13 +23,29 @@ pub enum EvalError {
     },
     /// A [`LowOperator::TableGet`] that found no entry for the key, or
     /// whose key is still unbound (a not-yet-concrete key can match nothing
-    /// — the table's stored keys are all concrete).  `table` is the
+    /// — the table's stored keys are all concrete), or whose target or key
+    /// is a computed nothing (a [`LowValue::Void`] never matches: it is the
+    /// residue of an already-recorded failure, not a key).  `table` is the
     /// container operand node, `key` the key node.
     TableMiss { table: AnyNodeId, key: AnyNodeId },
     /// A table build dropped an entry whose key could not be forced to a
     /// concrete value (its subtree holds an unbound cell or a parameterized
     /// computation) — hashing needs the key's decided content.
     TableKeyUnbound { key: AnyNodeId },
+    /// A [`LowOperator::Index`] whose target is not an array at all — a read
+    /// of a scalar, a function, a table, or a type-level node.  Reachable from
+    /// source (a field read applied to something that is not a container), so
+    /// it is a recorded failure and a computed nothing, never an internal
+    /// error: `target` is the container operand node, so the highlevel can
+    /// attribute the diagnostic to the expression that was indexed.
+    IndexTarget { target: AnyNodeId },
+    /// A [`LowOperator::Index`] whose **subscript** is not an index at all —
+    /// a read through a string, a tuple, a function, a table.  Reachable from
+    /// source (`a[i]` with `i : string`, and the same through a parameter), so
+    /// it is a recorded failure and a computed nothing: `subscript` is the
+    /// index operand node, so the highlevel can attribute the diagnostic to
+    /// the expression that was used as a subscript.
+    IndexSubscript { subscript: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -84,17 +100,25 @@ impl<P: Program> Module<P> {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
                             }
+                            // A computed-nothing index propagates: the
+                            // read's own failure was recorded where the
+                            // `Void` was produced.
+                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
                             Some(LowValue::USize(index)) => {
                                 match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                                     Some(LowValue::Parameterized) => {
                                         P::Value::from(LowValue::Parameterized)
                                     }
+                                    // A computed-nothing target propagates
+                                    // the same way — no second diagnostic.
+                                    Some(LowValue::Void) => P::Value::from(LowValue::Void),
                                     Some(LowValue::Array(array)) => {
                                         let array = array.items();
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
-                                        // and yield no value instead of panicking
-                                        // in raw slice indexing.
+                                        // and yield a computed nothing (`Void`)
+                                        // instead of panicking in raw slice
+                                        // indexing.
                                         if index < array.len() {
                                             // A read of a pure cell is a
                                             // reference, not a snapshot:
@@ -125,13 +149,40 @@ impl<P: Program> Module<P> {
                                                 index_value: index,
                                                 length: array.len(),
                                             });
-                                            P::Value::from(LowValue::None)
+                                            P::Value::from(LowValue::Void)
                                         }
                                     }
-                                    _ => unreachable!("Index target must be an array"),
+                                    // The read's operands are a *pair*: every
+                                    // failure mode of reading is a user error
+                                    // (a field read applied to something that is
+                                    // not a container, of an element that does
+                                    // not exist, or through a subscript that is
+                                    // not an index), never an invariant
+                                    // violation — record it and yield a computed
+                                    // nothing.  A late binding still reaches this
+                                    // position through the `Void`/`Parameterized`
+                                    // arms, so nothing that could resolve is lost.
+                                    _ => {
+                                        self.eval_errors.push(EvalError::IndexTarget {
+                                            target: operands[0].node,
+                                        });
+                                        P::Value::from(LowValue::Void)
+                                    }
                                 }
                             }
-                            _ => unreachable!("Index needs a USize index node"),
+                            // A subscript that is concretely not an index —
+                            // a string, a tuple, a function — is the same
+                            // class of user error as a non-container target
+                            // (neither is expressible in the type encoding,
+                            // so the checker cannot reject either one
+                            // statically): recorded, with the subscript node
+                            // carrying the fact, and a computed nothing.
+                            _ => {
+                                self.eval_errors.push(EvalError::IndexSubscript {
+                                    subscript: operands[1].node,
+                                });
+                                P::Value::from(LowValue::Void)
+                            }
                         }
                     }
                     _ => unreachable!("Index operand must be an array of [array, index]"),
@@ -147,7 +198,12 @@ impl<P: Program> Module<P> {
                             value
                         }
                     }
-                    None => P::Value::from(LowValue::None),
+                    // A nullary operator (e.g. `TypeOperator::Fresh`) has no
+                    // operand node: the honest stand-in is the computed-nothing
+                    // value — never the `None` unit value, which a program can
+                    // genuinely produce.  (`OperatorExt::run` takes the operand
+                    // by value, so the absence is spelled as a value.)
+                    None => P::Value::from(LowValue::Void),
                 };
                 operator.run(operand, block, self)
             }
@@ -215,50 +271,47 @@ impl<P: Program> Module<P> {
                             }
                             Some(LowValue::Table(payload)) => {
                                 // The key is force-evaluated and
-                                // deep-content-hashed; an unforceable key
-                                // can match nothing (the stored keys are
-                                // all concrete) and misses like any other
-                                // absent key.
-                                let Some(hash) = self.key_hash(key) else {
-                                    self.eval_errors.push(EvalError::TableMiss { table, key });
-                                    return P::Value::from(LowValue::None);
-                                };
-                                let items = payload.items();
-                                let start = items.partition_point(|item| item.hash < hash);
-                                let mut path = Vec::new();
-                                let mut found = None;
-                                for item in &items[start..] {
-                                    if item.hash != hash {
-                                        break;
+                                // deep-content-hashed; a key that is
+                                // decided-and-absent misses like any other
+                                // absent key.  A key that is not *decided
+                                // yet* (a lambda parameter mid-apply, a lazy
+                                // computation with unbound operands) is not a
+                                // miss: the lookup has not happened yet, so
+                                // the read stays lazy and a later pass, with
+                                // the key bound, decides it.
+                                match self.key_state(key) {
+                                    KeyState::Undecided => {
+                                        return P::Value::from(LowValue::Parameterized);
                                     }
-                                    if self.key_eq(key, item.key, &mut path) {
-                                        found = Some(item.value);
-                                        break;
-                                    }
-                                }
-                                match found {
-                                    // A read of a pure cell is a reference,
-                                    // not a snapshot — joining the reader
-                                    // to the cell's class lets a later bind
-                                    // reach it through replication, like an
-                                    // array `Index` read.
-                                    Some(element) => match element {
-                                        Dyn(element) => {
-                                            self.alias_read(node, element);
-                                            self.evaluate_node(Dyn(element), Some(block))
-                                        }
-                                        // A static element is immutable —
-                                        // no class to join — and its value
-                                        // is absolute, so the read result
-                                        // caches into this node like any
-                                        // other.
-                                        AnyNodeId::Static(sref) => self.static_read(sref),
-                                    },
-                                    None => {
+                                    KeyState::Unhashable => {
                                         self.eval_errors.push(EvalError::TableMiss { table, key });
-                                        P::Value::from(LowValue::None)
+                                        return P::Value::from(LowValue::Void);
+                                    }
+                                    KeyState::Hashed(hash) => {
+                                        let items = payload.items();
+                                        let start = items.partition_point(|item| item.hash < hash);
+                                        let mut path = Vec::new();
+                                        let mut found = None;
+                                        for item in &items[start..] {
+                                            if item.hash != hash {
+                                                break;
+                                            }
+                                            if self.key_eq(key, item.key, &mut path) {
+                                                found = Some(item.value);
+                                                break;
+                                            }
+                                        }
+                                        self.finish_table_get(node, found, block)
                                     }
                                 }
+                            }
+                            // A computed-nothing target (e.g. the anonymous
+                            // struct's "no name table" marker behind a lazy
+                            // named read) is a miss like any other: recorded,
+                            // never a panic.
+                            Some(LowValue::Void) => {
+                                self.eval_errors.push(EvalError::TableMiss { table, key });
+                                P::Value::from(LowValue::Void)
                             }
                             _ => unreachable!("TableGet target must be a table"),
                         }
@@ -308,6 +361,53 @@ impl<P: Program> Module<P> {
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
         self.evaluate_node_deep_inner(Dyn(node), current, false, true)
+    }
+
+    /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
+    /// found element is read by reference (joining the reader to the cell's
+    /// class lets a later bind reach it through replication, like an array
+    /// `Index` read), and an absent one is a miss — recorded, never a panic.
+    fn finish_table_get(
+        &mut self,
+        node: NodeId,
+        found: Option<AnyNodeId>,
+        block: BlockId,
+    ) -> P::Value {
+        match found {
+            Some(Dyn(element)) => {
+                self.alias_read(node, element);
+                self.evaluate_node(Dyn(element), Some(block))
+            }
+            // A static element is immutable — no class to join — and its value
+            // is absolute, so the read result caches into this node like any
+            // other.
+            Some(AnyNodeId::Static(sref)) => self.static_read(sref),
+            None => {
+                let (table, key) = self.table_get_operands(node);
+                self.eval_errors.push(EvalError::TableMiss { table, key });
+                P::Value::from(LowValue::Void)
+            }
+        }
+    }
+
+    /// The `[table, key]` operand nodes of a `TableGet`, for attributing a
+    /// miss.  The read has already proved the operand is a 2-element array, so
+    /// the shape holds here.
+    fn table_get_operands(&self, node: NodeId) -> (AnyNodeId, AnyNodeId) {
+        let operand = self.nodes[node]
+            .operation
+            .and_then(|op| op.operand)
+            .expect("a TableGet node reached the miss path carries its operand");
+        match self
+            .node_value(Dyn(operand))
+            .and_then(|value| value.as_enum())
+        {
+            Some(LowValue::Array(array)) => {
+                let items = array.items();
+                (items[0].node, items[1].node)
+            }
+            _ => unreachable!("a TableGet operand is the [table, key] array"),
+        }
     }
 
     /// Shared core of the deep and forced passes.  `skip_shallow` keeps the

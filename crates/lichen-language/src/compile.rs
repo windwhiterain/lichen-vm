@@ -40,6 +40,7 @@
 
 use std::collections::HashMap;
 
+use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
     HighProgramLiteral, IntLit, IntTypeLit, StrLit, StringTypeLit, TypeTypeLit,
@@ -271,7 +272,14 @@ impl Compiler {
                     if matches!(&binding.value, Expr::Name(..)) {
                         // A bare name reference (`b = a`, `y = x`, and the
                         // degenerate `a = a`): share the resolved id rather
-                        // than copying the kind, so the binding aliases it.
+                        // than copying the kind, so the binding aliases it —
+                        // one compilation (a transplanted struct type would
+                        // recompile under a second nominal id).  Uses compiled
+                        // *before* this statement captured the reserved
+                        // placeholder `p` (a forward reference); re-point them
+                        // to the aliased id, or they would keep the stale
+                        // `Placeholder` kind and lose the value's type.
+                        self.ir.repoint(p, value);
                         self.set_binder(binder, value);
                         value
                     } else {
@@ -583,21 +591,24 @@ impl Compiler {
             } => {
                 let value = self.compile_expr(value);
                 let r#type = r#type.as_ref().map(|t| self.compile_expr(t));
-                // Attribute value expressions, in tail order (the perspective
-                // constraint first, then the doc label), aligned by position
-                // with the schema tail — so the checker pairs `tail[i]` with
-                // `attributes[i]`.  The mechanism is generic: each annotation
-                // kind contributes one tail entry + one value expression.
-                let mut attrs: Vec<ExprId> = Vec::new();
-                let mut tail: Vec<LangAttr> = Vec::new();
+                // Attribute value expressions, laid out in the **canonical
+                // attribute order** (the composed set's order — the single
+                // authority the checker's slot merge sorts into as well), so
+                // the schema tail and the `attributes` range are aligned with
+                // each other and with the merged tail by construction rather
+                // than by a hand-spelled sequence.  The mechanism is generic:
+                // each annotation kind contributes one (marker, value
+                // expression) pair.
+                let mut spelled: Vec<(LangAttr, ExprId)> = Vec::new();
                 if let Some(p) = &perspective {
-                    attrs.push(self.compile_expr(p));
-                    tail.push(LangAttr::Perspective(Perspective));
+                    spelled.push((LangAttr::Perspective(Perspective), self.compile_expr(p)));
                 }
                 if let Some(d) = &doc {
-                    attrs.push(self.compile_expr(d));
-                    tail.push(LangAttr::Doc(Doc));
+                    spelled.push((LangAttr::Doc(Doc), self.compile_expr(d)));
                 }
+                spelled.sort_by_key(|(marker, _)| marker.order_index());
+                let tail: Vec<LangAttr> = spelled.iter().map(|(marker, _)| *marker).collect();
+                let attrs: Vec<ExprId> = spelled.into_iter().map(|(_, value)| value).collect();
                 let id = self.alloc_annotation(value, r#type, &attrs, span);
                 // The attribute tail stamps the annotated node's static
                 // schema — the one asymmetry with `:` (the slots come into

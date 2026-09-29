@@ -1,7 +1,7 @@
 //! Tables: the constant `LowValue::Table` — deep-content keys (the pure
 //! coinductive structural equality plus the matching content hash), the
 //! hash-sorted payload, and the `TableGet` read (a miss records an
-//! [`EvalError::TableMiss`] and yields `None`; an unforceable key is
+//! [`EvalError::TableMiss`] and yields `Void`; an unforceable key is
 //! dropped with a [`EvalError::TableKeyUnbound`] at build).
 
 use super::*;
@@ -61,11 +61,11 @@ fn usize_keys_round_trip_and_misses_record_an_error() {
     assert_eq!(read, TestValue::LowValue(LowValue::USize(20)));
 
     // A miss is a recorded fact, not a panic: the error ledger gets an
-    // entry and the read yields no value.
+    // entry and the read yields the computed-nothing value.
     let three = usize_node(&mut m, root, 3);
     let get = table_get(&mut m, root, t, three);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::None));
+    assert_eq!(read, TestValue::LowValue(LowValue::Void));
     assert_eq!(m.eval_errors.len(), 1);
     let EvalError::TableMiss { key, .. } = m.eval_errors[0] else {
         panic!("a missed read records a TableMiss failure")
@@ -104,7 +104,7 @@ fn keys_are_deep_content_distinct_but_equal_structures_match() {
     let other = array_node(&mut m, root, &[a, c], None);
     let get = table_get(&mut m, root, t, other);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::None));
+    assert_eq!(read, TestValue::LowValue(LowValue::Void));
 }
 
 #[test]
@@ -135,10 +135,80 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     };
     assert_eq!(dropped, AnyNodeId::Dynamic(key));
 
-    // Reading with an unbound key misses (it can match nothing).
+    // Reading with a still-unbound key does **not** miss: the key is undecided,
+    // not absent, so the lookup has not happened yet and the read stays lazy
+    // for a later pass, when the key is bound.  (A key that is *decided* and
+    // not key content — a `Void` — does miss; see the next test.)
     let get = table_get(&mut m, root, t, key);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::None));
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::Parameterized),
+        "an undecided key leaves the read lazy"
+    );
+    assert_eq!(
+        m.eval_errors.len(),
+        1,
+        "and records no miss — only the build's dropped entry is reported"
+    );
+}
+
+#[test]
+fn a_computed_nothing_key_is_never_a_phantom_hit() {
+    // Two *different* failed reads both evaluate to `Void`; neither may key
+    // a table entry, and the read must miss rather than the two residues
+    // colliding on a shared hash token.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let oob_read = |m: &mut Module<TestProgram>| -> NodeId {
+        let a = usize_node(m, root, 1);
+        let arr = array_node(m, root, &[a], None);
+        let idx = usize_node(m, root, 5);
+        let operands = array_node(m, root, &[arr, idx], None);
+        op_node(
+            m,
+            root,
+            TestOperator::LowOperator(LowOperator::Index),
+            Some(operands),
+        )
+    };
+    let build_key = oob_read(&mut m);
+    let value = usize_node(&mut m, root, 3);
+    let t = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(build_key), AnyNodeId::Dynamic(value))],
+    );
+
+    // The entry was dropped at build: a `Void` key is not hashable.
+    let TestValue::LowValue(LowValue::Table(payload)) =
+        m.node_value(AnyNodeId::Dynamic(t)).unwrap()
+    else {
+        panic!("the table value")
+    };
+    assert!(
+        payload.items().is_empty(),
+        "the `Void`-keyed entry is dropped"
+    );
+    assert!(
+        m.eval_errors
+            .iter()
+            .any(|e| matches!(e, EvalError::TableKeyUnbound { .. })),
+        "the build records the dropped key"
+    );
+
+    // A read keyed by *another* failed read misses — no phantom hit between
+    // two computed-nothing keys.
+    let read_key = oob_read(&mut m);
+    let get = table_get(&mut m, root, t, read_key);
+    let read = m.evaluate_node_deep(get, None);
+    assert_eq!(read, TestValue::LowValue(LowValue::Void));
+    assert!(
+        m.eval_errors
+            .iter()
+            .any(|e| matches!(e, EvalError::TableMiss { .. })),
+        "the read records a miss"
+    );
 }
 
 #[test]
@@ -202,7 +272,7 @@ fn table_values_key_by_identity() {
     assert_eq!(read, TestValue::LowValue(LowValue::USize(42)));
     let get = table_get(&mut m, root, outer, t2);
     let read = m.evaluate_node_deep(get, None);
-    assert_eq!(read, TestValue::LowValue(LowValue::None));
+    assert_eq!(read, TestValue::LowValue(LowValue::Void));
 }
 
 #[test]

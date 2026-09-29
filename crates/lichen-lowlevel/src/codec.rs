@@ -17,7 +17,7 @@ use std::sync::Arc;
 
 use crate::{
     AnyFunctionId, AnyHandle, ArrayItem, LowOperator, LowValue, ModuleKey, Program,
-    StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, TableItem,
+    StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, TableItem, ValueExt as _,
 };
 
 // --- byte reader / writer -----------------------------------------------------
@@ -61,18 +61,32 @@ pub trait OperatorCodec: Sized {
     fn read_operator(r: &mut Reader<'_>) -> Result<Self, String>;
 }
 
+/// The payload alignment of a program's frozen arena — the strictest
+/// alignment any arena payload kind can need: array items, table items, and
+/// the program's ext handle payloads ([`ValueExt::alignment`]).  The freeze
+/// layout ([`StaticModule::from_module`]) and this codec both derive the
+/// arena base from this one function of the program type, so the writer and
+/// the reader provably agree; the artifact header records it as a
+/// corruption guard.
+pub fn arena_align<P: Program>() -> usize {
+    std::mem::align_of::<ArrayItem>()
+        .max(std::mem::align_of::<TableItem>())
+        .max(P::Value::alignment())
+}
+
 /// The aligned base of a module's arena — the same formula
 /// `StaticModule::from_module` used to lay the payloads out, so offsets
 /// round-trip exactly.
-pub fn arena_base(arena: &[u8]) -> *const u8 {
+pub fn arena_base<P: Program>(arena: &[u8]) -> *const u8 {
+    let align = arena_align::<P>();
     let ptr = arena.as_ptr() as usize;
-    let base = (ptr + ARENA_ALIGN - 1) & !(ARENA_ALIGN - 1);
+    let base = (ptr + align - 1) & !(align - 1);
     base as *const u8
 }
 
 /// The base-relative offset of a handle's payload pointer.
 pub fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) -> usize {
-    let base = arena_base(&module.arena) as usize;
+    let base = arena_base::<P>(&module.arena) as usize;
     let relative = offset as usize - base;
     assert!(
         relative <= module.arena.len(),
@@ -80,12 +94,6 @@ pub fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) ->
     );
     relative
 }
-
-/// The payload alignment of the frozen arena — array item slices are the only
-/// payload kind the core vocabulary uses (a composed value's ext handle
-/// variants, if any, become a new payload kind and must be considered by a
-/// downstream codec's alignment choice).
-pub const ARENA_ALIGN: usize = std::mem::align_of::<ArrayItem>();
 
 // --- the structural leaves ------------------------------------------------------
 
@@ -131,6 +139,9 @@ impl ValueCodec for LowValue {
                 panic!("serializing a frozen module that carries a dynamic function ref")
             }
             LowValue::None => w.u8(3),
+            // Tag 7 is additive: artifacts written before `Void` existed
+            // never carry it, and tag 3 keeps meaning the `None` unit value.
+            LowValue::Void => w.u8(7),
             LowValue::Parameterized => w.u8(4),
             LowValue::Str(s) => {
                 w.u8(5);
@@ -160,7 +171,7 @@ impl ValueCodec for LowValue {
                         format!("artifact references unregistered dependency key {owner:?}")
                     })?;
                     let arena: &[u8] = &module.arena;
-                    (arena, arena_base(arena))
+                    (arena, arena_base::<P>(arena))
                 };
                 let gap = owner_base as usize - owner_arena.as_ptr() as usize;
                 if offset + len > owner_arena.len() - gap {
@@ -181,6 +192,7 @@ impl ValueCodec for LowValue {
                 }))
             }
             3 => LowValue::None,
+            7 => LowValue::Void,
             4 => LowValue::Parameterized,
             5 => {
                 let len = r.u32()? as usize;
@@ -202,7 +214,7 @@ impl ValueCodec for LowValue {
                         format!("artifact references unregistered dependency key {owner:?}")
                     })?;
                     let arena: &[u8] = &module.arena;
-                    (arena, arena_base(arena))
+                    (arena, arena_base::<P>(arena))
                 };
                 let gap = owner_base as usize - owner_arena.as_ptr() as usize;
                 if offset + len > owner_arena.len() - gap {

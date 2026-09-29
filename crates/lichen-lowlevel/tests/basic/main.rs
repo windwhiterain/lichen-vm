@@ -438,7 +438,10 @@ fn function(
     );
     let asserts_before = m.asserts.len();
     wire(m, ret, param);
-    let asserts = m.asserts[asserts_before..].to_vec();
+    let asserts = m.asserts[asserts_before..]
+        .iter()
+        .map(|e| e.condition)
+        .collect::<Vec<_>>();
     let (func_node, _) = wrap_function_asserts(m, block, ret, param, asserts);
     (func_node, ret, param)
 }

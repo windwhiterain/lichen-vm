@@ -41,16 +41,34 @@ Every note opens with a `> Status:` line:
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
 | [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
-| [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`ir`/`checker`), `lichen-language` (`program`) | current |
+| [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-compute` | proposed |
+| [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0/1a/1b/1c/2/3a); proposed (the rest of Phase 3, Phase 4+) |
+| [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`shape`/`ir`/`checker`), `lichen-language` (`program`/`compile`) | current |
+| [Doc attribute rework plan](notes/doc-attribute-rework-plan.md) | `lichen-language`, `lichen-highlevel` (`attr`), `lichen-language-server` (`analysis`) | current |
+| [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel` (`program`/`native`), `lichen-compute` | current |
+| [The plugin taxonomy](notes/plugin-taxonomy.md) | `lichen-highlevel` (`plugin`), `lichen-compute`, `lichen-std-native`, `lichen-perspective`, `lichen-language` (`program`/`package`) | current |
 | [Raw index `X<e>`](notes/raw-index.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`), `lichen-render` | current |
+| [Raw named read `X::a`](notes/raw-field.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`compile`), `lichen-highlevel` (`ir`/`checker`) | current |
+| [Placeholder `_` anywhere](notes/placeholder-anywhere.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language-server` (`analysis`) | current |
+| [No type mode](notes/no-type-mode.md) | `lichen-language-parser` | current |
+| [Record programs (modules)](notes/record-program.md) | `lichen-language-parser`, `lichen-language` (`compile`/`session`), `lichen-language-server` (`analysis`) | current |
+| [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language`, `lichen-highlevel` | current |
+| [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`resolve`/`compile`/`session`), `lichen-highlevel` (`checker`) | current (T3/T4 proposed) |
+| [Build performance](notes/build-performance.md) | `lichen-language-parser` | current |
+| [Language toolchain](notes/language-toolchain.md) | `lichen-language`, `lichen-language-server`, `lichen-language-zed` | current |
+| [Lichen Home for the LSP](notes/liche-lsp-home.md) | `lichen-language-server` (`home`), `lichen-language` (`package`/`persist`) | current |
 | [Packages & import](notes/packages.md) | `lichen-language` (`preprocess`/`package`/`persist`/`run`), `lichen-preprocess` | current |
 | [Package manager](notes/package-manager.md) | `lichen-package`, `lichen-preprocess` | current |
 | [Isolating the preprocessor](notes/preprocessor-isolation.md) | `lichen-preprocess`, `lichen-span`, `lichen-language` (`preprocess` shim, `package`), `lichen-package` | current |
+| [Cross-process artifact store](notes/artifact-cache.md) | `lichen-registry`, `lichen-language` (`persist`/`package`), `lichen-lowlevel` (`static_module`) | current |
+| [Testing the package manager offline](notes/venv-test.md) | `lichen-package`, `scripts/venv-test.sh` | current |
 | [README example sync](notes/readme-sync.md) | `lichen-language` (`readme`) | current |
-| [Build performance](notes/build-performance.md) | `lichen-language` (`parse`) | historical |
-| [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language` (`lex`/`parse`/`compile`), `lichen-highlevel` (`checker`) | proposed |
-| [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language` (`lex`/`parse`/`ast`/`diag`/`compile`), `lichen-language-lex` / `lichen-language-parser` (proposed) | proposed |
+| [lichen-compute: the JIT package](notes/lichen-compute.md) | `lichen-compute`, `lichen-language` (`program`/`package`), `lichen-highlevel` (`native`) | current |
+| [Kernels as `.native`/`.sig` structs](notes/compute-kernel-struct.md) | `lichen-compute`, `lichen-language` (`program`) | current |
+| [Parallel buffer map (`range`/`read`/`write`)](notes/compute-parallel-buffer-read-write.md) | `lichen-compute` | current |
+| [Parallel primitives (`parallel`/`plrun`/`pget`/`pcollect`)](notes/lichen-compute-parallel.md) | `lichen-compute` | historical |
 | [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
+| [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
 
 ## The language spec
 

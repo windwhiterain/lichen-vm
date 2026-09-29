@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lichen_highlevel::program::HighProgram;
-pub use lichen_lowlevel::codec::{ARENA_ALIGN, Reader, Writer, arena_base};
+pub use lichen_lowlevel::codec::{Reader, Writer, arena_align, arena_base};
 use lichen_lowlevel::{
     LocalNodeId, LowShape, Program, StaticFunction, StaticModule, StaticNode, StaticOperation,
 };
@@ -213,7 +213,7 @@ where
     w.u32(3); // format version
     w.u64(module.key.as_raw());
     w.bytes(&hash);
-    w.u64(ARENA_ALIGN as u64);
+    w.u64(arena_align::<P>() as u64);
     w.u64(export.index as u64);
     w.u64(module.arena.len() as u64);
     w.bytes(&module.arena);
@@ -397,7 +397,7 @@ where
         return Err("artifact hash does not match its file".into());
     }
     let max_align = r.u64()? as usize;
-    if max_align != ARENA_ALIGN {
+    if max_align != arena_align::<P>() {
         return Err("artifact payload alignment mismatch".into());
     }
     let export = LocalNodeId {
@@ -405,7 +405,7 @@ where
     };
     let arena_len = r.u64()? as usize;
     let arena = r.take(arena_len)?.to_vec();
-    let base = arena_base(&arena);
+    let base = arena_base::<P>(&arena);
 
     let node_count = r.u64()? as usize;
     let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_count);
@@ -593,27 +593,30 @@ mod codec_roundtrip {
     /// Every `LangValue` variant that round-trips without a module arena.  The
     /// handle/function-ref variants (array/table/function tags) need a real
     /// frozen module and are exercised at the artifact level by the `persist`
-    /// integration tests; this covers every scalar/type/string variant.
+    /// integration tests; this covers every scalar/type/string variant.  The
+    /// `TypeValue`/`TypeOperator` coverage iterates the leaf enums' own
+    /// registry-derived variant lists ([`TypeValue::KIND_MARKERS`],
+    /// [`TypeOperator::ALL`]), so a variant added to the single-source list
+    /// is covered here automatically — the hand-written part of this list
+    /// only spells the leaves that have no such registry.
     #[test]
     fn every_arena_free_value_round_trips() {
         let values: &[LangValue] = &[
             LangValue::LowValue(LowValue::USize(41)),
             LangValue::LowValue(LowValue::None),
+            LangValue::LowValue(LowValue::Void),
             LangValue::LowValue(LowValue::Parameterized),
             LangValue::LowValue(LowValue::Str("hello")),
-            LangValue::TypeValue(TypeValue::TypeInt),
-            LangValue::TypeValue(TypeValue::TypeType),
-            LangValue::TypeValue(TypeValue::TypeFunction),
-            LangValue::TypeValue(TypeValue::TypeTuple),
-            LangValue::TypeValue(TypeValue::TypeArray),
-            LangValue::TypeValue(TypeValue::TypeStruct),
-            LangValue::TypeValue(TypeValue::TypeTable),
-            LangValue::TypeValue(TypeValue::TypeString),
             LangValue::TypeValue(TypeValue::TypeId(7)),
             LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeBuffer),
+            LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeWrite),
         ];
         for &v in values {
             assert_eq!(roundtrip_value(v), v, "value did not round-trip");
+        }
+        for &marker in TypeValue::KIND_MARKERS {
+            let v = LangValue::TypeValue(marker);
+            assert_eq!(roundtrip_value(v), v, "kind marker did not round-trip");
         }
     }
 
@@ -634,15 +637,14 @@ mod codec_roundtrip {
             LangOperator::LowOperator(LowOperator::Index),
             LangOperator::LowOperator(LowOperator::Apply),
             LangOperator::LowOperator(LowOperator::TableGet),
-            LangOperator::TypeOperator(TypeOperator::Fresh),
-            LangOperator::TypeOperator(TypeOperator::Add),
-            LangOperator::TypeOperator(TypeOperator::Sub),
-            LangOperator::TypeOperator(TypeOperator::Leq),
-            LangOperator::TypeOperator(TypeOperator::Eq),
             LangOperator::GcdOp(crate::program::GcdOp::Gcd),
         ];
         for &op in ops {
             assert_eq!(roundtrip_op(op), op, "operator did not round-trip");
+        }
+        for &ty_op in TypeOperator::ALL {
+            let op = LangOperator::TypeOperator(ty_op);
+            assert_eq!(roundtrip_op(op), op, "type operator did not round-trip");
         }
     }
 }

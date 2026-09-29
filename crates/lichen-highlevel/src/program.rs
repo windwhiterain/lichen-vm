@@ -17,15 +17,16 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    BlockId, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt, Program,
-    StaticModule, ValueExt,
+    BlockId, Deferral, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt,
+    PendingSides, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
 
-use crate::attr::{AttrSpec, NoAttr};
+use crate::attr::{AttrSet, NoAttr};
 use crate::diagnostic::DiagKind;
 use crate::ir::Loc;
+use crate::shape::for_each_kind_marker;
 
 /// The fresh-nominal-type-id state — one extension component of
 /// [`HighGlobalExt`].
@@ -104,6 +105,18 @@ pub struct LiteralBuild {
     pub ty: NodeId,
 }
 
+// The marker-node accessors are generated from the registry — one
+// `fn …_marker_node(&self) -> NodeId` per marker, each returning the
+// checker's installed shared node for it.
+macro_rules! define_ctx_marker_accessors {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $(
+            #[doc = concat!("The installed `", $display, "` marker node.")]
+            fn $node_fn(&self) -> NodeId;
+        )*
+    };
+}
+
 /// The curated safe context an extension point sees — the program-generic
 /// subset of the checker's *encoding* surface.  This is the "who encode, who
 /// parse" boundary: the highlevel owns the `[value, type]` grammar, and an
@@ -143,26 +156,13 @@ pub trait Ctx<P: Program> {
     /// across occurrences, since diagnostics are attributed by the lowlevel
     /// unify trace and the checker's edges (never by span-on-node).
     fn int_type(&self) -> NodeId;
-    /// The installed `int` marker node.
-    fn int_marker_node(&self) -> NodeId;
     /// The canonical, shared `[string, Type]` type expression — the type of
     /// every `Str` value and the pair of the `string` type constant.  Shared
     /// across occurrences like [`Self::int_type`].
     fn string_type(&self) -> NodeId;
-    /// The installed `string` marker node.
-    fn string_marker_node(&self) -> NodeId;
-    /// The installed `Type` marker node.
-    fn type_marker_node(&self) -> NodeId;
-    /// The installed `FunctionType` kind marker node.
-    fn function_type_marker_node(&self) -> NodeId;
-    /// The installed `TupleType` kind marker node.
-    fn tuple_type_marker_node(&self) -> NodeId;
-    /// The installed `ArrayType` kind marker node.
-    fn array_type_marker_node(&self) -> NodeId;
-    /// The installed `TypeStruct` kind marker node.
-    fn type_struct_marker_node(&self) -> NodeId;
-    /// The installed `TypeTable` kind marker node.
-    fn table_type_marker_node(&self) -> NodeId;
+    // The 8 marker-node accessors (`int_marker_node`, `string_marker_node`,
+    // `type_marker_node`, …) are registry-derived — one per kind marker.
+    for_each_kind_marker!(define_ctx_marker_accessors);
     /// A checker-issued unification — an extension's type check, executed
     /// through the highlevel's own discipline (diary-attributed).
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind);
@@ -338,44 +338,34 @@ where
     }
 }
 
-/// The highlevel's own value extension — a plain enum of the type constants,
-/// provided whole for the compositions below (and for a language crate
-/// composing its own vocabulary from [`LowValue`] + this).
-///
-/// Every variant is a *type constant*: its own type is the canonical
-/// universe (`Type : Type`), which makes the composed vocabulary's literal
-/// build a one-arm answer for this whole branch.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TypeValue {
-    /// The `int` type constant.
-    TypeInt,
-    /// The `string` type constant — the builtin immutable string value.
-    TypeString,
-    /// The `Type` constant — the canonical universe node itself
-    /// (`Type : Type`).
-    TypeType,
-    /// The kind marker of function type expressions — the pair's second
-    /// element is a `Function` value.
-    TypeFunction,
-    /// The kind marker of tuple type expressions — the shape is the
-    /// element-type list.
-    TypeTuple,
-    /// The kind marker of array type expressions — the shape is
-    /// `[element type, length]`.
-    TypeArray,
-    /// The kind marker of struct type expressions — the shape is
-    /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
-    /// the positional field-type list.
-    TypeStruct,
-    /// The kind marker of table type expressions — the shape is
-    /// `[key type, value type]`.
-    TypeTable,
-    /// A nominal type id — a struct type's identity marker, living at
-    /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
-    /// different ids don't (nominal identity), and an id never unifies
-    /// with the structural markers above.
-    TypeId(usize),
+// The 8 kind-marker variants are generated from the registry
+// ([`crate::shape::for_each_kind_marker`]) — adding or removing a marker
+// touches that one list.  `TypeId` is NOT a kind marker (it carries the
+// nominal id a struct marker references) and is spelled out below.
+macro_rules! define_type_value {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        /// The highlevel's own value extension — a plain enum of the type constants,
+        /// provided whole for the compositions below (and for a language crate
+        /// composing its own vocabulary from [`LowValue`] + this).
+        ///
+        /// Every variant is a *type constant*: its own type is the canonical
+        /// universe (`Type : Type`), which makes the composed vocabulary's literal
+        /// build a one-arm answer for this whole branch.
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        pub enum TypeValue {
+            $(
+                $(#[$doc])*
+                $variant,
+            )*
+            /// A nominal type id — a struct type's identity marker, living at
+            /// `shape[0]` of a `TypeStruct`-kinded pair.  Equal ids unify,
+            /// different ids don't (nominal identity), and an id never unifies
+            /// with the structural markers above.
+            TypeId(usize),
+        }
+    };
 }
+for_each_kind_marker!(define_type_value);
 
 impl TypeValue {
     /// The nominal type id carried by a `TypeId` value, if this is one.
@@ -412,31 +402,36 @@ impl ValueExt for HighProgramValue {
     }
 }
 
+// The marker methods are generated from the registry with default bodies:
+// any vocabulary carrying the `TypeValue` leaf whole (an `enum_ext!`
+// composition, which generates `From<TypeValue>`) gets every marker for
+// free; an impl may still override individual methods.
+macro_rules! define_value_type_marker_methods {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $(
+            $(#[$doc])*
+            fn $marker_fn() -> Self {
+                Self::from(TypeValue::$variant)
+            }
+        )*
+    };
+}
+
 /// The value→type contract a value vocabulary must satisfy to flow through
 /// the checker: the type-constant markers it installs, the value→type
 /// mapping for constants, and the kind classification the checker's
 /// structural type checks dispatch on.  Every value union — the highlevel's
 /// own [`HighProgramValue`] or an extended one — implements this; the
 /// checker is generic over it.
-pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
-    /// The `int` type marker — `USize` literals pair with `[Self::int_marker(), K]`.
-    fn int_marker() -> Self;
-    /// The `string` type marker — `Str` literals pair with `[Self::string_marker(), K]`.
-    fn string_marker() -> Self;
-    /// The `Type` marker — the canonical universe node itself (`Type : Type`).
-    fn type_marker() -> Self;
-    /// The kind marker of function type expressions.
-    fn function_type_marker() -> Self;
-    /// The kind marker of tuple type expressions.
-    fn tuple_type_marker() -> Self;
-    /// The kind marker of array type expressions.
-    fn array_type_marker() -> Self;
-    /// The kind marker of struct type expressions — the shape is
-    /// `[TypeId(n), fields_types_array]`.
-    fn type_struct_marker() -> Self;
-    /// The kind marker of table type expressions — the shape is
-    /// `[key type, value type]`.
-    fn table_type_marker() -> Self;
+///
+/// The 8 kind-marker methods are registry-derived
+/// ([`crate::shape::for_each_kind_marker`]) with default bodies over
+/// `From<TypeValue>`; an implementation spells only [`Self::type_id`] and
+/// [`Self::type_id_value`].
+pub trait ValueType:
+    ValueExt + From<LowValue> + AsEnum<LowValue> + From<TypeValue> + Clone
+{
+    for_each_kind_marker!(define_value_type_marker_methods);
     /// The nominal id of a struct type value, if this is one.
     fn type_id(&self) -> Option<usize>;
     /// A nominal type id value — what the checker's `Fresh` operator yields.
@@ -444,30 +439,6 @@ pub trait ValueType: ValueExt + From<LowValue> + AsEnum<LowValue> + Clone {
 }
 
 impl ValueType for HighProgramValue {
-    fn int_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeInt)
-    }
-    fn string_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeString)
-    }
-    fn type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeType)
-    }
-    fn function_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeFunction)
-    }
-    fn tuple_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTuple)
-    }
-    fn array_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeArray)
-    }
-    fn type_struct_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeStruct)
-    }
-    fn table_type_marker() -> Self {
-        Self::TypeValue(TypeValue::TypeTable)
-    }
     fn type_id(&self) -> Option<usize> {
         match self {
             Self::TypeValue(TypeValue::TypeId(n)) => Some(*n),
@@ -490,16 +461,19 @@ pub enum TypeOperator {
     /// source occurrence and the cached value is reused wherever the struct
     /// type it tags is referenced.
     Fresh,
-    /// Binary integer operators: `Add`/`Sub` compute; `Leq`/`Eq` compare
-    /// and yield `USize(0/1)` — no `Bool` value exists, the comparison
-    /// result drives the lazy `Index` branch of an `if` directly.
+    /// Binary operators over `[left, right]`.  `Add`/`Sub` compute on
+    /// `Int` operands; `Leq`/`Eq` compare and yield `USize(0/1)` — no
+    /// `Bool` value exists, the comparison result drives the lazy `Index`
+    /// branch of an `if` directly.  `Eq` is the generalized equality
+    /// (docs/language-spec.md): it compares any two *same-typed* values
+    /// whole (two `Int`s, or two type values — `S::a == Int` is `1`),
+    /// while a cross-type comparison is a check-time error (the checker
+    /// unifies the operand types; `+ - <=` pin both to `Int`).
     ///
-    /// Operand: `[left, right]`.  The lowlevel deep-evaluates the operand
-    /// and gates on its parameterized subtree before calling `run`, so an
-    /// unbound operand (a template parameter during the definition pass)
-    /// is already the lazy marker; the checker pins both operand types to
-    /// `Int`, so a wrong-shape operand here is an invariant violation, not
-    /// a user error.
+    /// The lowlevel deep-evaluates the operand and gates on its
+    /// parameterized subtree before calling `run`, so an unbound operand
+    /// (a template parameter during the definition pass) is already the
+    /// lazy marker, and `run` stays lazy on any unbound side.
     Add,
     Sub,
     Leq,
@@ -510,73 +484,93 @@ pub enum TypeOperator {
 //
 // `TypeValue` and `TypeOperator` have no arena payload, so their codecs ignore
 // the relocation context and are the smallest leaf-codec implementations: an
-// exhaustive tag write and an inverse read.
+// exhaustive tag write and an inverse read.  Both sides of the `TypeValue`
+// codec are generated from the kind-marker registry
+// ([`crate::shape::for_each_kind_marker`]): each entry's tag is the persisted
+// artifact tag, a compatibility contract — an existing entry's tag never
+// changes and a new marker takes the next unused tag, so the tags are
+// deliberately not the list positions (`TypeString` is `7`).  `TypeId` is not
+// a kind marker; it keeps tag 8, spelled here — a registry entry claiming 8
+// would collide with it as a duplicate match arm and fail to compile.
+macro_rules! define_type_value_codec {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        impl TypeValue {
+            /// Every kind-marker variant, in registry order — registry-derived,
+            /// so the codec round-trip tests iterate the same list the enum
+            /// and codec are generated from.  `TypeId` is not a kind marker
+            /// and is sampled separately.
+            pub const KIND_MARKERS: &[TypeValue] = &[$(TypeValue::$variant),*];
+        }
 
-impl ValueCodec for TypeValue {
-    fn write_value<P: Program>(
-        w: &mut Writer,
-        value: Self,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) {
-        match value {
-            TypeValue::TypeInt => w.u8(0),
-            TypeValue::TypeType => w.u8(1),
-            TypeValue::TypeFunction => w.u8(2),
-            TypeValue::TypeTuple => w.u8(3),
-            TypeValue::TypeArray => w.u8(4),
-            TypeValue::TypeStruct => w.u8(5),
-            TypeValue::TypeTable => w.u8(6),
-            TypeValue::TypeString => w.u8(7),
-            TypeValue::TypeId(n) => {
-                w.u8(8);
-                w.u64(n as u64);
+        impl ValueCodec for TypeValue {
+            fn write_value<P: Program>(
+                w: &mut Writer,
+                value: Self,
+                _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+            ) {
+                match value {
+                    $(TypeValue::$variant => w.u8($tag),)*
+                    TypeValue::TypeId(n) => {
+                        w.u8(8);
+                        w.u64(n as u64);
+                    }
+                }
+            }
+
+            fn read_value<P: Program>(
+                r: &mut Reader<'_>,
+                _self_key: ModuleKey,
+                _self_arena: &[u8],
+                _self_base: *const u8,
+                _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+            ) -> Result<Self, String> {
+                Ok(match r.u8()? {
+                    $($tag => TypeValue::$variant,)*
+                    8 => TypeValue::TypeId(r.u64()? as usize),
+                    tag => return Err(format!("unknown type-value tag {tag}")),
+                })
             }
         }
-    }
-
-    fn read_value<P: Program>(
-        r: &mut Reader<'_>,
-        _self_key: ModuleKey,
-        _self_arena: &[u8],
-        _self_base: *const u8,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) -> Result<Self, String> {
-        Ok(match r.u8()? {
-            0 => TypeValue::TypeInt,
-            1 => TypeValue::TypeType,
-            2 => TypeValue::TypeFunction,
-            3 => TypeValue::TypeTuple,
-            4 => TypeValue::TypeArray,
-            5 => TypeValue::TypeStruct,
-            6 => TypeValue::TypeTable,
-            7 => TypeValue::TypeString,
-            8 => TypeValue::TypeId(r.u64()? as usize),
-            tag => return Err(format!("unknown type-value tag {tag}")),
-        })
-    }
+    };
 }
+for_each_kind_marker!(define_type_value_codec);
 
-impl OperatorCodec for TypeOperator {
-    fn write_operator(w: &mut Writer, op: Self) {
-        match op {
-            TypeOperator::Fresh => w.u8(0),
-            TypeOperator::Add => w.u8(1),
-            TypeOperator::Sub => w.u8(2),
-            TypeOperator::Leq => w.u8(3),
-            TypeOperator::Eq => w.u8(4),
+// The one list of the type-level operators: the codec's two sides and the
+// exhaustive [`TypeOperator::ALL`] list the round-trip tests iterate are
+// generated from it.  Each tag is the persisted artifact tag — the same
+// compatibility contract as the kind-marker tags above.  The write side is
+// an exhaustive match over the enum, so an enum variant missing from this
+// list fails to compile.
+macro_rules! define_type_operator_codec {
+    ($( $variant:ident = $tag:literal; )*) => {
+        impl TypeOperator {
+            /// Every variant — generated from the same list as the codec, so
+            /// the round-trip tests iterate the codec's full domain.
+            pub const ALL: &[TypeOperator] = &[$(TypeOperator::$variant),*];
         }
-    }
 
-    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
-        Ok(match r.u8()? {
-            0 => TypeOperator::Fresh,
-            1 => TypeOperator::Add,
-            2 => TypeOperator::Sub,
-            3 => TypeOperator::Leq,
-            4 => TypeOperator::Eq,
-            tag => return Err(format!("unknown type-operator tag {tag}")),
-        })
-    }
+        impl OperatorCodec for TypeOperator {
+            fn write_operator(w: &mut Writer, op: Self) {
+                match op {
+                    $(TypeOperator::$variant => w.u8($tag),)*
+                }
+            }
+
+            fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+                Ok(match r.u8()? {
+                    $($tag => TypeOperator::$variant,)*
+                    tag => return Err(format!("unknown type-operator tag {tag}")),
+                })
+            }
+        }
+    };
+}
+define_type_operator_codec! {
+    Fresh = 0;
+    Add = 1;
+    Sub = 2;
+    Leq = 3;
+    Eq = 4;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the
@@ -595,16 +589,18 @@ lichen_utils::enum_ext! {
     + TypeOperator as TypeOperator;
 }
 
-impl<V: ValueType, L> OperatorExt<ProgramImpl<V, HighProgramOperator, NoAttr, L>>
-    for HighProgramOperator
+impl<V, A, L, G> OperatorExt<ProgramImpl<V, HighProgramOperator, A, L, G>> for HighProgramOperator
 where
+    V: ValueType,
+    A: AttrSet,
     L: std::fmt::Debug + Copy + PartialEq,
+    G: GlobalExt + AsField<HighGlobal>,
 {
     fn run(
         &self,
         operand: V,
         _block: BlockId,
-        module: &mut Module<ProgramImpl<V, HighProgramOperator, NoAttr, L>>,
+        module: &mut Module<ProgramImpl<V, HighProgramOperator, A, L, G>>,
     ) -> V {
         match self {
             // The structural operators never reach `run`: the VM dispatches
@@ -613,85 +609,88 @@ where
                 unreachable!("structural operators are dispatched by the VM")
             }
             // The type-level operators are the highlevel's own computation —
-            // delegated to the generic [`OperatorExt`] impl for [`TypeOperator`],
-            // so any composed union reuses the same semantics.
+            // delegated to the program-generic [`OperatorExt`] impl for
+            // [`TypeOperator`], so any composed union reuses the same
+            // semantics.
             HighProgramOperator::TypeOperator(op) => op.run(operand, _block, module),
         }
     }
 }
 
 /// The highlevel's own type-level operators, dispatched as an extension
-/// operator by *any* composed program that carries them.  The run semantics
-/// live here, generic over the program's value vocabulary `V`, so the
-/// shipped `LangProgram`, a composed plugin compiler's program, and the
-/// highlevel's own default `HighProgramOperator` all share the same Fresh and
-/// integer operator behaviour (they differ only in which union wraps them).
-impl<V, O, A, L, G> OperatorExt<ProgramImpl<V, O, A, L, G>> for TypeOperator
+/// operator by *any* program whose value vocabulary implements [`ValueType`]
+/// and whose global state carries the [`HighGlobal`] component — the shipped
+/// `LangProgram`, a plugin-built compiler's program, and the highlevel's own
+/// default `HighProgramOperator` program all share this one impl (they differ
+/// only in which union wraps the operator).  The semantics are the
+/// spec-documented ones: `==` is the generalized equality over any two
+/// same-typed values, `+ - <=` are Int-only.
+impl<P> OperatorExt<P> for TypeOperator
 where
-    V: ValueType,
-    A: AttrSpec,
-    L: std::fmt::Debug + Copy + PartialEq,
-    G: GlobalExt + AsField<HighGlobal>,
-    O: OperatorExt<ProgramImpl<V, O, A, L, G>>
-        + From<LowOperator>
-        + AsEnum<LowOperator>
-        + std::fmt::Debug
-        + Copy
-        + PartialEq,
+    P: Program,
+    P::Value: ValueType,
+    P::GlobalExt: AsField<HighGlobal>,
 {
-    fn run(
-        &self,
-        operand: V,
-        _block: BlockId,
-        module: &mut Module<ProgramImpl<V, O, A, L, G>>,
-    ) -> V {
+    fn run(&self, operand: P::Value, _block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             TypeOperator::Fresh => {
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
-                V::type_id_value(id)
+                P::Value::type_id_value(id)
             }
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
                 if matches!(operand.as_enum(), Some(LowValue::Parameterized)) {
-                    return V::from(LowValue::Parameterized);
+                    return P::Value::from(LowValue::Parameterized);
                 }
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
                 let operands = operands.items();
-                // A non-USize operand is a *reported* type error, not an
-                // invariant violation: the checker pins both operands to
-                // `Int`, so a wrong shape only arrives here through an
-                // argument unify that already failed (recording the
-                // diagnostic) — stay lazy instead of panicking.
-                let Some(left) = module
-                    .node_value(operands[0].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return V::from(LowValue::Parameterized);
-                };
-                let Some(right) = module
-                    .node_value(operands[1].node)
-                    .and_then(|value| value.as_enum())
-                    .and_then(|value| match value {
-                        LowValue::USize(n) => Some(n),
-                        _ => None,
-                    })
-                else {
-                    return V::from(LowValue::Parameterized);
+                // An unbound side (an empty slot or the lazy marker) keeps
+                // the operator lazy.
+                let left = module.node_value(operands[0].node);
+                let right = module.node_value(operands[1].node);
+                if is_unbound(left) || is_unbound(right) {
+                    return P::Value::from(LowValue::Parameterized);
+                }
+                let (Some(left), Some(right)) = (left, right) else {
+                    unreachable!("is_unbound covers the empty slot")
                 };
                 match self {
-                    TypeOperator::Add => V::from(LowValue::USize(left.wrapping_add(right))),
-                    TypeOperator::Sub => V::from(LowValue::USize(left.wrapping_sub(right))),
-                    TypeOperator::Leq => V::from(LowValue::USize((left <= right) as usize)),
-                    TypeOperator::Eq => V::from(LowValue::USize((left == right) as usize)),
-                    _ => unreachable!("all binary operators are handled above"),
+                    // A non-USize operand is a *reported* type error, not an
+                    // invariant violation: the checker pins both operands to
+                    // `Int`, so a wrong shape only arrives here through an
+                    // argument unify that already failed (recording the
+                    // diagnostic) — stay lazy instead of panicking.
+                    TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq => {
+                        let to_usize = |value: &P::Value| match value.as_enum() {
+                            Some(LowValue::USize(n)) => Some(n),
+                            _ => None,
+                        };
+                        let (Some(left), Some(right)) = (to_usize(&left), to_usize(&right)) else {
+                            return P::Value::from(LowValue::Parameterized);
+                        };
+                        match self {
+                            TypeOperator::Add => {
+                                P::Value::from(LowValue::USize(left.wrapping_add(right)))
+                            }
+                            TypeOperator::Sub => {
+                                P::Value::from(LowValue::USize(left.wrapping_sub(right)))
+                            }
+                            TypeOperator::Leq => {
+                                P::Value::from(LowValue::USize((left <= right) as usize))
+                            }
+                            _ => unreachable!("the Int operators are handled above"),
+                        }
+                    }
+                    // `==` is the generalized equality: it compares the two
+                    // values whole (two `Int`s, or two type values).  The
+                    // checker unifies the operands' types, so a cross-type
+                    // comparison is already a reported error before `run`.
+                    TypeOperator::Eq => P::Value::from(LowValue::USize((left == right) as usize)),
+                    TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                 }
             }
         }
@@ -707,11 +706,13 @@ where
 /// `Perspective`); the checker never names a concrete attribute, only
 /// `Self::Attr`.
 pub trait HighProgram: Program {
-    /// The compile-time attribute type an expression's schema may carry.
-    /// `NoAttr` (highlevel's empty attribute) is the default — a program with
-    /// no attribute extension — while a language plugs in its own (e.g.
-    /// `Perspective`).
-    type Attr: AttrSpec;
+    /// The compile-time attribute type an expression's schema may carry: a
+    /// composed attribute *set* ([`AttrSet`]), which also owns the canonical
+    /// order the checker lays attributes out in.  `NoAttr` (highlevel's inert
+    /// single-attribute set) is the default — a program with no attribute
+    /// extension — while a language plugs in its own (e.g. the composed
+    /// `Perspective` + `Doc` set).
+    type Attr: AttrSet;
     /// The literal vocabulary — a downstream's composed `enum_ext!` union (or
     /// the built-in [`HighProgramLiteral`] for the default).  Every literal
     /// node carries a value of this type; the checker builds it through
@@ -733,7 +734,7 @@ pub trait HighProgram: Program {
 pub struct ProgramImpl<
     V: ValueType = HighProgramValue,
     O: std::fmt::Debug + Copy + PartialEq = HighProgramOperator,
-    A: AttrSpec = NoAttr,
+    A: AttrSet = NoAttr,
     L = HighProgramLiteral,
     G: GlobalExt = HighGlobalExt,
 >(#[doc(hidden)] pub PhantomData<(V, O, A, L, G)>);
@@ -747,7 +748,7 @@ impl<V, O, A, L, G> std::fmt::Debug for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -758,7 +759,7 @@ impl<V, O, A, L, G> Clone for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn clone(&self) -> Self {
@@ -769,7 +770,7 @@ impl<V, O, A, L, G> Copy for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
 }
@@ -777,7 +778,7 @@ impl<V, O, A, L, G> PartialEq for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
     O: std::fmt::Debug + Copy + PartialEq,
-    A: AttrSpec,
+    A: AttrSet,
     G: GlobalExt,
 {
     fn eq(&self, _other: &Self) -> bool {
@@ -788,7 +789,7 @@ where
 impl<V, O, A, L, G> Program for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
-    A: AttrSpec,
+    A: AttrSet,
     L: std::fmt::Debug + Copy + PartialEq,
     G: GlobalExt,
     O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>
@@ -802,12 +803,21 @@ where
     type Operator = O;
     type GlobalExt = G;
     type PackageMeta = HighPackageMeta;
+
+    /// The highlevel's unification deferral policy — see
+    /// [`crate::shape::defer_pending`]: a pending field/positional read may
+    /// merge with a class that holds a type, because "holds a type" is a fact
+    /// about the pair encoding this crate owns.  Everything else falls
+    /// through to the lowlevel's generic (untyped) rules.
+    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
+        crate::shape::defer_pending(module, sides)
+    }
 }
 
 impl<V, O, A, L, G> HighProgram for ProgramImpl<V, O, A, L, G>
 where
     V: ValueType,
-    A: AttrSpec,
+    A: AttrSet,
     L: LiteralExt<ProgramImpl<V, O, A, L, G>>,
     G: GlobalExt,
     O: lichen_lowlevel::OperatorExt<ProgramImpl<V, O, A, L, G>>

@@ -4,7 +4,7 @@
 //! node: an unbound condition stays untriggered rather than being forced to
 //! `1`, and the apply clone re-checks the instantiated condition per call.
 
-use crate::{LowValue, Module, NodeId, Program, is_unbound};
+use crate::{AnyNodeId, LowValue, Module, NodeId, Program, is_unbound};
 use lichen_utils::extend::AsEnum;
 
 /// A failed assert: the checked condition resolved to a concrete value
@@ -13,11 +13,29 @@ use lichen_utils::extend::AsEnum;
 /// without walking the module graph.
 #[derive(Debug, Clone, Copy)]
 pub struct AssertError<P: Program> {
-    /// The asserted condition node — its source span attributes the
-    /// diagnostic.
+    /// The asserted condition node — the one that was evaluated.  For a
+    /// per-call clone that is the clone, not the body's condition.
     pub condition: NodeId,
+    /// The body condition this one came from: a clone's template, or the
+    /// condition itself when it is the body's own.  This is the node a host
+    /// keyed its own metadata by (a source position, a user-facing flag), so
+    /// the lowlevel carries provenance instead of any knowledge of what that
+    /// metadata means.  A template cloned out of a static module keeps its
+    /// static identity — a host table keyed by the importing module's nodes
+    /// simply has no entry for it, which is the same answer it gave when the
+    /// lowlevel tracked user-facing conditions itself.
+    pub template: AnyNodeId,
     /// The value the condition resolved to.
     pub value: P::Value,
+}
+
+/// One entry of the assert worklist: the condition to evaluate beside the
+/// body condition it descends from (itself, unless an apply clone
+/// instantiated it — see [`AssertError::template`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PendingAssert {
+    pub condition: NodeId,
+    pub template: AnyNodeId,
 }
 
 impl<P: Program> Module<P> {
@@ -50,7 +68,8 @@ impl<P: Program> Module<P> {
         let mut pending = 0;
         let mut i = 0;
         while i < self.asserts.len() {
-            let condition = self.asserts[i];
+            let entry = self.asserts[i];
+            let condition = entry.condition;
             i += 1;
             let Some(node) = self.nodes.get(condition) else {
                 continue; // the condition's block was garbage-collected
@@ -63,7 +82,11 @@ impl<P: Program> Module<P> {
                 continue;
             }
             if !matches!(value.as_enum(), Some(LowValue::USize(1))) {
-                self.assert_errors.push(AssertError { condition, value });
+                self.assert_errors.push(AssertError {
+                    condition,
+                    template: entry.template,
+                    value,
+                });
             }
         }
         self.asserts.truncate(pending);

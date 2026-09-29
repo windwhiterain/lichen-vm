@@ -154,9 +154,10 @@ where
     }
 }
 
-/// The attribute-extension lowering of the [`Perspective`] marker: the slot it
-/// occupies, its missing value, its `gcd` combine, and the divisibility subtype
-/// order.
+/// The attribute-extension lowering of the [`Perspective`] marker: its missing
+/// value, its `gcd` combine, and the divisibility subtype order.  *Where* the
+/// slot sits is the composed set's canonical order, not this impl's business
+/// ([`AttrSet::order_index`](lichen_highlevel::attr::AttrSet::order_index)).
 ///
 /// Program-generic: `combine` builds the operator over `P::Operator` (which the
 /// host's vocabulary carries via a `From<GcdOp>` leaf), and the subtype reads
@@ -167,14 +168,6 @@ where
     P::Value: ValueType + AsEnum<LowValue>,
     P::Operator: From<GcdOp>,
 {
-    /// The slot this attribute occupies below the `[value, type]` head
-    /// (a first attribute → 2, so the pair is
-    /// `[value, type, [persp value, persp type]]` — the slot is itself a
-    /// `[value, type]` term pair, the uniform slot shape).
-    fn slot(&self) -> usize {
-        2
-    }
-
     /// `0` — neutral in `gcd` (the meet identity), concrete in equality
     /// unify.  The slot's absent form is `[0, int]` (see
     /// [`AttrExt::missing_slot`]).

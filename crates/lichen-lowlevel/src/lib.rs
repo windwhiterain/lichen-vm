@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -9,7 +9,7 @@ use std::sync::RwLock;
 use lichen_utils::disjoint::{self};
 use lichen_utils::extend::AsEnum;
 
-pub use crate::assert::AssertError;
+pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
@@ -53,6 +53,67 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
     /// per-package state (for example highlevel package export refs) without
     /// putting that concept into the lowlevel.
     type PackageMeta: Default;
+
+    /// The unification policy hook: what to do when a unification stalls
+    /// because one or both classes hold a **pending computation** — a class
+    /// with no decided value that carries an unevaluated operation, so
+    /// neither side can be compared yet.
+    ///
+    /// The lowlevel itself stays untyped, so it only merges what is a
+    /// *generic graph fact*: a pending computation against an all-unbound
+    /// skeleton (it holds nothing to erase), and two pending `Index` reads
+    /// (neither has a value to compare).  Every other deferral depends on
+    /// what the values **mean** — a read whose type is being unified against
+    /// a type value, for instance — and that is the program's decision, made
+    /// here.  The default refuses, which is the honest answer for a VM that
+    /// does not know what its values stand for.
+    ///
+    /// The policy is given the module to read (that is how it recognises its
+    /// own encodings) and must not retain the borrow, merge classes, or
+    /// write values.  `None` defers to the lowlevel's generic rules; the
+    /// verdict is only consulted where those rules would otherwise record a
+    /// conflict.
+    fn defer_pending(module: &mut Module<Self>, sides: &PendingSides) -> Option<Deferral> {
+        let _ = (module, sides);
+        None
+    }
+}
+
+/// What a [`Program::defer_pending`] policy decided about a stalled
+/// unification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deferral {
+    /// Merge the classes after all: the pending computation resolves later
+    /// and the merge erases nothing.
+    Merge,
+    /// Record the conflict now.
+    Conflict,
+}
+
+/// One side of a stalled unification, as the lowlevel sees it: the class
+/// identity plus the graph facts that need no knowledge of the program's
+/// values.  A policy reads the module for anything beyond these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSide {
+    /// The class's equality-class representative.
+    pub representative: NodeId,
+    /// The class holds an unevaluated operation — a pending computation.
+    pub pending: bool,
+    /// That operation is an `Index` that cannot be resolved yet (its target
+    /// is not a concrete array).
+    pub pending_index_read: bool,
+    /// The class is an all-unbound structure: no value, no operation.
+    pub skeleton: bool,
+    /// The class is a single unbound cell.
+    pub pure_cell: bool,
+}
+
+/// Both sides of a stalled unification — the whole view a policy gets
+/// besides the module.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingSides {
+    pub a: PendingSide,
+    pub b: PendingSide,
 }
 
 /// Program-global extension state — the marker trait that stances the
@@ -107,6 +168,14 @@ pub enum LowValue {
     Table(AnyHandle<[TableItem]>),
     Function(AnyFunctionId),
     None,
+    /// Computed nothing: the yield of a failed read (an out-of-bounds
+    /// index, a table miss — each produced together with a recorded
+    /// [`EvalError`], so consumers *propagate* it instead of
+    /// re-reporting), the anonymous struct's "no name table" marker, and
+    /// the no-operand sentinel the VM hands a nullary extension operator.
+    /// A concrete, decided value — distinct from both the [`Self::None`]
+    /// unit value and the unbound [`Self::Parameterized`] marker.
+    Void,
     Parameterized,
 }
 
@@ -226,8 +295,9 @@ pub enum LowOperator {
     /// - `operand[1]`: key.
     ///
     /// A table read: the key is force-evaluated, deep-content-hashed, and
-    /// matched against the table's sorted entries; a miss (or a key that is
-    /// still unbound) records a [`EvalError`] and yields [`LowValue::None`].
+    /// matched against the table's sorted entries; a miss (no entry for
+    /// the key, or a target/key that is still unbound or a computed
+    /// nothing) records a [`EvalError`] and yields [`LowValue::Void`].
     TableGet,
 }
 
@@ -248,9 +318,12 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn set_handle(&mut self, _payload: AnyHandle<[u8]>) {
         unreachable!()
     }
-    /// Available if [`Self::is_handle()`].
+    /// The payload alignment ext handle values need (a power of two).
+    /// Available if [`Self::is_handle()`]; a vocabulary with no handle
+    /// payloads has no alignment need, so the default is 1 — this keeps
+    /// [`crate::codec::arena_align`] total for every program.
     fn alignment() -> usize {
-        unreachable!()
+        1
     }
     /// Full equality of two values: handle payloads compare by content
     /// (same variant, byte-wise against the pointed-to allocation), every
@@ -308,6 +381,8 @@ pub struct StaticOperation<P: Program> {
 
 /// A class is unbound while it carries no value or only the lazy marker.
 /// The highlevel checker uses the same rule for its diagnostics.
+/// [`LowValue::Void`] (a computed failure) and [`LowValue::None`] (the
+/// unit value) are concrete values, never unbound.
 pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
@@ -641,27 +716,14 @@ pub struct Module<P: Program> {
     /// recorded instead of panicking — same append-only, never-cleared
     /// contract as [`Self::unify_errors`].
     pub eval_errors: Vec<EvalError>,
-    /// The module's assert worklist — the condition nodes registered by
+    /// The module's assert worklist — the conditions registered by
     /// [`Self::add_assert`].  Spawn and every apply clone register here;
     /// [`Self::check_asserts`] drains it, consuming decided entries and
     /// leaving exactly the not-yet-triggered ones.  Garbage collection
-    /// prunes the entries of dropped blocks.
-    pub asserts: Vec<NodeId>,
-    /// The *user-facing* assert conditions — the explicit `assert` expressions,
-    /// as opposed to a generated array-bounds guard.  Every [`Self::add_assert`]
-    /// that is a user assert (via [`Self::add_user_assert`]) and every
-    /// per-call clone of one (see [`Module::function_apply`]) lands here, so a
-    /// failed assert's diagnostic knows whether to render it.  The bounds-guard
-    /// conditions are deliberately absent — their failure is already reported
-    /// as an [`EvalError::Index`], so rendering the assert too would double
-    /// report.
-    pub user_asserts: HashSet<NodeId>,
-    /// The source span of an assert's condition, keyed by condition node —
-    /// populated by the checker (which knows source positions) and propagated
-    /// by the clone paths, so a per-call clone keeps its assert's location.
-    /// Stored as `(line, column)`, the same shape as the checker's span.
-    /// Absent for a spanless assert (the checker records no location).
-    pub assert_spans: HashMap<NodeId, (u32, u32)>,
+    /// prunes the entries of dropped blocks.  Each entry keeps the body
+    /// condition it came from, so a failure can be attributed without the
+    /// module knowing anything about the host's per-assert metadata.
+    pub asserts: Vec<PendingAssert>,
     /// Failed asserts: a condition that resolved to a concrete value other
     /// than `USize(1)`.  An assert whose condition stays lazy (an unbound
     /// parameter) is not triggered and records nothing.  Same append-only,
@@ -900,8 +962,6 @@ impl<P: Program> Module<P> {
             unify_errors: Vec::new(),
             eval_errors: Vec::new(),
             asserts: Vec::new(),
-            user_asserts: HashSet::new(),
-            assert_spans: HashMap::new(),
             assert_errors: Vec::new(),
             apply_errors: Vec::new(),
             global_ext: P::GlobalExt::default(),
@@ -926,7 +986,10 @@ impl<P: Program> Module<P> {
     /// source→statics node map.  Convenience over
     /// [`Registry::freeze_mapped`].
     pub fn freeze_mapped(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
-        debug_assert!(
+        // Hard in release too: a self-freeze (reachable only through a raw
+        // pointer, since the borrows of `self` and `source` exclude it)
+        // deadlocks on the registry write lock.
+        assert!(
             !std::ptr::eq(self, source),
             "freezing a module into itself would deadlock its registry lock"
         );
@@ -993,19 +1056,53 @@ impl<P: Program> Module<P> {
     /// and re-registered per apply, so a body's assert re-checks against
     /// each call's argument.
     pub fn add_assert(&mut self, condition: NodeId) -> NodeId {
-        self.asserts.push(condition);
+        self.asserts.push(PendingAssert {
+            condition,
+            template: AnyNodeId::Dynamic(condition),
+        });
         condition
     }
 
-    /// [`Self::add_assert`] for a *user-facing* condition — an explicit
-    /// `assert` expression rather than a generated array-bounds guard.  The
-    /// condition also lands in [`Self::user_asserts`], so a failure is
-    /// rendered as a diagnostic; a per-call clone of such a condition keeps
-    /// the marker when an apply re-registers it.
-    pub fn add_user_assert(&mut self, condition: NodeId) -> NodeId {
-        self.asserts.push(condition);
-        self.user_asserts.insert(condition);
-        condition
+    /// Create a function template's **shell**, before any of its nodes exist.
+    ///
+    /// The record this inserts is deliberately incomplete: its
+    /// [`Function::parameter`] and [`Function::r#return`] are unset until
+    /// [`Self::finish_function`] names them, and nothing may read a function
+    /// in between.  Building the shell first is what lets a compiler emit the
+    /// parameter nodes *into this function's scope*: the node allocator tags
+    /// and registers each node against the function currently being built, so
+    /// a parameter allocated after the shell lands in the right template
+    /// without being moved there afterwards.
+    ///
+    /// `parent` is the enclosing template, or `None` at the top level and for
+    /// a same-depth sibling (see [`Function::parent`]).
+    pub fn begin_function(&mut self, block: BlockId, parent: Option<FunctionId>) -> FunctionId {
+        let function = self.functions.insert(Function {
+            nodes: Vec::new(),
+            r#return: NodeId::default(),
+            parameter: NodeId::default(),
+            parent,
+            asserts: Vec::new(),
+            block,
+        });
+        self.blocks[block].functions.push(function);
+        function
+    }
+
+    /// Complete the shell begun by [`Self::begin_function`], naming the
+    /// return and parameter slots.
+    ///
+    /// Both must already be registered in the function's scope: the apply
+    /// clone walk reads its members through [`Function::nodes`], and
+    /// `parameter` in particular is what it instantiates, so a parameter
+    /// missing from the scope is a construction error, not a runtime one.
+    pub fn finish_function(&mut self, function: FunctionId, r#return: NodeId, parameter: NodeId) {
+        debug_assert!(
+            self.functions[function].nodes.contains(&parameter),
+            "a function's parameter slot must be registered in its own scope before the shell is finished"
+        );
+        self.functions[function].r#return = r#return;
+        self.functions[function].parameter = parameter;
     }
 
     pub fn add_function(
@@ -1017,14 +1114,7 @@ impl<P: Program> Module<P> {
         asserts: impl IntoIterator<Item = NodeId>,
     ) -> NodeId {
         let nodes: Vec<NodeId> = nodes.into_iter().collect();
-        let function = self.functions.insert(Function {
-            nodes: Vec::new(),
-            r#return: ret,
-            parameter: param,
-            parent: None,
-            asserts: asserts.into_iter().collect(),
-            block,
-        });
+        let function = self.begin_function(block, None);
         // The passed nodes are this function's template: tag each with its
         // owner, so the apply clone walk's chain membership test recognizes
         // them.  The function id must exist before the tags point at it.
@@ -1032,7 +1122,8 @@ impl<P: Program> Module<P> {
             self.nodes[node].function = Some(function);
         }
         self.functions[function].nodes = nodes;
-        self.blocks[block].functions.push(function);
+        self.functions[function].asserts = asserts.into_iter().collect();
+        self.finish_function(function, ret, param);
         // The value node is the function's own too — tagged with it, so an
         // enclosing template (a nested function's parent link) clones it and
         // instantiates a fresh closure per call instead of referencing the

@@ -61,23 +61,18 @@ where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
 {
-    /// The slot this attribute occupies below the `[value, type]` head — a
-    /// second attribute after `Perspective`, so the pair is
-    /// `[value, type, persp, doc]` in the (future) multi-attribute layout.
-    fn slot(&self) -> usize {
-        3
-    }
-
-    /// The value read for an *absent* occurrence: *no doc*.
+    /// The value read for an *absent* occurrence: *no doc* — spelled as the
+    /// unbound marker, because an absent doc is an *unbound cell* by intent:
+    /// a real unify binds it, so a doc passes from one side to the other.
     fn missing_value(&self) -> LowValue {
-        LowValue::None
+        LowValue::Parameterized
     }
 
     /// A doc never combines over its children: a compound's doc is its own
-    /// annotation, not a meet of its children's.  Returns the shared no-doc
-    /// value.
+    /// annotation, not a meet of its children's.  Returns an unbound cell —
+    /// the shared no-doc marker.
     fn combine(&self, ctx: &mut dyn Ctx<P>, _children: &[NodeId]) -> NodeId {
-        ctx.value_node(P::Value::from(LowValue::None))
+        ctx.value_node(P::Value::from(LowValue::Parameterized))
     }
 
     /// Propagate the doc and never fail: a real unify (an unbound doc cell

@@ -28,6 +28,36 @@ pub use lichen_perspective::{GcdOp, Perspective, divides, gcd, persp_attr_ext};
 use lichen_doc::Doc;
 pub use lichen_doc::doc_attr_ext;
 
+/// The position of the tokens counted so far, as a constant expression —
+/// `macro_rules!` cannot add a metavariable, so the index of a manifest entry
+/// is spelled as a sum of ones (the expansion is a literal expression, which
+/// the const evaluator folds).  Machinery for
+/// [`lang_compose_vocabulary!`], not a public API.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! lang_attr_position {
+    () => { 0usize };
+    ($head:tt $($rest:tt)*) => { 1usize + $crate::lang_attr_position!($($rest)*) };
+}
+
+/// The canonical-order index of `$value` over the manifest's attribute list,
+/// as one `if let` level per entry (macro expansion cannot produce match arms,
+/// so the chain is built as nested `if let`s and the innermost position — which
+/// no entry can reach — diverges).  Machinery for
+/// [`lang_compose_vocabulary!`], not a public API.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! lang_attr_order_index {
+    ($value:expr, $set:ident; [$($done:tt)*]) => { ::core::unreachable!() };
+    ($value:expr, $set:ident; [$($done:tt)*] $head:ident ; $($rest:tt)*) => {
+        if let $set::$head(_) = $value {
+            $crate::lang_attr_position!($($done)*)
+        } else {
+            $crate::lang_attr_order_index!($value, $set; [$($done)* $head] $($rest)*)
+        }
+    };
+}
+
 /// Compose the language's concrete program marker from a manifest of its
 /// vocabulary leaves and attribute set.
 ///
@@ -36,8 +66,10 @@ pub use lichen_doc::doc_attr_ext;
 /// operator like [`GcdOp`], a native plugin's operators/values —
 /// [`lichen_compute::ComputeOperator`]/[`lichen_compute::ComputeValue`] —
 /// alongside the core lowlevel/highlevel leaves), and `attrs` names the
-/// language's attributes.  Each attribute is a compiler plugin: a marker
-/// implementing [`lichen_highlevel::attr::AttrSpec`] plus an
+/// language's attributes **in the canonical attribute order** — the one
+/// declaration that fixes the pair-slot layout (the attribute at position `i`
+/// occupies pair slot `attr_slot(i)`).  Each attribute is a compiler plugin: a
+/// marker implementing [`lichen_highlevel::attr::AttrSpec`] plus an
 /// [`lichen_highlevel::attr::AttrExt`] impl, listed here as
 /// `<Marker> as <VariantName>`.  The trailing `[ … ]` holds any extra
 /// where-clause bounds the composed [`lang_attr_ext`] registry needs to
@@ -45,6 +77,11 @@ pub use lichen_doc::doc_attr_ext;
 /// a `Perspective` that emits a `Gcd` operator).  A package manager that
 /// assembles a new compiler re-invokes this macro with a different plugin set;
 /// the impls below (the checker/VM wiring) and the frontend are unchanged.
+///
+/// **Adding an attribute is a one-list edit**: append its marker to `attrs`.
+/// The order index, the `LANG_ATTR_ORDER` data, the build-time slot check and
+/// (through them) the frontend tail order and the checker's slot merge are all
+/// derived from that list, and the marker itself never names a slot number.
 #[macro_export]
 macro_rules! lang_compose_vocabulary {
     // With a plugin set (the package-manager-generated compiler): the shipping
@@ -126,12 +163,60 @@ macro_rules! lang_compose_vocabulary {
         /// them (an expression's schema tail holds one entry per attached
         /// attribute).  Each marker's behaviour lives in its own
         /// [`lichen_highlevel::attr::AttrExt`].
+        ///
+        /// The declaration order below **is** the canonical attribute order
+        /// (see [`LANG_ATTR_ORDER`]): it is the single authority for the
+        /// pair-slot layout, so nothing downstream keeps a second list.
         #[derive(Clone, Copy, PartialEq, Eq, Debug)]
         pub enum LangAttr {
             $( $attr_name($attr) ),*
         }
 
         impl ::lichen_highlevel::attr::AttrSpec for LangAttr {}
+
+        impl LangAttr {
+            /// This attribute's position in the canonical order, as a constant
+            /// expression (each manifest entry owns exactly the index its
+            /// position gives it, so the order is dense and collision-free by
+            /// construction).
+            pub const fn order_index_of(self) -> usize {
+                $crate::lang_attr_order_index!(self, LangAttr; [] $( $attr_name ; )*)
+            }
+        }
+
+        impl ::lichen_highlevel::attr::AttrSet for LangAttr {
+            /// The canonical order as data — the pair layout itself.
+            const ORDER: &'static [Self] = LANG_ATTR_ORDER;
+
+            /// The attribute's index in the canonical order — the single
+            /// authority for the pair-slot layout, so the pair slot of the
+            /// `i`-th attribute is `attr_slot(i)`.
+            fn order_index(&self) -> usize {
+                self.order_index_of()
+            }
+        }
+
+        /// The canonical attribute order: every composed attribute, in the
+        /// order its pair slot follows (the attribute at index `i` occupies
+        /// pair slot `attr_slot(i)`).  The frontend lays an annotation's
+        /// schema tail out in this order and the checker sorts a merged tail
+        /// into it, so the two can never disagree.
+        pub const LANG_ATTR_ORDER: &[LangAttr] = &[ $( LangAttr::$attr_name($attr) ),* ];
+
+        // The build-time slot check: every attribute's canonical index is its
+        // position in the canonical order.  The assertion is what makes that
+        // a *checked* property — a hand-edited index fails the build here
+        // instead of silently mis-pairing a pair at runtime.
+        const _: () = {
+            let mut i = 0;
+            while i < LANG_ATTR_ORDER.len() {
+                assert!(
+                    LANG_ATTR_ORDER[i].order_index_of() == i,
+                    "an attribute's canonical index must be its position in the canonical order"
+                );
+                i += 1;
+            }
+        };
 
         /// The attribute-extension registry for the language's [`LangAttr`]:
         /// maps each composed marker to its behaviour, so the checker
@@ -181,6 +266,20 @@ macro_rules! lang_compose_vocabulary {
             type Operator = LangOperator;
             type GlobalExt = ::lichen_highlevel::program::HighGlobalExt;
             type PackageMeta = ::lichen_highlevel::program::HighPackageMeta;
+
+            // The highlevel's unification deferral policy: a pending
+            // field/positional read may merge with a class holding a type,
+            // because "holds a type" is a fact about the pair encoding the
+            // highlevel owns.  Wiring it here is what makes every composed
+            // program — plugin-built ones included — inherit it; a program
+            // that never states a policy keeps the lowlevel's honest default
+            // (conflict).  See `lichen_highlevel::shape::defer_pending`.
+            fn defer_pending(
+                module: &mut ::lichen_lowlevel::Module<Self>,
+                sides: &::lichen_lowlevel::PendingSides,
+            ) -> Option<::lichen_lowlevel::Deferral> {
+                ::lichen_highlevel::shape::defer_pending(module, sides)
+            }
         }
 
         impl ::lichen_highlevel::program::HighProgram for LangProgram {
@@ -207,34 +306,13 @@ macro_rules! lang_compose_vocabulary {
         }
 
         // The type-constant markers all live in the core `TypeValue` leaf, so
-        // the composed vocabulary delegates every marker to that leaf.  The
+        // the trait's registry-derived default bodies
+        // (`Self::from(TypeValue::$variant)`, over the composed `From` impl)
+        // already provide every marker — the impl spells only the two
+        // nominal-id methods, which have no default.  The
         // `<path>::Variant` qualified path bypasses the macro_rules rule that
         // a `$path:path` fragment cannot be followed directly by `::`.
         impl ::lichen_highlevel::program::ValueType for LangValue {
-            fn int_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeInt)
-            }
-            fn string_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeString)
-            }
-            fn type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeType)
-            }
-            fn function_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeFunction)
-            }
-            fn tuple_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeTuple)
-            }
-            fn array_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeArray)
-            }
-            fn type_struct_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeStruct)
-            }
-            fn table_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeTable)
-            }
             fn type_id(&self) -> Option<usize> {
                 match self {
                     Self::$tyv_name(inner) => inner.as_type_id(),
@@ -246,124 +324,12 @@ macro_rules! lang_compose_vocabulary {
             }
         }
 
-        // The type-level operator leaf's own [`::lichen_lowlevel::OperatorExt`]
-        // impl (in `lichen_highlevel`) is tied to `ProgramImpl` — it dispatches
-        // against `Module<ProgramImpl<…>>`, not an arbitrary `P`.  Since this
-        // composition's `LangProgram` is now a local newtype, that impl no
-        // longer covers it, so the composed vocabulary needs its own
-        // `OperatorExt<LangProgram>` impl for the `$tyop` leaf, running the
-        // same semantics against `Module<LangProgram>`.  (Every other leaf —
-        // `LowOperator`, `GcdOp`, the plugin operators — already has a generic
-        // `impl<P: Program> OperatorExt<P>`, so it works for `LangProgram`
-        // unchanged.)
-        impl ::lichen_lowlevel::OperatorExt<LangProgram> for $tyop {
-            fn run(
-                &self,
-                operand: LangValue,
-                _block: ::lichen_lowlevel::BlockId,
-                module: &mut ::lichen_lowlevel::Module<LangProgram>,
-            ) -> LangValue {
-                match self {
-                    <$tyop>::Fresh => {
-                        let id = ::lichen_utils::compose::AsField::<
-                            ::lichen_highlevel::program::HighGlobal,
-                        >::get_mut(&mut module.global_ext)
-                        .next_type_id();
-                        <LangValue as ::lichen_highlevel::program::ValueType>::type_id_value(id)
-                    }
-                    <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq | <$tyop>::Eq => {
-                        if matches!(
-                            <LangValue as ::lichen_utils::extend::AsEnum<
-                                ::lichen_lowlevel::LowValue,
-                            >>::as_enum(&operand),
-                            Some(::lichen_lowlevel::LowValue::Parameterized)
-                        ) {
-                            return <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        }
-                        let Some(::lichen_lowlevel::LowValue::Array(operands)) =
-                            <LangValue as ::lichen_utils::extend::AsEnum<
-                                ::lichen_lowlevel::LowValue,
-                            >>::as_enum(&operand)
-                        else {
-                            unreachable!("binary operators expect an operand array of [left, right]")
-                        };
-                        let operands = operands.items();
-                        let left = module.node_value(operands[0].node);
-                        let right = module.node_value(operands[1].node);
-                        let unbound = |v: &Option<LangValue>| match v {
-                            None => true,
-                            Some(value) => matches!(
-                                <LangValue as ::lichen_utils::extend::AsEnum<
-                                    ::lichen_lowlevel::LowValue,
-                                >>::as_enum(value),
-                                Some(::lichen_lowlevel::LowValue::Parameterized)
-                            ),
-                        };
-                        if unbound(&left) || unbound(&right) {
-                            return <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                        }
-                        // `==` compares any two same-typed values (an `Int`, or a
-                        // type value); `+ - <=` are Int-only and read USizes.
-                        match self {
-                            <$tyop>::Add | <$tyop>::Sub | <$tyop>::Leq => {
-                                let to_usize = |v: &LangValue| -> Option<usize> {
-                                    <LangValue as ::lichen_utils::extend::AsEnum<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::as_enum(v)
-                                    .and_then(|value| match value {
-                                        ::lichen_lowlevel::LowValue::USize(n) => Some(n),
-                                        _ => None,
-                                    })
-                                };
-                                let (Some(a), Some(b)) = (
-                                    to_usize(left.as_ref().unwrap()),
-                                    to_usize(right.as_ref().unwrap()),
-                                ) else {
-                                    return <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::Parameterized);
-                                };
-                                match self {
-                                    <$tyop>::Add => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        a.wrapping_add(b),
-                                    )),
-                                    <$tyop>::Sub => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        a.wrapping_sub(b),
-                                    )),
-                                    <$tyop>::Leq => <LangValue as ::core::convert::From<
-                                        ::lichen_lowlevel::LowValue,
-                                    >>::from(::lichen_lowlevel::LowValue::USize(
-                                        (a <= b) as usize,
-                                    )),
-                                    _ => unreachable!("all binary operators are handled above"),
-                                }
-                            }
-                            <$tyop>::Eq => <LangValue as ::core::convert::From<
-                                ::lichen_lowlevel::LowValue,
-                            >>::from(::lichen_lowlevel::LowValue::USize(
-                                (left.unwrap() == right.unwrap()) as usize,
-                            )),
-                            _ => unreachable!("all binary operators are handled above"),
-                        }
-                    }
-                }
-            }
-        }
-
         // The operator union's `run` is a uniform dispatch: each leaf handles
         // itself (the structural lowlevel operator is unreachable — the VM
         // routes it through `AsEnum` first; the type operators run through
-        // their own [`::lichen_lowlevel::OperatorExt`] impl; each plugin
-        // operator runs its own).  This is the arm that lets a composed
-        // program's operators actually execute.
+        // their program-generic [`::lichen_lowlevel::OperatorExt`] impl in the
+        // highlevel; each plugin operator runs its own).  This is the arm that
+        // lets a composed program's operators actually execute.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,

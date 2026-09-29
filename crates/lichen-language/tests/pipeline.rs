@@ -530,6 +530,21 @@ fn an_assert_on_a_non_one_value_fails() {
 }
 
 #[test]
+fn an_assert_on_a_failed_read_fails_with_none() {
+    // `!([1, 2][5])` — the condition is a failed read: its residue is the
+    // concrete computed-nothing value, so the assert FAILS (an unbound
+    // condition would stay untriggered) and the value spells `none`.
+    let d = diags("!([1, 2][5])");
+    assert!(
+        d.iter().any(|d| {
+            d.check.as_ref().is_some_and(|c| c.kind == DiagKind::Assert)
+                && d.message == "assertion failed: expected 1, found none"
+        }),
+        "the assert fails on the computed-nothing value: {d:?}"
+    );
+}
+
+#[test]
 fn an_assert_in_a_function_body_checks_per_call() {
     // The body's assert cannot resolve at normalize (x is unbound), so the
     // apply clones it and re-checks against the argument — the failure is
@@ -540,9 +555,18 @@ fn an_assert_in_a_function_body_checks_per_call() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Assert);
     assert_eq!(d[0].message, "assertion failed: expected 1, found 0");
-    // The failure is inside the apply's clone of the body's assert — a
-    // source-blind diagnostic with no loc, so no caret span anymore.
-    assert!(check.loc().is_none(), "the body assert is source-blind");
+    // The failure is inside the apply's clone of the body's assert, so it is
+    // attributed through the clone's template — the caret points at the
+    // body's `!`, the expression the user actually wrote.
+    assert!(
+        check.loc().is_some(),
+        "the clone is attributed to its template's expression"
+    );
+    assert_eq!(
+        d[0].span.map(|(line, _)| line),
+        Some(1),
+        "and the rendered caret is on the line the assert was written"
+    );
 
     // A satisfying argument passes.
     assert!(
@@ -709,6 +733,47 @@ fn a_self_nested_struct_checks_without_overflow() {
     if let Some(s) = report.diagnostics.first() {
         assert_eq!(s.stage, Stage::Resolve, "{s:?}");
     }
+}
+
+#[test]
+fn a_self_referential_field_read_checks_without_overflow() {
+    // `a = a(0)`, `a = a.x`, `a = a::x` — a block-wide binding referencing
+    // itself through a field read.  The frontend transplants the value's kind
+    // into the binding's placeholder, so a block root may be *any* expression
+    // kind and the checker's cycle cut gates on block-root membership alone;
+    // these three kinds fell through the old hand-maintained kind list and
+    // overflowed the stack.  Each now checks like the `a = a + 1` control:
+    // no diagnostics, and the root deep-evaluates to the lazy parameterized
+    // marker instead of hanging.
+    for source in ["a = a + 1; a", "a = a(0); a", "a = a.x; a", "a = a::x; a"] {
+        let (mut module, root) = run(source);
+        assert!(
+            matches!(
+                module.evaluate_node_deep(root, None),
+                LangValue::LowValue(LowValue::Parameterized)
+            ),
+            "{source:?} must yield the parameterized marker like the control"
+        );
+    }
+}
+
+#[test]
+fn a_self_referential_record_checks_without_overflow() {
+    // `a = {x = a}` — a self-reference through a record block (the fourth
+    // kind the old skeleton gate missed).  The record value is concrete — a
+    // one-field struct whose single element is the knot itself — so the deep
+    // evaluation terminates on the runtime cycle guard rather than yielding
+    // the bare parameterized marker.
+    let (mut module, root) = run("a = {x = a}; a");
+    let ids = array_ids(module.evaluate_node_deep(root, None));
+    assert_eq!(ids.len(), 1, "the record carries its one field");
+    assert!(
+        matches!(
+            module.node_value(AnyNodeId::Dynamic(ids[0])),
+            Some(LangValue::LowValue(LowValue::Array(_)))
+        ),
+        "the field is the record itself (the evaluated knot)"
+    );
 }
 
 // --- struct types ------------------------------------------------------------
@@ -1132,6 +1197,131 @@ fn a_named_struct_instantiation_reads_through_a_parameter() {
         report.ok(),
         "a named-instantiation field read through a parameter must check: {:?}",
         report.diagnostics
+    );
+}
+
+#[test]
+fn a_lazy_named_read_over_an_anonymous_struct_is_a_reported_miss() {
+    // `apply = s => s.x` applied to a positional (anonymous) struct
+    // instance: the read's name lookup only resolves at the apply, where the
+    // struct's "no name table" marker makes it a recorded table miss — never
+    // a panic, and never a false non-termination report.
+    let d = diags("S = struct<Int, Type>\na = S(1, Int)\napply = s => s.x\napply (a)");
+    assert!(
+        d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::TableMiss)),
+        "the read is a table miss: {d:?}"
+    );
+    assert!(
+        !d.iter().any(|d| d
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::NonTerminating)),
+        "no false non-termination report: {d:?}"
+    );
+}
+
+#[test]
+fn an_instantiation_through_a_call_result_checks() {
+    // `(mk (Int))(1, 2)` — the callee is an unevaluated call result; the
+    // checker forces it and sees the concrete struct type (a panic was the
+    // pre-fix behaviour).  Both spellings — the direct call result and a
+    // bound alias of it — are the same graph.
+    assert_eq!(
+        lichen_language::run::evaluate("mk = u => struct<Int, Int>\n(mk (Int))(1, 2)").unwrap(),
+        "(1, 2): struct<Int, Int>"
+    );
+    assert_eq!(
+        lichen_language::run::evaluate("mk = u => struct<Int, Int>\nt = mk (Int)\nt(1, 2)")
+            .unwrap(),
+        "(1, 2): struct<Int, Int>"
+    );
+}
+
+#[test]
+fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
+    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is
+    // concretely not a struct type — a reported diagnostic, never a panic.
+    let d = diags("mk = u => Int\n(mk (Int))(1, 2)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::InstantiateCallee
+    );
+    assert!(
+        d[0].message
+            .contains("the callee of an instantiation must be a struct type"),
+        "{}",
+        d[0].message
+    );
+}
+
+#[test]
+fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
+    // Structs are nominal: a tuple type and a function type cannot
+    // instantiate, and the error points at the callee.
+    let d = diags("(<Int, Int>)(1, 2)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::InstantiateCallee);
+    assert!(
+        d[0].message
+            .contains("the callee of an instantiation must be a struct type"),
+        "{}",
+        d[0].message
+    );
+    let d = diags("(Int -> Int)(1, 2)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::InstantiateCallee
+    );
+}
+
+#[test]
+fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
+    // `s(.x 1, .y Int)` through a parameter: the struct's name table is not
+    // statically known, so the definition-order reorder cannot be computed —
+    // the diagnostic says so instead of the false "no named fields" claim.
+    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x 1, .y Int)\nf (S)");
+    assert!(
+        d.iter().all(|diag| diag
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::InstantiateNamesNotStatic)),
+        "no false anonymous-struct claim: {d:?}"
+    );
+    assert!(
+        d[0].message.contains("statically known struct type"),
+        "{}",
+        d[0].message
+    );
+}
+
+#[test]
+fn an_instantiation_through_a_parameter_at_a_non_struct_fails_at_the_call() {
+    // `f = s => s(1,2); f (Int)` — the body's callee is pinned to a struct
+    // kind, so the non-struct argument fails the apply's parameter check:
+    // the expected side names the struct requirement (not `?a`), at the
+    // call's argument.
+    let d = diags("f = s => s(1,2)\nf (Int)");
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(
+        d[0].message.contains("TypeStruct"),
+        "the expected side names the struct kind: {}",
+        d[0].message
+    );
+    assert_eq!(d[0].span, Some((2, 4)), "the failing argument: {d:?}");
+}
+
+#[test]
+fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
+    // `a = c(1, 2); b = struct<Int, Int>; c = b` — the use of `c` captured
+    // the reserved placeholder before `c = b` compiled; the alias re-points
+    // the earlier uses to `b`'s node, so the instantiation sees the struct
+    // type (it previously kept the stale placeholder's `?a`).
+    assert_eq!(
+        lichen_language::run::evaluate("a = c(1, 2)\nb = struct<Int, Int>\nc = b\na").unwrap(),
+        "(1, 2): struct<Int, Int>"
     );
 }
 
@@ -1625,9 +1815,11 @@ fn partial_inference_in_an_arrow_type() {
 
 #[test]
 fn an_underscore_in_the_array_length_position() {
-    // [1, 2, 3] : Int<_> — the length is inferred from the literal.
-    let ids = array_ids(evaluate("[1, 2, 3] : Int<_>"));
-    assert_eq!(ids.len(), 3);
+    // [1, 2, 3] : array<Int, _> — the length is inferred from the literal,
+    // so the rendered output type pins it.
+    let out = lichen_language::run::evaluate("[1, 2, 3] : array<Int, _>")
+        .expect("the placeholder length should infer");
+    assert_eq!(out, "[1, 2, 3]: array<Int, 3>");
 }
 
 #[test]

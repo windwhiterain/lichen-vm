@@ -33,7 +33,7 @@ is reused unchanged.
 ## Extension point 1: the value / operator vocabularies
 
 The lowlevel ships the *structural* core: `LowValue` (`USize`/`Array`/`Table`/`Function`/
-`None`/`Parameterized`) and `LowOperator` (`Index`/`Apply`/`TableGet`). A plugin composes
+`None`/`Void`/`Parameterized`) and `LowOperator` (`Index`/`Apply`/`TableGet`). A plugin composes
 its own plain enums in as **sibling carry variants** of one flat union with
 `lichen_utils::enum_ext!`:
 
@@ -131,6 +131,15 @@ Then a host composes it: `lichen-language`'s `program.rs` composes
 `ComputeValue`/`ComputeOperator` into `LangValue`/`LangOperator`, and `package.rs` builds the
 plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
 `compute.lichen` import.
+
+## Extension point 5: a compile-time attribute
+
+A plugin can contribute an *attribute* — a marker (`AttrSpec`) plus its lowering
+behaviour (`AttrExt<P>`: missing value, combine, unify, subtype, label, render),
+listed in the host composition's `attrs` manifest. The checker then carries the
+attribute as a compile-time `Schema` and materialises its slot at lowering; the
+marker never names a slot number, because the manifest's order *is* the
+canonical attribute order (see [attributes.md](attributes.md)).
 
 ## The shape of the contract
 

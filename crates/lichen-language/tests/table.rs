@@ -125,6 +125,16 @@ fn a_table_behind_a_parameter_reads_through_tableget() {
 }
 
 #[test]
+fn a_failed_read_key_never_phantom_matches() {
+    // Both keys are failed reads (computed-nothing `Void` residues): the
+    // build drops its entry, and the lookup *misses* — two failed reads
+    // must never collide into a phantom hit.
+    let source = "t = table{[1,2][5] ==> 3}\nt{[9][7]}";
+    assert!(has_check_kind(source, DiagKind::TableKeyUnbound));
+    assert!(has_check_kind(source, DiagKind::TableMiss));
+}
+
+#[test]
 fn a_non_pair_entry_is_a_parse_error() {
     let d = diags("t = table { 5 }; 0");
     assert!(

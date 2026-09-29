@@ -15,7 +15,9 @@
 //!   plugin-provided `#[macro_export] macro_rules! <name>_native_ops` that,
 //!   for a host program `$program`, expands to a `NativeOps` value (the
 //!   host invokes it to build its private per-module registry);
-//! - **an attribute** — an `AttrSpec` marker + `AttrExt` provider;
+//! - **an attribute** — an `AttrSpec` marker + `AttrExt` provider, listed in
+//!   the host composition's `attrs` manifest — which is also where its slot
+//!   comes from (see [`AttrSet`](crate::attr::AttrSet));
 //! - **a `GlobalExt` component** — composed by the host with
 //!   [`compose_ext!`](lichen_utils::compose_ext).
 //!

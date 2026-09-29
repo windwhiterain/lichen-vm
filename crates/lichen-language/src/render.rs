@@ -159,6 +159,15 @@ where
                 printer.node(d.a)
             )
         }
+        DiagKind::RuntimeIndexTarget => {
+            "this value is not a container — it has no element to read".to_string()
+        }
+        DiagKind::RuntimeIndexSubscript => {
+            "this value is not an index — an element can only be read by position".to_string()
+        }
+        DiagKind::ImportExport => {
+            "this package's export is not a value — a package must end in a value".to_string()
+        }
         DiagKind::NamedField => {
             let base = format!(
                 "no field with this name in the struct type {}",
@@ -199,6 +208,13 @@ where
         DiagKind::StructAnonymousField => {
             "cannot name a field — the struct has no named fields".to_string()
         }
+        DiagKind::InstantiateCallee => format!(
+            "the callee of an instantiation must be a struct type, found {}",
+            printer.node(d.a)
+        ),
+        DiagKind::InstantiateNamesNotStatic => {
+            "named arguments require a statically known struct type".to_string()
+        }
         DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).
@@ -215,7 +231,7 @@ where
         }
         DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
         DiagKind::TableKeyUnbound => {
-            "table key is not concrete (it depends on an unbound value) — the entry is dropped"
+            "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
                 .to_string()
         }
         DiagKind::Assert => {
@@ -223,7 +239,7 @@ where
             // structural `LowValue` view.
             let value = match d.assert_value.as_ref().and_then(|v| v.as_enum()) {
                 Some(LowValue::USize(n)) => n.to_string(),
-                Some(LowValue::None) => "none".to_string(),
+                Some(LowValue::None | LowValue::Void) => "none".to_string(),
                 Some(other) => format!("{other:?}"),
                 None => "—".to_string(),
             };

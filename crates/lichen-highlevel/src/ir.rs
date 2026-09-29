@@ -39,9 +39,10 @@ impl<A> Default for Schema<A> {
 }
 
 impl<A> Schema<A> {
-    /// The runtime pair's arity: 2 (value, type) + one slot per attribute.
+    /// The runtime pair's arity: the `[value, type]` head plus one slot per
+    /// attribute (`shape::attr_slot(tail.len())`).
     pub fn arity(&self) -> usize {
-        self.tail.len() + 2
+        crate::shape::attr_slot(self.tail.len())
     }
 }
 
@@ -269,8 +270,11 @@ pub enum ExprKind<L> {
     /// reorders the value's elements to the definition's positional order
     /// against the struct type's name table.  The value's element types are
     /// checked against the struct's field list, and the expression's type is
-    /// the struct type itself.  Emitted by the frontend when an application's
-    /// callee is a struct type.
+    /// the struct type itself.  Emitted by the frontend for the glued
+    /// comma-disciplined paren (`C()`, `C(,)`, `C(e,)`, `C(e1, …, en)`) —
+    /// recognition is *syntactic*; the checker validates that the callee's
+    /// type is a struct kind (a non-struct callee is a
+    /// [`DiagKind::InstantiateCallee`](crate::DiagKind) diagnostic).
     Instantiate {
         type_expr: ExprId,
         value: ExprId,
@@ -418,7 +422,7 @@ pub enum ExprKind<L> {
     },
     /// `_` — an inference placeholder hole, usable in any position (type or
     /// value).  Compiles to a fresh unbound cell that binds to whatever the
-    /// context unifies it with: `x : _`, `x : Int -> _`, `x : Int<_>`,
+    /// context unifies it with: `x : _`, `x : Int -> _`, `x : array<Int, _>`,
     /// `x : <Int, _>`, `struct<Int, _>`, and the value holes `_ : Int`,
     /// `f _`, `(1, _)`.
     Placeholder,
@@ -455,6 +459,105 @@ pub enum ExprKind<L> {
     /// [`NativeOp`] builder, and adopts the `[value, type]` pair it returns; it
     /// has no knowledge of what the operator does.
     NativeCall { op: &'static str, args: ChildRange },
+}
+
+impl<L> ExprKind<L> {
+    /// Replace every `from` reference in the kind's own fields with `to` —
+    /// one half of [`IR::repoint`].  The variadic kinds hold ranges into the
+    /// children arena, not ids; the arena is [`IR::repoint`]'s other half.
+    pub fn repoint(&mut self, from: ExprId, to: ExprId) {
+        let fix = |id: &mut ExprId| {
+            if *id == from {
+                *id = to;
+            }
+        };
+        match self {
+            ExprKind::Literal(_)
+            | ExprKind::Parameter
+            | ExprKind::Placeholder
+            | ExprKind::ErrorBlock
+            | ExprKind::Static { .. }
+            | ExprKind::Tuple(_)
+            | ExprKind::TypeTuple(_)
+            | ExprKind::TypeStruct { .. }
+            | ExprKind::Array(_)
+            | ExprKind::Table(_)
+            | ExprKind::ShallowArray { .. }
+            | ExprKind::NativeCall { .. } => {}
+            ExprKind::Function {
+                parameter,
+                parameter_type,
+                parameter_attribute,
+                r#return,
+                ..
+            } => {
+                fix(parameter);
+                if let Some(parameter_type) = parameter_type {
+                    fix(parameter_type);
+                }
+                if let Some(parameter_attribute) = parameter_attribute {
+                    fix(parameter_attribute);
+                }
+                fix(r#return);
+            }
+            ExprKind::Apply { function, argument } => {
+                fix(function);
+                fix(argument);
+            }
+            ExprKind::BinOp { left, right, .. } => {
+                fix(left);
+                fix(right);
+            }
+            ExprKind::Instantiate {
+                type_expr, value, ..
+            } => {
+                fix(type_expr);
+                fix(value);
+            }
+            ExprKind::Record { value, .. } => fix(value),
+            ExprKind::Assert { condition } => fix(condition),
+            ExprKind::TypeOf { value } => fix(value),
+            ExprKind::Index { array, index } => {
+                fix(array);
+                fix(index);
+            }
+            ExprKind::RawIndex { container, index } => {
+                fix(container);
+                fix(index);
+            }
+            ExprKind::Field { container, key } => {
+                fix(container);
+                fix(key);
+            }
+            ExprKind::NamedField { container, .. } | ExprKind::RawNamedField { container, .. } => {
+                fix(container);
+            }
+            ExprKind::Find { container, key } => {
+                fix(container);
+                fix(key);
+            }
+            ExprKind::Annotation { value, r#type, .. } => {
+                fix(value);
+                if let Some(r#type) = r#type {
+                    fix(r#type);
+                }
+            }
+            ExprKind::TypeFunction {
+                parameter,
+                r#return,
+            } => {
+                fix(parameter);
+                fix(r#return);
+            }
+            ExprKind::TypeArray {
+                element_type,
+                length,
+            } => {
+                fix(element_type);
+                fix(length);
+            }
+        }
+    }
 }
 
 impl<A: AttrSpec, L> IR<A, L> {
@@ -663,6 +766,36 @@ impl<A: AttrSpec, L> IR<A, L> {
     /// the root, and never re-evaluates.
     pub fn set_stmt_roots(&mut self, stmt_roots: Vec<ExprId>) {
         self.stmt_roots = stmt_roots;
+    }
+
+    /// Re-point every stored occurrence of `from` to `to`: the kind fields of
+    /// every expression, the variadic children arena, the root, and the
+    /// block-root set.  The frontend's alias fixup: a block-wide binding whose
+    /// value is a bare name (`c = b`) aliases its target, so the uses that
+    /// captured the binding's reserved placeholder (compiled before the alias
+    /// statement) are re-pointed to the aliased node — the placeholder keeps
+    /// no references and leaves the block-root set.  The alias target is a
+    /// block root already (a forward alias is another binding's placeholder)
+    /// or a `let`/statement value no new cycle can form through.
+    ///
+    /// No-op when `from == to` (the degenerate self-alias `a = a`): the
+    /// placeholder must stay referenced and block-rooted.
+    pub fn repoint(&mut self, from: ExprId, to: ExprId) {
+        if from == to {
+            return;
+        }
+        for expr in &mut self.expr {
+            expr.kind.repoint(from, to);
+        }
+        for child in &mut self.children {
+            if *child == from {
+                *child = to;
+            }
+        }
+        if self.root == from {
+            self.root = to;
+        }
+        self.block_roots.remove(&from);
     }
 }
 

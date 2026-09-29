@@ -1,6 +1,6 @@
 # Cross-process artifact store: it already exists
 
-> Status: implemented (landed) — this note records *what exists* and what the
+> Status: current — this note records *what exists* and what the
 > toolchain reuses; it is not a proposal to build.
 > Points at: `crates/lichen-registry` (the type-independent device layer: the
 > byte reader/writer, `ModuleKey`, the disk `DeviceRegistry`, the hashes),

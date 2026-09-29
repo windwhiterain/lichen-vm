@@ -18,9 +18,11 @@
 //! Keys are force-evaluated when the table is built — hashing needs the
 //! decided content — so a stored key is fully concrete and its hash is
 //! stable for the table's whole life.  A key that cannot be forced concrete
-//! (its subtree holds an unbound cell or a parameterized computation)
-//! records a [`EvalError::TableKeyUnbound`] and drops the entry.  Values
-//! are stored as lazy refs and read on demand, like array items.
+//! (its subtree holds an unbound cell or a parameterized computation) or
+//! whose content is a computed nothing ([`LowValue::Void`], the residue of
+//! a failed read) records a [`EvalError::TableKeyUnbound`] and drops the
+//! entry.  Values are stored as lazy refs and read on demand, like array
+//! items.
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvalError, LowValue,
@@ -49,10 +51,24 @@ fn id_hash(id: impl std::hash::Hash) -> u64 {
 
 /// Distinct content tokens for the marker values and a cycle revisit.
 const NONE_TOKEN: u64 = 0x6e6f_6e65_0000_0001; // "none"
-const PARAM_TOKEN: u64 = 0x7061_7261_0000_0002; // "para"
 const CYCLE_TOKEN: u64 = 0x6379_636c_0000_0003; // "cycl"
 /// The fold seed for an array's positional item hashes.
 const ARRAY_SEED: u64 = 0xa22e_b3e1_0000_0004;
+
+/// Why a table key has (or has not) a content hash.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeyState {
+    /// The key's content is decided and hashed.
+    Hashed(u64),
+    /// The key is not decided yet — an unbound cell, a lazy computation whose
+    /// operands are not bound.  It may still become a real key, so a read
+    /// must stay lazy rather than miss.
+    Undecided,
+    /// The key is decided and will never be key content (it holds a
+    /// [`LowValue::Void`](crate::LowValue::Void), the residue of a failed
+    /// read).  A read can miss.
+    Unhashable,
+}
 
 impl<P: Program> Module<P> {
     /// Build a constant table value from raw `(key, value)` node pairs (see
@@ -85,8 +101,29 @@ impl<P: Program> Module<P> {
 
     /// The deep content hash of `key`, or `None` when the key's subtree is
     /// not fully concrete — its content is not yet decided, so nothing can
-    /// be hashed or matched (a build drops the entry, a read misses).
+    /// be hashed or matched (a build drops the entry, a read misses) — or
+    /// when the content holds a [`LowValue::Void`], the residue of an
+    /// already-recorded failed read: not hashable, same class as an unbound
+    /// subtree.
     pub(crate) fn key_hash(&mut self, key: AnyNodeId) -> Option<u64> {
+        match self.key_state(key) {
+            KeyState::Hashed(hash) => Some(hash),
+            // Not decidable yet, or not key content at all — both mean "this
+            // key cannot match", and the caller decides what that costs.
+            KeyState::Undecided | KeyState::Unhashable => None,
+        }
+    }
+
+    /// [`Self::key_hash`] with the two reasons for "no hash" kept apart.
+    ///
+    /// They are different facts and the callers pay differently for them: a
+    /// build drops the entry either way, but a **read** must only record a
+    /// miss when the key is decided and simply absent.  A key that is still
+    /// undecided (a lambda parameter mid-apply, a lazy computation whose
+    /// operands are not bound yet) may become a real key later, so the read
+    /// stays lazy instead of reporting a miss for a lookup that has not
+    /// happened yet.
+    pub(crate) fn key_state(&mut self, key: AnyNodeId) -> KeyState {
         match key {
             Dyn(node) => {
                 self.evaluate_node_forced(node, None);
@@ -94,17 +131,21 @@ impl<P: Program> Module<P> {
                     .evaluated_deep
                     .is_some_and(|e| e.parameterized)
                 {
-                    return None;
+                    return KeyState::Undecided;
                 }
             }
             AnyNodeId::Static(sref) => {
                 if self.static_module(sref.module).nodes[sref.index.index].parameterized {
-                    return None;
+                    return KeyState::Undecided;
                 }
             }
         }
         let mut path = Vec::new();
-        Some(self.hash_inner(key, &mut path, 0))
+        match self.hash_inner(key, &mut path, 0) {
+            Ok(Some(hash)) => KeyState::Hashed(hash),
+            Ok(None) => KeyState::Unhashable,
+            Err(()) => KeyState::Undecided,
+        }
     }
 
     /// The recursive content hash — [`ValueExt::value_eq`]'s comparison
@@ -114,39 +155,88 @@ impl<P: Program> Module<P> {
     /// A cycle is cut by the path check: a revisited node mixes in the
     /// cycle token at its revisit depth, so two equal cyclic structures
     /// hash equal.
-    fn hash_inner(&self, id: AnyNodeId, path: &mut Vec<AnyNodeId>, depth: usize) -> u64 {
+    ///
+    /// The three outcomes match [`KeyState`], because *where* in the key the
+    /// undecided content sits must not change the verdict:
+    /// - `Ok(Some(hash))` — the content is decided and hashed.
+    /// - `Ok(None)` — decided, but never key content (it holds a
+    ///   [`LowValue::Void`](crate::LowValue::Void)): a read can miss.
+    /// - `Err(())` — **undecided**: a node with no value yet, or a value that
+    ///   is still [`LowValue::Parameterized`](crate::LowValue::Parameterized)
+    ///   anywhere in the key's content.  Such a key must not be hashed to a
+    ///   constant: two different undecided keys would then collide, and a
+    ///   lookup could hit an entry it never matched.  The caller keeps the
+    ///   read lazy instead.  (An undecided *top-level* key is caught before
+    ///   this is reached; this arm is for a parameter or a lazy computation
+    ///   *nested inside* the key.)
+    fn hash_inner(
+        &self,
+        id: AnyNodeId,
+        path: &mut Vec<AnyNodeId>,
+        depth: usize,
+    ) -> Result<Option<u64>, ()> {
         if path.contains(&id) {
-            return mix(CYCLE_TOKEN ^ depth as u64);
+            return Ok(Some(mix(CYCLE_TOKEN ^ depth as u64)));
         }
         path.push(id);
-        let value = self.node_value(id).unwrap_or_else(|| {
-            panic!("hashing a key whose subtree holds a node without a value — the deep pass must have resolved it")
-        });
-        let h = match value.as_enum() {
-            Some(LowValue::USize(n)) => mix(n as u64),
+        let hashed = self.hash_value(id, path, depth);
+        path.pop();
+        hashed
+    }
+
+    /// One level of [`Self::hash_inner`]'s content hash, on the assumption that
+    /// `id` has just been pushed onto `path` — so every early return still
+    /// leaves the path for the caller's `pop`.
+    fn hash_value(
+        &self,
+        id: AnyNodeId,
+        path: &mut Vec<AnyNodeId>,
+        depth: usize,
+    ) -> Result<Option<u64>, ()> {
+        let Some(value) = self.node_value(id) else {
+            return Err(());
+        };
+        Ok(match value.as_enum() {
+            Some(LowValue::USize(n)) => Some(mix(n as u64)),
             // A string key hashes by its byte content.
-            Some(LowValue::Str(s)) => {
-                mix(s.as_bytes().iter().fold(0u64, |h, &b| mix(h ^ b as u64)))
+            Some(LowValue::Str(s)) => Some(mix(s
+                .as_bytes()
+                .iter()
+                .fold(0u64, |h, &b| mix(h ^ b as u64)))),
+            Some(LowValue::None) => Some(NONE_TOKEN),
+            // A computed nothing is never key content: it is a failed
+            // read's residue, so the key is not hashable — the same class
+            // as an unbound subtree (a build drops the entry, a read
+            // misses).
+            Some(LowValue::Void) => None,
+            // Undecided content, wherever it sits in the key: the key cannot
+            // be hashed yet, and must not collapse onto one constant (two
+            // different undecided keys would then collide).
+            Some(LowValue::Parameterized) => return Err(()),
+            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => {
+                Some(mix(id_hash(function)))
             }
-            Some(LowValue::None) => NONE_TOKEN,
-            Some(LowValue::Parameterized) => PARAM_TOKEN,
-            Some(LowValue::Function(AnyFunctionId::Dynamic(function))) => mix(id_hash(function)),
-            Some(LowValue::Function(AnyFunctionId::Static(sref))) => mix(id_hash(sref)),
-            Some(LowValue::Array(array)) => array.items().iter().fold(ARRAY_SEED, |h, item| {
-                mix(h ^ self.hash_inner(item.node, path, depth + 1))
-            }),
+            Some(LowValue::Function(AnyFunctionId::Static(sref))) => Some(mix(id_hash(sref))),
+            Some(LowValue::Array(array)) => {
+                let mut h = ARRAY_SEED;
+                for item in array.items() {
+                    match self.hash_inner(item.node, path, depth + 1)? {
+                        Some(item_hash) => h = mix(h ^ item_hash),
+                        None => return Ok(None),
+                    }
+                }
+                Some(h)
+            }
             // A table keyed by identity (user directive) — the payload's
             // identity, matching [`AnyHandle`]'s `PartialEq`.
-            Some(LowValue::Table(table)) => mix(match table {
+            Some(LowValue::Table(table)) => Some(mix(match table {
                 AnyHandle::Dynamic(handle) => handle.0 as *const TableItem as usize as u64,
                 AnyHandle::Static(handle) => {
                     handle.module.as_raw() ^ (handle.offset as *const TableItem as usize as u64)
                 }
-            }),
+            })),
             None => unreachable!("a structural value is one of the variants above"),
-        };
-        path.pop();
-        h
+        })
     }
 
     /// Pure, coinductive structural equality of two key nodes — the

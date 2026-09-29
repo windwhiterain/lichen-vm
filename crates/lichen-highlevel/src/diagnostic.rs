@@ -17,8 +17,9 @@
 //! the structured facts in its own type syntax.
 
 use std::collections::HashSet;
+use std::ops::Range;
 
-use lichen_lowlevel::{AnyNodeId, EvalError, LowValue, NodeId, Program, UnifyError};
+use lichen_lowlevel::{AnyNodeId, EvalError, LowValue, NodeId, Program};
 
 use crate::{
     checker::Build,
@@ -56,6 +57,15 @@ pub enum DiagKind {
     /// A `.name` argument in a struct instantiation against a struct type with
     /// no named fields.
     StructAnonymousField,
+    /// A struct instantiation whose callee's type is concretely not a struct
+    /// type — structs are nominal, so only a struct type instantiates.
+    /// Expected = a struct type, found = the callee's type.
+    InstantiateCallee,
+    /// A `.name` argument in a struct instantiation whose callee's struct
+    /// type is not statically known (an unbound parameter, a deferred read):
+    /// the name table — and so the definition-order reorder — is unavailable
+    /// at check time.
+    InstantiateNamesNotStatic,
     /// An array literal's elements must share one type — expected = the
     /// shared element type, found = this element's type.
     ArrayElement,
@@ -80,6 +90,22 @@ pub enum DiagKind {
     TableMiss,
     /// A table build dropped a non-concrete key (see [`Diag::TableKeyUnbound`]).
     TableKeyUnbound,
+    /// A read whose **runtime** target turned out not to be a container — the
+    /// lowlevel's [`EvalError::IndexTarget`](lichen_lowlevel::EvalError::IndexTarget)
+    /// reached the diagnostics as a fact about a *value*, with no type to
+    /// print, so the wording is self-contained.  Distinct from
+    /// [`Self::IndexTarget`], which reports a *type* the checker refused to
+    /// index and therefore names that type.
+    RuntimeIndexTarget,
+    /// An imported package whose export is not the `[value, type]` pair the
+    /// importer reads — a raw read (`[1, 2]<0>`) at a package's root compiles
+    /// to the read operation rather than to a pair.  Expected = a pair.
+    ImportExport,
+    /// A read whose **runtime subscript** turned out not to be an index — the
+    /// lowlevel's [`EvalError::IndexSubscript`](lichen_lowlevel::EvalError::IndexSubscript)
+    /// reached the diagnostics as a fact about a *value*, with no type to
+    /// print, so the wording is self-contained.
+    RuntimeIndexSubscript,
     /// A top-level binding whose value computation never terminates — the VM's
     /// apply/depth guard fired while the build evaluated the user-written
     /// statement.  The checker reports this as an error instead of panicking.
@@ -87,12 +113,23 @@ pub enum DiagKind {
     NonTerminating,
 }
 
-/// One checker-issued unification, attributed with where it came from.
+/// One checker check, attributed with where it came from.
+///
+/// A `DiaryEntry` is *not* necessarily a unification failure: a guard can
+/// reject before any unify happens, in which case [`Self::errors`] is empty
+/// and the entry is itself the whole diagnostic.  What every entry has is a
+/// recording position ([`Self::seq`]), which is the output order.
 #[derive(Clone, Debug)]
 pub struct DiaryEntry {
-    /// Index into [`Module::unify_errors`] of the first error this unify
-    /// produced (one unify may record several, e.g. elementwise).
-    pub error_index: usize,
+    /// The [`Module::unify_errors`] entries this check produced — **empty on
+    /// success and for a guard failure**, which never unified.  One unify may
+    /// own several of them (e.g. elementwise), so this is the range rather
+    /// than a single index.
+    pub errors: Range<usize>,
+    /// The position this entry was recorded at — the checker's monotonic
+    /// recording counter.  It is the diagnostic's place in the output order
+    /// (see [`Build::diagnostics`]), independent of whether it owns errors.
+    pub seq: usize,
     pub a: NodeId,
     pub b: NodeId,
     /// The source-blind location of the mismatch — the IR expression and its
@@ -154,9 +191,17 @@ impl<P: HighProgram> Build<P>
 where
     P::Value: ValueType,
 {
-    /// Render the lowlevel's failure facts as structured diagnostics — one per
-    /// entry in [`Module::unify_errors`], in order, then the runtime
-    /// evaluation failures (deduplicated), then the user-facing asserts.
+    /// Render the lowlevel's failure facts as structured diagnostics.
+    ///
+    /// The checker-attributed failures come out **in recording order**: every
+    /// diary entry carries the [`Checker`](crate::checker::Checker) counter
+    /// value it was recorded at (`DiaryEntry::seq`), and a unification error
+    /// is emitted at the `seq` of the entry whose owned range contains it —
+    /// so a guard failure (which unified nothing) interleaves with real
+    /// unification failures exactly where it was recorded.  A unification
+    /// error with *no* owner (a deep apply-time failure the checker never
+    /// issued) is emitted after all of them, then come the runtime evaluation
+    /// failures (deduplicated) and the user-facing asserts.
     pub fn diagnostics(&self) -> Vec<Diag<P>> {
         let mut out = Vec::new();
         for loc in &self.nonterminating {
@@ -174,12 +219,55 @@ where
                 error_index: None,
             });
         }
-        for (i, err) in self.module.unify_errors.iter().enumerate() {
-            out.push(self.mismatch(i, err));
+        // Checker-attributed failures, in recording order.  A guard entry owns
+        // no errors and contributes exactly one diagnostic at its own `seq`;
+        // a unify entry contributes one diagnostic per error it owns, all at
+        // its own `seq` (they are the same failed unify).  Sorting by `seq` is
+        // stable, so several failures of one unify stay in their own order.
+        let mut attributed: Vec<(usize, Diag<P>)> = Vec::new();
+        for entry in &self.diary {
+            if entry.errors.is_empty() {
+                // A guard failure: the check refused before unifying, so the
+                // entry itself is the diagnostic — no error, no expected/found
+                // sides beyond what the guard recorded.
+                attributed.push((
+                    entry.seq,
+                    Diag {
+                        loc: Some(entry.loc.clone()),
+                        kind: entry.kind,
+                        a: entry.a,
+                        b: entry.b,
+                        value_a: None,
+                        value_b: None,
+                        assert_value: None,
+                        index: None,
+                        length: None,
+                        field: entry.field.clone(),
+                        error_index: None,
+                    },
+                ));
+                continue;
+            }
+            for i in entry.errors.clone() {
+                attributed.push((entry.seq, self.mismatch(i)));
+            }
         }
+        attributed.sort_by_key(|&(seq, _)| seq);
+        out.extend(attributed.into_iter().map(|(_, diag)| diag));
+        // A unification error no diary entry owns — a deep apply-time failure,
+        // recorded by the lowlevel rather than by a checker-issued check.  It
+        // has no recording position, so it lands after every attributed one.
+        out.extend(
+            self.orphan_unify_errors()
+                .into_iter()
+                .map(|i| self.mismatch(i)),
+        );
         // Runtime evaluation failures (an out-of-bounds index, a table read).
         // The value and type evaluation of the same expression each record
-        // one, so identical facts collapse to a single diagnostic.
+        // one, so identical facts collapse to a single diagnostic — the key
+        // is the failure's *kind and blamed node*, so two genuinely
+        // different failures (two out-of-bounds reads, a dropped build key
+        // and a later read miss) never collapse into each other.
         let mut seen = HashSet::new();
         for err in &self.module.eval_errors {
             let key = match err {
@@ -187,8 +275,11 @@ where
                     index,
                     index_value,
                     length,
-                } => (Some(*index), Some(*index_value), Some(*length)),
-                _ => (None, None, None),
+                } => (0, Some(*index), Some(*index_value), Some(*length)),
+                EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
+                EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
+                EvalError::IndexTarget { target } => (3, Some(*target), None, None),
+                EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None),
             };
             if !seen.insert(key) {
                 continue;
@@ -237,15 +328,52 @@ where
                     field: None,
                     error_index: None,
                 }),
+                // A read applied to a non-container: the value itself is the
+                // fact here, so this kind carries no type to print.
+                EvalError::IndexTarget { target } => out.push(Diag {
+                    loc: self.node_loc(*target),
+                    kind: DiagKind::RuntimeIndexTarget,
+                    a: NodeId::default(),
+                    b: NodeId::default(),
+                    value_a: None,
+                    value_b: None,
+                    assert_value: None,
+                    index: None,
+                    length: None,
+                    field: None,
+                    error_index: None,
+                }),
+                // A read whose subscript is not an index: like the
+                // non-container target beside it, the value itself is the
+                // fact, so this kind carries no type to print.
+                EvalError::IndexSubscript { subscript } => out.push(Diag {
+                    loc: self.node_loc(*subscript),
+                    kind: DiagKind::RuntimeIndexSubscript,
+                    a: NodeId::default(),
+                    b: NodeId::default(),
+                    value_a: None,
+                    value_b: None,
+                    assert_value: None,
+                    index: None,
+                    length: None,
+                    field: None,
+                    error_index: None,
+                }),
             }
         }
         // Failed asserts — only the explicit `assert` expressions (a
         // generated array-bounds guard duplicates the index eval error, so it
-        // is not rendered separately).
+        // is not rendered separately).  Both the user-facing flag and the
+        // location are keyed by the *template* condition, which is what an
+        // apply's clone records: a per-call failure is attributed to the
+        // `assert` expression the user wrote, not to a clone.
         for err in &self.module.assert_errors {
-            if self.module.user_asserts.contains(&err.condition) {
+            let AnyNodeId::Dynamic(template) = err.template else {
+                continue; // cloned out of a static module: no location to attribute
+            };
+            if self.user_asserts.contains(&template) {
                 out.push(Diag {
-                    loc: self.node_edges.get(&err.condition).cloned(),
+                    loc: self.node_edges.get(&template).cloned(),
                     kind: DiagKind::Assert,
                     a: NodeId::default(),
                     b: NodeId::default(),
@@ -271,8 +399,20 @@ where
         self.node_edges.get(&node).cloned()
     }
 
-    /// One unification-failure diagnostic.
-    fn mismatch(&self, i: usize, err: &UnifyError<P>) -> Diag<P> {
+    /// The `unify_errors` indices no diary entry owns — a deep apply-time
+    /// failure the lowlevel recorded rather than a checker-issued check, so
+    /// there is no recording position behind it.  Ascending, so they keep the
+    /// order the lowlevel recorded them in.
+    fn orphan_unify_errors(&self) -> Vec<usize> {
+        (0..self.module.unify_errors.len())
+            .filter(|&i| !self.diary.iter().any(|e| e.errors.contains(&i)))
+            .collect()
+    }
+
+    /// One unification-failure diagnostic — the `unify_errors` entry at `i`,
+    /// attributed through whichever diary entry owns that index.
+    fn mismatch(&self, i: usize) -> Diag<P> {
+        let err = &self.module.unify_errors[i];
         // An apply-time parameter-check failure: attribute to the argument.
         if let Some(apply) = self.module.apply_errors.iter().find(|a| a.error_index == i) {
             // The highlevel parses the argument's structure (the "who encodes,
@@ -280,7 +420,7 @@ where
             // pair slot or a tuple/array shape, so the language can build the
             // diagnostic without re-deriving the type grammar.
             let path =
-                crate::checker::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
+                crate::shape::tag_descent(&self.module, Vec::new(), apply.argument, &err.steps);
             let loc = self.apply_edges.get(&apply.apply_node).map(|edge| Loc {
                 expr: edge.argument_expr,
                 path,
@@ -299,13 +439,17 @@ where
                 error_index: Some(i),
             };
         }
-        // The owning diary entry: the last one whose error_index <= i (one
-        // unify may own a whole run of errors, e.g. elementwise).
-        let entry = self.diary.iter().rev().find(|e| e.error_index <= i);
+        // The owning diary entry: the one whose owned range contains this
+        // error (one unify may own several, e.g. elementwise).  Ranges are
+        // disjoint by construction — each is a slice of the append-only error
+        // vec, recorded before the next unify ran — so exactly one matches.
+        let entry = self.diary.iter().find(|e| e.errors.contains(&i));
         let (a, b) = match entry {
             Some(entry) => (entry.a, entry.b),
             None => (err.a, err.b),
         };
+        let value_a = entry.map(|e| (e.a, e.b)).and(err.value_a);
+        let value_b = entry.map(|e| (e.a, e.b)).and(err.value_b);
         let loc = entry.map(|e| e.loc.clone());
         let kind = entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime);
         let field = entry.map(|e| e.field.clone()).flatten();
@@ -314,8 +458,8 @@ where
             kind,
             a,
             b,
-            value_a: err.value_a,
-            value_b: err.value_b,
+            value_a,
+            value_b,
             assert_value: None,
             index: None,
             length: None,
