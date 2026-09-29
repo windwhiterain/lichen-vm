@@ -1,6 +1,20 @@
 # Type-system cleanup and standardization plan
 
-> Status: **Phases 0–3 complete.** Phase 0 (B1–B8); Phase 1 (the `shape`
+> Status: **Phases 0–4 complete.** Phase 4 closed the remaining structural
+> items (the five dead declarations, `recursive_func_nodes` under its real name
+> `lambda_value_nodes`, one struct-type builder, one `BinOp` → `TypeOperator`
+> conversion), restored the checker's read-only-IR contract (a merged attribute
+> tail is the checker's own, carried on `Build` for the renderer), and removed
+> panics-as-control-flow: a budget guard now records which limit was exceeded
+> and the non-termination diagnostic names it, so no `catch_unwind` remains and
+> a genuine internal panic propagates with a real backtrace instead of being
+> relabelled "this binding never terminates". A survey run before Phase 4 found
+> a **user-reachable crash the Phase 3 census had missed**: a raw read of a
+> table through a call result re-entered the same `TableGet` while it was still
+> being evaluated and hit `unreachable!`, escaping the compiler entirely on
+> `build` and `run`; it is fixed at the root — the `visiting` mark now has one
+> owner, scoped to the evaluation attempt, released by a `Drop` guard.
+> Phase 0 (B1–B8); Phase 1 (the `shape`
 > encoding authority, the kind-marker registry, single-sourced codec tags and
 > attribute slots); D3 (the `Instantiate` check is total and type-directed,
 > with a nominal callee check); Phase 2 (D1: the unification deferral policy
@@ -363,6 +377,38 @@ Either way, independent of D1:
   Undecided content at **any** depth is now undecided, and `PARAM_TOKEN` is
   gone.
 
+  #### The same `unreachable!` survived the fix — a second-order re-entry
+
+  The Phase 4 survey re-measured the census and found this site still
+  user-reachable through a shape the census never tried.  Bisected to `8d0302d`
+  — the fix that introduced `KeyState` introduced this:
+
+  ```text
+  t = table{ [1, 2] ==> 10 }
+  g = x => x
+  t{g [1, 2]}
+  ```
+
+  `build` and `run` both died with an uncaught `unreachable!` and exit 101 —
+  **no `catch_unwind` covers those paths**; with a binding in between the panic
+  *was* caught and reported as a false "this binding never terminates", the
+  exact B8 failure mode in a new position.  Two defects stacked:
+
+  1. the two early returns out of the read (`KeyState::Undecided` /
+     `Unhashable`) bypassed the postlude, so the node's `visiting` mark was
+     never cleared and the *next* pass hit the guard;
+  2. fixing only that is **not sufficient** — because the undecided answer is
+     not cached, it propagates into the enclosing array, whose descent forces
+     the same `TableGet` that is still mid-computation.  The re-entrancy is
+     real and independent of the stale mark.
+
+  The fix is the invariant that was missing: **`Node::visiting` is owned by one
+  evaluation attempt.**  `evaluate_node` delegates, the delegated body brackets
+  the work, and the operation dispatch sits inside the bracket, so no early
+  return and no panic can leak the mark.  The bracket is a `Drop` guard, which
+  also made the budget work below safe.  Both programs now compile and
+  evaluate to `parameterized: Int`.
+
   - **A failed approach worth recording**: pinning the container's type to a
     struct kind in `check_named_field` when it is not concrete (the move D3
     uses for an instantiation callee) *breaks* `lichen-compute`.  The generic
@@ -371,8 +417,14 @@ Either way, independent of D1:
     not arrays, and every compute test fails.  A check-time pin is not a
     general answer here — the deferral is the answer, and the lowlevel simply
     must not panic on what it eventually finds.
-- Intern `USize(0)`/`USize(1)` and field-name nodes instead of re-allocating
-  them ~20 times.
+- **Deferred** (Phase 4, deliberately not done): intern `USize(0)`/`USize(1)`
+  and field-name nodes instead of re-allocating them at 14 + 3 sites.  The
+  pattern already exists (`Checker::install_constants` interns the kind markers
+  and the two type constants), so this is a small change — but a shared
+  constant node is a *shared* node, where today each occurrence allocates its
+  own, and that is a real clone-aliasing change to the apply walk, not a
+  refactor.  It buys allocation count, not correctness, so it is not worth the
+  risk until something measures a cost.
 - **Landed** (`refactor/phase4c-decls`): the dead API (`type_expr_node`,
   `int_type_node`, `Schema::arity`, `LocKind` with its only user `Loc::kind`,
   and `Loc::type_depth`) is removed — each had zero call sites in the
@@ -442,11 +494,24 @@ These change or bless semantics; each needs an explicit decision (§7):
 
 ## 8. Tests and documentation (Phase 5, continuous)
 
-- Add the missing coverage identified by the survey: highlevel-level tests
-  for `NamedField`/`RawIndex`/`RawNamedField`/`Find`/`Record`/`Static`/
-  `NativeCall`, negative error-path tests for raw reads, the monomorphic
-  sharing half of let-polymorphism. (The codec round-trip property test
-  arrived with Phase 1c.)
+- **The nine survey test gaps were mostly stale, and the plan said so wrongly.**
+  Re-measured in Phase 4: eight of the nine are already covered, but downstream
+  in `lichen-language` and in `examples/`, not at the `lichen-highlevel` level
+  the plan named — **not one** of `NamedField`/`RawIndex`/`RawNamedField`/
+  `Find`/`Record`/`Static`/`NativeCall` is ever constructed in
+  `crates/lichen-highlevel/tests/**`, because the behaviour is already pinned
+  where the frontend is in play.  The ninth was real and pointed: the three
+  diagnostics Phase 3's census created to replace panics
+  (`RuntimeIndexTarget`, `RuntimeIndexSubscript`, `ImportExport`) shipped with
+  **zero** test references anywhere.  **Done** (`test/phase5-raw-read-diags`):
+  one test each, plus the uncovered "find on a concretely non-table container"
+  guard.  One finding worth keeping: `RuntimeIndexTarget` carries **no source
+  span** in any program, structurally — `check_raw_index` records an edge for
+  the subscript only — so the test pins that absence rather than a caret.  The
+  monomorphic sharing half of let-polymorphism was already pinned
+  (`pipeline.rs` `a_bound_struct_type_is_reusable`, with
+  `two_struct_type_occurrences_do_not_unify` as its negative control).
+  (The codec round-trip property test arrived with Phase 1c.)
 - ~~Fix the vacuous `Int<_>` test (B3)~~ (done in Phase 0) and the
   contradictory test docs (tests/checker.rs:167-184, 1066-1070) — **the test
   docs are done** (Phase 4 documentation sync): the `is_int_type` helpers
@@ -473,8 +538,46 @@ These change or bless semantics; each needs an explicit decision (§7):
    by the existing 80 checker tests + pipeline suite.
 3. **Phase 2** — boundary, after D1 is decided.
 4. **Phase 3** — checker structure, incremental per submodule.
-5. **Phase 4** — semantics, after D2–D5 are decided.
+5. **Phase 4** — semantics, after D2–D5 are decided. **Done**: D2–D5 all
+   resolved, the remaining structural items closed, the checker no longer
+   mutates the IR, and the budget guards record instead of panicking.
 6. **Phase 5** — continuous; docs synced with each landed phase.
 
 Each phase ends with `cargo check` + the *affected* crate tests only
 (per workspace policy), `cargo fmt`, and a docs sync.
+
+### Still open after Phase 4
+
+Nothing below is scheduled; each is recorded because it is a real remaining
+improvability, not because it is owed.
+
+- **The four structural descents in the lowlevel** — `unify_inner`,
+  `reconcile_node`, `key_eq`, `hash_value` — share a spine (the cycle guard and
+  the array elementwise descent are each written four times) behind four
+  genuinely different policies: a cycle is an *error* for unification and
+  *equal* for the other three; a value-less node is bind / wildcard /
+  mismatch / undecided respectively.  `reconcile_node` and `key_eq` are already
+  the same twelve lines apart from two arms.  Unifying them buys readability,
+  not correctness, and the policy enum would be wider than the duplication it
+  replaces.
+- **The lexical depth that decides a lambda's parent** (`checker/lambda.rs`) —
+  one expression, and it encodes a real rule (a same-depth sibling must not
+  hang under the lambda being checked, or mutual recursion re-applies a
+  template).  Replacing it with a parent link the frontend supplies means
+  reserving the function node's id *before* its body compiles, and a wrong
+  parent would silently change template membership rather than fail to compile.
+- **Interning** — see the deferred note in §5.
+- **The arrow / function-type encoding** — 7 build sites (2 of which hand-build
+  the `[marker, universe]` kind instead of using the shared helper, both in
+  `lichen-compute`) and 2 read sites.  Deferred with the compute work, since
+  every site that matters lives behind the raw-graph boundary D5 already labels
+  unstable.
+- **`Checker's ir: IR` is held by value**, so the read-only-IR contract restored
+  in Phase 4 is true today but not enforced.  Making it a shared reference would
+  let the compiler reject the class; it also collides with `Build`, which
+  currently moves the IR out.
+- **Two spec rows remain wrong**: the two `Annotation` rows name a field the IR
+  does not have (`attribute` vs `attributes: ChildRange`), and `$name(args)` is
+  real lexed syntax that §2 never mentions.  Both were found and left: the
+  first is a question about how much IR payload the table should carry, the
+  second is a section the sync did not touch.
