@@ -227,7 +227,8 @@ impl<P: Program> Module<P> {
         }
         // Drop the assert points that died with this block: the check pass
         // walks the registry by id, so a dangling entry would panic there.
-        self.asserts.retain(|&id| self.nodes.contains_key(id));
+        self.asserts
+            .retain(|entry| self.nodes.contains_key(entry.condition));
         self.blocks.remove(block);
     }
 }

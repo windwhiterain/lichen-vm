@@ -8,8 +8,12 @@
 > **Phase 2 landed** (D1: the unification deferral policy is a `Program` hook —
 > `defer_pending` — and the lowlevel is untyped); **Phase 3a landed** (the
 > `checker.rs` module split: the checking rules now live in five sibling
-> modules beside the root). The rest of Phase 3 — the fabricated-`UnifyError`
-> channel, `check_lam` surgery, the panic discipline — is pending.
+> modules beside the root). The assert metadata also moved: the lowlevel
+> carries only the worklist and the errors, and a failure is attributed
+> through the **template** condition a clone descends from, so a host table
+> keyed by that template resolves the user-facing flag and the span (§4). The
+> rest of Phase 3 — the fabricated-`UnifyError` channel, `check_lam` surgery,
+> the panic discipline — is pending.
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -63,8 +67,9 @@ universe (`equality.rs:191-230`), the `[shape,[marker,universe]]` kind
 encoding (`class_holds_type`, `equality.rs:601-624`), and carries three
 bespoke deferral rules justified by highlevel concepts (annotation, dependent
 type, field read — `equality.rs:295-345`). In the other direction, the
-lowlevel `Module` stores source spans (`assert_spans`, `lib.rs:659-664`),
-user-facing assert sets, and checker-shaped `ApplyError`s. Meanwhile the
+lowlevel `Module` stored source spans (`assert_spans`) and user-facing assert
+sets (**both moved — see §4**), and still carries checker-shaped `ApplyError`s.
+Meanwhile the
 compute JIT reverse-engineers the checker's encoding from raw nodes
 (`compute.rs:1410-1630`), so any encoding change breaks it silently.
 

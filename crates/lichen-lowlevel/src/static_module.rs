@@ -25,9 +25,9 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
-    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation, Program,
-    StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule, StaticNode,
-    StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
+    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
+    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -145,7 +145,10 @@ impl<P: Program> Module<P> {
                 let baked = !ctx.module.nodes[condition.index].parameterized;
                 let instantiated = module.static_node_apply(condition, &mut ctx);
                 if !baked {
-                    module.asserts.push(instantiated);
+                    module.asserts.push(PendingAssert {
+                        condition: instantiated,
+                        template: static_ref(&ctx.module, condition),
+                    });
                 }
             }
             // The parameter unify: same shape as `function_apply` — re-establish
@@ -343,7 +346,10 @@ impl<P: Program> Module<P> {
             let baked = !ctx.module.nodes[condition.index].parameterized;
             let instantiated = self.static_node_apply(condition, ctx);
             if !baked {
-                self.asserts.push(instantiated);
+                self.asserts.push(PendingAssert {
+                    condition: instantiated,
+                    template: static_ref(&ctx.module, condition),
+                });
             }
             assert_clones.push(instantiated);
         }
@@ -465,6 +471,16 @@ fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNo
         current = parent;
     }
     current
+}
+
+/// The static identity of a node in `module` — the form a host's own
+/// per-node tables can key on when an assert is cloned out of a static
+/// module (the importing module has no dynamic node for the template).
+fn static_ref<P: Program>(module: &StaticModule<P>, node: LocalNodeId) -> AnyNodeId {
+    AnyNodeId::Static(StaticNodeId {
+        module: module.key,
+        index: node,
+    })
 }
 
 impl<P: Program> StaticModule<P> {

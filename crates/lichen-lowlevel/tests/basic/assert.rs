@@ -15,7 +15,11 @@ fn passing_assert_records_no_error() {
     let root = m.add_block(None);
     let one = usize_node(&mut m, root, 1);
     let condition = m.add_assert(one);
-    assert_eq!(m.asserts, vec![condition], "the condition is registered");
+    assert_eq!(
+        m.asserts.iter().map(|e| e.condition).collect::<Vec<_>>(),
+        vec![condition],
+        "the condition is registered"
+    );
 
     m.check_asserts();
 
@@ -244,7 +248,11 @@ fn an_untriggered_assert_is_decided_by_a_later_drain() {
 
     m.check_asserts();
 
-    assert_eq!(m.asserts, vec![condition], "still pending");
+    assert_eq!(
+        m.asserts.iter().map(|e| e.condition).collect::<Vec<_>>(),
+        vec![condition],
+        "still pending"
+    );
     assert!(m.assert_errors.is_empty());
 
     // Later unification binds through the cell's class (outside the drain;
@@ -329,7 +337,7 @@ fn gc_prunes_asserts_of_dropped_blocks() {
         "the condition died with its block"
     );
     assert!(
-        !m.asserts.contains(&condition),
+        !m.asserts.iter().any(|e| e.condition == condition),
         "the dropped entry is pruned"
     );
     m.check_asserts();
@@ -383,7 +391,7 @@ fn gc_moves_an_assert_condition_with_its_function() {
         "the condition moved with its function"
     );
     assert!(
-        m.asserts.contains(&condition),
+        m.asserts.iter().any(|e| e.condition == condition),
         "the moved entry stays registered"
     );
     m.check_asserts();
