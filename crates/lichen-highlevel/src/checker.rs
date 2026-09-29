@@ -138,10 +138,14 @@ where
     /// calls through it.
     attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     /// The native-operator registry: a private, name→operator mapping for the
-    /// compiling module's plugin (see [`crate::native`]).  The empty default
-    /// `no_native_ops` rejects every `$name` call (the frontend reports it as
-    /// unresolved); a plugin whose source is being compiled (e.g.
-    /// `lichen-compute`'s `jit`/`launch`) supplies its own slice.
+    /// compiling module's plugin (see [`crate::native`]).  Nothing upstream of
+    /// the checker can see it — the frontend compiles a `$name` call blindly,
+    /// so the **checker** is what resolves the name against this slice, and an
+    /// unregistered `$name` is a [`DiagKind::NativeOpUnresolved`] guard
+    /// failure reported at the call's own span.  The empty default
+    /// `no_native_ops` therefore resolves nothing; a plugin whose source is
+    /// being compiled (e.g. `lichen-compute`'s `jit`/`launch`) supplies its own
+    /// slice.
     native_ops: NativeOps<P>,
     scopes: Vec<HashMap<ExprId, Binding>>,
     /// The lexical function stack: one entry per enclosing lambda whose body
@@ -1260,7 +1264,9 @@ where
     /// knowledge of what the operator does — the plugin's registration owns the
     /// lowering and the type construction (the private contract with its own
     /// source).
-    fn check_native_call(&mut self, e: ExprId, op: &str, args: ChildRange) -> NodeId {
+    /// a diagnostic rather than a panic (the frontend compiles `$name`
+    /// blind, so the checker is the first layer that can see the registry).
+    fn check_native_call(&mut self, e: ExprId, op: &'static str, args: ChildRange) -> NodeId {
         let arg_ids: Vec<ExprId> =
             self.ir.children[args.start as usize..args.end as usize].to_vec();
         for &arg in &arg_ids {
@@ -1276,14 +1282,33 @@ where
             .collect();
         let loc = self.loc(e, 0);
         let ops = self.native_ops;
-        let built = ops
+        let built = match ops
             .iter()
-            .copied()
             .find(|(name, _)| *name == op)
-            .map(|(_, op)| op.build(self, e, &native_args, loc))
-            .expect(
-                "a native op name must be validated by the frontend against the module's registry",
-            );
+            .map(|(_, operator)| operator)
+        {
+            Some(operator) => operator.build(self, e, &native_args, loc),
+            None => {
+                // An unregistered name is an ordinary check-time refusal, not
+                // a broken invariant: only the checker can see the registry,
+                // so this is the one place it can be reported.  The guard
+                // leaves the expression uncompiled, which `check_failed` picks
+                // up — the definition pass is skipped, so nothing ever
+                // evaluates the hole.
+                self.record_guard(
+                    self.type_expr,
+                    self.type_expr,
+                    loc,
+                    DiagKind::NativeOpUnresolved,
+                    Some(op),
+                );
+                let pair = self.pair_of(self.type_expr, self.type_expr);
+                self.term[e] = Some(pair);
+                self.val[e] = None;
+                self.ty[e] = Some(self.type_expr);
+                return pair;
+            }
+        };
         self.term[e] = Some(built.node);
         self.val[e] = built.val;
         self.ty[e] = Some(built.ty);
