@@ -1824,14 +1824,18 @@ fn run_parallel_kernel(
     Ok(store.into_data().output)
 }
 
-// --- Native-op registry: the plugin's opt-in to the native-plugin contract --
+// --- Native-op registry: the plugin's native-operator registry --
 
-/// The `lichen-compute` native plugin marker — the nominal opt-in to the
-/// native-plugin contract ([`lichen_highlevel::plugin::NativePlugin`]).
+/// The `lichen-compute` native plugin marker — the nominal declaration that
+/// this crate plays the native-plugin role
+/// ([`lichen_highlevel::plugin::NativePlugin`]).
 ///
-/// A unit marker: the plugin contributes its [`ComputeValue`] /
-/// [`ComputeOperator`] leaves and its native op registry (via
-/// [`compute_native_ops!`]), and never names a concrete host program.
+/// The trait carries no methods and nothing is generic-bound on it, so the
+/// `impl` is a declaration, not a check: the contract is carried by the
+/// macro-based composition, not by the trait.  A unit marker: the plugin
+/// contributes its [`ComputeValue`] / [`ComputeOperator`] leaves and its native
+/// op registry (via [`compute_native_ops!`]), and never names a concrete host
+/// program.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ComputePlugin;
 
