@@ -1070,10 +1070,21 @@ where
                 // then extract dynamic value/type leaves from its static
                 // items; the payloads stay in the package's static arena.
                 let pair = self.module.materialize_leaf(export, self.current_block);
-                let items = self
-                    .module
-                    .array_items(pair)
-                    .expect("a package export must be the final [value, type] pair");
+                // A `RawIndex` root compiles to the raw read operation, not to
+                // a pair: `[1, 2]<0>` exports an unevaluated op node, whose
+                // items are unavailable until something evaluates it.  The
+                // contract the importer needs is therefore a *checked* one, so
+                // a violated contract is an honest guard about the import
+                // rather than a panic inside the checker.
+                let Some(items) = self.module.array_items(pair) else {
+                    let cell = self.fresh_cell();
+                    let pair = self.pair_of(cell, cell);
+                    self.term[e] = Some(pair);
+                    self.val[e] = Some(cell);
+                    self.ty[e] = Some(cell);
+                    self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
+                    return pair;
+                };
                 let value_node = self.module.as_dynamic(items[0].node, self.current_block);
                 let ty_node = self.module.as_dynamic(items[1].node, self.current_block);
                 self.term[e] = Some(pair);

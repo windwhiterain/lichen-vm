@@ -97,6 +97,15 @@ pub enum DiagKind {
     /// [`Self::IndexTarget`], which reports a *type* the checker refused to
     /// index and therefore names that type.
     RuntimeIndexTarget,
+    /// An imported package whose export is not the `[value, type]` pair the
+    /// importer reads — a raw read (`[1, 2]<0>`) at a package's root compiles
+    /// to the read operation rather than to a pair.  Expected = a pair.
+    ImportExport,
+    /// A read whose **runtime subscript** turned out not to be an index — the
+    /// lowlevel's [`EvalError::IndexSubscript`](lichen_lowlevel::EvalError::IndexSubscript)
+    /// reached the diagnostics as a fact about a *value*, with no type to
+    /// print, so the wording is self-contained.
+    RuntimeIndexSubscript,
     /// A top-level binding whose value computation never terminates — the VM's
     /// apply/depth guard fired while the build evaluated the user-written
     /// statement.  The checker reports this as an error instead of panicking.
@@ -270,6 +279,7 @@ where
                 EvalError::TableMiss { key, .. } => (1, Some(*key), None, None),
                 EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
                 EvalError::IndexTarget { target } => (3, Some(*target), None, None),
+                EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None),
             };
             if !seen.insert(key) {
                 continue;
@@ -323,6 +333,22 @@ where
                 EvalError::IndexTarget { target } => out.push(Diag {
                     loc: self.node_loc(*target),
                     kind: DiagKind::RuntimeIndexTarget,
+                    a: NodeId::default(),
+                    b: NodeId::default(),
+                    value_a: None,
+                    value_b: None,
+                    assert_value: None,
+                    index: None,
+                    length: None,
+                    field: None,
+                    error_index: None,
+                }),
+                // A read whose subscript is not an index: like the
+                // non-container target beside it, the value itself is the
+                // fact, so this kind carries no type to print.
+                EvalError::IndexSubscript { subscript } => out.push(Diag {
+                    loc: self.node_loc(*subscript),
+                    kind: DiagKind::RuntimeIndexSubscript,
                     a: NodeId::default(),
                     b: NodeId::default(),
                     value_a: None,

@@ -11,9 +11,12 @@
 > modules beside the root). The assert metadata also moved: the lowlevel
 > carries only the worklist and the errors, and a failure is attributed
 > through the **template** condition a clone descends from, so a host table
-> keyed by that template resolves the user-facing flag and the span (§4). The
-> rest of Phase 3 — `check_lam` surgery, the remaining panic sites — is
-> pending.
+> keyed by that template resolves the user-facing flag and the span (§4).
+> **Phase 3b landed** (the panic-discipline census: every `unwrap`/`expect`/
+> `unreachable!` in the checker and the lowlevel is classified, and the
+> user-reachable ones are diagnostics or recorded failures — see the inventory
+> in §5). The remaining Phase 3 work is `check_lam` surgery plus the one
+> evaluator sharing defect the census found (§5, "not fixed").
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -230,17 +233,95 @@ Either way, independent of D1:
 - Deduplicate: struct-pair construction ×2, arrow encoding ×5,
   `TypeOperator::run` ×3 (fix B7 by making the generic impl cover
   `LangProgram`), `BinOp` vs `TypeOperator` (one enum + one mapping).
-- Panic discipline: the ~49 `unwrap`/`expect` in checker.rs become either
-  diagnostics (user-reachable) or `debug_assert` + graceful fallback
-  (frontend-bug-only); non-termination stops using `catch_unwind` as control
-  flow if the budget guards can report instead.
-  - **First case done: the `Index` target.** A read whose runtime target is not
-    an array was `unreachable!`, so `f = s => s.x; f (1)` — and every
-    parameter-borne named read whose argument is not a named-field struct —
-    panicked the compiler, then reported a bogus "this binding never
-    terminates" (the caught guard had inflated the depth counters).  It is now
-    an `EvalError::IndexTarget` and a computed nothing, exactly like the
-    out-of-bounds read beside it.
+- Panic discipline (**census measured — see the inventory below**): every
+  `unwrap`/`expect`/`unreachable!`/`panic!` in the checker and the lowlevel is
+  classified as user-reachable (becomes a diagnostic / recorded failure),
+  frontend-bug-only (a `debug_assert!` with the invariant stated), or
+  not-provable (left alone); non-termination stops using `catch_unwind` as
+  control flow if the budget guards can report instead.
+
+  ### Panic-discipline census (measured, branch `refactor/phase3-panic`)
+
+  The plan's earlier "~49 in checker.rs" was a rough count of one file. The
+  measured figures are **59 sites in `lichen-highlevel`** (checker.rs 18,
+  checker/structs.rs 13, checker/indexing.rs 11, program.rs 5, checker/lambda.rs
+  6, checker/annotations.rs 5, ir.rs 1) and **31 in `lichen-lowlevel`**. Each
+  was probed with source programs through
+  `cargo run -p lichen-language --bin lichen-compiler -- <file>`; every site not
+  listed under "left" below is reachable only through a checker-invariant path.
+
+  #### Changed (user-reachable — now a diagnostic or a recorded failure)
+
+  | Site | Class | Evidence | New behaviour |
+  |---|---|---|---|
+  | `highlevel/src/checker.rs:1076` | user-reachable, check time | a package whose last statement is a raw read (`[1, 2]<0>`), imported by another file | a recorded `ImportExport` guard at the import's location; the expression still compiles to a pair of fresh cells, so the descent stays total |
+  | `lowlevel/src/evaluation.rs:162` | user-reachable, runtime | `a = [1,2,3]` / `i = "x"` / `a[i]`; also `a(k)`, raw `<…>`, and the same through a parameter (`f = x => a[x]`; `f "x"`) | `EvalError::IndexSubscript` + a computed nothing (`Void`), rendered as "this value is not an index" at the subscript's own span |
+  | `lowlevel/src/evaluation.rs:154` (target not an array) | user-reachable, runtime | `f = s => s.x; f (1)` | `EvalError::IndexTarget` + `Void` — done at `62aad04`, kept as the model for the rows above |
+
+  Every row above previously panicked the process and then reported a *bogus*
+  "this binding never terminates" (the caught guard had inflated the depth
+  counters). All three now report one honest diagnostic with a real `Loc`.
+
+  #### Left (with the reasoning)
+
+  | Site | Class | Reasoning |
+  |---|---|---|
+  | `checker.rs:369` | unreachable | the no-attribute-extension `attr_ext` is only installed for a program whose every schema carries no attribute, so it is never consulted; the language composition always supplies an extension |
+  | `checker.rs:454` | frontend-only | every `check_term` arm sets `ty[root]`; the root is a compiled statement or a literal pair by construction |
+  | `checker.rs:784`, `794` | frontend-only | `range_children`/`range_depths` are called only from the arm that matched the same `ExprKind`; `check_record`'s and `named_instantiate`'s `value` is always an `alloc_tuple` (frontend contract) |
+  | `checker.rs:807`, `1276` | frontend-only | `check_expr` immediately precedes both, and every arm sets `term` |
+  | `checker.rs:1091` | frontend-only | B1's `block_roots`-only skeleton gate is exhaustive by construction; all 26 self-referential root shapes (`a = a.x`, `a(0)`, `a[0]`, `a::x`, `a{0}`, `a<0>`, `type_of a`, `a # 2`, `a ? "d"`, …) compile clean |
+  | `checker.rs:1128`, `1125` | frontend-only | the `NativeCall` registry is validated against the frontend before the build; a name cannot reach here unregistered |
+  | `checker.rs:1150-1163`, `1201`, `1235` | frontend-only | each follows a `check_expr` of its operand, which sets `ty`/`term` |
+  | `checker.rs:1284` | frontend-only | every `Parameter` use is compiled inside `check_lam` after the scope push (line 131), including `parameter_type`/`parameter_attribute` |
+  | `checker/annotations.rs:153`, `155`, `162`, `216` | frontend-only | `check_expr` precedes each; every arm sets `term`/`ty` |
+  | `checker/annotations.rs:205` | frontend-only | the frontend emits `attrs.len() == tail.len()` sorted by `order_index`, and `merge_slots` is a union, so the spelled-marker count equals the attribute-expression count; ~20 multi-attribute spellings probed clean |
+  | `checker/indexing.rs:48`, `160`, `198`, `246`, `252`, `292`, `296`, `395` | frontend-only | each follows `check_expr` of the same expression |
+  | `checker/indexing.rs:341`, `343`, `373` | frontend-only | `wrap_shallow` runs only after `check_expr(el)`, and the `levels`-empty path is the only `unwrap_or` arm |
+  | `checker/lambda.rs:150`, `180`, `215`, `248`, `266`, `299` | frontend-only | each follows `check_expr` of the named sub-expression; `299` follows an `is_some()` test on the same slot |
+  | `checker/structs.rs:46`, `120`, `213`, `368`, `407`, `423`, `527`, `590`, `613`, `712` | frontend-only | each follows `check_expr` |
+  | `checker/structs.rs:717-718` | frontend-only | a `None` hole needs a named argument leaving lower positions unclaimed, but `def_len` is `Some` whenever the name table is readable, and the missing-field pass sets `valid = false` before the reorder runs; 13 named-instantiation shapes probed clean |
+  | `checker/structs.rs:773` | frontend-only | dispatched from the matching `TypeStruct` arm |
+  | `ir.rs:615` | frontend-only | called only on a matched `Annotation` kind |
+  | `program.rs:609`, `648`, `659`, `685`, `693` | frontend-only | total matches inside one operator implementation; each arm is excluded above |
+  | `lowlevel/evaluation.rs:82`, `85` | **user-reachable — NOT FIXED** | see below |
+  | `lowlevel/evaluation.rs:90`, `188`, `212`, `255`, `260`, `330` | frontend-only | the operand bundle is built by the checker's own `array_node` helpers; every operator is handed the arity its arm destructures |
+  | `lowlevel/evaluation.rs:195` | frontend-only | `evaluate_node_deep` sets `evaluated_deep` before returning |
+  | `lowlevel/evaluation.rs:327` | frontend-only | a `TableGet` target is a table or a computed nothing; both are armed, and the third case needs the checker to have built the op against a non-table |
+  | `lowlevel/evaluation.rs:399` | frontend-only | the `Static` arm above already returned |
+  | `lowlevel/evaluation.rs:415` | by design | the non-termination budget guard; the checker catches it (`catch_unwind`) and reports `NonTerminating` |
+  | `lowlevel/evaluation.rs:520`, `gc.rs:170` | frontend-only | `garbage_collect` keeps the node it was given |
+  | `lowlevel/equality.rs:192` | frontend-only | a `Module` always has a root block; both-sides-static cannot arise from the apply path |
+  | `lowlevel/apply.rs:28`, `34` | by design | the two non-termination budget guards the checker catches |
+  | `lowlevel/codec.rs:120`, `131`, `139` | frontend-only | a frozen module's payloads were relocated by the freeze layout pass |
+  | `lowlevel/lib.rs:315`, `319`, `366`, `903` | frontend-only | total matches inside one impl; the operator arms are dispatched by the VM |
+  | `lowlevel/static_module.rs:45`, `747`, `783`, `835` | frontend-only | registration and the phase-2 layout precede every read |
+  | `lowlevel/table.rs:128`, `163` | frontend-only | the deep pass resolves a key before it is hashed; the value variants are total |
+  | `lowlevel/utils.rs:55` | frontend-only | a non-empty length and a non-zero alignment always form a valid `Layout` |
+
+  #### User-reachable panic found and deliberately **not** fixed
+
+  `lowlevel/src/evaluation.rs:82` — `unreachable!("cycle detected: …")`.
+  Minimal trigger:
+
+  ```text
+  t = table { 1 ==> 2 }
+  f = x => t{x}
+  f 1
+  ```
+
+  Narrowed: the cycle forms **only when the table subscript is a lambda
+  parameter** — `t{9}` and `t{t}` report a clean `TableMiss`, and
+  `g = w => w + 1; g 2` is fine. This is a genuine structural cycle in the lazy
+  graph (a sharing/ordering interaction between the parameter's in-place read
+  and the deep pass), not a missing diagnostic. Recording it as an `EvalError`
+  would report "table lookup missed" for a program that arguably should have
+  worked, hiding a real defect; fixing the sharing policy is a behavioural
+  change well outside a panic-discipline pass and risks the apply/clone
+  semantics. It is therefore **left in place and recorded here** for the phase
+  that owns evaluator sharing. It still surfaces to the user as the usual
+  caught-guard "this binding never terminates" rather than a clean diagnostic.
+
   - **A failed approach worth recording**: pinning the container's type to a
     struct kind in `check_named_field` when it is not concrete (the move D3
     uses for an instantiation callee) *breaks* `lichen-compute`.  The generic
