@@ -29,8 +29,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, RwLock};
 
 use lichen_lowlevel::{
-    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Function, FunctionId, LowOperator,
-    LowValue, Module, NodeId, Operation, Registry, TableItem, UnifyError,
+    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, Function, FunctionId, LowOperator, LowValue,
+    Module, NodeId, Operation, Registry, UnifyError,
 };
 
 use lichen_utils::extend::AsEnum;
@@ -625,6 +625,43 @@ where
     /// `ArrayType`, `TypeStruct`).
     fn kind_expr(&mut self, block: BlockId, marker: NodeId) -> NodeId {
         self.array_node(block, &[marker, self.type_expr])
+    }
+
+    /// The struct marker node `[TypeId, names]` — the two-field kind marker
+    /// of a struct type (layout: [`shape::STRUCT_MARKER_ID_SLOT`] /
+    /// [`shape::STRUCT_MARKER_NAMES_SLOT`]).  The single construction point
+    /// both `struct<…>` types and struct-returning blocks use.
+    fn struct_marker_node(&mut self, id: NodeId, names: NodeId) -> NodeId {
+        self.array_node(self.current_block, &[id, names])
+    }
+
+    /// A lazy structural read down a constant index `path` from `base`: the
+    /// nested `Index` op chain `Index(…Index(base, path[0])…, path[n])` that
+    /// resolves when `base` binds — the runtime form of a constant encoding
+    /// offset, walked for both struct name-table paths
+    /// ([`shape::STRUCT_TYPE_NAMES_PATH`], [`shape::STRUCT_KIND_NAMES_PATH`]).
+    /// `zero`/`one` are the caller's already-allocated slot constants, reused
+    /// per step.
+    fn lazy_index_path(
+        &mut self,
+        base: NodeId,
+        path: &[usize],
+        zero: NodeId,
+        one: NodeId,
+    ) -> NodeId {
+        // Both name-table paths descend 2-element structures only.
+        debug_assert!(path.iter().all(|&slot| slot <= 1));
+        let mut node = base;
+        for &slot in path {
+            let index = if slot == 0 { zero } else { one };
+            let ops = self.array_node(self.current_block, &[node, index]);
+            node = self.op_node(
+                self.current_block,
+                P::Operator::from(LowOperator::Index),
+                Some(ops),
+            );
+        }
+        node
     }
 
     /// The children of a variadic expression (`Tuple`, `TypeTuple`,
@@ -1803,20 +1840,10 @@ where
             None,
             Some(P::Value::from(LowValue::USize(1))),
         );
-        // names = Index(Index(container_ty, 0), 1) — the struct marker's name
-        // table, read directly from the container's *type*.
-        let marker_ops = self.array_node(self.current_block, &[container_ty, zero]);
-        let marker_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(marker_ops),
-        );
-        let names_ops = self.array_node(self.current_block, &[marker_node, one]);
-        let names_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(names_ops),
-        );
+        // names — the struct marker's name table, read directly from the
+        // container's *type* (a TypeStruct kind: marker at [0], names at [1]).
+        let names_node =
+            self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH, zero, one);
         // key = TableGet(names, name) — the field's positional index.
         let name_node = self.alloc_node(
             self.current_block,
@@ -1898,26 +1925,11 @@ where
             None,
             Some(P::Value::from(LowValue::USize(1))),
         );
-        // names = Index(Index(kind, 0), 1) — the struct marker `[id, names]`
-        // at kind[0], then its name-table field at [1].
-        let kind_ops = self.array_node(self.current_block, &[container_ty, one]);
-        let kind_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(kind_ops),
-        );
-        let marker_ops = self.array_node(self.current_block, &[kind_node, zero]);
-        let marker_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(marker_ops),
-        );
-        let names_ops = self.array_node(self.current_block, &[marker_node, one]);
-        let names_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(names_ops),
-        );
+        // names — the struct marker's name table, read through the container
+        // type's kind (`[shape, kind]`: kind at [1], marker at [0], names
+        // at [1]).
+        let names_node =
+            self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH, zero, one);
         // key = TableGet(names, name) — the field index.
         let name_node = self.alloc_node(
             self.current_block,
@@ -1957,39 +1969,11 @@ where
         pair
     }
 
-    /// The struct's name→index table (the `struct<.a T, …>` names) from a
-    /// struct type value, or `None` when it is an anonymous struct (no names).
-    fn struct_names_any(&mut self, ty: AnyNodeId) -> Option<AnyHandle<[TableItem]>> {
-        let items = shape::array_items(&self.module, ty)?;
-        if items.len() != 2 {
-            return None;
-        }
-        let kind_items = shape::array_items(&self.module, items[1].node)?;
-        if kind_items.len() != 2
-            || !shape::is_universe_any(&mut self.module, self.type_expr, kind_items[1].node)
-        {
-            return None;
-        }
-        // The struct marker `[id, names]`; its second field is the name table.
-        let marker_items = shape::array_items(&self.module, kind_items[0].node)?;
-        let Some(names_item) = marker_items.get(1) else {
-            return None;
-        };
-        match self
-            .module
-            .node_value(names_item.node)
-            .and_then(|v| v.as_enum())
-        {
-            Some(LowValue::Table(table)) => Some(table),
-            _ => None,
-        }
-    }
-
     /// The positional index of a named struct field, read from the struct
     /// type's name table at check time.  `None` when the type is not a
     /// struct, is an anonymous struct, or has no such named field.
     fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
-        let table = self.struct_names_any(ty)?;
+        let table = shape::struct_names_any(&mut self.module, self.type_expr, ty)?;
         for item in table.items() {
             if self
                 .module
@@ -2271,7 +2255,7 @@ where
         );
         let shape = self.array_node(self.current_block, &tys);
         let names_node = self.build_struct_names(field_names);
-        let marker = self.array_node(self.current_block, &[id, names_node]);
+        let marker = self.struct_marker_node(id, names_node);
         let kind = self.kind_expr(self.current_block, marker);
         let struct_ty = self.array_node(self.current_block, &[shape, kind]);
         let value_node = self.array_node(self.current_block, &vals);
@@ -2380,9 +2364,12 @@ where
         // A `.name` argument against an anonymous struct cannot match: record
         // it and fall back to the call-order value (the caller skips the
         // field-list unify).
-        if self
-            .struct_names_any(AnyNodeId::Dynamic(type_pair))
-            .is_none()
+        if shape::struct_names_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(type_pair),
+        )
+        .is_none()
         {
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
@@ -2499,7 +2486,11 @@ where
     /// The field name at a definition position, from the struct's name table
     /// (`None` for a positional field or an anonymous struct).
     fn struct_field_name(&mut self, type_pair: NodeId, pos: usize) -> Option<&'static str> {
-        let table = self.struct_names_any(AnyNodeId::Dynamic(type_pair))?;
+        let table = shape::struct_names_any(
+            &mut self.module,
+            self.type_expr,
+            AnyNodeId::Dynamic(type_pair),
+        )?;
         for item in table.items() {
             if self
                 .module
@@ -2685,7 +2676,7 @@ where
         let shape = self.array_node(self.current_block, &tys);
         let names_node = self.build_struct_names(&names);
         // TypeStruct{id, names} — the two-field struct marker.
-        let marker = self.array_node(self.current_block, &[id, names_node]);
+        let marker = self.struct_marker_node(id, names_node);
         let kind = self.kind_expr(self.current_block, marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);

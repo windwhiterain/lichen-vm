@@ -23,7 +23,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyNodeId, ArrayItem, LowValue, Module, NodeId, Program, StaticNodeId, UnifyStep,
+    AnyHandle, AnyNodeId, ArrayItem, LowValue, Module, NodeId, Program, StaticNodeId, TableItem,
+    UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -74,6 +75,35 @@ pub const TYPE_KIND_SLOT: usize = 1;
 pub const KIND_MARKER_SLOT: usize = 0;
 /// Element 1 of a kind `[marker, universe]` — the universe the kind closes on.
 pub const KIND_UNIVERSE_SLOT: usize = 1;
+
+// --- struct marker layout -----------------------------------------------------
+//
+// A struct kind's marker is the two-field value `[TypeId, names]` — the
+// nominal id plus the optional name→index table — sitting in the kind's
+// marker slot like any other kind's marker.  The name table is reachable by
+// two paths, depending on whether the read starts from a struct *type* or a
+// struct *kind*; both are spelled once here, as the constant offset paths
+// the checker's lazy `Index` chains walk.
+
+/// Element 0 of a struct marker `[TypeId, names]` — the nominal type id.
+pub const STRUCT_MARKER_ID_SLOT: usize = 0;
+/// Element 1 of a struct marker `[TypeId, names]` — the optional name→index
+/// table (`LowValue::Void` for an anonymous positional struct).
+pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
+/// The struct marker's field count: exactly `[id, names]`.  This is also the
+/// arity [`is_struct_marker_any`] guesses on — see its documented weakness.
+pub const STRUCT_MARKER_LEN: usize = 2;
+
+/// The lazy index path from a struct **type** `[shape, kind]` to its name
+/// table — kind at `[1]`, then the marker at `[0]`, then the names at `[1]`.
+/// The `a.x` read walks it (`container_ty[1][0][1]`).
+pub const STRUCT_TYPE_NAMES_PATH: [usize; 3] =
+    [TYPE_KIND_SLOT, KIND_MARKER_SLOT, STRUCT_MARKER_NAMES_SLOT];
+
+/// The lazy index path from a TypeStruct **kind** `[marker, K]` to its name
+/// table — the marker at `[0]`, then the names at `[1]`.  The `X::a` raw
+/// read walks it (`container_ty[0][1]`).
+pub const STRUCT_KIND_NAMES_PATH: [usize; 2] = [KIND_MARKER_SLOT, STRUCT_MARKER_NAMES_SLOT];
 
 /// The array items behind either a dynamic node or a static ref — the raw
 /// read every accessor and predicate in this module is built on.  `None`
@@ -275,7 +305,7 @@ pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -
 where
     P::Value: AsEnum<LowValue>,
 {
-    array_items(module, marker).is_some_and(|items| items.len() == 2)
+    array_items(module, marker).is_some_and(|items| items.len() == STRUCT_MARKER_LEN)
 }
 
 /// Whether `ty` is a TypeStruct **kind** — `[TypeStruct{id, names}, K]` —
@@ -335,6 +365,39 @@ where
     P::Value: ValueType,
 {
     is_positional_type_any(module, universe, AnyNodeId::Dynamic(ty))
+}
+
+/// The struct's name→index table (the `struct<.a T, …>` names) from a
+/// struct type value, or `None` when it is an anonymous struct (no names)
+/// or not a struct type at all.  The table is reached through the kind:
+/// `[shape, [marker, K]]` → the marker's [`STRUCT_MARKER_NAMES_SLOT`].
+pub fn struct_names_any<P: Program>(
+    module: &mut Module<P>,
+    universe: NodeId,
+    ty: AnyNodeId,
+) -> Option<AnyHandle<[TableItem]>>
+where
+    P::Value: ValueType,
+{
+    let items = array_items(module, ty)?;
+    if items.len() != 2 {
+        return None;
+    }
+    let kind_items = array_items(module, items[TYPE_KIND_SLOT].node)?;
+    if kind_items.len() != 2
+        || !is_universe_any(module, universe, kind_items[KIND_UNIVERSE_SLOT].node)
+    {
+        return None;
+    }
+    // The struct marker `[id, names]`; its second field is the name table.
+    let marker_items = array_items(module, kind_items[KIND_MARKER_SLOT].node)?;
+    let Some(names_item) = marker_items.get(STRUCT_MARKER_NAMES_SLOT) else {
+        return None;
+    };
+    match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
+        Some(LowValue::Table(table)) => Some(table),
+        _ => None,
+    }
 }
 
 // --- diagnostic descent ---------------------------------------------------------
