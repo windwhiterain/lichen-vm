@@ -181,7 +181,7 @@ where
                 function,
             )))),
         );
-        self.recursive_func_nodes.push(func_node);
+        self.lambda_value_nodes.push(func_node);
         // The function's own type: the arrow shape `[parameter type, return
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
         // Built while the current function is still the shell, so these

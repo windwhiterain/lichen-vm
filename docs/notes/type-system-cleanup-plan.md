@@ -352,9 +352,16 @@ Either way, independent of D1:
     must not panic on what it eventually finds.
 - Intern `USize(0)`/`USize(1)` and field-name nodes instead of re-allocating
   them ~20 times.
-- Remove dead API (`type_expr_node`, `int_type_node`, `Schema::arity`,
-  `LocKind`, `Loc::type_depth`, `NativePlugin` marker) and fix
-  `recursive_func_nodes` (collects every lambda; rename or fix).
+- **Landed** (`refactor/phase4c-decls`): the dead API (`type_expr_node`,
+  `int_type_node`, `Schema::arity`, `LocKind` with its only user `Loc::kind`,
+  and `Loc::type_depth`) is removed — each had zero call sites in the
+  workspace.  `recursive_func_nodes` is renamed `lambda_value_nodes`: it
+  collects *every* lambda's value node, not only the recursive bindings', and
+  the write stays unconditional.  **Deliberately kept**: `NativePlugin` — a
+  published trait with out-of-tree implementors (`lichen-compute`,
+  `lichen-std-native`), so deleting it is a public API break; it survives as a
+  nominal marker, and its doc no longer claims the `impl` enforces a contract
+  that nothing is generic-bound to check.
 
 ## 6. Semantic standardization decisions (Phase 4)
 

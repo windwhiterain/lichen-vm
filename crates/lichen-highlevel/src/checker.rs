@@ -218,11 +218,17 @@ where
     /// layer renders only these as `DiagKind::Assert`; a bounds guard fires
     /// a separate `EvalError::Index`, so rendering both would double report.
     user_asserts: HashSet<NodeId>,
-    /// The value nodes of recursive bindings' functions, collected by
-    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates them before
-    /// the definition pass (proving them concrete), so a recursive reference
-    /// stays in place instead of cloning the function per application.
-    recursive_func_nodes: Vec<NodeId>,
+    /// The value node of **every** lambda in the program, collected by
+    /// [`Checker::check_lam`].  [`Checker::build`] deep-evaluates all of
+    /// them before the definition pass (proving them concrete), so a
+    /// recursive reference stays in place instead of cloning the function per
+    /// application.
+    ///
+    /// The write is deliberately unconditional: a lambda that does not
+    /// reference itself contributes its value node too, and deep-evaluating
+    /// it is idempotent, so narrowing the field to the recursive ones would
+    /// change nothing about the pass.
+    lambda_value_nodes: Vec<NodeId>,
     /// The top-level statements the definition pass found **non-terminating**
     /// (the VM's apply/depth guard fired while evaluating the statement's
     /// value).  Each is recorded as a source-blind [`Loc`] so the diagnostics
@@ -423,7 +429,7 @@ where
             apply_edges: HashMap::new(),
             node_edges: HashMap::new(),
             user_asserts: HashSet::new(),
-            recursive_func_nodes: Vec::new(),
+            lambda_value_nodes: Vec::new(),
             nonterminating: Vec::new(),
             force_failed: false,
             markers: Markers::default(),
@@ -452,15 +458,15 @@ where
         }
         let root_term = checker.check_expr(root);
         let root_ty = checker.ty[root].expect("the root expression must have a type");
-        // Prove the recursive bindings' function values concrete before the
-        // definition pass: a recursive reference (the apply in the body)
-        // then stays in place, so every recursion level re-applies the
+        // Prove every lambda's function value concrete before the definition
+        // pass: a recursive reference (the apply in the body) then stays in
+        // place, so every recursion level re-applies the
         // template — whose own parameter is never deep-evaluated and is
         // cloned fresh per level.  Without this, the deep pass evaluates the
         // parameter clone of the first application, a second application
         // reuses the already-bound clone instead of cloning it fresh, and
         // the argument unify conflicts (the recursion cannot descend).
-        for &func_node in &checker.recursive_func_nodes {
+        for &func_node in &checker.lambda_value_nodes {
             checker.module.evaluate_node_deep(func_node, None);
         }
         // The definition pass: run the program so the apply-time type checks
