@@ -9,6 +9,13 @@
 //! (`shape_of`, `kind_of`, `is_function_type`) instead of re-deriving it
 //! from raw array offsets.
 //!
+//! The 8 kind markers (`Int`, `String`, `Type`, `Function`, `Tuple`,
+//! `Array`, `Struct`, `Table`) are defined once in the
+//! [`for_each_kind_marker`] registry list; the `TypeValue` variants, the
+//! `ValueType` marker methods, the `Ctx` node accessors, and the checker's
+//! installed marker nodes ([`crate::checker::Markers`]) are all macro-derived
+//! from it, so adding or removing a marker touches that one list.
+//!
 //! Two known weaknesses are named here, not fixed (Phase 1 is a pure
 //! refactor; Phase 4 may replace them):
 //!
@@ -30,6 +37,57 @@ use lichen_utils::extend::AsEnum;
 
 use crate::ir::LocStep;
 use crate::program::ValueType;
+
+// --- the kind-marker registry ---------------------------------------------------
+//
+// THE one list of the 8 kind markers.  Adding or removing a marker means
+// editing this list alone: the `TypeValue` variants, the `ValueType` marker
+// methods (default bodies), the `Ctx` node accessors, the checker's
+// installed marker fields (and its `Ctx::value_node` dispatch and the
+// `Build` record) are all macro-derived from it.  The persisted codec tags
+// are NOT derived (they are a compatibility contract — Phase 1c).
+//
+// Each entry: the `TypeValue` variant with its doc, then `{ display name,
+// ValueType method, Ctx accessor }` — `TypeInt { "int", int_marker,
+// int_marker_node }` declares the `TypeValue::TypeInt` variant, the
+// `ValueType::int_marker()` constructor, and the `Ctx::int_marker_node()`
+// accessor (the checker's installed `int_marker` field behind it).
+//
+// A consumer macro receives the whole list as its input; an optional
+// `[ args… ]` group is forwarded verbatim ahead of it, so a consumer that
+// needs call-site context (`self`, a block id) gets it passed in — macro
+// hygiene does not let the consumer see the call site's identifiers.
+macro_rules! for_each_kind_marker {
+    ($mac:ident $( [ $($args:tt)* ] )?) => {
+        $mac! { $( [ $($args)* ] )?
+            /// The `int` type constant — `USize` literals pair with `[int, K]`.
+            TypeInt { "int", int_marker, int_marker_node }
+            /// The `string` type constant — the builtin immutable string
+            /// value; `Str` literals pair with `[string, K]`.
+            TypeString { "string", string_marker, string_marker_node }
+            /// The `Type` constant — the canonical universe node itself
+            /// (`Type : Type`).
+            TypeType { "Type", type_marker, type_marker_node }
+            /// The kind marker of function type expressions — the pair's
+            /// second element is a `Function` value.
+            TypeFunction { "FunctionType", function_type_marker, function_type_marker_node }
+            /// The kind marker of tuple type expressions — the shape is the
+            /// element-type list.
+            TypeTuple { "TupleType", tuple_type_marker, tuple_type_marker_node }
+            /// The kind marker of array type expressions — the shape is
+            /// `[element type, length]`.
+            TypeArray { "ArrayType", array_type_marker, array_type_marker_node }
+            /// The kind marker of struct type expressions — the shape is
+            /// `[TypeId(n), fields_types_array]`: the nominal id bundled with
+            /// the positional field-type list.
+            TypeStruct { "TypeStruct", type_struct_marker, type_struct_marker_node }
+            /// The kind marker of table type expressions — the shape is
+            /// `[key type, value type]`.
+            TypeTable { "TypeTable", table_type_marker, table_type_marker_node }
+        }
+    };
+}
+pub(crate) use for_each_kind_marker;
 
 // --- pair layout ------------------------------------------------------------
 //

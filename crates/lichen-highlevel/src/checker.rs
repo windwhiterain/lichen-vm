@@ -41,6 +41,67 @@ use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc, LocStep, Schema};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
 use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape;
+use crate::shape::for_each_kind_marker;
+
+// The registry-derived consumer macros below expand the one kind-marker
+// list ([`crate::shape::for_each_kind_marker`]) into the checker's marker
+// plumbing: the [`Markers`] struct, the `install_constants` allocation, the
+// `Ctx` accessor impls, and the `Ctx::value_node` dispatch.  Adding or
+// removing a marker touches the registry list alone.
+
+/// The whole [`Markers`] struct, generated from the registry: the field set
+/// IS the kind-marker list.
+macro_rules! define_markers {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        /// The installed shared kind-marker nodes — one per marker, allocated
+        /// by [`Checker::install_constants`] in registry order and referenced
+        /// (never rebuilt) wherever the marker value appears.  Registry-derived:
+        /// adding or removing a kind marker touches only
+        /// [`crate::shape::for_each_kind_marker`]'s list.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+        pub struct Markers {
+            $(
+                #[doc = concat!("The installed shared `", $display, "` marker node.")]
+                pub $marker_fn: NodeId,
+            )*
+        }
+    };
+}
+for_each_kind_marker!(define_markers);
+
+/// The `install_constants` allocation: one shared node per marker, in
+/// registry order.  Call-site context (`self`, the root block) is passed in
+/// through the args group — hygiene keeps the macro from seeing it.
+macro_rules! define_install_markers {
+    ([ $this:ident, $root:ident ] $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $( $this.markers.$marker_fn =
+            $this.alloc_node($root, None, Some(ValueType::$marker_fn())); )*
+    };
+}
+
+/// The `Ctx` marker-accessor impls: each returns the checker's installed
+/// shared node for its marker.
+macro_rules! define_ctx_marker_accessor_impls {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $(
+            fn $node_fn(&self) -> NodeId {
+                self.markers.$marker_fn
+            }
+        )*
+    };
+}
+
+/// The `Ctx::value_node` dispatch: a built-in type marker reuses the
+/// checker's installed shared marker node, so the canonical type
+/// expressions are reached in place; anything else falls through to a fresh
+/// allocation by the caller.
+macro_rules! define_value_node_dispatch {
+    ([ $this:ident, $value:ident ] $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        $( if $value == ValueType::$marker_fn() {
+            return $this.markers.$marker_fn;
+        } )*
+    };
+}
 
 /// A parameter in scope: the parameter pair `[value, type]` plus its type
 /// cell.  Uses reference the pair (so the apply's clone always includes it —
@@ -144,14 +205,9 @@ where
     /// evaluates every user-written top-level statement and reports a
     /// non-terminating one as an error instead of panicking.
     nonterminating: Vec<Loc>,
-    int_marker: NodeId,
-    string_marker: NodeId,
-    type_marker: NodeId,
-    function_type_marker: NodeId,
-    tuple_type_marker: NodeId,
-    array_type_marker: NodeId,
-    type_struct_marker: NodeId,
-    table_type_marker: NodeId,
+    // The installed shared marker nodes — one per kind marker, allocated by
+    // `install_constants`; registry-derived (see [`Markers`]).
+    markers: Markers,
     /// The shared `[int, Type]` type expression every literal's pair carries.
     int_type: NodeId,
     /// The shared `[string, Type]` type expression every `Str` literal's pair
@@ -193,6 +249,11 @@ where
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
+    /// The installed shared kind-marker nodes — the complete registry set
+    /// (see [`Markers`]).
+    pub markers: Markers,
+    // The pre-Phase-1 flat spelling of three of the markers, kept so existing
+    // readers keep working; `markers` carries the full set.
     pub int_marker: NodeId,
     pub string_marker: NodeId,
     pub type_marker: NodeId,
@@ -324,14 +385,7 @@ where
             user_asserts: HashSet::new(),
             recursive_func_nodes: Vec::new(),
             nonterminating: Vec::new(),
-            int_marker: NodeId::default(),
-            string_marker: NodeId::default(),
-            type_marker: NodeId::default(),
-            function_type_marker: NodeId::default(),
-            tuple_type_marker: NodeId::default(),
-            array_type_marker: NodeId::default(),
-            type_struct_marker: NodeId::default(),
-            table_type_marker: NodeId::default(),
+            markers: Markers::default(),
             int_type: NodeId::default(),
             string_type: NodeId::default(),
             type_expr: NodeId::default(),
@@ -475,9 +529,10 @@ where
             root_term,
             root_val,
             root_ty,
-            int_marker: checker.int_marker,
-            string_marker: checker.string_marker,
-            type_marker: checker.type_marker,
+            markers: checker.markers,
+            int_marker: checker.markers.int_marker,
+            string_marker: checker.markers.string_marker,
+            type_marker: checker.markers.type_marker,
             int_type: checker.int_type,
             string_type: checker.string_type,
             type_expr: checker.type_expr,
@@ -498,21 +553,14 @@ where
     /// type expression `[int, K]` every literal's pair carries.
     fn install_constants(&mut self) {
         let root = self.current_block;
-        self.int_marker = self.alloc_node(root, None, Some(P::Value::int_marker()));
-        self.string_marker = self.alloc_node(root, None, Some(P::Value::string_marker()));
-        self.type_marker = self.alloc_node(root, None, Some(P::Value::type_marker()));
-        self.function_type_marker =
-            self.alloc_node(root, None, Some(P::Value::function_type_marker()));
-        self.tuple_type_marker = self.alloc_node(root, None, Some(P::Value::tuple_type_marker()));
-        self.array_type_marker = self.alloc_node(root, None, Some(P::Value::array_type_marker()));
-        self.type_struct_marker = self.alloc_node(root, None, Some(P::Value::type_struct_marker()));
-        self.table_type_marker = self.alloc_node(root, None, Some(P::Value::table_type_marker()));
+        // The 8 kind markers, one shared node each, registry order.
+        for_each_kind_marker!(define_install_markers[self, root]);
         // `K = [Type, K]`: allocate the node, then point its type slot at
         // itself.  The self-loop is cut by the lowlevel deep-evaluation
         // cycle guard whenever the definition pass reaches it.
         let universe = self.alloc_node(root, None, None);
         let items = [
-            ArrayItem::new(AnyNodeId::Dynamic(self.type_marker)),
+            ArrayItem::new(AnyNodeId::Dynamic(self.markers.type_marker)),
             ArrayItem::new(AnyNodeId::Dynamic(universe)),
         ];
         self.module.write_node_value(
@@ -522,8 +570,8 @@ where
             ))),
         );
         self.type_expr = universe;
-        self.int_type = self.array_node(root, &[self.int_marker, self.type_expr]);
-        self.string_type = self.array_node(root, &[self.string_marker, self.type_expr]);
+        self.int_type = self.array_node(root, &[self.markers.int_marker, self.type_expr]);
+        self.string_type = self.array_node(root, &[self.markers.string_marker, self.type_expr]);
     }
 
     // --- allocation ------------------------------------------------------
@@ -1105,7 +1153,7 @@ where
                 let return_ty = self.check_type_element(r#return);
                 let shape = self.array_node(self.current_block, &[parameter_ty, return_ty]);
                 self.arrows.insert(shape);
-                let kind = self.kind_expr(self.current_block, self.function_type_marker);
+                let kind = self.kind_expr(self.current_block, self.markers.function_type_marker);
                 let pair = self.array_node(self.current_block, &[shape, kind]);
                 self.term[e] = Some(pair);
                 self.val[e] = Some(shape);
@@ -1417,7 +1465,7 @@ where
         // nodes join its scope like the rest of the body.
         let shape = self.array_node(return_block, &[type_cell, self.ty[r#return].unwrap()]);
         self.arrows.insert(shape);
-        let kind = self.kind_expr(return_block, self.function_type_marker);
+        let kind = self.kind_expr(return_block, self.markers.function_type_marker);
         let arrow = self.array_node(return_block, &[shape, kind]);
         // The self-reference's type cell now carries the arrow, so the
         // in-body applications see the function's real type.
@@ -1480,7 +1528,7 @@ where
             let d = self.fresh_cell();
             let c = self.fresh_cell();
             let shape = self.array_node(self.current_block, &[d, c]);
-            let kind = self.kind_expr(self.current_block, self.function_type_marker);
+            let kind = self.kind_expr(self.current_block, self.markers.function_type_marker);
             let fn_ty = self.array_node(self.current_block, &[shape, kind]);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
@@ -1618,7 +1666,7 @@ where
         let elem_cell = self.fresh_cell();
         let len_cell = self.fresh_cell();
         let shape = self.array_node(self.current_block, &[elem_cell, len_cell]);
-        let kind = self.kind_expr(self.current_block, self.array_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let array_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
             self.ty[array].unwrap(),
@@ -2060,7 +2108,7 @@ where
         let key_cell = self.fresh_cell();
         let value_cell = self.fresh_cell();
         let shape = self.array_node(self.current_block, &[key_cell, value_cell]);
-        let kind = self.kind_expr(self.current_block, self.table_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let table_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
             self.ty[container].unwrap(),
@@ -2595,7 +2643,7 @@ where
         // A tuple: `[values, [[element types], [TupleType, Type]]]`.
         let value = self.array_node(self.current_block, &vals);
         let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
         self.term[e] = Some(pair);
@@ -2612,7 +2660,7 @@ where
             tys.push(self.check_type_element(el));
         }
         let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);
@@ -2755,7 +2803,7 @@ where
             Some(P::Value::from(LowValue::USize(vals.len()))),
         );
         let shape = self.array_node(self.current_block, &[element_ty, length]);
-        let kind = self.kind_expr(self.current_block, self.array_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
         self.term[e] = Some(pair);
@@ -2808,7 +2856,7 @@ where
             Some(P::Value::from(LowValue::Table(table))),
         );
         let shape = self.array_node(self.current_block, &[key_ty, value_ty]);
-        let kind = self.kind_expr(self.current_block, self.table_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
         self.term[e] = Some(pair);
@@ -2859,7 +2907,7 @@ where
         // per-element type slot.
         let value = self.array_node_masked(self.current_block, &vals, &mask);
         let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.tuple_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
         self.term[e] = Some(pair);
@@ -2935,7 +2983,7 @@ where
             self.current_block,
             &[self.term[element_type].unwrap(), length_value],
         );
-        let kind = self.kind_expr(self.current_block, self.array_type_marker);
+        let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
         self.term[e] = Some(pair);
         self.val[e] = Some(shape);
@@ -2974,28 +3022,12 @@ where
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
     /// The value node for a raw value: a built-in type marker reuses the
-    /// checker's installed shared marker node, so the canonical type
-    /// expressions are reached in place; anything else allocates a node.
+    /// checker's installed shared marker node (registry-derived dispatch), so
+    /// the canonical type expressions are reached in place; anything else
+    /// allocates a node.
     fn value_node(&mut self, value: P::Value) -> NodeId {
-        if value == P::Value::int_marker() {
-            self.int_marker
-        } else if value == P::Value::string_marker() {
-            self.string_marker
-        } else if value == P::Value::type_marker() {
-            self.type_marker
-        } else if value == P::Value::function_type_marker() {
-            self.function_type_marker
-        } else if value == P::Value::tuple_type_marker() {
-            self.tuple_type_marker
-        } else if value == P::Value::array_type_marker() {
-            self.array_type_marker
-        } else if value == P::Value::type_struct_marker() {
-            self.type_struct_marker
-        } else if value == P::Value::table_type_marker() {
-            self.table_type_marker
-        } else {
-            self.alloc_node(self.current_block, None, Some(value))
-        }
+        for_each_kind_marker!(define_value_node_dispatch[self, value]);
+        self.alloc_node(self.current_block, None, Some(value))
     }
 
     fn array_node(&mut self, ids: &[NodeId]) -> NodeId {
@@ -3026,41 +3058,12 @@ where
         self.int_type
     }
 
-    fn int_marker_node(&self) -> NodeId {
-        self.int_marker
-    }
-
     fn string_type(&self) -> NodeId {
         self.string_type
     }
 
-    fn string_marker_node(&self) -> NodeId {
-        self.string_marker
-    }
-
-    fn type_marker_node(&self) -> NodeId {
-        self.type_marker
-    }
-
-    fn function_type_marker_node(&self) -> NodeId {
-        self.function_type_marker
-    }
-
-    fn tuple_type_marker_node(&self) -> NodeId {
-        self.tuple_type_marker
-    }
-
-    fn array_type_marker_node(&self) -> NodeId {
-        self.array_type_marker
-    }
-
-    fn type_struct_marker_node(&self) -> NodeId {
-        self.type_struct_marker
-    }
-
-    fn table_type_marker_node(&self) -> NodeId {
-        self.table_type_marker
-    }
+    // The 8 marker-node accessors — registry-derived.
+    for_each_kind_marker!(define_ctx_marker_accessor_impls);
 
     fn check_unify(&mut self, a: NodeId, b: NodeId, loc: Loc, kind: DiagKind) {
         Checker::check_unify(self, a, b, loc, kind)
