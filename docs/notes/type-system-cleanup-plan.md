@@ -200,10 +200,25 @@ Either way, independent of D1:
   `pub(super)` the boundary requires (the root's dispatch and the sibling
   modules call each other) and four doc links that had to become explicit
   paths.  The fabricated-error channel is the remaining part of this group.
-- Kill the fabricated-`UnifyError` diagnostic channel
-  (`record_*_error` ×4, `checker/diagnostics.rs:100-204`): a first-class
-  `Diag` channel where "a unify error exists" again means "a unification
-  failed".
+- ~~Kill the fabricated-`UnifyError` diagnostic channel
+  (`record_*_error` ×4, `checker/diagnostics.rs:100-204`)~~ (**done**, Phase
+  3c, branch `refactor/phase3-diag`): "a unify error exists" again means "a
+  unification failed".  Two commits, both verified against a before/after
+  census of every diagnostic kind (no caller-visible change):
+  - **A+B** — the lowlevel's `Module::try_unify` reports the range of
+    `unify_errors` the call produced (empty on success), so no caller measures
+    a length delta; `DiaryEntry` carries `errors: Range<usize>` (what the check
+    owns — empty for a guard) and `seq` (when it was recorded), replacing
+    `error_index`.  `check_unify` fills the range, `check_unify_relaxed`
+    truncates exactly it, and `mismatch`'s owner lookup is range containment
+    instead of "the last entry with `error_index <= i`".
+  - **C+D** — the four fabrications are one `record_guard` that records the
+    entry directly with an empty owned range; `Build::diagnostics` emits guard
+    entries and owned unify errors interleaved by `seq` (unowned deep
+    apply-time failures last, as before).  Because a guard no longer writes
+    `unify_errors`, `Build::ok` and the two pass gates consult
+    `Checker::check_failed` — a failed unification **or** any guard entry —
+    rather than the vec's emptiness.
 - `check_lam` registry surgery (`checker/lambda.rs:24-228`): build the function
   shell *before* the parameter nodes (a small lowlevel API addition) so no
   `retain`/overwrite dance and no temporarily-invalid `Function` record.
