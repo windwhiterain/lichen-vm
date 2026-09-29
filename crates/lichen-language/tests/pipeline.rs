@@ -1215,6 +1215,108 @@ fn a_lazy_named_read_over_an_anonymous_struct_is_a_reported_miss() {
 }
 
 #[test]
+fn an_instantiation_through_a_call_result_checks() {
+    // `(mk (Int))(1, 2)` — the callee is an unevaluated call result; the
+    // checker forces it and sees the concrete struct type (a panic was the
+    // pre-fix behaviour).  Both spellings — the direct call result and a
+    // bound alias of it — are the same graph.
+    assert_eq!(
+        lichen_language::run::evaluate("mk = u => struct<Int, Int>\n(mk (Int))(1, 2)").unwrap(),
+        "(1, 2): struct<Int, Int>"
+    );
+    assert_eq!(
+        lichen_language::run::evaluate("mk = u => struct<Int, Int>\nt = mk (Int)\nt(1, 2)")
+            .unwrap(),
+        "(1, 2): struct<Int, Int>"
+    );
+}
+
+#[test]
+fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
+    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is
+    // concretely not a struct type — a reported diagnostic, never a panic.
+    let d = diags("mk = u => Int\n(mk (Int))(1, 2)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::InstantiateCallee
+    );
+    assert!(
+        d[0].message
+            .contains("the callee of an instantiation must be a struct type"),
+        "{}",
+        d[0].message
+    );
+}
+
+#[test]
+fn an_instantiation_of_a_non_struct_type_is_a_nominal_error() {
+    // Structs are nominal: a tuple type and a function type cannot
+    // instantiate, and the error points at the callee.
+    let d = diags("(<Int, Int>)(1, 2)");
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::InstantiateCallee);
+    assert!(
+        d[0].message
+            .contains("the callee of an instantiation must be a struct type"),
+        "{}",
+        d[0].message
+    );
+    let d = diags("(Int -> Int)(1, 2)");
+    assert_eq!(
+        d[0].check.as_ref().expect("a checker diagnostic").kind,
+        DiagKind::InstantiateCallee
+    );
+}
+
+#[test]
+fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
+    // `s(.x 1, .y Int)` through a parameter: the struct's name table is not
+    // statically known, so the definition-order reorder cannot be computed —
+    // the diagnostic says so instead of the false "no named fields" claim.
+    let d = diags("S = struct<.x Int, .y Type>\nf = s => s(.x 1, .y Int)\nf (S)");
+    assert!(
+        d.iter().all(|diag| diag
+            .check
+            .as_ref()
+            .is_some_and(|c| c.kind == DiagKind::InstantiateNamesNotStatic)),
+        "no false anonymous-struct claim: {d:?}"
+    );
+    assert!(
+        d[0].message.contains("statically known struct type"),
+        "{}",
+        d[0].message
+    );
+}
+
+#[test]
+fn an_instantiation_through_a_parameter_at_a_non_struct_fails_at_the_call() {
+    // `f = s => s(1,2); f (Int)` — the body's callee is pinned to a struct
+    // kind, so the non-struct argument fails the apply's parameter check:
+    // the expected side names the struct requirement (not `?a`), at the
+    // call's argument.
+    let d = diags("f = s => s(1,2)\nf (Int)");
+    assert_eq!(d.len(), 1, "{d:?}");
+    assert!(
+        d[0].message.contains("TypeStruct"),
+        "the expected side names the struct kind: {}",
+        d[0].message
+    );
+    assert_eq!(d[0].span, Some((2, 4)), "the failing argument: {d:?}");
+}
+
+#[test]
+fn an_alias_of_a_forward_used_binding_keeps_the_aliased_type() {
+    // `a = c(1, 2); b = struct<Int, Int>; c = b` — the use of `c` captured
+    // the reserved placeholder before `c = b` compiled; the alias re-points
+    // the earlier uses to `b`'s node, so the instantiation sees the struct
+    // type (it previously kept the stale placeholder's `?a`).
+    assert_eq!(
+        lichen_language::run::evaluate("a = c(1, 2)\nb = struct<Int, Int>\nc = b\na").unwrap(),
+        "(1, 2): struct<Int, Int>"
+    );
+}
+
+#[test]
 fn a_block_without_a_tail_returns_an_anonymous_struct_instance() {
     // { x = 1; y = Int } — a block whose last statement is a binding has no
     // tail expression, so it returns an anonymous struct instance with fields

@@ -271,7 +271,14 @@ impl Compiler {
                     if matches!(&binding.value, Expr::Name(..)) {
                         // A bare name reference (`b = a`, `y = x`, and the
                         // degenerate `a = a`): share the resolved id rather
-                        // than copying the kind, so the binding aliases it.
+                        // than copying the kind, so the binding aliases it —
+                        // one compilation (a transplanted struct type would
+                        // recompile under a second nominal id).  Uses compiled
+                        // *before* this statement captured the reserved
+                        // placeholder `p` (a forward reference); re-point them
+                        // to the aliased id, or they would keep the stale
+                        // `Placeholder` kind and lose the value's type.
+                        self.ir.repoint(p, value);
                         self.set_binder(binder, value);
                         value
                     } else {

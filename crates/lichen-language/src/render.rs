@@ -199,6 +199,13 @@ where
         DiagKind::StructAnonymousField => {
             "cannot name a field — the struct has no named fields".to_string()
         }
+        DiagKind::InstantiateCallee => format!(
+            "the callee of an instantiation must be a struct type, found {}",
+            printer.node(d.a)
+        ),
+        DiagKind::InstantiateNamesNotStatic => {
+            "named arguments require a statically known struct type".to_string()
+        }
         DiagKind::BinOp => format!("expected Int, found {}", printer.node(d.a)),
         // A runtime apply-time failure: the parameter is the expected side
         // (a), the argument the found side (b).

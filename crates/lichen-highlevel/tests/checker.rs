@@ -1695,6 +1695,167 @@ fn instances_of_different_struct_occurrences_conflict() {
     );
 }
 
+#[test]
+fn an_instantiation_through_a_call_result_callee_checks() {
+    // `(mk (Int))(1, 2)` with `mk = u => struct<Int, Int>` — the callee is an
+    // unevaluated apply node (not a statically readable array pair): the
+    // checker forces it, so the instantiation sees the concrete struct type.
+    // (Reading the callee's pair unconditionally was a panic before the fix.)
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let s = type_struct(&mut ir, &[f1, f2]);
+    let mk = lam(&mut ir, p, s);
+    let arg = int_t(&mut ir);
+    let call = app(&mut ir, mk, arg);
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let inst = instantiate(&mut ir, call, v);
+    let b = build(inst, ir);
+    assert!(
+        b.ok,
+        "a call-result callee resolves to its struct type: {:?}",
+        b.diagnostics()
+    );
+    assert_eq!(
+        b.ty[inst], b.term[call],
+        "the instance's type is the callee's struct type"
+    );
+}
+
+#[test]
+fn a_call_result_callee_of_a_non_struct_type_is_a_nominal_error() {
+    // `(mk (Int))(1, 2)` with `mk = u => Int`: the forced callee is
+    // concretely not a struct type — a reported diagnostic, never a panic.
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let intt = int_t(&mut ir);
+    let mk = lam(&mut ir, p, intt);
+    let arg = int_t(&mut ir);
+    let call = app(&mut ir, mk, arg);
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let inst = instantiate(&mut ir, call, v);
+    let b = build(inst, ir);
+    assert!(!b.ok, "a non-struct callee must not instantiate");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
+    assert_eq!(
+        diags[0].loc.as_ref().map(|loc| loc.expr),
+        Some(call),
+        "the not-a-struct error points at the callee"
+    );
+}
+
+#[test]
+fn an_instantiation_requires_a_struct_type_callee() {
+    // Nominality: a tuple type is not a struct — it cannot instantiate.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let t = type_tuple(&mut ir, &[f1, f2]);
+    let inst = instantiate(&mut ir, t, v);
+    let b = build(inst, ir);
+    assert!(!b.ok, "<Int, Int>(1, 2) must be rejected");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
+    assert_eq!(
+        diags[0].loc.as_ref().map(|loc| loc.expr),
+        Some(t),
+        "the not-a-struct error points at the callee"
+    );
+    // Nor can a function type.
+    let mut ir = IR::new();
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let d = int_t(&mut ir);
+    let c = int_t(&mut ir);
+    let f = arrow(&mut ir, d, c);
+    let inst = instantiate(&mut ir, f, v);
+    let b = build(inst, ir);
+    assert!(!b.ok, "(Int -> Int)(1, 2) must be rejected");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::InstantiateCallee);
+}
+
+#[test]
+fn an_instantiation_through_a_parameter_pins_the_callee_to_a_struct_kind() {
+    // `f = s => s(1, 2); f (Int)` — the callee's type is unbound in the body,
+    // so the checker pins it to a struct kind; applying f to a non-struct
+    // fails the apply's parameter check (attributed to the argument).
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let inst = instantiate(&mut ir, p, v);
+    let f = lam(&mut ir, p, inst);
+    let arg = int_t(&mut ir);
+    let call = app(&mut ir, f, arg);
+    let b = build(call, ir);
+    assert!(!b.ok, "applying f to a non-struct type must fail");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].kind, DiagKind::Runtime, "the apply-time check");
+    assert_eq!(
+        diags[0].loc.as_ref().map(|loc| loc.expr),
+        Some(arg),
+        "the deferred failure is attributed to the apply's argument"
+    );
+    // The pin rejects a tuple type too (nominality through the deferral).
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let two = int(&mut ir, 2);
+    let v = tuple(&mut ir, &[one, two]);
+    let inst = instantiate(&mut ir, p, v);
+    let f = lam(&mut ir, p, inst);
+    let f1 = int_t(&mut ir);
+    let f2 = int_t(&mut ir);
+    let arg = type_tuple(&mut ir, &[f1, f2]);
+    let call = app(&mut ir, f, arg);
+    let b = build(call, ir);
+    assert!(
+        !b.ok,
+        "a tuple type must not instantiate through a parameter"
+    );
+}
+
+#[test]
+fn a_named_instantiation_through_a_parameter_reports_the_honest_gap() {
+    // `f = s => s(.x 1, .y Int)` — the callee's name table is not statically
+    // known through a parameter, so the definition-order reorder cannot be
+    // computed: the honest "statically known" diagnostic per named argument,
+    // never the false "no named fields" one.
+    let mut ir = IR::new();
+    let p = param(&mut ir);
+    let one = int(&mut ir, 1);
+    let t = ty(&mut ir);
+    let v = tuple(&mut ir, &[one, t]);
+    let inst = ir.alloc_instantiate(p, v, &[Some("x"), Some("y")]);
+    let f = lam(&mut ir, p, inst);
+    let b = build(f, ir);
+    assert!(!b.ok, "named arguments need a statically known struct type");
+    let diags = b.diagnostics();
+    assert_eq!(diags.len(), 2, "one diagnostic per named argument");
+    assert!(
+        diags
+            .iter()
+            .all(|d| d.kind == DiagKind::InstantiateNamesNotStatic),
+        "no false anonymous-struct claim: {diags:?}"
+    );
+}
+
 // --- the `_` placeholder ----------------------------------------------------
 
 #[test]

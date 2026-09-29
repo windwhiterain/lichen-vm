@@ -205,6 +205,12 @@ where
     /// evaluates every user-written top-level statement and reports a
     /// non-terminating one as an error instead of panicking.
     nonterminating: Vec<Loc>,
+    /// A forced callee evaluation ([`Checker::check_instantiate`]) already hit
+    /// the VM's apply/depth guard once.  The guard leaves the module's
+    /// depth/total counters inflated, so every later force would trip it
+    /// immediately — never force again; the build's statement pass reports
+    /// the non-termination.
+    force_failed: bool,
     // The installed shared marker nodes — one per kind marker, allocated by
     // `install_constants`; registry-derived (see [`Markers`]).
     markers: Markers,
@@ -385,6 +391,7 @@ where
             user_asserts: HashSet::new(),
             recursive_func_nodes: Vec::new(),
             nonterminating: Vec::new(),
+            force_failed: false,
             markers: Markers::default(),
             int_type: NodeId::default(),
             string_type: NodeId::default(),
@@ -2039,6 +2046,46 @@ where
         None
     }
 
+    /// Whether a type cell's value is statically inspectable — a concrete
+    /// type/kind expression (an array) or marker — as opposed to an unbound
+    /// cell (a parameter, a deferred read), whose checks defer to the apply.
+    /// The same predicate gates the field-read and function-ness guards.
+    fn type_is_concrete(&self, ty: NodeId) -> bool {
+        self.module
+            .node_value(AnyNodeId::Dynamic(ty))
+            .is_some_and(|value| {
+                matches!(
+                    value.as_enum(),
+                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
+                )
+            })
+    }
+
+    /// Record an instantiation-callee failure — the callee of an
+    /// instantiation is concretely not a struct type (structs are nominal) —
+    /// as a reported type error pointing at the callee's type slot, not a
+    /// runtime panic.
+    fn record_instantiate_callee_error(&mut self, type_pair: NodeId, type_expr: ExprId) {
+        let error_index = self.module.unify_errors.len();
+        self.module.unify_errors.push(UnifyError {
+            root_a: type_pair,
+            root_b: type_pair,
+            steps: Vec::new(),
+            a: type_pair,
+            b: type_pair,
+            value_a: self.module.node_value(AnyNodeId::Dynamic(type_pair)),
+            value_b: self.module.node_value(AnyNodeId::Dynamic(type_pair)),
+        });
+        self.diary.push(DiaryEntry {
+            error_index,
+            a: type_pair,
+            b: type_pair,
+            loc: self.loc(type_expr, 1),
+            kind: DiagKind::InstantiateCallee,
+            field: None,
+        });
+    }
+
     /// Record an "index target" guard failure — a concretely invalid named
     /// field read (a non-struct container, or a struct without that field) —
     /// as a reported type error, not a runtime panic.
@@ -2314,6 +2361,16 @@ where
         pair
     }
 
+    /// A struct instantiation `C(f1, …, fn)` — recognition is syntactic (the
+    /// frontend lowers every glued comma-disciplined paren to
+    /// [`ExprKind::Instantiate`]); the callee's struct-ness is validated here,
+    /// type-directed: the callee's **type** must be a TypeStruct kind
+    /// (structs are nominal — a tuple or function type cannot instantiate).
+    /// A concretely non-struct callee is a diagnostic at the callee
+    /// ([`DiagKind::InstantiateCallee`]); an unbound callee (a parameter, a
+    /// deferred read) is *pinned* to a struct kind so a non-struct actual
+    /// callee fails the apply's argument unify per call — the same pinning
+    /// [`Self::check_binop`] applies to its operands.
     fn check_instantiate(
         &mut self,
         e: ExprId,
@@ -2324,30 +2381,112 @@ where
         self.check_expr(type_expr);
         self.check_expr(value);
         let type_pair = self.term[type_expr].unwrap();
+        // An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no
+        // statically readable pair — it is an apply node, not an array.  Force
+        // its evaluation so the nominality check and the field-list read see
+        // the concrete struct type.  A callee that depends on an unbound
+        // parameter stays lazy (the checks below defer to the apply), and a
+        // non-terminating one trips the VM's guard: leave it lazy — the
+        // build's statement pass evaluates the statement again and reports
+        // the `NonTerminating` diagnostic.  After a caught guard the module's
+        // counters are inflated, so never force twice.
+        if self.module.array_items(type_pair).is_none() && !self.force_failed {
+            let forced = catch_unwind(AssertUnwindSafe(|| {
+                self.module.evaluate_node_deep(type_pair, None);
+            }));
+            self.force_failed = forced.is_err();
+        }
+        let callee_ty = self.ty[type_expr].unwrap();
+        let concrete = self.type_is_concrete(callee_ty);
+        let any_named = arg_names.iter().any(|n| n.is_some());
+        if concrete
+            && !shape::is_type_struct_kind_any(
+                &mut self.module,
+                self.type_expr,
+                AnyNodeId::Dynamic(callee_ty),
+            )
+        {
+            // Nominality: only a struct type instantiates.  The field checks
+            // are skipped — against a non-struct callee they would only
+            // cascade.  The instance still gets a term (the call-order value
+            // under the callee's pair), so the descent stays total.
+            self.record_instantiate_callee_error(type_pair, type_expr);
+            let value_node = self.value_of(value);
+            let pair = self.pair_of(value_node, type_pair);
+            self.term[e] = Some(pair);
+            self.val[e] = Some(value_node);
+            self.ty[e] = Some(type_pair);
+            return pair;
+        }
+        if !concrete {
+            // Defer the nominality check: pin the callee's type to a struct
+            // kind `[[id, names], K]` (a 2-element marker, per
+            // [`shape::is_struct_marker_any`]'s structural guess).  The pin
+            // binds an unbound cell now and is re-checked by the apply's
+            // argument unify per call, so a tuple/function/atomic actual
+            // callee is rejected there.
+            let id = self.fresh_cell();
+            let names = self.fresh_cell();
+            let marker = self.struct_marker_node(id, names);
+            let kind = self.kind_expr(self.current_block, marker);
+            self.check_unify(
+                callee_ty,
+                kind,
+                self.loc(type_expr, 1),
+                DiagKind::InstantiateCallee,
+            );
+        }
         // The struct pair's shape *is* the positional field-type list (the
         // nominal id lives in the kind slot).  During a recursive struct's
         // own descent the shape is still an unbound cell (the bindings are
         // mutually recursive), so defer the field-list check through a probe
-        // cell.
-        let shape = self.module.as_dynamic(
-            self.module.array_items(type_pair).unwrap()[0].node,
-            self.current_block,
-        );
-        let field_list = match self.module.array_items(shape) {
-            Some(_) => shape,
-            // The struct's shape cell is not resolved yet (mid-recursion):
-            // bind it to a [field-list] probe and check the value against the
-            // probe slot.  When the descent completes the cell unifies with
-            // the real shape, closing the deferred check.
+        // cell; a callee whose pair stayed unreadable after the force (it
+        // depends on an unbound parameter) reads the shape through a lazy
+        // `Index` that resolves when the call binds it.
+        let field_list = match self
+            .module
+            .array_items(type_pair)
+            .and_then(|items| items.first())
+        {
+            Some(item) => {
+                let shape = self.module.as_dynamic(item.node, self.current_block);
+                match self.module.array_items(shape) {
+                    Some(_) => shape,
+                    // The struct's shape cell is not resolved yet
+                    // (mid-recursion): bind it to a [field-list] probe and
+                    // check the value against the probe slot.  When the
+                    // descent completes the cell unifies with the real shape,
+                    // closing the deferred check.
+                    _ => {
+                        let fields_cell = self.fresh_cell();
+                        self.module.unify(shape, fields_cell);
+                        fields_cell
+                    }
+                }
+            }
+            // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
+            // deferred unify below resolves through the lowlevel's
+            // pending-`Index` deferral, which accepts only a 2-element
+            // concrete other side (`class_holds_type`) — a param-dependent
+            // call-result callee whose struct has ≠2 fields reports the
+            // field-list mismatch at check time instead of at the apply.
+            // Phase 2's unification-hook extraction (D1) subsumes that rule.
             _ => {
-                let fields_cell = self.fresh_cell();
-                self.module.unify(shape, fields_cell);
-                fields_cell
+                let zero = self.alloc_node(
+                    self.current_block,
+                    None,
+                    Some(P::Value::from(LowValue::USize(0))),
+                );
+                let ops = self.array_node(self.current_block, &[type_pair, zero]);
+                self.op_node(
+                    self.current_block,
+                    P::Operator::from(LowOperator::Index),
+                    Some(ops),
+                )
             }
         };
-        let any_named = arg_names.iter().any(|n| n.is_some());
         let (value_node, value_shape, valid) = if any_named {
-            self.named_instantiate(e, type_pair, value, arg_names)
+            self.named_instantiate(e, type_pair, value, arg_names, concrete)
         } else {
             // A positional instantiation keeps the value's own tuple shape.
             // The value's shape: the element-type list of a tuple type, or
@@ -2397,21 +2536,29 @@ where
     /// (an unknown, duplicate, missing, or excess field, or a `.name`
     /// argument against an anonymous struct) — the caller then skips the
     /// ordinary field-list unify, since the mismatch is the structural one.
+    ///
+    /// `callee_concrete` distinguishes the two ways the name table can be
+    /// unavailable: a concrete but anonymous struct (a `.name` argument is a
+    /// [`DiagKind::StructAnonymousField`]) and a callee whose type is not
+    /// statically known (an unbound parameter — the definition-order reorder
+    /// cannot be computed at check time, a
+    /// [`DiagKind::InstantiateNamesNotStatic`]).
     fn named_instantiate(
         &mut self,
         e: ExprId,
         type_pair: NodeId,
         value: ExprId,
         arg_names: &[Option<&'static str>],
+        callee_concrete: bool,
     ) -> (NodeId, NodeId, bool) {
         // The value's tuple elements are the argument value expressions (call
         // order); their values and types are reordered into definition order.
         let elem_ids = self.range_children(value);
         let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
         let tys: Vec<NodeId> = elem_ids.iter().map(|&a| self.ty[a].unwrap()).collect();
-        // A `.name` argument against an anonymous struct cannot match: record
-        // it and fall back to the call-order value (the caller skips the
-        // field-list unify).
+        // The name table is unavailable: record each `.name` argument and
+        // fall back to the call-order value (the caller skips the field-list
+        // unify).
         if shape::struct_names_any(
             &mut self.module,
             self.type_expr,
@@ -2419,14 +2566,16 @@ where
         )
         .is_none()
         {
+            let kind = if callee_concrete {
+                // A concrete struct without a name table genuinely has no
+                // named fields.
+                DiagKind::StructAnonymousField
+            } else {
+                DiagKind::InstantiateNamesNotStatic
+            };
             for (i, name) in arg_names.iter().enumerate() {
                 if name.is_some() {
-                    self.record_struct_error(
-                        elem_ids[i],
-                        type_pair,
-                        *name,
-                        DiagKind::StructAnonymousField,
-                    );
+                    self.record_struct_error(elem_ids[i], type_pair, *name, kind);
                 }
             }
             return (self.value_of(value), self.ty[value].unwrap(), false);
