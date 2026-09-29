@@ -52,7 +52,7 @@ use crate::shape::for_each_kind_marker;
 /// The whole [`Markers`] struct, generated from the registry: the field set
 /// IS the kind-marker list.
 macro_rules! define_markers {
-    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         /// The installed shared kind-marker nodes — one per marker, allocated
         /// by [`Checker::install_constants`] in registry order and referenced
         /// (never rebuilt) wherever the marker value appears.  Registry-derived:
@@ -73,7 +73,7 @@ for_each_kind_marker!(define_markers);
 /// registry order.  Call-site context (`self`, the root block) is passed in
 /// through the args group — hygiene keeps the macro from seeing it.
 macro_rules! define_install_markers {
-    ([ $this:ident, $root:ident ] $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ([ $this:ident, $root:ident ] $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $( $this.markers.$marker_fn =
             $this.alloc_node($root, None, Some(ValueType::$marker_fn())); )*
     };
@@ -82,7 +82,7 @@ macro_rules! define_install_markers {
 /// The `Ctx` marker-accessor impls: each returns the checker's installed
 /// shared node for its marker.
 macro_rules! define_ctx_marker_accessor_impls {
-    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
             fn $node_fn(&self) -> NodeId {
                 self.markers.$marker_fn
@@ -96,7 +96,7 @@ macro_rules! define_ctx_marker_accessor_impls {
 /// expressions are reached in place; anything else falls through to a fresh
 /// allocation by the caller.
 macro_rules! define_value_node_dispatch {
-    ([ $this:ident, $value:ident ] $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ([ $this:ident, $value:ident ] $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $( if $value == ValueType::$marker_fn() {
             return $this.markers.$marker_fn;
         } )*

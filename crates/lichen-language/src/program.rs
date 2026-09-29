@@ -207,34 +207,13 @@ macro_rules! lang_compose_vocabulary {
         }
 
         // The type-constant markers all live in the core `TypeValue` leaf, so
-        // the composed vocabulary delegates every marker to that leaf.  The
+        // the trait's registry-derived default bodies
+        // (`Self::from(TypeValue::$variant)`, over the composed `From` impl)
+        // already provide every marker — the impl spells only the two
+        // nominal-id methods, which have no default.  The
         // `<path>::Variant` qualified path bypasses the macro_rules rule that
         // a `$path:path` fragment cannot be followed directly by `::`.
         impl ::lichen_highlevel::program::ValueType for LangValue {
-            fn int_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeInt)
-            }
-            fn string_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeString)
-            }
-            fn type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeType)
-            }
-            fn function_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeFunction)
-            }
-            fn tuple_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeTuple)
-            }
-            fn array_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeArray)
-            }
-            fn type_struct_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeStruct)
-            }
-            fn table_type_marker() -> Self {
-                Self::$tyv_name(<$tyv>::TypeTable)
-            }
             fn type_id(&self) -> Option<usize> {
                 match self {
                     Self::$tyv_name(inner) => inner.as_type_id(),

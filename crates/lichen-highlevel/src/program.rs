@@ -109,7 +109,7 @@ pub struct LiteralBuild {
 // `fn …_marker_node(&self) -> NodeId` per marker, each returning the
 // checker's installed shared node for it.
 macro_rules! define_ctx_marker_accessors {
-    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
             #[doc = concat!("The installed `", $display, "` marker node.")]
             fn $node_fn(&self) -> NodeId;
@@ -343,7 +343,7 @@ where
 // touches that one list.  `TypeId` is NOT a kind marker (it carries the
 // nominal id a struct marker references) and is spelled out below.
 macro_rules! define_type_value {
-    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         /// The highlevel's own value extension — a plain enum of the type constants,
         /// provided whole for the compositions below (and for a language crate
         /// composing its own vocabulary from [`LowValue`] + this).
@@ -407,7 +407,7 @@ impl ValueExt for HighProgramValue {
 // composition, which generates `From<TypeValue>`) gets every marker for
 // free; an impl may still override individual methods.
 macro_rules! define_value_type_marker_methods {
-    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
         $(
             $(#[$doc])*
             fn $marker_fn() -> Self {
@@ -484,73 +484,93 @@ pub enum TypeOperator {
 //
 // `TypeValue` and `TypeOperator` have no arena payload, so their codecs ignore
 // the relocation context and are the smallest leaf-codec implementations: an
-// exhaustive tag write and an inverse read.
+// exhaustive tag write and an inverse read.  Both sides of the `TypeValue`
+// codec are generated from the kind-marker registry
+// ([`crate::shape::for_each_kind_marker`]): each entry's tag is the persisted
+// artifact tag, a compatibility contract — an existing entry's tag never
+// changes and a new marker takes the next unused tag, so the tags are
+// deliberately not the list positions (`TypeString` is `7`).  `TypeId` is not
+// a kind marker; it keeps tag 8, spelled here — a registry entry claiming 8
+// would collide with it as a duplicate match arm and fail to compile.
+macro_rules! define_type_value_codec {
+    ($( [ $($args:tt)* ] )? $( $(#[$doc:meta])* $variant:ident { $tag:literal, $display:literal, $marker_fn:ident, $node_fn:ident } )*) => {
+        impl TypeValue {
+            /// Every kind-marker variant, in registry order — registry-derived,
+            /// so the codec round-trip tests iterate the same list the enum
+            /// and codec are generated from.  `TypeId` is not a kind marker
+            /// and is sampled separately.
+            pub const KIND_MARKERS: &[TypeValue] = &[$(TypeValue::$variant),*];
+        }
 
-impl ValueCodec for TypeValue {
-    fn write_value<P: Program>(
-        w: &mut Writer,
-        value: Self,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) {
-        match value {
-            TypeValue::TypeInt => w.u8(0),
-            TypeValue::TypeType => w.u8(1),
-            TypeValue::TypeFunction => w.u8(2),
-            TypeValue::TypeTuple => w.u8(3),
-            TypeValue::TypeArray => w.u8(4),
-            TypeValue::TypeStruct => w.u8(5),
-            TypeValue::TypeTable => w.u8(6),
-            TypeValue::TypeString => w.u8(7),
-            TypeValue::TypeId(n) => {
-                w.u8(8);
-                w.u64(n as u64);
+        impl ValueCodec for TypeValue {
+            fn write_value<P: Program>(
+                w: &mut Writer,
+                value: Self,
+                _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+            ) {
+                match value {
+                    $(TypeValue::$variant => w.u8($tag),)*
+                    TypeValue::TypeId(n) => {
+                        w.u8(8);
+                        w.u64(n as u64);
+                    }
+                }
+            }
+
+            fn read_value<P: Program>(
+                r: &mut Reader<'_>,
+                _self_key: ModuleKey,
+                _self_arena: &[u8],
+                _self_base: *const u8,
+                _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+            ) -> Result<Self, String> {
+                Ok(match r.u8()? {
+                    $($tag => TypeValue::$variant,)*
+                    8 => TypeValue::TypeId(r.u64()? as usize),
+                    tag => return Err(format!("unknown type-value tag {tag}")),
+                })
             }
         }
-    }
-
-    fn read_value<P: Program>(
-        r: &mut Reader<'_>,
-        _self_key: ModuleKey,
-        _self_arena: &[u8],
-        _self_base: *const u8,
-        _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) -> Result<Self, String> {
-        Ok(match r.u8()? {
-            0 => TypeValue::TypeInt,
-            1 => TypeValue::TypeType,
-            2 => TypeValue::TypeFunction,
-            3 => TypeValue::TypeTuple,
-            4 => TypeValue::TypeArray,
-            5 => TypeValue::TypeStruct,
-            6 => TypeValue::TypeTable,
-            7 => TypeValue::TypeString,
-            8 => TypeValue::TypeId(r.u64()? as usize),
-            tag => return Err(format!("unknown type-value tag {tag}")),
-        })
-    }
+    };
 }
+for_each_kind_marker!(define_type_value_codec);
 
-impl OperatorCodec for TypeOperator {
-    fn write_operator(w: &mut Writer, op: Self) {
-        match op {
-            TypeOperator::Fresh => w.u8(0),
-            TypeOperator::Add => w.u8(1),
-            TypeOperator::Sub => w.u8(2),
-            TypeOperator::Leq => w.u8(3),
-            TypeOperator::Eq => w.u8(4),
+// The one list of the type-level operators: the codec's two sides and the
+// exhaustive [`TypeOperator::ALL`] list the round-trip tests iterate are
+// generated from it.  Each tag is the persisted artifact tag — the same
+// compatibility contract as the kind-marker tags above.  The write side is
+// an exhaustive match over the enum, so an enum variant missing from this
+// list fails to compile.
+macro_rules! define_type_operator_codec {
+    ($( $variant:ident = $tag:literal; )*) => {
+        impl TypeOperator {
+            /// Every variant — generated from the same list as the codec, so
+            /// the round-trip tests iterate the codec's full domain.
+            pub const ALL: &[TypeOperator] = &[$(TypeOperator::$variant),*];
         }
-    }
 
-    fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
-        Ok(match r.u8()? {
-            0 => TypeOperator::Fresh,
-            1 => TypeOperator::Add,
-            2 => TypeOperator::Sub,
-            3 => TypeOperator::Leq,
-            4 => TypeOperator::Eq,
-            tag => return Err(format!("unknown type-operator tag {tag}")),
-        })
-    }
+        impl OperatorCodec for TypeOperator {
+            fn write_operator(w: &mut Writer, op: Self) {
+                match op {
+                    $(TypeOperator::$variant => w.u8($tag),)*
+                }
+            }
+
+            fn read_operator(r: &mut Reader<'_>) -> Result<Self, String> {
+                Ok(match r.u8()? {
+                    $($tag => TypeOperator::$variant,)*
+                    tag => return Err(format!("unknown type-operator tag {tag}")),
+                })
+            }
+        }
+    };
+}
+define_type_operator_codec! {
+    Fresh = 0;
+    Add = 1;
+    Sub = 2;
+    Leq = 3;
+    Eq = 4;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the

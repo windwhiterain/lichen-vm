@@ -593,7 +593,12 @@ mod codec_roundtrip {
     /// Every `LangValue` variant that round-trips without a module arena.  The
     /// handle/function-ref variants (array/table/function tags) need a real
     /// frozen module and are exercised at the artifact level by the `persist`
-    /// integration tests; this covers every scalar/type/string variant.
+    /// integration tests; this covers every scalar/type/string variant.  The
+    /// `TypeValue`/`TypeOperator` coverage iterates the leaf enums' own
+    /// registry-derived variant lists ([`TypeValue::KIND_MARKERS`],
+    /// [`TypeOperator::ALL`]), so a variant added to the single-source list
+    /// is covered here automatically — the hand-written part of this list
+    /// only spells the leaves that have no such registry.
     #[test]
     fn every_arena_free_value_round_trips() {
         let values: &[LangValue] = &[
@@ -602,20 +607,16 @@ mod codec_roundtrip {
             LangValue::LowValue(LowValue::Void),
             LangValue::LowValue(LowValue::Parameterized),
             LangValue::LowValue(LowValue::Str("hello")),
-            LangValue::TypeValue(TypeValue::TypeInt),
-            LangValue::TypeValue(TypeValue::TypeType),
-            LangValue::TypeValue(TypeValue::TypeFunction),
-            LangValue::TypeValue(TypeValue::TypeTuple),
-            LangValue::TypeValue(TypeValue::TypeArray),
-            LangValue::TypeValue(TypeValue::TypeStruct),
-            LangValue::TypeValue(TypeValue::TypeTable),
-            LangValue::TypeValue(TypeValue::TypeString),
             LangValue::TypeValue(TypeValue::TypeId(7)),
             LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeBuffer),
             LangValue::ComputeValue(::lichen_compute::ComputeValue::TypeWrite),
         ];
         for &v in values {
             assert_eq!(roundtrip_value(v), v, "value did not round-trip");
+        }
+        for &marker in TypeValue::KIND_MARKERS {
+            let v = LangValue::TypeValue(marker);
+            assert_eq!(roundtrip_value(v), v, "kind marker did not round-trip");
         }
     }
 
@@ -636,15 +637,14 @@ mod codec_roundtrip {
             LangOperator::LowOperator(LowOperator::Index),
             LangOperator::LowOperator(LowOperator::Apply),
             LangOperator::LowOperator(LowOperator::TableGet),
-            LangOperator::TypeOperator(TypeOperator::Fresh),
-            LangOperator::TypeOperator(TypeOperator::Add),
-            LangOperator::TypeOperator(TypeOperator::Sub),
-            LangOperator::TypeOperator(TypeOperator::Leq),
-            LangOperator::TypeOperator(TypeOperator::Eq),
             LangOperator::GcdOp(crate::program::GcdOp::Gcd),
         ];
         for &op in ops {
             assert_eq!(roundtrip_op(op), op, "operator did not round-trip");
+        }
+        for &ty_op in TypeOperator::ALL {
+            let op = LangOperator::TypeOperator(ty_op);
+            assert_eq!(roundtrip_op(op), op, "type operator did not round-trip");
         }
     }
 }
