@@ -1,7 +1,12 @@
 # Plan: make the doc attribute a plain, generic struct-typed value
 
 > Status: current — implemented and merged; the doc attribute is a plain,
-> generic struct-typed value as designed below.
+> generic struct-typed value as designed below.  The `Target:` list and the
+> per-item paths below are a record of the files *this change span* edited, so
+> they are kept as they stood: `lichen-language` has since split into
+> `lichen-language-lex` / `lichen-language-parser`, and `doc.rs` moved to
+> `crates/lichen-doc`.  Today's behaviour lives in
+> [attributes](attributes.md) and the spec, not here.
 > Target: `crates/lichen-language/{lex,parse,ast,compile,checker,render,run,program,doc}.rs`,
 > `crates/lichen-language/tests/doc.rs`, `crates/lichen-language-server/src/analysis.rs`,
 > `crates/lichen-highlevel/src/attr.rs`, `docs/notes/attributes.md`, `docs/language-spec.md`.
