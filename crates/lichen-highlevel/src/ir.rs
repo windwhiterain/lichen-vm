@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 
 use crate::attr::{AttrSpec, NoAttr};
-use crate::program::HighProgramLiteral;
+use crate::program::{HighProgramLiteral, TypeOperator};
 
 /// The static schema of an expression: which compile-time attributes ride on
 /// its runtime pair and in which order.  `tail` is index-aligned with the
@@ -53,6 +53,22 @@ pub enum BinOp {
     Sub,
     Leq,
     Eq,
+}
+
+/// Every [`BinOp`] names the [`TypeOperator`] the checker runs: the two enums
+/// spell the same four operators, so the checker converts once here instead
+/// of repeating the mapping at each site.  [`TypeOperator::Fresh`] is the
+/// other direction and has no [`BinOp`] spelling — it mints a nominal struct
+/// id, which no source operator does.
+impl From<BinOp> for TypeOperator {
+    fn from(operator: BinOp) -> Self {
+        match operator {
+            BinOp::Add => TypeOperator::Add,
+            BinOp::Sub => TypeOperator::Sub,
+            BinOp::Leq => TypeOperator::Leq,
+            BinOp::Eq => TypeOperator::Eq,
+        }
+    }
 }
 
 /// A dense index into [`IR::expr`].  References are pre-resolved: a

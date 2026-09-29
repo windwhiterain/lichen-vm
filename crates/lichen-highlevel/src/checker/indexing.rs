@@ -6,7 +6,7 @@
 use lichen_lowlevel::{AnyNodeId, LowOperator, LowValue, NodeId};
 
 use crate::diagnostic::DiagKind;
-use crate::ir::ExprId;
+use crate::ir::{BinOp, ExprId};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 
 use super::Checker;
@@ -67,13 +67,13 @@ where
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,
-            P::Operator::from(TypeOperator::Leq),
+            P::Operator::from(TypeOperator::from(BinOp::Leq)),
             Some(beyond_ops),
         );
         let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
         let in_range = self.op_node(
             self.current_block,
-            P::Operator::from(TypeOperator::Eq),
+            P::Operator::from(TypeOperator::from(BinOp::Eq)),
             Some(in_range_ops),
         );
         self.register_assert(in_range, self.loc(e, 0), false);

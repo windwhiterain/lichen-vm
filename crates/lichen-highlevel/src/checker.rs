@@ -1199,12 +1199,7 @@ where
                 );
             }
         }
-        let operator = match operator {
-            BinOp::Add => P::Operator::from(TypeOperator::Add),
-            BinOp::Sub => P::Operator::from(TypeOperator::Sub),
-            BinOp::Leq => P::Operator::from(TypeOperator::Leq),
-            BinOp::Eq => P::Operator::from(TypeOperator::Eq),
-        };
+        let operator = P::Operator::from(TypeOperator::from(operator));
         let left = self.value_of(left);
         let right = self.value_of(right);
         let operands = self.array_node(self.current_block, &[left, right]);
