@@ -103,6 +103,13 @@ fn table_values_share_one_type() {
 }
 
 #[test]
+fn a_find_on_a_concretely_non_table_container_is_a_guard_error() {
+    // The lookup pins the container's type to a table, so `1{2}` fails the
+    // check (an unbound container, by contrast, resolves at the call).
+    assert!(has_check_kind("1{2}", DiagKind::Guard));
+}
+
+#[test]
 fn a_table_flows_through_a_function() {
     // A table literal inside a function body: the key is concrete at build,
     // the value stays a lazy reference to the parameter, and the apply

@@ -5,6 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lichen_highlevel::diagnostic::DiagKind;
 use lichen_language::package::PackageStore;
 use lichen_language::program::LangProgram;
 use lichen_language::run::evaluate_raw;
@@ -155,6 +156,32 @@ fn a_failing_dependency_is_reported_at_the_import_directive() {
         err.iter()
             .any(|d| d.message.contains("cannot load package") && d.span == Some((1, 3))),
         "the caret sits on the @import directive, not the package's line 2: {err:?}"
+    );
+}
+
+#[test]
+fn a_package_whose_last_statement_is_a_raw_read_reports_an_import_export_error() {
+    // A raw read (`[1, 2]<0>`) at a package's root compiles to the read
+    // operation rather than to the `[value, type]` pair the importer reads, so
+    // the export is not a value — an honest guard about the import, not a
+    // panic inside the checker.  The caret sits on the main file's directive.
+    let dir = temp_dir("raw-export");
+    write(&dir, "raw.lichen", "[1, 2]<0>\n");
+    let main = "@{x = import \"raw.lichen\"@}x\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    let diag = err
+        .iter()
+        .find(|d| {
+            d.check
+                .as_ref()
+                .is_some_and(|c| c.kind == DiagKind::ImportExport)
+        })
+        .unwrap_or_else(|| panic!("the raw-read export must be guarded: {err:?}"));
+    assert_eq!(
+        diag.span,
+        Some((1, 3)),
+        "the caret is on the @import directive"
     );
 }
 

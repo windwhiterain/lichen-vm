@@ -977,6 +977,35 @@ fn a_raw_named_read_yields_the_field_type() {
 }
 
 #[test]
+fn a_raw_read_of_a_non_container_reports_a_runtime_index_target_error() {
+    // A raw read `X<e>` never validates its target, so `s<0>` over an int is
+    // not a check-time diagnostic: the lowlevel records the runtime failure
+    // and it reaches the diagnostics as `RuntimeIndexTarget` — the value
+    // itself is the fact, with no type to print.
+    let d = diags("f = s => s<0>; f (1)");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeIndexTarget);
+    // The blamed node is the target's *value* node, which the checker never
+    // gives a source edge (only the subscript gets one), so this diagnostic
+    // carries no caret.
+    assert_eq!(d[0].span, None, "the target's value node has no location");
+}
+
+#[test]
+fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error() {
+    // `a<i>` reads element `i` structurally, so a string subscript is not a
+    // check-time diagnostic either: the lowlevel records it and it arrives as
+    // `RuntimeIndexSubscript`.  The caret is on the subscript, the one node
+    // the raw read does give a source edge.
+    let d = diags("a = [1, 2, 3]\ni = \"x\"\na<i>");
+    assert_eq!(d.len(), 1);
+    let check = d[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeIndexSubscript);
+    assert_eq!(d[0].span, Some((2, 5)), "the caret is on the subscript `i`");
+}
+
+#[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Two functions each contain their own struct occurrence — each body's
     // `Fresh` node is its own, so the nominal ids stay distinct across the
