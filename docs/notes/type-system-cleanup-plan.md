@@ -1,22 +1,25 @@
 # Type-system cleanup and standardization plan
 
-> Status: **Phase 0 complete**; **Phase 1a/1b/1c complete** (shape authority
-> module `lichen-highlevel/src/shape.rs`, kind-marker registry, single-sourced
-> attribute slots — the canonical attribute order is the composition's `attrs`
-> manifest order — and single-sourced codec tags); **D3 landed** (the checker is
-> total and type-directed for `Instantiate`, with the nominal callee check);
-> **Phase 2 landed** (D1: the unification deferral policy is a `Program` hook —
-> `defer_pending` — and the lowlevel is untyped); **Phase 3a landed** (the
-> `checker.rs` module split: the checking rules now live in five sibling
-> modules beside the root). The assert metadata also moved: the lowlevel
-> carries only the worklist and the errors, and a failure is attributed
-> through the **template** condition a clone descends from, so a host table
-> keyed by that template resolves the user-facing flag and the span (§4).
-> **Phase 3b landed** (the panic-discipline census: every `unwrap`/`expect`/
-> `unreachable!` in the checker and the lowlevel is classified, and the
-> user-reachable ones are diagnostics or recorded failures — see the inventory
-> in §5). The remaining Phase 3 work is `check_lam` surgery plus the one
-> evaluator sharing defect the census found (§5, "not fixed").
+> Status: **Phases 0–3 complete.** Phase 0 (B1–B8); Phase 1 (the `shape`
+> encoding authority, the kind-marker registry, single-sourced codec tags and
+> attribute slots); D3 (the `Instantiate` check is total and type-directed,
+> with a nominal callee check); Phase 2 (D1: the unification deferral policy
+> is a `Program` hook and the lowlevel is untyped, with the assert metadata in
+> a highlevel-side secondary map keyed by a clone's template condition); Phase
+> 3a (the checker is five rule modules beside its root), 3b (the measured
+> panic census — every user-reachable panic is a diagnostic, 90 sites
+> classified), 3c (an explicit unify result and an honest diagnostic channel:
+> no fabricated `UnifyError`), and the `check_lam` surgery (a function shell
+> exists before its nodes). Two defects found while verifying were fixed
+> rather than recorded: a table read whose key is a lambda parameter formed a
+> cycle and crashed the evaluator, and an undecided key's content hashed to a
+> constant that could match an entry it never compared against.
+>
+> The assert metadata also moved: the lowlevel carries only the worklist and
+> the errors, and a failure is attributed through the **template** condition a
+> clone descends from, so a host table keyed by that template resolves the
+> user-facing flag and the span (§4).
+>
 > Decisions recorded: D1 = Option A (extract a `Program` unification hook;
 > lowlevel becomes honestly untyped). D2 = document equi-recursive
 > unification (no occurs check) as the designed semantics. D3 = syntactic
@@ -222,9 +225,16 @@ Either way, independent of D1:
     `unify_errors`, `Build::ok` and the two pass gates consult
     `Checker::check_failed` — a failed unification **or** any guard entry —
     rather than the vec's emptiness.
-- `check_lam` registry surgery (`checker/lambda.rs:24-228`): build the function
-  shell *before* the parameter nodes (a small lowlevel API addition) so no
-  `retain`/overwrite dance and no temporarily-invalid `Function` record.
+- ~~`check_lam` registry surgery~~ **done** (`68fa1e9`): `Module::begin_function` /
+  `finish_function` make the shell exist before its nodes, so the parameter
+  cells and pair are registered in the right template as they are allocated —
+  the `retain` over the enclosing scope, the re-tagging, and the wholesale
+  overwrite of `Function::nodes` are gone.  The record between the two calls
+  is deliberately incomplete (its slots unset, and `finish_function` asserts
+  the parameter is already a scope member), so a half-built function is not
+  representable as a lying record.  The natural registration order equals the
+  order the old code hand-assembled, so `Function::nodes` and the artifacts
+  are byte-identical (all 25 examples verified).
 - Replace lexical-depth parent arithmetic (`checker/lambda.rs:81-86`) with an
   explicit parent link supplied by the frontend in the IR.
 - Stop mutating the input IR (`set_schema` in `checker/annotations.rs`): merged
@@ -299,10 +309,10 @@ Either way, independent of D1:
   | `lowlevel/table.rs:128`, `163` | frontend-only | the deep pass resolves a key before it is hashed; the value variants are total |
   | `lowlevel/utils.rs:55` | frontend-only | a non-empty length and a non-zero alignment always form a valid `Layout` |
 
-  #### User-reachable panic found and deliberately **not** fixed
+  #### The one user-reachable panic the census found — **since fixed**
 
-  `lowlevel/src/evaluation.rs:82` — `unreachable!("cycle detected: …")`.
-  Minimal trigger:
+  `lowlevel/src/evaluation.rs:82` — `unreachable!("cycle detected: …")`,
+  minimal trigger:
 
   ```text
   t = table { 1 ==> 2 }
@@ -310,17 +320,27 @@ Either way, independent of D1:
   f 1
   ```
 
-  Narrowed: the cycle forms **only when the table subscript is a lambda
-  parameter** — `t{9}` and `t{t}` report a clean `TableMiss`, and
-  `g = w => w + 1; g 2` is fine. This is a genuine structural cycle in the lazy
-  graph (a sharing/ordering interaction between the parameter's in-place read
-  and the deep pass), not a missing diagnostic. Recording it as an `EvalError`
-  would report "table lookup missed" for a program that arguably should have
-  worked, hiding a real defect; fixing the sharing policy is a behavioural
-  change well outside a panic-discipline pass and risks the apply/clone
-  semantics. It is therefore **left in place and recorded here** for the phase
-  that owns evaluator sharing. It still surfaces to the user as the usual
-  caught-guard "this binding never terminates" rather than a clean diagnostic.
+  The census left it in place (a sharing/ordering defect, not a missing
+  diagnostic); it was then fixed at root.  The mechanism was **not** the
+  aliasing the census hypothesised: `TableGet` is a structural operator and
+  evaluates its operands shallowly.  The forcing came from `key_hash`, which
+  force-evaluated the key *before* asking whether it was decided, so the
+  forced descent reached the very apply being evaluated.
+
+  The real defect was a conflation, not a cycle: a read answered "cannot
+  match" for both a key that is **not decided yet** and a key that is decided
+  and **simply absent**.  Only the second is a miss.  `key_hash` now reports
+  which of the three states it is in (`KeyState`), an undecided key leaves the
+  read lazy, a `Void` key still misses, and a build still drops an undecidable
+  entry.  The program evaluates to `2`.
+
+  The same reasoning fixed a latent hazard found while narrowing it:
+  `hash_inner` panicked on a key subtree holding a value-less node (asserting
+  the deep pass must already have resolved it), and hashed a `Parameterized`
+  element to a single `PARAM_TOKEN` — two different undecided keys collapsing
+  onto one hash, so a lookup could hit an entry it never compared against.
+  Undecided content at **any** depth is now undecided, and `PARAM_TOKEN` is
+  gone.
 
   - **A failed approach worth recording**: pinning the container's type to a
     struct kind in `check_named_field` when it is not concrete (the move D3
