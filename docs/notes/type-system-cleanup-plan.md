@@ -417,14 +417,19 @@ Either way, independent of D1:
     not arrays, and every compute test fails.  A check-time pin is not a
     general answer here — the deferral is the answer, and the lowlevel simply
     must not panic on what it eventually finds.
-- **Deferred** (Phase 4, deliberately not done): intern `USize(0)`/`USize(1)`
-  and field-name nodes instead of re-allocating them at 14 + 3 sites.  The
-  pattern already exists (`Checker::install_constants` interns the kind markers
-  and the two type constants), so this is a small change — but a shared
-  constant node is a *shared* node, where today each occurrence allocates its
-  own, and that is a real clone-aliasing change to the apply walk, not a
-  refactor.  It buys allocation count, not correctness, so it is not worth the
-  risk until something measures a cost.
+- **Landed** (`refactor/phase5-encoders`; was "deferred" in Phase 4): intern
+  `USize(0)`/`USize(1)` and field-name nodes instead of re-allocating them at
+  14 + 3 sites.  The Phase 4 objection was the right one to raise — a shared
+  constant node is a *shared* node, where before each occurrence allocated its
+  own, so this is a real clone-aliasing change to the apply walk, not a
+  refactor — and it is now **discharged rather than taken on faith**: the two
+  constants are allocated by `install_constants` *before any function exists*,
+  so they carry no function tag and belong to no template, which means the
+  clone walk's membership test already referenced such nodes in place.  Same
+  node, same behaviour, fewer allocations.  The examples' compiled output is
+  byte-identical (verified by hash), and the affected crates' suites are green.
+  `lichen-compute`'s four own constant allocations were **not** ported — see
+  the adoption note above.
 - **Landed** (`refactor/phase4c-decls`): the dead API (`type_expr_node`,
   `int_type_node`, `Schema::arity`, `LocKind` with its only user `Loc::kind`,
   and `Loc::type_depth`) is removed — each had zero call sites in the
@@ -566,12 +571,17 @@ improvability, not because it is owed.
   template).  Replacing it with a parent link the frontend supplies means
   reserving the function node's id *before* its body compiles, and a wrong
   parent would silently change template membership rather than fail to compile.
-- **Interning** — see the deferred note in §5.
-- **The arrow / function-type encoding** — 7 build sites (2 of which hand-build
-  the `[marker, universe]` kind instead of using the shared helper, both in
-  `lichen-compute`) and 2 read sites.  Deferred with the compute work, since
-  every site that matters lives behind the raw-graph boundary D5 already labels
-  unstable.
+- **Interning** — **landed** for the highlevel: the `USize(0)`/`USize(1)`
+  constants and the field-name nodes are now installed once per build by
+  `Checker::install_constants` (the constants) and `Checker::name_node` (the
+  names), replacing 14 + 3 per-occurrence allocations.  See below for the
+  `lichen-compute` constants, which are still per-occurrence.
+- **The arrow / function-type encoding** — **landed** for the highlevel: all
+  three build sites now go through `Checker::arrow_parts` /
+  `Ctx::arrow`, and `shape::function_type_parts` is the symmetric reader.
+  Still per-site in `lichen-compute`: 4 build sites (2 of which hand-build the
+  `[marker, universe]` kind instead of using `Ctx::kind_expr`) and 2 read
+  sites that index the arrow's shape directly.  See below.
 - **`Checker's ir: IR` is held by value**, so the read-only-IR contract restored
   in Phase 4 is true today but not enforced.  Making it a shared reference would
   let the compiler reject the class; it also collides with `Build`, which
@@ -581,3 +591,31 @@ improvability, not because it is owed.
   real lexed syntax that §2 never mentions.  Both were found and left: the
   first is a question about how much IR payload the table should carry, the
   second is a section the sync did not touch.
+
+### Remaining: the `lichen-compute` adoption
+
+`crates/lichen-compute/src/compute.rs` still hand-builds the arrow encoding at
+four sites and reads it back at two.  The helpers it should adopt:
+
+- **Build** — replace each three-node hand assembly with a single
+  `ctx.arrow(domain, codomain)`.  Two sites (`JitOp::build`, `LaunchOp::build`)
+  additionally hand-build the `[marker, universe]` kind; those are the ones the
+  replacement must fix, because `Ctx::arrow` routes through `Ctx::kind_expr`.
+  The other two (`ParallelOp::build`, `ParLaunchOp::build`) already use
+  `ctx.kind_expr` and keep identical node order, so their replacement is purely
+  textual.  **`Ctx::arrow` does not touch the checker's `arrows` set**, and none
+  of these four sites ever registered anything in it — so adopting it changes
+  nothing about rendering.
+- **Read** — the two sites that extract domain and codomain by indexing the
+  arrow's shape (`LaunchOp::build`'s `d`/`c`, `ParLaunchOp::build`'s
+  `write_ty`) currently spell `Index(Index(sig.ty, 0), 0|1)` against hand-made
+  `zero`/`one` nodes.  They must keep **reading lazily through `Index`** — an
+  unbound signature has to resolve at apply time — so they cannot simply call
+  `shape::function_type_parts` (which requires a bound type).  They should keep
+  the `Index` chain and adopt the *shared* subscript constants instead of
+  allocating their own, once a `Ctx` accessor for them exists.
+- **The `USize(0)`/`USize(1)` constants** — the two native-op sites each
+  allocate their own through `ctx.value_node`.  They belong to a *native op*
+  invoked under a function that may later be cloned, so interning them is the
+  same shared-node question the highlevel constants answered; it needs its own
+  verification, not a mechanical port.

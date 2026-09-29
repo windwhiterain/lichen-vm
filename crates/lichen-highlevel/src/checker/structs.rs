@@ -60,11 +60,6 @@ where
                 None,
             );
         }
-        let zero = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(0))),
-        );
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
@@ -74,7 +69,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let shape_ops = self.array_node(self.current_block, &[container_ty, zero]);
+        let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
         let shape = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -142,26 +137,11 @@ where
                 None,
             );
         }
-        let zero = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(0))),
-        );
-        let one = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(1))),
-        );
         // names — the struct marker's name table, read directly from the
         // container's *type* (a TypeStruct kind: marker at [0], names at [1]).
-        let names_node =
-            self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH, zero, one);
+        let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_KIND_NAMES_PATH);
         // key = TableGet(names, name) — the field's positional index.
-        let name_node = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Str(name))),
-        );
+        let name_node = self.name_node(name);
         let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
         let key = self.op_node(
             self.current_block,
@@ -177,7 +157,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let ty_ops = self.array_node(self.current_block, &[value_node, one]);
+        let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -247,27 +227,12 @@ where
                 );
             }
         }
-        let zero = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(0))),
-        );
-        let one = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(1))),
-        );
         // names — the struct marker's name table, read through the container
         // type's kind (`[shape, kind]`: kind at [1], marker at [0], names
         // at [1]).
-        let names_node =
-            self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH, zero, one);
+        let names_node = self.lazy_index_path(container_ty, &shape::STRUCT_TYPE_NAMES_PATH);
         // key = TableGet(names, name) — the field index.
-        let name_node = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::Str(name))),
-        );
+        let name_node = self.name_node(name);
         let key_ops = self.array_node(self.current_block, &[names_node, name_node]);
         let key = self.op_node(
             self.current_block,
@@ -282,7 +247,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let shape_ops = self.array_node(self.current_block, &[container_ty, zero]);
+        let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
         let shape = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -499,12 +464,7 @@ where
             // field-list mismatch at check time instead of at the apply.
             // Phase 2's unification-hook extraction (D1) subsumes that rule.
             _ => {
-                let zero = self.alloc_node(
-                    self.current_block,
-                    None,
-                    Some(P::Value::from(LowValue::USize(0))),
-                );
-                let ops = self.array_node(self.current_block, &[type_pair, zero]);
+                let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
                 self.op_node(
                     self.current_block,
                     P::Operator::from(LowOperator::Index),
@@ -806,11 +766,7 @@ where
         let mut entries = Vec::new();
         for (i, name) in names.iter().enumerate() {
             if let Some(name) = name {
-                let key = self.alloc_node(
-                    self.current_block,
-                    None,
-                    Some(P::Value::from(LowValue::Str(name))),
-                );
+                let key = self.name_node(name);
                 let value = self.alloc_node(
                     self.current_block,
                     None,

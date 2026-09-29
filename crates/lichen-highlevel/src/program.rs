@@ -144,6 +144,17 @@ pub trait Ctx<P: Program> {
     fn pair(&mut self, value: NodeId, ty: NodeId) -> NodeId;
     /// A kind expression `[marker, Type]`.
     fn kind_expr(&mut self, marker: NodeId) -> NodeId;
+    /// A function type expression `[[domain, codomain], [FunctionType,
+    /// Type]]` — the single spelling of the arrow encoding
+    /// [`crate::shape`] documents but deliberately never builds.
+    ///
+    /// It does **not** register the result in the checker's `arrows` set:
+    /// that set drives the type *printer* (it is what renders a pair as
+    /// `T -> U` instead of `<T, U>`), so only a genuinely source-level arrow
+    /// belongs in it.  An arrow built as a unification *pattern* — the
+    /// function-ness guard's `[[?d, ?c], [FunctionType, K]]` — must stay out;
+    /// the caller that prints inserts it.
+    fn arrow(&mut self, domain: NodeId, codomain: NodeId) -> NodeId;
     /// A fresh unbound type cell.
     fn fresh(&mut self) -> NodeId;
     /// The canonical universe node `[Type, ↺]` (`Type : Type`).  Referenced,

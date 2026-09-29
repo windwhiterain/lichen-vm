@@ -59,18 +59,13 @@ where
             P::Operator::from(LowOperator::Index),
             Some(value_ops),
         );
-        let zero = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(0))),
-        );
         let beyond_ops = self.array_node(self.current_block, &[len_cell, index_value]);
         let beyond = self.op_node(
             self.current_block,
             P::Operator::from(TypeOperator::from(BinOp::Leq)),
             Some(beyond_ops),
         );
-        let in_range_ops = self.array_node(self.current_block, &[beyond, zero]);
+        let in_range_ops = self.array_node(self.current_block, &[beyond, self.zero()]);
         let in_range = self.op_node(
             self.current_block,
             P::Operator::from(TypeOperator::from(BinOp::Eq)),
@@ -117,12 +112,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ops),
         );
-        let one = self.alloc_node(
-            self.current_block,
-            None,
-            Some(P::Value::from(LowValue::USize(1))),
-        );
-        let ty_ops = self.array_node(self.current_block, &[value_node, one]);
+        let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),

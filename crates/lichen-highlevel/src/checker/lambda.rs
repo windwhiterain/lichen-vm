@@ -180,10 +180,12 @@ where
         // type]` kinded as a function — `[[in, out], [FunctionType, Type]]`.
         // Built while the current function is still the shell, so these
         // nodes join its scope like the rest of the body.
-        let shape = self.array_node(return_block, &[type_cell, self.ty[r#return].unwrap()]);
+        let (shape, _kind, arrow) =
+            self.arrow_parts(return_block, type_cell, self.ty[r#return].unwrap());
+        // The printer needs the arrow's *shape* — an anonymous `[dom, codom]`
+        // pair is indistinguishable from a tuple type without it, so only a
+        // registered shape renders as `dom -> codom`.
         self.arrows.insert(shape);
-        let kind = self.kind_expr(return_block, self.markers.function_type_marker);
-        let arrow = self.array_node(return_block, &[shape, kind]);
         // The self-reference's type cell now carries the arrow, so the
         // in-body applications see the function's real type.
         self.module.unify(ty_cell, arrow);
@@ -244,9 +246,10 @@ where
         if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
-            let shape = self.array_node(self.current_block, &[d, c]);
-            let kind = self.kind_expr(self.current_block, self.markers.function_type_marker);
-            let fn_ty = self.array_node(self.current_block, &[shape, kind]);
+            // A unification *pattern*, not a source arrow: it must stay out
+            // of `arrows` (see [`Checker::arrow`]), or every guard site would
+            // print as `?d -> ?c`.
+            let fn_ty = self.arrow(self.current_block, d, c);
             self.check_unify(function_ty, fn_ty, self.loc(e, 1), DiagKind::Guard);
         }
         // The apply's attribute equality check: the function's declared
