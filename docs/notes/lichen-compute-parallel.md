@@ -1,12 +1,16 @@
 # lichen-compute: parallel primitives (`parallel` / `plrun` / buffer read & collect)
 
-> Status: current — implemented as an extension of the `lichen-compute` native
-> plugin (see [lichen-compute.md](lichen-compute.md)).  Companion to
-> [compute-kernel-struct.md](compute-kernel-struct.md) (kernels — scalar and
-> parallel — are `.native`/`.sig` structs).
+> Status: historical — the two-level-curry index-function design below was
+> **superseded** by the buffer-map model
+> ([compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)):
+> `parallel`/`plrun` survive as the launcher, but `pget`/`pcollect` are gone
+> (`compute.read` / `compute.collect` take their place), the index function is
+> single-arg over a fixed-shape `cfg = (n, (buffer…))`, and the v1 runtime is
+> sequential (the thread pool described in §5 is not what shipped).  Kept for
+> the design record.
 > Points at: `crates/lichen-compute/src/compute.lichen` (the wrapper),
 > `crates/lichen-compute/src/compute.rs` (`ComputeValue`/`ComputeOperator`,
-> `compile_parallel_fragment`, `run_parallel_kernel`, the four new native ops),
+> `compile_parallel_fragment`, `run_parallel_kernel`),
 > `crates/lichen-language/src/program.rs` / `render.rs` (the `ParKernel`/`Buffer`
 > render hooks), and `crates/lichen-language/tests/compute.rs`.
 
@@ -106,7 +110,7 @@ reassembled in index order.  The results are stored under a fresh `BufferId` and
 
 - `BufferGet::run` returns `USize(results[index])`.
 - `BufferCollect::run` materialises each element as a fresh scalar node and builds
-  a real lichen array value (`alloc_array`), typed `Int<len>` with a fresh length
+  a real lichen array value (`alloc_array`), typed `array<Int, len>` with a fresh length
   cell.
 
 ## 6. Scope & limits
