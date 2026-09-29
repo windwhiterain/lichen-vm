@@ -21,21 +21,28 @@
 //! - **a `GlobalExt` component** — composed by the host with
 //!   [`compose_ext!`](lichen_utils::compose_ext).
 //!
-//! [`NativePlugin`] is the nominal marker a plugin implements to opt into
-//! this contract.  The mechanics are macro-based because *enum composition is
+//! [`NativePlugin`] is the nominal marker a plugin implements to *name* that
+//! it plays this role; nothing is generic-bound on it, so the `impl` records
+//! the claim rather than enforcing the contract.  The mechanics are macro-based
+//! because *enum composition is
 //! inherently a compile-time expansion*, so a plugin set is fixed at build
 //! time (a package manager assembles a compiler crate that lists the chosen
 //! plugins) rather than loaded at runtime.
 
-/// The nominal marker of a native plugin — opt-in to the native-plugin
-/// contract (see the [module docs](self)).
+/// The nominal marker of a native plugin: a plugin type that registers
+/// native operations (see the [module docs](self)).
 ///
-/// The marker carries no methods: the mechanics are macro-based (enum
-/// composition is a compile-time expansion), so a conforming plugin
+/// The trait carries no methods and nothing is generic-bound on it, so the
+/// `impl` is a declaration, not a check — the mechanics are macro-based (enum
+/// composition is a compile-time expansion), and a conforming plugin
 /// contributes its vocabulary leaves and a
 /// `#[macro_export] macro_rules! <name>_native_ops` for the host to invoke,
 /// alongside any `AttrExt` / `GlobalExt` it supplies.  A marker is a unit
 /// struct with an explicit `impl NativePlugin for ..`.
+///
+/// It is kept as a published trait precisely because nothing constrains it: a
+/// plugin crate implements it out of tree, so dropping it would break external
+/// implementors for no gain.
 pub trait NativePlugin {}
 
 // `NativeOp`/`NativeOps`/`AttrExt` are referenced in the module docs above;
