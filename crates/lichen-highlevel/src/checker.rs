@@ -1194,10 +1194,8 @@ where
         self.node_edges.insert(condition, loc);
         if user_facing {
             self.user_asserts.insert(condition);
-            self.module.add_user_assert(condition);
-        } else {
-            self.module.add_assert(condition);
         }
+        self.module.add_assert(condition);
         if let Some(function) = self.current_function() {
             self.module.functions[function].asserts.push(condition);
         }

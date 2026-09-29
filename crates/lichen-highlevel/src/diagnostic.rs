@@ -254,11 +254,17 @@ where
         }
         // Failed asserts — only the explicit `assert` expressions (a
         // generated array-bounds guard duplicates the index eval error, so it
-        // is not rendered separately).
+        // is not rendered separately).  Both the user-facing flag and the
+        // location are keyed by the *template* condition, which is what an
+        // apply's clone records: a per-call failure is attributed to the
+        // `assert` expression the user wrote, not to a clone.
         for err in &self.module.assert_errors {
-            if self.module.user_asserts.contains(&err.condition) {
+            let AnyNodeId::Dynamic(template) = err.template else {
+                continue; // cloned out of a static module: no location to attribute
+            };
+            if self.user_asserts.contains(&template) {
                 out.push(Diag {
-                    loc: self.node_edges.get(&err.condition).cloned(),
+                    loc: self.node_edges.get(&template).cloned(),
                     kind: DiagKind::Assert,
                     a: NodeId::default(),
                     b: NodeId::default(),

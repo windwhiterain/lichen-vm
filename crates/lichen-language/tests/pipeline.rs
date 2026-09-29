@@ -555,9 +555,18 @@ fn an_assert_in_a_function_body_checks_per_call() {
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::Assert);
     assert_eq!(d[0].message, "assertion failed: expected 1, found 0");
-    // The failure is inside the apply's clone of the body's assert — a
-    // source-blind diagnostic with no loc, so no caret span anymore.
-    assert!(check.loc().is_none(), "the body assert is source-blind");
+    // The failure is inside the apply's clone of the body's assert, so it is
+    // attributed through the clone's template — the caret points at the
+    // body's `!`, the expression the user actually wrote.
+    assert!(
+        check.loc().is_some(),
+        "the clone is attributed to its template's expression"
+    );
+    assert_eq!(
+        d[0].span.map(|(line, _)| line),
+        Some(1),
+        "and the rendered caret is on the line the assert was written"
+    );
 
     // A satisfying argument passes.
     assert!(

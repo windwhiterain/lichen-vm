@@ -4,7 +4,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function, FunctionId,
-    LowValue, Module, NodeId, Operation, Program, TableItem,
+    LowValue, Module, NodeId, Operation, PendingAssert, Program, TableItem,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -144,22 +144,17 @@ impl<P: Program> Module<P> {
             // per-call invariant and is referenced in place (decided at
             // normalize), while an unbound one rewrites to this call's clones,
             // so the body's assert re-checks against the argument.  Only actual
-            // clones register: a fresh entry is a constraint on this call.  A
-            // user-facing assert survives the clone — an explicit `assert` is
-            // rendered on failure even when the failure came from a per-call
-            // clone (the generated bounds guards stay unmarked, so they are
-            // still suppressed after cloning).
+            // clones register: a fresh entry is a constraint on this call.  The
+            // entry keeps the body condition as its template, which is all the
+            // host needs to attribute a per-call failure (a user-facing flag, a
+            // source position) through its own table.
             for &condition in &asserts {
-                let user_facing = module.user_asserts.contains(&condition);
                 let instantiated = module.node_apply(condition, &mut ctx);
                 if instantiated != condition {
-                    module.asserts.push(instantiated);
-                    if user_facing {
-                        module.user_asserts.insert(instantiated);
-                    }
-                    if let Some(&span) = module.assert_spans.get(&condition) {
-                        module.assert_spans.insert(instantiated, span);
-                    }
+                    module.asserts.push(PendingAssert {
+                        condition: instantiated,
+                        template: Dyn(condition),
+                    });
                 }
             }
             // The parameter is cloned like any parameterized node, and the clone
@@ -479,16 +474,12 @@ impl<P: Program> Module<P> {
                 // place.
                 let mut fresh_asserts = Vec::with_capacity(asserts.len());
                 for &condition in &asserts {
-                    let user_facing = self.user_asserts.contains(&condition);
                     let instantiated = self.node_apply(condition, &mut inner);
                     if instantiated != condition {
-                        self.asserts.push(instantiated);
-                        if user_facing {
-                            self.user_asserts.insert(instantiated);
-                        }
-                        if let Some(&span) = self.assert_spans.get(&condition) {
-                            self.assert_spans.insert(instantiated, span);
-                        }
+                        self.asserts.push(PendingAssert {
+                            condition: instantiated,
+                            template: Dyn(condition),
+                        });
                     }
                     fresh_asserts.push(instantiated);
                 }
