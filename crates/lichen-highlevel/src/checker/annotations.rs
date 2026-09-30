@@ -109,7 +109,9 @@ where
         let value_tail = self.schema_tail(value).to_vec();
         let pos = value_tail.iter().position(|m| m == marker)?;
         let pair = self.term[value]?;
-        let items = shape::array_items(&self.module, AnyNodeId::Dynamic(pair))?;
+        // SAFETY: `pair` is a live node of this module; nothing in this crate
+        // calls `Module::drop_block`.
+        let items = unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(pair)) }?;
         items
             .get(shape::attr_slot(pos))
             .and_then(|item| match item.node {

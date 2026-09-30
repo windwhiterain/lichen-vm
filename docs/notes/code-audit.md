@@ -37,7 +37,7 @@ queue's order is deliberate.
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
 | P0-2a | critical | lowlevel | Private raw-pointer fields, checked constructors, the missing contracts | done |
 | P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | done |
-| P0-2c | critical | highlevel | `shape::array_items` re-exports the unbounded slice from a safe wrapper | todo |
+| P0-2c | critical | highlevel | `shape::array_items` re-exports the unbounded slice from a safe wrapper | done |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |

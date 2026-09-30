@@ -581,7 +581,9 @@ where
         // crate calls `Module::drop_block`.
         let def_len = unsafe { self.module.array_items(type_pair) }
             .and_then(|items| items.get(0))
-            .and_then(|item| shape::array_items(&self.module, item.node))
+            // SAFETY: the field item's node is a live node of this module;
+            // nothing in this crate calls `Module::drop_block`.
+            .and_then(|item| unsafe { shape::array_items(&self.module, item.node) })
             .map(|items| items.len());
         // `assign[pos]` = the argument index supplying definition position
         // `pos`.  `valid` flips when a structural mismatch is recorded.
