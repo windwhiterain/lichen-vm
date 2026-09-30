@@ -83,7 +83,7 @@ queue's order is deliberate.
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
 | P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | todo |
 | P3-1 | medium | all | Duplication clusters | done |
-| P3-2 | medium | all | Workspace manifest duplication | todo |
+| P3-2 | medium | all | Workspace manifest duplication | done |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | todo |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | todo |
@@ -2695,7 +2695,47 @@ files by hand.
 
 **Fix.** `[workspace.package] version/edition`, `[workspace.dependencies]` for
 the shared externals and the internal path deps, `version.workspace = true` per
-crate. Then `P3-3` can hang lints off the same table.
+crate.
+
+**Outcome.** The premise held, but its **extent is wrong in one direction**:
+re-derived from `cargo metadata --no-deps`, this workspace has **19 members**,
+not 17, and **one** excluded standalone crate (`tree-sitter-lichen`), not two —
+so `version`/`edition` were stated in **19** member manifests and a release bump
+edited 19 files, not ~14.  Everything landed in the root `Cargo.toml`:
+
+- `[workspace.package]` carries `version = "0.1.0"` and `edition = "2024"`;
+  every member writes `version.workspace = true` / `edition.workspace = true`.
+- `[workspace.dependencies]` carries the externals named by more than one member
+  (`clap`, `logos`, `serde`, `serde_json`, `sha2`, `slotmap`, `stacksafe`) and
+  all the internal crates used as path deps, so each path is written once; the
+  members inherit with `<name>.workspace = true`.
+
+*Deliberately left inline, and why:*
+
+- **`lichen-std-native`'s three git dependencies.**  They must stay *git* deps —
+  that is the whole point of the crate (an externally generated compositor
+  resolves the core subtree from git) — and the root `[patch]` redirects them to
+  the local path members for the monorepo build.  Inheriting a path entry would
+  change their source and the resolution.
+- **`tree-sitter-lichen`'s path dependency** (in `lichen-language-zed`).  It
+  points at a crate the root deliberately *excludes*, so it must not become a
+  workspace-level path entry; and the grammar crate is its own workspace root
+  (`[workspace]` in its manifest), so it cannot inherit the table either.
+- **Single-use externals** (`wasmi`, `wasm-encoder`, `chumsky`, `bumpalo`,
+  `lsp-types`, `tokio`, `tower-lsp`, `toml`, `zed_extension_api`, `tree-sitter`)
+  stay in the one manifest that uses them: a version stated once is already
+  stated once.
+
+*Scope discipline, measured.*  No dependency's version changed, none was added
+or removed, and the `members` list is untouched; only the two new tables and the
+`workspace = true` inheritances changed.  **`git diff Cargo.lock` is empty** — no
+resolution moved.
+
+*The forward reference is dropped.*  The item's own fix line ended "Then `P3-3`
+can hang lints off the same table", expecting a `[workspace.lints]` table.  No
+such table was added: `D12` replaced it with the three-command gate, so the
+manifest tables here hold packages and dependencies only (see `P3-3`'s
+Outcome).
 
 ### P3-3 — No test/clippy/fmt gate in CI
 

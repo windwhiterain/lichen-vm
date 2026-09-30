@@ -1,7 +1,7 @@
 [package]
 name = "lichen-compute"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 wasmi = "2.0.0"
@@ -9,6 +9,6 @@ wasmi = "2.0.0"
 # `wasmi::Module::new` validates every assembled module before it runs, so the
 # encoder must not be a newer generation than the parser that checks its output.
 wasm-encoder = "0.228.0"
-lichen-highlevel = { path = "../lichen-highlevel" }
-lichen-lowlevel = { path = "../lichen-lowlevel" }
-lichen-utils = { path = "../lichen-utils" }
+lichen-highlevel.workspace = true
+lichen-lowlevel.workspace = true
+lichen-utils.workspace = true

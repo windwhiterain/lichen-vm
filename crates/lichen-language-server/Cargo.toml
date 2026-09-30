@@ -1,7 +1,7 @@
 [package]
 name = "lichen-language-server"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 default-run = "lichen-language-server"
 
 [features]
@@ -14,18 +14,18 @@ default = ["server"]
 server = ["dep:tower-lsp", "dep:tokio"]
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde.workspace = true
+serde_json.workspace = true
 # Must match the `lsp-types` line that `tower-lsp@0.20` uses (`^0.94.1`) so the
 # canonical protocol types here and those in `tower_lsp::lsp_types` unify to the
 # same crate.
 lsp-types = "0.94"
-stacksafe = "1"
-lichen-compute = { path = "../lichen-compute" }
-lichen-language = { path = "../lichen-language" }
-lichen-highlevel = { path = "../lichen-highlevel" }
-lichen-lowlevel = { path = "../lichen-lowlevel" }
-lichen-utils = { path = "../lichen-utils" }
+stacksafe.workspace = true
+lichen-compute.workspace = true
+lichen-language.workspace = true
+lichen-highlevel.workspace = true
+lichen-lowlevel.workspace = true
+lichen-utils.workspace = true
 tokio = { version = "1", features = ["full"], optional = true }
 tower-lsp = { version = "0.20", optional = true }
 

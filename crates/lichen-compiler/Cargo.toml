@@ -1,7 +1,7 @@
 [package]
 name = "lichen-compiler"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 default-run = "lichen-compiler"
 
 # The command-line surface, split out of the compiler library so an embedder
@@ -13,11 +13,11 @@ name = "lichen_compiler"
 path = "src/lib.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-lichen-compute = { path = "../lichen-compute" }
-lichen-highlevel = { path = "../lichen-highlevel" }
-lichen-language = { path = "../lichen-language" }
-lichen-utils = { path = "../lichen-utils" }
+clap.workspace = true
+lichen-compute.workspace = true
+lichen-highlevel.workspace = true
+lichen-language.workspace = true
+lichen-utils.workspace = true
 
 [[bin]]
 name = "lichen-compiler"

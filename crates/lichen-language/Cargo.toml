@@ -1,28 +1,28 @@
 [package]
 name = "lichen-language"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-stacksafe = "1"
-lichen-compute = { path = "../lichen-compute" }
-lichen-doc = { path = "../lichen-doc" }
-lichen-highlevel = { path = "../lichen-highlevel" }
-lichen-language-lex = { path = "../lichen-language-lex" }
-lichen-language-parser = { path = "../lichen-language-parser" }
-lichen-perspective = { path = "../lichen-perspective" }
-lichen-lowlevel = { path = "../lichen-lowlevel" }
-lichen-preprocess = { path = "../lichen-preprocess" }
-lichen-registry = { path = "../lichen-registry" }
-lichen-render = { path = "../lichen-render" }
-lichen-utils = { path = "../lichen-utils" }
+stacksafe.workspace = true
+lichen-compute.workspace = true
+lichen-doc.workspace = true
+lichen-highlevel.workspace = true
+lichen-language-lex.workspace = true
+lichen-language-parser.workspace = true
+lichen-perspective.workspace = true
+lichen-lowlevel.workspace = true
+lichen-preprocess.workspace = true
+lichen-registry.workspace = true
+lichen-render.workspace = true
+lichen-utils.workspace = true
 
 [dev-dependencies]
 # Only `tests/persist.rs` uses this: the compiler-slot contract test compares
 # the slot this crate reads with the one the package manager installs into.
-lichen-package = { path = "../lichen-package" }
-lichen-std-native = { path = "../../lichen-std-native" }
+lichen-package.workspace = true
+lichen-std-native.workspace = true
 # `tests/readme.rs` and `tests/examples.rs` drive the README tooling, which
 # moved to its own crate (`P2-6`); a dev-dependency keeps them here without
 # putting the generator back in the library.
-lichen-tools = { path = "../lichen-tools" }
+lichen-tools.workspace = true
