@@ -1022,6 +1022,30 @@ fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error(
 }
 
 #[test]
+fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
+    // `f = g => g 1` applied to `5`: the callee is a parameter, so its type
+    // cell stays unbound and the checker's function-ness guard is skipped.
+    // The lowlevel records the runtime failure, and it reaches the
+    // diagnostics as `RuntimeApplyTarget` — the value itself is the fact,
+    // with no type to print.
+    let report = compile("f = g => g 1\nf 5");
+    assert!(
+        !report.ok(),
+        "an apply of a non-function must not be accepted"
+    );
+    assert_eq!(report.diagnostics.len(), 1);
+    let check = report.diagnostics[0]
+        .check
+        .as_ref()
+        .expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeApplyTarget);
+    assert_eq!(
+        report.diagnostics[0].message,
+        "this value is not a function — it cannot be applied"
+    );
+}
+
+#[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Two functions each contain their own struct occurrence — each body's
     // `Fresh` node is its own, so the nominal ids stay distinct across the

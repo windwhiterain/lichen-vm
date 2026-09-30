@@ -70,6 +70,14 @@ pub enum EvalError {
     /// index operand node, so the highlevel can attribute the diagnostic to
     /// the expression that was used as a subscript.
     IndexSubscript { subscript: AnyNodeId },
+    /// A [`LowOperator::Apply`] whose **target** is a structural value that
+    /// cannot be applied — a scalar, a string, a table, or the unit value.
+    /// Reachable from source (`g 1` with `g : int`), including through a
+    /// deferred callee whose unbound type the checker's function-ness guard
+    /// cannot see, so it is a recorded failure and a computed nothing:
+    /// `function` is the callee operand node, so the highlevel can attribute
+    /// the diagnostic to the expression that was applied.
+    ApplyTarget { function: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -324,15 +332,35 @@ impl<P: Program> Module<P> {
                                         .static_function_apply(sref, argument, block, node, cell),
                                 }
                             }
-                            // A non-`Function` target is a *callable program
-                            // value* (e.g. a compute `Kernel`) — not a
-                            // structural apply.  The compute layer compiles it;
-                            // here it stays lazy so a body's deep pass and the
-                            // JIT can read the graph instead of panicking on a
-                            // legitimate (checker-validated) kernel apply.  A
-                            // genuinely non-callable target is caught by the
-                            // checker's unification before the deep pass runs,
-                            // so reaching this arm is never a real error.
+                            // A scalar, a string, a table, or the unit value
+                            // can never be a function — and never a callable
+                            // program value — so applying one is a user error.
+                            // The checker's function-ness guard cannot see a
+                            // deferred callee's unbound type, so this is where
+                            // the apply is refused: recorded, with the callee
+                            // operand node carrying the fact, and a computed
+                            // nothing.
+                            Some(
+                                LowValue::USize(_)
+                                | LowValue::Str(_)
+                                | LowValue::Table(_)
+                                | LowValue::None,
+                            ) => {
+                                self.eval_errors.push(EvalError::ApplyTarget {
+                                    function: operands[0].node,
+                                });
+                                P::Value::from(LowValue::Void)
+                            }
+                            // A computed nothing is the residue of an
+                            // already-recorded failure: propagate it without
+                            // recording a second one.
+                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
+                            // A structural array and the program's own value
+                            // both stay lazy: a compute `Kernel` is a struct —
+                            // structurally an array — and the compute layer
+                            // compiles that apply, so the lowlevel keeps the
+                            // graph readable for a body's deep pass and the
+                            // JIT instead of refusing a legitimate kernel.
                             _ => P::Value::from(LowValue::Parameterized),
                         }
                     }

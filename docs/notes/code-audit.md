@@ -48,7 +48,7 @@ queue's order is deliberate.
 | P1-3 | high | lowlevel | Table identity hash is a raw address | todo |
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | todo |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
-| P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | todo |
+| P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
 | P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
@@ -549,6 +549,54 @@ pass runs"* — it is not, in the non-concrete case.
 
 **Fix direction: `D3`.** Either the guard pins to a fresh pair per apply, or the
 runtime's non-function arm records an `EvalError`. Do not fix one side only.
+
+**Outcome.** Fixed in the runtime arm, with `check_app` untouched. The new fact
+is `EvalError::ApplyTarget { function }` — it carries the callee operand node,
+so the highlevel attributes the diagnostic to the expression that was applied
+(`diagnostic.rs`'s `RuntimeApplyTarget`, rendered as *"this value is not a
+function — it cannot be applied"*). The `Apply` arm's catch-all is split: a
+scalar, a string, a table, or the unit value records `ApplyTarget` and yields
+`Void`; `Void` propagates silently (it is the residue of an already-recorded
+failure); everything else — the program's own value *and* a structural array —
+stays lazy (`Parameterized`). `Build::ok` already required
+`module.eval_errors.is_empty()`, so recording the fact is what rejects the build.
+The diagnostic carries no caret when the callee's value node has no source edge,
+exactly as its `RuntimeIndexTarget` sibling. The sibling `checker.rs:576-580`
+comment above is now false a second time — the runtime does not panic on a
+non-function apply — but what the definition pass's skip is really for was not
+established here, and contradicted doc comments belong to `P5-3`, so that
+comment was left as it stands.
+
+**The arm split must keep an array lazy.** A compute `Kernel` is a struct
+`[native, sig]`, and a struct value is structurally an array — so classifying
+`LowValue::Array` with the non-callables turns a legitimate kernel apply into a
+runtime error. `tests/compute.rs`'s `jit_cross_kernel_call` and
+`jit_cross_kernel_subexpr` fail exactly there. The arm's laziness exists for that
+path, so only the leaf values the lowlevel can prove uncallable are refused.
+**Residual, deliberately left:** applying a *non-kernel* struct value through a
+deferred callee (`f = g => g 1` applied to a struct instance) is still silently
+accepted — the lowlevel cannot tell that array from a kernel's, and the kernel
+path is the one that must keep working. Closing it needs the checker to see the
+deferred callee's shape, which is `D3`'s other half.
+
+**`check_app`'s `concrete` gate was rejected, and must not be reopened.**
+Removing it makes the guard unify the callee's type cell with a fresh arrow. For
+a lambda *parameter* that cell is shared by every instantiation of the function,
+so the unify resolves it to one concrete arrow and let-polymorphism dies for the
+natural pattern `apply = f => x => f x` used at two types —
+`examples/let_polymorphism.lichen` is a documented, advertised feature. The gate
+is what keeps a callee with an unbound type out of that unify; the deferred case
+is now caught in the runtime arm instead.
+
+**Tests.** `crates/lichen-lowlevel/tests/basic/evaluation.rs`'s
+`applying_a_non_function_records_an_eval_error` pins the lowlevel fact (recorded
+exactly once, blamed on the callee node, `Void` yielded), and
+`crates/lichen-language/tests/pipeline.rs`'s
+`an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error` pins
+the user-visible diagnostic for the reproduction. The first was confirmed to fail
+against the unfixed arm; `compute`/`examples` pass before and after, and the
+`Array` regression above was found by that gate and fixed in the arm, not the
+test.
 
 ### P1-7 — Function pass order is non-deterministic `reported`
 

@@ -165,6 +165,9 @@ where
         DiagKind::RuntimeIndexSubscript => {
             "this value is not an index — an element can only be read by position".to_string()
         }
+        DiagKind::RuntimeApplyTarget => {
+            "this value is not a function — it cannot be applied".to_string()
+        }
         DiagKind::ImportExport => {
             "this package's export is not a value — a package must end in a value".to_string()
         }

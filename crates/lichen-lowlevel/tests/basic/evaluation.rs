@@ -161,6 +161,35 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     ));
 }
 #[test]
+fn applying_a_non_function_records_an_eval_error() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // The target is a structural scalar — not a function, and not the
+    // program's own (possibly callable) value — so the apply is a user error
+    // rather than a lazy deferral.
+    let callee = usize_node(&mut m, root, 5);
+    let argument = usize_node(&mut m, root, 1);
+    let operands = array_node(&mut m, root, &[callee, argument], None);
+    let apply = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(operands),
+    );
+
+    let value = m.evaluate_node_deep(apply, None);
+
+    // No panic, no call: the failure is recorded as a fact, and the apply
+    // yields the computed-nothing value.
+    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+    assert_eq!(m.eval_errors.len(), 1);
+    let EvalError::ApplyTarget { function } = m.eval_errors[0] else {
+        panic!("applying a non-function records an ApplyTarget failure")
+    };
+    assert_eq!(function, AnyNodeId::Dynamic(callee));
+    assert!(m.unify_errors.is_empty());
+}
+#[test]
 #[should_panic(expected = "cycle")]
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();

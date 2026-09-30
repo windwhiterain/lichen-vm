@@ -106,6 +106,13 @@ pub enum DiagKind {
     /// reached the diagnostics as a fact about a *value*, with no type to
     /// print, so the wording is self-contained.
     RuntimeIndexSubscript,
+    /// An apply whose **runtime** target turned out not to be a function — the
+    /// lowlevel's [`EvalError::ApplyTarget`](lichen_lowlevel::EvalError::ApplyTarget)
+    /// reached the diagnostics as a fact about a *value*, with no type to
+    /// print, so the wording is self-contained.  Distinct from
+    /// [`Self::Guard`], which reports a *type* the checker refused to apply
+    /// and therefore names that type.
+    RuntimeApplyTarget,
     /// A `$name(args…)` call whose `name` no plugin registered with this
     /// module — the checker resolves `$name` against the module's own private
     /// [`NativeOps`](crate::NativeOps) registry, and this is the miss.  `a`/`b`
@@ -292,6 +299,7 @@ where
                 EvalError::TableKeyUnbound { key } => (2, Some(*key), None, None),
                 EvalError::IndexTarget { target } => (3, Some(*target), None, None),
                 EvalError::IndexSubscript { subscript } => (4, Some(*subscript), None, None),
+                EvalError::ApplyTarget { function } => (5, Some(*function), None, None),
             };
             if !seen.insert(key) {
                 continue;
@@ -366,6 +374,22 @@ where
                     budget: None,
                     loc: self.node_loc(*subscript),
                     kind: DiagKind::RuntimeIndexSubscript,
+                    a: NodeId::default(),
+                    b: NodeId::default(),
+                    value_a: None,
+                    value_b: None,
+                    assert_value: None,
+                    index: None,
+                    length: None,
+                    field: None,
+                    error_index: None,
+                }),
+                // An apply of a non-function: the value itself is the fact, so
+                // this kind carries no type to print.
+                EvalError::ApplyTarget { function } => out.push(Diag {
+                    budget: None,
+                    loc: self.node_loc(*function),
+                    kind: DiagKind::RuntimeApplyTarget,
                     a: NodeId::default(),
                     b: NodeId::default(),
                     value_a: None,
