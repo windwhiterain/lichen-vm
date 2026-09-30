@@ -118,6 +118,14 @@ pub enum DiagKind {
     /// [`NativeOps`](crate::NativeOps) registry, and this is the miss.  `a`/`b`
     /// are unused; the operator name rides in [`DiaryEntry::field`].
     NativeOpUnresolved,
+    /// A schema that carries an attribute, checked by a build that has no
+    /// attribute extension to lower it — the public
+    /// [`Checker::build`](crate::checker::Checker::build) and
+    /// [`Checker::build_in`](crate::checker::Checker::build_in) install none.
+    /// `a`/`b` are unused; the checker records this at the site that read the
+    /// attribute rather than panicking, and the slot falls back to the
+    /// attribute's well-formed hole.
+    NoAttributeExtension,
     /// A top-level binding whose value computation never terminates — the VM's
     /// apply/depth guard fired while the build evaluated the user-written
     /// statement.  The checker reports this as an error instead of panicking.

@@ -149,6 +149,13 @@ where
             // The parameter's schema tail[0] names the attribute; the apply's
             // check resolves its `AttrExt` from this marker.
             let marker = self.ir.schema(parameter).tail[0];
+            // A parameter annotation is the other site that reads an
+            // attribute: a build with no attribute extension reports it here,
+            // so the apply's check can simply decline to run (the guard has
+            // already failed the build).
+            if self.attribute_extension(&marker).is_none() {
+                self.no_attr_ext_guard(self.loc(e, 2));
+            }
             self.function_param_attr.insert(e, (marker, declared));
         }
         let ret = self.check_expr(r#return);
@@ -259,20 +266,29 @@ where
         // `f = x # 4 => x` (declared `4` vs missing).  Routed through the
         // attribute's `AttrExt::unify_slots`; a program with no attribute
         // extension reaches neither branch (no schema carries an attribute).
+        //
+        // A build with no attribute extension records the guard once, where
+        // the attribute is first read — an annotation or a parameter
+        // annotation — and it is the argument pair's own missing slot
+        // ([`Checker::missing_slot_of`]) that reports it when no other site
+        // has.  So this check is skipped, not re-reported.
         if let Some((param_marker, param_slot)) = param_persp {
-            let ext = (self.attr_ext)(&param_marker);
-            let arg_missing = self.attr_or_missing(argument, &param_marker);
-            let loc2 = self.loc(e, 2);
-            ext.unify_slots(self, arg_missing, param_slot, loc2);
+            if let Some(ext) = self.attribute_extension(&param_marker) {
+                let arg_missing = self.attr_or_missing(argument, &param_marker);
+                let loc2 = self.loc(e, 2);
+                ext.unify_slots(self, arg_missing, param_slot, loc2);
+            }
         } else if self.attr[argument].is_some() {
             let marker = self.schema_tail(argument)[0];
-            let ext = (self.attr_ext)(&marker);
-            let found_attr = self.attr[argument].unwrap();
-            // The declared side of an unannotated parameter is the attribute's
-            // missing slot — a `[0, int]` term pair, the uniform slot shape.
-            let missing = self.missing_slot_of(&marker);
-            let loc2 = self.loc(e, 2);
-            ext.unify_slots(self, found_attr, missing, loc2);
+            if let Some(ext) = self.attribute_extension(&marker) {
+                let found_attr = self.attr[argument].unwrap();
+                // The declared side of an unannotated parameter is the
+                // attribute's missing slot — a `[0, int]` term pair, the
+                // uniform slot shape.
+                let missing = self.missing_slot_of(&marker, self.loc(e, 2));
+                let loc2 = self.loc(e, 2);
+                ext.unify_slots(self, found_attr, missing, loc2);
+            }
         }
         // The result's type cell: unbound unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime

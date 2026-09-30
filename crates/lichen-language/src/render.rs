@@ -250,6 +250,10 @@ where
             None => "unresolved native operator — this module composes no plugin registering it"
                 .to_string(),
         },
+        DiagKind::NoAttributeExtension => {
+            "this expression carries an attribute, but this build has no attribute extension to lower it"
+                .to_string()
+        }
         DiagKind::Assert => {
             // The assert's failed value, rendered generically through the
             // structural `LowValue` view.

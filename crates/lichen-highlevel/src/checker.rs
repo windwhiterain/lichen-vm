@@ -148,10 +148,18 @@ where
     module: Module<P>,
     pub current_block: BlockId,
     /// The attribute extension registry: maps an attribute marker
-    /// (`P::Attr`) to its lowering behaviour.  The checker never names a
-    /// concrete attribute — it asks this registry for the `AttrExt` and
-    /// calls through it.
-    attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+    /// (`P::Attr`) to its lowering behaviour, or `None` for a build with no
+    /// attribute extension at all.  The checker never names a concrete
+    /// attribute — it asks this registry for the `AttrExt` and calls through
+    /// it, and a marker it cannot resolve is
+    /// [`DiagKind::NoAttributeExtension`] rather than a panic (see
+    /// [`Checker::no_attr_ext_guard`]).
+    attr_ext: Option<Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>>,
+    /// Whether [`Checker::no_attr_ext_guard`] has already reported this
+    /// build's missing attribute extension.  "This build has no attribute
+    /// extension" is one fact about the build, however many expressions read
+    /// an attribute, so the guard is recorded once — at the first reader.
+    no_attr_ext_reported: bool,
     /// The native-operator registry: a private, name→operator mapping for the
     /// compiling module's plugin (see [`crate::native`]).  Nothing upstream of
     /// the checker can see it — the frontend compiles a `$name` call blindly,
@@ -457,9 +465,10 @@ where
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
     /// Compile an IR with a fresh private registry and no attribute
-    /// extension (a program whose schemas carry no attribute is unaffected),
-    /// under the default [`WorkBudget`] — [`Self::build_with_budget`] with
-    /// [`WorkBudget::default`].
+    /// extension, under the default [`WorkBudget`] — [`Self::build_with_budget`]
+    /// with [`WorkBudget::default`].  A program whose schemas carry no
+    /// attribute is unaffected; one that does carry an attribute is refused
+    /// with [`DiagKind::NoAttributeExtension`] (use [`Self::build_in_attr`]).
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
         Self::build_with_budget(ir, WorkBudget::default())
     }
@@ -469,13 +478,7 @@ where
     /// terminating, whose definition pass needs more work than the tuned
     /// default allows.
     pub fn build_with_budget(ir: IR<P::Attr, P::Literal>, work_budget: WorkBudget) -> Build<P> {
-        Self::build_with(
-            ir,
-            Module::new(),
-            Self::no_attr_ext(),
-            no_native_ops(),
-            work_budget,
-        )
+        Self::build_with(ir, Module::new(), None, no_native_ops(), work_budget)
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
@@ -483,13 +486,7 @@ where
     /// leaves through a `PackageStore`.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(
-            ir,
-            module,
-            Self::no_attr_ext(),
-            no_native_ops(),
-            WorkBudget::default(),
-        )
+        Self::build_with(ir, module, None, no_native_ops(), WorkBudget::default())
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry — the
@@ -502,7 +499,13 @@ where
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, no_native_ops(), WorkBudget::default())
+        Self::build_with(
+            ir,
+            module,
+            Some(attr_ext),
+            no_native_ops(),
+            WorkBudget::default(),
+        )
     }
 
     /// [`Self::build_in_attr`] with a native-operator registry — the entry
@@ -517,17 +520,13 @@ where
         native_ops: NativeOps<P>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, native_ops, WorkBudget::default())
-    }
-
-    /// The no-op registry of a program with no attribute extension: no schema
-    /// carries an attribute, so it is never consulted.  (Sharing is decided on
-    /// first use at the site that needs a slot, not in the install pass, so a
-    /// program that never has an absent attribute never asks even that.)
-    fn no_attr_ext() -> Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>> {
-        Box::new(|_attr: &P::Attr| -> &'static dyn AttrExt<P> {
-            unreachable!("this program has no attribute extension")
-        })
+        Self::build_with(
+            ir,
+            module,
+            Some(attr_ext),
+            native_ops,
+            WorkBudget::default(),
+        )
     }
 
     /// The shared body of every entry point above: compile `ir` against
@@ -538,7 +537,7 @@ where
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: Option<Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>>,
         native_ops: NativeOps<P>,
         work_budget: WorkBudget,
     ) -> Build<P> {
@@ -561,6 +560,7 @@ where
             module,
             current_block: root_block,
             attr_ext,
+            no_attr_ext_reported: false,
             native_ops,
             scopes: Vec::new(),
             function_stack: Vec::new(),

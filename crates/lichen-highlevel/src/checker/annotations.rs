@@ -8,7 +8,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{ExprId, ExprKind};
+use crate::ir::{ExprId, ExprKind, Loc};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
@@ -19,6 +19,49 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
+    /// The [`AttrExt`](crate::attr::AttrExt) for `marker`, or `None` when this
+    /// build has no attribute extension at all ([`Checker::build`] and
+    /// [`Checker::build_in`] install none).  A marker this build cannot lower
+    /// is a check-time refusal, not a broken invariant: the sites that read it
+    /// report [`DiagKind::NoAttributeExtension`] through
+    /// [`Self::no_attr_ext_guard`] and carry on over the hole it returns.
+    ///
+    /// [`Checker::build`]: super::Checker::build
+    /// [`Checker::build_in`]: super::Checker::build_in
+    pub(super) fn attribute_extension(
+        &self,
+        marker: &P::Attr,
+    ) -> Option<&'static dyn crate::attr::AttrExt<P>> {
+        self.attr_ext.as_ref().map(|registry| registry(marker))
+    }
+
+    /// Records the [`DiagKind::NoAttributeExtension`] guard at `loc` — the
+    /// site that read the attribute — and returns the well-formed hole the
+    /// slot falls back to: a fresh unbound `[value, type]` pair, the shape
+    /// every attribute slot has (see [`crate::attr`]).  Nothing unifies
+    /// against it — the guard has already failed the build, and
+    /// `check_failed` skips the definition pass — so it binds nothing, while
+    /// the runtime pair keeps the arity its schema declared.
+    ///
+    /// Recorded **once per build**, at the first reader: a program may read an
+    /// attribute at every expression it annotates, and the fact being reported
+    /// is about the build, not about any one of them.
+    pub(super) fn no_attr_ext_guard(&mut self, loc: Loc) -> NodeId {
+        if !self.no_attr_ext_reported {
+            self.no_attr_ext_reported = true;
+            self.record_guard(
+                self.type_expr,
+                self.type_expr,
+                loc,
+                DiagKind::NoAttributeExtension,
+                None,
+            );
+        }
+        let value = self.fresh_cell();
+        let ty = self.fresh_cell();
+        self.pair_of(value, ty)
+    }
+
     /// The direct sub-expressions of a compound whose perspectives participate
     /// in a `# p` annotation's meet (gcd) — the reference.  A leaf has none.
     /// Per the plan's combine table: the named sub-expressions of a `BinOp`/
@@ -130,7 +173,7 @@ where
         if let Some(slot) = self.attr[e] {
             return slot;
         }
-        self.missing_slot_of(marker)
+        self.missing_slot_of(marker, self.loc(e, 2))
     }
 
     /// The attribute's *missing* slot node — one shared node for the whole
@@ -147,14 +190,18 @@ where
     /// laziness is that a slot first needed *inside* a lambda is tagged into
     /// that function's template and so is cloned per apply, which is exactly
     /// what the per-occurrence form did; it is never worse, only sometimes no
-    /// better.
-    pub(super) fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
+    /// better.  `loc` is the attribute slot of the expression the slot is
+    /// needed for — where the missing attribute is read.
+    pub(super) fn missing_slot_of(&mut self, marker: &P::Attr, loc: Loc) -> NodeId {
         let index = marker.order_index();
         if let Some(shared) = self.missing_slots[index] {
             return shared;
         }
-        let slot = (self.attr_ext)(marker).missing_slot(self);
-        if (self.attr_ext)(marker).share_missing_slot() {
+        let Some(ext) = self.attribute_extension(marker) else {
+            return self.no_attr_ext_guard(loc);
+        };
+        let slot = ext.missing_slot(self);
+        if ext.share_missing_slot() {
             self.missing_slots[index] = Some(slot);
         }
         slot
@@ -215,7 +262,16 @@ where
         let mut constraint_slot: Option<NodeId> = None;
         let mut attr_idx = 0;
         for marker in &tail {
-            let ext = (self.attr_ext)(marker);
+            let Some(ext) = self.attribute_extension(marker) else {
+                // The schema carries an attribute this build cannot lower:
+                // report it at the annotation and keep the pair's arity with
+                // the hole.  No constraint slot is recorded — without an
+                // extension there is nothing to constrain with — so nothing
+                // downstream consults the extension for this expression a
+                // second time.
+                slots.push(self.no_attr_ext_guard(self.loc(e, 2)));
+                continue;
+            };
             // Does this annotation spell this slot?  (its own schema lists
             // exactly the slots it replaces; everything else is preserved.)
             let spelled = own_tail
@@ -286,7 +342,7 @@ where
                 // at element 0, a label's metadata is the whole pair).
                 let node = self
                     .value_attr_node(value, marker)
-                    .unwrap_or_else(|| self.missing_slot_of(marker));
+                    .unwrap_or_else(|| self.missing_slot_of(marker, self.loc(e, 2)));
                 if !ext.is_label() {
                     constraint_slot = Some(node);
                 }

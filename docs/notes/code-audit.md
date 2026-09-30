@@ -72,7 +72,7 @@ queue's order is deliberate.
 | P2-6 | medium | language | README generator and `clap` live in the compiler library | todo |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | todo |
-| P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | todo |
+| P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | todo |
 | P2-11 | medium | all | God files with named seams | todo |
 | P3-1 | medium | all | Duplication clusters | todo |
@@ -1413,6 +1413,54 @@ pattern a few dozen lines away (`NativeOpUnresolved`, `:1335-1341`).
 `build_in_attr` and `build_in_attr_native` have **zero** test coverage.
 
 **Fix.** Record a guard and return a hole.
+
+**Outcome.** The premise held, and the panic was reproduced first-hand before
+the fix: a hand-built program whose annotation schema carries an attribute,
+checked through `Checker::build`, aborted with *"panicked at
+crates\lichen-highlevel\src\checker.rs:529:13: internal error: entered
+unreachable code: this program has no attribute extension"*.  `no_attr_ext`
+installed that closure and both `build` and `build_in` passed it, so the
+public "simplest" entry point panicked mid-check on any schema carrying an
+attribute — a host that composes an attribute set and forgets `build_in_attr`
+got a panic instead of a diagnostic.
+
+*One correction to the finding:* `build_in_attr_native` is not uncovered — it
+is `lichen-language`'s only entry point (`lib.rs:228`), so every language-layer
+test exercises it.  *Direct* coverage was absent, and it is no longer: the new
+tests call both it and `build_in_attr` on an annotated program.
+
+The registry is now `Option<Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>>`
+(`attr_ext`); `build` and `build_in` pass `None`, and the `unreachable!`
+closure is gone.  A marker that cannot be resolved is a check-time refusal:
+`Checker::no_attr_ext_guard` records `DiagKind::NoAttributeExtension` — the new
+kind, rendered by `render::checker_message` as *"this expression carries an
+attribute, but this build has no attribute extension to lower it"* — and
+returns the same well-formed hole the other check-time guards leave: a fresh
+unbound `[value, type]` pair, the shape every attribute slot has, so the
+runtime pair keeps the arity its schema declared and no reader meets an absent
+element.  Nothing unifies against the hole (the guard has already failed the
+build, so `check_failed` skips the definition pass), and the guard is recorded
+**once per build**, at the first site that read the attribute — `check_ann`'s
+per-marker loop, the `x # n` parameter annotation in `check_lam`, or
+`missing_slot_of` when a missing slot is needed — because the fact reported is
+a property of the build rather than of one expression; the apply site then
+skips its attribute unify instead of reporting it a second time.
+`missing_slot_of` gained the `Loc` it attributes with (`attr_or_missing` and its
+two `check_ann` callers pass the expression's attribute slot).  No public
+signature changed: `build_in_attr` and `build_in_attr_native` still take the
+boxed closure and wrap it in `Some`.
+
+**Tests.** `crates/lichen-highlevel/tests/attributes.rs` (new) defines a probe
+attribute (`Tag`), its `AttrExt`, and a `TaggedProgram`, and pins five facts:
+the annotated program reports the new kind at the annotation and fails; the
+pair keeps its three-wide `[value, type, attribute]` arity with the hole in the
+slot; an annotated *parameter* is reported exactly once; an unannotated program
+through the same entry point is unaffected; and `build_in_attr` with the
+extension installed lowers the annotation with no diagnostic.  The two panic
+cases were confirmed to abort against the unfixed sources with the message
+above; the highlevel, `lichen-language` (including `pipeline`, `registry`,
+`examples`, `compute`), `lichen-perspective` and `lichen-doc` suites pass after
+the fix.
 
 ### P2-10 — `check_term` recursion is unbounded `reported`
 
