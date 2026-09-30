@@ -52,7 +52,7 @@ queue's order is deliberate.
 | P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
-| P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | todo |
+| P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | todo |
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
@@ -666,11 +666,34 @@ outcome enum.
 array panics the checker. The lowlevel does this correctly a few hundred lines
 away — `crates/lichen-lowlevel/src/apply.rs:143` checks `items().len() >= 2`.
 
-Reachability: a well-formed program always roots to a 2-element pair, so this
-needs a corrupt or mismatched-version artifact rather than ordinary source —
-still untrusted input to the compiler.
+Reachability: **the audit's claim was wrong and is corrected in the Outcome.** A well-formed program usually roots to a 2-element pair, but a raw
+read *of* a raw read (`[[1]]<0>`) exports the inner array — a one-element one —
+so ordinary source reaches the panic; no crafted artifact is involved.
 
 **Fix.** `if items.len() != 2 { record_guard(ImportExport); return pair; }`.
+
+**Outcome.** The guard now covers the array's *width* as well as its kind: the
+`Static` arm takes the export's items only when the array is exactly the
+`[value, type]` pair (`checker.rs:1273-1274`, `items.len() == 2`), and every
+other shape takes the same `DiagKind::ImportExport` path the non-array export
+already took, leaving the same well-formed hole (a fresh pair cell) behind. The
+arm's structure is unchanged; only the guard's condition grew. The lowlevel's
+sibling check (`apply.rs:148`, `items().len() >= 2`) is the shape the checker
+should have had.
+
+*The premise held, and reachability is stronger than reported.* No artifact is
+needed. A package whose whole source is `[[1]]<0>` exports the inner array — a
+one-element array — and the importer `@{x = import "pkg.lichen"@}x` panicked at
+the unfixed `checker.rs:1280` with **"index out of bounds: the len is 1 but the
+index is 1"**. The neighbouring `[1, 2]<0>` case stays on the non-array side of
+the guard: its export is an unevaluated op node, so `array_items` answers
+`None` for it.
+
+**Test.** `crates/lichen-language/tests/registry.rs`'s
+`a_package_export_that_is_not_a_pair_reports_an_import_export_error` pins the
+`[[1]]<0>` package, the `ImportExport` kind and the caret on the import
+directive; it was confirmed to fail against the unfixed checker with the panic
+above.
 
 ### P1-11 — `store_artifact`: fixed temp name, outside the lock `verified`
 

@@ -1261,13 +1261,18 @@ where
                 let pair = self.module.materialize_leaf(export, self.current_block);
                 // A `RawIndex` root compiles to the raw read operation, not to
                 // a pair: `[1, 2]<0>` exports an unevaluated op node, whose
-                // items are unavailable until something evaluates it.  The
-                // contract the importer needs is therefore a *checked* one, so
-                // a violated contract is an honest guard about the import
-                // rather than a panic inside the checker.
+                // items are unavailable until something evaluates it.  A raw
+                // read *of* a raw read exports the inner array itself
+                // (`[[1]]<0>` evaluates to an array of one element).  The
+                // contract the importer needs is therefore a *checked* one —
+                // exactly the pair's two items — so a violated contract is an
+                // honest guard about the import rather than a panic inside the
+                // checker.
                 // SAFETY: `pair` was just materialized into the current
                 // block, whose arena is alive.
-                let Some(items) = (unsafe { self.module.array_items(pair) }) else {
+                let Some(items) =
+                    (unsafe { self.module.array_items(pair) }).filter(|items| items.len() == 2)
+                else {
                     let cell = self.fresh_cell();
                     let pair = self.pair_of(cell, cell);
                     self.term[e] = Some(pair);

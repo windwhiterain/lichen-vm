@@ -229,6 +229,33 @@ fn an_unattributable_failure_in_a_dependency_names_the_package() {
 }
 
 #[test]
+fn a_package_export_that_is_not_a_pair_reports_an_import_export_error() {
+    // A raw read of a raw read exports the inner array itself: `[[1]]<0>`
+    // evaluates to a one-element array, not the `[value, type]` pair the
+    // importer reads.  The guard covers the width as well as the kind, so this
+    // is the same honest diagnostic the non-array export gets rather than an
+    // index-out-of-bounds panic inside the checker.
+    let dir = temp_dir("short-export");
+    write(&dir, "short.lichen", "[[1]]<0>\n");
+    let main = "@{x = import \"short.lichen\"@}x\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    let diag = err
+        .iter()
+        .find(|d| {
+            d.check
+                .as_ref()
+                .is_some_and(|c| c.kind == DiagKind::ImportExport)
+        })
+        .unwrap_or_else(|| panic!("the one-element export must be guarded: {err:?}"));
+    assert_eq!(
+        diag.span,
+        Some((1, 3)),
+        "the caret is on the @import directive"
+    );
+}
+
+#[test]
 fn package_store_caches_loaded_packages() {
     let dir = temp_dir("cache");
     let pkg = write(&dir, "pkg.lichen", "42\n");
