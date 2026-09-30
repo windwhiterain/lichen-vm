@@ -70,6 +70,7 @@ queue's order is deliberate.
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
+| P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -110,6 +111,7 @@ queue's order is deliberate.
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
 | P5-13 | low | preprocess | `PreprocessDiag::at_zero` fabricates a source span | done |
+| P5-14 | low | docs | Citations invalidated by the file splits | todo |
 
 ## P0 — memory safety and supply chain
 
@@ -1809,6 +1811,30 @@ fix; `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --all -- --check` exit 0, and the artifact round-trip gates
 (`-p lichen-language --test persist --test registry --test examples --test
 compute`) pass.
+
+### P1-28 — One AST walk is unguarded, and a caller runs it on the caller's stack `verified`
+
+Found while splitting files for `P2-11`, and it **corrects a claim `P2-2`'s Outcome
+makes**. `P2-2` lists `collect_error_blocks::walk_expr`
+(`crates/lichen-language-parser/src/parse.rs`, now `parse/error_blocks.rs`) as one
+of the seven AST walks and says all seven carry `#[stacksafe]`. That is wrong:
+**`lichen-language-parser` does not depend on `stacksafe` at all** (its manifest
+lists `chumsky` and `lichen-language-lex` and nothing else), so that walk has never
+been guarded.
+
+It has survived because its in-parser call site sits inside the parser's 16 MiB
+worker, where the stack is deep enough. But `crates/lichen-language/src/session.rs`
+calls it too, and that call is on the **caller's** stack — a 1 MiB thread — which
+is exactly the arrangement `P1-22` fixed for the other six.
+
+**Latent rather than live:** the `session.rs` path is `BufferSession`'s splice,
+which `P2-1` records as built but unwired. So this becomes reachable when `P2-1`
+wires the session — which is decision `D6`'s (b) step. Fix it before or with that
+wiring, not after.
+
+**Fix.** Add `stacksafe` to `lichen-language-parser`'s manifest and annotate the
+walk's recursive entry point, matching what `P1-22` did for the other six. Do not
+change the parser's worker or its stack size (`P1-23`, `wontfix:D9`).
 
 ## P2 — architecture
 
@@ -4662,6 +4688,29 @@ the rendering has neither `-->` nor a caret. Against the unfixed tree it fails
 with `span: Some((0, 0))` (the panic prints the whole `Diag`). A second test,
 `a_dependency_sub_path_outside_its_clone_is_not_reported_at_line_one`, pins the
 other `at_zero` site.
+
+### P5-14 — Citations invalidated by the file splits `verified`
+
+`P2-11` moved code into twelve new modules, so several notes' `file:line`
+citations now name a file that no longer holds the line, or a line that has moved.
+Two are known:
+
+- `docs/notes/lowlevel-low-types.md:125` cites `static_module.rs:539`, which is now
+  in `static_module/freeze.rs`.
+- `docs/notes/type-system-cleanup-plan.md` carries stale line references of its own
+  (a closed plan, but its citations are still read).
+
+**Fix.** Re-derive and re-point them, or delete the citation where the line number
+adds nothing. A closed plan's *methodology* is historical and stays; its
+*pointers* to live code are not. Sweep the other notes for the same drift while
+you are there — the splits touched `render.rs`, `static_module.rs`, `resolve.rs`,
+`checker.rs`, `compile.rs`, `package.rs` and `parse.rs`, so any note citing those
+by line is suspect.
+
+Also fix the truncated doc comment `P2-11` moved verbatim:
+`crates/lichen-highlevel/src/checker/native_call.rs`'s module doc jumps from
+*"…the private contract with its own source."* straight into a parenthetical — the
+lead-in sentence was already missing before the move (`P5-3`'s class).
 
 ## Decisions
 
