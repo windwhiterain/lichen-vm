@@ -71,6 +71,8 @@ queue's order is deliberate.
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
 | P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | done |
+| P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | todo |
+| P1-30 | low | compute | A refused `plrun` count is silent | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2010,6 +2012,40 @@ stand-in rather than any real caller's stack.
 `cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes, and
 `cargo test -p lichen-language --test pipeline --test examples --test persist
 --test registry` passes.
+
+### P1-29 — A compute value reaching the artifact codec panics `reported`
+
+Found while fixing `P1-18`, read but not reproduced, so `reported`:
+`ComputeValue::write_value` **panics** on `Kernel`, `ParKernel` and `Buffer`. The
+codec's own comment calls that an invariant violation, which is true only if no
+such value can reach a freeze.
+
+The reachable shape is a package that `jit`s at its **top level** and is then
+**imported**: the importer's freeze walks the imported module's values, meets the
+kernel, and panics. `P1-18` did not establish that this is reachable in practice,
+and neither does this note — **establish it before fixing**, because the answer
+decides whether the fix is a diagnostic or a codec change.
+
+**Fix.** A compute value that cannot be serialized must be refused with a
+diagnostic naming the value, not a panic inside a codec — the same standard
+`P0-1`/`P0-5`/`P0-7` hold the container to. If the codec *can* legitimately meet
+one, it needs an encoding; if it cannot, the panic is in the wrong layer and the
+refusal belongs where the freeze decides what to serialize.
+
+### P1-30 — A refused `plrun` count is silent `verified`
+
+`P1-18` bounded `plrun`'s element count (`MAX_PARALLEL_ELEMENTS = 1 << 20`) and
+chose to **refuse** rather than truncate, which is right — but the refusal returns
+an error that the caller's arm turns into the lazy marker, so the user sees
+`parameterized: Int` and no diagnostic. A program asking for 2²⁴ elements is told
+nothing about why it got nothing.
+
+**Fix.** Give the refusal a diagnostic. `P1-18`'s Outcome records why it did not:
+`eval_errors` is a closed enum of *structural* facts and every `BudgetExhausted`
+variant renders *"never terminates"*, which would be false here. So the fix is a
+variant in the right place, not a reuse of the wrong one — decide which channel
+owns "a resource limit was reached", and if that means extending the budget enum,
+say so.
 
 ## P2 — architecture
 
