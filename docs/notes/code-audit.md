@@ -81,7 +81,7 @@ queue's order is deliberate.
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
-| P2-11 | medium | all | God files with named seams | doing |
+| P2-11 | medium | all | God files with named seams | done |
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
 | P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | done |
 | P3-1 | medium | all | Duplication clusters | done |
@@ -2684,20 +2684,20 @@ that side; after the fix it passes.
 | `language/src/persist.rs` | 650 | codec traits + container / cache-root resolver / inline tests |
 | `language-parser/src/parse.rs` | 1584 | thread driver / token utils / statement grammar / precedence ladder / atoms+postfix / type constructors / AST walk / diagnostics |
 
-**Outcome — the seam table re-verified; seven of the eleven files are split, and four are left with their reason.**  Every extent above had drifted, so each was re-measured at the pre-commit revision (true line counts):
+**Outcome — the seam table re-verified; nine of the eleven files are split, and two are left with their reason.**  Every extent above had drifted, so each was re-measured before that commit (true line counts; it is the `first commit` column below, and the two files it left only for batch size were taken in the follow-up pass recorded after the seam list):
 
-| file | ledger | re-measured | this commit |
+| file | ledger | re-measured | first commit |
 |---|---|---|---|
 | `language-server/src/analysis.rs` | 2566 | 2689 | **left** |
 | `compute/src/compute.rs` | 2182 | 2371 | **left** |
 | `highlevel/src/checker.rs` | 1502 | 1765 | 1528 — `asserts` 50, `native_call` 118, `operators` 63, `tuples` 60 |
-| `lowlevel/src/lib.rs` | 1179 | 1505 | **left** |
+| `lowlevel/src/lib.rs` | 1179 | 1505 | **left here** |
 | `lowlevel/src/static_module.rs` | 848 | 933 | 248 — `apply` 366, `freeze` 334 |
 | `render/src/render.rs` | 1168 | 1302 | 485 — `type_printer` 485, `value_printer` 344 |
 | `language/src/compile.rs` | 952 | 994 | 922 — `alloc` 86 |
 | `language/src/resolve.rs` | 706 | 760 | 397 — `content_key` 373 |
 | `language/src/package.rs` | 916 | 930 | 787 — `vendored` 151 |
-| `language/src/persist.rs` | 650 | 744 | **left** |
+| `language/src/persist.rs` | 650 | 744 | **left here** |
 | `language-parser/src/parse.rs` | 1584 | 1566 | 1378 — `error_blocks` 168, `diagnostics` 36 |
 
 Both extents the item text calls out are wrong.  `compile_expr` is **475** lines,
@@ -2768,7 +2768,7 @@ No `#[stacksafe]` guard moved off its function: `check_term`
 `resolve_expr` and the three analysis walks were not touched at all.  Each split
 parent module doc now names its new siblings.
 
-*Left, and why.*  Four files:
+*Left by that commit, and why.*  Four files:
 
 - `analysis.rs` (2689).  The highest-value cut the item names there — merging the
   three ~150-line walks — **is the P2-2 Preference 1**, which the P2-2 Outcome
@@ -2803,15 +2803,81 @@ two printer modules and the parent all call them, so a third file would mean
 boundary.  This is the item own line about a widened surface being a worse trade
 than a long file.
 
-**Residual, and the status.**  `analysis.rs`, `compute.rs`, `lowlevel/lib.rs` and
-`persist.rs` are unsplit, so this row is `doing`, not `done`: the first needs the
-shared-visitor decision P2-2 left proposed, the other three are within reach of
-the same method in a second pass.
+**Follow-up pass — the two batch-size files are split; the two real costs stay,
+each with its boundary re-derived.**  Both splits are moves, checked the same way
+as the seven before them: the parent was sliced at the seam and the slice written
+to the child verbatim apart from a module doc, its `use` lines and the one
+visibility below.
 
-**Evidence.**  `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
-`cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes, and
-`cargo test -p lichen-language --test pipeline --test examples --test persist
---test registry --test compute` passes (24 + 1 + 15 + 123 + 16).
+- `lowlevel/lib.rs` (1505) → `lowlevel/module.rs` (377: `impl Default for Module`
+  plus the whole `impl Module`, parent lines 1133-1505) and
+  `lowlevel/registry.rs` (125: `impl Default for Registry` plus `impl Registry`,
+  lines 1011-1131).  The parent keeps its 1010 lines of types, traits and handles
+  and declares the two with plain `mod`, so no public path moved.  `lib.rs`
+  carries no module doc to extend, so the sibling naming lives in the two
+  children's own docs; `persist.rs`'s module doc, below, now lists its three.
+  One visibility changed: `Module::with_registry` is `pub(super)`, because
+  `Registry::new_module` now sits in the sibling.  Diffed against `HEAD:crates/lichen-lowlevel/src/lib.rs`:
+  `registry.rs`'s body is byte-identical to lines 1011-1131, `module.rs`'s to
+  1133-1505 except that one line, and `lib.rs` is lines 1-1010 plus the two `mod`
+  declarations.
+- `persist.rs` (744) → `persist/container.rs` (403: `serialize_artifact` /
+  `serialize_artifact_with`, the shape encoders, `reserve`, `check_node_index`,
+  `read_node_id` and `deserialize_artifact` / `deserialize_artifact_with`, lines
+  219-607), `persist/codec.rs` (222: `ArtifactCodec`, `ProgramCodecOf`,
+  `NoPersist` — lines 107-217 — and the `codec_roundtrip` tests, which moved with
+  the trait their doc points at, lines 647-744) and `persist/cache.rs` (43:
+  `load_artifact` and `shipping_cache_root`, lines 609-626 and 633-645).  The
+  parent keeps the module doc, the format comment, `ARTIFACT_FORMAT_VERSION`,
+  every re-export and the `mod` declarations — 111 lines.  `container.rs` and
+  `cache.rs` are byte-identical to their slices; `codec.rs` differs at exactly
+  two lines (the test module's own imports, and the trait doc's `ProgramCodec`
+  link, now spelled as a path because the import that resolved it stayed behind).
+  No visibility had to move at all.
+
+**Why the two cost-deferred files stay deferred, re-derived rather than
+inherited.**
+
+- `analysis.rs` (2689).  The file is one 902-line `impl Doc` (`:173-1075`) plus
+  three visitor clusters — `Walk` (`:1493-1729`), `ScopeCapture` (`:1730-2009`)
+  and the name classifier (`classify_token_kind` / `classify_names` /
+  `NameClass`, `:1198-1461`, which carries one of `P1-22`'s three `#[stacksafe]`
+  walks in `NameClass::expr`) — and ~680 lines of tests.  The only seam that is
+  neither the redesign nor the tests is the classifier: 264 lines, read from
+  `impl Doc` at `:1033`/`:1038`.  Taking it costs `pub(super)` on two functions,
+  the struct and its methods and moves a guard, and leaves 2425 lines with the
+  902-line `impl Doc` untouched — the same god file with a smaller tail.  The cut
+  worth taking there is the one P2-2 names (one generic walk over the three
+  visitors), which that Outcome deliberately left *proposed* as a redesign of the
+  analysis, with the guards riding on exactly the entry points it would replace.
+  `P2-11` is a move-only item and cannot take a redesign.
+- `compute.rs` (2371).  Re-measured, the item's stated cost is right about the
+  file's core and too strong about its edges: the file is 33 free functions over
+  `Module<P>` that call one another (`:641-1928` is the lower / emit / run stack),
+  but the first pass's "no type-owned `impl` block to lift" is not exact — the
+  eleven `NativeOp` impls (`:2002-2370`) reference exactly **one** of those 33
+  free functions (`buffers`), so that seam alone would cost one `pub(super)`.  It
+  is still not taken, on `AGENTS.md`'s line: it moves 369 lines out of a file and
+  leaves 2002 lines of the mutual-recursion web the item itself names, so it buys
+  a file boundary for 15 percent of the file without reaching the boundary that
+  matters.  The cut that would reach it — separating the registries, the
+  emit/codegen stack and the runners — is a `pub(super)` on most of those 33
+  signatures because they call one another, and that is a redesign of the codegen
+  stack, not a move: the same call as `analysis.rs`.  Recorded rather than done,
+  and available cheaply if a later item wants the native-operator surface in its
+  own file.
+
+**Residual, and the status.**  Nine of the eleven files are split; `analysis.rs`
+and `compute.rs` are not, each on the boundary stated above rather than on batch
+size.  The row is `done`: the two deferrals that were only about commit size are
+split, and the two that remain are the item's own two real costs, re-measured
+here.
+
+**Evidence, final pass.**  `cargo clippy --workspace --all-targets -- -D warnings`
+exits 0, `cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes
+with zero failures in every binary, and `cargo test -p lichen-language --test
+pipeline --test examples --test persist --test registry` passes (123 + 1 + 15 +
+16).
 
 ### P2-12 — `clap` is linked by every consumer of the compiler library `verified`
 
