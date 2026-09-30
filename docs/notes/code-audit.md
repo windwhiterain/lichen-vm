@@ -67,6 +67,7 @@ queue's order is deliberate.
 | P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
+| P1-25 | high | package | A dependency's package name is written as Rust source | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -100,6 +101,7 @@ queue's order is deliberate.
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | done |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
+| P5-13 | low | preprocess | `PreprocessDiag::at_zero` fabricates a source span | todo |
 
 ## P0 — memory safety and supply chain
 
@@ -1444,6 +1446,44 @@ question as `P1-23`.
 stated where it bites: the abort lands *after* a successful parse and check, so
 the only symptom is a process that dies having printed nothing wrong.
 
+### P1-25 — A dependency's package name is written as Rust source `verified`
+
+Found while fixing `P5-8`, which closed the same class in the generated
+`Cargo.toml`. This is the other generated document, and it is worse: the manifest
+is data, but **this one is code**.
+
+`crates/lichen-package/src/plugin.rs`'s `compose_source` writes a generated
+`src/main.rs` containing
+
+```rust
+use {crate_ident} as {crate_ident}_leaves;
+```
+
+as **Rust source**, where `crate_ident` is the dependency's `package` field with
+`-` replaced by `_`, and `native_package_lines` writes the same identifier inside
+a Rust **string literal**. `package` reaches that point as a source-file string,
+and the preprocessor's string literal is `"[^"@]*"` — documented *"no escapes,
+may be multiline"* and pinned by its own test
+(`crates/lichen-preprocess/src/lex.rs:42-48`, `:198-206`). A newline or a `}` in a
+`depend` declaration's `package` therefore closes the generated item and injects
+arbitrary Rust, which `cargo build` then **compiles and, for a plugin, runs**.
+
+**Fix.** The generated source must be assembled from tokens the generator
+controls, not concatenated from a caller's string: emit the identifier only after
+checking it is a legal Rust identifier (the crate-name alphabet is known and
+narrow — letters, digits, `_`, not leading-digit), and refuse the plugin with a
+diagnostic otherwise. The string-literal site needs the same treatment as the
+manifest got: escape, or better, stop interpolating an arbitrary string into a
+literal and pass the value through a generated constant or an argument.
+`P5-8`'s `toml_string` helper is the precedent for the escaping half — do not
+invent a second convention.
+
+**Severity is high, not low, which is why it is here and not in `P5`:** the input
+is a dependency declaration, which is exactly what a user pastes from a README,
+and the outcome is code execution inside the compiler's own build. The manifest
+half was bad enough to be its own item; this half is what makes the pair a
+supply-chain concern rather than a formatting bug.
+
 ## P2 — architecture
 
 ### P2-1 — `BufferSession` is built but unwired `verified`
@@ -2322,6 +2362,25 @@ scans the module's whole node table and is called **per emitted node**
   `lichen-language-zed` with the `grammar-consistency` feature still finds the
   path dependency.
 
+### P5-13 — `PreprocessDiag::at_zero` fabricates a source span `verified`
+
+The same class as `P5-9`, in the layer below it. `crates/lichen-preprocess`'s
+`PreprocessDiag::at_zero` (`lib.rs:61-66`, used at `:468` and `:475`) builds a
+diagnostic whose span is a fabricated `(0, 0)`, so the user is shown a
+line-1-column-1 source problem for something that has nothing to do with source
+syntax. The concrete case is the one a user meets most: *"dependency '{alias}' is
+not fetched … run `lichen fetch` first"* — a **missing directory** reported as a
+syntax error at the first character of a file.
+
+**Fix.** `P5-9` gave the language layer a span-less `Diag` (`Stage::Io` plus
+`Diag::unattributed`), which renders as its message alone. `PreprocessDiag` has no
+equivalent kind, so the honest fix is to give it one — a diagnostic that carries
+no span — rather than for the language layer to launder a `(0, 0)` into a
+span-less diagnostic at its boundary. Which of the two is right depends on
+whether `PreprocessDiag`'s consumers ever need a span at all; `P5-9`'s
+implementation settled it for the language layer, so read that before choosing.
+Report which you chose and why.
+
 ## Decisions
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
@@ -2514,8 +2573,10 @@ Recorded so the next pass does not re-audit them.
   `Drop` (`P1-24`).
 - **`no_attr_ext` aside, no `format!` in a hot path** in the lowlevel or
   highlevel; `format!` appears in the highlevel only in two codec error paths.
-- **`docs/README.md`'s index is complete** — all 33 notes are linked and no link
-  is dangling (the disagreement is the one status cell, `P5-2`).
+- **`docs/README.md`'s index is complete** — every note is linked and no link is
+  dangling. (This line used to add *"the disagreement is the one status cell,
+  `P5-2`"* and to count 33 notes; `P5-2` is `done` and the count is now 34, so
+  both clauses are removed rather than left to go stale again.)
 - **The preprocessor extraction is exemplary** —
   `crates/lichen-language/src/preprocess/mod.rs` is an 82-line shim with no
   re-implementation; both crates are live. This is the standard other
