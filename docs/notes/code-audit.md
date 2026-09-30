@@ -96,6 +96,7 @@ queue's order is deliberate.
 | P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | done |
 | P4-8 | low | render | Two more ancestor guards scan the path they guard | done |
 | P4-9 | low | compute | A `NativeOps` slice is leaked per registration | done |
+| P4-10 | medium | render | The type printer recurses per type depth and overflows at ~200 | wontfix:D9 |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | done |
@@ -3811,6 +3812,27 @@ the `compute.lichen` arm (`:247-252`), so after the first registration
 wrapper.  This is pre-existing — `P4-9` changed no load-path behaviour — and it
 is what makes "once per store" exact; the comment at `:245-246` ("it
 self-registers on first import") describes the import that compiles.
+
+### P4-10 — The type printer recurses per type depth and overflows at ~200 `verified`
+
+Found while measuring `P4-8`, and recorded rather than left as a footnote: the
+guard's scan count collapsed by 171× but **wall time did not move at all** (2000
+prints at depth 170: 4716–4968 ms with the `Vec`, 4973–5151 ms with the set),
+because the binding constraint is the printer's **own recursion**, not the guard.
+A hand-built right-nested array type of depth 200 **stack-overflows the process**,
+before and after that change.
+
+That makes a **fourth** stack-exhaustion path, and unlike the other three it is in
+the renderer, which the language server reaches on hover — so it is reachable from
+a deeply nested *type* in a file the user merely opened.
+
+**Closed `wontfix:D9`, with `D9`'s reasoning transferred:** a file that aborts a
+tool the user ran on their own machine crosses no privilege boundary, and the
+editor exposure has the same shape as `P1-23`'s. It is recorded separately rather
+than folded into `P1-23` because the *site* is different — that one is the parser's
+worker, this is a printer — and because anyone measuring render cost needs to know
+the depth is capped by recursion rather than by the guard. If that reasoning is
+wrong for the renderer specifically, this is the item to reopen.
 
 ## P5 — hygiene and docs
 
