@@ -91,7 +91,7 @@ queue's order is deliberate.
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | todo |
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | todo |
-| P5-7 | low | package | `lichen path language-server` pollutes stdout | todo |
+| P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |

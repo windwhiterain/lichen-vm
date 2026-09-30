@@ -357,7 +357,7 @@ pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
         let dest = install(Tool::LanguageServer, DEFAULT_REPO)?;
         return Ok(Some(dest));
     }
-    println!(
+    eprintln!(
         "composing a language server over the project's {} native plugin(s)...",
         plugins.len()
     );
