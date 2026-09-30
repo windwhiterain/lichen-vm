@@ -2071,12 +2071,11 @@ to what the pre-move code produced. The depth bound is reasoned rather than
 demonstrated: tripping it needs a 33-level tree, and no fixture can carry one
 without a directory per level.
 
-*One stale reference this leaves behind, named so it is not mistaken for
-history.* `P2-12`'s Outcome ("What did not move, and why") still says the
-generator stayed and that `lichen-language` "still has a binary"; both are now
-false. That paragraph is another item's record and was left untouched — it is the
-same class of stale reference `18dfad0` re-pointed after the CLI move, and wants
-the same one-line correction in a `docs:` commit.
+*One stale reference this left behind, now re-pointed.* `P2-12`'s Outcome ("What
+did not move, and why") said the generator stayed and that `lichen-language`
+"still has a binary"; both became false when this item landed. It was corrected in
+the same `docs:` pass as the reference sweep below, on the same reasoning: a record
+naming a file that no longer exists is stale, not historical.
 
 ### P2-7 — `visiting` is set by hand, bypassing the `Drop` guard `reported`
 
@@ -2346,11 +2345,13 @@ generated compiler's shape (depending on `lichen-compiler` by path and calling
 `main_with_native_packages`) `cargo check`s — so the generated manifest's line
 and the generated call both resolve.
 
-**What did not move, and why.**  The README generator and `sync-readme`
-(`readme.rs`, `src/bin/sync-readme.rs`) stayed: they are `P2-6`'s, and that is
-why `lichen-language` still has a binary.  The library half (`package.rs`,
-`persist.rs`, `run.rs`, `render.rs`, `preprocess`, `program`) stayed because the
-CLI only calls it; `clap` left the library's manifest with no replacement.
+**What did not move at the time, and where it went.**  The README generator and
+`sync-readme` (`readme.rs`, `src/bin/sync-readme.rs`) stayed here because they are
+`P2-6`'s, which is why `lichen-language` still had a binary after this commit.
+`P2-6` has since moved both to a tools crate, so the library now has **no** binary
+at all.  The library half (`package.rs`, `persist.rs`, `run.rs`, `render.rs`,
+`preprocess`, `program`) stayed because the CLI only calls it; `clap` left the
+library's manifest with no replacement.
 
 **Residual references.**  This Outcome originally left two sections naming the old
 path — `P1-16`'s Outcome (`crates/lichen-language/src/cli.rs:232`) and `P2-6`'s
@@ -2594,7 +2595,7 @@ scans the module's whole node table and is called **per emitted node**
   the field types in the shape and `[TypeStruct{id, names}, K]` in the kind, the
   opposite of the claim; `language/src/lib.rs`'s `Report::build` doc ("`None`
   only when the resolve stage failed") — the lowering is total, so every path
-  this crate produces is `Some`; `language/src/readme.rs`'s claim that
+  this crate produces is `Some`; `crates/lichen-tools/src/readme.rs`'s claim that
   `cargo test` self-heals stale `output = "..."` metadata — `tests/readme.rs`
   rewrites only the README and `tests/examples.rs` asserts the metadata and
   fails; the four grammar claims (`parser/ast.rs`'s `T<e>`, `parser/parse.rs`'s

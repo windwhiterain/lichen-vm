@@ -154,7 +154,9 @@ What moved, what stayed:
 | `diag.rs` wide `Diag`/`Stage` | **stays** in `lichen-language` | adds `Resolve`/`Check` + checker payload |
 | `src/preprocess/mod.rs` (orchestrator) | **stays** in `lichen-language` | resolves imports via `PackageStore` (`StaticNodeId`) |
 | `src/preprocess/{lex,parse}.rs` (directive block) | **stays** in `lichen-language` (see seam #5) | preprocessor/package-specific; byte-range, not `Span` |
-| `program.rs`, `session.rs`, `render.rs`, `run.rs`, `package.rs`, `persist.rs`, `readme.rs`, `main.rs` | **stay** in `lichen-language` | semantics / tooling |
+| `program.rs`, `session.rs`, `render.rs`, `run.rs`, `package.rs`, `persist.rs` | **stay** in `lichen-language` | semantics / tooling |
+| `cli.rs` + the `lichen-compiler` binary | **moved** to `lichen-compiler` (`P2-12`) | the library must not link `clap` for every embedder |
+| `readme.rs` + the `sync-readme` binary | **moved** to `lichen-tools` (`P2-6`) | repo tooling that panics outside a checkout must not ship in a library |
 | `lib.rs` (pipeline glue) | **stays** in `lichen-language` | merges lex/parse + resolve + check diagnostics |
 
 ### Back-compat re-export in `lichen-language`
