@@ -65,6 +65,8 @@ queue's order is deliberate.
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
 | P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
+| P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | todo |
+| P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1293,29 +1295,26 @@ STATUS_STACK_OVERFLOW (0xc00000fd)          # a process abort, not an error
 
 250 nested parentheses abort; 150 succeed. Nested `[` behaves the same.
 
-**Why, and why it is not the parser.** The parser is the one layer that *is*
-guarded: it runs its own recursion on a worker thread with a 16 MiB stack
-(`crates/lichen-language-parser/src/parse.rs`). Everything after it walks the
-resulting AST **on the caller's thread** — `compile.rs`'s `compile_expr`
-(42 self-calls, no guard), `resolve.rs`'s expression walk, and the language
-server's walks in `analysis.rs` (`P2-2`'s three traversals). So the frontend
-faithfully builds a deep tree one layer up and then dies walking it.
+**Attribution corrected — this finding named the wrong layer.** It originally
+claimed the parser was the *guarded* layer and the frontend walks were the
+unguarded ones, and that argument is inverted. `(e)` is transparent
+(`crates/lichen-language-parser/src/parse.rs:905-930`), so 250 nested parentheses
+produce an AST **one node deep** — nothing after the parser recurses on that
+input at all. The aborting thread is the parser's own **unnamed worker**, and it
+is the *first* layer to overflow: re-measured, the 16 MiB worker dies at **175
+nested parentheses (351 bytes)** while 174 (349 bytes) compile, and nested
+brackets are identical because they share the path. The recorded `thread 'main'`
+line did not reproduce. See `P1-23`.
 
-**Why it matters beyond the CLI.** The language server runs this same pipeline on
-a blocking thread for every request (`P1-17` makes that every keystroke), so
-pasting a deeply nested expression aborts the editor's language server. It is a
-crash reachable from a file a user merely opens — the cheapest kind of
-denial-of-service, and the process aborts rather than reporting anything.
+The frontend walks *do* overflow, on a shape that is flat in the token stream but
+left-nested in the AST — `1+1+…`, one `BinOp` per term, which the parser folds, so
+only the walks recurse. Measured on the CLI's 1 MiB main thread: 200 terms check,
+500 terms (~1 KiB of source) abort.
 
-**Fix.** Guard every recursive walk that runs on the caller's thread, the way the
-lowlevel already does — `#[stacksafe]` on each recursive entry point (the
-dependency is already declared in `lichen-highlevel`, and `P2-10` shows it
-applies cleanly to a `&mut self` method), or one explicit depth guard that
-records a diagnostic where a counter is the better fit. The work overlaps `P2-2`
-(the hand-written walks should collapse rather than each grow a guard), so do
-them in whichever order lands the guard first and note the overlap. A test cannot
-provoke a stack overflow and stay a test — pin the success case, and pin the
-guard's diagnostic if the mechanism gives one.
+**Why it matters beyond the CLI.** The language server runs this same pipeline for
+every request (`P1-17` makes that every keystroke), so a mere paste or file open
+reaches it. A crash reachable from a file a user only *opens* is the cheapest kind
+of denial-of-service, and a process abort reports nothing.
 
 **Outcome.**  The guards landed, and the walks were the defect — but not for the
 input the finding names.
@@ -1363,6 +1362,52 @@ stack, lex + parse + drop does not); and whatever stack the caller gives the
 language server's blocking thread.  Whether the frontend needs a nesting-depth
 limit, and where its number should come from, is therefore still open — and the
 first number it must clear is the parser's **175 levels**, not the frontend's.
+
+### P1-23 — The parser's 16 MiB worker overflows at 175 nesting levels `verified`
+
+Split out of `P1-22` when its attribution was corrected: the parser is the
+**first** layer to overflow, not the guarded one. `(e)`, `[e]` and their
+neighbours are transparent in the grammar, so the recursion depth is the
+*syntactic* nesting depth of the source, one frame per level.
+
+```
+$ n=174  → compiles            (349 bytes)
+$ n=175  → thread '<unknown>' has overflowed its stack     (351 bytes)
+```
+
+Measured on this revision with `(` … `)`; `[` … `]` is identical because they
+share the path. That is roughly 16 MiB / 175 ≈ **94 KiB of stack per nesting
+level**, which is a lot per frame and suggests the recursion runs through
+`chumsky`'s combinatorial machinery rather than one thin function.
+
+**Why it cannot be fixed the way `P1-22` was.** `#[stacksafe]` works by wrapping
+*a function of ours*, and the recursion here lives **inside the parser library**.
+Growth would have to be arranged around the whole parse — for example running it
+on a thread whose stack is grown on demand rather than a fixed 16 MiB — which is
+a real design change, not an annotation. It is therefore part of the open
+nesting-depth question rather than an independent fix.
+
+**Why it matters.** A 351-byte file aborts the process, and the language server
+parses on every request, so this is the crash a user reaches first. `P4-3` names
+the walk duplication and the parser's cost; this is the crash.
+
+### P1-24 — The AST's own recursive `Drop` overflows on a deep tree `verified`
+
+Found while measuring `P1-22`. `#[stacksafe]` guards the walks, but the tree is
+still freed by the compiler-generated recursive `Drop` for a boxed recursive
+enum, and **no annotation of ours can reach it**:
+
+```
+lex + parse + mem::forget   survives 8000 nested terms on a 1 MiB stack
+lex + parse + drop          does not
+```
+
+So a program deep enough to survive parsing and checking still aborts on the way
+out — after all the work succeeded, which makes it the most confusing of the
+three to debug. The only fixes are an iterative `Drop` impl or a
+`ManuallyDrop`-based teardown for the expression type, which is a change to the
+AST's shape and not a local guard; it is therefore part of the same nesting-depth
+question as `P1-23`.
 
 ## P2 — architecture
 
@@ -2079,9 +2124,10 @@ Recorded so the next pass does not re-audit them.
   reload-under-lock, tmp+rename save.
 - **No `todo!`/`unimplemented!`/`FIXME`/`TODO` marker anywhere** in the crates.
 - **`#[stacksafe]` coverage in the lowlevel is complete** — all eleven recursive
-  entry points are annotated. The gap this line used to name —
-  `highlevel::check_term` — is closed (`P2-10`); the surviving gaps are **upstream
-  of the lowlevel** in the frontend's own walks, which is `P1-22`.
+  entry points are annotated, and the frontend's own walks are now annotated too
+  (`P1-22`). The surviving overflow paths are not functions of ours and so cannot
+  be annotated: the parser's worker stack (`P1-23`) and the AST's recursive
+  `Drop` (`P1-24`).
 - **`no_attr_ext` aside, no `format!` in a hot path** in the lowlevel or
   highlevel; `format!` appears in the highlevel only in two codec error paths.
 - **`docs/README.md`'s index is complete** — all 33 notes are linked and no link
