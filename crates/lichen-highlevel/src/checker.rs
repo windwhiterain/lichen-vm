@@ -27,9 +27,12 @@
 //!
 //! The checking rules are grouped into the sibling modules: `lambda` (a
 //! function and an application), `structs` (struct types, field reads,
-//! instantiation), `indexing` (arrays, tables, the reads over them),
-//! `annotations` (the attribute slots), and `diagnostics` (the attributed
-//! unify and the reported-error helpers).  This root holds the checker itself:
+//! instantiation), `indexing` (arrays, tables, the reads over them), `tuples`
+//! (tuple terms, tuple types, the type-position helper), `operators` (the
+//! binary operators), `asserts` (the explicit constraint and its
+//! registration), `native_call` (a `$name(…)` plugin call), `annotations`
+//! (the attribute slots), and `diagnostics` (the attributed unify and the
+//! reported-error helpers).  This root holds the checker itself:
 //! its state, the node construction every check shares, the per-kind dispatch,
 //! and the passes that drive them.
 
@@ -51,10 +54,14 @@ use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
 
 mod annotations;
+mod asserts;
 mod diagnostics;
 mod indexing;
 mod lambda;
+mod native_call;
+mod operators;
 mod structs;
+mod tuples;
 
 // The registry-derived consumer macros below expand the one kind-marker
 // list ([`crate::shape::for_each_kind_marker`]) into the checker's marker
@@ -1436,250 +1443,6 @@ where
             self.module.unify(tc, ty);
         }
         pair
-    }
-
-    /// A `$name(args…)` call: compile each argument, look `name` up in this
-    /// module's private [`NativeOps`] registry, and adopt the `[value, type]`
-    /// pair the plugin's [`NativeOp`] builder returns.  The checker has no
-    /// knowledge of what the operator does — the plugin's registration owns the
-    /// lowering and the type construction (the private contract with its own
-    /// source).
-    /// a diagnostic rather than a panic (the frontend compiles `$name`
-    /// blind, so the checker is the first layer that can see the registry).
-    fn check_native_call(&mut self, e: ExprId, op: &'static str, args: ChildRange) -> NodeId {
-        let arg_ids: Vec<ExprId> =
-            self.ir.children[args.start as usize..args.end as usize].to_vec();
-        for &arg in &arg_ids {
-            self.check_expr(arg);
-        }
-        let native_args: Vec<NativeArg> = arg_ids
-            .iter()
-            .map(|&arg| NativeArg {
-                expr: arg,
-                value: self.value_of(arg),
-                ty: self.state[arg].ty.expect("a compiled argument has a type"),
-            })
-            .collect();
-        let loc = self.loc(e, 0);
-        let ops = self.native_ops;
-        let built = match ops
-            .iter()
-            .find(|(name, _)| *name == op)
-            .map(|(_, operator)| operator)
-        {
-            Some(operator) => operator.build(self, e, &native_args, loc.clone()),
-            None => {
-                // An unregistered name is an ordinary check-time refusal, not
-                // a broken invariant: only the checker can see the registry,
-                // so this is the one place it can be reported.  The guard
-                // leaves the expression uncompiled, which `check_failed` picks
-                // up — the definition pass is skipped, so nothing ever
-                // evaluates the hole.
-                self.record_guard(
-                    self.type_expr,
-                    self.type_expr,
-                    loc,
-                    DiagKind::NativeOpUnresolved,
-                    Some(op),
-                );
-                let pair = self.pair_of(self.type_expr, self.type_expr);
-                self.state[e].term = Some(pair);
-                self.state[e].val = None;
-                self.state[e].ty = Some(self.type_expr);
-                return pair;
-            }
-        };
-        // The plugin's contract — the one thing the checker relies on and
-        // cannot see.  Every downstream read of an expression's term reads it
-        // as a `[value, type]` pair (`value_of` indexes element 0; the apply
-        // wiring and the type checks read element 1), and `Ctx` builds exactly
-        // that shape — but the three records a builder returns are raw node
-        // ids, so the shape is validated here rather than assumed: `node` must
-        // be a two-slot array in the block this call is compiled into, element
-        // 1 exactly `ty`, and element 0 exactly `val` when the value is a
-        // decided node (a builder like compute's `$jit` legitimately returns
-        // `val: None`, leaving element 0 the op node the runtime reads).  A
-        // violated contract is a guard rather than an adopted malformed term,
-        // exactly as the imported export's pair contract above.
-        //
-        // Only `node`'s block is checked: the checker's canonical shared type
-        // expressions (`int_type`, the kind markers, the universe) are
-        // allocated once in the root block and deliberately referenced from
-        // pairs built in child blocks — compute's `$range` returns
-        // `int_type()` from a kernel body — so `ty`'s block is not part of the
-        // contract.
-        let pair_items = match self.module.node_value(AnyNodeId::Dynamic(built.node)) {
-            Some(value) => match value.as_enum() {
-                // SAFETY: `array` is the value payload of `built.node`, a node
-                // the plugin holds from this module, so its home block is alive
-                // for this read.
-                Some(LowValue::Array(array)) => Some(unsafe { array.items() }),
-                _ => None,
-            },
-            None => None,
-        };
-        let contract_holds = pair_items.is_some_and(|items| {
-            items.len() == 2
-                && self.module.nodes.contains_key(built.node)
-                && self.module.node_block(built.node) == self.current_block
-                && items[1].node == AnyNodeId::Dynamic(built.ty)
-                && built
-                    .val
-                    .is_none_or(|val| items[0].node == AnyNodeId::Dynamic(val))
-        });
-        if !contract_holds {
-            let cell = self.fresh_cell();
-            let pair = self.pair_of(cell, cell);
-            self.state[e].term = Some(pair);
-            self.state[e].val = Some(cell);
-            self.state[e].ty = Some(cell);
-            self.record_guard(pair, pair, loc, DiagKind::NativeOpContract, Some(op));
-            return pair;
-        }
-        self.state[e].term = Some(built.node);
-        self.state[e].val = built.val;
-        self.state[e].ty = Some(built.ty);
-        built.node
-    }
-
-    /// A binary integer operation `a op b`: both operands must be `Int`, and
-    /// the result is `Int` (a comparison yields `0/1` to drive an `if`'s
-    /// lazy `Index` branch).  Each operand's type is unified against the int
-    /// type expression — a concretely non-`Int` operand is a check error,
-    /// and an unbound operand (a parameter) is *pinned* to `Int`, so a
-    /// later apply at a non-`Int` argument is a runtime failure in the
-    /// argument unify, not a panic inside the operator.
-    fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
-        self.check_expr(left);
-        self.check_expr(right);
-        match operator {
-            // `==` compares two *same-typed* values and yields 0/1: the Int
-            // equalities (`s.a == 1`, `x == y`) and the type-value equalities
-            // (`S::a == Int`) — the operands' types must be equal, so a type
-            // value (`: Type`) can be compared with a type constant.
-            BinOp::Eq => self.check_unify(
-                self.state[left].ty.unwrap(),
-                self.state[right].ty.unwrap(),
-                self.loc(left, 1),
-                DiagKind::BinOp,
-            ),
-            BinOp::Add | BinOp::Sub | BinOp::Leq => {
-                self.check_unify(
-                    self.state[left].ty.unwrap(),
-                    self.int_type,
-                    self.loc(left, 1),
-                    DiagKind::BinOp,
-                );
-                self.check_unify(
-                    self.state[right].ty.unwrap(),
-                    self.int_type,
-                    self.loc(right, 1),
-                    DiagKind::BinOp,
-                );
-            }
-        }
-        let operator = P::Operator::from(TypeOperator::from(operator));
-        let left = self.value_of(left);
-        let right = self.value_of(right);
-        let operands = self.array_node(self.current_block, &[left, right]);
-        let value = self.op_node(self.current_block, operator, Some(operands));
-        let pair = self.pair_of(value, self.int_type);
-        self.state[e].term = Some(pair);
-        self.state[e].val = Some(value);
-        self.state[e].ty = Some(self.int_type);
-        pair
-    }
-
-    /// `assert(condition)` — an explicit constraint, not a unify: the
-    /// condition's *value* node is registered as an assert.  The
-    /// lowlevel's [`Module::check_asserts`] then force-evaluates every
-    /// assert (ignoring laziness) after the definition pass and requires
-    /// `USize(1)` — an unbound condition is not bound to `1`, it stays
-    /// untriggered, and the apply clone re-checks the instantiated
-    /// condition per call.  The expression compiles to the condition
-    /// itself: an assert checks its subject, it does not replace it.
-    fn check_assert(&mut self, e: ExprId, condition: ExprId) -> NodeId {
-        self.check_expr(condition);
-        // The checked thing is a `USize`, so the assert names the value
-        // node — element 0 of the pair — not the pair itself.
-        let value = self.value_of(condition);
-        self.register_assert(value, self.loc(e, 0), true);
-        let pair = self.state[condition].term.unwrap();
-        self.state[e].term = Some(pair);
-        self.state[e].val = self.state[condition].val;
-        self.state[e].ty = self.state[condition].ty;
-        pair
-    }
-
-    /// Registers an assert condition: the module worklist entry plus, when
-    /// a function body is being compiled, the current function's own list —
-    /// the function owns it, so an apply clones it and re-checks the
-    /// instantiated condition against each call's argument.  `loc` is
-    /// recorded as the runtime attribution edge for the condition node;
-    /// `user_facing` marks an explicit `assert` (rendered as a diagnostic) as
-    /// opposed to a generated guard (the array-bounds check, which duplicates
-    /// the index eval error and is not rendered).  The location is source-blind
-    /// (an [`ExprId`]-based [`Loc`]), so no span reaches the lowlevel module.
-    fn register_assert(&mut self, condition: NodeId, loc: Loc, user_facing: bool) {
-        self.node_edges.insert(condition, loc);
-        if user_facing {
-            self.user_asserts.insert(condition);
-        }
-        self.module.add_assert(condition);
-        if let Some(function) = self.current_function() {
-            self.module.functions[function].asserts.push(condition);
-        }
-    }
-
-    fn check_tuple_term(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut vals = Vec::new();
-        let mut tys = Vec::new();
-        for &el in &elements {
-            self.check_expr(el);
-            vals.push(self.value_of(el));
-            tys.push(self.state[el].ty.unwrap());
-        }
-        // A tuple: `[values, [[element types], [TupleType, Type]]]`.
-        let value = self.array_node(self.current_block, &vals);
-        let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
-        let pair = self.pair_of(value, ty_node);
-        self.state[e].term = Some(pair);
-        self.state[e].val = Some(value);
-        self.state[e].ty = Some(ty_node);
-        pair
-    }
-
-    /// A tuple type expression: `[[element types], [TupleType, Type]]`.
-    fn check_tuple_type(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut tys = Vec::new();
-        for &el in &elements {
-            tys.push(self.check_type_element(el));
-        }
-        let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
-        self.state[e].term = Some(pair);
-        self.state[e].val = Some(shape);
-        self.state[e].ty = Some(kind);
-        pair
-    }
-
-    /// The type an expression contributes in a type position — a struct
-    /// field, a tuple-type element, a function-type side.  There is no
-    /// term/type distinction: the expression is used as-is, its pair being
-    /// the type it denotes.  A genuine type (a value whose own type is a
-    /// kind, or an unbound cell) contributes its pair directly; a *term*
-    /// put in a type position contributes its own value pair too, and the
-    /// subsequent unification fails (a term's value pair does not unify
-    /// with its own type) — `struct<Int, b>` with `b : B` fails, while
-    /// `struct<Int, B>` works.
-    fn check_type_element(&mut self, el: ExprId) -> NodeId {
-        self.check_expr(el);
-        self.state[el].term.unwrap()
     }
 
     fn lookup(&self, target: ExprId) -> Binding {

@@ -80,7 +80,7 @@ queue's order is deliberate.
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
-| P2-11 | medium | all | God files with named seams | todo |
+| P2-11 | medium | all | God files with named seams | doing |
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
 | P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | done |
 | P3-1 | medium | all | Duplication clusters | done |
@@ -2612,6 +2612,135 @@ that side; after the fix it passes.
 | `language/src/package.rs` | 916 | load pipeline / native virtual-package registration (`compute.lichen` is hard-coded at `:230`) / vendored path resolution / 70 lines of inline tests |
 | `language/src/persist.rs` | 650 | codec traits + container / cache-root resolver / inline tests |
 | `language-parser/src/parse.rs` | 1584 | thread driver / token utils / statement grammar / precedence ladder / atoms+postfix / type constructors / AST walk / diagnostics |
+
+**Outcome — the seam table re-verified; seven of the eleven files are split, and four are left with their reason.**  Every extent above had drifted, so each was re-measured at the pre-commit revision (true line counts):
+
+| file | ledger | re-measured | this commit |
+|---|---|---|---|
+| `language-server/src/analysis.rs` | 2566 | 2689 | **left** |
+| `compute/src/compute.rs` | 2182 | 2371 | **left** |
+| `highlevel/src/checker.rs` | 1502 | 1765 | 1528 — `asserts` 50, `native_call` 118, `operators` 63, `tuples` 60 |
+| `lowlevel/src/lib.rs` | 1179 | 1505 | **left** |
+| `lowlevel/src/static_module.rs` | 848 | 933 | 248 — `apply` 366, `freeze` 334 |
+| `render/src/render.rs` | 1168 | 1302 | 485 — `type_printer` 485, `value_printer` 344 |
+| `language/src/compile.rs` | 952 | 994 | 922 — `alloc` 86 |
+| `language/src/resolve.rs` | 706 | 760 | 397 — `content_key` 373 |
+| `language/src/package.rs` | 916 | 930 | 787 — `vendored` 151 |
+| `language/src/persist.rs` | 650 | 744 | **left** |
+| `language-parser/src/parse.rs` | 1584 | 1566 | 1378 — `error_blocks` 168, `diagnostics` 36 |
+
+Both extents the item text calls out are wrong.  `compile_expr` is **475** lines,
+not the 453 of the table and not the 442 a previous item reports: its body is
+`compile.rs:388-862` at the pre-commit revision (484 with its doc comment from
+`:381`), and `:829` — the end line that item gives — is inside the
+`Expr::TypeArray` arm.  It was **not** touched: its `#[stacksafe]` is at `:387` and
+the item text puts that recursion out of scope.  The checker `impl` block is
+**1201** lines (`checker.rs:492-1692`), not 1090, and 957 now (`:499-1455`).
+
+*The seams taken.*
+
+- `static_module.rs` (933) → `static_module/apply.rs`: the static-function apply
+  half of the mixed `impl Module` block plus its capture analysis and
+  `StaticApplyCtx` (the `#[stacksafe]` guard moved with `static_node_apply`);
+  and `static_module/freeze.rs`: the whole `impl StaticModule` freeze plus
+  `align_up` and `rewrite_value`.  The parent keeps the registry-facing reads,
+  `static_find`, `static_ref` and `referenced_keys`.
+- `render.rs` (1302) → `render/type_printer.rs` and `render/value_printer.rs`
+  (the two `impl` blocks).  The struct definitions and the struct-kind helpers
+  stay, see the boundary below.
+- `resolve.rs` (760) → `resolve/content_key.rs`: `KEY_FORMAT_VERSION`,
+  `content_key` and `KeyWriter`, the serializer cluster the item calls 45 percent
+  of the file, with `pub use content_key::content_key;` so `resolve::content_key`
+  still resolves from `session.rs` and the tests.
+- `checker.rs` (1765) → the six concrete check rules still inline are now four
+  sibling modules, following the `lambda`/`structs`/`indexing`/`annotations`
+  pattern already in `checker/`: `tuples` (tuple terms, tuple type expressions,
+  the type-position helper), `operators` (`check_binop`), `asserts`
+  (`check_assert`, `register_assert`) and `native_call` (`check_native_call`).
+  The `#[stacksafe]` dispatcher `check_term` and the `build_with` pass driver
+  stayed in the root.
+- `compile.rs` (994) → `compile/alloc.rs`: the ten allocators (`alloc` plus the
+  nine `alloc_*` wrappers).
+- `package.rs` (930) → `package/vendored.rs`: `vendored_alias`,
+  `vendored_entry_file` and the `vendored_tests` module that tests them, so the
+  inline tests move with their subject.
+- `parse.rs` (1566) → `parse/error_blocks.rs` (the recovered-error AST walk) and
+  `parse/diagnostics.rs` (`diag_from`), declared with `#[path]` because `parse.rs`
+  is itself reached by `#[path]` from the crate root.
+
+*How the moves were checked.*  A split here is a move and nothing else: the
+parent was sliced at the seam by line range and the slice written to the child
+verbatim, with only (a) a module doc, (b) `use super::*;` plus, where the parent
+no longer carried a name the child needs, one explicit import, (c) an `impl`
+wrapper where the moved block was part of a mixed `impl` block, and (d) the
+visibility of a method the parent still calls.  Every child body was then diffed
+against that slice of `HEAD:crates/...` and is byte-identical apart from exactly
+those adjustments.  The visibility changes are private → `pub(super)` and never
+toward `pub`:
+
+- `render/value_printer.rs` `ValuePrinter::element_any` and
+  `render/type_printer.rs` `TypePrinter::is_universe_any` are the only two
+  methods raised: the `render.rs` public free function `render_struct_fields_named`
+  and the value printer each call across the new boundary.
+- `checker/`: `check_native_call`, `check_binop`, `check_assert`,
+  `register_assert` (`indexing.rs` calls it too), `check_tuple_term`,
+  `check_tuple_type`, `check_type_element` (`structs.rs` calls it too) — the same
+  `pub(super)` the existing `checker/` rules already use.
+- `compile/alloc.rs`: the ten allocators.  `package/vendored.rs`:
+  `vendored_alias` and `vendored_entry_file`, re-imported into the parent by
+  name.  `parse/diagnostics.rs`: `diag_from`.
+
+No `#[stacksafe]` guard moved off its function: `check_term`
+(`checker.rs:1226`), `KeyWriter::expr` (`resolve/content_key.rs:124`),
+`static_node_apply` (`static_module/apply.rs:91`) and `compile_expr`
+(`compile.rs:387`) all carry the attribute exactly as before, and `analysis.rs`,
+`resolve_expr` and the three analysis walks were not touched at all.  Each split
+parent module doc now names its new siblings.
+
+*Left, and why.*  Four files:
+
+- `analysis.rs` (2689).  The highest-value cut the item names there — merging the
+  three ~150-line walks — **is the P2-2 Preference 1**, which the P2-2 Outcome
+  deliberately left proposed: it is a redesign of the analysis, and collapsing
+  the walks would move three `#[stacksafe]` guards.  What remains is one 902-line
+  `impl Doc` over the shared report/snapshot state plus a token-classifier cluster
+  (`classify_token_kind`, `classify_names`, `NameClass`) that the scope walk
+  reads.  That cluster is a real seam but a small one, and taking it needs
+  `pub(super)` on a struct and its methods while the 902-line block stays.
+- `compute.rs` (2371).  The responsibilities the item lists are real (the kernel
+  and buffer registries, the value and operator vocabularies with their codecs,
+  the emit/codegen stack, the two runners, the op vocabulary), but they are all
+  **free functions over `Module<P>`** that call one another.  There is no
+  type-owned `impl` block to lift, so any seam needs `pub(super)` on most of
+  roughly 30 signatures for a layout with no call-site benefit.
+- `lowlevel/lib.rs` (1505).  Two seams pass the same test as the seven taken —
+  `impl Module` (`:1139`, 367 lines) and `impl Registry` (`:1017`, 115) — and are
+  left only because this commit already adds twelve modules; the vocabulary half
+  of the file is a different matter, since those are the crate public types and
+  moving them needs `pub use` re-exports rather than a plain `mod`.
+- `persist.rs` (744).  The container (the writer and reader, the artifact header
+  and the body digest), the cache-root resolver (`load_artifact`,
+  `shipping_cache_root`) and the codec traits above them are separable and share
+  no mutable state.  Left for the same reason as `lowlevel/lib.rs`.
+
+*The struct-kind helpers, deliberately not split.*  The `render.rs` helpers
+`representative`, `letter_name`, `is_struct_kind`, `is_universe`, `is_universe_any`,
+`marker_is_struct`, `kind_is_struct`, `struct_field_names`, `struct_kind_id`,
+`struct_fields_with_names` and the two public renderers stay in the parent: the
+two printer modules and the parent all call them, so a third file would mean
+`pub(super)` on twelve items for a shared utility base, not a responsibility
+boundary.  This is the item own line about a widened surface being a worse trade
+than a long file.
+
+**Residual, and the status.**  `analysis.rs`, `compute.rs`, `lowlevel/lib.rs` and
+`persist.rs` are unsplit, so this row is `doing`, not `done`: the first needs the
+shared-visitor decision P2-2 left proposed, the other three are within reach of
+the same method in a second pass.
+
+**Evidence.**  `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
+`cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes, and
+`cargo test -p lichen-language --test pipeline --test examples --test persist
+--test registry --test compute` passes (24 + 1 + 15 + 123 + 16).
 
 ### P2-12 — `clap` is linked by every consumer of the compiler library `verified`
 

@@ -1,0 +1,366 @@
+//! The static-function apply: materializing a solved static module's reachable
+//! graph into fresh dynamic clones, then running the apply tail shared with the
+//! dynamic path (`Module::function_apply`).
+
+use super::*;
+impl<P: Program> Module<P> {
+    /// Apply a static function: materialize its graph into fresh dynamic
+    /// clones in `block`, then run the standard apply tail (parameter unify,
+    /// `ApplyError`, cell wiring) shared with [`Module::function_apply`].
+    #[stacksafe]
+    pub fn static_function_apply(
+        &mut self,
+        function: StaticFunctionRef,
+        argument: NodeId,
+        block: BlockId,
+        node: NodeId,
+        cell: Option<NodeId>,
+    ) -> P::Value {
+        self.with_apply_frame(|module| {
+            let static_module = module.static_module(function.module);
+            let (r#return, parameter, assert_count) = {
+                let f = &static_module.functions[function.index.0];
+                (f.r#return, f.parameter, f.asserts.len())
+            };
+            let mut ctx = StaticApplyCtx {
+                target: block,
+                module: static_module,
+                remap: HashMap::new(),
+                applied: function.index,
+                parameter,
+            };
+            let applied = module.static_node_apply(r#return, &mut ctx);
+            // The parameter is an entry point of the walk, not just a node the
+            // return subtree happens to reach: an ignored parameter still must
+            // be satisfied, and a parameter read a type annotation pinned is
+            // invisible from the return.
+            module.static_node_apply(parameter, &mut ctx);
+            // The body's asserts are the function's own registry entries: each
+            // condition instantiates through the shared remap.  A baked
+            // condition is per-call invariant (decided at solve time) and is not
+            // re-registered; a cloned one re-checks against the argument.
+            // Walked by index rather than over a clone of the list, for the
+            // same reason as the dynamic path: instantiating a condition needs
+            // `&mut module` while the list lives on the ctx's module.
+            for index in 0..assert_count {
+                let condition = ctx.module.functions[function.index.0].asserts[index];
+                let baked = !ctx.module.nodes[condition.index].parameterized;
+                let instantiated = module.static_node_apply(condition, &mut ctx);
+                if !baked {
+                    module.asserts.push(PendingAssert {
+                        condition: instantiated,
+                        template: static_ref(&ctx.module, condition),
+                    });
+                }
+            }
+            // The parameter unify: same shape as `function_apply` — re-establish
+            // the template's internal class topology among the clones (grouped
+            // by the solved static reps), evaluate the argument to the pattern's
+            // depth, unify, and record an `ApplyError` on failure.
+            if let Some(&cloned_param) = ctx.remap.get(&parameter) {
+                if ctx.remap.len() > 1 {
+                    let groups = crate::apply::regroup_clones(
+                        ctx.remap
+                            .iter()
+                            .map(|(&template, &clone)| (template, clone)),
+                        |template| static_find(&ctx.module.nodes, template),
+                    );
+                    crate::apply::unify_clone_groups(groups, |first, clone| {
+                        module.unify(first, clone);
+                    });
+                }
+                if module.apply_parameter_check(
+                    cloned_param,
+                    argument,
+                    block,
+                    node,
+                    AnyFunctionId::Static(function),
+                    cloned_param,
+                ) {
+                    return P::Value::from(LowValue::Parameterized);
+                }
+            }
+            let result = module.evaluate_node(Dyn(applied), Some(block));
+            module.wire_apply_result(node, cell, result, applied, block)
+        })
+    }
+
+    /// Clone one static node into the dynamic world (see the module docs).
+    /// `#[stacksafe]`: static recursion runs through here at one frame per
+    /// level, so the apply-depth guard must be able to grow the stack.
+    #[stacksafe]
+    fn static_node_apply(&mut self, local: LocalNodeId, ctx: &mut StaticApplyCtx<P>) -> NodeId {
+        if let Some(&clone) = ctx.remap.get(&local) {
+            return clone;
+        }
+        let node = &ctx.module.nodes[local.index];
+        let (parameterized, template_operation) = (node.parameterized, node.operation);
+        // Reserve the clone id before recursing so diamonds resolve to one
+        // clone and value cycles to the clone's own (still evaluating) id.
+        let clone = self.add_node(ctx.target, None, None);
+        ctx.remap.insert(local, clone);
+        if parameterized {
+            // Residual: the operation (if any) is kept with its operand
+            // walked — the computation re-runs against the argument — and a
+            // stale cached value on an operation node is dropped (it was
+            // computed against the unbound template parameter).  A
+            // parameterized *value* node (no operation — a structural array
+            // containing the parameter, or the marker itself) keeps its
+            // value, with items re-pointed at the walk's clones, mirroring
+            // the dynamic clone rule.
+            let operation = template_operation.map(|operation| Operation {
+                operator: operation.operator,
+                operand: operation
+                    .operand
+                    .map(|operand| self.static_node_apply(operand, ctx)),
+            });
+            if operation.is_none() {
+                let value = ctx.module.read(local);
+                let value = self.static_remap_value(value, ctx);
+                self.write_node_value(clone, Some(value));
+            }
+            self.nodes[clone].operation = operation;
+        } else {
+            // Baked: the solved value in place (shared payload — no copy),
+            // with item refs re-pointed at per-call clones where the walk
+            // made one; untouched items stay inline absolute static refs.
+            // The residual operation (if any) is dead — the value is final.
+            let value = ctx.module.read(local);
+            let value = self.static_remap_value(value, ctx);
+            self.write_node_value(clone, Some(value));
+        }
+        clone
+    }
+
+    /// Re-point the items of a value at per-call clones: an item is
+    /// cloned (walked) when the walk already made one, or when its static
+    /// node is itself parameterized — a residual behind a value edge must
+    /// re-open against the argument (a condition or branch frozen as
+    /// `Parameterized` at solve time reads as unbound forever otherwise).
+    /// Concrete items stay inline absolute static refs.  An item naming
+    /// *another* module (a frozen dependency the applied function's module
+    /// itself imported) is not this template's to clone: local indices are
+    /// per-module, so only a ref keyed by `ctx.module` may consult the
+    /// remap or the module's parameterized flags — a foreign ref is
+    /// concrete by construction (the apply that kept it verbatim proved it)
+    /// and stays in place, resolved through the registry.  The item slice is
+    /// reallocated only when something changed — the common all-baked case
+    /// shares the payload.
+    fn static_remap_value(&mut self, value: P::Value, ctx: &mut StaticApplyCtx<P>) -> P::Value {
+        // A same-module nested closure that captures the applied parameter
+        // must be re-homed as a dynamic `Function`: its body references the
+        // parameter, which only the apply's fresh clone (bound by the
+        // parameter unify below) can supply — a baked static template is
+        // frozen and cannot capture it.  The applied function's *own* value
+        // node is the recursion self-reference and stays a frozen static
+        // template; a foreign-module ref or a non-capturing same-module
+        // closure (its body never reaches the parameter) is baked too.
+        if let Some(LowValue::Function(AnyFunctionId::Static(sref))) = value.as_enum() {
+            if sref.module == ctx.module.key
+                && sref.index != ctx.applied
+                && static_function_captures(&ctx.module, sref.index, ctx.parameter)
+            {
+                return self.static_clone_function(sref, ctx);
+            }
+            return value;
+        }
+        let Some(LowValue::Array(array)) = value.as_enum() else {
+            return value;
+        };
+        // SAFETY: `array` is a payload of `value`, which lives in a registered
+        // static module's arena — `ctx.module`'s, held alive by this apply, or
+        // a dependency the registry pins; the walk below releases nothing.
+        let items = unsafe { array.items() };
+        let mut changed = false;
+        let mut remapped = Vec::with_capacity(items.len());
+        for item in items {
+            let node = match item.node {
+                AnyNodeId::Static(sref)
+                    if sref.module == ctx.module.key
+                        && (ctx.remap.contains_key(&sref.index)
+                            || ctx.module.nodes[sref.index.index].parameterized) =>
+                {
+                    changed = true;
+                    Dyn(self.static_node_apply(sref.index, ctx))
+                }
+                // A baked static closure value inside an array captures the
+                // applied parameter — not parameterized, so the arm above skips
+                // it (a concrete function ref is a decided leaf).  Re-home it
+                // explicitly so the closure's captured parameter rewrites to
+                // this call's clone.
+                AnyNodeId::Static(sref)
+                    if sref.module == ctx.module.key
+                        && static_node_is_capturing_closure(
+                            &ctx.module,
+                            sref.index,
+                            ctx.parameter,
+                        ) =>
+                {
+                    changed = true;
+                    Dyn(self.static_node_apply(sref.index, ctx))
+                }
+                node => node,
+            };
+            remapped.push(ArrayItem { node, ..*item });
+        }
+        if !changed {
+            return value;
+        }
+        P::Value::from(LowValue::Array(self.alloc_array(&remapped, ctx.target)))
+    }
+
+    /// Re-home a same-module static closure (`sref`) that captures the
+    /// applied parameter into a fresh dynamic [`Function`].  The closure's
+    /// body is walked through the *shared* remap, so a reference to the
+    /// applied parameter rewrites to the very clone the enclosing apply's
+    /// parameter unify binds — the closure captures the argument's value.
+    /// The fresh closure's own scope nodes are re-tagged with the fresh
+    /// owner, so a later apply of the closure re-instantiates them per call,
+    /// while its captures (not in the scope) keep the enclosing owner and are
+    /// referenced in place.
+    fn static_clone_function(
+        &mut self,
+        sref: StaticFunctionRef,
+        ctx: &mut StaticApplyCtx<P>,
+    ) -> P::Value {
+        let (r#return, parameter, asserts, scope) = {
+            let f = &ctx.module.functions[sref.index.0];
+            (f.r#return, f.parameter, f.asserts.clone(), f.nodes.clone())
+        };
+        // Fresh closure homed on the target block.  `parent` is None — the
+        // enclosing apply is a static function, which has no dynamic id, so a
+        // capture is a member of no enclosing dynamic template and is read in
+        // place; membership of the closure's own nodes rests entirely on the
+        // fresh id tagged below.
+        let fresh = self.functions.insert(Function {
+            nodes: Vec::new(),
+            r#return: NodeId::default(),
+            parameter: NodeId::default(),
+            asserts: Vec::new(),
+            parent: None,
+            block: ctx.target,
+        });
+        let ret_clone = self.static_node_apply(r#return, ctx);
+        let param_clone = self.static_node_apply(parameter, ctx);
+        let mut assert_clones = Vec::with_capacity(asserts.len());
+        for &condition in &asserts {
+            let baked = !ctx.module.nodes[condition.index].parameterized;
+            let instantiated = self.static_node_apply(condition, ctx);
+            if !baked {
+                self.asserts.push(PendingAssert {
+                    condition: instantiated,
+                    template: static_ref(&ctx.module, condition),
+                });
+            }
+            assert_clones.push(instantiated);
+        }
+        // Re-stamp the closure's own clones with the fresh owner.  Runs after
+        // the entry-point walks so a capture the body references (already
+        // collided into the shared remap) is not re-owned by the closure.
+        let mut own = Vec::with_capacity(scope.len());
+        for &node in &scope {
+            let clone = self.static_node_apply(node, ctx);
+            self.nodes[clone].function = Some(fresh);
+            own.push(clone);
+        }
+        let fresh_function = &mut self.functions[fresh];
+        fresh_function.nodes = own;
+        fresh_function.r#return = ret_clone;
+        fresh_function.parameter = param_clone;
+        fresh_function.asserts = assert_clones;
+        self.blocks[ctx.target].functions.push(fresh);
+        P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(fresh)))
+    }
+}
+
+/// Whether static node `node` is a same-module closure value whose body
+/// captures `parameter` — the item-level counterpart of the top-of-value
+/// check in [`Module::static_remap_value`], reached when a closure rides
+/// inside an array value rather than as the function's direct return.
+fn static_node_is_capturing_closure<P: Program>(
+    module: &StaticModule<P>,
+    node: LocalNodeId,
+    parameter: LocalNodeId,
+) -> bool {
+    let Some(value) = module.nodes[node.index].value else {
+        return false;
+    };
+    match value.as_enum() {
+        Some(LowValue::Function(AnyFunctionId::Static(sref))) => {
+            sref.module == module.key && static_function_captures(module, sref.index, parameter)
+        }
+        _ => false,
+    }
+}
+
+/// Whether static function `index`'s body graph reaches `target` — a free
+/// variable it must capture (the applied function's parameter).  Walks the
+/// static module's nodes from the function's entry points (return,
+/// parameter, asserts), following operation operands and array-item refs.
+fn static_function_captures<P: Program>(
+    module: &StaticModule<P>,
+    index: StaticFunctionId,
+    target: LocalNodeId,
+) -> bool {
+    fn walk<P: Program>(
+        module: &StaticModule<P>,
+        node: LocalNodeId,
+        target: LocalNodeId,
+        visited: &mut HashSet<LocalNodeId>,
+    ) -> bool {
+        if node == target {
+            return true;
+        }
+        if !visited.insert(node) {
+            return false;
+        }
+        let sn = &module.nodes[node.index];
+        if let Some(operation) = sn.operation
+            && let Some(operand) = operation.operand
+            && walk(module, operand, target, visited)
+        {
+            return true;
+        }
+        if let Some(value) = sn.value
+            && let Some(LowValue::Array(array)) = value.as_enum()
+        {
+            // SAFETY: `array` is a payload in `module`'s arena, and the caller
+            // holds the registered static module alive for this walk.
+            for item in unsafe { array.items() } {
+                if let AnyNodeId::Static(sref) = item.node
+                    && sref.module == module.key
+                    && walk(module, sref.index, target, visited)
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    let f = &module.functions[index.0];
+    let mut visited = HashSet::new();
+    walk(module, f.r#return, target, &mut visited)
+        || walk(module, f.parameter, target, &mut visited)
+        || f.asserts
+            .iter()
+            .any(|&condition| walk(module, condition, target, &mut visited))
+}
+
+/// The fixed context of one static materialize pass: where the clones land,
+/// the module being materialized (an `Arc` clone, so reads never borrow
+/// `self` while clones are created), the running remap (static node →
+/// its dynamic clone), the static function being applied (its own value
+/// node is the recursion self-reference and must stay baked, while any
+/// *other* same-module function value that captures the applied parameter
+/// is re-homed as a dynamic closure), and the applied function's parameter
+/// node (the capture that must bind to the argument).
+struct StaticApplyCtx<P: Program> {
+    target: BlockId,
+    module: Arc<StaticModule<P>>,
+    remap: HashMap<LocalNodeId, NodeId>,
+    /// The static function being applied.
+    applied: StaticFunctionId,
+    /// The applied function's parameter node (a free variable a nested
+    /// closure might capture).
+    parameter: LocalNodeId,
+}
