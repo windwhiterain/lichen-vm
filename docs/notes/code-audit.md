@@ -1201,7 +1201,7 @@ import 'b.lichen'"*, the workaround's lie (the load failed, not the resolution).
 
 ### P1-16 — `stage_depends` wired on one of two store entry points `reported`
 
-`crates/lichen-language/src/cli.rs:232` stages a file's `depend`/`plug`
+`crates/lichen-compiler/src/cli.rs` stages a file's `depend`/`plug`
 directives onto the store before resolving; the editor's path
 (`crates/lichen-language-server/src/analysis.rs:224`) calls `preprocess`
 directly, so a vendored `import "alias"` fails in the LSP and the user gets a
@@ -1382,7 +1382,7 @@ $ cat p.lichen
 S = struct<.a Int>
 f = g => g 1
 f S(.a 1)
-$ cargo run -q -p lichen-language -- p.lichen
+$ cargo run -q -p lichen-compiler -- p.lichen
 parameterized: ?a          # exit 0, no diagnostic
 ```
 
@@ -1466,7 +1466,7 @@ tiny:
 
 ```
 $ python -c "print('('*250 + '1' + ')'*250)" > deep.lichen    # ~500 bytes
-$ cargo run -p lichen-language -- deep.lichen
+$ cargo run -p lichen-compiler -- deep.lichen
 thread 'main' has overflowed its stack
 STATUS_STACK_OVERFLOW (0xc00000fd)          # a process abort, not an error
 ```
@@ -1882,7 +1882,7 @@ should not read this item as closed:
 
 *Why the CLI cannot simply move into `main.rs`.* It is not only the binary's
 entry: `crates/lichen-package/src/plugin.rs` generates a plugin compiler's
-`main.rs` that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`,
+`main.rs` that calls `lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(…)`,
 so `cli` is a **public library API** with an out-of-tree caller this repository
 itself generates. Moving it needs the generated manifest and the release
 workflows to move with it; that is `P2-12`, split out so this item's remaining
@@ -1902,7 +1902,7 @@ of it is `cli.rs`.
 
 *Why the CLI cannot simply move into `main.rs`.* It is not only the binary's
 entry: `crates/lichen-package/src/plugin.rs` generates a plugin compiler's
-`main.rs` that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`
+`main.rs` that calls `lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(…)`
 (`plugin.rs:560`), so `cli` is a **public library API** every plugin-built
 compiler depends on. Moving it into the binary would break them; feature-gating
 it means the generated `Cargo.toml` must enable the feature (the generator's
@@ -2140,7 +2140,7 @@ never calls.
 
 It is not a local move, which is why it is not folded back into `P2-6`:
 `crates/lichen-package/src/plugin.rs` generates a plugin compiler's `main.rs`
-that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`,
+that calls `lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(…)`,
 so `cli` is a **public library API with a caller this repository generates at
 build time**. Any answer has to move three things together: the generated plugin
 manifest (`core_dep_line` emits no features today), `[[bin]] required-features`
@@ -2173,7 +2173,8 @@ pipeline did.
 `lichen_compiler::cli::main::<lichen_language::program::LangProgram>()`.
 ② The generated plugin compiler's source: `write_compiler_main_rs` emits
 `lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(…)` in
-place of the `lichen_language::cli::…` call.  ③ The generated manifest:
+place of the `lichen_language::cli::…` call it used to emit.  ③ The generated
+manifest:
 `rebuild` passes `core_dep_line(core_repo, "lichen-compiler")` through
 `write_cargo_toml`'s `extra_deps` — the interpolation site `server_dep` already
 used — so a generated *compiler* gains
@@ -2204,13 +2205,17 @@ why `lichen-language` still has a binary.  The library half (`package.rs`,
 `persist.rs`, `run.rs`, `render.rs`, `preprocess`, `program`) stayed because the
 CLI only calls it; `clap` left the library's manifest with no replacement.
 
-**Residual references left alone.**  Two sections of this file still name the
-old path — `P1-16`'s Outcome (`crates/lichen-language/src/cli.rs:232`) and
-`P2-6`'s text (`lichen_language::cli::main_with_native_packages`) — and those
-are each item's own record; a closed plan's methodology in
+**Residual references.**  This Outcome originally left two sections naming the old
+path — `P1-16`'s Outcome (`crates/lichen-language/src/cli.rs:232`) and `P2-6`'s
+text (`lichen_language::cli::main_with_native_packages`) — on the grounds that each
+is its own item's record. That was the wrong call: a record that names a file or a
+command which no longer exists is stale, not historical, and a later reader cannot
+tell the two apart. Both were re-pointed after this commit, along with the two
+`cargo run -p lichen-language --` transcripts in `P1-21` and `P1-22` (that package
+has no runnable binary now). A closed plan's methodology in
 `docs/notes/type-system-cleanup-plan.md` (`cargo run -p lichen-language --bin
-lichen-compiler`) is likewise historical.  Every live reference was re-pointed:
-`README.md`, `crates/lichen-package/{README.md,src/lib.rs}` and
+lichen-compiler`) is genuinely historical and was left. Every live reference was
+re-pointed: `README.md`, `crates/lichen-package/{README.md,src/lib.rs}` and
 `docs/notes/{artifact-cache,language-toolchain,plugin-taxonomy,venv-test,package-manager}.md`.
 
 ## P3 — refactor
@@ -3024,7 +3029,7 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
   **What the move must carry, because each of these is a caller and not a detail:**
   `crates/lichen-package/src/plugin.rs` generates a plugin compiler's `main.rs`
-  that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>`,
+  that calls `lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>`,
   so the generated manifest's dependency line changes with the move; the compiler
   binary's target moves with it; and the release workflows that build and ship it
   follow. Keep the flag surface and the behaviour identical — this is a move, not
