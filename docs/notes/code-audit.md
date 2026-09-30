@@ -92,7 +92,7 @@ queue's order is deliberate.
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
-| P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | todo |
+| P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | done |
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | todo |
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
@@ -1929,6 +1929,29 @@ scans the module's whole node table and is called **per emitted node**
   overflows **saturates to `usize::MAX`** (which means "bare `~`"), silently
   changing the program's meaning, while the sibling `Int` path reports the
   identical mistake.
+  **Outcome.** The premise held, re-read first-hand: `saturating_mul` /
+  `saturating_add` collapsed any run past `usize::MAX` to `usize::MAX`, the very
+  payload a bare `~` gets, and the value is consumed as a depth the whole way
+  down — `TokenKind::Tilde(n)` → `Expr::Shallow(_, depth, _)` →
+  `IR::depths` → `checker/indexing.rs`'s `usize::MAX` arm, which selects the
+  **whole subtree**. A typo'd depth was therefore a different marker with no
+  complaint. **Reject, not clamp**: this crate already has the channel and the
+  precedent — `IntLit` reports *"integer literal out of range"* and returns no
+  token — so the arm now parses with `checked_mul`/`checked_add`, records
+  *"shallow marker depth out of range"* at the token's own span, and returns
+  `None` on overflow, exactly as its sibling does. Clamping was rejected
+  because every value it could clamp *to* is meaningful (the bare `~`, or some
+  arbitrary smaller depth), which is the confusion being removed; the bare `~`
+  and every depth that fits are unchanged.
+  **Test.** `crates/lichen-language-lex/src/tests/lex_tests.rs`'s
+  `an_overflowing_shallow_depth_is_a_lex_error` pins the one diagnostic and
+  that the run contributes no token. Against the unfixed arm it failed with
+  `left: 0, right: 1` — no diagnostic at all, the silence itself.
+  **Residual, deliberately left.** A spelled depth that genuinely *equals*
+  `usize::MAX` (`~18446744073709551615` on a 64-bit target) still encodes the
+  bare `~`: the token payload has no second encoding for it, and that is a
+  valid number rather than the overflow this item is about. Closing it would
+  change the token type, not the parse of an out-of-range literal.
 - **P5-6 `verified`** — `crates/lichen-package/build.rs:13-24` uses
   `rerun-if-changed=../../.git/HEAD`. In a git worktree `.git` is a *file*, so
   the trigger never fires and `LICHEN_BUILD_COMMIT` goes stale — and this repo's

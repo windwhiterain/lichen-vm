@@ -384,7 +384,7 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                         prev_end = Some(end);
                     }
                     None => {
-                        // integer overflow: the run was consumed, no token.
+                        // literal overflow: the run was consumed, no token.
                         prev_end = Some(end);
                     }
                 }
@@ -606,8 +606,9 @@ fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> O
     }
 }
 
-/// Map a raw token plus its matched slice to a TokenKind.  Integer literals
-/// are parsed here: overflow records an error and returns None (no token).
+/// Map a raw token plus its matched slice to a TokenKind.  Numeric literals
+/// are parsed here — `Int`, and the `~n` shallow marker's depth; an overflow
+/// records an error and returns None (no token).
 fn raw_to_kind(
     raw: &RawToken,
     slice: &str,
@@ -664,15 +665,27 @@ fn raw_to_kind(
         }),
         RawToken::TildeLit => {
             let digits = &slice[1..];
-            let n = if digits.is_empty() {
-                usize::MAX
-            } else {
-                let mut n: usize = 0;
-                for byte in digits.bytes() {
-                    n = n.saturating_mul(10).saturating_add((byte - b'0') as usize);
+            // A bare `~` is the unbounded depth, encoded as `usize::MAX` in
+            // the token's payload (`TokenKind::Tilde`).
+            if digits.is_empty() {
+                return Some(TokenKind::Tilde(usize::MAX));
+            }
+            let mut n: usize = 0;
+            for byte in digits.bytes() {
+                let digit = (byte - b'0') as usize;
+                // Saturating would turn an out-of-range depth into the bare
+                // `~` — a different marker; report it as the `IntLit` arm does.
+                match n.checked_mul(10).and_then(|v| v.checked_add(digit)) {
+                    Some(v) => n = v,
+                    None => {
+                        errors.push(LexDiag {
+                            span: Some(lc),
+                            message: "shallow marker depth out of range".to_string(),
+                        });
+                        return None;
+                    }
                 }
-                n
-            };
+            }
             Some(TokenKind::Tilde(n))
         }
         RawToken::KwInt => Some(TokenKind::KwInt),
