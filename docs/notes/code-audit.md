@@ -91,7 +91,7 @@ queue's order is deliberate.
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | done |
-| P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
+| P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | done |
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | done |
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | done |
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
@@ -2015,6 +2015,37 @@ scans the module's whole node table and is called **per emitted node**
   The JIT emits with `wasm-encoder 0.258` and `wasmi 2.0` validates with
   `wasmparser 0.228` — a 30-release skew between an encoder and its validator.
   The current MVP subset happens to work; nothing pins the pair.
+  **Outcome.** The premise held, re-derived from `Cargo.lock` and `cargo tree`
+  (the note's own numbers are still current): `wasmparser 0.228.0` is
+  `wasmi 2.0.0`'s validator and is pulled by nothing else, `wasm-encoder 0.258.0`
+  was `lichen-compute`'s encoder (and, separately, `wast`/`wat`'s under
+  `wasmi`), and the 0.227.1 pair belongs to the Zed extension's `wit-bindgen`
+  graph, not to the JIT path.  **`wasmi` does not re-export its `wasmparser`**
+  (its `lib.rs` re-exports `wasmi_core`, its own `Engine`/`Module`/… surface,
+  and nothing named `wasmparser`; the only use is
+  `src/error.rs`'s private `wasmparser::BinaryReaderError`), so the first option
+  is unavailable — validating against wasmi's own parser would mean pinning a
+  second, independently-drifting `wasmparser` next to `wasmi`'s.
+  **The emitted encoding is now the validator's generation.**
+  `lichen-compute` depends on `wasm-encoder = "0.228.0"` — the wasm-tools
+  release that `wasmparser 0.228.0` belongs to — with the pairing stated in the
+  manifest.  The emitter uses only that crate's `TypeSection`/`ImportSection`/
+  `FunctionSection`/`ExportSection`/`CodeSection`, `i32`/`i64` value types and
+  the MVP instruction set (`i64.const/add/sub/le_s/eq/extend_i32_u`,
+  `i32.wrap_i64`, `local.get`, `select`, `call`, `end`), so the alignment needed
+  **no code change**: `cargo check -p lichen-compute` compiles the 0.258 call
+  sites unchanged against 0.228.  Cost, stated: the lockfile gains a
+  `wasm-encoder 0.228.0` entry and keeps 0.258.0 for `wast`/`wat` under `wasmi`,
+  so three `wasm-encoder` versions remain — the skew being closed is the one
+  this crate's emissions could exhibit, not the transitive ones in `wasmi`'s own
+  text-format dependencies.
+  **Residual, deliberately left.** `wasmi 2.0.0` is the authority on the pair
+  for as long as it is pinned; a future `wasmi` bump moves `wasmparser` and
+  re-opens the gap, which is what the manifest comment exists to catch.  Nothing
+  validates the assembled bytes at assembly time: the first validator to see
+  them is `wasmi::Module::new` (`compute.rs`'s two launch paths), which returns
+  an `Err` rather than executing anything it cannot parse, so a mismatch stays a
+  loud kernel-load failure.
 - **P5-5 `reported`** — `language-lex/src/lib.rs:665-676`: a `~` count that
   overflows **saturates to `usize::MAX`** (which means "bare `~`"), silently
   changing the program's meaning, while the sibling `Int` path reports the
