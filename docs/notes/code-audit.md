@@ -73,7 +73,7 @@ queue's order is deliberate.
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
-| P2-6 | medium | language | README generator and `clap` live in the compiler library | todo |
+| P2-6 | medium | language | README generator and `clap` live in the compiler library | done |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
@@ -1731,6 +1731,53 @@ it, so `lichen-language-server` links it for nothing; `logos` and `sha2` are
 **Fix.** Move `readme.rs` + `sync-readme` to a tools crate (or behind a
 `readme-sync` feature), move the CLI behind a feature or into `main.rs`, and drop
 the two unused deps.
+
+**Outcome.** The premise held, re-derived; the ownership move was **stopped**
+one step in, exactly as this item's instruction allows, and the two unused deps
+landed.
+
+*What is where.* `crates/lichen-language/Cargo.toml` carries one explicit
+`[[bin]] lichen-compiler` (`src/main.rs`) **plus** an auto-discovered
+`src/bin/sync-readme.rs`, and `src/lib.rs` lists `pub mod cli;` and
+`pub mod readme;`. `clap` is a hard dependency and the whole crate's direct use
+of it is `cli.rs`.
+
+*Why the CLI cannot simply move into `main.rs`.* It is not only the binary's
+entry: `crates/lichen-package/src/plugin.rs` generates a plugin compiler's
+`main.rs` that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`
+(`plugin.rs:560`), so `cli` is a **public library API** every plugin-built
+compiler depends on. Moving it into the binary would break them; feature-gating
+it means the generated `Cargo.toml` must enable the feature (the generator's
+`core_dep_line` emits `lichen-language = { path = … }` with no features today),
+the crate's own `[[bin]]` needs `required-features`, and the release builds that
+produce the prebuilt toolchain assets must pass it
+(`.github/workflows/build.yml:35`, `release-lichen.yml:58`,
+`scripts/venv-test.sh:111`). That is an ownership change across three crates and
+the release pipeline, not a move inside this one.
+
+*Why the README generator cannot be feature-gated off.* It is called from the
+library's own tests: `src/tests/readme_tests.rs`, `tests/examples.rs`
+(`readme::example_files`/`read_normalized`/`declared_output`/`program_output`)
+and `tests/readme.rs` (`readme::render_examples`/`readme_path`/
+`replace_examples`) — the case this item's instruction names. The mandated
+verification runs `--test examples --test readme` without a feature flag, so
+gating the module off would silently turn those tests vacuous rather than move
+the generator. (`lichen-language-server` does depend on `lichen-language`,
+`Cargo.toml:25`, so the "links clap for nothing" half of the finding is real.)
+
+*What landed.* `logos` and `sha2` are removed from
+`crates/lichen-language/Cargo.toml`; a search of the whole crate for either
+name finds only the manifest lines — the crate's lexer is
+`lichen-language-lex`'s, and its hashing is `lichen_utils::hash::sha256`
+(re-exported at `persist.rs:43`). `Cargo.lock` drops the two edges and no
+target changes behaviour.
+
+*Verified but not acted on.* `readme::crate_dir()` is the compile-time
+`CARGO_MANIFEST_DIR` (`readme.rs:49-51`), `example_dir()` walks two directories
+up from it (`:55-57`), and `example_files` panics on a directory it cannot read
+(`:77-78`) — so the `cargo install` panic is real for a caller that invokes the
+generator, which is an argument for the move, not against it. What blocks the
+move is that those callers are inside this crate's own test targets.
 
 ### P2-7 — `visiting` is set by hand, bypassing the `Drop` guard `reported`
 

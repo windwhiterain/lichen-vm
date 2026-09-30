@@ -681,8 +681,6 @@ dependencies = [
  "lichen-render",
  "lichen-std-native",
  "lichen-utils",
- "logos",
- "sha2",
  "stacksafe",
 ]
 
