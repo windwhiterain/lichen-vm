@@ -199,21 +199,9 @@ where
     /// [`ExprKind::Function::parent`] link, filled in by
     /// [`Checker::check_lam`] as each function's shell is begun.
     function_of: HashMap<ExprId, FunctionId>,
-    /// The compiled pair node `[value, type]` per expression.
-    term: Vec<Option<NodeId>>,
-    /// Element 0 of the pair (the value).  `None` for call results, whose
-    /// value is only known at runtime — built lazily as
-    /// `Index(pair, 0)` via [`Checker::value_of`] when the value is needed.
-    val: Vec<Option<NodeId>>,
-    /// Element 1 of the pair (the type).
-    ty: Vec<Option<NodeId>>,
-    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
-    /// apply-time attribute check reads.  Indexed like [`Checker::ty`]: `None`
-    /// for an expression whose schema carries only a label attribute (`? d`)
-    /// or no attribute; the constraint slot for one carrying a constraint
-    /// (a `# p` annotation's perspective).  A label slot (e.g. `Doc`) is
-    /// metadata and lives only in the pair, never here.
-    attr: Vec<Option<NodeId>>,
+    /// The per-expression checker state — one entry per IR expression, see
+    /// [`ExprState`].  Indexed by [`ExprId`].
+    state: Vec<ExprState>,
     /// The parameter-attribute slot of each function whose parameter is
     /// annotated `x # n` — keyed by the `Function` expression id, carrying the
     /// attribute marker (the parameter's schema tail) and the fresh attribute
@@ -358,6 +346,46 @@ pub struct NonTerminating {
     pub budget: Option<BudgetExhausted>,
 }
 
+/// One IR expression's checker state, held in a single entry so the four
+/// records cannot disagree about which expression they describe.
+///
+/// [`Build::state`] holds one entry per IR expression, indexed by [`ExprId`]:
+/// the compiled pair `[value, type]` (`term`), its two halves (`val` and
+/// `ty`), and the constraint attribute slot (`attr`).  The ordinal is the
+/// vector's, so no code can record one field at a different expression than
+/// the rest.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExprState {
+    /// The compiled pair node `[value, type]`.
+    pub term: Option<NodeId>,
+    /// Element 0 of the pair (the value).  `None` for call results, whose
+    /// value is only known at runtime — built lazily as `Index(pair, 0)` when
+    /// the value is needed (the checker's `value_of`).
+    pub val: Option<NodeId>,
+    /// Element 1 of the pair (the type).
+    pub ty: Option<NodeId>,
+    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
+    /// apply-time attribute check reads.  `None` for an expression whose
+    /// schema carries only a label attribute (`? d`) or no attribute; the
+    /// constraint slot for one carrying a constraint (a `# p` annotation's
+    /// perspective).  A label slot (e.g. `Doc`) is metadata and lives only in
+    /// the pair, never here.
+    pub attr: Option<NodeId>,
+}
+
+impl std::ops::Index<ExprId> for Vec<ExprState> {
+    type Output = ExprState;
+    fn index(&self, id: ExprId) -> &ExprState {
+        &self[id.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ExprId> for Vec<ExprState> {
+    fn index_mut(&mut self, id: ExprId) -> &mut ExprState {
+        &mut self[id.0 as usize]
+    }
+}
+
 /// The result of one [`Checker::build`]: the module the lowlevel built, the
 /// per-expression nodes the checker attributed, and everything the layers
 /// above need to render, trace, or freeze it — plus the pass records that let
@@ -373,10 +401,9 @@ where
     /// from it lives on this struct.
     pub ir: Arc<IR<P::Attr, P::Literal>>,
     pub module: Module<P>,
-    pub term: Vec<Option<NodeId>>,
-    pub val: Vec<Option<NodeId>>,
-    pub ty: Vec<Option<NodeId>>,
-    pub attr: Vec<Option<NodeId>>,
+    /// The per-expression checker state — one entry per IR expression, see
+    /// [`ExprState`].  Indexed by [`ExprId`].
+    pub state: Vec<ExprState>,
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
@@ -568,10 +595,7 @@ where
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
-            term: vec![None; n],
-            val: vec![None; n],
-            ty: vec![None; n],
-            attr: vec![None; n],
+            state: vec![ExprState::default(); n],
             function_param_attr: HashMap::new(),
             merged_tails: HashMap::new(),
             diary: Vec::new(),
@@ -612,7 +636,9 @@ where
             checker.check_expr(s);
         }
         let root_term = checker.check_expr(root);
-        let root_ty = checker.ty[root].expect("the root expression must have a type");
+        let root_ty = checker.state[root]
+            .ty
+            .expect("the root expression must have a type");
         // Prove every lambda's function value concrete before the definition
         // pass: a recursive reference (the apply in the body) then stays in
         // place, so every recursion level re-applies the
@@ -685,7 +711,7 @@ where
         if !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
-                let Some(term) = checker.term[s] else {
+                let Some(term) = checker.state[s].term else {
                     continue;
                 };
                 checker.module.evaluate_node_deep(term, None);
@@ -749,10 +775,7 @@ where
         Build {
             ir: checker.ir,
             module: checker.module,
-            term: checker.term,
-            val: checker.val,
-            ty: checker.ty,
-            attr: checker.attr,
+            state: checker.state,
             root_term,
             root_val,
             root_ty,
@@ -1113,17 +1136,17 @@ where
     /// stored; for call results it is extracted at runtime with
     /// `Index(pair, 0)` and memoized.
     fn value_of(&mut self, e: ExprId) -> NodeId {
-        if let Some(value) = self.val[e] {
+        if let Some(value) = self.state[e].val {
             return value;
         }
-        let pair = self.term[e].expect("expression must be compiled");
+        let pair = self.state[e].term.expect("expression must be compiled");
         let operands = self.array_node(self.current_block, &[pair, self.zero()]);
         let index = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(operands),
         );
-        self.val[e] = Some(index);
+        self.state[e].val = Some(index);
         index
     }
 
@@ -1139,8 +1162,10 @@ where
     /// clone rewrites the parameter pair to the argument's).
     fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
         self.check_expr(value);
-        let operands =
-            self.array_node(self.current_block, &[self.term[value].unwrap(), self.one()]);
+        let operands = self.array_node(
+            self.current_block,
+            &[self.state[value].term.unwrap(), self.one()],
+        );
         let pair = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -1152,9 +1177,9 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_operands),
         );
-        self.term[e] = Some(pair);
-        self.val[e] = None;
-        self.ty[e] = Some(ty);
+        self.state[e].term = Some(pair);
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty);
         pair
     }
 
@@ -1200,7 +1225,7 @@ where
         // duplicate fresh state (a struct type's nominal id comes from a
         // per-compilation `Fresh` call), silently breaking the sharing the
         // frontend relies on.
-        if let Some(pair) = self.term[e] {
+        if let Some(pair) = self.state[e].term {
             return pair;
         }
         // A cycle can only form through a block-wide binding placeholder —
@@ -1221,9 +1246,9 @@ where
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
             let skel = self.array_node(self.current_block, &[vc, tc]);
-            self.term[e] = Some(skel);
-            self.val[e] = Some(vc);
-            self.ty[e] = Some(tc);
+            self.state[e].term = Some(skel);
+            self.state[e].val = Some(vc);
+            self.state[e].ty = Some(tc);
             Some((vc, tc))
         } else {
             None
@@ -1240,9 +1265,9 @@ where
                 // is built as the self-referential universe node, so it is
                 // not `[value, type]`.
                 let built = lit.build(self);
-                self.term[e] = Some(built.pair);
-                self.val[e] = Some(built.value);
-                self.ty[e] = Some(built.ty);
+                self.state[e].term = Some(built.pair);
+                self.state[e].val = Some(built.value);
+                self.state[e].ty = Some(built.ty);
                 built.pair
             }
             ExprKind::Parameter => {
@@ -1253,8 +1278,8 @@ where
                 // resolves to it.  The value slot is left alone — `value_of`
                 // builds and memoizes the shared `Index(pair, 0)` lazily.
                 let binding = self.lookup(e);
-                self.term[e] = Some(binding.term);
-                self.ty[e] = Some(binding.ty);
+                self.state[e].term = Some(binding.term);
+                self.state[e].ty = Some(binding.ty);
                 binding.term
             }
             ExprKind::Function {
@@ -1314,9 +1339,9 @@ where
                 // `arrows`; a *pattern* arrow (the apply's function-ness
                 // guard) deliberately does not — see [`Self::arrow`].
                 self.arrows.insert(shape);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(shape);
-                self.ty[e] = Some(kind);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(shape);
+                self.state[e].ty = Some(kind);
                 pair
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
@@ -1338,9 +1363,9 @@ where
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(val);
-                self.ty[e] = Some(ty_cell);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(val);
+                self.state[e].ty = Some(ty_cell);
                 pair
             }
             ExprKind::Placeholder => {
@@ -1354,9 +1379,9 @@ where
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(val);
-                self.ty[e] = Some(ty_cell);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(val);
+                self.state[e].ty = Some(ty_cell);
                 pair
             }
             ExprKind::TypeArray {
@@ -1386,17 +1411,17 @@ where
                 else {
                     let cell = self.fresh_cell();
                     let pair = self.pair_of(cell, cell);
-                    self.term[e] = Some(pair);
-                    self.val[e] = Some(cell);
-                    self.ty[e] = Some(cell);
+                    self.state[e].term = Some(pair);
+                    self.state[e].val = Some(cell);
+                    self.state[e].ty = Some(cell);
                     self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
                     return pair;
                 };
                 let value_node = self.module.as_dynamic(items[0].node, self.current_block);
                 let ty_node = self.module.as_dynamic(items[1].node, self.current_block);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(value_node);
-                self.ty[e] = Some(ty_node);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(value_node);
+                self.state[e].ty = Some(ty_node);
                 pair
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
@@ -1406,7 +1431,7 @@ where
         // equals the finished expression.
         if let Some((vc, tc)) = skeleton {
             let value = self.value_of(e);
-            let ty = self.ty[e].expect("a compound kind sets a type");
+            let ty = self.state[e].ty.expect("a compound kind sets a type");
             self.module.unify(vc, value);
             self.module.unify(tc, ty);
         }
@@ -1432,7 +1457,7 @@ where
             .map(|&arg| NativeArg {
                 expr: arg,
                 value: self.value_of(arg),
-                ty: self.ty[arg].expect("a compiled argument has a type"),
+                ty: self.state[arg].ty.expect("a compiled argument has a type"),
             })
             .collect();
         let loc = self.loc(e, 0);
@@ -1458,9 +1483,9 @@ where
                     Some(op),
                 );
                 let pair = self.pair_of(self.type_expr, self.type_expr);
-                self.term[e] = Some(pair);
-                self.val[e] = None;
-                self.ty[e] = Some(self.type_expr);
+                self.state[e].term = Some(pair);
+                self.state[e].val = None;
+                self.state[e].ty = Some(self.type_expr);
                 return pair;
             }
         };
@@ -1505,15 +1530,15 @@ where
         if !contract_holds {
             let cell = self.fresh_cell();
             let pair = self.pair_of(cell, cell);
-            self.term[e] = Some(pair);
-            self.val[e] = Some(cell);
-            self.ty[e] = Some(cell);
+            self.state[e].term = Some(pair);
+            self.state[e].val = Some(cell);
+            self.state[e].ty = Some(cell);
             self.record_guard(pair, pair, loc, DiagKind::NativeOpContract, Some(op));
             return pair;
         }
-        self.term[e] = Some(built.node);
-        self.val[e] = built.val;
-        self.ty[e] = Some(built.ty);
+        self.state[e].term = Some(built.node);
+        self.state[e].val = built.val;
+        self.state[e].ty = Some(built.ty);
         built.node
     }
 
@@ -1533,20 +1558,20 @@ where
             // (`S::a == Int`) — the operands' types must be equal, so a type
             // value (`: Type`) can be compared with a type constant.
             BinOp::Eq => self.check_unify(
-                self.ty[left].unwrap(),
-                self.ty[right].unwrap(),
+                self.state[left].ty.unwrap(),
+                self.state[right].ty.unwrap(),
                 self.loc(left, 1),
                 DiagKind::BinOp,
             ),
             BinOp::Add | BinOp::Sub | BinOp::Leq => {
                 self.check_unify(
-                    self.ty[left].unwrap(),
+                    self.state[left].ty.unwrap(),
                     self.int_type,
                     self.loc(left, 1),
                     DiagKind::BinOp,
                 );
                 self.check_unify(
-                    self.ty[right].unwrap(),
+                    self.state[right].ty.unwrap(),
                     self.int_type,
                     self.loc(right, 1),
                     DiagKind::BinOp,
@@ -1559,9 +1584,9 @@ where
         let operands = self.array_node(self.current_block, &[left, right]);
         let value = self.op_node(self.current_block, operator, Some(operands));
         let pair = self.pair_of(value, self.int_type);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(self.int_type);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(self.int_type);
         pair
     }
 
@@ -1579,10 +1604,10 @@ where
         // node — element 0 of the pair — not the pair itself.
         let value = self.value_of(condition);
         self.register_assert(value, self.loc(e, 0), true);
-        let pair = self.term[condition].unwrap();
-        self.term[e] = Some(pair);
-        self.val[e] = self.val[condition];
-        self.ty[e] = self.ty[condition];
+        let pair = self.state[condition].term.unwrap();
+        self.state[e].term = Some(pair);
+        self.state[e].val = self.state[condition].val;
+        self.state[e].ty = self.state[condition].ty;
         pair
     }
 
@@ -1613,7 +1638,7 @@ where
         for &el in &elements {
             self.check_expr(el);
             vals.push(self.value_of(el));
-            tys.push(self.ty[el].unwrap());
+            tys.push(self.state[el].ty.unwrap());
         }
         // A tuple: `[values, [[element types], [TupleType, Type]]]`.
         let value = self.array_node(self.current_block, &vals);
@@ -1621,9 +1646,9 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -1637,9 +1662,9 @@ where
         let shape = self.array_node(self.current_block, &tys);
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(shape);
-        self.ty[e] = Some(kind);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
         pair
     }
 
@@ -1654,7 +1679,7 @@ where
     /// `struct<Int, B>` works.
     fn check_type_element(&mut self, el: ExprId) -> NodeId {
         self.check_expr(el);
-        self.term[el].unwrap()
+        self.state[el].term.unwrap()
     }
 
     fn lookup(&self, target: ExprId) -> Binding {

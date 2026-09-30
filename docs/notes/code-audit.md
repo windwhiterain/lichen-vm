@@ -72,7 +72,7 @@ queue's order is deliberate.
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
-| P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
+| P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | done |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
 | P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | done |
@@ -1949,6 +1949,53 @@ layout change cross-crate.
 **Fix.** A single `Vec<ExprState>` (four `Option<NodeId>` fields) removes the
 "indices disagree" hazard; a checked accessor that records a diagnostic removes
 the panic surface. Both are invasive — propose before doing.
+
+**Outcome — the four vectors are one; the read surface is untouched.**
+Re-derived first, because the mechanism needed pinning before the shape could
+be chosen: the four are `term`, `val`, `ty` and `attr`, all
+`Vec<Option<NodeId>>`, all sized once at `n = ir.expr.len()` in the single
+`Checker` initializer (`checker.rs:571-574` before this change) and moved into
+`Build` at its single construction site (`:749-755`).  **No code pushes to any
+of them** — every write is `self.<field>[e] = …` — so the four were always the
+same length and the "silently misaligned build" was a latent hazard (a future
+`push`), not a live one.  Measured on the pre-change tree: 157 indexed reads
+inside `lichen-highlevel/src` (218 workspace-wide), 43 of them immediately
+`.unwrap()`/`.expect()` — the ledger's "about 30" undercounts — and 35 `term`,
+34 `val`, 35 `ty`, 2 `attr` write sites.  The sparsity is real, and it is
+*presence*, not alignment: `val` is `None` for a call result (the lazy
+`value_of` memo) and `attr` only for an expression whose schema carries a
+constraint.
+
+What landed is the ledger's own first shape: `ExprState` (four `Option` fields,
+so presence sparsity is unchanged) and `Build::state: Vec<ExprState>` — plus
+`Checker::state` behind it.  The `ExprId` indexing impl that made four parallel
+vectors convenient is moved from `Vec<Option<NodeId>>` to `Vec<ExprState>`
+(`ir.rs`'s copy is deleted), so the ordinal belongs to one vector and
+misalignment is unrepresentable instead of conventional.  Behaviour is
+identical: 225 access sites (223 code, 2 doc comments) become one index plus a
+field, with the same values read, the same diagnostics in the same order, and
+no expression checked differently; `cargo clippy --workspace --all-targets --
+-D warnings` exits 0, `cargo fmt --all -- --check` exits 0, `cargo test
+--workspace` passes, and `cargo test -p lichen-language --test pipeline --test
+examples --test persist --test registry --test compute` passes (24 + 1 + 15 +
+123 + 16, the counts the sibling items report).
+
+*Residual, deliberately left — the read surface.*  The ledger's second half (a
+checked accessor that records a diagnostic instead of panicking) is **not**
+done: the 43 `.unwrap()`/`.expect()` reads are the checker's own contract
+assertions, and answering one with a recorded diagnostic changes what the
+compiler does on a checker bug — a behaviour change, which this item's brief
+forbids.  The panics are exactly where they were.
+
+*The public surface moved, and that is visible.*  `Build::term`/`val`/`ty`/
+`attr` are now `Build::state[expression].term`/`val`/`ty`/`attr`; the 11 sites
+in `lichen-language-server/src/analysis.rs` were rewritten with the rest
+(`analysis.rs:82`'s own prose note included), so an out-of-tree reader of the
+old four fields is the only thing this breaks.  Nothing serialises `Build`: the
+artifact codec reads the frozen `Module`, and the checker's diagnostic assembly
+reads `diary`/`apply_edges`/`node_edges`, none of which the four vectors feed.
+`P1-5`'s content key and `P1-9`'s diary discriminant do not touch these fields
+and are unaffected.
 
 ### P2-4 — `Node`'s `pub` fields break the write choke-point `reported`
 

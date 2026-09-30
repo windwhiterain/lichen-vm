@@ -68,7 +68,7 @@ where
         });
         let param = match attr_cell {
             Some((_, _, attr)) => {
-                self.attr[parameter] = Some(attr);
+                self.state[parameter].attr = Some(attr);
                 self.array_node(return_block, &[value_cell, type_cell, attr])
             }
             None => self.array_node(return_block, &[value_cell, type_cell]),
@@ -78,8 +78,8 @@ where
         // that allocated them (the apply clone walk requires `parameter` to be
         // a member, and `finish_function` asserts it).
         self.module.finish_function(function, param, param);
-        self.term[parameter] = Some(param);
-        self.ty[parameter] = Some(type_cell);
+        self.state[parameter].term = Some(param);
+        self.state[parameter].ty = Some(type_cell);
         // A self- or mutually-recursive binding (`fib = n => e`): the IR is a
         // cycle — the body references the function's own `ExprId`.  Register
         // the function's pair *before* the body compiles, so the reference
@@ -91,9 +91,9 @@ where
         let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
         let pair = self.array_node(return_block, &[func_node, ty_cell]);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(func_node);
-        self.ty[e] = Some(ty_cell);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(func_node);
+        self.state[e].ty = Some(ty_cell);
         self.scopes.push(HashMap::from([(
             parameter,
             Binding {
@@ -112,8 +112,9 @@ where
         // when it happens, not in what it binds.
         if let Some(parameter_type) = parameter_type {
             self.check_expr(parameter_type);
-            let type_pair =
-                self.term[parameter_type].expect("the type expression must compile to a pair");
+            let type_pair = self.state[parameter_type]
+                .term
+                .expect("the type expression must compile to a pair");
             self.check_unify(
                 type_cell,
                 type_pair,
@@ -143,7 +144,9 @@ where
             // The declared value is the annotation expression's `[value, type]`
             // term pair — the uniform slot shape the apply's check compares
             // against the argument's slot.
-            let declared = self.term[parameter_attribute].expect("an attribute expr is compiled");
+            let declared = self.state[parameter_attribute]
+                .term
+                .expect("an attribute expr is compiled");
             // The parameter's schema tail[0] names the attribute; the apply's
             // check resolves its `AttrExt` from this marker.
             let marker = self.ir.schema(parameter).tail[0];
@@ -186,7 +189,7 @@ where
         // Built while the current function is still the shell, so these
         // nodes join its scope like the rest of the body.
         let (shape, _kind, arrow) =
-            self.arrow_parts(return_block, type_cell, self.ty[r#return].unwrap());
+            self.arrow_parts(return_block, type_cell, self.state[r#return].ty.unwrap());
         // The printer needs the arrow's *shape* — an anonymous `[dom, codom]`
         // pair is indistinguishable from a tuple type without it, so only a
         // registered shape renders as `dom -> codom`.
@@ -196,9 +199,9 @@ where
         self.module.unify(ty_cell, arrow);
         let pair = self.array_node(return_block, &[func_node, arrow]);
         self.function_stack.pop();
-        self.term[e] = Some(pair);
-        self.val[e] = Some(func_node);
-        self.ty[e] = Some(arrow);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(func_node);
+        self.state[e].ty = Some(arrow);
         pair
     }
 
@@ -220,7 +223,7 @@ where
         // declared value).
         let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
-        let argument_type = self.ty[argument].unwrap();
+        let argument_type = self.state[argument].ty.unwrap();
         let argument_pair = match &param_persp {
             Some((marker, _)) => {
                 let argument_persp = self.attr_or_missing(argument, marker);
@@ -238,7 +241,7 @@ where
         // cell here would chain the type cells of every use of a polymorphic
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
-        let function_ty = self.ty[function].unwrap();
+        let function_ty = self.state[function].ty.unwrap();
         let concrete = self.type_is_concrete(function_ty);
         if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
             let d = self.fresh_cell();
@@ -268,10 +271,10 @@ where
                 let loc2 = self.loc(e, 2);
                 ext.unify_slots(self, arg_missing, param_slot, loc2);
             }
-        } else if self.attr[argument].is_some() {
+        } else if self.state[argument].attr.is_some() {
             let marker = self.schema_tail(argument)[0];
             if let Some(ext) = self.attribute_extension(&marker) {
-                let found_attr = self.attr[argument].unwrap();
+                let found_attr = self.state[argument].attr.unwrap();
                 // The declared side of an unannotated parameter is the
                 // attribute's missing slot — a `[0, int]` term pair, the
                 // uniform slot shape.
@@ -307,9 +310,9 @@ where
                 apply_expr: e,
             },
         );
-        self.term[e] = Some(node);
-        self.val[e] = None;
-        self.ty[e] = Some(c);
+        self.state[e].term = Some(node);
+        self.state[e].val = None;
+        self.state[e].ty = Some(c);
         node
     }
 }

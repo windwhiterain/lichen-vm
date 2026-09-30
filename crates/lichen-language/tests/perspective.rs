@@ -29,14 +29,16 @@ fn message(source: &str) -> String {
 
 /// The root expression's static perspective slot, evaluated to its value.
 /// Only meaningful for a program whose root is itself `# p`-annotated
-/// (`build.attr[root]` is the checker's lowered slot — a `[value, type]` term
+/// (`build.state[root].attr` is the checker's lowered slot — a `[value, type]` term
 /// pair, whose lattice value is element 0).
 fn root_persp(source: &str) -> usize {
     let build = compile(source)
         .build
         .expect("the program must compile clean");
     let root = build.ir.root;
-    let slot = build.attr[root].expect("the root carries a perspective slot");
+    let slot = build.state[root]
+        .attr
+        .expect("the root carries a perspective slot");
     let mut module = build.module;
     let value = module.evaluate_node_deep(slot, None);
     // A slot is a `[value, type]` term pair; the lattice value is element 0.

@@ -41,7 +41,7 @@ where
     pub(super) fn check_field(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
-        let container_ty = self.ty[container].unwrap();
+        let container_ty = self.state[container].ty.unwrap();
         let concrete = self.type_is_concrete(container_ty);
         if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
             self.record_guard(
@@ -57,9 +57,9 @@ where
         self.node_edges.insert(key_value, self.loc(key, 0));
         let (value_node, ty_node) = self.slot_read(container_ty, container_value, key_value);
         let pair = self.pair_of(value_node, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -118,7 +118,7 @@ where
         name: &'static str,
     ) -> NodeId {
         self.check_expr(container);
-        let container_ty = self.ty[container].unwrap();
+        let container_ty = self.state[container].ty.unwrap();
         let concrete = self.type_is_concrete(container_ty);
         if concrete
             && !shape::is_type_struct_kind_any(
@@ -152,9 +152,9 @@ where
         // value = Index(container_value, key); type = Index(value, 1).
         let container_value = self.value_of(container);
         let (value_node, ty_node) = self.element_read(container_value, key);
-        self.term[e] = Some(value_node);
-        self.val[e] = None;
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(value_node);
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty_node);
         value_node
     }
 
@@ -177,7 +177,7 @@ where
         name: &'static str,
     ) -> NodeId {
         self.check_expr(container);
-        let container_ty = self.ty[container].unwrap();
+        let container_ty = self.state[container].ty.unwrap();
         let concrete = self.type_is_concrete(container_ty);
         if concrete {
             if !shape::is_struct_type_any(
@@ -224,9 +224,9 @@ where
         let container_value = self.value_of(container);
         let (value_node, ty_node) = self.slot_read(container_ty, container_value, key);
         let pair = self.pair_of(value_node, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -292,7 +292,7 @@ where
         let mut tys = Vec::with_capacity(elements.len());
         for &el in &elements {
             vals.push(self.value_of(el));
-            tys.push(self.ty[el].unwrap());
+            tys.push(self.state[el].ty.unwrap());
         }
         let id = self.op_node(
             self.current_block,
@@ -302,9 +302,9 @@ where
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(struct_ty);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(struct_ty);
         pair
     }
 
@@ -327,7 +327,7 @@ where
     ) -> NodeId {
         self.check_expr(type_expr);
         self.check_expr(value);
-        let type_pair = self.term[type_expr].unwrap();
+        let type_pair = self.state[type_expr].term.unwrap();
         // An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no
         // statically readable pair — it is an apply node, not an array.  Force
         // its evaluation so the nominality check and the field-list read see
@@ -343,7 +343,7 @@ where
             self.module.evaluate_node_deep(type_pair, None);
             self.force_failed = self.module.budget_exhausted.is_some();
         }
-        let callee_ty = self.ty[type_expr].unwrap();
+        let callee_ty = self.state[type_expr].ty.unwrap();
         let concrete = self.type_is_concrete(callee_ty);
         let any_named = arg_names.iter().any(|n| n.is_some());
         if concrete
@@ -368,9 +368,9 @@ where
             // under the callee's pair), so the descent stays total.
             let value_node = self.value_of(value);
             let pair = self.pair_of(value_node, type_pair);
-            self.term[e] = Some(pair);
-            self.val[e] = Some(value_node);
-            self.ty[e] = Some(type_pair);
+            self.state[e].term = Some(pair);
+            self.state[e].val = Some(value_node);
+            self.state[e].ty = Some(type_pair);
             return pair;
         }
         if !concrete {
@@ -446,7 +446,7 @@ where
             // The value's shape: the element-type list of a tuple type, or
             // the type itself for anything else (which then fails the list
             // check).
-            let value_ty = self.ty[value].unwrap();
+            let value_ty = self.state[value].ty.unwrap();
             // SAFETY: `value_ty` is a live node of this module; nothing in
             // this crate calls `Module::drop_block`.
             let value_shape = match unsafe { self.module.array_items(value_ty) } {
@@ -479,9 +479,9 @@ where
             );
         }
         let pair = self.pair_of(value_node, type_pair);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(type_pair);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(type_pair);
         pair
     }
 
@@ -511,7 +511,10 @@ where
         // order); their values and types are reordered into definition order.
         let elem_ids = self.range_children(value);
         let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
-        let tys: Vec<NodeId> = elem_ids.iter().map(|&a| self.ty[a].unwrap()).collect();
+        let tys: Vec<NodeId> = elem_ids
+            .iter()
+            .map(|&a| self.state[a].ty.unwrap())
+            .collect();
         // The name table is unavailable: record each `.name` argument and
         // fall back to the call-order value (the caller skips the field-list
         // unify).
@@ -534,7 +537,7 @@ where
                     self.record_guard(type_pair, type_pair, self.loc(elem_ids[i], 0), kind, *name);
                 }
             }
-            return (self.value_of(value), self.ty[value].unwrap(), false);
+            return (self.value_of(value), self.state[value].ty.unwrap(), false);
         }
         // The definition's field count (the shape's length) — `None` when the
         // shape is still an unbound cell mid-recursion, in which case the
@@ -635,7 +638,7 @@ where
             // The structural mismatch is the recorded diagnostic; return the
             // call-order value so the checker still produces a term, but the
             // caller skips the field-list unify.
-            return (self.value_of(value), self.ty[value].unwrap(), false);
+            return (self.value_of(value), self.state[value].ty.unwrap(), false);
         }
         // Reorder the argument values and their element types into definition
         // order, so the instance's value reads positionally against the
@@ -712,9 +715,9 @@ where
             None,
         );
         let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(shape);
-        self.ty[e] = Some(kind);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
         pair
     }
 

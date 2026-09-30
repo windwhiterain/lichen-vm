@@ -276,7 +276,7 @@ where
                     })
                 });
                 if let Some(eid) = eid
-                    && let Some(t) = build.ty[eid]
+                    && let Some(t) = build.state[eid].ty
                 {
                     import_ty.insert(imp.span, print_type_lang(&build.module, t));
                     if let Some(names) = struct_type_named_fields(&build.module, t) {
@@ -332,7 +332,7 @@ where
                                 (s, lsp::offset_of_span(&line_starts, s))
                             }
                         };
-                        let ty_node = build.ty[id];
+                        let ty_node = build.state[id].ty;
                         let ty = match ty_node {
                             Some(t) => print_type_lang(&build.module, t),
                             None => String::new(),
@@ -346,7 +346,7 @@ where
                                 names.into_iter().flatten().map(|n| n.to_string()).collect(),
                             );
                         }
-                        let value = build.val[id].and_then(|vn| {
+                        let value = build.state[id].val.and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                                 // A `Parameterized` value is a deferred (lazy /
                                 // recursive) binding — report type only, never force.
@@ -356,7 +356,7 @@ where
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
-                                    build.ty[id].unwrap_or_default(),
+                                    build.state[id].ty.unwrap_or_default(),
                                 )),
                                 None => None,
                             }
@@ -390,11 +390,11 @@ where
                             &build.ir.struct_names[names.start as usize..names.end as usize];
                         for (name, &val_id) in field_names.iter().zip(vals.iter()) {
                             let Some(name) = name else { continue };
-                            let ty = match build.ty[val_id] {
+                            let ty = match build.state[val_id].ty {
                                 Some(t) => print_type_lang(&build.module, t),
                                 None => String::new(),
                             };
-                            let value = build.val[val_id].and_then(|vn| {
+                            let value = build.state[val_id].val.and_then(|vn| {
                                 match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                                     Some(v)
                                         if matches!(v.as_enum(), Some(LowValue::Parameterized)) =>
@@ -404,7 +404,7 @@ where
                                     Some(v) => Some(print_value_lang(
                                         &build.module,
                                         v,
-                                        build.ty[val_id].unwrap_or_default(),
+                                        build.state[val_id].ty.unwrap_or_default(),
                                     )),
                                     None => None,
                                 }
@@ -453,7 +453,7 @@ where
                             .get(&container_span)
                             .and_then(|mty| field_type_in_struct(mty, name))
                             .unwrap_or_default();
-                        let value = build.val[eid].and_then(|vn| {
+                        let value = build.state[eid].val.and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                                 Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
                                     None
@@ -461,7 +461,7 @@ where
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
-                                    build.ty[eid].unwrap_or_default(),
+                                    build.state[eid].ty.unwrap_or_default(),
                                 )),
                                 None => None,
                             }

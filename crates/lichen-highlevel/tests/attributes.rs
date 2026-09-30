@@ -90,7 +90,9 @@ fn the_attribute_slot_of_an_unlowerable_schema_is_a_well_formed_hole() {
     // other check-time guards leave.
     let (annotation, ir) = annotated_int();
     let build = Checker::<TaggedProgram>::build(ir);
-    let pair = build.term[annotation.0 as usize].expect("the annotation compiled to a pair");
+    let pair = build.state[annotation.0 as usize]
+        .term
+        .expect("the annotation compiled to a pair");
     // SAFETY: `pair` is a live node of the build under test, whose block has
     // not been dropped.
     let items = unsafe { build.module.array_items(pair) }.expect("the pair is an array");

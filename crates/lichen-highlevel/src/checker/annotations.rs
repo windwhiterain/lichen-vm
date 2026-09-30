@@ -100,7 +100,7 @@ where
             }
             // An annotated value contributes no sub-expression to a parent's
             // combine: its attribute is its OWN slot (read via
-            // `self.attr[value]` in `check_ann`), never the value beneath it
+            // `self.state[value].attr` in `check_ann`), never the value beneath it
             // (`a # q` re-annotated keeps `q`; a `? doc` on a value writes the
             // new doc).  A doc-only annotation (no perspective) therefore
             // reads as a leaf.
@@ -151,7 +151,7 @@ where
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let value_tail = self.schema_tail(value).to_vec();
         let pos = value_tail.iter().position(|m| m == marker)?;
-        let pair = self.term[value]?;
+        let pair = self.state[value].term?;
         // SAFETY: `pair` is a live node of this module; nothing in this crate
         // calls `Module::drop_block`.
         let items = unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(pair)) }?;
@@ -170,7 +170,7 @@ where
     /// which attribute the caller is asking about; the missing slot is the
     /// attribute's own (`[0, int]` for a perspective).
     pub(super) fn attr_or_missing(&mut self, e: ExprId, marker: &P::Attr) -> NodeId {
-        if let Some(slot) = self.attr[e] {
+        if let Some(slot) = self.state[e].attr {
             return slot;
         }
         self.missing_slot_of(marker, self.loc(e, 2))
@@ -231,16 +231,16 @@ where
         let type_pair = match r#type {
             Some(type_expr) => {
                 self.check_expr(type_expr);
-                let type_pair = self.term[type_expr].unwrap();
+                let type_pair = self.state[type_expr].term.unwrap();
                 self.check_unify(
-                    self.ty[value].unwrap(),
+                    self.state[value].ty.unwrap(),
                     type_pair,
                     self.loc(value, 1),
                     DiagKind::Annotation,
                 );
                 type_pair
             }
-            None => self.ty[value].unwrap(),
+            None => self.state[value].ty.unwrap(),
         };
         let value_node = self.value_of(value);
         // The annotation *replaces* the attribute slots it spells and
@@ -305,7 +305,9 @@ where
                 // label's slot representation — the distinction below is the
                 // *semantic* one (does the attribute constrain at apply time?)
                 // that lives in [`AttrExt::is_label`].
-                let slot = self.term[pe].expect("an annotation value expr is compiled");
+                let slot = self.state[pe]
+                    .term
+                    .expect("an annotation value expr is compiled");
                 if ext.is_label() {
                     // A label (metadata, e.g. `Doc`) carries no constraint: it
                     // contributes no apply-time slot.  The attribute's own
@@ -326,7 +328,7 @@ where
                     // no attribute of its own (a plain leaf, or a doc-only
                     // annotation) has no provider, so there is nothing to
                     // validate against and the annotation is the slot.
-                    let provider = if self.attr[value].is_some() {
+                    let provider = if self.state[value].attr.is_some() {
                         Some(self.attr_or_missing(value, marker))
                     } else {
                         let children = self.persp_combine_children(value);
@@ -364,15 +366,15 @@ where
         }
         // The constraint slot (e.g. the perspective) is what the apply-time
         // attribute check reads; a label slot is metadata only.
-        self.attr[e] = constraint_slot;
+        self.state[e].attr = constraint_slot;
         let mut pair = Vec::with_capacity(slots.len() + 2);
         pair.push(value_node);
         pair.push(type_pair);
         pair.extend(slots);
         let pair = self.array_node(self.current_block, &pair);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(type_pair);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(type_pair);
         pair
     }
 }
