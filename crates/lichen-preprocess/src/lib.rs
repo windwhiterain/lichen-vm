@@ -296,43 +296,15 @@ where
                             }
                         }
                         Directive::Metadata { name, value } => metadata.push((name, value)),
-                        Directive::Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin,
-                        } => depends.push(Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin,
-                        }),
-                        Directive::Plug {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                        } => depends.push(Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin: true,
-                        }),
+                        // Both `name = depend "url"` and `name = plug "url"`
+                        // normalize through `depend_of` — the one place a
+                        // `Depend` is built — so a new field cannot be dropped
+                        // on this path.
+                        other => {
+                            if let Some(dep) = depend_of(other) {
+                                depends.push(dep);
+                            }
+                        }
                     }
                 }
             }

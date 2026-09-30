@@ -844,6 +844,33 @@ fn struct_inst_field<'a>(
     ))
 }
 
+/// A comma-separated list, a trailing comma tolerated — plus *whether any
+/// comma appeared*, which the callers use to split the single-comma-free form
+/// from the instantiating one.  One combinator, so the comma discipline and
+/// the trailing-comma tolerance of the two callers below cannot differ.
+fn comma_list<'a, T>(
+    item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
+    let first = item.clone().or_not();
+    first
+        .then(
+            token(TokenKind::Separator)
+                .ignore_then(item)
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Separator).or_not())
+        .map(|((first, rest), trailing)| {
+            let saw_comma = !rest.is_empty() || trailing.is_some();
+            let mut items = Vec::new();
+            if let Some(first) = first {
+                items.push(first);
+            }
+            items.extend(rest);
+            (items, saw_comma)
+        })
+}
+
 /// The content of an adjacent `(` in a struct-instantiation position: zero or
 /// more field arguments (each positional or `.name`-prefixed) separated by
 /// commas, a trailing comma tolerated — plus *whether any comma appeared*.
@@ -852,25 +879,7 @@ fn struct_inst_field<'a>(
 fn struct_inst_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), E<'a>> + Clone {
-    let field = struct_inst_field(expr.clone());
-    let first = field.clone().or_not();
-    first
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(field.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
-        .map(|((first, rest), trailing)| {
-            let saw_comma = !rest.is_empty() || trailing.is_some();
-            let mut fields = Vec::new();
-            if let Some(f0) = first {
-                fields.push(f0);
-            }
-            fields.extend(rest);
-            (fields, saw_comma)
-        })
+    comma_list(struct_inst_field(expr))
 }
 
 /// The content of an adjacent `(`: zero or more expressions separated by
@@ -884,24 +893,7 @@ fn struct_inst_fields<'a>(
 fn paren_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), E<'a>> + Clone {
-    let first = expr.clone().or_not();
-    first
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(expr.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
-        .map(|((first, rest), trailing)| {
-            let saw_comma = !rest.is_empty() || trailing.is_some();
-            let mut fields = Vec::new();
-            if let Some(f0) = first {
-                fields.push(f0);
-            }
-            fields.extend(rest);
-            (fields, saw_comma)
-        })
+    comma_list(expr)
 }
 
 /// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple value (always
@@ -1012,23 +1004,9 @@ fn table_literal<'a>(
     token(TokenKind::KwTable)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LBrace))
-        .ignore_then(entry.clone().or_not())
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(entry.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
+        .ignore_then(comma_list(entry))
         .then_ignore(token(TokenKind::RBrace))
-        .map_with(|((first, mut rest), _trailing), me| {
-            let mut entries = Vec::new();
-            if let Some(first) = first {
-                entries.push(first);
-            }
-            entries.append(&mut rest);
-            Expr::Table(entries, span_at(tokens, me.span().start))
-        })
+        .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
 }
 
 /// An array element with an optional `~` prefix: `~ e`, `~2 e`, or a plain

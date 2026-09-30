@@ -157,19 +157,15 @@ impl<P: Program> Module<P> {
             // depth, unify, and record an `ApplyError` on failure.
             if let Some(&cloned_param) = ctx.remap.get(&parameter) {
                 if ctx.remap.len() > 1 {
-                    for clones in crate::apply::regroup_clones(
+                    let groups = crate::apply::regroup_clones(
                         ctx.remap
                             .iter()
                             .map(|(&template, &clone)| (template, clone)),
                         |template| static_find(&ctx.module.nodes, template),
-                    )
-                    .values()
-                    {
-                        let first = clones[0];
-                        for &clone in &clones[1..] {
-                            module.unify(first, clone);
-                        }
-                    }
+                    );
+                    crate::apply::unify_clone_groups(groups, |first, clone| {
+                        module.unify(first, clone);
+                    });
                 }
                 if module.apply_parameter_check(
                     cloned_param,

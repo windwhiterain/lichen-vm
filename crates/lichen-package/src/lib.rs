@@ -30,3 +30,14 @@ pub use project::Project;
 /// The repository the core crates and toolchain binaries are fetched from.
 /// Overridable per command with a `--repo` flag / config value.
 pub const DEFAULT_REPO: &str = crate::toolchain::DEFAULT_REPO;
+
+/// Whether `tool` is on `$PATH`: it is invoked with `--version` and answers.
+/// Every external-tool probe goes through here, so the four commands that need
+/// one (git, cargo, curl, and the toolchain binaries) agree on what "present"
+/// means.
+pub(crate) fn tool_available(tool: &str) -> bool {
+    std::process::Command::new(tool)
+        .arg("--version")
+        .output()
+        .is_ok_and(|out| out.status.success())
+}

@@ -90,6 +90,18 @@ impl ChildRange {
     pub const EMPTY: ChildRange = ChildRange { start: 0, end: 0 };
 }
 
+/// Append `values` to an arena and return the half-open [`ChildRange`] they
+/// occupy.  Every variadic arena write goes through here, so a range and the
+/// push it describes cannot disagree.
+fn extend_range<T>(arena: &mut Vec<T>, values: impl IntoIterator<Item = T>) -> ChildRange {
+    let start = arena.len() as u32;
+    arena.extend(values);
+    ChildRange {
+        start,
+        end: arena.len() as u32,
+    }
+}
+
 /// A source-blind diagnostic location: the IR expression a check is about,
 /// plus a single **recursive** descent path through its `[value, type, …]`
 /// spine.
@@ -577,12 +589,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         r#type: Option<ExprId>,
         attrs: &[ExprId],
     ) -> ExprId {
-        let start = self.children.len() as u32;
-        self.children.extend_from_slice(attrs);
-        let attributes = ChildRange {
-            start,
-            end: self.children.len() as u32,
-        };
+        let attributes = extend_range(&mut self.children, attrs.iter().copied());
         self.alloc(ExprKind::Annotation {
             value,
             r#type,
@@ -640,22 +647,11 @@ impl<A: AttrSpec, L> IR<A, L> {
     }
 
     pub fn alloc_type_struct(&mut self, fields: &[(ExprId, Option<&'static str>)]) -> ExprId {
-        let start = self.children.len() as u32;
-        let nstart = self.struct_names.len() as u32;
-        let mut names = Vec::with_capacity(fields.len());
-        for &(element, name) in fields {
-            self.children.push(element);
-            names.push(name);
-        }
-        let field_range = ChildRange {
-            start,
-            end: self.children.len() as u32,
-        };
-        self.struct_names.extend_from_slice(&names);
-        let name_range = ChildRange {
-            start: nstart,
-            end: self.struct_names.len() as u32,
-        };
+        let field_range = extend_range(
+            &mut self.children,
+            fields.iter().map(|&(element, _)| element),
+        );
+        let name_range = extend_range(&mut self.struct_names, fields.iter().map(|&(_, name)| name));
         self.alloc(ExprKind::TypeStruct {
             fields: field_range,
             names: name_range,
@@ -668,12 +664,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         value: ExprId,
         names: &[Option<&'static str>],
     ) -> ExprId {
-        let nstart = self.struct_names.len() as u32;
-        self.struct_names.extend_from_slice(names);
-        let name_range = ChildRange {
-            start: nstart,
-            end: self.struct_names.len() as u32,
-        };
+        let name_range = extend_range(&mut self.struct_names, names.iter().copied());
         self.alloc(ExprKind::Instantiate {
             type_expr,
             value,
@@ -682,12 +673,7 @@ impl<A: AttrSpec, L> IR<A, L> {
     }
 
     pub fn alloc_record(&mut self, value: ExprId, names: &[Option<&'static str>]) -> ExprId {
-        let nstart = self.struct_names.len() as u32;
-        self.struct_names.extend_from_slice(names);
-        let name_range = ChildRange {
-            start: nstart,
-            end: self.struct_names.len() as u32,
-        };
+        let name_range = extend_range(&mut self.struct_names, names.iter().copied());
         self.alloc(ExprKind::Record {
             value,
             names: name_range,
@@ -702,35 +688,21 @@ impl<A: AttrSpec, L> IR<A, L> {
     /// flattened into the children arena (interleaved, entry by entry), and
     /// the expression is an [`ExprKind::Table`] over that range.
     pub fn alloc_table(&mut self, entries: &[(ExprId, ExprId)]) -> ExprId {
-        let start = self.children.len() as u32;
-        for &(key, value) in entries {
-            self.children.push(key);
-            self.children.push(value);
-        }
-        let range = ChildRange {
-            start,
-            end: self.children.len() as u32,
-        };
+        let range = extend_range(
+            &mut self.children,
+            entries.iter().flat_map(|&(key, value)| [key, value]),
+        );
         self.alloc(ExprKind::Table(range))
     }
 
     /// Allocate a shallow-marked array: each `(element, depth)` pair carries
     /// the element's `~` depth (0 = unmarked, `usize::MAX` = bare `~`).
     pub fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)]) -> ExprId {
-        let start = self.children.len() as u32;
-        let dstart = self.depths.len() as u32;
-        for &(element, depth) in elements {
-            self.children.push(element);
-            self.depths.push(depth);
-        }
-        let range = ChildRange {
-            start,
-            end: self.children.len() as u32,
-        };
-        let depths = ChildRange {
-            start: dstart,
-            end: self.depths.len() as u32,
-        };
+        let range = extend_range(
+            &mut self.children,
+            elements.iter().map(|&(element, _)| element),
+        );
+        let depths = extend_range(&mut self.depths, elements.iter().map(|&(_, depth)| depth));
         self.alloc(ExprKind::ShallowArray { range, depths })
     }
 
@@ -739,12 +711,7 @@ impl<A: AttrSpec, L> IR<A, L> {
         elements: &[ExprId],
         make: fn(ChildRange) -> ExprKind<L>,
     ) -> ExprId {
-        let start = self.children.len() as u32;
-        self.children.extend_from_slice(elements);
-        let range = ChildRange {
-            start,
-            end: self.children.len() as u32,
-        };
+        let range = extend_range(&mut self.children, elements.iter().copied());
         self.alloc(make(range))
     }
 

@@ -22,8 +22,46 @@ pub use crate::render::print_type;
 pub use crate::render::print_value;
 use crate::render::{print_type_lang, print_value_lang, render_attributes};
 
+use lichen_highlevel::checker::Build;
 use lichen_highlevel::program::ValueType;
 use lichen_utils::extend::AsEnum;
+
+/// Run a checked build to its output text: deep-evaluate the root value and
+/// type, then render `value<attributes>: type`.  The one place the output line
+/// is formed, so [`evaluate`] and [`evaluate_raw`] — which differ only in how
+/// they obtain the build — cannot drift.
+fn render_build<P>(build: Build<P>) -> String
+where
+    P: LangProgramShape,
+    P::Value: ValueType
+        + AsEnum<lichen_compute::ComputeValue>
+        + From<lichen_compute::ComputeValue>
+        + 'static,
+    P::Operator: From<GcdOp>
+        + From<lichen_highlevel::program::TypeOperator>
+        + From<lichen_compute::ComputeOperator>
+        + 'static,
+{
+    let mut module = build.module;
+    let value = module.evaluate_node_deep(build.root_val, None);
+    module.evaluate_node_deep(build.root_ty, None);
+    format!(
+        "{}{}: {}",
+        print_value_lang::<P>(&module, value, build.root_ty),
+        {
+            // Render only the attributes the root expression actually carries.
+            let attr_ext = lang_attr_ext::<P>();
+            let tail = &build.root_schema_tail;
+            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
+            if attrs.is_empty() {
+                String::new()
+            } else {
+                format!(" {attrs}")
+            }
+        },
+        print_type_lang::<P>(&module, build.root_ty)
+    )
+}
 
 /// Compile, check, and run `source`; the rendered output value and its type.
 ///
@@ -38,26 +76,7 @@ pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    let build = report.build.unwrap();
-    let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
-    module.evaluate_node_deep(build.root_ty, None);
-    Ok(format!(
-        "{}{}: {}",
-        print_value_lang::<LangProgram>(&module, value, build.root_ty),
-        {
-            // Render only the attributes the root expression actually carries.
-            let attr_ext = lang_attr_ext::<LangProgram>();
-            let tail = &build.root_schema_tail;
-            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
-            if attrs.is_empty() {
-                String::new()
-            } else {
-                format!(" {attrs}")
-            }
-        },
-        print_type_lang::<LangProgram>(&module, build.root_ty)
-    ))
+    Ok(render_build(report.build.unwrap()))
 }
 
 /// Compile, check, and run a raw source file after preprocessing imports.
@@ -96,24 +115,5 @@ where
     if !report.ok() {
         return Err(report.diagnostics);
     }
-    let build = report.build.unwrap();
-    let mut module = build.module;
-    let value = module.evaluate_node_deep(build.root_val, None);
-    module.evaluate_node_deep(build.root_ty, None);
-    Ok(format!(
-        "{}{}: {}",
-        print_value_lang::<P>(&module, value, build.root_ty),
-        {
-            // Render only the attributes the root expression actually carries.
-            let attr_ext = lang_attr_ext::<P>();
-            let tail = &build.root_schema_tail;
-            let attrs = render_attributes(&module, build.root_term, tail, &*attr_ext);
-            if attrs.is_empty() {
-                String::new()
-            } else {
-                format!(" {attrs}")
-            }
-        },
-        print_type_lang::<P>(&module, build.root_ty)
-    ))
+    Ok(render_build(report.build.unwrap()))
 }

@@ -82,7 +82,7 @@ queue's order is deliberate.
 | P2-11 | medium | all | God files with named seams | todo |
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
 | P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | todo |
-| P3-1 | medium | all | Duplication clusters | todo |
+| P3-1 | medium | all | Duplication clusters | done |
 | P3-2 | medium | all | Workspace manifest duplication | todo |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | todo |
@@ -2562,6 +2562,128 @@ Each of these is two or more sites that must change together:
   dropped on one path.
 - **`Disjoint` parent walk forked** in `render.rs:932-941` — no cycle guard, no
   `#[stacksafe]`, duplicating `utils/disjoint.rs:66-79` (`P5-10`).
+
+**Outcome.** The list was walked entry by entry against the current tree,
+re-deriving every line number and every extent: they had drifted, one entry
+names a function that no longer exists, and one is refuted on its merits rather
+than merged.  Of the seventeen entries, **eight merged outright, three partly,
+three are refuted and three are left**, each with its reason below.
+
+*Merged — one implementation, the other sites calling it:*
+
+- **Codec array/table arms.**  The read halves were already one
+  (`relocated_handle`, `P0-1`), but the owner lookup and both *write* halves
+  were still two copies.  `codec.rs:155` `read_relocated_handle` is now the one
+  read and `codec.rs:179` `write_relocated_handle` the one write, so the two
+  `LowValue` arms are a tag byte plus a call and cannot drift.
+- **`ChildRange` push, seven sites** (`highlevel/src/ir.rs`), in three
+  spellings; one of them built a temporary `names` vector only to copy it.
+  `ir.rs:96` `extend_range(arena, values)` is the one append-and-range, and
+  `alloc_type_struct`'s temporary is gone.
+- **`concrete` predicate.**  `type_is_concrete` (`structs.rs:259`) was re-inlined
+  verbatim at **four** sites — `structs.rs:45`, `:122`, `:181` and
+  `lambda.rs:244`.  So the note's "five times" counts the extraction itself plus
+  four inlines, which is right; all four call the helper now (`pub(super)` for
+  `lambda.rs`).  The existing call at `structs.rs:347` was already correct.
+- **Positional-read pairs.**  Both pairs the note names are real.
+  `structs.rs:72` `slot_read` is the shared shape-slot read (`check_field`,
+  `check_named_field`), and `indexing.rs:121` `element_read` the shared
+  value-pair read (`check_raw_named_field`, `check_raw_index`).  Each builds the
+  `Index` nodes in the same order the two sites did, so node ids are unchanged.
+- **`regroup_clones` call.**  The 13-line group-and-unify tail was identical in
+  `function.rs:173` and `static_module.rs:160` apart from the representative
+  function.  `apply.rs:197` `unify_clone_groups` is the unification policy; each
+  caller still picks its own representative, because a live `disjoint::find` and
+  a `static_find` are different union-find structures.
+- **`.exe` suffix, three sites.**  `plugin.rs:199`/`:204` now call
+  `toolchain.rs:112`'s `exe_suffix` (which became `pub(crate)`).
+- **Tool-on-PATH probe, two sites.**  `git_available` and `cargo_available` were
+  the same `--version`-and-status probe; `lib.rs:38` `tool_available` is the
+  probe and the two keep only their own error wording.
+- **The identical `cargo build --release` body** in `rebuild` and `rebuild_lsp`
+  is now `plugin.rs:178` `cargo_build`, error text unchanged.
+- **`depend_of` normalization.**  `preprocess` re-inlined both `Depend`/`Plug`
+  arms that `depend_of` (`preprocess/src/lib.rs:409`) already normalizes; the
+  loop's fallthrough arm now calls it, so a new `Depend` field cannot be
+  dropped on this path.
+- **Diagnostic construction.**  `highlevel/src/diagnostic.rs` spells the struct
+  out at **12** sites, eight of which set every field but `kind`/`loc` to empty.
+  `diagnostic.rs:245` `Diag::factual(kind, loc)` plus struct-update syntax
+  covers them; `unattributed_failure` is one call to it.
+- **List combinator.**  `parse.rs:851` `comma_list` is the shared
+  comma-separated list.  The note says five; the file has **five** such
+  parsers, three of which are the same combinator (`struct_inst_fields`,
+  `paren_fields`, `table_literal`) and now call it.
+- **Output-line formatter.**  `evaluate` and `evaluate_raw` repeated the
+  deep-evaluate-and-render block verbatim; `run.rs:33` `render_build` is it, and
+  the two keep only how they obtain the build.
+
+*Left, with the reason:*
+
+- **`restatic` rewrite three times — refuted, stale.**  There is no `restatic`
+  anywhere in the tree, and `git log -S restatic` across the whole repository
+  history finds only the commit that wrote this note: the name was never code.
+  The three cited ranges now fall inside `rewrite_value`'s per-payload arms,
+  which are typed — the array arm rewrites `ArrayItem::node`, the table arm
+  rewrites `TableItem::key` *and* `.value`, and the ext arm rewrites a third
+  payload kind with its own handle protocol.
+- **Atomic write three ways — refuted, three contracts.**  The three are not one
+  helper with three policies; they are three owners with three error contracts.
+  `Registry::save` (`registry/src/device.rs:212`) runs **under the registry
+  lock**, which is exactly what makes its fixed temp name safe, and swallows
+  errors because `reload` recovers the index.  `store_artifact`
+  (`device.rs:317`) is **deliberately outside** that lock, so it needs a unique
+  temp name and an `fsync`, and swallows errors because the artifact cache
+  degrades to a miss and a recompile.  `download`
+  (`package/src/toolchain.rs:281`) must **return** its error — a failed install
+  cannot fail silently — and chmods the result.  Their `fsync` helpers are not
+  interchangeable either: `device.rs:419` `write_synced` creates and writes the
+  bytes, `toolchain.rs:312` `flush_to_disk` opens a file `curl` already wrote.
+  Merging them would move a registry-lock invariant and an install policy into
+  one crate that owns neither.
+- **Assert instantiation four times — left.**  The four sites share the
+  `PendingAssert { condition, template }` construction, not a body.  The two
+  dynamic sites (`function.rs:154`, `:488`) decide "was it instantiated per
+  call" from `instantiated != condition` and name the template `Dyn(condition)`;
+  the two static sites (`static_module.rs:148`, `:348`) decide it from the
+  template node's own `parameterized` flag, name it `static_ref`, and read nodes
+  from a `StaticModule` rather than the live `Module`; two of the four also
+  collect the clone list.  One helper would take three axes as parameters and
+  still not remove the per-site decision, so the note's "merge" is not obviously
+  a reduction here.
+- **Compile pipeline five times / "evaluate → freeze → export → publish meta"
+  three times — left as a redesign.**  The three sites in
+  `language/src/package.rs` (`:315`/`:344`/`:352`, `:519`/`:541`/`:549`,
+  `:684`/`:713`/`:721`) diverge in error type (`Vec<String>` vs `Vec<Diag>`),
+  which key they allocate, what they hash, and what bookkeeping follows the
+  freeze (a store insert, a dependency record, a disk cache write).  Folding
+  them needs a parameter object and a generic error, which is the redesign this
+  item's scope discipline defers rather than a merge.
+- **`rebuild` vs `rebuild_lsp` — partly merged.**  The identical 11-line cargo
+  invocation is `cargo_build` now.  What remains differs in the generated crate
+  prefix, the dependency line, the main-file writer, the binary-name function
+  and the return type; folding *that* into one function is the same
+  parameter-object rewrite, and `P3-2` owns neither.
+- **`Disjoint` parent walk forked in `render.rs` — not a duplicate.**
+  `disjoint::find` (`utils/disjoint.rs:66`) takes `&mut SlotMap` and compresses
+  paths; `render::representative` (`render.rs:982`) is a read-only walk over
+  `&Module` through the `node_equality` accessor, with a revisit bound.  The
+  renderer holds no `&mut Module`, and `P5-10` already added the guard, so the
+  fork the note names is gone and what is left cannot call the shared one.
+
+*One intentional non-merge inside a merged cluster.*  `paren` and
+`array_literal` are the other two comma-list parsers and were **left** calling
+their own shape: both require a first element, so the empty `()` and `[]` do not
+parse today, and `comma_list` accepts an empty list.  Pointing them at it would
+silently make `()` a value, which is a grammar decision, not a refactor.
+
+*Overlap with `P2-2`.*  None of the merges above touches the five AST traversals
+`P2-2` owns; `resolve.rs`'s and `compile.rs`'s walk functions are untouched.
+
+*Gates.*  `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
+`cargo fmt --all -- --check` exits 0, and `cargo test --workspace` passes — the
+edits reach `lowlevel`, `highlevel`, `language`, `language-parser`,
+`preprocess` and `package`, so the influenced set is effectively the workspace.
 
 ### P3-2 — Workspace manifest duplication
 

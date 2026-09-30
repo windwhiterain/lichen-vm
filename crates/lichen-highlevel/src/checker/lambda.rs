@@ -5,9 +5,7 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, LowOperator, LowValue, NodeId};
-
-use lichen_utils::extend::AsEnum;
+use lichen_lowlevel::{AnyFunctionId, LowOperator, LowValue, NodeId};
 
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
@@ -241,15 +239,7 @@ where
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
         let function_ty = self.ty[function].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(function_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let concrete = self.type_is_concrete(function_ty);
         if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();

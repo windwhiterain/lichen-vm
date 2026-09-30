@@ -106,11 +106,28 @@ where
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let ops = self.array_node(self.current_block, &[container_value, index_value]);
+        let (value_node, ty_node) = self.element_read(container_value, index_value);
+        self.term[e] = Some(value_node);
+        self.val[e] = None;
+        self.ty[e] = Some(ty_node);
+        value_node
+    }
+
+    /// The structural element read shared by the raw positional form `X<e>`
+    /// and the raw named form `X::a`: `value = Index(container_value,
+    /// subscript)`, `type = Index(value, 1)` — the element's own pair, both
+    /// read lazily, with no type validation.  `subscript` is already the
+    /// resolved slot: the caller's index value, or a name table's read.
+    pub(super) fn element_read(
+        &mut self,
+        container_value: NodeId,
+        subscript: NodeId,
+    ) -> (NodeId, NodeId) {
+        let value_ops = self.array_node(self.current_block, &[container_value, subscript]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
-            Some(ops),
+            Some(value_ops),
         );
         let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
         let ty_node = self.op_node(
@@ -118,10 +135,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        self.term[e] = Some(value_node);
-        self.val[e] = None;
-        self.ty[e] = Some(ty_node);
-        value_node
+        (value_node, ty_node)
     }
 
     /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose

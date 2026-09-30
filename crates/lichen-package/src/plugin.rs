@@ -124,17 +124,7 @@ pub fn rebuild(
     )?;
     write_compiler_main_rs(dir, plugins, leaves)?;
 
-    let out = Command::new("cargo")
-        .args(["build", "--release"])
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("cannot run cargo build: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "rebuild failed:\n{}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    cargo_build(dir)?;
     let bin = dir.join("target").join("release").join(bin_name(name));
     Ok(CompilerBuild {
         dir: dir.to_path_buf(),
@@ -171,17 +161,7 @@ pub fn rebuild_lsp(
     )?;
     write_server_main_rs(dir, plugins, leaves)?;
 
-    let out = Command::new("cargo")
-        .args(["build", "--release"])
-        .current_dir(dir)
-        .output()
-        .map_err(|e| format!("cannot run cargo build: {e}"))?;
-    if !out.status.success() {
-        return Err(format!(
-            "rebuild failed:\n{}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        ));
-    }
+    cargo_build(dir)?;
     let bin = dir
         .join("target")
         .join("release")
@@ -192,24 +172,40 @@ pub fn rebuild_lsp(
     })
 }
 
+/// `cargo build --release` the generated crate at `dir`, returning the
+/// command's stderr on failure.  The shared tail of [`rebuild`] and
+/// [`rebuild_lsp`], which differ only in the crate they generate.
+fn cargo_build(dir: &Path) -> Result<(), String> {
+    let out = Command::new("cargo")
+        .args(["build", "--release"])
+        .current_dir(dir)
+        .output()
+        .map_err(|e| format!("cannot run cargo build: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!(
+        "rebuild failed:\n{}",
+        String::from_utf8_lossy(&out.stderr).trim()
+    ))
+}
+
 /// Whether `cargo` is on `$PATH`.
 pub fn cargo_available() -> bool {
-    Command::new("cargo")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
+    crate::tool_available("cargo")
 }
 
 /// The compiled binary name for a compiler named `name`.
 pub fn bin_name(name: &str) -> String {
-    let n = format!("lichen-compiler-{name}");
-    if cfg!(windows) { format!("{n}.exe") } else { n }
+    format!("lichen-compiler-{name}{}", crate::toolchain::exe_suffix())
 }
 
 /// The compiled binary name for a language server named `name`.
 pub fn server_bin_name(name: &str) -> String {
-    let n = format!("lichen-language-server-{name}");
-    if cfg!(windows) { format!("{n}.exe") } else { n }
+    format!(
+        "lichen-language-server-{name}{}",
+        crate::toolchain::exe_suffix()
+    )
 }
 
 /// The TOML basic-string literal for `value` — the only way a value reaches the

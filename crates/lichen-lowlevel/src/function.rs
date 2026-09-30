@@ -170,17 +170,13 @@ impl<P: Program> Module<P> {
                 // the pattern's internal constraints.  A single clone (just the
                 // parameter) has no topology to re-establish.
                 if ctx.remap.len() > 1 {
-                    for clones in crate::apply::regroup_clones(
+                    let groups = crate::apply::regroup_clones(
                         ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
                         |template| disjoint::find(&mut module.nodes, template),
-                    )
-                    .values()
-                    {
-                        let first = clones[0];
-                        for &clone in &clones[1..] {
-                            module.unify(first, clone);
-                        }
-                    }
+                    );
+                    crate::apply::unify_clone_groups(groups, |first, clone| {
+                        module.unify(first, clone);
+                    });
                 }
                 // A failed parameter check leaves the apply's result unknown:
                 // the body must not run under a mismatched argument.

@@ -75,10 +75,7 @@ fn git_path(p: &Path) -> String {
 
 /// Whether the `git` CLI is available.
 pub fn git_available() -> bool {
-    Command::new("git")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
+    crate::tool_available("git")
 }
 
 /// Clone or update a dependency into the lichen-home source cache and return

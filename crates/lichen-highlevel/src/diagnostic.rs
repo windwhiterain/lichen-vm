@@ -238,15 +238,14 @@ impl<P: Program> Diag<P> {
         self.loc.as_ref()
     }
 
-    /// The placeholder for a failed build [`Build::diagnostics`] rendered
-    /// nothing for — see [`DiagKind::UnattributedFailure`].  The report's
-    /// assembly layer emits exactly one of these when a failed build would
-    /// otherwise carry an empty diagnostic list, upholding the invariant that
-    /// every consumer relies on.
-    pub fn unattributed_failure() -> Self {
+    /// A diagnostic that is only its kind and its location: every value,
+    /// index, field and budget slot is empty.  Most failure kinds carry no
+    /// more than that, so this is the common shape, and a new [`Diag`] field
+    /// is filled in once here rather than at every construction site.
+    pub fn factual(kind: DiagKind, loc: Option<Loc>) -> Self {
         Diag {
-            loc: None,
-            kind: DiagKind::UnattributedFailure,
+            loc,
+            kind,
             a: NodeId::default(),
             b: NodeId::default(),
             value_a: None,
@@ -258,6 +257,15 @@ impl<P: Program> Diag<P> {
             budget: None,
             error_index: None,
         }
+    }
+
+    /// The placeholder for a failed build [`Build::diagnostics`] rendered
+    /// nothing for — see [`DiagKind::UnattributedFailure`].  The report's
+    /// assembly layer emits exactly one of these when a failed build would
+    /// otherwise carry an empty diagnostic list, upholding the invariant that
+    /// every consumer relies on.
+    pub fn unattributed_failure() -> Self {
+        Diag::factual(DiagKind::UnattributedFailure, None)
     }
 }
 
@@ -280,18 +288,8 @@ where
         let mut out = Vec::new();
         for entry in &self.nonterminating {
             out.push(Diag {
-                loc: Some(entry.loc.clone()),
-                kind: DiagKind::NonTerminating,
-                a: NodeId::default(),
-                b: NodeId::default(),
-                value_a: None,
-                value_b: None,
-                assert_value: None,
-                index: None,
-                length: None,
-                field: None,
                 budget: entry.budget,
-                error_index: None,
+                ..Diag::factual(DiagKind::NonTerminating, Some(entry.loc.clone()))
             });
         }
         // Checker-attributed failures, in recording order.  A guard entry owns
@@ -308,18 +306,10 @@ where
                 attributed.push((
                     entry.seq,
                     Diag {
-                        loc: Some(entry.loc.clone()),
-                        kind: entry.kind,
                         a: entry.a,
                         b: entry.b,
-                        value_a: None,
-                        value_b: None,
-                        assert_value: None,
-                        index: None,
-                        length: None,
                         field: entry.field.clone(),
-                        budget: None,
-                        error_index: None,
+                        ..Diag::factual(entry.kind, Some(entry.loc.clone()))
                     },
                 ));
                 continue;
@@ -380,83 +370,32 @@ where
                     field: None,
                     error_index: None,
                 }),
-                EvalError::TableMiss { key, .. } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*key),
-                    kind: DiagKind::TableMiss,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
-                    assert_value: None,
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
-                }),
-                EvalError::TableKeyUnbound { key } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*key),
-                    kind: DiagKind::TableKeyUnbound,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
-                    assert_value: None,
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
-                }),
+                EvalError::TableMiss { key, .. } => {
+                    out.push(Diag::factual(DiagKind::TableMiss, self.node_loc(*key)))
+                }
+                EvalError::TableKeyUnbound { key } => out.push(Diag::factual(
+                    DiagKind::TableKeyUnbound,
+                    self.node_loc(*key),
+                )),
                 // A read applied to a non-container: the value itself is the
                 // fact here, so this kind carries no type to print.
-                EvalError::IndexTarget { target } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*target),
-                    kind: DiagKind::RuntimeIndexTarget,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
-                    assert_value: None,
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
-                }),
+                EvalError::IndexTarget { target } => out.push(Diag::factual(
+                    DiagKind::RuntimeIndexTarget,
+                    self.node_loc(*target),
+                )),
                 // A read whose subscript is not an index: like the
                 // non-container target beside it, the value itself is the
                 // fact, so this kind carries no type to print.
-                EvalError::IndexSubscript { subscript } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*subscript),
-                    kind: DiagKind::RuntimeIndexSubscript,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
-                    assert_value: None,
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
-                }),
+                EvalError::IndexSubscript { subscript } => out.push(Diag::factual(
+                    DiagKind::RuntimeIndexSubscript,
+                    self.node_loc(*subscript),
+                )),
                 // An apply of a non-function: the value itself is the fact, so
                 // this kind carries no type to print.
-                EvalError::ApplyTarget { function } => out.push(Diag {
-                    budget: None,
-                    loc: self.node_loc(*function),
-                    kind: DiagKind::RuntimeApplyTarget,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
-                    assert_value: None,
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
-                }),
+                EvalError::ApplyTarget { function } => out.push(Diag::factual(
+                    DiagKind::RuntimeApplyTarget,
+                    self.node_loc(*function),
+                )),
             }
         }
         // Failed asserts — only the explicit `assert` expressions (a
@@ -471,18 +410,8 @@ where
             };
             if self.user_asserts.contains(&template) {
                 out.push(Diag {
-                    budget: None,
-                    loc: self.node_edges.get(&template).cloned(),
-                    kind: DiagKind::Assert,
-                    a: NodeId::default(),
-                    b: NodeId::default(),
-                    value_a: None,
-                    value_b: None,
                     assert_value: Some(err.value),
-                    index: None,
-                    length: None,
-                    field: None,
-                    error_index: None,
+                    ..Diag::factual(DiagKind::Assert, self.node_edges.get(&template).cloned())
                 });
             }
         }

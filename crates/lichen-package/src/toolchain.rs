@@ -109,7 +109,7 @@ impl Tool {
 // ---------------------------------------------------------------------------
 
 /// The `.exe` suffix on Windows, else empty.
-fn exe_suffix() -> &'static str {
+pub(crate) fn exe_suffix() -> &'static str {
     if cfg!(windows) { ".exe" } else { "" }
 }
 

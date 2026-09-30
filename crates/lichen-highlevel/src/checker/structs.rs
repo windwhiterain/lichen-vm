@@ -42,15 +42,7 @@ where
         self.check_expr(container);
         self.check_expr(key);
         let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let concrete = self.type_is_concrete(container_ty);
         if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
             self.record_guard(
                 container_ty,
@@ -63,7 +55,27 @@ where
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
-        let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key_value);
+        let pair = self.pair_of(value_node, ty_node);
+        self.term[e] = Some(pair);
+        self.val[e] = Some(value_node);
+        self.ty[e] = Some(ty_node);
+        pair
+    }
+
+    /// The structural slot read shared by the positional form `a(k)` and the
+    /// named form `a.name`: `value = Index(container_value, key)`,
+    /// `type = Index(Index(container_ty, 0), key)` — the type comes from the
+    /// container's **type** tree (its shape), so an unbound container resolves
+    /// when the call binds it.  `key` is already the resolved slot: the
+    /// argument's own value, or a struct name table's read.
+    fn slot_read(
+        &mut self,
+        container_ty: NodeId,
+        container_value: NodeId,
+        key: NodeId,
+    ) -> (NodeId, NodeId) {
+        let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -75,17 +87,13 @@ where
             P::Operator::from(LowOperator::Index),
             Some(shape_ops),
         );
-        let ty_ops = self.array_node(self.current_block, &[shape, key_value]);
+        let ty_ops = self.array_node(self.current_block, &[shape, key]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        let pair = self.pair_of(value_node, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(ty_node);
-        pair
+        (value_node, ty_node)
     }
 
     /// A **raw** named component read `X::a` (the glued `::` postfix).  It is
@@ -111,15 +119,7 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let concrete = self.type_is_concrete(container_ty);
         if concrete
             && !shape::is_type_struct_kind_any(
                 &mut self.module,
@@ -151,18 +151,7 @@ where
         self.node_edges.insert(key, self.loc(e, 0));
         // value = Index(container_value, key); type = Index(value, 1).
         let container_value = self.value_of(container);
-        let value_ops = self.array_node(self.current_block, &[container_value, key]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
+        let (value_node, ty_node) = self.element_read(container_value, key);
         self.term[e] = Some(value_node);
         self.val[e] = None;
         self.ty[e] = Some(ty_node);
@@ -189,15 +178,7 @@ where
     ) -> NodeId {
         self.check_expr(container);
         let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let concrete = self.type_is_concrete(container_ty);
         if concrete {
             if !shape::is_struct_type_any(
                 &mut self.module,
@@ -241,24 +222,7 @@ where
         );
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let value_ops = self.array_node(self.current_block, &[container_value, key]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
-        let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
-        let shape = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(shape_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[shape, key]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key);
         let pair = self.pair_of(value_node, ty_node);
         self.term[e] = Some(pair);
         self.val[e] = Some(value_node);
@@ -292,7 +256,7 @@ where
     /// type/kind expression (an array) or marker — as opposed to an unbound
     /// cell (a parameter, a deferred read), whose checks defer to the apply.
     /// The same predicate gates the field-read and function-ness guards.
-    fn type_is_concrete(&self, ty: NodeId) -> bool {
+    pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
         self.module
             .node_value(AnyNodeId::Dynamic(ty))
             .is_some_and(|value| {

@@ -147,6 +147,52 @@ fn relocated_handle<Item>(
     })
 }
 
+/// Read a relocated static handle: the owner's key, the payload's
+/// base-relative byte offset, and its element count.  The owner's arena is the
+/// reader's own for `self_key`, else the dependency module named by the key —
+/// the one lookup both the array and the table leaf share, so the two cannot
+/// drift.
+fn read_relocated_handle<Item, P: Program>(
+    r: &mut Reader<'_>,
+    self_key: ModuleKey,
+    self_arena: &[u8],
+    self_base: *const u8,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+) -> Result<StaticHandle<[Item]>, String> {
+    let owner = ModuleKey::from_raw(r.u64()?);
+    let offset = r.u64()? as usize;
+    let len = r.u64()? as usize;
+    let (owner_arena, owner_base) = if owner == self_key {
+        (self_arena, self_base)
+    } else {
+        let module = modules
+            .get(&owner)
+            .ok_or_else(|| format!("artifact references unregistered dependency key {owner:?}"))?;
+        let arena: &[u8] = &module.arena;
+        (arena, arena_base::<P>(arena))
+    };
+    relocated_handle::<Item>(owner, owner_arena, owner_base, offset, len)
+}
+
+/// The write half of [`read_relocated_handle`]: the owning module's key, the
+/// payload's base-relative byte offset, and its element count.
+fn write_relocated_handle<Item, P: Program>(
+    w: &mut Writer,
+    modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
+    module_key: ModuleKey,
+    offset: *const [Item],
+) {
+    w.u64(module_key.as_raw());
+    let module = &modules[&module_key];
+    // SAFETY: a static handle names a payload inside its home module's arena —
+    // the freeze layout put it there, and the codec's own load resolves a
+    // stored offset to the same place — and `handle_offset` asserts the address
+    // lies inside that arena before the offset is written.
+    let slice = unsafe { &*offset };
+    w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
+    w.u64(slice.len() as u64);
+}
+
 impl ValueCodec for LowValue {
     fn write_value<P: Program>(
         w: &mut Writer,
@@ -160,31 +206,14 @@ impl ValueCodec for LowValue {
             }
             LowValue::Array(AnyHandle::Static(handle)) => {
                 w.u8(1);
-                w.u64(handle.module.as_raw());
-                let module = &modules[&handle.module];
-                // SAFETY: a static handle names a payload inside its home
-                // module's arena — the freeze layout put it there, and the
-                // codec's load resolves a stored offset to the same place —
-                // and `handle_offset` asserts the address lies inside that
-                // arena before the offset is written.
-                let slice = unsafe { &*handle.offset };
-                w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
-                w.u64(slice.len() as u64);
+                write_relocated_handle(w, modules, handle.module, handle.offset);
             }
             LowValue::Array(AnyHandle::Dynamic(_)) => {
                 panic!("serializing a frozen module that carries a dynamic array payload")
             }
             LowValue::Table(AnyHandle::Static(handle)) => {
                 w.u8(6);
-                w.u64(handle.module.as_raw());
-                let module = &modules[&handle.module];
-                // SAFETY: as in the array arm above — the handle's pointer was
-                // placed inside its home module's arena by the freeze layout
-                // or the codec's own load, and `handle_offset` bounds-checks it
-                // against that arena.
-                let slice = unsafe { &*handle.offset };
-                w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
-                w.u64(slice.len() as u64);
+                write_relocated_handle(w, modules, handle.module, handle.offset);
             }
             LowValue::Table(AnyHandle::Dynamic(_)) => {
                 panic!("serializing a frozen module that carries a dynamic table payload")
@@ -219,23 +248,9 @@ impl ValueCodec for LowValue {
     ) -> Result<Self, String> {
         Ok(match r.u8()? {
             0 => LowValue::USize(r.u64()? as usize),
-            1 => {
-                let owner = ModuleKey::from_raw(r.u64()?);
-                let offset = r.u64()? as usize;
-                let len = r.u64()? as usize;
-                let (owner_arena, owner_base) = if owner == self_key {
-                    (self_arena, self_base)
-                } else {
-                    let module = modules.get(&owner).ok_or_else(|| {
-                        format!("artifact references unregistered dependency key {owner:?}")
-                    })?;
-                    let arena: &[u8] = &module.arena;
-                    (arena, arena_base::<P>(arena))
-                };
-                let handle =
-                    relocated_handle::<ArrayItem>(owner, owner_arena, owner_base, offset, len)?;
-                LowValue::Array(AnyHandle::Static(handle))
-            }
+            1 => LowValue::Array(AnyHandle::Static(read_relocated_handle::<ArrayItem, P>(
+                r, self_key, self_arena, self_base, modules,
+            )?)),
             2 => {
                 let module = ModuleKey::from_raw(r.u64()?);
                 let index = r.u64()? as usize;
@@ -269,23 +284,9 @@ impl ValueCodec for LowValue {
                 let s = std::str::from_utf8(bytes).map_err(|_| "string literal is not UTF-8")?;
                 LowValue::Str(Box::leak(s.to_string().into_boxed_str()))
             }
-            6 => {
-                let owner = ModuleKey::from_raw(r.u64()?);
-                let offset = r.u64()? as usize;
-                let len = r.u64()? as usize;
-                let (owner_arena, owner_base) = if owner == self_key {
-                    (self_arena, self_base)
-                } else {
-                    let module = modules.get(&owner).ok_or_else(|| {
-                        format!("artifact references unregistered dependency key {owner:?}")
-                    })?;
-                    let arena: &[u8] = &module.arena;
-                    (arena, arena_base::<P>(arena))
-                };
-                let handle =
-                    relocated_handle::<TableItem>(owner, owner_arena, owner_base, offset, len)?;
-                LowValue::Table(AnyHandle::Static(handle))
-            }
+            6 => LowValue::Table(AnyHandle::Static(read_relocated_handle::<TableItem, P>(
+                r, self_key, self_arena, self_base, modules,
+            )?)),
             tag => return Err(format!("unknown lowlevel value tag {tag}")),
         })
     }

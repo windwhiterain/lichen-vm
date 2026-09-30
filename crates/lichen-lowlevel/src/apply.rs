@@ -189,3 +189,21 @@ where
     }
     groups
 }
+
+/// Re-establish one apply pass's template topology among its fresh clones:
+/// unify every group [`regroup_clones`] produced.  The grouping caller picks
+/// the representative; this half — the unification policy — is the same for
+/// the dynamic and the static apply path, so it is stated once.
+pub(super) fn unify_clone_groups<K>(
+    groups: HashMap<K, Vec<NodeId>>,
+    mut unify: impl FnMut(NodeId, NodeId),
+) where
+    K: Copy + Eq + std::hash::Hash,
+{
+    for clones in groups.values() {
+        let first = clones[0];
+        for &clone in &clones[1..] {
+            unify(first, clone);
+        }
+    }
+}
