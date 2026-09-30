@@ -13,6 +13,7 @@ use std::collections::{HashMap, HashSet};
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_highlevel::shape;
+use lichen_lowlevel::ancestors::AncestorNodes;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -123,7 +124,7 @@ where
     static_names: HashMap<lichen_lowlevel::StaticNodeId, String>,
     next: usize,
     /// Array nodes on the current recursion; a cycle renders as `…`.
-    path: Vec<NodeId>,
+    path: AncestorNodes<NodeId>,
     /// The extension's own value variants — how a variant the base
     /// vocabulary does not know renders.  `None` (the base vocabulary) or a
     /// hook returning `None` for a value leaves it `?`.
@@ -170,7 +171,7 @@ where
             names: HashMap::new(),
             static_names: HashMap::new(),
             next: 0,
-            path: Vec::new(),
+            path: AncestorNodes::new(),
             render_ext,
             show_struct_id: false,
         }
@@ -193,7 +194,7 @@ where
     /// computed nothing ([`LowValue::Void`]) is a concrete value and renders
     /// as `none` — it is never a fresh class variable.
     pub fn node(&mut self, node: NodeId) -> String {
-        if self.path.contains(&node) {
+        if self.path.contains(node) {
             return "…".to_string();
         }
         // A value-less node is an unbound cell: the lazy marker is the
@@ -205,9 +206,9 @@ where
         if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
             return self.class_name(node);
         }
-        self.path.push(node);
+        self.path.insert(node);
         let out = self.value(node, value);
-        self.path.pop();
+        self.path.remove(node);
         out
     }
 
@@ -628,9 +629,9 @@ where
     module: &'a Module<P>,
     printer: TypePrinter<'a, P>,
     /// Value nodes on the current recursion; a cycle renders as `…`.
-    path: Vec<NodeId>,
+    path: AncestorNodes<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
-    tpath: Vec<NodeId>,
+    tpath: AncestorNodes<NodeId>,
 }
 
 impl<'a, P: HighProgram> ValuePrinter<'a, P>
@@ -650,8 +651,8 @@ where
         ValuePrinter {
             module,
             printer: TypePrinter::new_with_ext(module, render_ext),
-            path: Vec::new(),
-            tpath: Vec::new(),
+            path: AncestorNodes::new(),
+            tpath: AncestorNodes::new(),
         }
     }
 
@@ -860,18 +861,18 @@ where
     fn element_any(&mut self, id: AnyNodeId, ty: AnyNodeId) -> String {
         match (id, ty) {
             (AnyNodeId::Dynamic(id), AnyNodeId::Dynamic(ty)) => {
-                if self.path.contains(&id) || self.tpath.contains(&ty) {
+                if self.path.contains(id) || self.tpath.contains(ty) {
                     return "…".to_string();
                 }
-                self.path.push(id);
-                self.tpath.push(ty);
+                self.path.insert(id);
+                self.tpath.insert(ty);
                 let value = self
                     .module
                     .node_value(AnyNodeId::Dynamic(id))
                     .unwrap_or_else(|| P::Value::from(LowValue::None));
                 let out = self.value(value, ty);
-                self.tpath.pop();
-                self.path.pop();
+                self.tpath.remove(ty);
+                self.path.remove(id);
                 out
             }
             _ => {

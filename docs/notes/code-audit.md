@@ -94,7 +94,7 @@ queue's order is deliberate.
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
 | P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | done |
-| P4-8 | low | render | Two more ancestor guards scan the path they guard | todo |
+| P4-8 | low | render | Two more ancestor guards scan the path they guard | done |
 | P4-9 | low | compute | A `NativeOps` slice is leaked per registration | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
@@ -3400,11 +3400,13 @@ number that collapses.
 
 *Also found by this sweep, and deliberately not changed.*  `render.rs:196`
 (`TypePrinter::path`) and `render.rs:863` (`TypePrinter::path`/`tpath`) in
-`lichen-render` are the same ancestor guard on the type/value walk.  They are
-outside this item's area (`lowlevel, compute`), no queue item owns them, and
-changing them would need this item's measurement repeated on a type-printing
-workload; they are recorded here so the next sweep does not have to find them
-again rather than folded in.
+`lichen-render` are the same `Vec`-probed guard on the type/value walk — though
+a **single-node** test, not this item's unordered-pair one.  They are
+outside this item's area (`lowlevel, compute`), no queue item owned them at the
+time, and changing them would need this item's measurement repeated on a
+type-printing workload; they are recorded here so the next sweep does not have
+to find them again rather than folded in.  *`P4-8` later took them, and
+corrected this paragraph's arity: see its Outcome.*
 
 ### The kernel codegen — quadratic, but only for bodies that reach a bare cell
 
@@ -3679,11 +3681,78 @@ parameter-topology test that asserts the `apply_errors` entry) and
 `P4-5` replaced with `crates/lichen-lowlevel/src/ancestors.rs`, in a crate `P4-5`
 did not name.
 
-**Fix.** Reuse `ancestors` — it exists now, and a second implementation of the same
-guard is exactly the duplication `P3-1` exists to remove. Note the semantics
-`P4-5` established: the test is the **unordered pair against the current path**
-(ancestor), not a visited mark, so a plain visited set is wrong. Measure on a
-type-printing workload, since `P4-5`'s numbers were taken on unification.
+**Outcome — the defect is real and the sites are the two named; the prescribed
+reuse was the wrong type, and the difference is the guard's arity, not its
+semantics.**  Re-derived first-hand, both guards are exactly where the note
+says — `render.rs:196` (`TypePrinter::node`) and `render.rs:863`
+(`ValuePrinter::element_any`) — and both are a linear `Vec::contains` on a path
+that grows with the recursion depth.
+
+**What `P4-5`'s Outcome does *not* carry over, and why.**  `P4-5` established
+that its three guards ask *"is this unordered **pair** on the current path"*,
+which is why `AncestorPairs` stores both orientations.  These two ask a
+different question: `if self.path.contains(&node)` and
+`if self.path.contains(&id) || self.tpath.contains(&ty)` test a **single node**
+against the path.  Substituting `AncestorPairs` would be neither a reuse nor
+behaviour-preserving: it would cut only when a value/type *pair* recurs, where
+the current guard cuts whenever either half recurs with any partner — a wider
+relation, so more cycles would print a level deeper.  The task's instruction
+("reuse `ancestors` … the test is the unordered pair") therefore did not hold
+for these two sites, and `AncestorPairs` was not used.
+
+**What was done instead.**  The shared guard structure *was* reused — the
+module `P4-5` created is now the one place both arities live.  `ancestors`
+gains `AncestorNodes<K>` (`ancestors.rs:23-73`), the one-node guard whose
+contract is `AncestorPairs`'s read for a single node (insert after a `false`
+`contains`, remove on every exit), and `AncestorPairs` now wraps it
+(`:75-123`) so the `HashSet` has one implementation rather than two.  The module
+became `pub` (`lib.rs:18`; both types are `#[doc(hidden)]` — the contract is
+internal, it is not a host-facing API) because `lichen-render` depends on
+`lichen-lowlevel` and must be able to name the guard; nothing else about the
+module changed, and the three `P4-5` call sites are untouched.
+
+In `render.rs`, `TypePrinter::path` (`:127`, `:174`) and `ValuePrinter`'s
+`path`/`tpath` (`:632`, `:634`, `:654-655`) become `AncestorNodes<NodeId>`, and
+the six guard operations become `contains`/`insert`/`remove` (`:197`, `:209`,
+`:211`; `:864`, `:867-868`, `:874-875`).  Each site keeps its exact push/pop
+discipline, so the decision is identical.
+
+*Measured, before → after.*  `P4-5`'s method — a temporary counter at the
+guard, removed before commit — on a type-printing workload, since `P4-5`'s
+numbers were taken on unification.  The input is a right-nested **array type**
+`[…[[Int, 0], 1]…, d]` built by hand at depth *d*, printed by the real
+`TypePrinter`; one level is three nodes, so the walk descends *d* levels and the
+path holds *d* nodes at the bottom.  The counts are exact and the printed text
+is byte-identical before and after at every depth (4481 bytes at *d* = 170):
+
+| depth | nodes visited | guard entries scanned, before | index probes, after |
+|---|---|---|---|
+| 100 | 701 | 70 600 | **701** |
+| 120 | 841 | 101 520 | **841** |
+| 150 | 1 051 | 158 400 | **1 051** |
+| 170 | 1 191 | 203 320 | **1 191** |
+
+Before: `nodes × depth` — one scan per recursion level, quadratic; after: one
+probe per visit, `nodes`.
+
+**Wall time on this workload did not move, and that is reported rather than
+smoothed over.**  2000 prints at *d* = 170 read 4716–4968 ms with the `Vec`
+guard against 4973–5151 ms with the set (min of four alternating rounds) — the
+set is not slower by more than the machine's own spread and is not faster
+either.  Two facts bound the item: the guard's scan count is the claim and it
+collapses 171×, and **the depth is capped by the printer's own recursion** — a
+depth of 200 overflows the test harness's stack *both before and after* this
+change, so the guard was never the binding constraint on how deep a printable
+type can be.  The quadratic term is real and removed; it was not what made
+type printing slow at the depths reachable here.  The set's memory cost (one
+`HashSet` per printer, at most *depth* entries during a walk, against the `Vec`
+it replaces) is not a regression.
+
+**Verification.**  `cargo test -p lichen-render -p lichen-language -p
+lichen-lowlevel` passes unchanged (the render and language suites, including
+every type- and value-printing test, 70 + 123 + 139 among them);
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all -- --check` exit 0.
 
 ### P4-9 — A `NativeOps` slice is leaked per registration `verified`
 
