@@ -28,8 +28,13 @@ use lichen_preprocess::{Depend, lichendir};
 use crate::compiler_cache;
 use crate::plugin;
 
-/// The default repository toolchain releases are fetched from.
-pub const DEFAULT_REPO: &str = "https://github.com/windwhiterain/lichen-vm";
+/// The default repository toolchain releases are fetched from — and the fixed
+/// core-repository identity the shipping compiler slot is keyed by, so a slot
+/// names the toolchain a home holds, not the address its bytes arrived from.
+/// The compiler derives that same slot from its own
+/// `persist::shipping_cache_root`, so the two must name one repository; the
+/// value is defined once, in `lichen_utils::cache`.
+pub const DEFAULT_REPO: &str = lichen_utils::cache::DEFAULT_CORE_REPO;
 
 /// The package manager's own binary name.
 pub const PACKAGE_MANAGER_BIN: &str = "lichen";
@@ -142,8 +147,8 @@ pub fn tools_dir() -> PathBuf {
 /// binaries for the plugin-sensitive tools. Project plugin sets are composed into
 /// their own keyed sllot by [`crate::compiler_cache`].
 fn shipping_dir() -> Result<PathBuf, String> {
-    let key =
-        compiler_cache::key(&[]).map_err(|e| format!("cannot key the base plugin set: {e}"))?;
+    let key = compiler_cache::key(DEFAULT_REPO, &[])
+        .map_err(|e| format!("cannot key the base plugin set: {e}"))?;
     Ok(lichendir()
         .join(compiler_cache::COMPILERS_DIR)
         .join(key)

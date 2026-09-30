@@ -628,16 +628,14 @@ pub use lichen_preprocess::{SOURCES_DIR, lichendir, sources_root};
 /// The Lichen Home `compilers/<toolchain-key>` slot for the **shipping**
 /// (empty plugin-set) vocabulary.
 ///
-/// The slot key hashes the toolchain version — the same value the package
-/// manager computes for an empty plugin set (`compiler_cache::key(&[])`), so
-/// the shipping compiler and language server cache under the same
-/// `compilers/<key>` slot the package manager installs them into.  The core
-/// crates are versioned and released together, so `CARGO_PKG_VERSION` here is
-/// the toolchain version.
+/// The slot key is derived by `lichen_utils::cache::compiler_slot_key`, the one
+/// derivation the package manager also calls (for an empty plugin set it
+/// computes `compiler_cache::key(DEFAULT_REPO, &[])`), so the shipping compiler
+/// and language server cache under the same `compilers/<key>` slot the package
+/// manager installs them into.  Deriving it here a second time from this
+/// crate's own version is exactly what let the two sides drift.
 pub fn shipping_cache_root() -> PathBuf {
-    let key = hex(&sha256(
-        format!("lichen-language={}", env!("CARGO_PKG_VERSION")).as_bytes(),
-    ));
+    let key = lichen_utils::cache::compiler_slot_key(lichen_utils::cache::DEFAULT_CORE_REPO, &[]);
     lichendir().join("compilers").join(key)
 }
 

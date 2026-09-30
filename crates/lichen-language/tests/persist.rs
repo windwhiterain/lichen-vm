@@ -51,6 +51,25 @@ fn handle_of(
 }
 
 #[test]
+fn the_shipping_slot_is_the_one_the_package_manager_installs_into() {
+    // The compiler locates its cache root here; `lichen` (lichen-package)
+    // installs the shipping toolchain into `<lichendir>/compilers/<its own
+    // key>`.  Both call `lichen_utils::cache::compiler_slot_key`, and this is
+    // the one test that spans the two crates: a second derivation — or the
+    // same derivation over a different repository — on either side fails here.
+    let installed = lichen_package::compiler_cache::key(lichen_package::DEFAULT_REPO, &[])
+        .expect("the empty plugin set needs no fetched source");
+    let expected = lichen_language::persist::lichendir()
+        .join("compilers")
+        .join(installed);
+    assert_eq!(
+        lichen_language::persist::shipping_cache_root(),
+        expected,
+        "the slot the compiler reads must be the slot the package manager writes"
+    );
+}
+
+#[test]
 fn cache_round_trip_across_stores() {
     // A transitive chain compiles once, then a fresh store over the same
     // cache directory loads the whole chain from disk — same output, same

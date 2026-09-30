@@ -674,6 +674,7 @@ dependencies = [
  "lichen-language-lex",
  "lichen-language-parser",
  "lichen-lowlevel",
+ "lichen-package",
  "lichen-perspective",
  "lichen-preprocess",
  "lichen-registry",

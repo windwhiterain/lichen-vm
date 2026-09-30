@@ -55,7 +55,7 @@ queue's order is deliberate.
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | done |
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
-| P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
+| P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | done |
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
@@ -781,6 +781,58 @@ while both crates are `0.1.0`. One version bump in one crate and
 **Fix.** Put the slot-key spec in one place both crates call (both already
 depend on `lichen-utils`), include `core_repo`, and add one equality test
 (`needs-test`).
+
+**Outcome.** The premise held, and both halves of it were re-read first-hand
+before the fix: `key` hashed `"lichen-language=" + lichen-package's
+`CARGO_PKG_VERSION`` plus the sorted plugin parts, `shipping_cache_root` hashed
+the same string from lichen-language's `CARGO_PKG_VERSION` (the two agreed only
+because both crates are `0.1.0`), and `key` never received `core_repo` although
+`ensure`/`ensure_lsp` take it and hand it to the compositor build.
+
+The derivation now lives **once**, in
+`lichen_utils::cache::compiler_slot_key(core_repo, plugins)`
+(`crates/lichen-utils/src/cache.rs`) — the leaf crate both sides already link,
+whose only dependencies remain `sha2`/`slotmap`/`stacksafe`, so the new module
+creates no cycle. `compiler_cache::key` resolves each plugin's version (the only
+fallible half) and forwards; `persist::shipping_cache_root()` calls the same
+function for the empty plugin set. The version is *that* shared crate's
+`CARGO_PKG_VERSION`: the one value both binaries link, so an independent bump in
+either caller can no longer move one side's slot and not the other's. The
+`lichen-package` comment that claimed its own version *is* the toolchain
+version, and that any core-crate change bumps the key, is gone. `core_repo` is
+now a key input, so `--repo A` followed by `--repo B` no longer reuses A's built
+compositor. The shipping slot is keyed by a **fixed** repository identity
+(`lichen_utils::cache::DEFAULT_CORE_REPO`, which `toolchain::DEFAULT_REPO` now
+aliases rather than repeats): the slot names the toolchain a home holds, not the
+address `lichen install --repo` downloaded its bytes from — keying it by the
+download address would put the bytes in a slot the compiler never reads. Keys
+change, so every existing slot is invalidated and rebuilds, which is intended.
+*Residual:* the version half still moves only when that one crate's version
+moves; `core_repo` covers the repository half, nothing covers "a core crate was
+edited without any version bump".
+
+**Tests — and what the equality test can and cannot catch.** The derivation's
+own inputs are pinned in `crates/lichen-utils/tests/cache.rs` (the repository and
+the plugin set are part of the key; the set's order is not), and the equality
+test itself is
+`crates/lichen-language/tests/persist.rs`'s
+`the_shipping_slot_is_the_one_the_package_manager_installs_into`: it compares
+`shipping_cache_root()` with
+`lichendir()/compilers/<compiler_cache::key(DEFAULT_REPO, &[])>`. That test spans
+both crates from one test file, which needed a **dev-dependency** of
+`lichen-language` on `lichen-package` — the two have no production edge in either
+direction, so a dev-only one is not a cycle and does not change the shipped
+graph. Both tests were shown failing against the defect they guard: removing
+`core_repo` from the shared spec fails the first with two equal hashes, and
+restoring the pre-fix inline derivation in `shipping_cache_root` fails the second
+with two different slot hashes (`4377690f…` vs `26c240e8…`). *Stated plainly:*
+the original defect was **not** behaviourally catchable at the time — with both
+crates at `0.1.0` the two pre-fix derivations produced the same key, so a test
+comparing them would have passed on the unfixed tree. What the equality test pins
+is that the two sides still share one derivation and one repository identity; the
+"one version source" property is structural (a single
+`env!("CARGO_PKG_VERSION")`, in one crate) and is not something a test can
+observe while the versions are equal.
 
 ### P1-14 — `run.rs` never checks `Build::ok` `reported`
 

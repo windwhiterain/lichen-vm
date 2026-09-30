@@ -21,6 +21,9 @@ lichen-render = { path = "../lichen-render" }
 lichen-utils = { path = "../lichen-utils" }
 
 [dev-dependencies]
+# Only `tests/persist.rs` uses this: the compiler-slot contract test compares
+# the slot this crate reads with the one the package manager installs into.
+lichen-package = { path = "../lichen-package" }
 lichen-std-native = { path = "../../lichen-std-native" }
 
 [[bin]]
