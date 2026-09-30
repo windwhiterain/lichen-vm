@@ -54,7 +54,7 @@ queue's order is deliberate.
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | done |
-| P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
+| P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | done |
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | done |
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
@@ -758,6 +758,98 @@ allocation from a crashed `alloc` (`:186-192`) is never reclaimed, so
 **Fix.** On a parse failure, mark the store degraded and refuse to save (or back
 up the unreadable file and start clean with a new key epoch) rather than
 silently truncating. Add the reference guard to `gc()`.
+
+**Outcome.** The premise held, re-read first-hand at the then-current lines, and
+all three findings were confirmed: `reload` kept the previous (in a fresh
+process, empty) state on a parse failure and the next `with_lock` saved it,
+discarding the file-ID → key table while the `.module` files stayed on disk;
+`gc` freed keys without `remove`'s reference guard; and a pending allocation is
+never reclaimed, which is what made `module_key.rs`'s *"the key space stays
+bounded"* false.
+
+**Recovery — preserve, then restart over an empty artifact directory.** On a
+parse failure the store moves `<dir>/registry` to `<dir>/registry.corrupt[.<n>]`
+and `<dir>/artifacts/` to `<dir>/artifacts.corrupt[.<n>]` (the first free name,
+so an earlier quarantine is never overwritten), creates a fresh `artifacts/`,
+drops the entry table while keeping the process's key frontier and dropping its
+free list, and prints where both went to stderr. **Nothing is deleted.** The
+mechanism is the one that satisfies the three criteria in order:
+
+1. *never destroy state without a trace* — the bytes survive under a named path
+   and the recovery says which, so the loss is diagnosable;
+2. *never pair a recycled key with an artifact the registry does not describe* —
+   the restarted space has **no artifact on disk at all** to collide with. The
+   registry file was the only thing that mapped a file ID to a key, so the
+   orphan `.module` files were already unusable; moving them *with* the index
+   makes the restart provably collision-free instead of probabilistically so.
+   An epoch base (`start above any old key`) cannot be used here: it needs the
+   old `next_key`, which is exactly what the unreadable file no longer
+   supplies, and a second recovery would have to guess it again. The frontier
+   *is* kept, though — the restarted space starts where this process's
+   allocator already stood, so it never hands a key to a second module while
+   the lowlevel registry in memory still holds the first under it (the free
+   list is dropped for the same reason);
+3. *keep the toolchain working* — the store recompiles; the ledger's other
+   option, "mark degraded and refuse to save", wedges the toolchain and buys
+   nothing the move does not.
+
+`reload` additionally stops clearing when the file is **still** unreadable after
+a recovery in the same process: without that guard a preserve or a save that did
+not take would clear the state a second time and leave `publish` without the
+pending entry `alloc` made. *Residuals, stated rather than hidden:* the
+quarantined `artifacts.corrupt[.<n>]` directories are described by nothing any
+more, so `gc`/`clean` cannot reclaim them and one may accumulate per recovery;
+the preserve is best-effort, and the cases that make it fail — an unwritable
+directory, or a file another process holds against replacement — also stop
+`save` from replacing the file, so the corrupt bytes stay in place rather than
+being lost; and recovery is serialised by the registry lock, so a concurrent
+process's next `with_lock` adopts the fresh registry instead of recovering too —
+the one-process guard is for the case where no save ever landed.
+
+**`gc` — the reference guard.** `gc` now mirrors `remove`: a dead entry whose key
+a surviving entry still names is kept and not counted, because freeing that key
+is what would hand it to a different module while an artifact on disk still refers
+to the old one. In practice no *live* dependency can be dead — `dependency_file_id`
+records only `.lichen` paths and `virtual:` names, both of which `gc` keeps — so
+this is a defensive guard, but it costs one condition and the two removal paths
+now agree.
+
+**The pending-allocation reaper: investigated, deliberately not added.** An entry
+is written at `alloc` time (under the lock) and completed by `publish` after a
+compile that runs **outside** it, so from another process a live in-flight
+allocation is indistinguishable from a crashed one: the entry is a key, an
+all-zero source hash and no artifact, with no lease, timestamp or owner to age
+out, and a reaper could pull a key from under a compile that is about to publish.
+So the entry stays, and the claim is smaller than it reads: a crashed `alloc` is
+**reused** by the next run of the same file — `alloc` returns the pending key and
+`publish` completes it, pinned by `a_crash_between_alloc_and_publish_recovers` —
+while `register_native`/`register_compute` allocate an embedded source's key and
+never publish it by design (the frozen module is served in memory or cannot be
+serialized), so each distinct `virtual:` name holds one key for the registry's
+life. The space is therefore bounded by the file IDs the registry has **held**,
+not by the live set; `module_key.rs` now says that instead of *"the key space
+stays bounded"*.
+
+**Tests.** `crates/lichen-registry/tests/device_recovery.rs` (new).
+`an_unreadable_registry_is_preserved_and_the_key_space_restarts_clean` publishes
+an artifact, corrupts `registry`, and asserts the restarted store has no entries,
+that `registry.corrupt` holds the original bytes, that `artifacts.corrupt` is a
+directory while the restarted `artifacts/` is empty, that the store keeps working
+(a new file gets key 0 and survives a reopen), and that a second corruption
+preserves both files as `registry.corrupt` / `registry.corrupt.1`.
+`gc_keeps_a_key_a_surviving_entry_still_names` gives a dead `junk.txt` entry a
+live dependent and asserts `gc` reclaims nothing and the next allocation does not
+receive the referenced key. Both were confirmed to fail against the unfixed
+`device.rs` — *"the recovery preserved no registry bytes"* and `left: 1,
+right: 0`. A third,
+`a_recovery_does_not_hand_out_a_key_this_process_already_used`, pins the kept
+frontier: it fails with *"a restarted space must not reuse a key already handed
+out in this process"* when the recovery resets `next_key` to zero, which is how
+that half of the mechanism was checked. The two prose descriptions of the old
+behaviour were corrected in place:
+`crates/lichen-language-server/src/home.rs` and `docs/notes/liche-lsp-home.md` no
+longer say the store "reloads the last-known (or empty) state … and repairs it on
+the next save".
 
 ### P1-13 — Compiler-cache key omits `core_repo` and uses the wrong version `reported`
 

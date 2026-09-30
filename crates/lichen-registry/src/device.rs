@@ -105,6 +105,11 @@ pub struct DeviceRegistry {
     free: BTreeSet<u64>,
     entries: HashMap<String, Entry>,
     by_key: HashMap<ModuleKey, String>,
+    /// Whether this process already recovered from an unreadable registry file.
+    /// A still-unreadable file after that is the same corruption — a preserve
+    /// or a save that did not take — not a new one, so the state the recovery
+    /// started is kept rather than cleared again (see [`Self::reload`]).
+    registry_recovered: bool,
 }
 
 /// The lock's stale threshold: registry mutations are millisecond-scale, so
@@ -122,6 +127,7 @@ impl DeviceRegistry {
             free: BTreeSet::new(),
             entries: HashMap::new(),
             by_key: HashMap::new(),
+            registry_recovered: false,
         };
         registry.reload();
         registry
@@ -138,23 +144,67 @@ impl DeviceRegistry {
             .join(format!("{}.module", hex(&file_id_hash(file_id))))
     }
 
-    /// Re-read the registry file, replacing the in-memory state.  A missing
-    /// or corrupt file leaves the (empty or last-known) state in place —
-    /// the next save repairs it.
+    /// Re-read the registry file, replacing the in-memory state.
+    ///
+    /// A missing file is a fresh store.  A file that exists but cannot be
+    /// parsed is never overwritten and never silently dropped — [`Self::recover`]
+    /// preserves it and restarts the key space, and its own doc says why the
+    /// restart cannot collide with the artifacts already on disk.
     fn reload(&mut self) {
         let Ok(bytes) = std::fs::read(self.registry_path()) else {
             return;
         };
-        if let Ok(state) = parse_registry(&bytes) {
-            self.by_key = state
-                .entries
-                .iter()
-                .map(|(file_id, entry)| (entry.key, file_id.clone()))
-                .collect();
-            self.next_key = state.next_key;
-            self.free = state.free;
-            self.entries = state.entries;
+        match parse_registry(&bytes) {
+            Ok(state) => {
+                self.registry_recovered = false;
+                self.by_key = state
+                    .entries
+                    .iter()
+                    .map(|(file_id, entry)| (entry.key, file_id.clone()))
+                    .collect();
+                self.next_key = state.next_key;
+                self.free = state.free;
+                self.entries = state.entries;
+            }
+            // Already recovered in this process: the file is still unreadable,
+            // which is the same corruption (a preserve or a save that did not
+            // take), not a new one.  Keeping the restarted state means an
+            // `alloc`/`publish` pair still completes in memory — a second
+            // recovery would leave `publish` without its pending entry.
+            Err(_) if self.registry_recovered => {}
+            Err(reason) => self.recover(&reason),
         }
+    }
+
+    /// Recover an unreadable registry: preserve it and the artifacts it alone
+    /// could still describe, then start a fresh, empty entry table.
+    ///
+    /// The key space may only restart once no artifact on disk carries an
+    /// older key, because a [`ModuleKey`] is a recycled index and artifact
+    /// bytes embed it as an absolute reference.  The registry file was the only
+    /// thing that mapped a file ID to a key, so the artifacts are unusable
+    /// without it: they are moved aside with it, and the restarted space then
+    /// has nothing on disk to collide with.  The key frontier (`next_key`) is
+    /// kept and the free list dropped, so the space also hands out no key this
+    /// process already gave to a different module — the lowlevel registry in
+    /// memory may still hold it.  Nothing is deleted: a diagnosis can still
+    /// read the bytes the recovery message names, and the store keeps working
+    /// by recompiling.
+    fn recover(&mut self, reason: &str) {
+        let registry = quarantine(&self.registry_path());
+        let artifacts = quarantine(&self.dir.join("artifacts"));
+        let _ = std::fs::create_dir_all(self.dir.join("artifacts"));
+        self.free = BTreeSet::new();
+        self.entries = HashMap::new();
+        self.by_key = HashMap::new();
+        self.registry_recovered = true;
+        eprintln!(
+            "the device registry at {} is unreadable ({reason}); preserved it at {} and the \
+             artifacts it described at {}; every artifact recompiles",
+            self.registry_path().display(),
+            describe(registry),
+            describe(artifacts),
+        );
     }
 
     /// Write the registry file (a fixed temp name plus a rename).  Only called
@@ -304,7 +354,10 @@ impl DeviceRegistry {
     /// (`virtual:`) — i.e. keep exactly the on-disk and embedded lichen
     /// sources, and prune anything else.  The kept artifacts stay keyed by
     /// their file ID (a `.lichen` source is kept even when its slot is
-    /// overwritten by a recompile).  Returns the number of removed artifacts.
+    /// overwritten by a recompile).  A dead entry whose key a surviving entry
+    /// still names is kept as well: reclaiming that key would hand it to a
+    /// different module while an artifact on disk still refers to it by the
+    /// old one.  Returns the number of removed artifacts.
     pub fn gc(&mut self) -> usize {
         self.with_lock(|registry| {
             let dead: Vec<String> = registry
@@ -313,12 +366,23 @@ impl DeviceRegistry {
                 .filter(|file_id| !is_lichen_file_id(file_id))
                 .cloned()
                 .collect();
-            let removed = dead.len();
+            let mut removed = 0;
             for file_id in dead {
-                let entry = registry.entries.remove(&file_id).expect("the dead entry");
-                registry.by_key.remove(&entry.key);
-                registry.free.insert(entry.key.as_raw());
+                let Some(entry) = registry.entries.get(&file_id) else {
+                    continue;
+                };
+                let key = entry.key;
+                let referenced = registry.entries.iter().any(|(other, other_entry)| {
+                    other != &file_id && other_entry.deps.iter().any(|(_, dep)| *dep == key)
+                });
+                if referenced {
+                    continue;
+                }
+                registry.entries.remove(&file_id);
+                registry.by_key.remove(&key);
+                registry.free.insert(key.as_raw());
                 let _ = std::fs::remove_file(registry.artifact_path(&file_id));
+                removed += 1;
             }
             removed
         })
@@ -356,6 +420,32 @@ fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let mut file = std::fs::File::create(path)?;
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// Move `path` aside to the first free `<name>.corrupt[.<n>]` sibling,
+/// returning where it went — an earlier quarantine is never overwritten.
+/// `None` when there is nothing at `path` or the move failed.
+fn quarantine(path: &Path) -> Option<PathBuf> {
+    if !path.exists() {
+        return None;
+    }
+    let parent = path.parent()?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let mut candidate = parent.join(format!("{name}.corrupt"));
+    let mut suffix = 0;
+    while candidate.exists() {
+        suffix += 1;
+        candidate = parent.join(format!("{name}.corrupt.{suffix}"));
+    }
+    std::fs::rename(path, &candidate).ok().map(|()| candidate)
+}
+
+/// Where a quarantine put its bytes — or that there were none to put.
+fn describe(preserved: Option<PathBuf>) -> String {
+    match preserved {
+        Some(path) => path.display().to_string(),
+        None => "nothing to move".to_string(),
+    }
 }
 
 fn verify_entry(
