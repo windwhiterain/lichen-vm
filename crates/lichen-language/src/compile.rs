@@ -40,6 +40,8 @@
 
 use std::collections::HashMap;
 
+use stacksafe::stacksafe;
+
 use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
@@ -376,6 +378,13 @@ impl Compiler {
         leaked
     }
 
+    /// The lowering's recursion: one frame per nested expression (through the
+    /// per-kind arms, [`Self::compile_scope_statements`] and
+    /// [`Self::compile_record_fields`] for a block, and back here), so a deep
+    /// program overflows the caller's stack — the parser runs on a worker
+    /// thread with a large stack, but nothing after it does.  `#[stacksafe]`:
+    /// the recursion grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn compile_expr(&mut self, e: &Expr) -> ExprId {
         match e {
             Expr::Int(n, span) => self.alloc(

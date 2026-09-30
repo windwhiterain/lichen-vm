@@ -64,7 +64,7 @@ queue's order is deliberate.
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
-| P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | todo |
+| P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1316,6 +1316,53 @@ records a diagnostic where a counter is the better fit. The work overlaps `P2-2`
 them in whichever order lands the guard first and note the overlap. A test cannot
 provoke a stack overflow and stay a test — pin the success case, and pin the
 guard's diagnostic if the mechanism gives one.
+
+**Outcome.**  The guards landed, and the walks were the defect — but not for the
+input the finding names.
+
+*What now holds.*  `compile.rs`'s `compile_expr`, `resolve.rs`'s `resolve_expr`,
+`resolve.rs`'s `KeyWriter::expr` (the `content_key` walk, reachable through that
+public entry point) and the language server's three walks (`NameClass::expr`,
+`Walk::expr`, `ScopeCapture::expr`) each recurse once per nested expression on
+the caller's thread.  Every cycle in a walk re-enters through its expression
+method, so one `#[stacksafe]` on that method — not on each helper it calls —
+covers the walk.  `stacksafe = "1"` is now a dependency of `lichen-language` and
+`lichen-language-server`; no depth limit was added.  The recursion grows the
+stack, so a deep AST no longer aborts the caller.  Measured with the guards
+removed one at a time: unguarding `resolve_expr` alone, `compile_expr` alone, or
+the server's three walks alone each restores a process abort, so all five are
+load-bearing.  `pipeline.rs`'s
+`a_deep_operator_chain_compiles_without_an_overflow` (2000 terms) aborts the test
+binary before the fix and checks after it in 0.09 s.
+
+*The recorded repro is a different layer, and a shallower one.*  Re-measured
+(debug, this revision): the 250-parenthesis file still aborts **after** the fix,
+and the aborting thread is the parser's *unnamed worker* — `thread '<unknown>'
+… has overflowed its stack` — not `main`; the recorded `thread 'main'` line did
+not reproduce.  The 16 MiB worker overflows at **175 nested parentheses (351
+bytes); 174 (349 bytes) compile**, and nested brackets are identical (174/175),
+because `(e)` is transparent (`language-parser/src/parse.rs:905-930`) — that
+input's AST is one node deep, so nothing after the parser recurses at all.  The
+parser is therefore the *first* layer to overflow, at roughly 16 MiB / 175 ≈
+94 KiB of stack per syntactic nesting level; the 16 MiB thread is itself
+reachable at 175 levels, and is not the "deeper than 250" layer this finding
+assumed.
+
+*Where the walks do overflow.*  A shape that is flat in the token stream but
+left-nested in the AST: `1+1+…`, one `BinOp` per term.  The parser folds it, so
+only the walks recurse.  On the CLI's 1 MiB main thread 200 terms check and 500
+(~1 KiB of source) abort; the language server builds a 2000-term `Doc` only with
+its three walks guarded.  After the fix 2000 and 6000 terms check, and 20 000
+terms abort in the parser's worker.
+
+*What still aborts.*  Three paths grow stack outside these walks, so this removes
+the abort without bounding stack growth: the parser's 16 MiB worker at ~175
+syntactic nesting levels; the AST's own recursive `Drop`, which no `#[stacksafe]`
+can reach (lex + parse + `mem::forget` survives 8000 nested terms on a 1 MiB
+stack, lex + parse + drop does not); and whatever stack the caller gives the
+language server's blocking thread.  Whether the frontend needs a nesting-depth
+limit, and where its number should come from, is therefore still open — and the
+first number it must clear is the parser's **175 levels**, not the frontend's.
 
 ## P2 — architecture
 

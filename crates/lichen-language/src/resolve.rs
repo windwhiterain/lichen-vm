@@ -19,6 +19,8 @@
 
 use std::collections::HashMap;
 
+use stacksafe::stacksafe;
+
 use crate::ast::{BinderId, BlockStmt, Expr, Program, RecordField, Stmt};
 use crate::diag::{Diag, Stage};
 use crate::preprocess::ResolvedImport;
@@ -209,6 +211,12 @@ impl Resolver {
         }
     }
 
+    /// The resolver's recursion: one frame per nested expression (through
+    /// [`Self::resolve_stmt`]/[`Self::resolve_scope`] and
+    /// [`Self::resolve_record_fields`] for a block, and back here), so a deep
+    /// program overflows the caller's stack.  `#[stacksafe]`: the recursion
+    /// grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn resolve_expr(&mut self, e: &mut Expr) {
         match e {
             Expr::Name(name, span, binder) => {
@@ -496,6 +504,11 @@ impl KeyWriter {
     /// [`Expr`] variants and every list writes its length, so the encoding is
     /// injective; adding a variant or changing a tag bumps
     /// [`KEY_FORMAT_VERSION`].
+    ///
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through [`Self::opt_expr`] and [`Self::stmt`] and back here) on the
+    /// caller's thread, so it grows the stack instead of overflowing it.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(n, _) => {

@@ -17,6 +17,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use stacksafe::stacksafe;
+
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
 use lichen_highlevel::no_native_ops;
@@ -1291,6 +1293,10 @@ impl<'a> NameClass<'a> {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Lambda {
@@ -1539,6 +1545,10 @@ impl Walk {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(..)
@@ -1831,6 +1841,10 @@ impl<'a> ScopeCapture<'a> {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         if self.result.is_some() {
             return;

@@ -683,6 +683,7 @@ dependencies = [
  "lichen-utils",
  "logos",
  "sha2",
+ "stacksafe",
 ]
 
 [[package]]
@@ -713,6 +714,7 @@ dependencies = [
  "lsp-types",
  "serde",
  "serde_json",
+ "stacksafe",
  "tokio",
  "tower-lsp",
 ]

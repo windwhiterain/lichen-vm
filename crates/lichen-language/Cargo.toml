@@ -8,6 +8,7 @@ default-run = "lichen-compiler"
 clap = { version = "4", features = ["derive"] }
 logos = "0.16"
 sha2 = "0.10"
+stacksafe = "1"
 lichen-compute = { path = "../lichen-compute" }
 lichen-doc = { path = "../lichen-doc" }
 lichen-highlevel = { path = "../lichen-highlevel" }

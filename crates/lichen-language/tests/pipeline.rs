@@ -806,6 +806,24 @@ fn a_self_referential_record_checks_without_overflow() {
     );
 }
 
+#[test]
+fn a_deep_operator_chain_compiles_without_an_overflow() {
+    // `1+1+…` is flat in the token stream but left-nested in the AST, so the
+    // frontend's expression walks recurse once per term on the caller's thread
+    // (`#[stacksafe]`: they grow the stack instead of overflowing it).  It is
+    // the shape that reaches them — nested brackets recurse in the parser
+    // first, and the parser's 16 MiB worker thread overflows at ~175 levels, so
+    // a bracket test cannot pin these walks; see `docs/notes/code-audit.md`
+    // (P1-22).  `TERMS` aborts this test process before the fix.
+    const TERMS: usize = 2000;
+    let report = compile(&("1+".repeat(TERMS) + "1"));
+    assert!(
+        report.ok(),
+        "expected the deep chain to check, got: {:?}",
+        report.diagnostics
+    );
+}
+
 // --- struct types ------------------------------------------------------------
 
 #[test]

@@ -20,6 +20,7 @@ serde_json = "1"
 # canonical protocol types here and those in `tower_lsp::lsp_types` unify to the
 # same crate.
 lsp-types = "0.94"
+stacksafe = "1"
 lichen-compute = { path = "../lichen-compute" }
 lichen-language = { path = "../lichen-language" }
 lichen-highlevel = { path = "../lichen-highlevel" }
