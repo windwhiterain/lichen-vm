@@ -139,7 +139,7 @@ fn static_apply_bakes_constants_in_place() {
     let TestValue::U128(AnyHandle::Static(h)) = constant else {
         panic!("expected the baked static constant")
     };
-    let addr = h.offset as usize;
+    let addr = h.as_ptr() as usize;
     assert!(
         addr >= base && addr < end,
         "the payload must stay in the shared static arena"

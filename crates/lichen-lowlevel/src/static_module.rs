@@ -577,6 +577,10 @@ impl<P: Program> StaticModule<P> {
         for (_, node) in module.nodes.iter() {
             let Some(value) = node.value else { continue };
             if let Some(LowValue::Array(AnyHandle::Dynamic(handle))) = value.as_enum() {
+                // SAFETY: a dynamic payload is allocated in a block arena of
+                // `module` by `Module::alloc_array`, and the freeze holds
+                // `module` borrowed for the whole build, so every block — and
+                // every arena in them — is alive here.
                 let items = unsafe { &*handle.0 };
                 let bytes = std::mem::size_of_val(items);
                 let key = (handle.0 as *const u8 as usize, bytes);
@@ -584,6 +588,10 @@ impl<P: Program> StaticModule<P> {
                     unique.push((key.0, key.1, std::mem::align_of::<ArrayItem>()));
                 }
             } else if let Some(LowValue::Table(AnyHandle::Dynamic(handle))) = value.as_enum() {
+                // SAFETY: as in the array arm above — the payload was
+                // allocated in a block arena of `module` by
+                // `Module::alloc_table`, and the freeze's borrow keeps that
+                // block alive.
                 let items = unsafe { &*handle.0 };
                 let bytes = std::mem::size_of_val(items);
                 let key = (handle.0 as *const u8 as usize, bytes);
@@ -618,6 +626,13 @@ impl<P: Program> StaticModule<P> {
         // arena copies and builds the static handles pointing at them.
         for &(ptr, len, _) in &unique {
             let offset = offsets[&(ptr, len)];
+            // SAFETY: `ptr`/`len` were read from a live dynamic payload of
+            // `module` above, so the source range is a real allocation;
+            // `offset` is the `align_up`-ed cursor position that payload was
+            // laid out at and the layout totals `cursor` bytes, with `base`
+            // aligned inside `buffer`'s `cursor + arena_align` bytes — so the
+            // destination range lies inside the freshly allocated `buffer` and
+            // cannot overlap the source.
             unsafe { ptr::copy_nonoverlapping(ptr as *const u8, base.add(offset), len) };
         }
         let arena = buffer;
@@ -660,8 +675,10 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
         match value.as_enum() {
             Some(LowValue::Array(AnyHandle::Static(handle))) => {
                 keys.insert(handle.module);
-                // Safe: the payload lives in the dependency's shared arena,
-                // pinned by the registry the artifact is filed into.
+                // SAFETY: the payload lives in the dependency's shared arena,
+                // pinned by the registry the artifact is filed into — and
+                // `freeze_mapped` asserts every dependency key is registered
+                // there before it freezes the referencing module.
                 for item in unsafe { &*handle.offset } {
                     if let AnyNodeId::Static(sref) = item.node {
                         keys.insert(sref.module);
@@ -669,8 +686,9 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
                 }
             }
             Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
-                // Safe: the handle points into one of the module's own block
-                // arenas, alive as long as the module is.
+                // SAFETY: the handle points into one of `module`'s own block
+                // arenas (`Module::alloc_array`), alive as long as the module
+                // is — the `drop_block` contract.
                 for item in unsafe { &*handle.0 } {
                     if let AnyNodeId::Static(sref) = item.node {
                         keys.insert(sref.module);
@@ -679,8 +697,8 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
             }
             Some(LowValue::Table(AnyHandle::Static(handle))) => {
                 keys.insert(handle.module);
-                // Safe: the payload lives in the dependency's shared arena,
-                // pinned by the registry the artifact is filed into.
+                // SAFETY: as in the static array arm above — the payload lives
+                // in the dependency's registered shared arena.
                 for item in unsafe { &*handle.offset } {
                     if let AnyNodeId::Static(sref) = item.key {
                         keys.insert(sref.module);
@@ -691,6 +709,9 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
                 }
             }
             Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+                // SAFETY: as in the dynamic array arm above — the payload was
+                // allocated in one of `module`'s own block arenas by
+                // `Module::alloc_table`.
                 for item in unsafe { &*handle.0 } {
                     if let AnyNodeId::Static(sref) = item.key {
                         keys.insert(sref.module);
@@ -736,6 +757,9 @@ fn rewrite_value<P: Program>(
 ) -> P::Value {
     match value.as_enum() {
         Some(LowValue::Array(AnyHandle::Dynamic(handle))) => {
+            // SAFETY: the payload was allocated in a block arena of the module
+            // being frozen (`Module::alloc_array`), and that module is
+            // borrowed for the whole build, so the arena is alive.
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
             // Phase 2 laid out and copied every dynamic payload of the
@@ -745,6 +769,10 @@ fn rewrite_value<P: Program>(
             let offset = *offsets
                 .get(&(handle.0 as *const u8 as usize, bytes))
                 .expect("phase 2 laid out every dynamic payload of the module");
+            // SAFETY: phase 2 laid out exactly `bytes` at `offset` inside
+            // `buffer` and copied the payload there, and `base` is that
+            // buffer's aligned start — so the range is in bounds, aligned for
+            // `ArrayItem`, and no other reference to the copy exists yet.
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut ArrayItem, items.len())
             };
@@ -763,6 +791,8 @@ fn rewrite_value<P: Program>(
             P::Value::from(LowValue::Array(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
+                    // SAFETY: the same in-bounds arena copy as `copied` above,
+                    // at the phase-2 offset for this payload.
                     unsafe { base.add(offset) } as *const ArrayItem,
                     items.len(),
                 ),
@@ -774,6 +804,9 @@ fn rewrite_value<P: Program>(
         | Some(LowValue::Table(AnyHandle::Static(_)))
         | Some(LowValue::Function(AnyFunctionId::Static(_))) => value,
         Some(LowValue::Table(AnyHandle::Dynamic(handle))) => {
+            // SAFETY: as in the array arm above — the payload was allocated in
+            // a block arena of the module being frozen (`Module::alloc_table`)
+            // and the build's borrow keeps the arena alive.
             let items = unsafe { &*handle.0 };
             let bytes = std::mem::size_of_val(items);
             // Same invariant as the array arm: phase 2 already laid out and
@@ -781,6 +814,9 @@ fn rewrite_value<P: Program>(
             let offset = *offsets
                 .get(&(handle.0 as *const u8 as usize, bytes))
                 .expect("phase 2 laid out every dynamic payload of the module");
+            // SAFETY: as in the array arm above — the arena copy at `offset`
+            // is in bounds, aligned for `TableItem`, and uniquely referenced
+            // while phase 3 rewrites it.
             let copied = unsafe {
                 std::slice::from_raw_parts_mut(base.add(offset) as *mut TableItem, items.len())
             };
@@ -809,6 +845,8 @@ fn rewrite_value<P: Program>(
             P::Value::from(LowValue::Table(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
+                    // SAFETY: the same in-bounds arena copy as `copied` above,
+                    // at the phase-2 offset for this payload.
                     unsafe { base.add(offset) } as *const TableItem,
                     items.len(),
                 ),
@@ -837,6 +875,9 @@ fn rewrite_value<P: Program>(
             value.set_handle(AnyHandle::Static(StaticHandle {
                 module: key,
                 offset: ptr::slice_from_raw_parts(
+                    // SAFETY: phase 2 laid out this ext payload's `old.len()`
+                    // bytes at the offset the lookup above returned, inside
+                    // the same `buffer` whose aligned start is `base`.
                     unsafe { base.add(offset) } as *const u8,
                     old.len(),
                 ),

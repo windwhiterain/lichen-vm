@@ -341,7 +341,7 @@ fn table_values_stay_lazy_until_read() {
     let TestValue::U128(AnyHandle::Dynamic(handle)) = read else {
         panic!("the read forces the stored value, got {read:?}")
     };
-    assert_eq!(unsafe { *handle.0 }, 5, "the forced value's content");
+    assert_eq!(unsafe { *handle.as_ptr() }, 5, "the forced value's content");
 }
 
 #[test]

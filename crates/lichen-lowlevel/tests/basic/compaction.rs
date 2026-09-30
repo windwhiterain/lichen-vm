@@ -41,8 +41,8 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     // Relocated into root's arena: the copy was made after the marker,
     // so it sits below it in the same chunk.
     let ptr = match ptr {
-        AnyHandle::Dynamic(h) => h.0 as *const u8,
-        AnyHandle::Static(h) => h.offset as *const u8,
+        AnyHandle::Dynamic(h) => h.as_ptr() as *const u8,
+        AnyHandle::Static(h) => h.as_ptr() as *const u8,
     };
     assert!(ptr as usize + 16 <= marker_start);
 

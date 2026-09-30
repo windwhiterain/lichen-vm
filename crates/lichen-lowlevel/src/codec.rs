@@ -134,6 +134,12 @@ fn relocated_handle<Item>(
     if end > available {
         return Err("artifact handle out of its arena's bounds".into());
     }
+    // SAFETY: the checks above establish that `owner_base` lies inside
+    // `owner_arena` (`gap` is its offset from the arena's start), that
+    // `offset + len * size_of::<Item>()` stays within the arena's bytes, and
+    // that `offset` is a whole number of `Item`s; so `owner_base.add(offset)`
+    // stays inside the allocation `owner_arena` names and is aligned for
+    // `Item`.
     let payload = unsafe { owner_base.add(offset) as *const Item };
     Ok(StaticHandle {
         module: owner,
@@ -156,6 +162,11 @@ impl ValueCodec for LowValue {
                 w.u8(1);
                 w.u64(handle.module.as_raw());
                 let module = &modules[&handle.module];
+                // SAFETY: a static handle names a payload inside its home
+                // module's arena — the freeze layout put it there, and the
+                // codec's load resolves a stored offset to the same place —
+                // and `handle_offset` asserts the address lies inside that
+                // arena before the offset is written.
                 let slice = unsafe { &*handle.offset };
                 w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
                 w.u64(slice.len() as u64);
@@ -167,6 +178,10 @@ impl ValueCodec for LowValue {
                 w.u8(6);
                 w.u64(handle.module.as_raw());
                 let module = &modules[&handle.module];
+                // SAFETY: as in the array arm above — the handle's pointer was
+                // placed inside its home module's arena by the freeze layout
+                // or the codec's own load, and `handle_offset` bounds-checks it
+                // against that arena.
                 let slice = unsafe { &*handle.offset };
                 w.u64(handle_offset(module, slice.as_ptr() as *const u8) as u64);
                 w.u64(slice.len() as u64);

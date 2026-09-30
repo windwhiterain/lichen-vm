@@ -257,7 +257,16 @@ impl AnyHandle<[ArrayItem]> {
     /// payload — the caller's existing safety contract for arena payloads.
     pub fn items(&self) -> &'static [ArrayItem] {
         match self {
+            // SAFETY: a dynamic payload is allocated in a block's arena
+            // (`Module::alloc_array`), and the value holding the handle is
+            // reachable only while that block lives: `drop_block` requires its
+            // caller to leave no live reference into a block it releases
+            // (`gc.rs`), so no reachable handle outlives its arena.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            // SAFETY: a static payload lives in a registered static module's
+            // arena.  The registry holds the `Arc<StaticModule>`, and a module
+            // reaches a static ref only through the registry it is bound to,
+            // so the arena outlives every reader of this module.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -268,7 +277,14 @@ impl AnyHandle<[TableItem]> {
     /// [`AnyHandle<[ArrayItem]>::items`].
     pub fn items(&self) -> &'static [TableItem] {
         match self {
+            // SAFETY: as in `AnyHandle<[ArrayItem]>::items` — the dynamic
+            // payload was allocated in a block's arena by
+            // `Module::alloc_table`, and `drop_block`'s contract keeps that
+            // arena alive while any reachable value still names it.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            // SAFETY: as in `AnyHandle<[ArrayItem]>::items` — the payload
+            // lives in a registered static module's arena, pinned by the
+            // registry entry every reader resolves through.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -308,9 +324,30 @@ pub enum LowOperator {
 /// unification merges on is [`ValueExt::value_eq`], which compares handle
 /// payloads by content.  Equality *through* arrays is not any `==`'s job —
 /// unification recurses into them elementwise.
+///
+/// # Contract
+///
+/// The crate reads and relocates an implementor's handle payloads by raw
+/// pointer, so every implementor owes three obligations:
+///
+/// - [`Self::handle`] must stay valid while the value lives, and its payload
+///   must be stable — the same address and the same length — for as long as
+///   the value is reachable.
+/// - [`Self::alignment`] must be a power of two: the freeze layout
+///   ([`crate::codec::arena_align`]) and the crate's copy path both derive
+///   the arena slot from it.
+/// - [`Self::handle`]'s length is a **byte** count, and the crate's copy path
+///   copies exactly that many bytes into a slot aligned to
+///   [`Self::alignment`].
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
-    /// Available if [`Self::is_handle()`].
+    /// The value's handle payload as bytes.  Available if
+    /// [`Self::is_handle()`].
+    ///
+    /// **Contract:** the returned handle must stay valid while the value
+    /// lives, its payload must be stable for as long as the value is
+    /// reachable, and its length is a byte count — exactly the bytes
+    /// [`Self::value_eq`] compares and the crate's copy path moves.
     fn handle(&self) -> AnyHandle<[u8]> {
         unreachable!()
     }
@@ -318,9 +355,12 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn set_handle(&mut self, _payload: AnyHandle<[u8]>) {
         unreachable!()
     }
-    /// The payload alignment ext handle values need (a power of two).
-    /// Available if [`Self::is_handle()`]; a vocabulary with no handle
-    /// payloads has no alignment need, so the default is 1 — this keeps
+    /// The payload alignment ext handle values need.  **Contract: must be a
+    /// power of two** — the freeze layout ([`crate::codec::arena_align`]) and
+    /// the crate's copy path (`Layout::from_size_align`) both derive from it
+    /// and the latter refuses anything else.  Available if
+    /// [`Self::is_handle()`]; a vocabulary with no handle payloads has no
+    /// alignment need, so the default is 1 — this keeps
     /// [`crate::codec::arena_align`] total for every program.
     fn alignment() -> usize {
         1
@@ -341,6 +381,14 @@ pub trait ValueExt: Debug + Copy + PartialEq {
             let (a, b) = (self.handle(), other.handle());
             return a.len() == b.len()
                 && (std::ptr::eq(a.as_ptr(), b.as_ptr())
+                    // SAFETY: `a` and `b` are handle payloads of the same
+                    // byte length.  Both values are reachable (`value_eq`
+                    // reads them through `self`/`other`), so each payload's
+                    // home storage is alive — the dynamic case by
+                    // `drop_block`'s no-live-reference contract, the static
+                    // case by the registry pinning the module — and
+                    // `as_ptr()`/`len()` are the pointer and byte count the
+                    // payload was built with.
                     || unsafe {
                         std::slice::from_raw_parts(a.as_ptr(), a.len())
                             == std::slice::from_raw_parts(b.as_ptr(), b.len())
@@ -387,21 +435,28 @@ pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
 
-/// Pointer into a [`Block::arena`].
+/// Pointer into a [`Block::arena`] — or, after a freeze, into a
+/// [`StaticModule`]'s shared arena.
 /// `PartialEq` is pointer identity: two handles are equal iff they point at
 /// the same allocation (same address and length) — never a dereference.
 /// Content equality of two handle payloads is a value-level question,
 /// answered by [`Module::value_eq`].
+///
+/// The pointer is private: a handle is built through [`Handle::from_raw`],
+/// whose contract carries the payload's arena-lifetime obligation.
 #[derive(Debug)]
-pub struct Handle<T: ?Sized>(pub *const T);
+pub struct Handle<T: ?Sized>(pub(crate) *const T);
 #[derive(Debug)]
 pub struct StaticHandle<T: ?Sized> {
     /// The payload's home module — [`StaticModule::key`], global and
     /// position-independent, so the handle reads identically from any
     /// importer that plugged the module and identity is shared across them.
     pub module: ModuleKey,
-    /// Not really pointing to anything, just offset encoded with possible slice length.
-    pub offset: *const T,
+    /// The payload's address in the home module's static arena.  The codec
+    /// resolves an artifact's stored form — a base-relative byte offset plus
+    /// an element count (`codec.rs`) — into this address at load, and every
+    /// reader dereferences it.
+    pub(crate) offset: *const T,
 }
 
 #[derive(Debug)]
@@ -428,6 +483,48 @@ impl<T: ?Sized> Clone for AnyHandle<T> {
 impl<T: ?Sized> Copy for Handle<T> {}
 impl<T: ?Sized> Copy for StaticHandle<T> {}
 impl<T: ?Sized> Copy for AnyHandle<T> {}
+
+impl<T: ?Sized> Handle<T> {
+    /// A handle to the payload at `pointer`.
+    ///
+    /// # Safety
+    /// `pointer` must name a payload in a live [`Block::arena`] — the address
+    /// [`Module::alloc_array`] or [`Module::alloc_table`] returned, or the one
+    /// the crate's copy path relocated it to — and must stay valid, meaning
+    /// the payload's home block must not be released, for as long as any
+    /// reader may dereference the handle.  [`Module::drop_block`] releasing
+    /// the block's `Bump` is what invalidates the pointer.
+    pub unsafe fn from_raw(pointer: *const T) -> Self {
+        Handle(pointer)
+    }
+
+    /// The payload's raw pointer.  Dereferencing it carries the same
+    /// arena-lifetime obligation as [`Self::from_raw`].
+    pub fn as_ptr(&self) -> *const T {
+        self.0
+    }
+}
+
+impl<T: ?Sized> StaticHandle<T> {
+    /// A handle to the payload at `offset` of `module`'s static arena — the
+    /// mirror of [`Handle::from_raw`] for a payload a freeze filed into a
+    /// registered [`StaticModule`].
+    ///
+    /// # Safety
+    /// `offset` must name a payload inside `module`'s arena — what the freeze
+    /// layout writes and the codec's load resolves a stored offset to — and
+    /// `module` must stay registered, pinning that arena, for as long as any
+    /// reader may dereference the handle.
+    pub unsafe fn from_raw(module: ModuleKey, offset: *const T) -> Self {
+        StaticHandle { module, offset }
+    }
+
+    /// The payload's raw pointer.  Dereferencing it carries the same
+    /// arena-lifetime obligation as [`Self::from_raw`].
+    pub fn as_ptr(&self) -> *const T {
+        self.offset
+    }
+}
 
 impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -457,6 +554,10 @@ impl<T: ?Sized> PartialEq for AnyHandle<T> {
 
 impl Handle<[u8]> {
     pub fn len(&self) -> usize {
+        // SAFETY: the handle names a byte payload in a live block arena — the
+        // arena-lifetime obligation `Handle::from_raw` states, upheld by the
+        // `drop_block` contract (`gc.rs`), which forbids a release while a
+        // reachable value still names a payload inside the block.
         let slice = unsafe { &*self.0 };
         slice.len()
     }
@@ -467,6 +568,10 @@ impl Handle<[u8]> {
 
 impl StaticHandle<[u8]> {
     pub fn len(&self) -> usize {
+        // SAFETY: the handle names a byte payload in a registered static
+        // module's arena, pinned by the `Arc<StaticModule>` the registry
+        // holds; the module key is the one the payload was frozen under, and
+        // the registry never releases a registered entry.
         let slice = unsafe { &*self.offset };
         slice.len()
     }
