@@ -49,7 +49,7 @@ queue's order is deliberate.
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | todo |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
-| P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | todo |
+| P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | done |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | done |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | done |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
@@ -630,6 +630,31 @@ compiler output.
 numeric slot index or the `ExprId` in `function_of` — so that the ordering is a
 stated property rather than an inherited one. Cheap; do it when the surrounding
 area is next touched. Do **not** cite this item as a reproducibility bug.
+
+**Outcome.** The definition pass's order is now the checker's own statement,
+keyed on `ExprId`: before the pass it inverts [`Checker::function_of`] into a
+`FunctionId → ExprId` map and sorts the collected `Module::functions` keys by
+that expression id (`checker.rs:637-656`). The **`ExprId`** was chosen over the
+slot index deliberately: `SlotMap::keys`'s order is what the note above calls an
+accident, and the only slotmap-supplied key form (`KeyData::as_ffi`) is
+documented as opaque — *"no guarantees about its value are made"* — so sorting
+by it would have re-inherited the same dependency instead of removing it. The
+expression id is the frontend's own dense, pre-order index, so the pass now
+walks functions in source order and survives a switch to `HopSlotMap` unchanged.
+
+*This is not a no-op, and the measured difference is recorded here.* A probe
+comparing the collected key order with the sorted one, run across the highlevel
+suite and `lichen-language`'s `pipeline`/`registry`/`examples`, found programs
+where the two differ: `tests/checker.rs`'s
+`a_sibling_lambda_hangs_under_nothing` collects its two functions in the
+expression order `[2, 1]`, and the pass now walks `[1, 2]`. So the recorded
+sequence of *orphan* unify errors and runtime `eval_errors` — the diagnostics
+`diagnostic.rs` emits in record order — is source order from here on, where it
+was the checker's `check_lam` call order before. No existing test asserted that
+sequence: every suite above passes with the sort in place. Nothing else about
+the pass changed, and a function with no expression in the map (the probe found
+none — every collected key is in `function_of`) still gets a total order, after
+every function that has one. The probe itself was removed after measuring.
 
 ### P1-8 — Compile work budget is hard-coded `reported`
 

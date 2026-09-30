@@ -634,8 +634,26 @@ where
         // guards) already failed — the graph may then hit a non-function
         // apply, which the runtime panics on.
         if !checker.check_failed() {
-            let functions: Vec<lichen_lowlevel::FunctionId> =
-                checker.module.functions.keys().collect();
+            // The *order* of this pass is user-visible: an orphan unify error
+            // and a runtime `eval_error` are emitted in the order their
+            // function is walked, with no re-sort afterwards.  Each function is
+            // keyed by the IR expression it was compiled from — every function
+            // here was begun by [`Checker::check_lam`], which is what fills
+            // [`Checker::function_of`] — so sorting by that key states the
+            // order instead of inheriting `SlotMap::keys`'s
+            // documented-as-arbitrary key order.  The fallback orders a
+            // function with no expression after all the rest.
+            let expression_of: HashMap<FunctionId, ExprId> = checker
+                .function_of
+                .iter()
+                .map(|(&expression, &function)| (function, expression))
+                .collect();
+            let mut functions: Vec<FunctionId> = checker.module.functions.keys().collect();
+            functions.sort_by_key(|function| {
+                expression_of
+                    .get(function)
+                    .map_or(u32::MAX, |expression| expression.0)
+            });
             for function in functions {
                 let (ret, asserts) = {
                     let function = &checker.module.functions[function];
