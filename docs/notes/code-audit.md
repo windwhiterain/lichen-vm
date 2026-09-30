@@ -90,6 +90,7 @@ queue's order is deliberate.
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | todo |
+| P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | todo |
 
 ## P0 — memory safety and supply chain
 
@@ -279,6 +280,14 @@ entirely. `sub` is a documented, used feature (`lichen-std/README.md`).
 **Fix.** Reject `sub` unless it is a relative path with no `..` component, no
 root, and no prefix — checked in one place next to `sanitize_alias`, with a
 preprocess diagnostic.
+
+**Residual, deliberately left.** The check is lexical, so a `sub` naming a
+**symlink** inside the clone still resolves wherever that symlink points. It is
+not worth a follow-up on its own: the same repository already supplies the
+clone's contents, including any `build.rs` the plugin build runs, so a symlink
+grants nothing an attacker did not already have. Resolving it would mean
+canonicalising and re-checking containment against `sources_root()`, which
+needs the directory to exist and so cannot live in this accessor.
 
 ## P1 — correctness
 
@@ -1009,6 +1018,40 @@ scans the module's whole node table and is called **per emitted node**
   `fs::read` and `.ok()?` turns it into a **silent permanent cache miss**. The
   two functions in the same file disagree about what a file ID is. Fix together
   with `P1-11` via the shared `write_atomic`/file-ID helper.
+- **P5-12 `verified`** — `tree-sitter-lichen` is deliberately outside the
+  workspace (the root manifest `exclude`s it, and its own manifest says so), but
+  its manifest has **no `[workspace]` table of its own**, so resolving it as a
+  package makes cargo walk *upward* for a workspace root. In the main checkout
+  that walk stops at the root manifest, whose `exclude` covers it, and works. In
+  a worktree the crate sits deeper (`.worktrees/<name>/tree-sitter-lichen`) and
+  the walk lands on the **main** checkout's manifest — which does not exclude
+  that path — so cargo fails:
+
+  ```
+  error: current package believes it's in a workspace when it's not:
+  current:   C:\resource\lichen-vm\.worktrees\code-audit\tree-sitter-lichen\Cargo.toml
+  workspace: C:\resource\lichen-vm\Cargo.toml
+  ```
+
+  Reproduce with `cargo metadata --no-deps --manifest-path
+  tree-sitter-lichen/Cargo.toml` from any worktree. Not caused by this branch:
+  `cargo fmt --all -- --check` exits 0 in the main checkout and fails in the
+  worktree. The trigger is `lichen-language-zed`'s optional path dependency on
+  the crate, so anything resolving the graph with that feature enabled hits it
+  too; `cargo check --workspace` and `cargo test --workspace` are unaffected.
+
+  **Why it matters.** `cargo fmt --all` fails in every worktree, and `AGENTS.md`
+  both mandates working in a worktree and requires `cargo fmt` before a final
+  commit. It also blocks `P3-3`'s workspace-wide `fmt --check` gate.
+
+  **Fix.** Add an empty `[workspace]` table to `tree-sitter-lichen/Cargo.toml` —
+  cargo's own suggested third option, and the standard way to declare a crate
+  that is intentionally its own workspace. It stops the upward walk at that
+  manifest. Verify that `cargo fmt --all -- --check` and `cargo metadata` then
+  succeed from a worktree, that `cargo test --manifest-path
+  tree-sitter-lichen/Cargo.toml` still works, and that resolving
+  `lichen-language-zed` with the `grammar-consistency` feature still finds the
+  path dependency.
 
 ## Decisions
 
