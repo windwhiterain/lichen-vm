@@ -22,7 +22,7 @@ lichen clean                                   reclaim the plugin-composed compi
                                                  cache slots (device-cache artifacts)
 lichen install <compiler|language-server|all>  install a prebuilt toolchain binary into Lichen Home
 lichen path <compiler|language-server>         print the resolved toolchain binary path (installing if absent)
-lichen update                                  update the package manager itself to the repo's latest commit
+lichen update                                  update the package manager itself to the newest released tag
 lichen rebuild-plugin [<file|dir>] [--repo <u>] build (or reuse) a cached compiler
                                                  over the project's native plugins
 ```
@@ -34,7 +34,8 @@ downloaded as **prebuilt release assets** from `DEFAULT_REPO`, from the **GitHub
 release tagged at the commit the `lichen` binary itself was built from** (recorded
 by `build.rs`). That tag names the revision the download asks for; nothing verifies
 that what arrives is that revision (see the `toolchain` module doc). `lichen update`
-moves the package manager (and the toolchain it then installs) to a later commit.
+moves the package manager (and the toolchain it then installs) to the newest
+published release.
 
 There are two classes, living in different places under Lichen Home
 (`$LICHEN_HOME`, default `~/.lichen`):

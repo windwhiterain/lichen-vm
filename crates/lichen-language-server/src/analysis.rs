@@ -2,9 +2,10 @@
 //! an editor-view index built on top of them.
 //!
 //! `Doc` reuses the *actual* frontend artifacts from `lichen-language` — the
-//! tokens (byte ranges), the AST (source spans) — and the *checker* via
-//! [`BufferSession`] for the full diagnostic set. It then adds the one thing the
-//! raw frontend does not give you: name resolution for editing.
+//! tokens (byte ranges), the AST (source spans) — and the *checker* through
+//! [`build_report`], the same shared tail the compiler calls, for the full
+//! diagnostic set. It then adds the one thing the raw frontend does not give
+//! you: name resolution for editing.
 //!
 //! Why the resolution is re-derived here: `compile` resolves names at lowering
 //! but collapses a name *use* onto the binder's `ExprId`, so the IR never

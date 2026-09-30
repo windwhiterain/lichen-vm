@@ -90,7 +90,7 @@ queue's order is deliberate.
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
-| P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
+| P5-3 | low | all | Stale or contradicted doc comments (list) | done |
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | done |
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | done |
@@ -1954,6 +1954,62 @@ scans the module's whole node table and is called **per emitted node**
   `scripts/release.sh` prints a `releases/tag/<full-sha>` URL although the real
   tag is the 12-character short SHA (`RELEASE_TAG_LEN`), so the printed link does
   not resolve.
+  **Outcome.** The list was walked entry by entry and every citation re-derived;
+  the line numbers had drifted in both directions.  *Corrected in place:*
+  `language-server/analysis.rs`'s module doc claimed the checker ran "via
+  `BufferSession`" — `Doc` calls `frontend_at` + `build_report` and never
+  imports or names the session (this is `P2-1`'s own prescribed "correct the
+  doc" step, done here; its wiring half stays `D6`); `checker.rs`'s two "which
+  the runtime panics on" clauses (the definition pass's skip comment and
+  `check_failed`'s doc) — since `P1-6` the runtime records
+  `EvalError::ApplyTarget` instead; `highlevel/ir.rs`'s struct layout, which
+  said the shape bundles the nominal id — the checker's `[shape, kind]` pair has
+  the field types in the shape and `[TypeStruct{id, names}, K]` in the kind, the
+  opposite of the claim; `language/src/lib.rs`'s `Report::build` doc ("`None`
+  only when the resolve stage failed") — the lowering is total, so every path
+  this crate produces is `Some`; `language/src/readme.rs`'s claim that
+  `cargo test` self-heals stale `output = "..."` metadata — `tests/readme.rs`
+  rewrites only the README and `tests/examples.rs` asserts the metadata and
+  fails; the four grammar claims (`parser/ast.rs`'s `T<e>`, `parser/parse.rs`'s
+  module doc and `atom_parser` doc, `lex/lib.rs`'s Glue paragraph and keyword
+  list) — the array type is the keyword-led `array<T, n>`, a glued `<` is the
+  raw type-component read `X<e>`, Glue precedes **five** delimiters (`::`
+  included), the keyword list omitted `string`, `return`, `pub`, and `array`,
+  and a bare `~` is `Tilde(usize::MAX)` (`P5-5`); `lowlevel/lib.rs`'s doc on the
+  re-exported `ModuleKey`, whose first paragraph repeated the pre-`P1-12` "key
+  space stays bounded" claim — that paragraph is deleted and the type's own doc
+  in `lichen-registry` is the one statement; `Registry`/`Module` docs saying
+  modules "executing in threads" share one registry `Arc` — a `Handle` holds a
+  raw pointer, so `Arc<RwLock<Registry<…>>>` is neither `Send` nor `Sync`
+  (clippy's `arc_with_non_send_sync` on
+  `highlevel/tests/attributes.rs:151` is the machine check) and the sharing is
+  single-threaded; `language/src/program.rs`'s per-leaf codec comment, which
+  described a leaf *position* byte where the codec writes a length-prefixed leaf
+  **name** (`Writer::leaf`); `lichen-perspective`'s codesign list, which named
+  `u8(9)` for `GcdOp` — the crate writes `u8(0)` as that leaf's payload behind
+  the `GcdOp` name tag, so nothing emits 9; `lichen-package/README.md`'s
+  "update … to the repo's latest commit" — `update()` follows
+  `latest_release_tag`, the newest published release; and `scripts/release.sh`,
+  which printed `releases/tag/<full-sha>` where the tag is the 12-character
+  short SHA (`RELEASE_TAG_LEN`), so the link never resolved.  The document the
+  note called `preprocess-isolation.md` is
+  `docs/notes/preprocessor-isolation.md`, and its shim section described
+  wrappers generic over `V`/`O`/`C` returning `Diag<CompiledProgram<V,O>>` —
+  they are generic over one `P: LangProgramShape` and return
+  `(Preprocessed, Vec<Diag<P>>)` / `Vec<Diag<P>>`, and `compile.rs` and
+  `readme.rs` are no longer callers.
+  **Already correct**, fixed with the item that owned the code and left
+  standing: `device.rs`'s lock-scope and recovery docs (`P1-11`, `P1-12`),
+  `module_key.rs` and `compiler_cache.rs`/`persist.rs`'s slot-key comments
+  (`P1-12`, `P1-13`), `evaluation.rs`'s depth-counter comment (`P1-2`) and its
+  non-callable-target comment (`P1-6`; the sentence is gone), and
+  `lowlevel/lib.rs`'s `value_eq` SAFETY note (`P0-2`).
+  **Refuted:** `compute.rs`'s parenthetical "claims parallelism" — the cited
+  bullets describe `parallel`'s type-level effect (the result is a kernel
+  *struct*) and `plrun`'s index range, not concurrent execution, and the
+  function's own doc says "v1 runs sequentially (the data-parallelism is
+  logical)".  Whatever the operator names and module docs still overstate is
+  `P1-18`'s finding, and was left to it.
 - **P5-4 `verified`** — `Cargo.lock` holds **three** `wasmparser`
   (0.227.1 / 0.228.0 / 0.258.0) and two `wasm-encoder` (0.227.1 / 0.258.0).
   The JIT emits with `wasm-encoder 0.258` and `wasmi 2.0` validates with

@@ -611,21 +611,11 @@ impl AnyHandle<[u8]> {
 
 new_key_type! {pub struct NodeId;}
 
-/// The device key of a static module — the module's compact index in the
-/// device's [`Registry`].  A monotonically increasing index allocated by
-/// the device registry (the persistent store that maps keys to artifact
-/// content hashes), so the same module has the same key in every process
-/// sharing the registry — keys are stable across processes and are
-/// reclaimed (reused) when a module is removed from the registry, so the
-/// key space stays bounded.  Refs (node, function, handle) carry the key
-/// of their home module, so refs are absolute from birth: an importer
-/// stores them verbatim and resolves the key through the shared registry —
-/// no per-importer retarget, no re-based copies, and the same payload is
-/// shared by every importer.
 /// The device key naming a compiled module — defined in the `lichen-registry`
 /// crate (the type-independent persistence layer) and re-exported here so the
 /// lowlevel's registry and serialization can name modules without coupling to
-/// the language stack.
+/// the language stack.  Its key-space rules live on the type itself, in
+/// `lichen-registry`'s `module_key`.
 pub use lichen_registry::ModuleKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaticNodeId {
@@ -822,9 +812,9 @@ pub enum BudgetExhausted {
 }
 
 pub struct Module<P: Program> {
-    /// The device's registry — shared with every module executing in the
-    /// process.  All static refs resolve through it; the module itself is
-    /// never shared (`Arc<Module>` does not exist).
+    /// The device's registry — shared with every module bound to it (see the
+    /// `Registry` doc for the thread rule).  All static refs resolve through
+    /// it; the module itself is never shared (`Arc<Module>` does not exist).
     pub registry: Arc<RwLock<Registry<P>>>,
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
@@ -935,8 +925,10 @@ pub struct Freeze {
 }
 
 /// The device's module registry — the virtual file system of the device's
-/// compiled modules, shared by every [`Module`] executing (in threads) as
-/// `Arc<RwLock<Registry>>`.  It handles **registering** (compiling a
+/// compiled modules, shared by every [`Module`] bound to one
+/// `Arc<RwLock<Registry>>`.  A filed value carries arena handles (raw
+/// pointers), so the registry cannot cross a thread: the sharing is within one
+/// thread, never across threads.  It handles **registering** (compiling a
 /// dynamic module into a static artifact and filing it under its device
 /// key), **storage** (the resident map of loaded modules), and resolution
 /// **during evaluating** (every static ref an executing module touches is
@@ -948,8 +940,8 @@ pub struct Freeze {
 /// and `persist.rs`), which maps keys to artifact content hashes and back;
 /// the lowlevel only files a built artifact under the caller-provided key
 /// ([`Self::freeze_mapped`], [`Self::insert_module`]).  Keys are compact
-/// indices, stable across processes and reclaimed when a module is removed
-/// from the device registry.
+/// indices, stable across processes; the device registry decides when one is
+/// reused (see [`ModuleKey`]).
 pub struct Registry<P: Program> {
     entries: HashMap<ModuleKey, Package<P>>,
 }
@@ -967,9 +959,10 @@ impl<P: Program> Registry<P> {
     }
 
     /// An executing module bound to this registry: every static ref it
-    /// touches resolves through `self`.  Modules executing in threads share
-    /// the one registry `Arc` — a `Module` itself is never shared
-    /// (`Arc<Module>` does not exist; it is a per-thread owned value).
+    /// touches resolves through `self`.  Modules in one thread share the one
+    /// registry `Arc` (see the `Registry` doc for why it cannot cross a
+    /// thread) — a `Module` itself is never shared (`Arc<Module>` does not
+    /// exist; it is a per-thread owned value).
     pub fn new_module(registry: &Arc<RwLock<Registry<P>>>) -> Module<P> {
         Module::with_registry(registry.clone())
     }
@@ -1093,7 +1086,7 @@ impl<P: Program> Module<P> {
     }
 
     /// A module bound to the given registry — every static ref it touches
-    /// resolves through it.  Modules executing in threads share the one
+    /// resolves through it.  Every module in one thread shares the one
     /// registry `Arc` ([`Registry::new_module`]); a standalone module owns
     /// a private registry, which is the same thing at one-module scale.
     fn with_registry(registry: Arc<RwLock<Registry<P>>>) -> Self {

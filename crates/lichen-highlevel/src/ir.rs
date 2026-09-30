@@ -365,10 +365,12 @@ pub enum ExprKind<L> {
     TypeTuple(ChildRange),
     /// A struct type expression.  `fields` is the field-type list; the
     /// corresponding `names` range (into [`IR::struct_names`] holds each
-    /// field's optional name.  Kinded with a fixed `TypeStruct` marker and
-    /// shaped `[TypeId(n), [T1, …, Tn]]`: a *fresh nominal* id bundled with
-    /// the field-type list, plus an optional name table (see the checker).  A
-    /// struct type is reused by binding it once through a parameter.
+    /// field's optional name.  The checker builds it as the usual
+    /// `[shape, kind]` pair — shape `[T1, …, Tn]`, kind
+    /// `[TypeStruct{id, names}, K]` — so the *fresh nominal* id and the
+    /// optional name table sit in the kind, never in the shape (see the
+    /// checker's struct-type construction).  A struct type is reused by
+    /// binding it once through a parameter.
     TypeStruct {
         fields: ChildRange,
         names: ChildRange,

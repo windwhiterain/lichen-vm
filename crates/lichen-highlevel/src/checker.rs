@@ -631,9 +631,8 @@ where
         // it is still unbound).  The order against the root pass is
         // irrelevant: reads alias their target cells (see the lowlevel Index
         // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations,
-        // guards) already failed — the graph may then hit a non-function
-        // apply, which the runtime panics on.
+        // Skipped when the checker-side unifies (annotations, guards) already
+        // failed: the build is rejected either way.
         if !checker.check_failed() {
             // The *order* of this pass is user-visible: an orphan unify error
             // and a runtime `eval_error` are emitted in the order their
@@ -778,8 +777,8 @@ where
     /// unification **or** a recorded guard failure.  A guard failure is a
     /// check-time refusal that never reached the lowlevel, so it leaves the
     /// error vec empty and the vec alone would now miss it; this is why the
-    /// definition pass skips when it holds (the graph may then hit a
-    /// non-function apply, which the runtime panics on).  A guard entry is
+    /// definition pass skips when it holds (the build is rejected either way).
+    /// A guard entry is
     /// exactly one whose [`DiaryEntry::errors`] is `None` — the kind of check
     /// it was is a recorded fact, never an inference from an empty range.
     fn check_failed(&self) -> bool {

@@ -22,12 +22,13 @@
 //! flag: `(a, b)` is always a `Tuple` value, `<a, b>` always a `TypeTuple`
 //! type expression, and `_` always a [`Expr::Placeholder`] (never a name)
 //! — an annotated `expr : expr` parses both sides the same way.  Angle
-//! brackets are exclusively type-level: `<a, b>` is always a `TypeTuple`,
-//! `struct<T1, T2>` always a `StructType`, and `T<e>` (a `<` directly after
-//! an expression) is always the array type.  Postfix forms are marked by a `Glue` token (the lexer
+//! brackets are type-level: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>`
+//! always a `StructType`, and the array type is the keyword-led
+//! `array<T, n>`.  Postfix forms are marked by a `Glue` token (the lexer
 //! emits it when the delimiter is directly glued to the previous token): a
-//! glued `[` is an index `e[i]`, a glued `<` an array type.  A spaced `[` is
-//! a fresh array-literal atom (so `f ([1, 2])` applies `f` to the array) and
+//! glued `[` is an index `e[i]`, a glued `<` a raw type-component read
+//! `X<e>`.  A spaced `[` is a fresh array-literal atom (so `f ([1, 2])`
+//! applies `f` to the array) and
 //! a spaced `<` a tuple-type atom.  Precedence (loosest → tightest): `=>` (right) → `:`
 //! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
 //! (left) → postfix `<e>` / `[e]` / `(…)` / atoms.  A `(` immediately after
@@ -655,9 +656,10 @@ enum Pre {
 
 /// The atoms, with their postfix forms: `e[i]` (array index), `a(k)` (the
 /// positional slot read — an adjacent single-expression paren), `t{k}`
-/// (table lookup), `T<e>` (array type), and `C(...)` (struct instantiation
-/// — any other adjacent paren content).  The bracket and angle forms are
-/// always postfix, with no whitespace rule; a paren or a brace is postfix
+/// (table lookup), `X<e>` (raw type-component read), and `C(...)` (struct
+/// instantiation — any other adjacent paren content).  The bracket and angle
+/// forms are always postfix, with no whitespace rule; a paren or a brace is
+/// postfix
 /// *only when adjacent* (no space before it) — a spaced `(` is a paren
 /// atom, and a spaced `{` is a block: the application rule treats either
 /// as an argument, never this postfix.

@@ -60,9 +60,10 @@ The preprocessor never names a package store or a compile vocabulary.
 
 `lichen-language/src/preprocess/mod.rs` is a `pub use` re-export of the pure
 items plus two generic wrappers (`preprocess`, `stage_depends`) that keep their
-old signatures — generic over `V`/`O`/`C` and returning `Diag<CompiledProgram<V,O>>`
-— so `package.rs`, `run.rs`, `compile.rs`, `readme.rs`, `cli.rs`, and
-`lichen-language-server` call them unchanged.  `lichen-package::preprocess` is likewise
+old call shape — generic over one program type `P: LangProgramShape`, returning
+`(Preprocessed, Vec<Diag<P>>)` and `Vec<Diag<P>>` respectively
+— so `package.rs`, `run.rs`, `cli.rs`, and `lichen-language-server` call them
+unchanged.  `lichen-package::preprocess` is likewise
 a pure re-export.
 
 ## The package manager now depends only on the preprocessor + the registry

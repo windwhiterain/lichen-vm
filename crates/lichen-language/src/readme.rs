@@ -22,10 +22,11 @@
 //! [`replace_examples`] splices the rendered blob into the region between
 //! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
 //! `cargo run -p lichen-language --bin sync-readme` writes it back.
-//! `tests/readme.rs` resyncs the README and the output metadata in place
-//! whenever they drift, so they cannot go stale — `cargo test` self-heals a
-//! stale README or stale output metadata (the sync binary does the same, for
-//! committing on demand).
+//! `tests/readme.rs` rewrites the README's generated region in place whenever
+//! it drifts, so the README cannot go stale.  A program's `output = "..."`
+//! metadata is *not* self-healed: it is a claim about observable behaviour, so
+//! `tests/examples.rs` asserts it and fails on drift, while the `sync-readme`
+//! binary rewrites both for committing on demand.
 
 use std::fs;
 use std::path::{Path, PathBuf};

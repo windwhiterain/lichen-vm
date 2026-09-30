@@ -16,9 +16,10 @@
 //! quantity never matters.
 //!
 //! The only whitespace-significance the grammar needs is adjacency: an
-//! expression followed immediately (no trivia) by '(' '{' '<' or '[' is a
-//! postfix form (a slot read, a table lookup, an array type, or an index).
-//! So the lexer emits a Glue token immediately before one of those four
+//! expression followed immediately (no trivia) by '(' '{' '<' '[' or '::' is
+//! a postfix form (a slot read or struct instantiation, a table lookup, a raw
+//! type-component read, an index, or a raw named read).
+//! So the lexer emits a Glue token immediately before one of those five
 //! delimiters when it is directly glued to the previous token.  The parser
 //! reads Glue to decide postfix vs application -- no hidden space_before flag.
 //!
@@ -27,11 +28,13 @@
 //! slice of a larger source, mapping every token's span and range back to the
 //! original file via a base offset and the source's line starts.
 //!
-//! Int, Type, struct, table, let, if, then, else, and type_of lex as
-//! keywords.  '->'
-//! is the function-type arrow, '=>' a lambda, '::' a table key/value
-//! separator, '!' a prefix assert.  '~' with adjacent digits folds into
-//! Tilde(n).  Any other character is a lex error -- errors accumulate (the
+//! Int, string, Type, struct, table, let, if, then, else, return, pub,
+//! type_of, and array lex as keywords.  '->'
+//! is the function-type arrow, '=>' a lambda, '::' the raw named-read
+//! separator, '==>' the table key/value separator, '!' a prefix assert.  A
+//! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into
+//! Tilde(n); a run that overflows is a lex error with no token.  Any other
+//! character is a lex error -- errors accumulate (the
 //! character is skipped).
 
 use logos::Logos;
@@ -144,8 +147,8 @@ pub enum TokenKind {
     Tilde(usize),
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
-    /// A zero-width marker: the next '(' '{' '<' or '[' is directly glued to
-    /// the previous token, so it is a postfix form.
+    /// A zero-width marker: the next '(' '{' '<' '[' or '::' is directly
+    /// glued to the previous token, so it is a postfix form.
     Glue,
     Eof,
 }

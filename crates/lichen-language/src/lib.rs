@@ -110,10 +110,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The result of compiling and checking a source program.
 ///
-/// `build` is `Some` whenever the frontend resolved the program (lex, parse,
-/// resolve) — including a *partially recovered* parse — and the checker ran
-/// on it; it is `None` only when the resolve stage failed (an unresolved
-/// name), so no IR exists to check.  `diagnostics` holds the frontend's
+/// `build` is `Some` on every path this crate produces: the frontend's
+/// lowering is total, so even an unresolved name yields an IR and its error
+/// rides in `diagnostics`.  `None` is reserved for a caller of [`build_report`]
+/// that has no IR to check.  `diagnostics` holds the frontend's
 /// errors (which may be many — lex errors accumulate and parse errors are
 /// recovered) and the checker's rendered failures.
 pub struct Report<P: HighProgram>

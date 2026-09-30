@@ -77,5 +77,9 @@ if [ "$WATCH" -eq 1 ]; then
     say "could not resolve the run id; check manually with \`gh run list --workflow=$WORKFLOW\`"
   fi
   commit="$(git -C "$ROOT" rev-parse "$REF" 2>/dev/null || echo "$REF")"
-  say "published: https://github.com/windwhiterain/lichen-vm/releases/tag/$commit"
+  # The release tag is the commit's first 12 hex chars (RELEASE_TAG_LEN in
+  # crates/lichen-package/src/toolchain.rs), not the full SHA, so the link needs
+  # the same truncation the workflow applies.
+  tag="${commit:0:12}"
+  say "published: https://github.com/windwhiterain/lichen-vm/releases/tag/$tag"
 fi

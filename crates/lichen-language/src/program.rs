@@ -349,9 +349,9 @@ macro_rules! lang_compose_vocabulary {
         //
         // `ProgramCodec` implements [`$crate::persist::ArtifactCodec`] by
         // dispatching each carry variant to its leaf's [`ValueCodec`]/
-        // [`OperatorCodec`]: a leaf discriminator byte (the leaf's position in
-        // the composition — `0`/`1` are the structural leaves, `2 3 …` each
-        // plugin in order), then the leaf's own payload.  Self-consistent per
+        // [`OperatorCodec`]: a length-prefixed leaf-name tag (the carry
+        // variant's name, written by `Writer::leaf`), then the leaf's own
+        // payload.  Self-consistent per
         // compiler; a plugin-built compiler's `cli` uses it for a real
         // `~/.lichen` device cache.
         #[derive(Default)]
