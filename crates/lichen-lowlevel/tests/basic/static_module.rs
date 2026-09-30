@@ -42,7 +42,9 @@ fn raw_items(value: TestValue) -> Vec<ArrayItem> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value")
     };
-    array.items().to_vec()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }.to_vec()
 }
 
 #[test]

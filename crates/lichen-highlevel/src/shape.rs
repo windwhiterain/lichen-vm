@@ -174,6 +174,10 @@ pub const STRUCT_KIND_NAMES_PATH: [usize; 2] = [KIND_MARKER_SLOT, STRUCT_MARKER_
 /// The array items behind either a dynamic node or a static ref — the raw
 /// read every accessor and predicate in this module is built on.  `None`
 /// when `id` is unbound or not an array.
+///
+/// **Obligation:** the caller must keep `id` reachable — its home block alive
+/// — for as long as the returned slice is read, exactly the contract
+/// `AnyHandle::<[ArrayItem]>::items` states.
 pub fn array_items<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<&'static [ArrayItem]>
 where
     P::Value: AsEnum<LowValue>,
@@ -182,7 +186,10 @@ where
     let LowValue::Array(array) = value.as_enum()? else {
         return None;
     };
-    Some(array.items())
+    // SAFETY: `array` is the payload of `id`, a node of `module`, and nothing
+    // in this crate calls `Module::drop_block`, so the home block outlives
+    // this read.  This wrapper's callers owe the obligation its doc states.
+    Some(unsafe { array.items() })
 }
 
 /// The shape slot of a kinded type expression `[shape, kind]`, for a dynamic
@@ -611,14 +618,17 @@ pub(crate) fn tag_descent<P: Program>(
 /// array (a tuple value), tagging that `Value` descent as `Shape`.  Kept
 /// as-is in Phase 1: it is a diagnostic rendering hint, never a check.
 fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
-    let Some(items) = module.array_items(node) else {
+    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { module.array_items(node) }) else {
         return false;
     };
     if items.is_empty() {
         return false;
     }
     match items[0].node {
-        AnyNodeId::Dynamic(child) => module.array_items(child).is_some(),
+        // SAFETY: as above — `child` is a live node of `module`.
+        AnyNodeId::Dynamic(child) => unsafe { module.array_items(child) }.is_some(),
         // A static element is a leaf (a package export); it is never a
         // tuple/array/struct shape we descend into.
         AnyNodeId::Static(_) => false,

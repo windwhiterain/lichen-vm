@@ -219,7 +219,10 @@ impl<P: Program> Module<P> {
             Some(LowValue::Function(AnyFunctionId::Static(sref))) => Some(mix(id_hash(sref))),
             Some(LowValue::Array(array)) => {
                 let mut h = ARRAY_SEED;
-                for item in array.items() {
+                // SAFETY: `array` is the payload of a live node of this module
+                // and `hash_inner` only reads, so its home block stays alive
+                // across the recursion.
+                for item in unsafe { array.items() } {
                     match self.hash_inner(item.node, path, depth + 1)? {
                         Some(item_hash) => h = mix(h ^ item_hash),
                         None => return Ok(None),
@@ -261,7 +264,10 @@ impl<P: Program> Module<P> {
         let ok = match (self.node_value(a), self.node_value(b)) {
             (Some(va), Some(vb)) => match (va.as_enum(), vb.as_enum()) {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                    let (left, right) = (pa.items(), pb.items());
+                    // SAFETY: `pa`/`pb` are payloads of live nodes of this
+                    // module and `key_eq` only reads, so their home blocks
+                    // stay alive across the recursion.
+                    let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                     left.len() == right.len()
                         && left
                             .iter()

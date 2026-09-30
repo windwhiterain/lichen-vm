@@ -217,10 +217,13 @@ impl<P: Program> Module<P> {
                 else {
                     return false;
                 };
-                if array.items().len() != 2 {
+                // SAFETY: `array` is the payload of `node`, a live node of
+                // this module, so its home block has not been dropped.
+                if unsafe { array.items() }.len() != 2 {
                     return false;
                 }
-                for item in array.items() {
+                // SAFETY: as above — `node` is a live node of this module.
+                for item in unsafe { array.items() } {
                     match item.node {
                         Dyn(item) => {
                             if self.equality_representative(item) == rep {
@@ -244,7 +247,9 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = self.static_read(sref).as_enum() else {
             return false;
         };
-        let items = array.items();
+        // SAFETY: `array` is a static payload read through `sref`, whose home
+        // module is registered — the registration pins its arena.
+        let items = unsafe { array.items() };
         items.len() == 2
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
@@ -388,7 +393,11 @@ impl<P: Program> Module<P> {
         );
         match pair {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                let (left, right) = (pa.items(), pb.items());
+                // SAFETY: `pa`/`pb` are the payloads of the reachable class
+                // representatives `ra`/`rb`, both live nodes of this module, so
+                // their home blocks stay alive across the recursion below —
+                // nothing in the descent releases a block.
+                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                 if left.len() != right.len() {
                     self.record_error(ra, rb, steps, root);
                     return false;
@@ -517,7 +526,9 @@ impl<P: Program> Module<P> {
                 None => {}
                 Some(LowValue::Parameterized) => {}
                 Some(LowValue::Array(array)) => {
-                    let items = array.items();
+                    // SAFETY: `array` is the payload of `member`, a live node
+                    // of this module, so its home block has not been dropped.
+                    let items = unsafe { array.items() };
                     let mut seen = HashSet::new();
                     if items
                         .iter()
@@ -553,8 +564,10 @@ impl<P: Program> Module<P> {
                     && match self.nodes[node].value.and_then(|value| value.as_enum()) {
                         None => true,
                         Some(LowValue::Parameterized) => true,
-                        Some(LowValue::Array(array)) => array
-                            .items()
+                        // SAFETY: `array` is the payload of `node`, a live node
+                        // of this module, so its home block has not been
+                        // dropped.
+                        Some(LowValue::Array(array)) => unsafe { array.items() }
                             .iter()
                             .all(|item| self.value_is_skeleton(item.node, seen)),
                         _ => false,
@@ -598,7 +611,9 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = operands.as_enum() else {
             return None;
         };
-        let operands = array.items();
+        // SAFETY: `array` is the payload of `operand`, a live node of this
+        // module, so its home block has not been dropped.
+        let operands = unsafe { array.items() };
         if operands.len() != 2 {
             return None;
         }
@@ -610,7 +625,12 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
-        container_ptr.items().get(index).map(|item| item.node)
+        // SAFETY: `container_ptr` is the array payload of a live node of this
+        // module (read through `Self::node_value` just above), so its home
+        // block has not been dropped.
+        unsafe { container_ptr.items() }
+            .get(index)
+            .map(|item| item.node)
     }
 
     /// Whether `rep`'s class holds a *pending field/positional read*: an
@@ -808,7 +828,10 @@ impl<P: Program> Module<P> {
         }
         match (a.as_enum(), b.as_enum()) {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                let (left, right) = (pa.items(), pb.items());
+                // SAFETY: `pa`/`pb` are values the caller read out of live
+                // nodes of this module (`Self::node_value`), so their home
+                // blocks have not been dropped.
+                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                 left.len() == right.len()
                     && left
                         .iter()

@@ -201,9 +201,9 @@ fn the_checker_runs_on_an_extended_union() {
         Some(ProbeValue::FloatType)
     );
     assert_eq!(build.ty[float_ty.0 as usize], Some(build.type_expr));
-    let ids = build
-        .module
-        .array_items(float_pair)
+    // SAFETY: `float_pair` is a live node of the build under test, whose block
+    // has not been dropped.
+    let ids = unsafe { build.module.array_items(float_pair) }
         .expect("the pair is an array")
         .iter()
         .map(|item| dyn_node(item.node))

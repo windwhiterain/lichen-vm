@@ -269,7 +269,10 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = value.as_enum() else {
             return value;
         };
-        let items = array.items();
+        // SAFETY: `array` is a payload of `value`, which lives in a registered
+        // static module's arena — `ctx.module`'s, held alive by this apply, or
+        // a dependency the registry pins; the walk below releases nothing.
+        let items = unsafe { array.items() };
         let mut changed = false;
         let mut remapped = Vec::with_capacity(items.len());
         for item in items {
@@ -423,7 +426,9 @@ fn static_function_captures<P: Program>(
         if let Some(value) = sn.value
             && let Some(LowValue::Array(array)) = value.as_enum()
         {
-            for item in array.items() {
+            // SAFETY: `array` is a payload in `module`'s arena, and the caller
+            // holds the registered static module alive for this walk.
+            for item in unsafe { array.items() } {
                 if let AnyNodeId::Static(sref) = item.node
                     && sref.module == module.key
                     && walk(module, sref.index, target, visited)

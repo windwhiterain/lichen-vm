@@ -9,22 +9,26 @@ use lichen_utils::extend::AsEnum;
 impl<P: Program> Module<P> {
     /// The items of `node`'s array value, if it has one.
     ///
-    /// The returned slice points into the arena of the node's home block, and
-    /// the `'static` return is that arena's lifetime — not a borrow of
-    /// `&self`, which the signature cannot express because the slice outlives
-    /// one call.  A node's home block is alive exactly while the node is:
-    /// dropping a block removes its nodes, and indexing a removed `NodeId`
-    /// panics, so a reachable node always has its arena alive.
+    /// A node's home block is alive exactly while the node is: dropping a
+    /// block removes its nodes, and indexing a removed `NodeId` panics, so a
+    /// reachable node always has its arena alive.
     ///
-    /// **Contract:** the caller must keep `node` reachable — its home block
-    /// alive — for as long as it dereferences the slice.  `Module::drop_block`
-    /// releasing the block's `Bump` is what invalidates the returned slice.
-    pub fn array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
+    /// # Safety
+    ///
+    /// As [`AnyHandle<[ArrayItem]>::items`], which states the contract: the
+    /// returned slice points into the array payload's home arena, so the
+    /// caller must keep `node` reachable — its home block alive — for as long
+    /// as the slice is read.  [`Module::drop_block`] releasing the block's
+    /// `Bump` is what invalidates it.
+    pub unsafe fn array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
         let value = self.nodes[node].value?;
         let LowValue::Array(array) = value.as_enum()? else {
             return None;
         };
-        Some(array.items())
+        // SAFETY: the caller upholds this method's `# Safety`; `array` is the
+        // live payload of a node whose home block has not been released, so
+        // the same obligation covers handing its slice out here.
+        Some(unsafe { array.items() })
     }
 
     /// Copy `items` into `block.arena` and return the array handle pointing

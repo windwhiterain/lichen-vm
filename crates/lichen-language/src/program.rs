@@ -671,8 +671,9 @@ mod sort_op_tests {
         let Some(LowValue::Array(array)) = out.as_enum() else {
             panic!("Sort must yield a USize array");
         };
-        let sorted: Vec<usize> = array
-            .items()
+        // SAFETY: `array` is the payload of the value the sort extension just
+        // returned, allocated in a live block of this module.
+        let sorted: Vec<usize> = unsafe { array.items() }
             .iter()
             .map(|item| {
                 module

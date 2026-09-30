@@ -162,7 +162,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the operand node; its home block is
+                        // alive and not dropped.
+                        let operands = unsafe { array.items() };
                         match self.evaluate_node(operands[1].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -180,7 +183,10 @@ impl<P: Program> Module<P> {
                                     // the same way — no second diagnostic.
                                     Some(LowValue::Void) => P::Value::from(LowValue::Void),
                                     Some(LowValue::Array(array)) => {
-                                        let array = array.items();
+                                        // SAFETY: `array` is the value the
+                                        // module just evaluated for the target
+                                        // node; its home block is alive.
+                                        let array = unsafe { array.items() };
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
                                         // and yield a computed nothing (`Void`)
@@ -283,7 +289,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the Apply operand node; its home block
+                        // is alive and not dropped.
+                        let operands = unsafe { array.items() };
                         match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -329,7 +338,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the TableGet operand node; its home
+                        // block is alive and not dropped.
+                        let operands = unsafe { array.items() };
                         let table = operands[0].node;
                         let key = operands[1].node;
                         match self.evaluate_node(table, Some(block)).as_enum() {
@@ -355,7 +367,10 @@ impl<P: Program> Module<P> {
                                         return P::Value::from(LowValue::Void);
                                     }
                                     KeyState::Hashed(hash) => {
-                                        let items = payload.items();
+                                        // SAFETY: `payload` is the evaluated
+                                        // table value of a live node of this
+                                        // module; its home block is alive.
+                                        let items = unsafe { payload.items() };
                                         let start = items.partition_point(|item| item.hash < hash);
                                         let mut path = Vec::new();
                                         let mut found = None;
@@ -469,7 +484,9 @@ impl<P: Program> Module<P> {
             .and_then(|value| value.as_enum())
         {
             Some(LowValue::Array(array)) => {
-                let items = array.items();
+                // SAFETY: `array` is the payload of `node`'s operand, a live
+                // node of this module, so its home block has not been dropped.
+                let items = unsafe { array.items() };
                 (items[0].node, items[1].node)
             }
             _ => unreachable!("a TableGet operand is the [table, key] array"),
@@ -556,7 +573,11 @@ impl<P: Program> Module<P> {
             // duration: the same structural-cycle cut as the entry above.
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
-            for item in array.items() {
+            // SAFETY: `array` is the value this module just evaluated for
+            // `node`.  The descent below mutates the module but never releases
+            // a block — `drop_block` is called only from `garbage_collect` —
+            // so the payload's arena stays alive for the whole loop.
+            for item in unsafe { array.items() } {
                 // A shallow position is a lazy region: its whole subtree
                 // stays unevaluated (never proven concrete), and a read
                 // forces the single element on demand through `Index` —
@@ -575,7 +596,11 @@ impl<P: Program> Module<P> {
         if let Some(LowValue::Table(table)) = value.as_enum() {
             self.nodes[node].visiting = true;
             let block = self.nodes[node].block;
-            for item in table.items() {
+            // SAFETY: `table` is the value this module just evaluated for
+            // `node`.  The descent below mutates the module but never releases
+            // a block — `drop_block` is called only from `garbage_collect` —
+            // so the payload's arena stays alive for the whole loop.
+            for item in unsafe { table.items() } {
                 self.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, force_operand);
                 self.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, force_operand);
             }
@@ -594,8 +619,11 @@ impl<P: Program> Module<P> {
                     // not evaluated, and even an assert's forced pass that
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
-                    if array.items().iter().any(|item| item.shallow)
-                        || array.items().iter().any(|item| match item.node {
+                    // SAFETY: `array` is the value this module just evaluated
+                    // for `node`; its home block is alive.  The note covers the
+                    // two `items()` calls in this arm.
+                    if unsafe { array.items() }.iter().any(|item| item.shallow)
+                        || unsafe { array.items() }.iter().any(|item| match item.node {
                             Dyn(node) => self.nodes[node]
                                 .evaluated_deep
                                 .is_some_and(|e| e.parameterized),
@@ -607,14 +635,17 @@ impl<P: Program> Module<P> {
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Table(table))
-                    if table.items().iter().any(|item| match item.key {
+                    // SAFETY: `table` is the value this module just evaluated
+                    // for `node`; its home block is alive.  The note covers the
+                    // two `items()` calls in this arm.
+                    if unsafe { table.items() }.iter().any(|item| match item.key {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),
                         AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
                             [sref.index.index]
                             .parameterized,
-                    }) || table.items().iter().any(|item| match item.value {
+                    }) || unsafe { table.items() }.iter().any(|item| match item.value {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),

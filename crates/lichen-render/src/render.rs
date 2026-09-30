@@ -72,7 +72,9 @@ where
         .node_value(AnyNodeId::Dynamic(pair))
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(a) => Some(a.items().to_vec()),
+            // SAFETY: `a` is the payload of a value read from a live node of
+            // the module being rendered; this printer releases no block.
+            LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
             _ => None,
         });
     let Some(values) = values else {
@@ -242,7 +244,9 @@ where
             return match structural {
                 LowValue::USize(n) => n.to_string(),
                 LowValue::Str(s) => format!("\"{s}\""),
-                LowValue::Array(array) => self.elements(node, array.items()),
+                // SAFETY: `array` is the payload of `node`, a live node of the
+                // module being rendered; this printer releases no block.
+                LowValue::Array(array) => self.elements(node, unsafe { array.items() }),
                 LowValue::Table(_) => "Table".to_string(),
                 LowValue::Function(_) => "Function".to_string(),
                 LowValue::None | LowValue::Void => "none".to_string(),
@@ -302,12 +306,15 @@ where
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && self.kind_is_struct_any(kind.items())
+            // SAFETY: `kind` is the payload of a value read from the live node
+            // `elements[1]`; this printer releases no block.  The note covers
+            // the three `items()` calls in this arm.
+            && self.kind_is_struct_any(unsafe { kind.items() })
         {
             let fields = self.fields_any(elements[0].node);
-            let names = struct_field_names(self.module, kind.items(), fields.len());
+            let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, kind.items());
+            let id = struct_kind_id(self.module, unsafe { kind.items() });
             return match (self.show_struct_id, id) {
                 (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
                 _ => format!("struct<{}>", fields.join(", ")),
@@ -318,7 +325,7 @@ where
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
+            && let kind = unsafe { kind.items() }
             && kind.len() == 2
             && self.is_universe_any(kind[1].node)
         {
@@ -327,7 +334,9 @@ where
                     // shape = [in, out] — render `in -> out`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
                         && s.len() == 2
                     {
                         return format!(
@@ -346,7 +355,9 @@ where
                     // shape = [element type, length] — render `array<T, len>`.
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
                         && s.len() == 2
                     {
                         return format!(
@@ -390,8 +401,9 @@ where
         if let Some(LowValue::Array(array)) =
             self.module.node_value(shape).and_then(|v| v.as_enum())
         {
-            array
-                .items()
+            // SAFETY: `array` is the payload of the value read from the live
+            // node `shape`.
+            unsafe { array.items() }
                 .iter()
                 .map(|item| self.any_node(item.node))
                 .collect()
@@ -435,7 +447,11 @@ where
             Some(LowValue::None | LowValue::Void) => "none".to_string(),
             Some(LowValue::Function(_)) => "Function".to_string(),
             Some(LowValue::Table(_)) => "Table".to_string(),
-            Some(LowValue::Array(array)) => self.static_elements(sref, array.items(), visiting),
+            // SAFETY: `array` is a static payload read through `sref`, whose
+            // registered module pins the arena.
+            Some(LowValue::Array(array)) => {
+                self.static_elements(sref, unsafe { array.items() }, visiting)
+            }
             None => self
                 .type_constant(&value)
                 .unwrap_or_else(|| "?".to_string()),
@@ -465,12 +481,15 @@ where
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && self.kind_is_struct_any(kind.items())
+            // SAFETY: `kind` is the payload of a value read from the live node
+            // `elements[1]`; the note covers the three `items()` calls in this
+            // arm.
+            && self.kind_is_struct_any(unsafe { kind.items() })
         {
             let fields = self.static_fields(elements[0].node, visiting);
-            let names = struct_field_names(self.module, kind.items(), fields.len());
+            let names = struct_field_names(self.module, unsafe { kind.items() }, fields.len());
             let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, kind.items());
+            let id = struct_kind_id(self.module, unsafe { kind.items() });
             return match (self.show_struct_id, id) {
                 (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
                 _ => format!("struct<{}>", fields.join(", ")),
@@ -481,7 +500,7 @@ where
         if elements.len() == 2
             && let Some(kind) = self.module.node_value(elements[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
+            && let kind = unsafe { kind.items() }
             && kind.len() == 2
             && self.is_static_universe(kind[1].node)
         {
@@ -489,7 +508,9 @@ where
                 Some(m) if m == P::Value::function_type_marker() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
                         && s.len() == 2
                     {
                         return format!(
@@ -506,7 +527,9 @@ where
                 Some(m) if m == P::Value::array_type_marker() => {
                     if let Some(shape) = self.module.node_value(elements[0].node)
                         && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
+                        // SAFETY: `shape` is the payload of a value read from
+                        // the live node `elements[0]`.
+                        && let s = unsafe { shape.items() }
                         && s.len() == 2
                     {
                         return format!(
@@ -546,8 +569,9 @@ where
         if let Some(LowValue::Array(array)) =
             self.module.node_value(shape).and_then(|v| v.as_enum())
         {
-            array
-                .items()
+            // SAFETY: `array` is the payload of the value read from the live
+            // node `shape`.
+            unsafe { array.items() }
                 .iter()
                 .map(|item| self.static_any(item.node, visiting))
                 .collect()
@@ -563,7 +587,9 @@ where
         if let Some(value) = self.module.node_value(id)
             && let Some(LowValue::Array(array)) = value.as_enum()
         {
-            let items = array.items();
+            // SAFETY: `array` is the payload of the value read from the live
+            // node `id`.
+            let items = unsafe { array.items() };
             return items.len() == 2
                 && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
                 && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index);
@@ -643,7 +669,9 @@ where
         else {
             return self.raw(value);
         };
-        let tys = ty_array.items();
+        // SAFETY: `ty_array` is the payload of the value read from the live
+        // node `ty`.
+        let tys = unsafe { ty_array.items() };
         // A struct type itself: the value's type is the struct kind
         // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
         // and the value is the field-type list — render
@@ -651,8 +679,9 @@ where
         if is_struct_kind(self.module, ty)
             && let Some(LowValue::Array(shape)) = value.as_enum()
         {
-            let fields: Vec<String> = shape
-                .items()
+            // SAFETY: `shape` is the payload of the value being printed,
+            // which belongs to the module being rendered.
+            let fields: Vec<String> = unsafe { shape.items() }
                 .iter()
                 .map(|item| self.printer.any_node(item.node))
                 .collect();
@@ -684,7 +713,7 @@ where
         if tys.len() == 2
             && let Some(kind) = self.module.node_value(tys[1].node)
             && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
+            && let kind = unsafe { kind.items() }
             && kind.len() == 2
             && self.printer.is_universe_any(kind[1].node)
             && let Some(marker) = self.module.node_value(kind[0].node)
@@ -715,7 +744,9 @@ where
         let Some(LowValue::Array(shape)) = value.as_enum() else {
             return None;
         };
-        let shape = shape.items();
+        // SAFETY: `shape` is the payload of the value being printed, which
+        // belongs to the module being rendered.
+        let shape = unsafe { shape.items() };
         if marker == P::Value::function_type_marker() {
             if shape.len() == 2 {
                 return Some(format!(
@@ -757,12 +788,14 @@ where
         let Some(LowValue::Array(values)) = value.as_enum() else {
             return None;
         };
-        let values = values.items();
+        // SAFETY: `values`/`shape` are payloads of the value being printed and
+        // of the shape node, both in the module being rendered.
+        let values = unsafe { values.items() };
         let shape = self.module.node_value(shape_node).and_then(|v| v.as_enum());
         let Some(LowValue::Array(shape)) = shape else {
             return None;
         };
-        let shape = shape.items();
+        let shape = unsafe { shape.items() };
         if marker == P::Value::tuple_type_marker() {
             if shape.len() != values.len() {
                 return None;
@@ -851,7 +884,9 @@ where
             .node_value(id)
             .and_then(|v| v.as_enum())
             .is_some_and(|v| match v {
-                LowValue::Array(kind) => kind_is_struct(self.module, kind.items()),
+                // SAFETY: `kind` is the payload of the value read from the
+                // live node `id`.
+                LowValue::Array(kind) => kind_is_struct(self.module, unsafe { kind.items() }),
                 _ => false,
             })
     }
@@ -866,7 +901,9 @@ where
         else {
             return None;
         };
-        let marker = self.module.node_value(kind.items()[0].node)?;
+        // SAFETY: `kind` is the payload of the value read from the live node
+        // `kind_node`.
+        let marker = self.module.node_value(unsafe { kind.items() }[0].node)?;
         if marker
             .as_enum()
             .is_some_and(|m| matches!(m, LowValue::Array(_)))
@@ -897,7 +934,9 @@ where
                 LowValue::Void => "none".to_string(),
                 LowValue::Parameterized => "parameterized".to_string(),
                 LowValue::Array(array) => {
-                    let elements = array.items();
+                    // SAFETY: `array` is the payload of `value`, a value of the
+                    // module being rendered.
+                    let elements = unsafe { array.items() };
                     // A type pair `[head, K]`: the kind slot is the
                     // self-looping universe, so render just the head (and cut
                     // the cycle).
@@ -967,7 +1006,9 @@ where
         .node_value(AnyNodeId::Dynamic(node))
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
-            LowValue::Array(kind) => kind_is_struct(module, kind.items()),
+            // SAFETY: `kind` is the payload of the value read from the live
+            // node `node`.
+            LowValue::Array(kind) => kind_is_struct(module, unsafe { kind.items() }),
             _ => false,
         })
 }
@@ -979,7 +1020,9 @@ where
     let rep = representative(module, node);
     matches!(module.node_value(AnyNodeId::Dynamic(node)), Some(value)
     if matches!(value.as_enum(), Some(LowValue::Array(array))
-        if array.items().iter().any(|item| match item.node {
+        // SAFETY: `array` is the payload of the value read from the live node
+        // `node`.
+        if unsafe { array.items() }.iter().any(|item| match item.node {
             AnyNodeId::Dynamic(item) => representative(module, item) == rep,
             AnyNodeId::Static(_) => is_universe_any(module, item.node),
         })))
@@ -998,7 +1041,9 @@ where
             .and_then(|v| v.as_enum())
             .is_some_and(|v| match v {
                 LowValue::Array(array) => {
-                    let items = array.items();
+                    // SAFETY: `array` is a static payload read through `sref`,
+                    // whose registered module pins the arena.
+                    let items = unsafe { array.items() };
                     items.len() == 2
                         && module.node_value(items[0].node) == Some(P::Value::type_marker())
                         && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
@@ -1019,7 +1064,9 @@ where
         .node_value(marker)
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
-            LowValue::Array(m) => m.items().len() == 2,
+            // SAFETY: `m` is the payload of the value read from the live node
+            // `marker`.
+            LowValue::Array(m) => unsafe { m.items() }.len() == 2,
             _ => false,
         })
 }
@@ -1053,7 +1100,9 @@ where
         .node_value(kind_items[0].node)
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(m) => Some(m.items()),
+            // SAFETY: `m` is the payload of a value read from a live node of
+            // the module being rendered.
+            LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         });
     let Some(marker_items) = marker_items else {
@@ -1066,7 +1115,9 @@ where
     else {
         return out;
     };
-    for item in table.items() {
+    // SAFETY: `table` is the payload of the value read from the live node
+    // `names_item`.
+    for item in unsafe { table.items() } {
         let name = module
             .node_value(item.key)
             .and_then(|v| v.as_enum())
@@ -1111,7 +1162,9 @@ where
     let LowValue::Array(ty_arr) = ty.as_enum()? else {
         return None;
     };
-    let tys = ty_arr.items();
+    // SAFETY: `ty_arr`/`shape`/`kind` are payloads of values read from live
+    // nodes of `module`; the note covers this function's `items()` calls.
+    let tys = unsafe { ty_arr.items() };
     if tys.len() != 2 {
         return None;
     }
@@ -1119,12 +1172,12 @@ where
     let LowValue::Array(shape) = module.node_value(tys[0].node)?.as_enum()? else {
         return None;
     };
-    let field_count = shape.items().len();
+    let field_count = unsafe { shape.items() }.len();
     // The kind `[marker, K]`: only a struct kind carries a name table.
     let LowValue::Array(kind) = module.node_value(tys[1].node)?.as_enum()? else {
         return None;
     };
-    let kind_items = kind.items();
+    let kind_items = unsafe { kind.items() };
     if !kind_is_struct(module, kind_items) {
         return None;
     }
@@ -1141,7 +1194,9 @@ where
         .node_value(kind_items[0].node)
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(m) => Some(m.items()),
+            // SAFETY: `m` is the payload of a value read from a live node of
+            // `module`.
+            LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         })?;
     let id_item = marker_items.get(0)?;
@@ -1184,14 +1239,16 @@ where
     let LowValue::Array(value_arr) = value else {
         return None;
     };
-    let field_values = value_arr.items();
+    // SAFETY: every slice below is the payload of a value read from a live
+    // node of `module`; the note covers this function's `items()` calls.
+    let field_values = unsafe { value_arr.items() };
 
     // The struct type: `[shape, kind]` where kind is `[marker, K]`.
     let ty = module.node_value(ty_node)?.as_enum()?;
     let LowValue::Array(ty_arr) = ty else {
         return None;
     };
-    let tys = ty_arr.items();
+    let tys = unsafe { ty_arr.items() };
     if tys.len() != 2 {
         return None;
     }
@@ -1199,7 +1256,7 @@ where
     let LowValue::Array(kind_items) = kind else {
         return None;
     };
-    if !kind_is_struct(module, kind_items.items()) {
+    if !kind_is_struct(module, unsafe { kind_items.items() }) {
         return None;
     }
     // The shape is the positional field-type list.
@@ -1207,8 +1264,8 @@ where
     let LowValue::Array(shape_items) = shape else {
         return None;
     };
-    let field_types = shape_items.items();
-    let names = struct_field_names(module, kind_items.items(), field_values.len());
+    let field_types = unsafe { shape_items.items() };
+    let names = struct_field_names(module, unsafe { kind_items.items() }, field_values.len());
 
     let mut vp = ValuePrinter::new(module);
     let mut fields = Vec::with_capacity(field_values.len());

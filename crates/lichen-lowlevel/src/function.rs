@@ -249,7 +249,14 @@ impl<P: Program> Module<P> {
         ) else {
             return;
         };
-        for (pattern_item, argument_item) in pattern.items().iter().zip(argument.items().iter()) {
+        // SAFETY: `pattern` is a live node of this module (a static ref
+        // resolves through the registered module) and `argument` is the value
+        // just evaluated from a live node; neither home block is released by
+        // the descent below.
+        for (pattern_item, argument_item) in unsafe { pattern.items() }
+            .iter()
+            .zip(unsafe { argument.items() }.iter())
+        {
             // A shallow position on either side is opaque — its subtree
             // stays lazy, so the apply's argument evaluation does not force
             // what the marker deliberately left unevaluated.
@@ -375,8 +382,11 @@ impl<P: Program> Module<P> {
                 // with the remapped node, so each call's clone honors its
                 // own markers.  A baked static reference is absolute and
                 // per-call invariant — referenced in place.
-                let items: Vec<ArrayItem> = array
-                    .items()
+                // SAFETY: `array` is the payload of `value`, the value this
+                // pass is applying; the caller holds it reachable and
+                // `node_apply` never releases a block, so its arena stays
+                // alive across the map.
+                let items: Vec<ArrayItem> = unsafe { array.items() }
                     .iter()
                     .map(|&item| ArrayItem {
                         node: match item.node {
@@ -392,8 +402,11 @@ impl<P: Program> Module<P> {
                 // The entry nodes clone like array items; the stored hash
                 // travels verbatim — a cloned key holds the same forced
                 // value, so its hash stays valid for the fresh instance.
-                let items: Vec<TableItem> = table
-                    .items()
+                // SAFETY: `table` is the payload of `value`, the value this
+                // pass is applying; the caller holds it reachable and
+                // `node_apply` never releases a block, so its arena stays
+                // alive across the map.
+                let items: Vec<TableItem> = unsafe { table.items() }
                     .iter()
                     .map(|&item| TableItem {
                         key: match item.key {
@@ -552,9 +565,14 @@ impl<P: Program> Module<P> {
             return false;
         };
         let mut stack: Vec<AnyNodeId> = match value.as_enum() {
-            Some(LowValue::Array(array)) => array.items().iter().map(|item| item.node).collect(),
-            Some(LowValue::Table(table)) => table
-                .items()
+            // SAFETY: `array`/`table` are payloads of `value`, which the
+            // caller holds reachable; this method only reads, so neither home
+            // block is released.  The note covers both arms.
+            Some(LowValue::Array(array)) => unsafe { array.items() }
+                .iter()
+                .map(|item| item.node)
+                .collect(),
+            Some(LowValue::Table(table)) => unsafe { table.items() }
                 .iter()
                 .flat_map(|item| [item.key, item.value])
                 .collect(),
@@ -574,10 +592,14 @@ impl<P: Program> Module<P> {
                         return true;
                     }
                     Some(LowValue::Array(array)) => {
-                        stack.extend(array.items().iter().map(|item| item.node))
+                        // SAFETY: `array` is the payload of `node`, a live node
+                        // of this module; this method only reads.
+                        stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
                     }
                     Some(LowValue::Table(table)) => {
-                        for item in table.items() {
+                        // SAFETY: `table` is the payload of `node`, a live node
+                        // of this module; this method only reads.
+                        for item in unsafe { table.items() } {
                             stack.push(item.key);
                             stack.push(item.value);
                         }

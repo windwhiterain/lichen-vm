@@ -1265,7 +1265,9 @@ where
                 // contract the importer needs is therefore a *checked* one, so
                 // a violated contract is an honest guard about the import
                 // rather than a panic inside the checker.
-                let Some(items) = self.module.array_items(pair) else {
+                // SAFETY: `pair` was just materialized into the current
+                // block, whose arena is alive.
+                let Some(items) = (unsafe { self.module.array_items(pair) }) else {
                     let cell = self.fresh_cell();
                     let pair = self.pair_of(cell, cell);
                     self.term[e] = Some(pair);

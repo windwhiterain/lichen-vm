@@ -82,8 +82,10 @@ where
             // panicking.
             return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
         };
-        let mut values: Vec<usize> = array
-            .items()
+        // SAFETY: `array` is the payload of the operand value the VM just
+        // evaluated for this operation; its home block is alive for the
+        // duration of the run.
+        let mut values: Vec<usize> = unsafe { array.items() }
             .iter()
             .filter_map(|item| {
                 module

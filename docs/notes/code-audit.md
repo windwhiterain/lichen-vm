@@ -36,7 +36,7 @@ queue's order is deliberate.
 |---|---|---|---|---|
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
 | P0-2a | critical | lowlevel | Private raw-pointer fields, checked constructors, the missing contracts | done |
-| P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | todo |
+| P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | done |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
@@ -194,6 +194,25 @@ non-power-of-two `alignment()`. 21 of the crate's 26 `unsafe` sites have no
 `unsafe` with one written contract, then update every call site (the compiler
 enumerates them). Internal sites that uphold the invariant get a one-line
 `SAFETY`; external sites must acknowledge it explicitly.
+
+**Outcome.** `AnyHandle<[ArrayItem]>::items`, `AnyHandle<[TableItem]>::items`
+and `Module::array_items` are `unsafe`: the contract is written once on the
+first and cited by the other two, and all 149 call sites across eight crates
+carry an `unsafe` block plus a one-line `SAFETY` naming that site's own reason.
+The `[u8]` length accessors stayed **safe** — the toolchain has the stable
+pointer-metadata read (`<*const [T]>::len()`), so
+`Handle`/`StaticHandle`/`AnyHandle<[u8]>::len` and `is_empty` get the length
+without forming a reference, and two `unsafe` blocks went away instead.
+`as_ptr` is deliberately safe as well: producing a raw pointer is not a
+dereference, and building a handle is already `unsafe` (`P0-2a`).
+
+**Residual, deliberately left.** `lichen_highlevel::shape::array_items` is a
+safe wrapper that hands back the same `&'static [ArrayItem]`, so an
+out-of-crate caller can still reach the slice without an `unsafe` block: the
+"`B'` closes the external hole" claim now holds for the lowlevel, not for this
+re-export.  Its doc states the obligation it forwards.  Making it `unsafe`
+touches 17 more sites (15 inside `shape` itself, two in the checker); that is a
+follow-up, not a reopening of `D7`.
 
 ### P0-3 — `git clone`/`checkout` argument injection `verified`
 

@@ -658,7 +658,10 @@ where
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary operators expect an operand array of [left, right]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just
+                // evaluated for this operation node, so its home block is
+                // alive for the duration of the run.
+                let operands = unsafe { operands.items() };
                 // An unbound side (an empty slot or the lazy marker) keeps
                 // the operator lazy.
                 let left = module.node_value(operands[0].node);

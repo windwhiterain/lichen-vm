@@ -348,7 +348,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Launch expects an operand array of [kernel, arg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Kernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -389,7 +392,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Call expects an operand array of [kernel, arg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Kernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -449,7 +455,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; the note covers this arm's `items()`
+                // calls, all of live nodes of `module`.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::ParKernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -461,7 +470,8 @@ where
                 let Ok(cfg_node) = dyn_node(operands[1].node) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let Some(cfg_items) = module.array_items(cfg_node) else {
+                // SAFETY: as above — `cfg_node` names a live node of `module`.
+                let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
                 // count = cfg(0), an `Int`/`USize`.
@@ -477,7 +487,8 @@ where
                 let mut inputs: Vec<Vec<i64>> = Vec::new();
                 if let Some(buf_tuple) = cfg_items.get(1)
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
-                    && let Some(buf_items) = module.array_items(buf_tuple_node)
+                    // SAFETY: `buf_tuple_node` names a live node of `module`.
+                    && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
                 {
                     for item in buf_items {
                         match module
@@ -518,7 +529,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Read expects an operand array of [buffer, index]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Buffer(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -556,7 +570,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("BufferCollect expects an operand array of [buffer]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Buffer(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -664,7 +681,9 @@ where
     // value node (the checker leaves a direct kernel-apply's codomain unbound,
     // so it stores the body's value node directly instead of a pair) is used
     // as the value itself.
-    let ret_value = match module.array_items(ret) {
+    // SAFETY: `ret` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let ret_value = match unsafe { module.array_items(ret) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => ret,
     };
@@ -679,13 +698,12 @@ where
     }
     // The parameter's value cell (element 0 of the `[value, type]` pair) is
     // where the domain shape is stored — the node the body emitter consults.
-    let param_value = match module
-        .array_items(param_pair)
-        .and_then(|items| items.first())
-    {
-        Some(first) => dyn_node(first.node)?,
-        None => return Err("parameter is not a [value, type] pair".into()),
-    };
+    // SAFETY: `param_pair` is a live node of `module`.
+    let param_value =
+        match unsafe { module.array_items(param_pair) }.and_then(|items| items.first()) {
+            Some(first) => dyn_node(first.node)?,
+            None => return Err("parameter is not a [value, type] pair".into()),
+        };
     module.set_node_shape(param_value, Some(param_shape.clone()));
 
     let params = vec![ParamSlot {
@@ -728,7 +746,8 @@ where
     let body = module.functions[fid].r#return;
     // The kernel's result is the index function's body value (a `Write`, v1
     // single output), through a `[value, type]` pair or a bare value node.
-    let ret_value = match module.array_items(body) {
+    // SAFETY: `body` is a live node of `module`.
+    let ret_value = match unsafe { module.array_items(body) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
@@ -919,8 +938,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let pair = module
-        .array_items(param_pair)
+    // SAFETY: `param_pair` is a live node of `module`.
+    let pair = unsafe { module.array_items(param_pair) }
         .ok_or_else(|| "parameter is not a [value, type] pair".to_string())?;
     let Some(type_cell) = pair.get(1) else {
         return Ok(LowShape::USize);
@@ -941,7 +960,8 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let type_node = dyn_node(type_node)?;
-    let Some(type_items) = module.array_items(type_node) else {
+    // SAFETY: `type_node` is a live node of `module`.
+    let Some(type_items) = (unsafe { module.array_items(type_node) }) else {
         return Ok(LowShape::USize);
     };
     if type_items.len() < 2 {
@@ -953,8 +973,10 @@ where
         .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
     {
         Some(LowValue::Array(shape_array)) => {
-            let mut items = Vec::with_capacity(shape_array.items().len());
-            for item in shape_array.items() {
+            // SAFETY: `shape_array` is the payload of the value read from the
+            // live node `shape`; the note covers both `items()` calls here.
+            let mut items = Vec::with_capacity(unsafe { shape_array.items() }.len());
+            for item in unsafe { shape_array.items() } {
                 items.push(element_shape(module, item.node)?);
             }
             Ok(LowShape::Tuple(items))
@@ -1105,7 +1127,8 @@ where
                 // peels index 0, so handle every constant `k` here.
                 if let Some(k) = usize_value(module, index) {
                     if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        if let Some(items) = module.array_items(array_value) {
+                        // SAFETY: `array_value` is a live node of `module`.
+                        if let Some(items) = unsafe { module.array_items(array_value) } {
                             if let Some(item) = items.get(k) {
                                 return emit_node(module, params, dyn_node(item.node)?, body);
                             }
@@ -1118,7 +1141,8 @@ where
                 // a value_of extraction; look through it.
                 if usize_value(module, index).is_none() {
                     if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        if let Some(items) = module.array_items(array_value) {
+                        // SAFETY: `array_value` is a live node of `module`.
+                        if let Some(items) = unsafe { module.array_items(array_value) } {
                             if items.len() == 2 {
                                 let then_node = dyn_node(items[1].node)?;
                                 let else_node = dyn_node(items[0].node)?;
@@ -1235,7 +1259,8 @@ where
                     let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
                         break;
                     };
-                    let Some(items) = module.array_items(array_value) else {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    let Some(items) = (unsafe { module.array_items(array_value) }) else {
                         break;
                     };
                     let Some(item) = items.get(k) else { break };
@@ -1426,7 +1451,8 @@ where
         return None;
     }
     // A concrete `[value, type]` pair value → its value slot (element 0).
-    if let Some(items) = module.array_items(target) {
+    // SAFETY: `target` is a live node of `module`.
+    if let Some(items) = unsafe { module.array_items(target) } {
         return dyn_node(items.first()?.node).ok();
     }
     // An *operator* node as the target — e.g. `Index(apply_op, 0)` where the
@@ -1462,7 +1488,9 @@ where
     }
     // A kernel *struct value* `[native, sig]` reached by value (not through an
     // `Index` op): its element 0 is the bare `.native` kernel artifact.
-    if let Some(items) = module.array_items(node)
+    // SAFETY: `node` is a live node of `module`; the note covers this
+    // function's `items()` calls.
+    if let Some(items) = (unsafe { module.array_items(node) })
         && let Some(first) = items.first()
         && let Ok(first) = dyn_node(first.node)
         && let Some(kid) = kernel_id_of(module, first)
@@ -1475,7 +1503,8 @@ where
         if let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
             && usize_value(module, index) == Some(0)
-            && let Some(items) = module.array_items(target)
+            // SAFETY: `target` is a live node of `module`.
+            && let Some(items) = (unsafe { module.array_items(target) })
             && let Ok(first) = dyn_node(items.first()?.node)
         {
             return kernel_id_of(module, first);
@@ -1495,7 +1524,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let items = module.array_items(node)?;
+    // SAFETY: `node` is a live node of `module`.
+    let items = unsafe { module.array_items(node) }?;
     dyn_node(items.first()?.node).ok()
 }
 
@@ -1585,7 +1615,9 @@ where
             true
         }
         Some(LowValue::Array(arr)) => {
-            for item in arr.items() {
+            // SAFETY: `arr` is the payload of a value read from a live node of
+            // `module`.
+            for item in unsafe { arr.items() } {
                 if !collect_args(module, item.node, out) {
                     return false;
                 }
@@ -1619,9 +1651,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    module
-        .array_items(node)
-        .ok_or_else(|| "operand is not an array value".into())
+    // SAFETY: `node` is a live node of `module`.
+    unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
 /// The `[function, argument]` of an `Apply` operand array.  The checker's

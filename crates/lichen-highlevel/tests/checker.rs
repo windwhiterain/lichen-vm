@@ -170,8 +170,9 @@ fn array_ids(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     node: lichen_lowlevel::NodeId,
 ) -> Vec<lichen_lowlevel::NodeId> {
-    b.module
-        .array_items(node)
+    // SAFETY: `node` is a live node of the build under test, whose block has
+    // not been dropped.
+    unsafe { b.module.array_items(node) }
         .expect("expected an array value")
         .iter()
         .map(|item| dyn_node(item.node))
@@ -183,8 +184,9 @@ fn array_ids_from(value: HighProgramValue) -> Vec<lichen_lowlevel::NodeId> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| dyn_node(item.node))
         .collect()
@@ -195,7 +197,12 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array.items().iter().map(|item| item.shallow).collect()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
+        .iter()
+        .map(|item| item.shallow)
+        .collect()
 }
 
 /// Whether the given ids form the int type — a `[int, Type]` pair.  The two
@@ -1468,7 +1475,9 @@ fn a_named_struct_carries_a_name_to_index_table() {
     else {
         panic!("the names field must be a table");
     };
-    let items = table.items();
+    // SAFETY: `names_node` is a live node of the build under test, whose block
+    // has not been dropped.
+    let items = unsafe { table.items() };
     assert_eq!(items.len(), 2);
     let mut found: Vec<(&str, usize)> = items
         .iter()
@@ -2106,15 +2115,21 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
     let HighProgramValue::LowValue(LowValue::Array(ty_pair)) = ty_val else {
         panic!("expected a type pair");
     };
-    let kind_val = b
-        .module
-        .evaluate_node_deep(dyn_node(ty_pair.items()[1].node), None);
+    let kind_val = b.module.evaluate_node_deep(
+        // SAFETY: `ty_pair` is the value just evaluated by the build under
+        // test, whose block has not been dropped.
+        dyn_node(unsafe { ty_pair.items() }[1].node),
+        None,
+    );
     let HighProgramValue::LowValue(LowValue::Array(kind)) = kind_val else {
         panic!("expected a kind expression");
     };
     assert_eq!(
-        b.module
-            .node_value(AnyNodeId::Dynamic(dyn_node(kind.items()[0].node))),
+        b.module.node_value(AnyNodeId::Dynamic(
+            // SAFETY: `kind` is the value just evaluated by the build under
+            // test, whose block has not been dropped.
+            dyn_node(unsafe { kind.items() }[0].node)
+        )),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
         "typed like a tuple"
     );

@@ -333,7 +333,9 @@ where
             levels.push((self.value_of(e), self.ty[e].unwrap()));
         } else {
             while levels.len() < depth {
-                let Some(items) = self.module.array_items(current) else {
+                // SAFETY: `current` is a live node of this module (a checked
+                // expression's term).
+                let Some(items) = (unsafe { self.module.array_items(current) }) else {
                     break;
                 };
                 if items.len() != 2 {
@@ -341,10 +343,10 @@ where
                 }
                 let slot0 = self.module.as_dynamic(items[0].node, self.current_block);
                 let slot1 = self.module.as_dynamic(items[1].node, self.current_block);
-                let descend = self
-                    .module
-                    .array_items(slot1)
-                    .is_some_and(|next| next.len() == 2);
+                // SAFETY: `slot1` was just materialized into the current
+                // block, whose arena is alive.
+                let descend =
+                    unsafe { self.module.array_items(slot1) }.is_some_and(|next| next.len() == 2);
                 levels.push((slot0, slot1));
                 if !descend {
                     break;

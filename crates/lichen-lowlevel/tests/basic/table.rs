@@ -129,7 +129,12 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     else {
         panic!("the table value")
     };
-    assert_eq!(payload.items().len(), 0, "the unbound entry is dropped");
+    // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+    assert_eq!(
+        unsafe { payload.items() }.len(),
+        0,
+        "the unbound entry is dropped"
+    );
     let EvalError::TableKeyUnbound { key: dropped } = m.eval_errors[0] else {
         panic!("the build records a TableKeyUnbound failure")
     };
@@ -187,7 +192,8 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
         panic!("the table value")
     };
     assert!(
-        payload.items().is_empty(),
+        // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+        unsafe { payload.items() }.is_empty(),
         "the `Void`-keyed entry is dropped"
     );
     assert!(
@@ -365,7 +371,8 @@ fn the_payload_is_stored_sorted_by_hash() {
     else {
         panic!("the table value")
     };
-    let items = payload.items();
+    // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+    let items = unsafe { payload.items() };
     assert_eq!(items.len(), 2);
     assert!(
         items.windows(2).all(|w| w[0].hash <= w[1].hash),

@@ -106,7 +106,9 @@ where
         let LowValue::Array(items) = pair else {
             return None;
         };
-        let items = items.items();
+        // SAFETY: `items` is the payload of the value read from the live node
+        // `slot` of `module`.
+        let items = unsafe { items.items() };
         let value = items.first()?.node;
         let ty = items.get(1)?.node;
         let fields = render_struct_fields_named(module, value, ty)?;

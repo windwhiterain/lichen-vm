@@ -42,7 +42,9 @@ fn root_persp(source: &str) -> usize {
     // A slot is a `[value, type]` term pair; the lattice value is element 0.
     let value = match value.as_enum() {
         Some(LowValue::Array(items)) => {
-            let node = match items.items().first().map(|item| item.node) {
+            // SAFETY: `items` is the payload of the value just evaluated from
+            // the build under test, whose block has not been dropped.
+            let node = match unsafe { items.items() }.first().map(|item| item.node) {
                 Some(AnyNodeId::Dynamic(n)) => n,
                 _ => panic!("expected a dynamic perspective value"),
             };

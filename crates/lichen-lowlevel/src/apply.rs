@@ -101,13 +101,15 @@ impl<P: Program> Module<P> {
         // argument is meaningless and may well panic (e.g. an `Index` over a
         // non-array value).  Deduplicated by apply node, so a later re-read
         // of the same apply does not re-record it.
-        let parameter_type = self
-            .array_items(parameter_type_source)
+        // SAFETY: `parameter_type_source` is a node of this module, reachable
+        // here — its home block is alive and has not been dropped.
+        let parameter_type = unsafe { self.array_items(parameter_type_source) }
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(parameter_type_source);
-        let argument_type = self
-            .array_items(argument)
+        // SAFETY: `argument` is a node of this module, reachable here — its
+        // home block is alive and has not been dropped.
+        let argument_type = unsafe { self.array_items(argument) }
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(argument);
@@ -140,8 +142,11 @@ impl<P: Program> Module<P> {
         block: BlockId,
     ) -> P::Value {
         match (cell, result.as_enum()) {
-            (Some(cell), Some(LowValue::Array(array))) if array.items().len() >= 2 => {
-                let items = array.items();
+            // SAFETY: `array` is the payload of `result`, a value this module
+            // just evaluated, so its home block is alive and not dropped; the
+            // note covers both `items()` calls in this arm.
+            (Some(cell), Some(LowValue::Array(array))) if unsafe { array.items() }.len() >= 2 => {
+                let items = unsafe { array.items() };
                 self.write_node_value(node, Some(result));
                 self.unify(node, applied);
                 // Resolve the return type before binding the cell: the deep

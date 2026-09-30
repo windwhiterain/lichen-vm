@@ -201,7 +201,9 @@ impl OperatorExt<TestProgram> for TestOperator {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary ops expect an array of two node ids")
                 };
-                let operands = operands.items();
+                // SAFETY: the operand is the value of a live node of `module`,
+                // whose block has not been dropped.
+                let operands = unsafe { operands.items() };
                 // Operands may be baked static refs (a constant operand of a
                 // materialized static function) — resolve through the module
                 // API, which reads a dynamic node's value or a static node's
@@ -359,8 +361,9 @@ fn array_ids(value: TestValue) -> Vec<NodeId> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected array")
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| match item.node {
             AnyNodeId::Dynamic(node) => node,
@@ -374,7 +377,12 @@ fn array_mask(value: TestValue) -> Vec<bool> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected array")
     };
-    array.items().iter().map(|item| item.shallow).collect()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
+        .iter()
+        .map(|item| item.shallow)
+        .collect()
 }
 
 /// Assert `value` is an array whose elements hold the given `u128`s.

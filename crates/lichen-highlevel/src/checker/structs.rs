@@ -271,7 +271,9 @@ where
     /// struct, is an anonymous struct, or has no such named field.
     fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
         let table = shape::struct_names_any(&mut self.module, self.type_expr, ty)?;
-        for item in table.items() {
+        // SAFETY: `table` is read from a live node of this module; nothing in
+        // this crate calls `Module::drop_block`.
+        for item in unsafe { table.items() } {
             if self
                 .module
                 .node_value(item.key)
@@ -373,7 +375,9 @@ where
         // build's statement pass evaluates the statement again and reports
         // the `NonTerminating` diagnostic.  A refused callee leaves a partly
         // walked graph, so never force twice.
-        if self.module.array_items(type_pair).is_none() && !self.force_failed {
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        if unsafe { self.module.array_items(type_pair) }.is_none() && !self.force_failed {
             self.module.evaluate_node_deep(type_pair, None);
             self.force_failed = self.module.budget_exhausted.is_some();
         }
@@ -435,43 +439,44 @@ where
         // cell; a callee whose pair stayed unreadable after the force (it
         // depends on an unbound parameter) reads the shape through a lazy
         // `Index` that resolves when the call binds it.
-        let field_list = match self
-            .module
-            .array_items(type_pair)
-            .and_then(|items| items.first())
-        {
-            Some(item) => {
-                let shape = self.module.as_dynamic(item.node, self.current_block);
-                match self.module.array_items(shape) {
-                    Some(_) => shape,
-                    // The struct's shape cell is not resolved yet
-                    // (mid-recursion): bind it to a [field-list] probe and
-                    // check the value against the probe slot.  When the
-                    // descent completes the cell unifies with the real shape,
-                    // closing the deferred check.
-                    _ => {
-                        let fields_cell = self.fresh_cell();
-                        self.module.unify(shape, fields_cell);
-                        fields_cell
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        let field_list =
+            match unsafe { self.module.array_items(type_pair) }.and_then(|items| items.first()) {
+                Some(item) => {
+                    let shape = self.module.as_dynamic(item.node, self.current_block);
+                    // SAFETY: `shape` was just materialized into the current
+                    // block, whose arena is alive.
+                    match unsafe { self.module.array_items(shape) } {
+                        Some(_) => shape,
+                        // The struct's shape cell is not resolved yet
+                        // (mid-recursion): bind it to a [field-list] probe and
+                        // check the value against the probe slot.  When the
+                        // descent completes the cell unifies with the real shape,
+                        // closing the deferred check.
+                        _ => {
+                            let fields_cell = self.fresh_cell();
+                            self.module.unify(shape, fields_cell);
+                            fields_cell
+                        }
                     }
                 }
-            }
-            // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
-            // deferred unify below resolves through the lowlevel's
-            // pending-`Index` deferral, which accepts only a 2-element
-            // concrete other side (`class_holds_type`) — a param-dependent
-            // call-result callee whose struct has ≠2 fields reports the
-            // field-list mismatch at check time instead of at the apply.
-            // Phase 2's unification-hook extraction (D1) subsumes that rule.
-            _ => {
-                let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
-                self.op_node(
-                    self.current_block,
-                    P::Operator::from(LowOperator::Index),
-                    Some(ops),
-                )
-            }
-        };
+                // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
+                // deferred unify below resolves through the lowlevel's
+                // pending-`Index` deferral, which accepts only a 2-element
+                // concrete other side (`class_holds_type`) — a param-dependent
+                // call-result callee whose struct has ≠2 fields reports the
+                // field-list mismatch at check time instead of at the apply.
+                // Phase 2's unification-hook extraction (D1) subsumes that rule.
+                _ => {
+                    let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
+                    self.op_node(
+                        self.current_block,
+                        P::Operator::from(LowOperator::Index),
+                        Some(ops),
+                    )
+                }
+            };
         let (value_node, value_shape, valid) = if any_named {
             self.named_instantiate(e, type_pair, value, arg_names, concrete)
         } else {
@@ -480,7 +485,9 @@ where
             // the type itself for anything else (which then fails the list
             // check).
             let value_ty = self.ty[value].unwrap();
-            let value_shape = match self.module.array_items(value_ty) {
+            // SAFETY: `value_ty` is a live node of this module; nothing in
+            // this crate calls `Module::drop_block`.
+            let value_shape = match unsafe { self.module.array_items(value_ty) } {
                 Some(items) if items.len() == 2 => {
                     // Materialize static refs so the shape can participate in
                     // dynamic array construction below.
@@ -570,9 +577,9 @@ where
         // The definition's field count (the shape's length) — `None` when the
         // shape is still an unbound cell mid-recursion, in which case the
         // missing/excess checks are deferred to the probe unify.
-        let def_len = self
-            .module
-            .array_items(type_pair)
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        let def_len = unsafe { self.module.array_items(type_pair) }
             .and_then(|items| items.get(0))
             .and_then(|item| shape::array_items(&self.module, item.node))
             .map(|items| items.len());
@@ -684,7 +691,9 @@ where
             self.type_expr,
             AnyNodeId::Dynamic(type_pair),
         )?;
-        for item in table.items() {
+        // SAFETY: `table` is read from a live node of this module; nothing in
+        // this crate calls `Module::drop_block`.
+        for item in unsafe { table.items() } {
             if self
                 .module
                 .node_value(item.value)

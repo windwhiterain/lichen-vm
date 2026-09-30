@@ -251,22 +251,34 @@ pub struct TableItem {
 }
 
 impl AnyHandle<[ArrayItem]> {
-    /// The array's items — valid for as long as the handle's home storage is
-    /// alive: the array's home block arena for a dynamic payload, or the
-    /// static arena (pinned by every importer's [`Dependency`]) for a static
-    /// payload — the caller's existing safety contract for arena payloads.
-    pub fn items(&self) -> &'static [ArrayItem] {
+    /// The array's items.
+    ///
+    /// The `'static` return is the arena's lifetime, not a borrow of `&self`:
+    /// the slice outlives one call, which the signature cannot express, so the
+    /// obligation moves to the caller.  This method's `# Safety` is the one
+    /// written contract for the arena accessors;
+    /// [`AnyHandle<[TableItem]>::items`] and [`Module::array_items`] cite it
+    /// rather than restating it.
+    ///
+    /// # Safety
+    ///
+    /// The payload pointer names bytes in a block's arena (a dynamic payload,
+    /// allocated by [`Module::alloc_array`]) or in a registered static
+    /// module's arena (a static payload, filed by a freeze and pinned by the
+    /// registry entry every reader resolves `module` through).  The home
+    /// storage must not be released while the returned slice is read.
+    /// [`Module::drop_block`] releasing the block's `Bump` is what invalidates
+    /// a dynamic payload's slice; a static module's arena lives as long as the
+    /// module stays registered.
+    pub unsafe fn items(&self) -> &'static [ArrayItem] {
         match self {
-            // SAFETY: a dynamic payload is allocated in a block's arena
-            // (`Module::alloc_array`), and the value holding the handle is
-            // reachable only while that block lives: `drop_block` requires its
-            // caller to leave no live reference into a block it releases
-            // (`gc.rs`), so no reachable handle outlives its arena.
+            // SAFETY: the caller upholds this method's `# Safety` — the
+            // dynamic payload's home block arena has not been released — so
+            // the pointer names a live `[ArrayItem]`.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
-            // SAFETY: a static payload lives in a registered static module's
-            // arena.  The registry holds the `Arc<StaticModule>`, and a module
-            // reaches a static ref only through the registry it is bound to,
-            // so the arena outlives every reader of this module.
+            // SAFETY: the caller upholds this method's `# Safety` — the static
+            // module `handle.module` names is still registered, pinning the
+            // arena the payload lives in.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -274,17 +286,21 @@ impl AnyHandle<[ArrayItem]> {
 
 impl AnyHandle<[TableItem]> {
     /// The table's entries — same arena-lifetime contract as
-    /// [`AnyHandle<[ArrayItem]>::items`].
-    pub fn items(&self) -> &'static [TableItem] {
+    /// [`AnyHandle<[ArrayItem]>::items`], which states it.
+    ///
+    /// # Safety
+    ///
+    /// As [`AnyHandle<[ArrayItem]>::items`]: the payload's home storage must
+    /// not have been released while the returned slice is read.
+    pub unsafe fn items(&self) -> &'static [TableItem] {
         match self {
-            // SAFETY: as in `AnyHandle<[ArrayItem]>::items` — the dynamic
-            // payload was allocated in a block's arena by
-            // `Module::alloc_table`, and `drop_block`'s contract keeps that
-            // arena alive while any reachable value still names it.
+            // SAFETY: the caller upholds this method's `# Safety` — the
+            // dynamic payload's home block arena has not been released — so
+            // the pointer names a live `[TableItem]`.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
-            // SAFETY: as in `AnyHandle<[ArrayItem]>::items` — the payload
-            // lives in a registered static module's arena, pinned by the
-            // registry entry every reader resolves through.
+            // SAFETY: the caller upholds this method's `# Safety` — the static
+            // module `handle.module` names is still registered, pinning the
+            // arena the payload lives in.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -553,13 +569,10 @@ impl<T: ?Sized> PartialEq for AnyHandle<T> {
 }
 
 impl Handle<[u8]> {
+    /// The payload's byte length.  Reads the fat pointer's metadata
+    /// (`<*const [T]>::len`) without forming a reference, so it is safe.
     pub fn len(&self) -> usize {
-        // SAFETY: the handle names a byte payload in a live block arena — the
-        // arena-lifetime obligation `Handle::from_raw` states, upheld by the
-        // `drop_block` contract (`gc.rs`), which forbids a release while a
-        // reachable value still names a payload inside the block.
-        let slice = unsafe { &*self.0 };
-        slice.len()
+        self.0.len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -567,13 +580,10 @@ impl Handle<[u8]> {
 }
 
 impl StaticHandle<[u8]> {
+    /// The payload's byte length.  Reads the fat pointer's metadata
+    /// (`<*const [T]>::len`) without forming a reference, so it is safe.
     pub fn len(&self) -> usize {
-        // SAFETY: the handle names a byte payload in a registered static
-        // module's arena, pinned by the `Arc<StaticModule>` the registry
-        // holds; the module key is the one the payload was frozen under, and
-        // the registry never releases a registered entry.
-        let slice = unsafe { &*self.offset };
-        slice.len()
+        self.offset.len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0

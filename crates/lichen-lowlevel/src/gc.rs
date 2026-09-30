@@ -54,7 +54,12 @@ impl<P: Program> Module<P> {
                 value
             }
             Some(LowValue::Array(array)) => {
-                for item in array.items() {
+                // SAFETY: `array` is the payload of `node`, a live node of
+                // this module.  `garbage_collect` releases `source` only after
+                // this walk returns, so both the source and target arenas stay
+                // alive for the whole loop; the note covers both `items()`
+                // calls in this arm.
+                for item in unsafe { array.items() } {
                     // A static item lives in the static module — nothing to
                     // move (its value stays, referenced in place).
                     if let Dyn(node) = item.node {
@@ -65,7 +70,9 @@ impl<P: Program> Module<P> {
                 // together — moves into the target arena, so a compacted
                 // array keeps its markers (static item refs are absolute and
                 // copy verbatim).
-                P::Value::from(LowValue::Array(self.alloc_array(array.items(), target)))
+                P::Value::from(LowValue::Array(
+                    self.alloc_array(unsafe { array.items() }, target),
+                ))
             }
             Some(LowValue::Table(AnyHandle::Static(_))) => {
                 // A static payload lives in the plugged module's shared
@@ -76,7 +83,12 @@ impl<P: Program> Module<P> {
                 value
             }
             Some(LowValue::Table(table)) => {
-                for item in table.items() {
+                // SAFETY: `table` is the payload of `node`, a live node of
+                // this module.  `garbage_collect` releases `source` only after
+                // this walk returns, so both the source and target arenas stay
+                // alive for the whole loop; the note covers both `items()`
+                // calls in this arm.
+                for item in unsafe { table.items() } {
                     // A static entry lives in the static module — nothing
                     // to move (its value stays, referenced in place).
                     if let Dyn(node) = item.key {
@@ -90,7 +102,9 @@ impl<P: Program> Module<P> {
                 // together — moves into the target arena, so a compacted
                 // table keeps its sorted order and per-entry hashes (static
                 // entry refs are absolute and copy verbatim).
-                P::Value::from(LowValue::Table(self.alloc_table(table.items(), target)))
+                P::Value::from(LowValue::Table(
+                    self.alloc_table(unsafe { table.items() }, target),
+                ))
             }
             // A static function value is frozen in the static module — no
             // scope to walk, no home block to re-point.
