@@ -68,7 +68,7 @@ queue's order is deliberate.
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
-| P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | todo |
+| P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1707,6 +1707,28 @@ already states the rule this restores (*"a change to either half bumps it and
 retires the artifacts written before the change: they fail the version check and
 recompile"*), so the fix is the number and nothing else. Do not add a
 compatibility path — there is no version of this format worth reading.
+
+**Outcome.** The premise held as written, and the fix is the one number. The
+constant is a private `const` with a doc at `persist.rs:100-105` — `4` before,
+`5` after — the writer emits it at `:309`, and the reader's check at `:483` is
+its only comparison. The doc names no version, so it reads unchanged after the
+bump; the header layout, the hash implementation and the compatibility surface
+are untouched.
+
+*Shown by hand, on this revision, with a throwaway test that was deleted before
+the commit.* The pre-bump build compiled a one-line package into
+`artifacts/<file-id>.module`; the header's version field decoded to `4`, and the
+**pre-bump** reader accepted those bytes — the check at `:483` compared `4` to
+itself, which is the defect. The artifact was copied aside before the edit.
+Against the bumped build, the saved bytes are rejected with precisely
+`unknown artifact format version` — the version check, before the key check
+(`:486`), the hash check (`:489`) and the body digest (`:501`) — while a fresh
+compile plus a second store's reload still round-trips
+(`cache_round_trip_across_stores`), so the writer and the reader agree on `5`.
+The invalidation is exactly the set `P1-3`/`P1-4` already made useless: scalar
+and acyclic-array hashes are byte-identical to the old function, so only the
+cyclic-array, table and function-key payloads — the ones the old hash could not
+survive a freeze for — carry a rewritten hash.
 
 ## P2 — architecture
 

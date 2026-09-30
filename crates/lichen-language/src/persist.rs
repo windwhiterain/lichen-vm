@@ -102,7 +102,7 @@ pub use lichen_registry::{
 /// The reader accepts only this value, so a change to either half bumps it and
 /// retires the artifacts written before the change: they fail the version
 /// check and recompile, which is the intended answer, not a compatibility path.
-const ARTIFACT_FORMAT_VERSION: u32 = 4;
+const ARTIFACT_FORMAT_VERSION: u32 = 5;
 
 /// The vocabulary-specific half of the artifact format.
 ///
