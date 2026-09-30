@@ -686,7 +686,7 @@ where
         Some(first) => dyn_node(first.node)?,
         None => return Err("parameter is not a [value, type] pair".into()),
     };
-    module.set_node_shape(param_value, Some(param_shape.clone()));
+    module.seed_class_low_type(param_value, param_shape.clone());
 
     let params = vec![ParamSlot {
         pair: param_pair,
@@ -739,7 +739,7 @@ where
     let cfg_value = pair_value_node(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
     let cfg_shape = LowShape::Tuple(vec![LowShape::USize]);
-    module.set_node_shape(cfg_value, Some(cfg_shape.clone()));
+    module.seed_class_low_type(cfg_value, cfg_shape.clone());
     let params = vec![ParamSlot {
         pair: cfg_pair,
         value: cfg_value,
@@ -966,11 +966,18 @@ where
 /// The number of scalar `i64` locals a domain shape flattens to — the wasm
 /// parameter count.  A scalar is one local; a tuple is the sum of its
 /// elements' arities (so `((Int,Int), Int)` is `1 + 1 + 1 = 3`).
+///
+/// An undecided domain is refused before arity is ever computed — the domain
+/// check in `compile_fragment` rejects anything that is not a decided scalar
+/// or tuple of decided scalars — so the `Unknown` arm is the total-function
+/// filler for a shape that cannot reach a wasm signature, and counts one
+/// undecided leaf rather than inventing a parameter count.
 fn flat_arity(shape: &LowShape) -> usize {
     match shape {
         LowShape::USize => 1,
         LowShape::Tuple(items) => items.iter().map(flat_arity).sum(),
         LowShape::Array(_, _) | LowShape::Function(..) | LowShape::Table(..) => 1,
+        LowShape::Unknown => 1,
     }
 }
 

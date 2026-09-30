@@ -179,29 +179,52 @@ pub enum LowValue {
     Parameterized,
 }
 
-/// A host-side, **optional** static shape of a node's eventual value.
+/// The **low type** of a node's class: the [`LowValue`] variant tag its value
+/// takes, plus — recursively — the element, domain, or codomain shape.
 ///
 /// This closes the gap that blocks emitting bytecode directly from the
-/// lowlevel: a [`Node`] carries a value (possibly still [`LowValue::Parameterized`])
-/// and an operator, but has no compile-time notion of *what shape* the value
-/// will take.  A layer above the lowlevel — the checker, or a compute
-/// frontend that *has* the type — generates a [`LowShape`] for exactly the
-/// nodes a backend will **trace**, and stores it in [`Module::shapes`].  The
-/// backend reads the shape and emits code without consulting the type half,
-/// without forcing the value, and without waiting for evaluation.
+/// lowlevel: a [`Node`] carries a value (possibly still
+/// [`LowValue::Parameterized`]) and an operator, but no compile-time notion
+/// of *what shape* the value will take.  A backend therefore had to either
+/// read the already-evaluated value, or walk the *type half* of the
+/// `[value, type]` pair — the second coupling the encoding change
+/// ([`crate`](../lichen_highlevel) `shape`) would silently break.
 ///
-/// Shape generation is optional and per-node, by design:
-/// - a node with **no** entry in [`Module::shapes`] has no traced shape —
-///   it is either *type-check-only* scaffolding the backend never reaches,
-///   or it is *materialized before the backend runs* (so the backend sees a
-///   concrete leaf, not a traceable computation);
-/// - only the nodes that form the traceable value-graph spine are annotated.
+/// # It is a lower bound of a class, not a fact about a node
+///
+/// Identity in the VM is the equivalence class, so a low type is a **property
+/// of the union-find class**, read through the representative
+/// ([`Module::class_low_type`]) and maintained by two automatic writers plus
+/// one computation route:
+///
+/// - **observation** — whenever a concrete value lands on a node
+///   ([`Module::write_node_value`], [`Module::add_node`]), the class refines
+///   from the value's variant tag: O(1), monotone, no traversal;
+/// - **class merge** — a union joins the two representatives' low types onto
+///   the new one ([`Module::add_equality`]);
+/// - **abstract interpretation** — an on-demand fixed-point pass over a
+///   function *template*, which is what makes pre-apply compilation work (see
+///   `docs/notes/lowlevel-low-types.md`).
+///
+/// The lattice is `Unknown → Known(shape)`, refined monotonically, so a reader
+/// can only ever read `Unknown` — never a wrong shape.  **No notification
+/// mechanism exists or is needed**: a backend reads the class's current lower
+/// bound at the moment it runs.
+///
+/// `Option<LowShape>` keeps its two distinguished states: `None` is untraced
+/// scaffolding (the default, costing nothing) and `Some(Unknown)` is traced but
+/// undecided.
 ///
 /// A [`LowShape`] is never a lichen value — it is host metadata, sibling to
 /// [`ArrayItem::shallow`] and [`Node::evaluated_deep`] — so "a type is just a
 /// value" (`Type : Type`) is untouched.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LowShape {
+    /// Undecided: the class is traced (it has a low-type slot) but nothing has
+    /// refined it yet.  The bottom of the lattice — the only answer a reader
+    /// may get for a value the graph cannot decide, and the one every backend
+    /// must handle with a conservative fallback.
+    Unknown,
     /// A machine scalar (`USize`; the kernel-safe scalar subset) — `i64` in
     /// the wasm backend.
     USize,
@@ -214,6 +237,48 @@ pub enum LowShape {
     Function(Box<LowShape>, Box<LowShape>),
     /// A table: key → value.
     Table(Box<LowShape>, Box<LowShape>),
+}
+
+impl LowShape {
+    /// The lattice join of two lower bounds of one class: the least shape
+    /// that is at least as precise as both.  `Unknown` is the bottom
+    /// (`Unknown ∨ k = k`), and two equal decided shapes are unchanged.
+    ///
+    /// `Tuple(..)` of arity `n` and `Array(_, n)` are **two views of the same
+    /// array value** — a seeded positional domain and an observed homogeneous
+    /// one — so the tuple view wins: it is strictly more precise, and a class
+    /// legitimately carries both writers' contributions.
+    ///
+    /// Two *different* decided shapes are unreachable on a checked graph (the
+    /// checker already proved `value : type` consistent, so a low type can
+    /// never contradict the highlevel type); the `debug_assert` states that
+    /// invariant, and the release answer is the conservative
+    /// [`LowShape::Unknown`] — a reader degrades to "undecided" rather than to
+    /// a wrong shape.
+    pub fn join(left: &LowShape, right: &LowShape) -> LowShape {
+        match (left, right) {
+            (LowShape::Unknown, other) | (other, LowShape::Unknown) => other.clone(),
+            (LowShape::Tuple(items), LowShape::Array(_, n)) if items.len() == *n => {
+                LowShape::Tuple(items.clone())
+            }
+            (LowShape::Array(_, n), LowShape::Tuple(items)) if items.len() == *n => {
+                LowShape::Tuple(items.clone())
+            }
+            _ if left == right => left.clone(),
+            _ => {
+                debug_assert!(
+                    false,
+                    "two different decided low types joined on one equality class: {left:?} vs {right:?}"
+                );
+                LowShape::Unknown
+            }
+        }
+    }
+
+    /// Whether the shape is decided — anything but [`LowShape::Unknown`].
+    pub fn is_known(&self) -> bool {
+        !matches!(self, LowShape::Unknown)
+    }
 }
 
 /// One element of a structural array value: the element's node plus its
@@ -634,14 +699,20 @@ pub struct Node<P: Program> {
     /// pure-cell members).  External crates must never touch the field
     /// directly.
     value: Option<P::Value>,
-    /// The node's optional [`LowShape`] — stored *with* the value, behind the
-    /// same private gate.  A layer above the lowlevel (which *has* the type)
-    /// sets it via [`Module::set_node_shape`], and a backend reads it via
-    /// [`Module::node_shape`].  It is an **analysis result, not a checker
-    /// stamp**: the checker cannot know a value's shape at lowering (types are
-    /// lazy); the shape comes from the graph after it is resolved, and is
-    /// absent for any node the backend will not trace (type-check-only
-    /// scaffolding, or a node materialized before the backend runs).
+    /// The class's low type — stored *with* the value, behind the same
+    /// private gate.  It is **class-routed**: the authoritative copy lives on
+    /// the equality-class representative, and every read goes through
+    /// [`Module::class_low_type`] (or the recursive [`Module::low_type_of_node`]),
+    /// so a backend never has to know which member of a class resolved first.
+    /// It is written only by the two automatic maintenance sites
+    /// ([`Module::add_equality`]'s join and the observation in
+    /// [`Module::write_node_value`]) and by an explicit seed
+    /// ([`Module::seed_class_low_type`]).
+    ///
+    /// It is an **analysis result, not a checker stamp**: the checker cannot
+    /// know a value's shape at lowering (types are lazy), and `None` means the
+    /// class is untraced — type-check-only scaffolding a backend never reaches,
+    /// or a class materialized before the backend runs.
     low_shape: Option<LowShape>,
     pub operation: Option<Operation<P>>,
     /// The function whose body owns this node — the template membership
@@ -669,8 +740,10 @@ pub struct Node<P: Program> {
 pub struct StaticNode<P: Program> {
     pub value: Option<P::Value>,
     /// The optional [`LowShape`] copied from the source dynamic node by
-    /// [`StaticModule::from_module`] — a frozen node keeps its shape so an
-    /// importer's backend can still derive bytecode.
+    /// [`StaticModule::from_module`] — read through the *class* representative
+    /// there, so every member of a frozen class carries its class's low type.
+    /// A frozen node keeps it so an importer's backend can still derive
+    /// bytecode.
     pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
@@ -1082,6 +1155,13 @@ impl<P: Program> Module<P> {
         });
         disjoint::make_set(&mut self.nodes, node);
         self.blocks[block].nodes.push(node);
+        // Allocation with a concrete value is the second of the two value-write
+        // sites (`write_node_value` is the first), so the observation runs here
+        // too — otherwise a literal, a marker, or a freshly built array would
+        // carry no low type at all, and only the evaluated spine ever would.
+        if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+            self.observe_class_low_type(node, value);
+        }
         node
     }
 

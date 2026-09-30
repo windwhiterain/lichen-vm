@@ -25,9 +25,9 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, BlockId, Function,
-    FunctionId, LocalNodeId, LowShape, LowValue, Module, ModuleKey, NodeId, Operation,
-    PendingAssert, Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle,
-    StaticModule, StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
+    FunctionId, LocalNodeId, LowValue, Module, ModuleKey, NodeId, Operation, PendingAssert,
+    Program, StaticFunction, StaticFunctionId, StaticFunctionRef, StaticHandle, StaticModule,
+    StaticNode, StaticNodeId, StaticOperation, TableItem, ValueExt as _,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -66,26 +66,6 @@ impl<P: Program> Module<P> {
             AnyNodeId::Static(sref) => {
                 self.static_module(sref.module).nodes[sref.index.index].value
             }
-        }
-    }
-
-    /// The optional [`LowShape`] a layer above the lowlevel computed for
-    /// `node` — stored *with* the node's private value, not in a side table.
-    /// `None` means the node has no traced shape (it is type-check-only, or
-    /// it is materialized before the backend runs), so the backend must not
-    /// rely on it.
-    pub fn node_shape(&self, node: NodeId) -> Option<&LowShape> {
-        self.nodes
-            .get(node)
-            .and_then(|node| node.low_shape.as_ref())
-    }
-
-    /// Record `node`'s [`LowShape`].  Only the layer above the lowlevel that
-    /// *has* the type calls this, after the graph is resolved — never the
-    /// checker at lowering time (see [`LowShape`]).
-    pub fn set_node_shape(&mut self, node: NodeId, shape: Option<LowShape>) {
-        if let Some(node) = self.nodes.get_mut(node) {
-            node.low_shape = shape;
         }
     }
 
@@ -532,11 +512,14 @@ impl<P: Program> StaticModule<P> {
         }
         let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(module.nodes.len());
         let mut values: Vec<Option<P::Value>> = Vec::with_capacity(module.nodes.len());
-        for (_, node) in module.nodes.iter() {
+        for (id, node) in module.nodes.iter() {
             values.push(node.value);
             nodes.push(StaticNode {
                 value: None, // rewritten in phase 2, once arena offsets exist
-                low_shape: node.low_shape.clone(),
+                // The class's low type, not this member's own slot: a frozen
+                // class is a decided leaf whose members all read alike, and
+                // the authoritative copy lives on the representative.
+                low_shape: module.class_low_type(id).cloned(),
                 operation: node.operation.map(|operation| StaticOperation {
                     operator: operation.operator,
                     operand: operation.operand.map(|operand| node_map[&operand]),

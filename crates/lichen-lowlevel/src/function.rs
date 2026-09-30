@@ -300,14 +300,14 @@ impl<P: Program> Module<P> {
         // *containing* such a function value (a function's pair, a tuple of
         // closures): the proof cannot see through the function's body
         // either.
-        let (value, operation, evaluated_deep, low_shape) = {
+        // The clone is a fresh class, but the same computation over the same
+        // values, so the source's *class* low type seeds it.  Read through the
+        // representative (see `class_low_type`), never from the source's own
+        // slot.
+        let low_shape = self.class_low_type(node).cloned();
+        let (value, operation, evaluated_deep) = {
             let source = &self.nodes[node];
-            (
-                source.value,
-                source.operation,
-                source.evaluated_deep,
-                source.low_shape.clone(),
-            )
+            (source.value, source.operation, source.evaluated_deep)
         };
         // A node the deep pass proved concrete can be baked (referenced in
         // place); one it never ran on (`None`) or flagged parameterized is
@@ -363,7 +363,11 @@ impl<P: Program> Module<P> {
         });
         self.write_node_value(clone, value);
         self.nodes[clone].operation = operation;
-        self.nodes[clone].low_shape = low_shape;
+        // The clone is still a singleton class here, so the slot write *is* the
+        // class write; a later unify joins the two through `add_equality`.
+        if let Some(low_shape) = low_shape {
+            self.nodes[clone].low_shape = Some(low_shape);
+        }
         clone
     }
 

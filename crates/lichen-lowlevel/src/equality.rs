@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet};
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyNodeId, AnyNodeId::Dynamic as Dyn, Deferral, LowOperator, LowValue, Module, Node, NodeId,
-    Operation, PendingSide, PendingSides, Program, StaticNodeId, ValueExt as _, is_unbound,
+    AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, LowOperator, LowShape, LowValue,
+    Module, Node, NodeId, Operation, PendingSide, PendingSides, Program, StaticNodeId,
+    ValueExt as _, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -57,7 +58,16 @@ impl<P: Program> disjoint::Node for Node<P> {
 
 impl<P: Program> Module<P> {
     pub fn add_equality(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        disjoint::union(&mut self.nodes, a, b)
+        // Both sides' low types are read *before* the union (which leaves the
+        // authoritative copy on whichever node becomes the representative) and
+        // joined onto it after, so a merge never drops a decided shape.
+        let left = self.class_low_type(a).cloned();
+        let right = self.class_low_type(b).cloned();
+        let representative = disjoint::union(&mut self.nodes, a, b);
+        for shape in [left, right].into_iter().flatten() {
+            self.refine_class_low_type(representative, shape);
+        }
+        representative
     }
 
     pub fn equality_representative(&mut self, node: NodeId) -> NodeId {
@@ -76,6 +86,168 @@ impl<P: Program> Module<P> {
         self.nodes[root].value
     }
 
+    /// The class's **low type**, read through its representative — the lower
+    /// bound a backend compiles against.  `&self`, walked the same way
+    /// [`Self::class_value`] is, so a read never mutates the tree and never
+    /// depends on which member of the class resolved first.
+    ///
+    /// `None` is an untraced class (scaffolding a backend never reaches);
+    /// `Some(LowShape::Unknown)` is a traced but undecided one.
+    pub fn class_low_type(&self, node: NodeId) -> Option<&LowShape> {
+        self.nodes.get(self.class_root(node))?.low_shape.as_ref()
+    }
+
+    /// The class's recursive low type: [`Self::class_low_type`] with every
+    /// still-undecided position refined from the element classes the value
+    /// structurally covers.  Deep shapes are never unfolded at write time — a
+    /// read recurses, because the element classes refine independently, as
+    /// they bind, of the array that holds them.
+    ///
+    /// A value with no decided shape reads back unchanged (`None` or
+    /// `Some(Unknown)`), and a self-referential structure is cut by the path
+    /// guard, so a cyclic value cannot recurse forever.
+    pub fn low_type_of_node(&self, node: NodeId) -> Option<LowShape> {
+        let shape = self.class_low_type(node)?.clone();
+        let mut seen = HashSet::new();
+        Some(self.deepen_low_type(node, shape, &mut seen))
+    }
+
+    /// Record `shape` as a lower bound on `node`'s class — the **seed** of the
+    /// computation route, the one thing the value graph can never decide for a
+    /// template (the parameter positions: a template is never evaluated, and an
+    /// apply binds the *clones*, not it).  A layer above the lowlevel that has
+    /// the type calls this before running the fixed-point pass; a seed is an
+    /// ordinary refinement, never a widening.
+    ///
+    /// Returns whether the class's low type changed.
+    pub fn seed_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
+        self.refine_class_low_type(node, shape)
+    }
+
+    /// The union-find representative of `node` — the `&self`, no-compression
+    /// form of [`Self::equality_representative`], so the class-routed reads
+    /// stay read-only.
+    fn class_root(&self, node: NodeId) -> NodeId {
+        let mut root = node;
+        while let Some(parent) = self.nodes[root].equality.parent {
+            root = parent;
+        }
+        root
+    }
+
+    /// The array items of `node`'s class value, read through the
+    /// representative — the structural descent every deep low-type read walks.
+    fn class_array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
+        let LowValue::Array(array) = self.class_value(node)?.as_enum()? else {
+            return None;
+        };
+        Some(array.items())
+    }
+
+    /// Refine `node`'s class low type with `shape` (the lattice join) and
+    /// report whether the class moved.  The single write side of the low-type
+    /// channel: observation, the merge join, a seed, and the fixed-point pass
+    /// all route through it, so refinement is monotone by construction.
+    pub fn refine_class_low_type(&mut self, node: NodeId, shape: LowShape) -> bool {
+        let Some(entry) = self.nodes.get_mut(self.class_root(node)) else {
+            return false;
+        };
+        match &mut entry.low_shape {
+            None => {
+                entry.low_shape = Some(shape);
+                true
+            }
+            Some(current) => {
+                let joined = LowShape::join(current, &shape);
+                let changed = joined != *current;
+                *current = joined;
+                changed
+            }
+        }
+    }
+
+    /// Refine `node`'s class low type from a concrete value's variant tag.
+    ///
+    /// O(1) and monotone by construction: only the top-level tag is read, never
+    /// the payload.  A value the vocabulary has no shape for (`Str`, the unit
+    /// `None`, a computed-nothing `Void`) states nothing, so it never widens
+    /// and never narrows; a value that refines nothing leaves the class
+    /// untouched.  Called from both value-write sites — [`Self::write_node_value`]
+    /// and [`Module::add_node`].
+    pub(crate) fn observe_class_low_type(&mut self, node: NodeId, value: P::Value) {
+        let Some(shape) = observed_low_shape(value) else {
+            return;
+        };
+        self.refine_class_low_type(node, shape);
+    }
+
+    /// [`Self::deepen_low_type`] for one structural element: an undecided
+    /// position takes the element's own (deep) low type, and a decided one
+    /// keeps it — the two descriptions of a decided position cannot disagree,
+    /// and the position was decided first.
+    fn deepen_position(
+        &self,
+        position: LowShape,
+        element: AnyNodeId,
+        seen: &mut HashSet<NodeId>,
+    ) -> LowShape {
+        if position.is_known() {
+            return position;
+        }
+        let AnyNodeId::Dynamic(element) = element else {
+            return LowShape::Unknown;
+        };
+        let Some(shape) = self.class_low_type(element).cloned() else {
+            return LowShape::Unknown;
+        };
+        self.deepen_low_type(element, shape, seen)
+    }
+
+    /// [`Module::low_type_of_node`] at one level, with `seen` cutting the
+    /// cycle of a self-referential structure.
+    fn deepen_low_type(
+        &self,
+        node: NodeId,
+        shape: LowShape,
+        seen: &mut HashSet<NodeId>,
+    ) -> LowShape {
+        if !shape.is_known() {
+            return shape;
+        }
+        let root = self.class_root(node);
+        if !seen.insert(root) {
+            return shape;
+        }
+        let elements = self.class_array_items(node);
+        let deepened = match (&shape, elements) {
+            (LowShape::Tuple(items), Some(elements)) if items.len() == elements.len() => {
+                LowShape::Tuple(
+                    items
+                        .iter()
+                        .zip(elements)
+                        .map(|(position, element)| {
+                            self.deepen_position(position.clone(), element.node, seen)
+                        })
+                        .collect(),
+                )
+            }
+            (LowShape::Array(element, length), Some(elements)) if *length == elements.len() => {
+                let element = elements
+                    .iter()
+                    .fold((**element).clone(), |accumulated, item| {
+                        LowShape::join(
+                            &accumulated,
+                            &self.deepen_position(LowShape::Unknown, item.node, seen),
+                        )
+                    });
+                LowShape::Array(Box::new(element), *length)
+            }
+            _ => shape,
+        };
+        seen.remove(&root);
+        deepened
+    }
+
     /// The controlled value-write API: write `value` onto `node`, then — if
     /// the value is concrete — replicate it to every unbound *pure-cell*
     /// member of `node`'s class, so a read of any member (or a later
@@ -90,6 +262,11 @@ impl<P: Program> Module<P> {
     /// not a fact to propagate.  A singleton class is a no-op (the walk visits
     /// only the node itself).  Only operation-free (pure) cells are touched,
     /// matching `force_pending`, so a pending computation is never overridden.
+    ///
+    /// It is also one of the two **observation** sites of the low-type layer:
+    /// a concrete value refines its class's low type from the value's variant
+    /// tag ([`Self::observe_class_low_type`]).  The other is
+    /// [`Module::add_node`], where a value arrives already concrete.
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
@@ -103,6 +280,7 @@ impl<P: Program> Module<P> {
                 let Some(next) = next else { break };
                 member = next;
             }
+            self.observe_class_low_type(rep, value);
         }
     }
 
@@ -870,5 +1048,35 @@ fn node_or_default(id: AnyNodeId) -> NodeId {
     match id {
         AnyNodeId::Dynamic(node) => node,
         AnyNodeId::Static(_) => NodeId::default(),
+    }
+}
+
+/// The low type a concrete value's variant tag states, read without touching
+/// the payload — the observation half of the low-type layer.
+///
+/// `None` for a value the vocabulary has no shape for: the `Str` literal, the
+/// unit `None`, a computed-nothing `Void`, and the undecided `Parameterized`
+/// marker.  Those state nothing at all, which is what keeps observation from
+/// ever widening a class it knows more about.
+///
+/// A payload-carrying shape is recorded with `Unknown` positions: the element,
+/// domain, codomain, key, and value classes refine independently as they bind,
+/// and [`Module::low_type_of_node`] recurses into them on a read.
+fn observed_low_shape(value: impl AsEnum<LowValue>) -> Option<LowShape> {
+    match value.as_enum()? {
+        LowValue::USize(_) => Some(LowShape::USize),
+        LowValue::Array(array) => Some(LowShape::Array(
+            Box::new(LowShape::Unknown),
+            array.items().len(),
+        )),
+        LowValue::Table(_) => Some(LowShape::Table(
+            Box::new(LowShape::Unknown),
+            Box::new(LowShape::Unknown),
+        )),
+        LowValue::Function(_) => Some(LowShape::Function(
+            Box::new(LowShape::Unknown),
+            Box::new(LowShape::Unknown),
+        )),
+        _ => None,
     }
 }

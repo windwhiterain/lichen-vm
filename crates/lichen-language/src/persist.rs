@@ -281,7 +281,7 @@ where
     w.into_bytes()
 }
 
-/// Write an optional [`LowShape`] (the node's stored shape marker).
+/// Write an optional [`LowShape`] (the node's stored low type).
 fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
     match shape {
         None => w.u8(0),
@@ -292,6 +292,9 @@ fn write_low_shape_opt(w: &mut Writer, shape: &Option<LowShape>) {
     }
 }
 
+// The tags are the compatibility contract with already-persisted artifacts:
+// `0`–`4` are the decided shapes and never change, and a new shape takes the
+// next unused tag (`5` is `Unknown`, the lattice's bottom).
 fn write_low_shape(w: &mut Writer, shape: &LowShape) {
     match shape {
         LowShape::USize => w.u8(0),
@@ -317,6 +320,7 @@ fn write_low_shape(w: &mut Writer, shape: &LowShape) {
             write_low_shape(w, key);
             write_low_shape(w, value);
         }
+        LowShape::Unknown => w.u8(5),
     }
 }
 
@@ -352,6 +356,7 @@ fn read_low_shape(r: &mut Reader<'_>) -> Result<LowShape, String> {
             Box::new(read_low_shape(r)?),
             Box::new(read_low_shape(r)?),
         )),
+        5 => Ok(LowShape::Unknown),
         _ => Err("bad low_shape tag".into()),
     }
 }
