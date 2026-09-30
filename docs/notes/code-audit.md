@@ -36,7 +36,7 @@ queue's order is deliberate.
 |---|---|---|---|---|
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
 | P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | todo |
-| P0-3 | critical | package | `git clone`/`checkout` argument injection | todo |
+| P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
 | P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
