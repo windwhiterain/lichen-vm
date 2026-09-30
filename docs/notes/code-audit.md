@@ -49,7 +49,7 @@ queue's order is deliberate.
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | todo |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
-| P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
+| P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | todo |
@@ -599,18 +599,34 @@ against the unfixed arm; `compute`/`examples` pass before and after, and the
 `Array` regression above was found by that gate and fixed in the arm, not the
 test.
 
-### P1-7 — Function pass order is non-deterministic `reported`
+### P1-7 — The function pass order relies on an undocumented iteration order `verified`
 
-`crates/lichen-highlevel/src/checker.rs:582-584`:
-`checker.module.functions.keys().collect()` — `slotmap`'s `keys()` yields
-**arbitrary** order. Diary-attributed errors are re-sorted by `seq`
-(`diagnostic.rs:267`), but *orphan* unify errors (`diagnostic.rs:269-276`) and
-all runtime `eval_errors` are emitted in record order with no re-sort. The same
-source can therefore produce a different diagnostic sequence across runs and
-between builds.
+**The audit's original claim was wrong and is corrected here.** It said the pass
+order was *non-deterministic* and could differ "between two builds of the same
+binary if slotmap's hash seed moves". There is no hash seed, and the order is
+deterministic: `SlotMap::iter` is implemented as
+`self.slots.iter().enumerate()` (skipping the sentinel and vacant slots), and
+`SlotMap::keys` is `Keys { inner: self.iter() }` — so the order is **ascending
+slot index**, which for a map that only ever inserts is insertion order. Checked
+in the vendored source, `slotmap-1.1.1/src/basic.rs:847-855` and `:913-915`. The
+same input therefore produces the same diagnostic sequence across runs.
 
-**Fix.** Sort by a stable key (the numeric slot index, or the `ExprId` in
-`function_of`) before the pass.
+What survives, at a much lower severity, is that the code depends on behaviour
+the crate **documents** as *"an arbitrary order"* (`basic.rs:857`, `:917`): the
+user-visible ordering of *orphan* unify errors and all runtime `eval_errors` —
+the ones `diagnostic.rs` emits in record order with no re-sort, unlike the
+diary-attributed ones it re-sorts by `seq` — is an accident of `slotmap`'s
+current internals. A switch to `HopSlotMap` (whose order genuinely is arbitrary),
+or a change in how the checker inserts functions, would silently reorder
+compiler output.
+
+`crates/lichen-highlevel/src/checker.rs` collects the pass order with
+`checker.module.functions.keys().collect()`.
+
+**Fix (hardening, not a bug fix).** Sort by a stable key before the pass — the
+numeric slot index or the `ExprId` in `function_of` — so that the ordering is a
+stated property rather than an inherited one. Cheap; do it when the surrounding
+area is next touched. Do **not** cite this item as a reproducibility bug.
 
 ### P1-8 — Compile work budget is hard-coded `reported`
 
