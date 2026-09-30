@@ -43,10 +43,32 @@ pub fn file_id_hash(file_id: &str) -> Hash {
     sha256(file_id.as_bytes())
 }
 
+/// The prefix of an embedded lichen source's file ID: `virtual:<name>` is a
+/// compiled unit's identity for a source that has no place on disk.
+const VIRTUAL_PREFIX: &str = "virtual:";
+
+/// The file ID of an embedded lichen source: the identity the device files it
+/// under, and the identity a dependent must record for it (see the module doc).
+pub fn virtual_file_id(name: &str) -> String {
+    format!("{VIRTUAL_PREFIX}{name}")
+}
+
+/// Whether a file ID names an embedded lichen source (`virtual:<name>`) rather
+/// than a file on disk.
+pub fn is_virtual_file_id(file_id: &str) -> bool {
+    file_id.starts_with(VIRTUAL_PREFIX)
+}
+
+/// The name of the embedded source a `virtual:` file ID names; `None` for an
+/// on-disk file ID.
+pub fn virtual_name(file_id: &str) -> Option<&str> {
+    file_id.strip_prefix(VIRTUAL_PREFIX)
+}
+
 /// Whether a file ID names a lichen source the cache should keep: an on-disk
 /// `.lichen` file path, or a `virtual:` embedded lichen source.
 pub fn is_lichen_file_id(file_id: &str) -> bool {
-    file_id.ends_with(".lichen") || file_id.starts_with("virtual:")
+    file_id.ends_with(".lichen") || is_virtual_file_id(file_id)
 }
 
 /// One registered artifact's record: its device key, the hash of the raw
@@ -353,6 +375,15 @@ fn verify_entry(
         let dep_entry = state.entries.get(dep_file_id)?;
         if dep_entry.key != *dep_key {
             return None;
+        }
+        if is_virtual_file_id(dep_file_id) {
+            // An embedded source is compiled into the compiler binary, and the
+            // artifact store is scoped per toolchain/plugin set
+            // (`docs/notes/artifact-cache.md`), so its bytes cannot change under
+            // this cache root: it can never invalidate a dependent.  The device
+            // holds its identity, not its bytes, so there is nothing to read or
+            // hash here.
+            continue;
         }
         let dep_raw = std::fs::read(dep_file_id).ok()?;
         verify_entry(state, dep_file_id, &dep_raw, visited)?;

@@ -383,6 +383,34 @@ fn two_stores_share_the_device_registry() {
 }
 
 #[test]
+fn a_package_that_imports_an_embedded_source_verifies_across_stores() {
+    // The package imports an embedded (native virtual) source instead of a file
+    // on disk.  Its bytes are compiled into the compiler binary, so the
+    // dependency can never change under this cache root and must not force the
+    // package to recompile on every run.
+    let dir = temp_dir("embedded-dep");
+    let pkg_path = write(&dir, "pkg.lichen", "@{p = import \"plug.lichen\"@}p + 1\n");
+    let cache = dir.join("cache");
+
+    let mut first = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    first
+        .register_native("plug.lichen", "42", lichen_highlevel::no_native_ops())
+        .unwrap();
+    first.load_package(&pkg_path).unwrap();
+    assert_eq!(first.loaded_from_cache, 0, "the first load compiles");
+
+    let mut second = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    second
+        .register_native("plug.lichen", "42", lichen_highlevel::no_native_ops())
+        .unwrap();
+    second.load_package(&pkg_path).unwrap();
+    assert_eq!(
+        second.loaded_from_cache, 1,
+        "an embedded dependency cannot change, so it must not force a recompile every run"
+    );
+}
+
+#[test]
 fn cache_only_when_a_cache_dir_is_configured() {
     // The default store is purely in-memory: no directory, no files.
     let dir = temp_dir("nocache");

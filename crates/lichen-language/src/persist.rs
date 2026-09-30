@@ -48,6 +48,7 @@ pub use lichen_utils::hash::{Hash, hex, sha256};
 // file_id_hash, is_lichen_file_id, artifact_hash}` paths keep resolving.
 pub use lichen_registry::{
     DeviceRegistry, Entry, ModuleKey, Verified, artifact_hash, file_id_hash, is_lichen_file_id,
+    is_virtual_file_id, virtual_file_id, virtual_name,
 };
 
 // ---------------------------------------------------------------------------

@@ -197,6 +197,23 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             }
         }
     }
+
+    /// The device file ID of an import path this store resolved: an on-disk
+    /// package's canonical path is its file ID, while a registered embedded
+    /// source is filed under `virtual:<name>` (see [`Self::register_native`]
+    /// and [`Self::register_compute`]) — the import path is that source's
+    /// display path, not its identity, so the device cannot verify the
+    /// dependency by it.
+    fn dependency_file_id(&self, path: &Path) -> String {
+        let registered = path
+            .file_name()
+            .map(Path::new)
+            .and_then(|name| self.native.get(name));
+        match registered {
+            Some(handle) => persist::virtual_file_id(&handle.path.to_string_lossy()),
+            None => path.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 // The compute-bounds impl: load/compile/freeze/serialize, which compile the
@@ -322,7 +339,7 @@ where
         module.evaluate_node_deep(build.root_ty, None);
 
         let hash = persist::artifact_hash(source.as_bytes(), &[]);
-        let (key, _is_new) = self.alloc_key("virtual:compute.lichen");
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(COMPUTE_PATH));
         let freeze = self
             .registry
             .write()
@@ -397,7 +414,11 @@ where
         deps: &[(String, ModuleKey)],
     ) -> Result<Option<PackageHandle>, Vec<Diag<P>>> {
         for (dep_file_id, _) in deps {
-            self.load_package(Path::new(dep_file_id))?;
+            // A recorded embedded dependency is filed as a `virtual:<name>`
+            // file ID; the store serves it by the name it registered (see
+            // [`Self::dependency_file_id`]).
+            let name = persist::virtual_name(dep_file_id).unwrap_or(dep_file_id.as_str());
+            self.load_package(Path::new(name))?;
         }
         let mut modules: HashMap<ModuleKey, Arc<StaticModule<P>>> = HashMap::new();
         {
@@ -537,6 +558,14 @@ where
                 },
             );
 
+        // The recorded dependency identity: the file ID, not the import's
+        // display path (they differ for an embedded source).
+        let deps: Vec<(String, ModuleKey)> = preprocessed
+            .imports
+            .iter()
+            .map(|import| (self.dependency_file_id(&import.path), import.export.module))
+            .collect();
+
         // Serialize into the device cache under the file ID slot (overwritten
         // on recompile), and record the source hash + dependency graph.
         if let Some(device) = &mut self.device {
@@ -559,16 +588,6 @@ where
                 P::Codec::default(),
             );
             device.store_artifact(&file_id, &bytes);
-            let deps: Vec<(String, ModuleKey)> = preprocessed
-                .imports
-                .iter()
-                .map(|import| {
-                    (
-                        import.path.to_string_lossy().into_owned(),
-                        import.export.module,
-                    )
-                })
-                .collect();
             device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
         }
         self.compiled += 1;
@@ -691,7 +710,7 @@ where
         module.evaluate_node_deep(build.root_ty, None);
 
         let hash = persist::artifact_hash(source.as_bytes(), &[]);
-        let (key, _is_new) = self.alloc_key(&format!("virtual:{virtual_path}"));
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(virtual_path));
         let freeze = self
             .registry
             .write()

@@ -95,7 +95,7 @@ queue's order is deliberate.
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
-| P5-11 | low | registry | `virtual:` file IDs can never verify | todo |
+| P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
 
 ## P0 — memory safety and supply chain
@@ -1390,12 +1390,44 @@ scans the module's whole node table and is called **per emitted node**
   with no length check (its sibling `kind_is_struct` at `:1034` checks), and
   `:932-941` walks `equality.parent` unguarded, uncompressed and cycle-unsafe,
   forking `disjoint::find`. Both run from `Doc::new`, i.e. every keystroke.
-- **P5-11 `reported`** — `registry/src/device.rs:316-323` opens every dependency
-  ID as a filesystem path, but `virtual:` IDs are real
-  (`language/src/package.rs:325`, `:700`), so a `virtual:` dependency fails
-  `fs::read` and `.ok()?` turns it into a **silent permanent cache miss**. The
-  two functions in the same file disagree about what a file ID is. Fix together
-  with `P1-11` via the shared `write_atomic`/file-ID helper.
+- **P5-11 `verified`** — `registry/src/device.rs`'s `verify_entry` opened every
+  recorded dependency as a filesystem path, while `is_lichen_file_id` in the
+  same file accepted `virtual:<name>` as a real file ID. **The audit's stated
+  mechanism was wrong and is corrected here:** no `virtual:` string ever reached
+  `fs::read`, because the caller recorded the embedded source's **display path**
+  (`plug.lichen`), not its file ID (`virtual:plug.lichen`) — so
+  `state.entries.get(dep_file_id)` returned `None` and the `?` produced the miss
+  one line earlier. **The defect is real and reachable**, with the reported
+  effect: a package importing an embedded source recompiled on every run. A
+  `virtual:` file ID names an embedded (native) source — bytes compiled into the
+  compiler binary by `register_native`/`register_compute` — and the artifact
+  store is scoped per toolchain/plugin set, so it cannot change under a cache
+  root and can never invalidate a dependent.
+  **Outcome.** One shared file-ID notion (`virtual_file_id`, `virtual_name`,
+  `is_virtual_file_id` in `lichen-registry::device`, with `is_lichen_file_id`
+  built on it) now spans both sides. The package store records the dependency's
+  **file ID** (`dependency_file_id`) rather than its display path, loads a
+  recorded embedded dependency by its registered name, and `verify_entry` checks
+  a `virtual:` dependency's recorded key and then treats it as verified — the
+  embedded source has no bytes in the device to read or hash. The store's own
+  identity strings (`register_native`, `register_compute`) go through the same
+  helper, so the two sides cannot drift. A registry written before this change
+  records the display path, fails verification once, and rewrites itself on the
+  next compile.
+  **Test.** `crates/lichen-language/tests/persist.rs`'s
+  `a_package_that_imports_an_embedded_source_verifies_across_stores` registers a
+  `plug.lichen` embedded source, loads an importing package through one store
+  and then through a second store over the same cache directory, and requires
+  the second to serve the artifact (`loaded_from_cache == 1`). It was confirmed
+  to fail against the unfixed sources with `left: 0, right: 1`, and a probe of
+  the registry file showed the entry keyed `virtual:plug.lichen` beside the
+  recorded dependency `plug.lichen` — the mechanism above, not the reported one.
+  **Residual.** Verification still requires the embedded source's entry to exist
+  with the recorded key, so the native package must be registered (as the CLI's
+  `staged_store` does) before a cached dependent can verify. Its recorded source
+  hash stays the all-zero *pending* value, since verification never consults it,
+  so a changed embedded source under the **same** cache root (a rebuild without
+  a version bump) is not detected — the same slot-key hole `P1-13` names.
 - **P5-12 `verified`** — `tree-sitter-lichen` is deliberately outside the
   workspace (the root manifest `exclude`s it, and its own manifest says so), but
   its manifest has **no `[workspace]` table of its own**, so resolving it as a
