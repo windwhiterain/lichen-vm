@@ -35,17 +35,18 @@ queue's order is deliberate.
 | id | severity | area | item | status |
 |---|---|---|---|---|
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
-| P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | blocked:D1 |
-| P0-3 | critical | package | `git clone`/`checkout` argument injection | blocked:D2 |
+| P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | todo |
+| P0-3 | critical | package | `git clone`/`checkout` argument injection | todo |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
 | P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
+| P0-7 | high | language | The artifact container has no body digest | todo |
 | P1-1 | high | lowlevel | `insert_module` inserts before it asserts | done |
 | P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | todo |
 | P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | blocked:D5 |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | todo |
-| P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | blocked:D3 |
+| P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | todo |
 | P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
@@ -288,6 +289,36 @@ clone's contents, including any `build.rs` the plugin build runs, so a symlink
 grants nothing an attacker did not already have. Resolving it would mean
 canonicalising and re-checking containment against `sources_root()`, which
 needs the directory to exist and so cannot live in this accessor.
+
+### P0-7 — The artifact container has no body digest `verified`
+
+New item from decision `D1`. The reader
+(`crates/lichen-language/src/persist.rs:433`, checks at `:445-455`) validates the
+magic (`:445`), the format version (`:449`), the module key and the payload
+alignment, then compares a 32-byte `hash` (`:454`) — but that `hash` is the
+artifact's *identity*, checked against a value the **caller** computes locally
+(the device registry's `verify`). It says nothing about the bytes that follow it
+in the file, and the body has no digest of any kind. The layout comment at `:56`
+shows the header: magic, version, key, hash, alignment, then the body.
+
+So a file whose prefix is copied from a valid artifact and whose body is
+replaced or corrupted passes every check the container makes, and `P0-1`/`P0-5`
+are the only things between that and undefined behaviour. They hold now, but the
+container should not depend on every future field parser being individually
+careful.
+
+**Fix.** Add a digest over the body to the header (`:200-213` is the writer) and
+verify it before interpreting any of the body. Bump the format version, since the
+header layout changes; an older artifact then fails the version check and
+recompiles, which is the intended answer. `sha2` is already a dependency of both
+crates involved, so no new dependency is needed.
+
+**What this does and does not buy — say so, do not overclaim.** A digest detects
+corruption: bit rot, a truncated write, a bad copy. It does **not** provide
+authenticity — whoever can write the artifact file can recompute the digest. The
+bound on a deliberate attacker is memory safety plus total field validation
+(`P0-1`, `P0-5`, `P0-2`), not the digest. Put that distinction in the format's
+doc comment so a later reader does not mistake it for a signature.
 
 ## P1 — correctness
 
@@ -1057,22 +1088,32 @@ scans the module's whole node table and is called **per emitted node**
 
 These block the items marked `blocked:Dn`. Do not pick an answer silently.
 
-- **D1 — Is `~/.lichen/artifacts/` untrusted input?** (blocks `P0-2`)
-  *Untrusted:* add a body checksum to the container, validate every field, make
-  the accessors `unsafe` with real contracts — larger change, closes the class.
-  *Trusted:* `checked_*` arithmetic only, keep the signatures — small, removes
-  the UB-from-a-crafted-file path but not the design smell.
-  `P0-1` and `P0-5` are worth doing either way.
-- **D2 — Which git URL schemes are legitimate?** (blocks `P0-3`)
-  *Minimal:* `--` separator plus reject a leading `-` (kills `--upload-pack` and
-  `-f`; no legitimate form is lost).
-  *Full:* the above plus a scheme allowlist rejecting `ext::` and other remote
-  helpers. Stricter, but `ext::` is already disabled by default in modern git and
-  an allowlist may reject a form someone relies on.
-- **D3 — Tests.** May the fix subagents add minimal regression tests? Several
-  items' only sound proof is a test (`P0-1`, `P1-5`, `P1-6`, `P1-13`); without
-  permission those land with the fix unproven, and `P1-6` should not be touched
-  at all until the behaviour is pinned.
+- **D1 — Is `~/.lichen/artifacts/` untrusted input? — DECIDED: untrusted.**
+  What that commits to: the reader must be **memory-safe and total against
+  arbitrary bytes** (`P0-1` and `P0-5` are done; `P0-2` remains), and the
+  container gets a **body digest** so corruption is detected before any of the
+  body is interpreted (`P0-7`). One honesty note recorded with the decision: a
+  digest detects *corruption*, not a deliberate writer — whoever can write the
+  file can recompute the digest. Authenticity is not what a digest buys, and
+  the docs must not claim it does; memory safety and total validation are what
+  actually bound an attacker, and the digest is what turns bit rot into a clean
+  recompile.
+  *Rejected — trusted:* `checked_*` arithmetic only, signatures unchanged. It
+  would have left the `P0-2` UB-from-safe-code path open.
+- **D2 — Which git URL schemes are legitimate? — DECIDED: the minimal fix.**
+  `git clone -- <url> <dir>` and reject any `url`/`rev`/`branch`/`tag` whose
+  first byte is `-`. That closes argument injection (`--upload-pack`, and a
+  `rev = "-f"` pin downgrade) without rejecting any legitimate URL form.
+  *Rejected for now — a scheme allowlist:* stricter, but `ext::` is already
+  disabled by default in modern git and an allowlist risks rejecting a form
+  someone relies on (a local path dependency, say). If a scheme policy is ever
+  wanted, it is a new item, not a reopening of `P0-3`.
+- **D3 — Tests. — DECIDED: allowed, minimal, per item.** Each fix may add the
+  smallest test that falsifies the defect it fixes, and only that. This
+  unblocks `P1-5`, `P1-6` and `P1-13`, whose only sound proof is a test, and it
+  means `P1-6` can now be pinned before it is touched. Tests stay in separate
+  files from sources per `AGENTS.md`, and a fix must still not run the
+  full-scale suite.
 - **D4 — Toolchain integrity.** (blocks `P0-4`) Options: a published
   `SHA256SUMS` asset verified after download; a signed release; or accepting
   GitHub-over-TLS and dropping the "same revision" framing from the docs. The
