@@ -74,7 +74,7 @@ queue's order is deliberate.
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | todo |
 | P2-6 | medium | language | README generator and `clap` live in the compiler library | todo |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
-| P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | todo |
+| P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
@@ -1568,6 +1568,40 @@ invariant is debug-only. A hand-written set that forgets it compiles and panics
 in release.
 
 **Fix.** `.get(index).copied()` plus a recorded guard.
+
+**Outcome.** The premise held, re-read first-hand at the now-current lines
+(the ledger's have drifted): the index came from `AttrSet::order_index`
+(`annotations.rs`, `missing_slot_of`'s read and its write), a public trait
+method a downstream set supplies, while the vector is sized
+`P::Attr::ORDER.len()` (`checker.rs`'s `Checker` construction) and the only
+thing making the two agree is `debug_assert!(order_is_canonical::<P::Attr>())`
+in `build_with` (`checker.rs:548-551`) — compiled out in release, where an
+out-of-range index panics and an in-range-but-wrong one silently aliases
+another attribute's cached slot.
+
+**Chosen: the correct-by-construction key, not the checked access.** The cache
+is now keyed by the marker's **position in `P::Attr::ORDER`** — the same list
+that sizes the vector — found with
+`P::Attr::ORDER.iter().position(|attr| attr == marker)`, so the index cannot
+leave the vector and cannot name another attribute's slot; `order_index()` is no
+longer consulted on this path at all. For a canonical set the position *is* the
+order index, which is exactly what `order_is_canonical` asserts, so no behaviour
+moves and the highlevel suite is unchanged. A marker absent from the set's own
+list takes the crate's malformed-input convention: `no_attr_ext_guard` records
+the guard and returns the well-formed `[value, type]` hole, so the build fails
+with a diagnostic instead of panicking on a path the checker reads to decide
+whether a slot is missing. The ledger's `.get(index).copied()` was rejected as
+the *only* change because it makes the bound real but leaves the finding's
+"worse" half standing: an index that is in range yet disagrees with `ORDER`
+would still be accepted, and would still alias the wrong slot.
+`missing_slots`' own doc now names the position in `ORDER` as its key.
+
+**No test.** The harness cannot observe this in a debug build: a malformed
+`AttrSet` panics at `order_is_canonical`'s `debug_assert!` in `build_with`
+before `missing_slot_of` is ever reached, so the fixed path is reachable only in
+a release build; pinning it would take a `--release` test over a deliberately
+non-canonical set. For every canonical set — all the suite uses — the change is
+a bound that no longer needs asserting, with no behaviour to pin.
 
 ### P2-9 — `no_attr_ext` panics on any annotated program `reported`
 

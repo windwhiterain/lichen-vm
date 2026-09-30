@@ -193,7 +193,20 @@ where
     /// better.  `loc` is the attribute slot of the expression the slot is
     /// needed for — where the missing attribute is read.
     pub(super) fn missing_slot_of(&mut self, marker: &P::Attr, loc: Loc) -> NodeId {
-        let index = marker.order_index();
+        // The slot cache is keyed by the marker's **position in the set's own
+        // order list**, not by `AttrSet::order_index`: the list is what sizes
+        // [`Checker::missing_slots`], so the position is in range by
+        // construction, while an index the plugin returns is only checked in
+        // debug builds by `order_is_canonical` — a hand-written set that
+        // disagrees with its own list would index out of bounds, or alias
+        // another attribute's cached slot, in a release build.  For a set whose
+        // order *is* canonical the two are the same number, so nothing moves.
+        let Some(index) = P::Attr::ORDER.iter().position(|attr| attr == marker) else {
+            // Not an attribute of the set the cache is sized for: the same
+            // recorded guard and well-formed hole as an attribute this build
+            // cannot lower.
+            return self.no_attr_ext_guard(loc);
+        };
         if let Some(shared) = self.missing_slots[index] {
             return shared;
         }

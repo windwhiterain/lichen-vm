@@ -309,8 +309,9 @@ where
     /// The shared `USize(1)` node — element 1 of an expression's pair.
     one_value: NodeId,
     /// One shared absent-occurrence slot per attribute that opted in, indexed
-    /// by [`AttrSet::order_index`] and installed by `install_constants`; `None`
-    /// where the attribute builds a fresh one per site.
+    /// by the attribute's position in [`AttrSet::ORDER`] and installed by
+    /// `install_constants`; `None` where the attribute builds a fresh one per
+    /// site.
     ///
     /// The attribute decides whether its own missing value may be shared — see
     /// [`AttrExt::share_missing_slot`], which states the contract (the value
