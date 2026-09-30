@@ -72,7 +72,7 @@ queue's order is deliberate.
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
-| P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | todo |
+| P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
 | P2-6 | medium | language | README generator and `clap` live in the compiler library | todo |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
@@ -1670,6 +1670,50 @@ allocated through `Ctx`.
 **Fix.** Validate shape and block membership, recording a `NativeOpContract`
 guard on failure — the same pattern `ImportExport`
 (`checker.rs:1266-1278`) and `NativeOpUnresolved` (`:1335-1346`) already use.
+
+**Outcome.** The premise held in its main half and is corrected in the other.
+Re-derived: `NativeApply` is a public type (`highlevel/src/native.rs`), `NativeOp`
+is a public trait, and `native_ops` reaches the checker through the public
+`Checker::build_in_attr_native` — so this is an extension point a **host
+composes**, not an internal helper, and the checker adopted all three records
+with no validation (the now-current `check_native_call`). A plugin can return
+the three ids from anywhere it can reach: a bare `ctx.value_node`, the pair's
+slots disagreeing with `val`/`ty`, or a node it stashed from an earlier module.
+
+*Corrected: the block-membership half is not a contract for `ty`.* Measured
+first-hand with a probe that printed each builder's blocks: compute's `$range`
+returns `node_block=12v1 ty_block=1v1 current=12v1` — its `ty` is
+`ctx.int_type()`, the checker's canonical shared type expression, allocated once
+in the **root** block and deliberately referenced from a pair built in a kernel
+body (as `Ctx`'s own doc says: the markers and canonical types are *referenced,
+not rebuilt*). A "`ty` must be in the current block" check would refuse a
+legitimate in-tree plugin. The template-membership claim is likewise not the
+lever: `Ctx` registers every node it allocates in the current function's
+template, so a plugin that builds through `Ctx` satisfies it by construction,
+and nothing the checker reads distinguishes a stashed in-block node from a
+built one.
+
+**Fix.** The shape is validated where it is relied on, in `check_native_call`:
+`node` must be a two-slot array in the block the call is compiled into, element
+1 exactly `ty`, and element 0 exactly `val` when `val` is `Some` (compute's
+`$jit`/`$launch`/… legitimately return `val: None`, leaving element 0 the op
+node the runtime reads). A failure records the new `DiagKind::NativeOpContract`
+(a guard, `field` = the operator name) and leaves the well-formed hole the
+`ImportExport` and `NoAttributeExtension` guards leave — a fresh-cell pair — so
+nothing downstream reads a malformed term. The message is rendered by
+`render::checker_message` as *"native operator '{name}' returned a malformed
+term — a native operator must return the [value, type] pair it built in the
+current block"*. `val` is copied into the guard path instead of being consumed,
+and the location is cloned for the builder call, so the guard still has both.
+
+**Tests.** `crates/lichen-highlevel/tests/native.rs` (new) composes a probe
+`NativeOp` into `Checker::build_in_attr_native` over a hand-built
+`ExprKind::NativeCall` and pins three facts: a builder that returns a bare value
+node is refused, a builder whose `ty` is not the pair's element 1 is refused,
+and a well-formed builder is adopted. Against the unfixed checker — the guard
+bypassed, everything else in place — the two hostile cases fail exactly as the
+finding predicts: `build.ok == true`, i.e. the malformed term is **accepted**,
+not refused. The well-formed case passes both ways.
 
 ### P2-6 — Repo tooling inside the compiler library `reported`
 

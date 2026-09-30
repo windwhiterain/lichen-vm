@@ -254,6 +254,13 @@ where
             None => "unresolved native operator — this module composes no plugin registering it"
                 .to_string(),
         },
+        DiagKind::NativeOpContract => match d.field.as_deref() {
+            Some(name) => format!(
+                "native operator '{name}' returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+            ),
+            None => "a native operator returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+                .to_string(),
+        },
         DiagKind::NoAttributeExtension => {
             "this expression carries an attribute, but this build has no attribute extension to lower it"
                 .to_string()

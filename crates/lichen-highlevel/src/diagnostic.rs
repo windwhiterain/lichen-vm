@@ -118,6 +118,16 @@ pub enum DiagKind {
     /// [`NativeOps`](crate::NativeOps) registry, and this is the miss.  `a`/`b`
     /// are unused; the operator name rides in [`DiaryEntry::field`].
     NativeOpUnresolved,
+    /// A `$name(args…)` call whose builder returned a term the checker cannot
+    /// adopt: the three
+    /// [`NativeApply`](crate::NativeApply) records must name one `[value,
+    /// type]` pair — exactly two slots, element 1 the returned `ty`, element 0
+    /// the returned `val` when the value is a decided node — built in the block
+    /// the call is compiled into.  Every downstream read of the term reads
+    /// those two slots, so anything else would install a term the checker never
+    /// checked.  `a`/`b` are unused; the operator name rides in
+    /// [`DiaryEntry::field`].
+    NativeOpContract,
     /// A schema that carries an attribute, checked by a build that has no
     /// attribute extension to lower it — the public
     /// [`Checker::build`](crate::checker::Checker::build) and

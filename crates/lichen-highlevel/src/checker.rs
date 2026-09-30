@@ -40,6 +40,7 @@ use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
     NodeId, Operation, Registry,
 };
+use lichen_utils::extend::AsEnum;
 use stacksafe::stacksafe;
 
 use crate::attr::{AttrExt, AttrSet};
@@ -1415,7 +1416,7 @@ where
             .find(|(name, _)| *name == op)
             .map(|(_, operator)| operator)
         {
-            Some(operator) => operator.build(self, e, &native_args, loc),
+            Some(operator) => operator.build(self, e, &native_args, loc.clone()),
             None => {
                 // An unregistered name is an ordinary check-time refusal, not
                 // a broken invariant: only the checker can see the registry,
@@ -1437,6 +1438,53 @@ where
                 return pair;
             }
         };
+        // The plugin's contract — the one thing the checker relies on and
+        // cannot see.  Every downstream read of an expression's term reads it
+        // as a `[value, type]` pair (`value_of` indexes element 0; the apply
+        // wiring and the type checks read element 1), and `Ctx` builds exactly
+        // that shape — but the three records a builder returns are raw node
+        // ids, so the shape is validated here rather than assumed: `node` must
+        // be a two-slot array in the block this call is compiled into, element
+        // 1 exactly `ty`, and element 0 exactly `val` when the value is a
+        // decided node (a builder like compute's `$jit` legitimately returns
+        // `val: None`, leaving element 0 the op node the runtime reads).  A
+        // violated contract is a guard rather than an adopted malformed term,
+        // exactly as the imported export's pair contract above.
+        //
+        // Only `node`'s block is checked: the checker's canonical shared type
+        // expressions (`int_type`, the kind markers, the universe) are
+        // allocated once in the root block and deliberately referenced from
+        // pairs built in child blocks — compute's `$range` returns
+        // `int_type()` from a kernel body — so `ty`'s block is not part of the
+        // contract.
+        let pair_items = match self.module.node_value(AnyNodeId::Dynamic(built.node)) {
+            Some(value) => match value.as_enum() {
+                // SAFETY: `array` is the value payload of `built.node`, a node
+                // the plugin holds from this module, so its home block is alive
+                // for this read.
+                Some(LowValue::Array(array)) => Some(unsafe { array.items() }),
+                _ => None,
+            },
+            None => None,
+        };
+        let contract_holds = pair_items.is_some_and(|items| {
+            items.len() == 2
+                && self.module.nodes.get(built.node).map(|node| node.block)
+                    == Some(self.current_block)
+                && items[1].node == AnyNodeId::Dynamic(built.ty)
+                && built
+                    .val
+                    .is_none_or(|val| items[0].node == AnyNodeId::Dynamic(val))
+        });
+        if !contract_holds {
+            let cell = self.fresh_cell();
+            let pair = self.pair_of(cell, cell);
+            self.term[e] = Some(pair);
+            self.val[e] = Some(cell);
+            self.ty[e] = Some(cell);
+            self.record_guard(pair, pair, loc, DiagKind::NativeOpContract, Some(op));
+            return pair;
+        }
         self.term[e] = Some(built.node);
         self.val[e] = built.val;
         self.ty[e] = Some(built.ty);
