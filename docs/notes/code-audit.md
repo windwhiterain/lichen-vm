@@ -63,6 +63,7 @@ queue's order is deliberate.
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | todo |
+| P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -848,6 +849,38 @@ independent of the integrity question:
 the directory) before the rename, and make the `$PATH` fallback say what it
 picked. Do not add a checksum or a signature here — `D4` decided against both,
 and re-adding one is a new decision, not a finishing touch.
+
+### P1-21 — A struct value applied through a deferred callee is still silent `verified`
+
+The residual `P1-6` could not close, demonstrated first-hand:
+
+```
+$ cat p.lichen
+S = struct<.a Int>
+f = g => g 1
+f S(.a 1)
+$ cargo run -q -p lichen-language -- p.lichen
+parameterized: ?a          # exit 0, no diagnostic
+```
+
+**Why it is not closable from the lowlevel as things stand.** A compute `Kernel`
+is a struct — `[native, sig]` — and in this runtime a struct value *is*
+structurally a `LowValue::Array`. `P1-6` moved `Array` to the lazy side for
+exactly that reason, after `tests/compute.rs`'s cross-kernel cases caught the
+first, `Array`-recording split (both failed with the new error, so the arm was
+fixed rather than the test). The lowlevel therefore cannot tell a kernel's array
+from a struct instance's array: only the **program** knows which of its values
+are callable.
+
+**Fix shape.** The apply arm needs the program's answer, which means a hook — the
+same shape `Program::defer_pending` already establishes (a policy the lowlevel
+consults where it would otherwise have to guess, with a default that refuses).
+A `Program::is_callable(value) -> bool`, defaulting to `false` for a program that
+names none, would let the arm record the error for a value the program disclaims
+while leaving a kernel lazy. Cost: a new method on the `Program` trait, so every
+program type states it — which is why it is its own item and not a footnote to
+`P1-6`. The alternative, having the arm consult the program's operator dispatch,
+was not evaluated and may be cheaper.
 
 ## P2 — architecture
 
