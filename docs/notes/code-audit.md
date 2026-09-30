@@ -64,6 +64,7 @@ queue's order is deliberate.
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
+| P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1277,6 +1278,45 @@ program type states it — which is why it is its own item and not a footnote to
 `P1-6`. The alternative, having the arm consult the program's operator dispatch,
 was not evaluated and may be cheaper.
 
+### P1-22 — The frontend's recursion overflows the caller's stack on a ~500-byte file `verified`
+
+Found while fixing `P2-10`, which guarded the checker's own recursion. With
+`check_term` guarded, a **source** file still aborts the process, and the file is
+tiny:
+
+```
+$ python -c "print('('*250 + '1' + ')'*250)" > deep.lichen    # ~500 bytes
+$ cargo run -p lichen-language -- deep.lichen
+thread 'main' has overflowed its stack
+STATUS_STACK_OVERFLOW (0xc00000fd)          # a process abort, not an error
+```
+
+250 nested parentheses abort; 150 succeed. Nested `[` behaves the same.
+
+**Why, and why it is not the parser.** The parser is the one layer that *is*
+guarded: it runs its own recursion on a worker thread with a 16 MiB stack
+(`crates/lichen-language-parser/src/parse.rs`). Everything after it walks the
+resulting AST **on the caller's thread** — `compile.rs`'s `compile_expr`
+(42 self-calls, no guard), `resolve.rs`'s expression walk, and the language
+server's walks in `analysis.rs` (`P2-2`'s three traversals). So the frontend
+faithfully builds a deep tree one layer up and then dies walking it.
+
+**Why it matters beyond the CLI.** The language server runs this same pipeline on
+a blocking thread for every request (`P1-17` makes that every keystroke), so
+pasting a deeply nested expression aborts the editor's language server. It is a
+crash reachable from a file a user merely opens — the cheapest kind of
+denial-of-service, and the process aborts rather than reporting anything.
+
+**Fix.** Guard every recursive walk that runs on the caller's thread, the way the
+lowlevel already does — `#[stacksafe]` on each recursive entry point (the
+dependency is already declared in `lichen-highlevel`, and `P2-10` shows it
+applies cleanly to a `&mut self` method), or one explicit depth guard that
+records a diagnostic where a counter is the better fit. The work overlaps `P2-2`
+(the hand-written walks should collapse rather than each grow a guard), so do
+them in whichever order lands the guard first and note the overlap. A test cannot
+provoke a stack overflow and stay a test — pin the success case, and pin the
+guard's diagnostic if the mechanism gives one.
+
 ## P2 — architecture
 
 ### P2-1 — `BufferSession` is built but unwired `verified`
@@ -1992,7 +2032,9 @@ Recorded so the next pass does not re-audit them.
   reload-under-lock, tmp+rename save.
 - **No `todo!`/`unimplemented!`/`FIXME`/`TODO` marker anywhere** in the crates.
 - **`#[stacksafe]` coverage in the lowlevel is complete** — all eleven recursive
-  entry points are annotated (the gap is `highlevel::check_term`, `P2-10`).
+  entry points are annotated. The gap this line used to name —
+  `highlevel::check_term` — is closed (`P2-10`); the surviving gaps are **upstream
+  of the lowlevel** in the frontend's own walks, which is `P1-22`.
 - **`no_attr_ext` aside, no `format!` in a hot path** in the lowlevel or
   highlevel; `format!` appears in the highlevel only in two codec error paths.
 - **`docs/README.md`'s index is complete** — all 33 notes are linked and no link
