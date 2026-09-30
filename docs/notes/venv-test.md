@@ -73,7 +73,7 @@ For a composed compiler to actually *run* a plugin's typed wrapper (not just
 carry its vocabulary), the compiler must register each plugin's wrapper as a
 **native package** on the store it evaluates against — the same store
 `register_native` fills so the plugin's `$sort`-style native calls resolve (see
-[`cli.rs`](../../crates/lichen-language/src/cli.rs)
+[`cli.rs`](../../crates/lichen-compiler/src/cli.rs)
 `main_with_native_packages`). The generated compiler's `main` passes one
 `("<alias>.lichen", <crate>::WRAPPER_SOURCE, <crate>::<crate>_ops!(LangProgram))`
 per plugin; the shipping compiler passes `&[]`, so its store stays native-free.

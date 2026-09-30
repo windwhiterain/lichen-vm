@@ -129,7 +129,7 @@ for the live buffer**, rather than building a second cache. See
 
 The store is **scoped per plugin set**: a plugin-built compiler uses its own
 `<lichendir>/compilers/<key>/` as the artifact-cache root (via
-`lichen_language::cli::main_with_cache_dir`), so its compile artifacts never
+`lichen_compiler::cli::main_with_cache_dir`), so its compile artifacts never
 collide with (or reuse) another vocabulary's — only the shipping compiler uses
 the base `lichendir()` root.
 

@@ -113,7 +113,7 @@ dependency-aware) *is* the cross-process artifact.
 ### The artifact store is scoped per plugin set
 
 The `DeviceRegistry` cache root is **not** `lichendir()`: the compiler CLI
-takes an explicit cache root ([`lichen_language::cli::main_with_cache_dir`]), and
+takes an explicit cache root ([`lichen_compiler::cli::main_with_cache_dir`]), and
 **every** compiler — shipping and **plugin-built** — scopes it to a
 `compilers/<plugin-set-key>` slot (`lichendir()/compilers/<key>`).  This isolates
 the *compiled-artifact* store per vocabulary.  The artifact encoding depends on

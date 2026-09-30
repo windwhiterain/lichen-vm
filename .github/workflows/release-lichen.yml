@@ -57,7 +57,7 @@ jobs:
         run: |
           cargo build --release --locked \
             -p lichen-package \
-            -p lichen-language \
+            -p lichen-compiler \
             -p lichen-language-server
       - name: Stage release assets
         shell: bash

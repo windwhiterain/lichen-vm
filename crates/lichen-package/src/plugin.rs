@@ -21,7 +21,7 @@
 //! language-server crate are generated **bin-only**: `src/main.rs` holds the
 //! composition *and* the `main`.  In a lib+bin package `crate::` refers to the
 //! *binary* crate (which has no composition), so `crate::LangProgram` — used by
-//! both `cli::main::<crate::LangProgram>()` (compiler) and
+//! both `lichen_compiler::cli::main::<crate::LangProgram>()` (compiler) and
 //! `server::main::<crate::LangProgram>(&cache_root)` (LSP) — would not resolve there.  The
 //! bin-only shape makes the composed `LangProgram` a root item of the binary
 //! crate, so both entry points resolve it.
@@ -30,7 +30,7 @@
 //! `cargo check`s once the plugin's leaves exist.  The language layer's
 //! tooling (package store, run, render, CLI, server) is generic over a
 //! program's value/operator vocabularies (see `lichen_language::LangProgramShape`),
-//! so a generated compiler routes through the shared [`lichen_language::cli`]
+//! so a generated compiler routes through the shared [`lichen_compiler::cli`]
 //! and a generated server through the shared
 //! [`lichen_language_server::server`] over its own composed vocabulary.  The
 //! composition macro emits a **per-leaf [`ProgramCodec`]** (persistent — see
@@ -117,7 +117,10 @@ pub fn rebuild(
         &format!("lichen-compiler-{name}"),
         core_repo,
         plugins,
-        "",
+        // The generated compiler drives the shared CLI, which lives in its own
+        // crate (`P2-12`); the language-server build below does not need it, so
+        // the dependency is passed here rather than baked into the base list.
+        &format!("\n{}", core_dep_line(core_repo, "lichen-compiler")),
     )?;
     write_compiler_main_rs(dir, plugins, leaves)?;
 
@@ -262,8 +265,11 @@ fn server_dep(core_repo: &str) -> String {
 /// The generated crate's `Cargo.toml`: depends on the language crate, the
 /// plugin dependencies (from a local path when `git` is a path that exists),
 /// core crates from `core_repo` (a local checkout path or a git URL), and any
-/// `extra_deps` (the language-server dependency for an LSP crate — a fragment
-/// already rendered by [`server_dep`], the only producer).
+/// `extra_deps` — the dependency lines only one of the two generated crates
+/// needs.  The producers are [`server_dep`] (the language server for an LSP
+/// crate) and [`core_dep_line`] with `"lichen-compiler"` (the CLI crate for a
+/// compiler); a crate that is not the kind being generated never gets the
+/// other's.
 ///
 /// Every value in the document is written through [`toml_string`], so no value
 /// can end the literal it sits in.
@@ -493,9 +499,9 @@ pub type Program = LangProgram;
 /// The `register_native` slots a plugin's embedded wrapper against its private
 /// native-op registry, served as a native virtual package at `<alias>.lichen`.
 /// A plugin-built compiler's `main` hands one `(virtual_path, wrapper, ops)`
-/// tuple per plugin to `cli::main_with_native_packages`, so the plugin's
-/// `$sort` (etc.) resolves privately — and the wrapper is compiled on the same
-/// store the program evaluates against, exactly as the reference
+/// tuple per plugin to `lichen_compiler::cli::main_with_native_packages`, so
+/// the plugin's `$sort` (etc.) resolves privately — and the wrapper is compiled
+/// on the same store the program evaluates against, exactly as the reference
 /// `std_native` test's `register_native` plug.
 ///
 /// The wrapper is `<crate_ident>::WRAPPER_SOURCE` and the ops registry is
@@ -526,16 +532,17 @@ fn native_package_lines(plugins: &[Depend]) -> Result<String, String> {
 }
 
 /// The generated crate's `src/main.rs` (the **bin-only** compiler): the
-/// composition at the crate root, then the shared [`lichen_language::cli`]
+/// composition at the crate root, then the shared [`lichen_compiler::cli`]
 /// over the composed program.  A compiler must be **bin-only** (not lib+bin)
 /// so `<crate>::LangProgram` resolves from the binary crate's root — in a
 /// lib+bin package `crate::` refers to the binary crate, which would have no
-/// composition, so `cli::main::<crate::LangProgram>()` would not compile.
+/// composition, so `lichen_compiler::cli::main::<crate::LangProgram>()` would
+/// not compile.
 ///
 /// The generated `main` runs the compiler with its **own plugin-set cache
 /// slot** as the artifact-cache root, so the compiled-artifact store is scoped
 /// per vocabulary: a rebuilt compiler never shares (or reuses) another plugin
-/// set's artifacts for the same file ID (see `lichen_language::cli` and
+/// set's artifacts for the same file ID (see `lichen_compiler::cli` and
 /// `docs/notes/artifact-cache.md`).
 fn write_compiler_main_rs(dir: &Path, plugins: &[Depend], leaves: &Leaves) -> Result<(), String> {
     // The slot directory base name IS the plugin-set cache key — the same key
@@ -557,7 +564,7 @@ fn main() -> std::process::ExitCode {{
     let cache_root = lichen_language::persist::lichendir()
         .join("compilers")
         .join("{key}");
-    lichen_language::cli::main_with_native_packages::<crate::LangProgram>(
+    lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(
         &cache_root,
         &[
 {native}        ],
@@ -635,8 +642,9 @@ mod generated_main_tests {
         write_compiler_main_rs(&slot, &[], &Leaves::shipping()).expect("write the generated main");
         let main = std::fs::read_to_string(slot.join("src/main.rs")).unwrap();
         assert!(
-            main.contains("main_with_native_packages"),
-            "the generated compiler must register the plugin's native packages:\n{main}"
+            main.contains("lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>("),
+            "the generated compiler must drive the CLI crate's entry point over its composed \
+             program:\n{main}"
         );
         assert!(
             main.contains(&format!(".join(\"{key}\")")),
@@ -680,7 +688,7 @@ mod generated_main_tests {
     fn native_package_lines_register_each_plugins_wrapper() {
         // A generated compiler must register each plugin's native package so its
         // wrapper (`$sort` etc.) resolves against the plugin's own registry —
-        // the tuple shape `cli::main_with_native_packages` expects.
+        // the tuple shape `lichen_compiler::cli::main_with_native_packages` expects.
         let dep = Depend {
             url: "file:///C:/work/lichen-vm".into(),
             name: "std".into(),

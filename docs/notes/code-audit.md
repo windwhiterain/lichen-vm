@@ -80,7 +80,7 @@ queue's order is deliberate.
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
-| P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | todo |
+| P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
 | P3-1 | medium | all | Duplication clusters | todo |
 | P3-2 | medium | all | Workspace manifest duplication | todo |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | todo |
@@ -2148,6 +2148,70 @@ for the compiler binary, and the release workflows that build it.
 
 **Resolved by `D10`: its own crate.** The feature route was considered and
 rejected there; see that entry for what the move must carry with it.
+
+**Outcome.** The CLI is a workspace member of its own, **`lichen-compiler`**
+(`crates/lichen-compiler`; package and binary `lichen-compiler`, library
+`lichen_compiler`).  `cli.rs` moved there as `src/cli.rs` — the module path
+survives, so a plugin's generated `main` names `lichen_compiler::cli::…` — and
+`src/main.rs` moved with it; the `clap` dependency, `default-run` and the
+`[[bin]]` target left `lichen-language`, which keeps no `pub mod cli;`.  The
+crate graph gained exactly one edge, `lichen-compiler → lichen-language`:
+`cargo tree` shows `clap` gone from both `lichen-language` and
+`lichen-language-server`, and `Cargo.lock` lists neither `clap` nor
+`lichen-compiler` among `lichen-language`'s dependencies.
+
+*No library item had to be widened.*  Every item `cli.rs` calls was already
+public — `LangProgramShape`, `package::PackageStore`
+(`new`/`with_cache_dir`/`register_native`/`load_package`),
+`persist::{ArtifactCodec, shipping_cache_root}`, `preprocess::stage_depends`,
+`program::GcdOp`, `diag::{Diag, Stage}`, `render::render_all`,
+`run::evaluate_raw` — so the argument parsing moved and no piece of the
+pipeline did.
+
+**The callers that changed.**  ① The compiler binary's target: `[[bin]]` and
+`default-run` moved to the new manifest, and `src/main.rs` now calls
+`lichen_compiler::cli::main::<lichen_language::program::LangProgram>()`.
+② The generated plugin compiler's source: `write_compiler_main_rs` emits
+`lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(…)` in
+place of the `lichen_language::cli::…` call.  ③ The generated manifest:
+`rebuild` passes `core_dep_line(core_repo, "lichen-compiler")` through
+`write_cargo_toml`'s `extra_deps` — the interpolation site `server_dep` already
+used — so a generated *compiler* gains
+`"lichen-compiler" = { path = "<core_repo>/crates/lichen-compiler" }` (or the
+git form) and a generated *server* does not, which is the asymmetry the split
+exists for.  The build callers followed: `-p lichen-language` became
+`-p lichen-compiler` in `.github/workflows/build.yml`,
+`.github/workflows/release-lichen.yml` and `scripts/venv-test.sh`, with nothing
+else about those steps changed.
+
+**Tests.**  The only suites that reached the CLI were the generated-text pins,
+and they pin the new text: `plugin_manifest_tests.rs` asserts the compiler
+manifest carries `lichen-compiler` (and the language-server manifest does not),
+and `generated_main_tests` pins
+`lichen_compiler::cli::main_with_native_packages::<crate::LangProgram>(`.  No
+other suite named `cli::`.  The flag surface, help text, exit codes and
+behaviour are unchanged: the files moved, nothing in them was tidied.  The
+shipped binary was run end to end after the move (`--help`, `--version`,
+`examples/array.lichen` → `[1, 2, 3]: array<Int, 3>`,
+`examples/recursion.lichen` → `55: Int`), and a hand-written crate with a
+generated compiler's shape (depending on `lichen-compiler` by path and calling
+`main_with_native_packages`) `cargo check`s — so the generated manifest's line
+and the generated call both resolve.
+
+**What did not move, and why.**  The README generator and `sync-readme`
+(`readme.rs`, `src/bin/sync-readme.rs`) stayed: they are `P2-6`'s, and that is
+why `lichen-language` still has a binary.  The library half (`package.rs`,
+`persist.rs`, `run.rs`, `render.rs`, `preprocess`, `program`) stayed because the
+CLI only calls it; `clap` left the library's manifest with no replacement.
+
+**Residual references left alone.**  Two sections of this file still name the
+old path — `P1-16`'s Outcome (`crates/lichen-language/src/cli.rs:232`) and
+`P2-6`'s text (`lichen_language::cli::main_with_native_packages`) — and those
+are each item's own record; a closed plan's methodology in
+`docs/notes/type-system-cleanup-plan.md` (`cargo run -p lichen-language --bin
+lichen-compiler`) is likewise historical.  Every live reference was re-pointed:
+`README.md`, `crates/lichen-package/{README.md,src/lib.rs}` and
+`docs/notes/{artifact-cache,language-toolchain,plugin-taxonomy,venv-test,package-manager}.md`.
 
 ## P3 — refactor
 

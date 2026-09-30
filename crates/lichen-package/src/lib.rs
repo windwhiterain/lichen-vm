@@ -15,7 +15,7 @@
 //! crate for the `@{…@}` block grammar and its `Depend` import-path type (see
 //! [`preprocess`]); it never links the language or VM crates.  The binary is
 //! named `lichen` ([`main`]); the language compiler is the renamed
-//! `lichen-compiler` in `crates/lichen-language`.
+//! `lichen-compiler` in `crates/lichen-compiler`.
 
 pub mod compiler_cache;
 pub mod git;

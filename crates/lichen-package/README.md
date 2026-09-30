@@ -9,7 +9,7 @@ language server) into **Lichen Home**, building a plugin-composed compiler (in t
 lichen-home compiler cache) when a native plugin is imported.
 
 It is the companion to the language compiler, now `lichen-compiler`
-(`crates/lichen-language`, formerly the `lichen` binary).  There is **no
+(`crates/lichen-compiler`, formerly the `lichen` binary).  There is **no
 project manifest** — dependencies are declared per file.
 
 ## Commands

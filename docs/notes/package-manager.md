@@ -9,7 +9,7 @@
 > `crates/lichen-language/src/package.rs` (`PackageStore` `register_vendored` /
 > `resolve_import`).
 
-The compiler binary is `lichen-compiler` (in `crates/lichen-language`, formerly
+The compiler binary is `lichen-compiler` (in `crates/lichen-compiler`, formerly
 the `lichen` binary).  The `lichen` name is now the **package manager**: a
 separate crate, `crates/lichen-package`, that resolves git dependencies from a
 file's own `@{…@}` block, fetches the toolchain binaries, and rebuilds the
@@ -19,9 +19,10 @@ There is **no project manifest**: dependencies are declared per file.
 
 ## Splitting the work
 
-- `lichen-compiler` (crates/lichen-language) — the frontend, the package store,
-  the persistent device cache, `run`/`build`.  Consumes the `@{…@}`
-  block grammar and the `Depend` type from the isolated
+- `lichen-compiler` (crates/lichen-compiler) — the command-line surface and the
+  binary; the frontend, the package store, the persistent device cache and
+  `run`/`build` live in the compiler library, `crates/lichen-language`.
+  Consumes the `@{…@}` block grammar and the `Depend` type from the isolated
   [`lichen-preprocess`](../../crates/lichen-preprocess/) crate (which owns the
   block *syntax* and the preprocessor import path).
 - `lichen` (crates/lichen-package) — the project workflow.  Owns the

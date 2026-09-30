@@ -2,10 +2,8 @@
 name = "lichen-language"
 version = "0.1.0"
 edition = "2024"
-default-run = "lichen-compiler"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
 stacksafe = "1"
 lichen-compute = { path = "../lichen-compute" }
 lichen-doc = { path = "../lichen-doc" }
@@ -24,7 +22,3 @@ lichen-utils = { path = "../lichen-utils" }
 # the slot this crate reads with the one the package manager installs into.
 lichen-package = { path = "../lichen-package" }
 lichen-std-native = { path = "../../lichen-std-native" }
-
-[[bin]]
-name = "lichen-compiler"
-path = "src/main.rs"
