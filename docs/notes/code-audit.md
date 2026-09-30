@@ -51,7 +51,7 @@ queue's order is deliberate.
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
 | P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | done |
-| P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
+| P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | done |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | done |
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | done |
@@ -697,10 +697,45 @@ The second clause works only because a guard records `Range::default()`
 (`checker/diagnostics.rs:100`) and a unify always records a non-empty range.
 One informational diary entry with an empty range flips this to `true`, which at
 `:581` **skips the entire definition pass** — silently disabling every runtime
-check in the program. The invariant is unstated and untyped.
+check in the program. The invariant is unstated and untyped. *(No such entry is
+produced in the tree: the consequence is a latent hazard, not a live bug — see
+the Outcome.)*
 
 **Fix.** Make the discriminant explicit — `errors: Option<Range<usize>>`, or an
 outcome enum.
+
+**Outcome.** The mechanism held, re-read first-hand: `record_guard` wrote
+`Range::default()` while `record_unify` wrote the non-empty range
+`check_unify`/`check_unify_relaxed` had just produced, so an entry's *kind* was
+the emptiness of its range.  Every `check_failed` call site was read too, and
+each acts on a `true`: the function-definition pass is skipped (every body's
+return and its asserts never deep-evaluate, so no apply-time check and no assert
+fires), then the top-level statement pass, then `check_asserts`, and `Build::ok`
+becomes false.
+
+**Reachability is latent, and the note's consequence overstated it.** No
+producer records an entry that is not a failure — a guard *is* a failure by
+construction, and a unify entry exists only when its range is non-empty — so no
+in-tree program could flip the clause; `Build::diary` is public, but it is only
+read after the passes have run.  What the item names is a hazard on the one
+field every future producer must fill in, and that is the thing fixed.
+
+`DiaryEntry::errors` is now `Option<Range<usize>>`: `None` *is* the guard
+outcome — nothing unified, so the entry is itself the whole diagnostic — and
+`Some(range)` is a failed unification's owned errors, so "a guard produced no
+unify errors" and "a check produced an empty range" are different values rather
+than the same one.  `check_failed` reads `entry.errors.is_none()`, so the
+definition-pass skip still happens for the reason it was written (a guard
+failure) and for no other; the diagnostics layer matches on the option for its
+guard-versus-owner split, and the two owner lookups
+(`orphan_unify_errors`, `mismatch`) filter with
+`is_some_and(|range| range.contains(&i))`.
+
+No test was added: the change is a type-level disambiguation with no behaviour
+to pin, and the classification it protects is already exercised on both sides by
+the suite (a guard failure and a unification failure each fail their build).
+The highlevel suite (91 + 5 + 5 + 1 + 5 tests) and `lichen-language`'s
+`pipeline` (121 tests) pass unchanged.
 
 ### P1-10 — `Static` export operands are unchecked `reported`
 

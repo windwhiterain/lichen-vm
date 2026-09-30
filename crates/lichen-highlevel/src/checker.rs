@@ -759,9 +759,12 @@ where
     /// check-time refusal that never reached the lowlevel, so it leaves the
     /// error vec empty and the vec alone would now miss it; this is why the
     /// definition pass skips when it holds (the graph may then hit a
-    /// non-function apply, which the runtime panics on).
+    /// non-function apply, which the runtime panics on).  A guard entry is
+    /// exactly one whose [`DiaryEntry::errors`] is `None` — the kind of check
+    /// it was is a recorded fact, never an inference from an empty range.
     fn check_failed(&self) -> bool {
-        !self.module.unify_errors.is_empty() || self.diary.iter().any(|e| e.errors.is_empty())
+        !self.module.unify_errors.is_empty()
+            || self.diary.iter().any(|entry| entry.errors.is_none())
     }
 
     /// The attribute tail a checked expression carries: an annotation's

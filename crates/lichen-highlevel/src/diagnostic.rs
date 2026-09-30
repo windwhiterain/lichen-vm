@@ -136,17 +136,25 @@ pub enum DiagKind {
 
 /// One checker check, attributed with where it came from.
 ///
-/// A `DiaryEntry` is *not* necessarily a unification failure: a guard can
-/// reject before any unify happens, in which case [`Self::errors`] is empty
-/// and the entry is itself the whole diagnostic.  What every entry has is a
+/// The kind of check is [`Self::errors`], not an incidental reading of it: a
+/// guard rejected the expression before any unify happened, so it owns no
+/// error range and the entry is itself the whole diagnostic, while a failed
+/// unification owns the range it produced.  What every entry has is a
 /// recording position ([`Self::seq`]), which is the output order.
 #[derive(Clone, Debug)]
 pub struct DiaryEntry {
-    /// The [`Module::unify_errors`] entries this check produced — **empty on
-    /// success and for a guard failure**, which never unified.  One unify may
-    /// own several of them (e.g. elementwise), so this is the range rather
-    /// than a single index.
-    pub errors: Range<usize>,
+    /// What the check produced: `None` for a **guard** failure, which never
+    /// unified, and `Some(range)` for the [`Module::unify_errors`] entries a
+    /// failed unification produced.  One unify may own several of them (e.g.
+    /// elementwise), so this is the range rather than a single index.
+    ///
+    /// The range is never empty: a unification that produced no error is not
+    /// recorded at all (see
+    /// [`Checker::check_unify`](crate::checker::Checker::check_unify)).  That
+    /// is what makes this field the discriminant — reading an empty range as
+    /// "a guard" would have classified a future informational entry with no
+    /// owned error as a guard failure, which skips the whole definition pass.
+    pub errors: Option<Range<usize>>,
     /// The position this entry was recorded at — the checker's monotonic
     /// recording counter.  It is the diagnostic's place in the output order
     /// (see [`Build::diagnostics`]), independent of whether it owns errors.
@@ -275,7 +283,7 @@ where
         // stable, so several failures of one unify stay in their own order.
         let mut attributed: Vec<(usize, Diag<P>)> = Vec::new();
         for entry in &self.diary {
-            if entry.errors.is_empty() {
+            let Some(errors) = entry.errors.clone() else {
                 // A guard failure: the check refused before unifying, so the
                 // entry itself is the diagnostic — no error, no expected/found
                 // sides beyond what the guard recorded.
@@ -297,8 +305,8 @@ where
                     },
                 ));
                 continue;
-            }
-            for i in entry.errors.clone() {
+            };
+            for i in errors {
                 attributed.push((entry.seq, self.mismatch(i)));
             }
         }
@@ -478,7 +486,12 @@ where
     /// order the lowlevel recorded them in.
     fn orphan_unify_errors(&self) -> Vec<usize> {
         (0..self.module.unify_errors.len())
-            .filter(|&i| !self.diary.iter().any(|e| e.errors.contains(&i)))
+            .filter(|&i| {
+                !self
+                    .diary
+                    .iter()
+                    .any(|e| e.errors.as_ref().is_some_and(|range| range.contains(&i)))
+            })
             .collect()
     }
 
@@ -517,7 +530,10 @@ where
         // error (one unify may own several, e.g. elementwise).  Ranges are
         // disjoint by construction — each is a slice of the append-only error
         // vec, recorded before the next unify ran — so exactly one matches.
-        let entry = self.diary.iter().find(|e| e.errors.contains(&i));
+        let entry = self
+            .diary
+            .iter()
+            .find(|e| e.errors.as_ref().is_some_and(|range| range.contains(&i)));
         let (a, b) = match entry {
             Some(entry) => (entry.a, entry.b),
             None => (err.a, err.b),
