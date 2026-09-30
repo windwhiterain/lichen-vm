@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -930,6 +930,12 @@ pub struct Module<P: Program> {
     /// failed `function_apply`; the raw [`UnifyError`] entries it produced
     /// stay in [`Self::unify_errors`] alongside it.
     pub apply_errors: Vec<ApplyError>,
+    /// The apply nodes [`Self::apply_errors`] already holds an entry for — the
+    /// dedup's membership test, kept beside the list so recording an apply
+    /// error costs one hash probe instead of a scan of every entry recorded
+    /// so far.  Both stay append-only and are never cleared, so the two
+    /// cannot drift.
+    apply_error_nodes: HashSet<NodeId>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
@@ -1160,6 +1166,7 @@ impl<P: Program> Module<P> {
             asserts: Vec::new(),
             assert_errors: Vec::new(),
             apply_errors: Vec::new(),
+            apply_error_nodes: HashSet::new(),
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             apply_total: 0,

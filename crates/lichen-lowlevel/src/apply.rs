@@ -111,7 +111,7 @@ impl<P: Program> Module<P> {
             .and_then(|items| items.get(1))
             .map(|item| self.as_dynamic(item.node, block))
             .unwrap_or(argument);
-        if !self.apply_errors.iter().any(|e| e.apply_node == node) {
+        if self.apply_error_nodes.insert(node) {
             self.apply_errors.push(ApplyError {
                 function,
                 parameter_type,

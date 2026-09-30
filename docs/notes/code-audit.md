@@ -93,7 +93,7 @@ queue's order is deliberate.
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
-| P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | todo |
+| P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | done |
 | P4-8 | low | render | Two more ancestor guards scan the path they guard | todo |
 | P4-9 | low | compute | A `NativeOps` slice is leaked per registration | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
@@ -3628,10 +3628,49 @@ include: `crates/lichen-lowlevel/src/apply.rs` dedupes `apply_errors` with a lin
 `iter().any(...)` over a list that is **append-only and never cleared**, so a run
 that records `n` apply errors pays `n(n−1)/2` comparisons.
 
-**Fix.** The structure `P4-4` chose for its two sites — an index or a set beside
-the list — applied here. The dedup's *decision* must be identical, and the
-diagnostic order must not change. `P4-4`'s Outcome has the measurement method;
-reuse it rather than inventing a second one.
+**Outcome — premise held at the re-derived line, and the measurement is the
+note's own `n(n−1)/2` exactly.** Re-read first-hand: `apply.rs:114-123` was
+`!self.apply_errors.iter().any(|e| e.apply_node == node)` before the push, and
+`apply_errors` is the `pub` field at `lib.rs:932` that nothing clears. Counted
+with the method `P4-4` used — a temporary counter in the replaced scan, removed
+before commit — on a workload that records many apply errors: a frozen
+`f([a, b]) = a` with `a` and `b` unified (a homogeneous array parameter, the
+shape `static_parameter_topology_is_reestablished_among_clones` builds), driven
+through `N` distinct failing call sites, so each records one `ApplyError`.
+
+*Measured, before → after* (`test` profile; the count is exact):
+
+| N failing call sites | `apply_errors` | scan entries visited, before | index probes, after |
+|---|---|---|---|
+| 50 | 50 | 1 225 | **50** |
+| 100 | 100 | 4 950 | **100** |
+| 200 | 200 | 19 900 | **200** |
+| 400 | 400 | 79 800 | **400** |
+| 800 | 800 | 319 600 | **800** |
+
+Before: exactly `n(n−1)/2` per the table (`800·799/2 = 319 600`), quadratic.
+After: `n`, one hash probe per recorded error.
+
+**The replacement, and why it is a set rather than `P4-4`'s index.**
+`P4-4`'s two sites asked *which* entry owns an error index, so a
+`Vec<Option<usize>>` beside the list answered them in one pass. This site asks
+only *has this apply node already been recorded* — a membership test keyed on
+`NodeId`, the `apply_node` field — so the structure beside the list is a
+`HashSet<NodeId>` (`Module::apply_error_nodes`, `lib.rs:933-938`), and the check
+becomes `if self.apply_error_nodes.insert(node)` (`apply.rs:114`). `insert`
+returns whether the node was new, which is exactly the old `any`'s negation.
+
+**No behavioural change, checked directly.** The decision is identical by
+construction: the same nodes are new on the same calls, so the same entries push
+in the same order, and the diagnostic sequence `P4-4`'s `unify_error_index`
+re-reads from this list is unchanged. Both stay append-only and are never
+cleared, so the set cannot drift from the list; the field is private, so no
+out-of-crate writer can push to one without the other. The workspace suite
+passes — `cargo test -p lichen-lowlevel` (139 tests, including the static
+parameter-topology test that asserts the `apply_errors` entry) and
+`cargo test -p lichen-language --test pipeline` (123) both green — and
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all -- --check` exit 0.
 
 ### P4-8 — Two more ancestor guards scan the path they guard `verified`
 
