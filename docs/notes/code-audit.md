@@ -62,7 +62,7 @@ queue's order is deliberate.
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
-| P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | todo |
+| P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
@@ -965,6 +965,26 @@ independent of the integrity question:
 the directory) before the rename, and make the `$PATH` fallback say what it
 picked. Do not add a checksum or a signature here — `D4` decided against both,
 and re-adding one is a new decision, not a finishing touch.
+
+**Outcome.** All three mechanical issues are fixed, and the integrity question
+was left exactly as `D4` settled it (no checksum, no signature, no host
+restriction). `download` now writes to
+`<dest-stem>.download.<pid>.<counter>.tmp` — unique across processes and within
+one — instead of the destination-derived `download.tmp`, so two concurrent
+installs for the same tool can no longer interleave on one file and nothing can
+pre-create or replace the temp by guessing its name. The downloaded file is
+flushed with `sync_all` before the rename (the open is for **write** access, not
+read: `sync_all` needs it on Windows), so a crash can leave a stray temp but not
+a truncated binary under the final name. `resolve` now reports a `$PATH` hit on
+**stderr** — *"`<bin>` is not installed in Lichen Home; using the copy on $PATH
+at <path>"* — because that path executes whatever binary the environment
+carries in place of the pinned release; stderr, not stdout, so `lichen path
+language-server` keeps its one-line stdout contract (`P5-7`).
+**Residual, deliberately left.** Only the file is flushed, not its directory, so
+on a power loss the rename itself can still be lost — the destination then holds
+the previous binary (or nothing), a clean re-download, not a truncated install.
+The `$PATH` binary is still executed with no further check; the note is the
+whole of the fix, by `D4`'s decision.
 
 ### P1-21 — A struct value applied through a deferred callee is still silent `verified`
 

@@ -19,8 +19,9 @@
 //! as delivered, over HTTPS to GitHub. The package manager is only ever *run*; how
 //! it got installed (any way) is irrelevant.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lichen_preprocess::{Depend, lichendir};
 
@@ -259,16 +260,26 @@ pub fn asset_url(repo: &str, tag: &str, bin: &str) -> String {
     format!("{repo}/releases/download/{tag}/{}", asset_name(bin))
 }
 
-/// Download `url` to `dest` (a temp sibling, then rename) using `curl`.
+/// A per-process counter making download temp names unique within one process;
+/// the pid separates processes.
+static DOWNLOAD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Download `url` to `dest` (a unique temp sibling, then rename) using `curl`.
 ///
-/// Windows ships `curl.exe`; Unix systems ship `curl`. Returns the download
-/// command's stderr on failure.
+/// A **predictable** temp name would let two invocations for the same tool
+/// interleave on one file, and let anything else in the destination directory
+/// pre-create or replace it; the pid + counter suffix keeps one invocation's
+/// bytes out of another's.  The file is flushed before the rename, so a crash
+/// cannot install a truncated binary under the final name.  Windows ships
+/// `curl.exe`; Unix systems ship `curl`. Returns the download command's stderr
+/// on failure.
 fn download(url: &str, dest: &PathBuf) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let tmp = dest.with_extension("download.tmp");
+    let nonce = DOWNLOAD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = dest.with_extension(format!("download.{}.{nonce}.tmp", std::process::id()));
     let out = Command::new("curl")
         .args(["-L", "--fail", "--output"])
         .arg(&tmp)
@@ -282,9 +293,23 @@ fn download(url: &str, dest: &PathBuf) -> Result<(), String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+    if let Err(e) = flush_to_disk(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot flush the download: {e}"));
+    }
     std::fs::rename(&tmp, dest).map_err(|e| format!("cannot move download into place: {e}"))?;
     make_executable(dest)?;
     Ok(())
+}
+
+/// Flush `path` to disk, so a crash after this cannot leave a truncated file
+/// behind the rename that follows.
+fn flush_to_disk(path: &Path) -> std::io::Result<()> {
+    // Opened for writing, not reading: `sync_all` needs write access on Windows.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .sync_all()
 }
 
 /// Make `path` executable (a no-op on Windows).
@@ -326,14 +351,25 @@ pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Resolve the shipped binary for `tool`: the Lichen Home copy first, then `$PATH`.
+/// Resolve the shipped binary for `tool`: the Lichen Home copy first, then
+/// `$PATH`.  A `$PATH` hit is reported on stderr, because it executes whatever
+/// binary the user's environment happens to carry in place of the pinned
+/// release.
 pub fn resolve(tool: Tool) -> Option<PathBuf> {
     if let Ok(dest) = tool_dest_path(tool) {
         if dest.is_file() {
             return Some(dest);
         }
     }
-    find_on_path(tool.bin_name())
+    let found = find_on_path(tool.bin_name());
+    if let Some(path) = &found {
+        eprintln!(
+            "note: `{}` is not installed in Lichen Home; using the copy on $PATH at {}",
+            tool.bin_name(),
+            path.display()
+        );
+    }
+    found
 }
 
 /// Resolve the language-server binary for a plugin set.
