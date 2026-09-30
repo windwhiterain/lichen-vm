@@ -2613,3 +2613,28 @@ fn the_tuned_total_still_bounds_a_long_but_terminating_recursion() {
     );
     assert_eq!(b.nonterminating.len(), 1);
 }
+
+// --- the checker's own recursion -----------------------------------------
+
+/// Nesting levels of [`a_deeply_nested_program_is_checked_without_an_overflow`],
+/// chosen past what the test thread's native stack holds: the checker's
+/// `check_term` recurses about twice per level (through `check_expr` and the
+/// `check_ann` rule), so this is millions of frames.
+const DEEP_NESTING: usize = 200_000;
+
+#[test]
+fn a_deeply_nested_program_is_checked_without_an_overflow() {
+    // A generated program may nest far deeper than the native stack: the
+    // checker's `check_term` recurses once per nesting level, so without a
+    // stack guard this build overflows and aborts the process instead of
+    // reporting anything.  The deep pass that follows is already
+    // `#[stacksafe]`; this pins the same property for the checker.
+    let mut ir = IR::new();
+    let int_ty = int_t(&mut ir);
+    let mut nested = int(&mut ir, 5);
+    for _ in 0..DEEP_NESTING {
+        nested = ann(&mut ir, nested, int_ty);
+    }
+    let b = build(nested, ir);
+    assert!(b.ok, "the nested annotations must check");
+}

@@ -40,6 +40,7 @@ use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
     NodeId, Operation, Registry,
 };
+use stacksafe::stacksafe;
 
 use crate::attr::{AttrExt, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
@@ -1138,6 +1139,14 @@ where
     // encoding — and are called from here with `self.type_expr` as the
     // canonical universe node.
 
+    /// The checker's recursion: one frame per nested expression (through the
+    /// per-kind rules and back through [`Self::check_expr`]), so a generated
+    /// or hostile program may nest past the native stack.  Nothing bounds the
+    /// expression grammar here — the budget guards bound the *runtime*, not
+    /// the check — so the recursion grows the stack instead, exactly as the
+    /// lowlevel's own recursive entry points do (`#[stacksafe]`: without it a
+    /// deeply nested program overflows the process instead of being checked).
+    #[stacksafe]
     fn check_term(&mut self, e: ExprId) -> NodeId {
         // The IR is a graph: statement bindings pre-resolve every use of a
         // name to the value's own `ExprId`, so one expression may be

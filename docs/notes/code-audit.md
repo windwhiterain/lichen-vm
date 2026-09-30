@@ -73,7 +73,7 @@ queue's order is deliberate.
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | todo |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
-| P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | todo |
+| P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
 | P3-1 | medium | all | Duplication clusters | todo |
 | P3-2 | medium | all | Workspace manifest duplication | todo |
@@ -1473,6 +1473,53 @@ the *runtime* (`checker.rs:484-490`) but not for the checker itself.
 
 **Fix.** `#[stacksafe]` on `check_term` (or an explicit depth counter that
 records a diagnostic) — the dependency is already there.
+
+**Outcome.** The premise held: `check_expr` forwards to `check_term`, the
+per-kind rules call `check_expr` back, and nothing on that cycle counted depth;
+and `stacksafe` was a `[dependencies]` entry of `lichen-highlevel` that no
+source file imported (a workspace grep for the import found only
+`lichen-lowlevel` and `lichen-utils`).  Measured first-hand by reverting only
+the source change: a hand-built IR nesting a literal in 200_000 annotations,
+compiled through `Checker::build`, aborted the test binary with *"has
+overflowed its stack"* (`STATUS_STACK_OVERFLOW`, `0xc00000fd`) — an abort, not
+a failed assertion.
+
+The fix is `#[stacksafe]` on `check_term`, as the lowlevel annotates its own
+recursive entry points.  The macro's requirements are a plain (non-`async`,
+non-`const`) function and a non-`impl Trait` return; this method's `&mut self`
+receiver and `-> NodeId` satisfy both, so it applies cleanly and the depth
+counter the item offered as a fallback was not needed.  The attribute wraps the
+body in `stacker::maybe_grow`, so the recursion allocates a fresh 2 MiB stack
+segment when less than 128 KiB remains.  There is therefore **no limit to trip
+and no diagnostic to assert** — the mechanism is stack growth, not a guard —
+which is why the test pins the success case only.  The same 200_000-deep build
+now checks, in 0.75 s, and the crate exercises its `stacksafe` dependency
+instead of merely declaring it.
+
+**The file-level consequence the finding states is real, but it is not this
+recursion's — corrected here.**  Post-fix (with `check_term` guarded), a source
+file of **250 nested parentheses** — about 500 bytes — still aborts the same
+way: 250 fails, 150 succeeds, on the `lichen-language` binary.  So the pass
+that overflows first from source is one of the frontend's own unguarded
+recursions, not the checker's: the parser's grammar recursion (which is why it
+gets a 16 MiB thread, `language-parser/src/parse.rs:94-103`) and the language
+layer's recursive walks (`compile.rs:379`'s `compile_expr` calls itself 42
+times, and `resolve.rs`'s and `analysis.rs`'s three walks are `P2-2`'s) all run
+with no `#[stacksafe]` and no depth guard.  Which of them is hit first was not
+isolated.  `P2-10`'s defect is therefore reachable through the IR-level public
+API — a host that generates and compiles an IR, which is what `Checker::build`
+is for — while a *source*-level repro of this particular recursion cannot be
+built, because the frontend dies first at roughly four orders of magnitude less
+nesting.  That source-level gap is a new finding of the same class, adjacent to
+`P2-2`/`P4-3`; it is reported, not fixed, and is not this item.
+
+**Test.** `crates/lichen-highlevel/tests/checker.rs`'s
+`a_deeply_nested_program_is_checked_without_an_overflow` builds
+`DEEP_NESTING` (200_000) nested annotations and requires the build to check.
+Against the unfixed sources it aborts the test binary with the message above
+instead of failing an assertion — a stack overflow is a process abort, so the
+pre-fix observation is an abort rather than a red test, and no test can pin
+that side; after the fix it passes.
 
 ### P2-11 — God files with named seams
 
