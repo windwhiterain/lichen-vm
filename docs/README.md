@@ -70,6 +70,7 @@ Every note opens with a `> Status:` line:
 | [Parallel primitives (`parallel`/`plrun`/`pget`/`pcollect`)](notes/lichen-compute-parallel.md) | `lichen-compute` | historical |
 | [Zed extension: build & test workflow](notes/zed-extension-testing.md) | `lichen-language-zed`, `lichen-language-server`, `tree-sitter-lichen` | current |
 | [Tree-sitter generated-files testing](notes/tree-sitter-generated-files.md) | `tree-sitter-lichen`, `lichen-language-zed` | current |
+| [Code audit and remediation queue](notes/code-audit.md) | — (all crates) | current — the queue is the work list; each item's status is live |
 
 ## The language spec
 

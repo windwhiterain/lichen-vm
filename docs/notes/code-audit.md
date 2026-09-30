@@ -1,0 +1,1088 @@
+# Code audit and remediation queue
+
+> Status: current — the audit inventory below was taken at `dev@e4c0bae`; the
+> queue is the work list, and each item's `Status:` field is the live state.
+> Points at: the code it names (every claim carries a `file:line`).
+
+This is the one place the audit's findings live. It exists so the fixes can be
+done one at a time, reviewed, and committed without re-deriving the analysis.
+
+## How to read this
+
+**Evidence legend** — every finding is marked:
+
+- `verified` — re-read first-hand at the cited lines while writing this note.
+- `reported` — found by a scoped read-only sweep and *not* independently
+  re-verified. Treat the line reference as a lead, confirm before fixing.
+
+**Status legend** — `todo` / `doing` / `done` / `blocked:<decision-id>` /
+`wontfix:<why>`.
+
+**Decisions** — items that cannot be fixed without a design call are marked
+`blocked:Dn` and listed in [Decisions](#decisions). Do not silently pick an
+answer for one.
+
+**Tests** — this project forbids an agent writing tests without permission.
+Items whose only sound proof is a regression test are marked `needs-test`; they
+are blocked until that permission is given (see [Decisions](#decisions), `D3`).
+
+**Scope discipline** — one item, one concern, one commit on
+`feature/code-audit`. Do not opportunistically fold in an adjacent item: the
+queue's order is deliberate.
+
+## Queue
+
+| id | severity | area | item | status |
+|---|---|---|---|---|
+| P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | todo |
+| P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | blocked:D1 |
+| P0-3 | critical | package | `git clone`/`checkout` argument injection | blocked:D2 |
+| P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
+| P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | todo |
+| P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | todo |
+| P1-1 | high | lowlevel | `insert_module` inserts before it asserts | todo |
+| P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | todo |
+| P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |
+| P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | blocked:D5 |
+| P1-5 | high | language | `content_key` tag collision across four AST forms | todo |
+| P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | blocked:D3 |
+| P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
+| P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
+| P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
+| P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | todo |
+| P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | todo |
+| P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
+| P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
+| P1-14 | high | language | `run.rs` never checks `Build::ok` | todo |
+| P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | todo |
+| P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | todo |
+| P1-17 | high | language-server | Every request runs the whole frontend | blocked:D6 |
+| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D6 |
+| P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
+| P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
+| P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
+| P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
+| P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | todo |
+| P2-6 | medium | language | README generator and `clap` live in the compiler library | todo |
+| P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
+| P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | todo |
+| P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | todo |
+| P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | todo |
+| P2-11 | medium | all | God files with named seams | todo |
+| P3-1 | medium | all | Duplication clusters | todo |
+| P3-2 | medium | all | Workspace manifest duplication | todo |
+| P3-3 | medium | ci | No test/clippy/fmt gate in CI | todo |
+| P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | todo |
+| P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | todo |
+| P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | todo |
+| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | todo |
+| P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
+| P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
+| P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
+| P5-1 | low | language | `tests/scratch.rs` has no assertions | todo |
+| P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | todo |
+| P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
+| P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
+| P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | todo |
+| P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | todo |
+| P5-7 | low | package | `lichen path language-server` pollutes stdout | todo |
+| P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
+| P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
+| P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
+| P5-11 | low | registry | `virtual:` file IDs can never verify | todo |
+
+## P0 — memory safety and supply chain
+
+### P0-1 — Byte-reader bounds: unit mismatch, overflow, alignment `verified`
+
+`crates/lichen-lowlevel/src/codec.rs:163-185` (array, tag 1) and `:206-228`
+(table, tag 6) are the same code twice:
+
+```rust
+let offset = r.u64()? as usize;
+let len    = r.u64()? as usize;                       // element count
+let gap = owner_base as usize - owner_arena.as_ptr() as usize;
+if offset + len > owner_arena.len() - gap { return Err(...); }
+let payload = unsafe { owner_base.add(offset) as *const ArrayItem };
+```
+
+Three defects in four lines:
+
+1. **Unit mismatch.** The writer emits `slice.len()` where `slice: &[ArrayItem]`
+   (`:117`, `:128`), so `len` is an *element* count, while
+   `owner_arena.len()` is a *byte* count (`persist.rs:406-408` reads bytes).
+   `offset = L-8, len = 8` passes the check and then reads 56 bytes past the
+   allocation.
+2. **Overflow.** `offset + len` is an unchecked `usize` add; in release a
+   crafted pair wraps and makes the check vacuous, after which
+   `ptr::add(offset)` is already UB (out of the object's bounds).
+3. **No alignment or stride validation.** `offset` need not be a multiple of
+   `align_of::<ArrayItem>()`, and `len` need not be a whole number of items.
+
+`gap` can also underflow `owner_arena.len() - gap` when the arena is shorter
+than the alignment padding, wrapping the bound to `usize::MAX`.
+
+`crates/lichen-registry/src/codec.rs:80-87` `Reader::take` has the same
+unchecked add (there it degrades to a slice-range panic, not UB).
+
+**Why it matters.** `deserialize_artifact` validates magic, version, key, the
+*supplied* hash, and the alignment — but the hash is a header field compared
+against a value the caller computes locally, and **the body has no integrity
+check at all**. Copying a valid artifact's 48-byte prefix and replacing the body
+passes every check. Anyone able to write `~/.lichen/artifacts/` reaches this.
+
+**Fix.** `checked_add` / `checked_mul(len, size_of::<T>())` for both leaf
+types; validate `offset % align == 0`; `saturating_sub` for `gap`; share one
+generic helper so the array and table arms cannot drift. Consider a body
+checksum in the container as the durable fix (see `D1`).
+
+### P0-2 — `&'static` laundering and `pub` raw-pointer fields `verified`
+
+`crates/lichen-lowlevel/src/lib.rs:253-275`:
+
+```rust
+pub fn items(&self) -> &'static [ArrayItem] {
+    match self {
+        AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+```
+
+The signature lifts a borrow of `&self` to `'static`. `drop_block` is `pub`
+(`gc.rs:187`) and frees the `Bump` (`gc.rs:232`), so this is UB from safe code:
+
+```rust
+let items: &'static [ArrayItem] = module.array_items(node).unwrap();
+module.drop_block(block);
+println!("{:?}", items[0]);
+```
+
+The same laundering is in `array_items` (`utils.rs:18`), `Handle::len`
+(`lib.rs:458-466`), `StaticHandle::len` (`:468-476`), and `ValueExt::value_eq`
+(`:336-350`). `utils.rs:12-17` puts a `# Safety` header on a **safe** function
+whose prose argues about "the lifetime of `&self`" while the signature says
+`'static`.
+
+`lib.rs:395-411`: `Handle<T>(pub *const T)` and
+`StaticHandle { pub offset: *const T }` are public raw-pointer fields, and
+`lib.rs:403`'s comment — *"Not really pointing to anything, just offset encoded
+with possible slice length"* — is **false**: `offset` is dereferenced at
+`lib.rs:271`, `lib.rs:470`, `codec.rs:115`, `codec.rs:126`, `static_module.rs:665`,
+`static_module.rs:684`. It describes the *serialized* integer form and was left
+on the in-memory field.
+
+Also note `copy_ext` (`utils.rs:49-63`) copies `old.len()` **bytes** into a slot
+aligned to `P::Value::alignment()`, and `ValueExt` (`lib.rs:311-351`) has no
+trait-level doc at all — no statement that `handle()` must stay stable, that
+`alignment()` must be a power of two, or that `len()` is a byte count.
+`Layout::from_size_align(..).unwrap()` (`utils.rs:55`) panics on a non-power-of-two
+`alignment()`.
+
+**Fix direction (needs `D1`).** Tie the returned slice to a lifetime the caller
+must hold (`fn items<'m>(&'m self, module: &'m Module<P>) -> &'m [ArrayItem]`), or
+make the accessors `unsafe` with a real contract. Make the pointer fields
+private behind checked constructors. Document `ValueExt`'s three obligations.
+
+### P0-3 — `git clone`/`checkout` argument injection `verified`
+
+`crates/lichen-package/src/git.rs:86-93`:
+
+```rust
+git(&["clone", &dep.url, &dir_git], &root_git)?;      // no `--`, no allowlist
+if let Some(rev) = rev { git_in(&dir_git, &["checkout", rev])?; }
+```
+
+`dep.url` is the right-hand side of a `depend "…"` directive and
+`crates/lichen-preprocess/src/parse.rs:24-46` stores it as a bare `String` with
+**no validation anywhere**. A source file containing
+
+```lichen
+@{ x = depend "--upload-pack=<command>" @}
+x
+```
+
+makes the process run `git clone --upload-pack=<command> <dir>`, which executes
+`<command> <dir>`. Reachable from `lichen fetch` / `run` / `build`
+(`main.rs:189, 248, 439, 498`) — cloning an untrusted repo and running one of
+its files is enough; no network fetch is needed. The preprocessor's string
+regex `"[^"@]*"` (`lichen-preprocess/src/lex.rs:44`) forbids `"` and `@` but
+not `-`, `=` or space, so the payload lexes cleanly.
+
+`rev`/`branch`/`tag` (`git.rs:38-43`) reach `git checkout <rev>` the same way:
+`rev = "-f"` silently checks out `HEAD` instead of the pin — a supply-chain
+downgrade that no test would notice.
+
+**Fix.** `git clone -- <url> <dir>` and reject a value whose first byte is `-`
+for all four fields. Scheme policy is `D2`.
+
+### P0-4 — Downloaded binaries have no integrity check `verified`
+
+`crates/lichen-package/src/toolchain.rs:262-284` downloads with
+`curl -L --fail`, renames into place, `chmod 0755`s, and hands the path to a
+caller that spawns it (`main.rs:302`, and an editor runs it as the LSP).
+`update()` (`toolchain.rs:369-378`) does the same for the package manager
+itself. There is no hash, no checksum file, no signature, and no pinning
+anywhere in the crate.
+
+`toolchain.rs:13-16` reads as a provenance guarantee — *"the toolchain and the
+package manager are always the same revision"* — but the **commit is pinned and
+the bytes are not**. `-L` follows redirects to any host; the temp name
+(`:267`) is predictable and shared; there is no `fsync` before the rename, so a
+crash can leave a truncated binary in place. `toolchain.rs:326-333` also falls
+back to any `lichen-compiler` on `$PATH` without warning.
+
+**Fix direction: `D4`.**
+
+### P0-5 — Artifact deserialization: unbounded recursion and allocation `reported`
+
+`crates/lichen-language/src/persist.rs`:
+
+- `:410-411`, `:470`, `:479`, `:486`, `:336`, `:344` —
+  `Vec::with_capacity(r.u64()? as usize)` straight from the file. A 64-byte
+  artifact can request a `2^60`-element allocation and abort the process.
+- `:331-357` `read_low_shape` recurses once per nesting level; each level costs
+  one byte, so ~1 MB of crafted bytes is ~10^6 frames of native stack.
+- `:403-405`, `:431-451`, `:472-490` — every `LocalNodeId` (`export`,
+  `parent`/`next`/`tail`, `parameter`/`r#return`/`asserts`/`nodes`) is taken
+  from the file unchecked. A structurally valid but semantically corrupt
+  artifact loads "successfully" and panics much later, far from the cause —
+  which contradicts the self-heal claim in
+  `crates/lichen-language-server/src/home.rs:14-17`.
+
+**Fix.** `checked_add` in `Reader::take`; a depth cap in `read_low_shape`;
+`min(count, remaining_bytes)` before every `with_capacity`; and validate every
+`LocalNodeId` against the declared node count at load.
+
+### P0-6 — `Depend::sub` is an unvalidated path join `verified`
+
+`crates/lichen-preprocess/src/lib.rs:162-166`:
+
+```rust
+pub fn vendored_dir(&self) -> PathBuf {
+    match &self.sub { Some(sub) => self.sources_dir().join(sub), None => self.sources_dir() }
+}
+```
+
+`sub` is a free-form string from the source file. `sanitize_alias` (`:171-183`)
+is applied to the *alias* only, and only allows `.` among punctuation — so even
+the alias could pass `..`, though `parse.rs:66-74` requires an identifier
+(`[A-Za-z_][A-Za-z0-9_]*` per `lex.rs:50`), so that path is unreachable. `sub`
+has no such gate: `sub = "../../.."` escapes the cache, and
+`PathBuf::join` with an absolute path or a drive letter *replaces* the base
+entirely. `sub` is a documented, used feature (`lichen-std/README.md`).
+
+**Fix.** Reject `sub` unless it is a relative path with no `..` component, no
+root, and no prefix — checked in one place next to `sanitize_alias`, with a
+preprocess diagnostic.
+
+## P1 — correctness
+
+### P1-1 — `insert_module` inserts before it asserts `verified`
+
+`crates/lichen-lowlevel/src/lib.rs:912-926` performs
+`self.entries.insert(key, …)` *inside* the `assert!`, so the resident `Package`
+is dropped and replaced before the duplicate-key assert fires. The sibling
+`freeze_mapped` (`:888-891`) checks `contains_key` first — the correct order. If
+the panic is caught anywhere up the stack, the registry silently holds the new
+artifact under the old key: exactly the shadowing the message claims to prevent.
+
+**Fix.** Hoist the `contains_key` check above the insert.
+
+### P1-2 — `.unwrap()` on the budget-refusal path `verified`
+
+`crates/lichen-lowlevel/src/evaluation.rs:262`:
+
+```rust
+let value = self.evaluate_node_deep(operand, Some(block));
+if self.nodes[operand].evaluated_deep.unwrap().parameterized {
+```
+
+`evaluate_node_deep_inner` returns **before** writing `evaluated_deep` on
+budget exhaustion (`:536-537`), and the cycle cut (`:513-517`) skips it too. So
+an extension operator over a too-deep operand turns
+`BudgetExhausted::EvaluateDepth` — whose whole contract (`lib.rs:686-693`) is
+that the guards *"refuse to continue instead of unwinding"* — into a panic. The
+author already guards the same field with `self.nodes.get(operand)` at
+`:626-634`; only `:262` indexes unconditionally.
+
+**Bonus defect in the same block:** `:534-535` says *"The nested counter
+deliberately stays inflated, as it did when the guard unwound"* and `:536`
+executes `self.deep_depth -= 1;`. The comment was copied from `apply.rs:24-28`,
+where it is **correct**. The divergence is behavioural, not cosmetic: because
+the counter is restored, every later sibling in the same pass re-trips the same
+budget and takes the same early return.
+
+**Fix.** `map_or(true, |e| e.parameterized)` and route the `None` case to the
+`Void` path; then make the comment and the code agree (decide which of the two
+behaviours is intended and state it).
+
+### P1-3 — Table identity hash is a raw address `verified`
+
+`crates/lichen-lowlevel/src/table.rs:232-237` hashes a table/function key by
+its **process address**:
+
+```rust
+AnyHandle::Dynamic(handle) => handle.0 as *const TableItem as usize as u64,
+AnyHandle::Static(handle) => handle.module.as_raw() ^ (handle.offset as *const TableItem as usize as u64),
+```
+
+The stored hash travels verbatim through a freeze
+(`static_module.rs:805-807`), so after a reload the key recomputes a different
+number and `partition_point` (`evaluation.rs:359`) never lands on the entry — a
+permanent `TableMiss`. `id_hash(FunctionId)` vs `id_hash(StaticFunctionRef)`
+(`table.rs:217`/`:219`) is the same class of bug with two different `Hash`
+impls. This falsifies `table.rs:8-11` (*"content-addressed artifacts stay
+deterministic"*) and `table.rs:20-21` (*"stable for the table's whole life"*).
+No test freezes a table and reads it back.
+
+### P1-4 — `hash_inner` cycle token vs `key_eq` coinduction `reported`
+
+`table.rs:178-180` cuts a cycle on **node identity plus depth**; `table.rs:248-259`
+cuts on the **unordered pair**. `A = [1, A]` and `B = [1, [1, B]]` are equal
+under `key_eq` but hash differently; a self-referential universe crossing the
+static/dynamic boundary terminates at different depths on each side. Since the
+hash only *finds candidates*, a hash disagreement is an unconditional miss.
+`tests/basic/table.rs:258` covers only the symmetric case.
+
+**Fix direction: `D5`.**
+
+### P1-5 — `content_key` tag collision across four AST forms `verified`
+
+`crates/lichen-language/src/resolve.rs:623-638`:
+
+```rust
+Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => { self.u(18); … }
+Expr::StructType(fields, _) => { self.u(18); … }
+```
+
+`Tuple`, `TypeTuple` and `Array` write byte-identical keys, while
+`compile.rs` lowers all four differently (`alloc_tuple` / `alloc_type_tuple` /
+`alloc_array` / `alloc_type_struct`). `session.rs:250` reuses the cached
+`Build` whenever `cache.key == key`, so changing `[a, b]` to `(a, b)` — a pure
+bracket edit — reuses the array's build and reports the array's types and
+diagnostics for a tuple. The key format also carries **no version tag**, so a
+future `Expr` variant reusing tag 18 would silently reintroduce this.
+
+The doc at `resolve.rs:385-394` claims *"Two programs with equal keys have
+literally identical lowering-visible content"* — that assertion is false.
+
+**Impact.** `BufferSession` has no production consumer today (see `P2-1`), so
+this is a real bug in a public API, currently unreachable from the CLI or LSP.
+It becomes user-visible the moment `P1-17` is done.
+
+**Fix.** Version-prefix the key; give the four forms distinct tags.
+
+### P1-6 — Non-function apply to a deferred callee is silently accepted `verified`
+
+`crates/lichen-highlevel/src/checker/lambda.rs:236-254` gates the
+function-ness guard on `concrete`:
+
+```rust
+let concrete = …matches!(value.as_enum(), None | Some(USize(_)) | Some(Array(_)));
+if concrete && !shape::is_function_type(…) { /* record Guard */ }
+```
+
+When the callee is a parameter or a call result its type is an unbound cell,
+`concrete` is false, and the guard is **skipped entirely**. Every sibling rule
+*pins* instead (`indexing.rs:47-52`, `indexing.rs:149-154`, `structs.rs:424-429`,
+with a test at `tests/checker.rs:1900-1912`). `check_app` is the only weakened
+site.
+
+The failure is then silent: `crates/lichen-lowlevel/src/evaluation.rs:310-319`
+returns `LowValue::Parameterized` for a non-`Function` target and records
+nothing, and `apply.rs:142-163`'s `_ => result` arm records nothing either. So
+`f = g => g 1` applied to `f 5` yields `Build::ok == true` with zero
+diagnostics.
+
+**Both docs are wrong in the same direction**, which is what makes this look
+intentional. `checker.rs:576-580` says a non-function apply is one *"the
+runtime panics on"* — it does not. `evaluation.rs:316-318` says a genuinely
+non-callable target *"is caught by the checker's unification before the deep
+pass runs"* — it is not, in the non-concrete case.
+
+**Fix direction: `D3`.** Either the guard pins to a fresh pair per apply, or the
+runtime's non-function arm records an `EvalError`. Do not fix one side only.
+
+### P1-7 — Function pass order is non-deterministic `reported`
+
+`crates/lichen-highlevel/src/checker.rs:582-584`:
+`checker.module.functions.keys().collect()` — `slotmap`'s `keys()` yields
+**arbitrary** order. Diary-attributed errors are re-sorted by `seq`
+(`diagnostic.rs:267`), but *orphan* unify errors (`diagnostic.rs:269-276`) and
+all runtime `eval_errors` are emitted in record order with no re-sort. The same
+source can therefore produce a different diagnostic sequence across runs and
+between builds.
+
+**Fix.** Sort by a stable key (the numeric slot index, or the `ExprId` in
+`function_of`) before the pass.
+
+### P1-8 — Compile work budget is hard-coded `reported`
+
+`crates/lichen-highlevel/src/checker.rs:490, 502` set
+`apply_depth_limit = 500` and `apply_total_limit = 2_000` unconditionally on a
+fresh `Module`, and no `build*` entry point accepts a caller-supplied limit. A
+*terminating* program that applies more than 2000 times is reported as
+`DiagKind::NonTerminating` — indistinguishable to the user from an infinite
+loop. The comment at `:484-501` shows the values were tuned against the examples.
+
+**Fix.** Plumb a limits struct through `build_with`, defaulting to today's values.
+
+### P1-9 — `DiaryEntry::errors` doubles as a discriminant `reported`
+
+`crates/lichen-highlevel/src/checker.rs:709-711`:
+
+```rust
+fn check_failed(&self) -> bool {
+    !self.module.unify_errors.is_empty() || self.diary.iter().any(|e| e.errors.is_empty())
+}
+```
+
+The second clause works only because a guard records `Range::default()`
+(`checker/diagnostics.rs:100`) and a unify always records a non-empty range.
+One informational diary entry with an empty range flips this to `true`, which at
+`:581` **skips the entire definition pass** — silently disabling every runtime
+check in the program. The invariant is unstated and untyped.
+
+**Fix.** Make the discriminant explicit — `errors: Option<Range<usize>>`, or an
+outcome enum.
+
+### P1-10 — `Static` export operands are unchecked `reported`
+
+`crates/lichen-highlevel/src/checker.rs:1266-1278` guards with
+`array_items(pair).is_none()` (the "not an array" half) and then indexes
+`items[0]` / `items[1]`. A package export that materializes to a 0- or 1-element
+array panics the checker. The lowlevel does this correctly a few hundred lines
+away — `crates/lichen-lowlevel/src/apply.rs:143` checks `items().len() >= 2`.
+
+Reachability: a well-formed program always roots to a 2-element pair, so this
+needs a corrupt or mismatched-version artifact rather than ordinary source —
+still untrusted input to the compiler.
+
+**Fix.** `if items.len() != 2 { record_guard(ImportExport); return pair; }`.
+
+### P1-11 — `store_artifact`: fixed temp name, outside the lock `verified`
+
+`crates/lichen-registry/src/device.rs:226-232`:
+
+```rust
+let tmp = self.dir.join("artifacts").join("tmp");   // shared by every process
+if std::fs::write(&tmp, bytes).is_ok() { let _ = std::fs::rename(&tmp, path); }
+```
+
+Two concurrent compiles interleave on the same temp path: A writes, B
+overwrites, A's rename installs **B's bytes** into A's slot. Both errors are
+discarded. The call site is `crates/lichen-language/src/package.rs:561`, which
+does **not** take `with_lock`, so `device.rs:74-75`'s claim that *"All
+mutations go through the cross-process `mkdir` lock and are saved atomically"*
+is false for the artifact path. (`save()` at `:137` does hold the lock.)
+
+**Fix.** A unique temp name (pid + counter or a random suffix), written under
+the same lock, with `fsync` before the rename, and the errors propagated. Do
+this with `P5-11` — one shared `write_atomic` helper.
+
+### P1-12 — Unparseable registry discards all state `reported`
+
+`crates/lichen-registry/src/device.rs:118-132`: an `Err` from `parse_registry`
+leaves the in-memory state at its previous value, and the next `with_lock`
+(`:146-153`) reloads (no-op) then `save()`s an **empty** registry — `next_key`
+restarts at 0 while the orphan `.module` files stay on disk. Because
+`ModuleKey` is a *recycled* index (`module_key.rs:5-13`) and artifact bytes embed
+it as an absolute reference, a stale artifact can be paired with a different
+module. The doc at `:115-117` calls this *"the next save repairs it"* — it
+discards, it does not repair.
+
+Related: `gc()` (`:262-278`) frees keys that surviving entries still reference
+(`remove()` at `:289-292` has the guard, `gc()` does not), and a pending
+allocation from a crashed `alloc` (`:186-192`) is never reclaimed, so
+`module_key.rs:6-8`'s *"the key space stays bounded"* is not true.
+
+**Fix.** On a parse failure, mark the store degraded and refuse to save (or back
+up the unreadable file and start clean with a new key epoch) rather than
+silently truncating. Add the reference guard to `gc()`.
+
+### P1-13 — Compiler-cache key omits `core_repo` and uses the wrong version `reported`
+
+`crates/lichen-package/src/compiler_cache.rs:47-65`:
+
+```rust
+let mut spec = format!("lichen-language={}", env!("CARGO_PKG_VERSION"));
+```
+
+`core_repo` is a parameter of `ensure`/`ensure_lsp` but is **not** in the key, so
+`lichen run --repo A` then `--repo B` reuses A's binary. And
+`CARGO_PKG_VERSION` here is *lichen-package's* `0.1.0`; the comment at `:55-58`
+claims it is *"the toolchain version … the key a change to any core crate should
+bump"*, which no core-crate change does.
+
+`crates/lichen-language/src/persist.rs:537-551` derives the **same slot** from
+*lichen-language's* version, with a doc claiming the two agree — they agree only
+while both crates are `0.1.0`. One version bump in one crate and
+`lichen install` writes the binary into a slot the compiler never reads.
+
+**Fix.** Put the slot-key spec in one place both crates call (both already
+depend on `lichen-utils`), include `core_repo`, and add one equality test
+(`needs-test`).
+
+### P1-14 — `run.rs` never checks `Build::ok` `reported`
+
+`crates/lichen-language/src/run.rs:96-99` gates only on
+`!report.diagnostics.is_empty()` and then `report.build.unwrap()`. Its three
+siblings check `!b.ok` as well (`package.rs:511`, `:517`, `:695`). `Report::ok()`
+(`lib.rs:137-139`) exists to combine both and neither `run.rs` function uses it.
+
+**Fix.** Use `Report::ok()`.
+
+### P1-15 — `Err(vec![])` — an error carrying no diagnostic `reported`
+
+`crates/lichen-language/src/package.rs:511-513` returns `Err(report.diagnostics)`
+when the build failed with no rendered diagnostics. `try_reuse` propagates it
+with `?`, `render_all` over an empty list prints **nothing** — a silent failure.
+`resolve_import` already papers over this hole twice (`:601-609`, `:629-637`)
+with a synthesised diagnostic.
+
+**Fix.** Guarantee at least one diagnostic on the failure path (synthesise a
+"build failed" diagnostic at the report level), then delete the two workarounds.
+
+### P1-16 — `stage_depends` wired on one of two store entry points `reported`
+
+`crates/lichen-language/src/cli.rs:232` stages a file's `depend`/`plug`
+directives onto the store before resolving; the editor's path
+(`crates/lichen-language-server/src/analysis.rs:224`) calls `preprocess`
+directly, so a vendored `import "alias"` fails in the LSP and the user gets a
+false "cannot load package" diagnostic.
+
+**Fix.** One line — stage the aliases in the LSP path too. Worth doing early
+because it is user-visible and free.
+
+### P1-17 — Every LSP request runs the whole frontend `verified`
+
+`crates/lichen-language-server/src/server.rs:186, 210, 236, 258` each construct
+a fresh `Doc`; `Doc::new_with_cache`
+(`crates/lichen-language-server/src/analysis.rs:208-247`) runs preprocess (with
+a **new** `PackageStore`) → lex → parse → `frontend_at` → `build_report` (the
+whole-IR checker). With `TextDocumentSyncKind::FULL` (`server.rs:125-127`)
+there is no incremental sync, no debounce, no cache, and the store holds only
+`String`. Each keystroke triggers a `didChange` analysis *plus* a
+`semanticTokens/full` analysis.
+
+Amplifiers:
+- `analysis.rs:262-269` linearly scans the whole `ExprId → span` index once per
+  import → O(imports × expressions).
+- Every request re-opens the `DeviceRegistry` (`device.rs:91-102`:
+  `create_dir_all` + read + full parse), and `verify` re-reads and re-parses it
+  once per dependency file (`device.rs:241-242`) → N-file import graph = N
+  registry reads + N parses **per request**.
+- `concurrency_level(1)` (`server.rs:273-294`) serialises all requests and
+  `spawn_blocking` is detached from the request lifetime, so there is no
+  cancellation; one slow analysis stalls `shutdown` too. Combined with `P1-18`'s
+  unbounded `plrun`, that is a permanent hang, not a slowdown.
+- No document-version tracking (`server.rs:161-168` discards
+  `text_document.version`; `publish_diagnostics` always passes `version: None`),
+  so a client cannot reject stale diagnostics. No `did_save` /
+  `did_change_watched_files` handler, so editing an imported `math.lichen` never
+  refreshes the importer.
+
+**Fix direction: `D6`.** The stated obstacle — `Doc` is `!Send` — does not
+prevent *caching*: keep the last `(uri, version)` → extracted indexes (all
+`Send`) and re-run only on change, and reuse one `PackageStore`/registry
+handle across requests.
+
+### P1-18 — Compute: unbounded globals, per-launch rebuild, unbounded `plrun` `verified`
+
+`crates/lichen-compute/src/compute.rs:90-119` — two process-global
+`OnceLock<Mutex<HashMap<…>>>` registries with **no** `remove`, LRU or reset.
+Every `$jit` adds a fragment (`:329`, `:433`); every `plrun` adds a
+`count`-element `Vec<i64>` (`:505`) that is never freed; every read **clones the
+whole buffer** (`:118`). In a long-lived host this is unbounded growth,
+compounded by `P1-17` (every keystroke re-runs the checker).
+
+`run_parallel_kernel` (`:1739-1825`) and `run_kernel` (`:1663`) build a fresh
+`wasmi::Engine`, `assemble_module` the bytes, `wasmi::Module::new`, `Linker::new`
+and instantiate **on every call** — only the fragment is cached. This is the
+crate's single largest optimisation opportunity.
+
+`plrun`'s element count is program-controlled and uncapped (`:1818-1823` with
+`output = vec![0i64; count]`): `2^40` requests ~8 TiB and 10^12 interpreted
+iterations. It is reachable from *analysis*, which is the concrete mechanism
+behind `P1-17`'s hang.
+
+Also `:41-45` advertises a data-parallel `plrun` while `:1737-1738` admits it is
+sequential — there are **no threads** in the crate. Operator names and module
+docs overstate what runs.
+
+**Fix direction: `D6`.**
+
+## P2 — architecture
+
+### P2-1 — `BufferSession` is built but unwired `verified`
+
+~1100 lines of incremental machinery (`language/src/session.rs`,
+`resolve.rs:385-706` `content_key`, `lex::lex_resume`,
+`parse::parse_statement_region_traced`, `parse::collect_error_blocks`) have **no
+production consumer** — only their own unit tests. The LSP, the one component
+that needs them, builds its own pipeline through `frontend_at`/`build_report`
+and re-derives name resolution with its own scope walk.
+
+`crates/lichen-language-server/src/analysis.rs:5-7` still claims the opposite:
+
+> `Doc` … the *checker* via [`BufferSession`] for the full diagnostic set.
+
+The file neither imports `session` nor calls it. This stale doc is what hides
+`P1-17`. `docs/notes/incremental-parse-compile.md` marked "current" is also
+generous: T3 (memoized check) is not implemented, so even a wired session would
+only avoid lex/parse.
+
+**Fix.** Correct the doc immediately; wiring is `D6`.
+
+### P2-2 — Five hand-written AST traversals `verified`
+
+`analysis.rs` alone has three near-identical ~110-line recursive walks over the
+same ~30 `Expr` variants: `NameClass::expr` (`:1292-1439`), `Walk::expr`
+(`:1540-1697`), `ScopeCapture::expr` (`:1832-1987`) — plus `resolve.rs:478` and
+`compile.rs:379`. Adding an `Expr` variant means editing five sites.
+
+`lowerlevel`'s sibling `checker.rs:985-994` `range_children` uses a **wildcard**
+`_ => unreachable!("expected a variadic expression kind")`, so a new variadic
+kind compiles cleanly and panics at runtime — while its two siblings
+(`annotations.rs:29-81`, `ir.rs:451-540`) are fully enumerated and *would* break
+the build. `range_children` should be enumerated.
+
+**Fix.** Enumerate `range_children` (small, do it early). A shared visitor is a
+bigger design call — propose before doing.
+
+### P2-3 — `Build` is a god-DTO `verified`
+
+`checker.rs:355-412` exposes four index-aligned vectors
+(`term`/`val`/`ty`/`attr: Vec<Option<NodeId>>`) plus ~20 more `pub` fields, and
+the crate reads them with `self.ty[x].unwrap()` / `self.term[x].unwrap()` about
+**30 times** across `checker.rs`, `checker/{structs,lambda,indexing,annotations}.rs`.
+The invariant "every expression has a type by the time we read it" is assumed,
+not encoded, so a checker bug becomes a panic on user input. Downstream
+(`analysis.rs` 9 sites, one test) indexes the vectors directly, making any
+layout change cross-crate.
+
+**Fix.** A single `Vec<ExprState>` (four `Option<NodeId>` fields) removes the
+"indices disagree" hazard; a checked accessor that records a diagnostic removes
+the panic surface. Both are invasive — propose before doing.
+
+### P2-4 — `Node`'s `pub` fields break the write choke-point `reported`
+
+`lowlevel/src/lib.rs:636` makes `value` private with an explicit contract
+(*"External crates must never touch the field directly"*), but `:646-666` leaves
+`operation`, `function`, `block`, `visiting`, `evaluated_deep` and `equality`
+`pub`. From safe host code: writing `evaluated_deep = Some(..parameterized:
+false)` makes `function.rs:315` treat a parameter-dependent body as proven
+concrete and reuse it across calls (silently wrong results); a wrong `block`
+makes GC (`gc.rs:148, 216, 224`) drop a live node or retain a dead one; a wrong
+`equality` meta breaks `disjoint`'s documented contract and hits
+`disjoint.rs:105`. The crate's own tests write these fields in ~20 places, so
+this is a de-facto API.
+
+**Fix.** Privatise the invariant-bearing fields behind `&mut`-taking methods, as
+`value` already is.
+
+### P2-5 — `NativeApply` is an unvalidated escape hatch `reported`
+
+`highlevel/src/native.rs:29-34` hands a plugin's `build` back as three raw
+`NodeId`s, and `checker.rs:1349-1352` adopts all three with **zero validation** —
+not that `node` is a `[value, type]` pair, not that `ty` is in the current
+block, not that `node` is a member of the enclosing function's template. This
+directly contradicts `program.rs:120-134` (*"an extension can never build into
+the wrong block"*). Every other extension returns nodes the checker itself
+allocated through `Ctx`.
+
+**Fix.** Validate shape and block membership, recording a `NativeOpContract`
+guard on failure — the same pattern `ImportExport`
+(`checker.rs:1266-1278`) and `NativeOpUnresolved` (`:1335-1346`) already use.
+
+### P2-6 — Repo tooling inside the compiler library `reported`
+
+`language/src/readme.rs` plus the `sync-readme` binary is a README/example
+generator that reaches two `..` hops out of `CARGO_MANIFEST_DIR` (`:55`, `:60`),
+executes every example program (`:296-308`), panics on a missing examples dir
+(`:77`), and follows symlinks with unbounded recursion (`:83`, `:191-242`). Under
+`cargo install` the directory does not exist, so it panics. It ships inside the
+library, reachable by any consumer.
+
+Related: `clap` is a hard dependency of `lichen-language` but only `cli.rs` uses
+it, so `lichen-language-server` links it for nothing; `logos` and `sha2` are
+**unused** dependencies of that crate.
+
+**Fix.** Move `readme.rs` + `sync-readme` to a tools crate (or behind a
+`readme-sync` feature), move the CLI behind a feature or into `main.rs`, and drop
+the two unused deps.
+
+### P2-7 — `visiting` is set by hand, bypassing the `Drop` guard `reported`
+
+`lowlevel/src/evaluation.rs:557/570` and `:576/582` set and clear
+`Node::visiting` directly inside the deep pass, while the crate goes to real
+trouble to make the same flag unwind-safe elsewhere (`:94-110`, with
+`impl Drop for VisitGuard` at `:27-31` and a comment explaining that this is what
+keeps *"a future internal panic inside an attempt [costing] one node instead of
+poisoning the module for the rest of the build"*). Any panic inside the descent —
+`unreachable!("cycle detected")` (`:139`), `operands[1]` (`:166`),
+`evaluate_block`'s `expect` (`:642`) — leaves `visiting = true` on the node and
+every ancestor frame, permanently.
+
+**Fix.** Wrap the descent in the same guard.
+
+### P2-8 — `missing_slots[order_index()]` guarded only in debug `reported`
+
+`highlevel/src/checker/annotations.rs:149-153` indexes `missing_slots`, sized
+from `P::Attr::ORDER.len()` (`checker.rs:536`), with a plugin-controlled index.
+`AttrSet` is a public trait a downstream implements, and the only check is a
+`debug_assert!` (`checker.rs:480-483`). `attr.rs:74-76` acknowledges the
+invariant is debug-only. A hand-written set that forgets it compiles and panics
+in release.
+
+**Fix.** `.get(index).copied()` plus a recorded guard.
+
+### P2-9 — `no_attr_ext` panics on any annotated program `reported`
+
+`highlevel/src/checker.rs:465-469` installs an `unreachable!` closure as the
+attribute registry, used by the public `build` (`:422`) and `build_in` (`:430`).
+Any program whose schema carries an attribute — i.e. any host that plugs in
+`Perspective` and calls `Checker::build` instead of `build_in_attr` — panics
+mid-check instead of getting a diagnostic. The crate already has the right
+pattern a few dozen lines away (`NativeOpUnresolved`, `:1335-1341`).
+`build_in_attr` and `build_in_attr_native` have **zero** test coverage.
+
+**Fix.** Record a guard and return a hole.
+
+### P2-10 — `check_term` recursion is unbounded `reported`
+
+`highlevel/src/checker.rs:1069, 1084` recurses once per nested expression with
+no depth counter. `stacksafe` is declared in `lichen-highlevel`'s `Cargo.toml`
+but **never imported by the crate** (it is used only in `lichen-lowlevel` and
+`lichen-utils`). A generated file with 10^5 nested parentheses overflows the
+native stack before any budget fires. The crate is aware of the constraint for
+the *runtime* (`checker.rs:484-490`) but not for the checker itself.
+
+**Fix.** `#[stacksafe]` on `check_term` (or an explicit depth counter that
+records a diagnostic) — the dependency is already there.
+
+### P2-11 — God files with named seams
+
+| file | lines | seam |
+|---|---|---|
+| `language-server/src/analysis.rs` | 2566 | pipeline / snapshot / imports / resolve / scope / diagnostics / hover / completion / semantic tokens; the highest-value cut is merging the three walks (`P2-2`) |
+| `compute/src/compute.rs` | 2182 | registry / vocab / vm / wasm_emit / codegen / run / ops |
+| `highlevel/src/checker.rs` | 1502 | one `impl` block of 1090 lines; six concrete check rules still inline while their siblings already live in `checker/` |
+| `lowlevel/src/lib.rs` | 1179 | 145 `pub` items, ≥7 responsibilities: handle (all the `unsafe`), registry, module, vocabulary |
+| `lowlevel/src/static_module.rs` | 848 | `impl Module` block mixes importer-apply, generic node helpers (`node_shape`, `materialize_leaf`, `as_dynamic` — nothing to do with static modules) and freeze |
+| `render/src/render.rs` | 1168 | `TypePrinter` (490) / `ValuePrinter` (340) / struct-kind helpers (8 free fns) |
+| `language/src/compile.rs` | 952 | `compile_expr` is a **single 453-line function** (`:379-832`); 9 `alloc_*` wrappers are pure boilerplate with an unguarded invariant |
+| `language/src/resolve.rs` | 706 | scope machine (1-379) + content-key serializer (**385-706 = 45%**) |
+| `language/src/package.rs` | 916 | load pipeline / native virtual-package registration (`compute.lichen` is hard-coded at `:230`) / vendored path resolution / 70 lines of inline tests |
+| `language/src/persist.rs` | 650 | codec traits + container / cache-root resolver / inline tests |
+| `language-parser/src/parse.rs` | 1584 | thread driver / token utils / statement grammar / precedence ladder / atoms+postfix / type constructors / AST walk / diagnostics |
+
+## P3 — refactor
+
+### P3-1 — Duplication clusters
+
+Each of these is two or more sites that must change together:
+
+- **Codec array/table arms** are 20-line near-clones
+  (`lowlevel/src/codec.rs:163-185` vs `:206-228`, and the write halves at
+  `:111-132`). Merge while fixing `P0-1`.
+- **`restatic` rewrite appears three times verbatim**
+  (`static_module.rs:752-761`, `:788-797`, `:798-804`).
+- **`concrete` predicate written five times** (`structs.rs:295-304` extracts it,
+  then re-inlines at `:45-53`, `:114-122`, `:192-200`, and `lambda.rs:237-245`).
+- **`nstart`/`name_range` block three times** (`ir.rs:669-674`, `:683-688`, and
+  the `ChildRange` push repeated at seven sites).
+- **`regroup_clones` was extracted and then its *call* was copy-pasted**
+  (`apply.rs:173-186` is the helper; `function.rs:172-184` and
+  `static_module.rs:159-173` repeat the 13-line tail).
+- **Assert instantiation four times** (`function.rs:151-159`, `:476-485`,
+  `static_module.rs:144-153`, `:345-355`).
+- **Atomic write three ways, three policies** (`device.rs:137-140` locked with
+  errors swallowed; `device.rs:228-231` unlocked, fixed name; `toolchain.rs:267-281`
+  errors returned). One `write_atomic(dest, bytes)` fixes `P1-11` too.
+- **Subprocess invoke + status + stderr→String six times** (`git.rs:60,107,124`,
+  `toolchain.rs:188,268`, `plugin.rs:124,171,194`); **tool-on-PATH probe twice**;
+  **`.exe` suffix three times**.
+- **Compile pipeline written five times and diverging**
+  (`lib.rs:163`, `run.rs:88`, `package.rs:301`, `:503`, `:676`) — see `P1-14`.
+- **"evaluate → freeze → export → publish meta" three times in one file**
+  (`package.rs:320-349`, `:517-538`, `:695-730`), including the duplicated
+  comment at `:516` and `:694`.
+- **Output-line formatter twice** (`run.rs:45-60` ≡ `:103-118`).
+- **`Diagnostic` construction boilerplate at seven sites**
+  (`highlevel/src/diagnostic.rs`); each lists all ten fields and sets seven to
+  `None`. A `Diag::factual(kind, loc)` constructor shrinks it and makes adding a
+  field a one-line change.
+- **List combinator written five times** in `parse.rs:850-903`, `:912-1077`.
+- **`rebuild` vs `rebuild_lsp`** 40 lines differing in a name and a main-file
+  writer (`package/src/plugin.rs:103-140` vs `:148-190`).
+- **Positional-read and raw-read pairs**: `structs.rs:66-83` ≡ `:244-259`;
+  `structs.rs:152-165` ≡ `indexing.rs:109-120`.
+- **`preprocess()` re-inlines `depend_of`'s normalization** instead of calling it
+  (`preprocess/src/lib.rs:272-308` vs `:382`), so a new `Depend` field can be
+  dropped on one path.
+- **`Disjoint` parent walk forked** in `render.rs:932-941` — no cycle guard, no
+  `#[stacksafe]`, duplicating `utils/disjoint.rs:66-79` (`P5-10`).
+
+### P3-2 — Workspace manifest duplication
+
+No `[workspace.package]`, `[workspace.dependencies]` or `[workspace.lints]`.
+`version = "0.1.0"` and `edition = "2024"` are repeated in **every** manifest
+(17 workspace members plus the two standalone crates), and each `lichen-*` path
+dependency is spelled out at each use site. A release bump means editing ~14
+files by hand.
+
+**Fix.** `[workspace.package] version/edition`, `[workspace.dependencies]` for
+the shared externals and the internal path deps, `version.workspace = true` per
+crate. Then `P3-3` can hang lints off the same table.
+
+### P3-3 — No test/clippy/fmt gate in CI
+
+`.github/workflows/build.yml` only runs `cargo build --release --locked`. No
+`cargo test`, no `clippy`, no `fmt --check`, and there is no lint policy
+anywhere (`cargo clippy --workspace --all-targets` currently reports **56
+warnings**). `dev` has no quality gate, which is why the warnings are there.
+
+**Fix.** Clean the 56 warnings, add `[workspace.lints]`, and add a CI job
+running `fmt --check` + `clippy -D warnings` + `test`. Note the baseline: the
+test suite compiles (`cargo test --workspace --no-run` succeeded) and the suite
+is 15.1k lines against 31.5k of source.
+
+### P3-4 — Four byte↔line/col implementations with divergent edge behaviour
+
+`span/src/lib.rs:31-38` (panics on an empty `starts`; `Err(0)` → index
+`usize::MAX`), `language-server/src/lsp.rs:32-42` (returns the **last** line
+start for an out-of-range line — a silently wrong offset), `:50-63`, `:87-94`.
+`language/src/render.rs:112` re-scans the source from byte 0 per diagnostic.
+
+**Fix.** One shared implementation over the already-computed `line_starts`
+(every call site has it), with one documented out-of-range answer.
+
+## P4 — optimization
+
+### P4-1 — Registry read lock and `Arc` clone per array element `verified`
+
+`lowlevel/src/static_module.rs:40-48` takes `self.registry.read()`, looks up, and
+**clones the `Arc`** (an atomic refcount bump). It is called inside the deep
+pass's inner loop — once per array element and twice per table entry
+(`evaluation.rs:602, 607-624`), inside a `matches!` guard, plus `:614`, `:621`,
+`equality.rs:549`, `table.rs:138`. For an N-entry table that is 2N lock
+acquisitions and 2N refcount bumps per visit. Hoisting
+`let module = self.static_module(sref.module);` above the iterator removes
+almost all of it.
+
+### P4-2 — `write_node_value` is O(class size) `verified`
+
+`lowlevel/src/equality.rs:93-107` walks the **entire class member list** on
+every concrete write, and six sibling predicates repeat the same full walk
+(`class_has_pending_op :470-481`, `class_is_pure_cell :488-502`,
+`class_is_skeleton :510-536`, `class_committed_value :728-738`, `pending_op
+:636-644`, `force_pending :746-753`) — seven independent walks of the same list
+per unification step. Classes grow with application count (`regroup_clones`
+merges every clone per apply, `apply.rs:173-186`; `MAX_APPLY_TOTAL = 100_000`),
+so this is quadratic in the common recursive case.
+
+**Fix.** A small summary maintained at union time (has-concrete-value,
+has-pending-op) collapses most of these to O(1).
+
+### P4-3 — A thread and a rebuilt combinator graph per parse `reported`
+
+`language-parser/src/parse.rs:94-103` and `:188-201` each
+`thread::scope` + `Builder::new().stack_size(16 MiB).spawn_scoped`, and
+`parse_inner` calls `program_parser(tokens)` (`:111`) which recurses through the
+whole precedence ladder with ~20 `.boxed()` clones (`:425-539`). So per parse:
+two thread spawns and a full combinator-tree rebuild. A `OnceLock`-held parser
+(chumsky parsers are `Clone` and reusable) removes the construction; by the same
+measure `In<'a> = Stream<Cloned<…>>` (`:77`, `:110`) deep-clones every token
+payload — one heap allocation per identifier and per string literal, per parse.
+
+### P4-4 — Quadratic diagnostics `reported`
+
+`highlevel/src/diagnostic.rs:424-428` `orphan_unify_errors` is O(E × D);
+per-error it also does `apply_errors.iter().find` (`:435`) and
+`diary.iter().find` (`:465`). `diagnostics()` is what an editor calls on every
+keystroke. One O(E + D) sweep over the diary (marking owned indices in a
+`Vec<bool>`) replaces all three. In `language/src/render.rs:112,124`,
+`render_all` is O(diags × lines) for the same reason.
+
+### P4-5 — `path.contains` as a cycle guard; O(n²) kernel codegen `reported`
+
+`equality.rs:272`, `table.rs:178`, `table.rs:257`, `equality.rs:832` do a
+**linear scan of a `Vec`** at every recursion level, and `key_eq`/`hash_inner`
+*hash* each element, so a table key of depth *d* costs O(d²) hashes. A `HashSet`
+beside the existing `Vec` gives O(1) membership with the same push/pop
+discipline. Separately, `compute.rs:1009-1011` `class_computation_node` linearly
+scans the module's whole node table and is called **per emitted node**
+(`emit_node`, `:1069`); `equality_rep` has no path compression.
+
+### P4-6 — Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak `reported`
+
+- `function.rs:100-106` and `:421-429` clone the template's whole node list per
+  apply (plus `asserts`), and `apply.rs:173-186` builds a `HashMap` per apply;
+  `static_module.rs:125`, `:327` likewise.
+- `evaluation.rs:588-634` evaluates `value.as_enum()` up to four times and
+  iterates `array.items()` twice and `table.items()` **four** times, each with a
+  nested `self.nodes[node].evaluated_deep` lookup.
+- `table.rs:202-205` does three multiplies **per byte** for a string key hash.
+- **`Box::leak` per compile** (`language/src/compile.rs:362, 374, 390`):
+  `Compiler::new()` is fresh per `compile_resolved` (`:95`), so the two intern
+  maps dedupe only *within* one compile. Every compile permanently leaks every
+  string literal and every distinct name; the editor leaks per keystroke, and a
+  fresh copy per keystroke while editing inside a literal. The deserializer
+  leaks the same way (`lowlevel/src/codec.rs:204`). Correctness is unaffected
+  (native-op lookup compares `&str` by content) but the growth is unbounded.
+- `apply.rs:114` linear dedupe scan over `apply_errors`, which is append-only
+  and never cleared.
+- `compute.rs:1879` `Box::leak` per `compute_native_ops!` invocation.
+- `registry/codec.rs:42-45` writes a `u8` leaf-name length — truncates and
+  desynchronises the stream past 255.
+
+## P5 — hygiene and docs
+
+- **P5-1 `verified`** — `crates/lichen-language/tests/scratch.rs` is a 31-line
+  debug printer with **no assertions**; it can never fail. Delete it.
+- **P5-2 `verified`** — `docs/README.md:45` indexes
+  `type-system-cleanup-plan.md` as *"current (Phases 0/1a/1b/1c/2/3a); proposed
+  (the rest of Phase 3, Phase 4+)"* while the note itself says *"**Phases 0–5
+  complete**"*. Reconcile, and decide whether a completed plan stays (the
+  project's own rule is that stale material is removed).
+- **P5-3 `verified`** — doc comments contradicted by the code:
+  `analysis.rs:5-7` (claims `BufferSession`, `P2-1`); `device.rs:74-75` (claims
+  all mutations are locked, `P1-11`); `device.rs:115-117` (claims the next save
+  repairs a corrupt registry, `P1-12`); `module_key.rs:6-8` (key space bounded);
+  `table.rs:8-11, 20-21` (determinism and hash stability, `P1-3`/`P1-4`);
+  `evaluation.rs:534-535` (the counter claim, `P1-2`); `lowlevel/lib.rs:403`
+  (*"not really pointing to anything"*); `lowlevel/lib.rs:709-713, 854-857,
+  981-984` (claim cross-thread registry sharing — `Module`/`Registry` are
+  `!Send + !Sync` because `AnyHandle` holds raw pointers, there is no
+  `unsafe impl Send` in the workspace, and clippy reports three
+  `arc_with_non_send_sync`; correct the docs or add a documented unsafe impl);
+  `compiler_cache.rs:55-58` and `persist.rs:540-545` (the slot key, `P1-13`);
+  `highlevel/ir.rs:366-371` (struct layout is the opposite of
+  `checker/structs.rs:709-714`); `checker.rs:576-580` and
+  `evaluation.rs:316-318` (`P1-6`); `compute.rs:41-45` (claims parallelism,
+  `P1-18`); `preprocess-isolation.md:61-64` (signatures that no longer exist);
+  `language-parser/ast.rs:239-240`, `parse.rs:26-29`, `lex:19-22`, `lex:30-33`
+  (four grammar claims the grammar contradicts); `readme.rs:25-28` (claims the
+  README test rewrites metadata, while both test files say it must *fail*);
+  `language/lib.rs:115-117` (claims `build` can be `None`, it cannot);
+  `render`'s perspective discriminator doc names a byte the crate never emits.
+- **P5-4 `verified`** — `Cargo.lock` holds **three** `wasmparser`
+  (0.227.1 / 0.228.0 / 0.258.0) and two `wasm-encoder` (0.227.1 / 0.258.0).
+  The JIT emits with `wasm-encoder 0.258` and `wasmi 2.0` validates with
+  `wasmparser 0.228` — a 30-release skew between an encoder and its validator.
+  The current MVP subset happens to work; nothing pins the pair.
+- **P5-5 `reported`** — `language-lex/src/lib.rs:665-676`: a `~` count that
+  overflows **saturates to `usize::MAX`** (which means "bare `~`"), silently
+  changing the program's meaning, while the sibling `Int` path reports the
+  identical mistake.
+- **P5-6 `verified`** — `crates/lichen-package/build.rs:13-24` uses
+  `rerun-if-changed=../../.git/HEAD`. In a git worktree `.git` is a *file*, so
+  the trigger never fires and `LICHEN_BUILD_COMMIT` goes stale — and this repo's
+  own workflow mandates worktrees. `Command::new("git")` also relies on the
+  build script's CWD rather than naming the directory.
+- **P5-7 `reported`** — `toolchain.rs:356-359` prints a progress line to
+  **stdout** from library code, while `main.rs:446-449`'s command contract is to
+  print a path: `SERVER=$(lichen path language-server --project .)` captures two
+  lines. Use `eprintln!` or a verbose flag.
+- **P5-8 `reported`** — `package/src/plugin.rs:281-288, 305-317, 217-228` build
+  `Cargo.toml` by string interpolation: a `--repo` containing `"` injects
+  manifest keys, and a Windows local path is emitted as `path = "C:\dir\crate"`
+  where `\d` is an invalid TOML escape, so the generated manifest does not parse.
+- **P5-9 `reported`** — `language/src/package.rs:233, 241, 253, 261, 362, 603,
+  631, 810, 829` and `cli.rs:235` report an `io::Error` as a *source* diagnostic
+  with a fabricated `(0, 0)` span, which `render.rs:109-116` prints as a caret
+  at line 1 column 0. There is no `Stage::Io`, so a permission error and a syntax
+  error are indistinguishable to a consumer.
+- **P5-10 `reported`** — `render/src/render.rs:869` indexes `kind.items()[0]`
+  with no length check (its sibling `kind_is_struct` at `:1034` checks), and
+  `:932-941` walks `equality.parent` unguarded, uncompressed and cycle-unsafe,
+  forking `disjoint::find`. Both run from `Doc::new`, i.e. every keystroke.
+- **P5-11 `reported`** — `registry/src/device.rs:316-323` opens every dependency
+  ID as a filesystem path, but `virtual:` IDs are real
+  (`language/src/package.rs:325`, `:700`), so a `virtual:` dependency fails
+  `fs::read` and `.ok()?` turns it into a **silent permanent cache miss**. The
+  two functions in the same file disagree about what a file ID is. Fix together
+  with `P1-11` via the shared `write_atomic`/file-ID helper.
+
+## Decisions
+
+These block the items marked `blocked:Dn`. Do not pick an answer silently.
+
+- **D1 — Is `~/.lichen/artifacts/` untrusted input?** (blocks `P0-2`)
+  *Untrusted:* add a body checksum to the container, validate every field, make
+  the accessors `unsafe` with real contracts — larger change, closes the class.
+  *Trusted:* `checked_*` arithmetic only, keep the signatures — small, removes
+  the UB-from-a-crafted-file path but not the design smell.
+  `P0-1` and `P0-5` are worth doing either way.
+- **D2 — Which git URL schemes are legitimate?** (blocks `P0-3`)
+  *Minimal:* `--` separator plus reject a leading `-` (kills `--upload-pack` and
+  `-f`; no legitimate form is lost).
+  *Full:* the above plus a scheme allowlist rejecting `ext::` and other remote
+  helpers. Stricter, but `ext::` is already disabled by default in modern git and
+  an allowlist may reject a form someone relies on.
+- **D3 — Tests.** May the fix subagents add minimal regression tests? Several
+  items' only sound proof is a test (`P0-1`, `P1-5`, `P1-6`, `P1-13`); without
+  permission those land with the fix unproven, and `P1-6` should not be touched
+  at all until the behaviour is pinned.
+- **D4 — Toolchain integrity.** (blocks `P0-4`) Options: a published
+  `SHA256SUMS` asset verified after download; a signed release; or accepting
+  GitHub-over-TLS and dropping the "same revision" framing from the docs. The
+  last is free but removes a claim the docs currently make.
+- **D5 — Table key hashing.** (blocks `P1-3`, `P1-4`) A table/function key
+  cannot hash by address across a freeze. Options: a canonical content
+  unfolding for the hashable key; a structural (non-address) identity assigned
+  at freeze; or declaring such keys unsupported with a diagnostic. `P1-3` and
+  `P1-4` must be decided together — they are the same key-comparison contract.
+- **D6 — How far to wire incrementality.** (blocks `P1-17`, `P1-18`) Options:
+  (a) cache the extracted indexes per `(uri, version)` and reuse one
+  `PackageStore` — removes most of the per-request cost, no new architecture;
+  (b) additionally wire `BufferSession` — needs `P1-5` fixed first and only
+  helps lex/parse until T3 exists; (c) add cancellation and a debounce — a
+  correctness/UX fix independently of (a)/(b). Compute's registry eviction and
+  wasm-module caching are separate from all three and can proceed regardless.
+
+## Checked and found clean
+
+Recorded so the next pass does not re-audit them.
+
+- **No shell injection:** every subprocess uses `Command::new` with an argument
+  vector; there is no `sh -c` and no shell string anywhere in scope. The risk is
+  *argument* injection (`P0-3`), not shell injection.
+- **No archive extraction** in any crate, so no `../`-in-entry-name surface.
+- **No `set_current_dir` / `set_var` / `remove_var`** anywhere in the workspace.
+  Every `current_dir` is `Command::current_dir`.
+- **No `unsafe` outside `lichen-lowlevel`** (and none in `registry`, `compute`,
+  `package`, `language`, `language-server`, `render`, `perspective`, `doc`,
+  `utils`, `span`). No `transmute`. No `unsafe impl Send`/`Sync` anywhere. No
+  `static mut`, no `thread_local!`, no lazy statics outside compute's two
+  registries.
+- **No `Rc`/`RefCell`/`Cell` in the lowlevel** — zero interior mutability, zero
+  borrow-flag panics, zero reference cycles; the `&mut Module` discipline is
+  explicit and consistent.
+- **The wire format is sound in itself:** uniformly explicit little-endian
+  (`to_le_bytes`/`from_le_bytes`), every multi-byte read via `take(n)` +
+  `try_into`, and the registry carries a magic **and** a checked version
+  (`device.rs:407-412`). The container has magic, a checked version, an
+  alignment guard and a trailing-bytes check (`persist.rs:386-401`, `:499-501`).
+  The problems are the cache management around it, not the encoding.
+- **`disjoint` is correct:** path compression in `find` plus union-by-size, O(1)
+  member-list splice, no allocation.
+- **The registry's *mutation* path is correct:** cross-process `mkdir` lock,
+  reload-under-lock, tmp+rename save.
+- **No `todo!`/`unimplemented!`/`FIXME`/`TODO` marker anywhere** in the crates.
+- **`#[stacksafe]` coverage in the lowlevel is complete** — all eleven recursive
+  entry points are annotated (the gap is `highlevel::check_term`, `P2-10`).
+- **`no_attr_ext` aside, no `format!` in a hot path** in the lowlevel or
+  highlevel; `format!` appears in the highlevel only in two codec error paths.
+- **`docs/README.md`'s index is complete** — all 33 notes are linked and no link
+  is dangling (the disagreement is the one status cell, `P5-2`).
+- **The preprocessor extraction is exemplary** —
+  `crates/lichen-language/src/preprocess/mod.rs` is an 82-line shim with no
+  re-implementation; both crates are live. This is the standard other
+  extractions should meet.
+- **`examples/` is a real living spec** — 23 files, exactly the 23 README blocks,
+  enforced by `crates/lichen-language/tests/readme.rs`.
+- **`AttrExt` (`highlevel/src/attr.rs:113-232`) is the best-designed trait in the
+  codebase** — it states `share_missing_slot`'s invariant and why, documents
+  `is_subtype`'s conservative answer for unbound values, and explains that
+  label-vs-constraint is purely semantic. The model `NativeOp` should follow
+  (`P2-5`).
