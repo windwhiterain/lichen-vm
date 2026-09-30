@@ -61,6 +61,7 @@ queue's order is deliberate.
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | todo |
 | P1-17 | high | language-server | Every request runs the whole frontend | blocked:D6 |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D6 |
+| P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -375,31 +376,58 @@ artifact under the old key: exactly the shadowing the message claims to prevent.
 
 ### P1-2 — `.unwrap()` on the budget-refusal path `verified`
 
-`crates/lichen-lowlevel/src/evaluation.rs:262`:
+`crates/lichen-lowlevel/src/evaluation.rs`, the extension-operator arm:
 
 ```rust
 let value = self.evaluate_node_deep(operand, Some(block));
 if self.nodes[operand].evaluated_deep.unwrap().parameterized {
 ```
 
-`evaluate_node_deep_inner` returns **before** writing `evaluated_deep` on
-budget exhaustion (`:536-537`), and the cycle cut (`:513-517`) skips it too. So
-an extension operator over a too-deep operand turns
-`BudgetExhausted::EvaluateDepth` — whose whole contract (`lib.rs:686-693`) is
-that the guards *"refuse to continue instead of unwinding"* — into a panic. The
-author already guards the same field with `self.nodes.get(operand)` at
-`:626-634`; only `:262` indexes unconditionally.
+`evaluate_node_deep_inner` returns **before** writing `evaluated_deep` when it
+refuses on budget exhaustion, and the structural-cycle cut returns early too. So
+an extension operator over a too-deep operand turned
+`BudgetExhausted::EvaluateDepth` — whose whole contract is that the guards
+*"refuse to continue instead of unwinding"* — into a panic. The same field is
+already read defensively further down the same function via
+`self.nodes.get(operand)`, with a comment noting *"a nested block release may
+have dropped the node by now"*, so the node may be **absent** as well as the flag
+unset.
 
-**Bonus defect in the same block:** `:534-535` says *"The nested counter
-deliberately stays inflated, as it did when the guard unwound"* and `:536`
-executes `self.deep_depth -= 1;`. The comment was copied from `apply.rs:24-28`,
-where it is **correct**. The divergence is behavioural, not cosmetic: because
-the counter is restored, every later sibling in the same pass re-trips the same
-budget and takes the same early return.
+**Outcome.** The arm now reads
+`self.nodes.get(operand).is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized))`
+— an absent node or an unset flag is "concreteness unknown", never "proven
+concrete". (`is_none_or`, not `map_or(true, ..)`: the latter draws
+`unnecessary_map_or` on this toolchain.) The only paths whose behaviour changed
+are the ones that used to panic. A regression test lowers
+`evaluate_depth_limit` and drives an extension operator past it
+(`tests/basic/evaluation.rs`); it was confirmed to fail against the old
+`.unwrap()` before being committed.
 
-**Fix.** `map_or(true, |e| e.parameterized)` and route the `None` case to the
-`Void` path; then make the comment and the code agree (decide which of the two
-behaviours is intended and state it).
+**The counter comment, and the question it opened.** The comment claimed the
+nesting counter *"deliberately stays inflated"* while the code decremented it —
+copied from `apply.rs`, where that sentence is **correct** (that path genuinely
+skips its decrement). The comment now describes the decrement and argues for the
+scoped reading: `deep_depth` is incremented at entry and restored on every exit,
+so leaving it inflated would make every later `evaluate_node_deep` in the process
+start past the limit.
+
+That argument is not obviously the whole story, so the semantics are **not**
+declared settled here — see `D8`. The panic fix above holds either way.
+
+### P1-19 — `evaluate_block` expects a return the budget may refuse `reported`
+
+Found while fixing `P1-2`, same class, second site: `evaluation.rs`'s
+`evaluate_block` ends with `.expect("evaluated return node")` after
+`evaluate_node_deep(root, None)`. A depth refusal returns `Void` before
+`evaluate_node`, so the root's cached value stays `None`, `garbage_collect`
+returns `None`, and the `expect` fires — **after** `drop_block` has already run.
+`Parameterized` is a first-class, expected answer everywhere else in the crate,
+so treating it as an internal error here is inconsistent. Reachability was
+reasoned but not demonstrated (it needs a child-block delegation with
+`deep_depth` already at the limit), so this is `reported`, not `verified`.
+`P2-7` names the same line among the panics inside the descent, but `P2-7`'s
+stated fix — the `VisitGuard` — would not change this trigger, so the two are
+separate.
 
 ### P1-3 — Table identity hash is a raw address `verified`
 
@@ -1201,6 +1229,30 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   by the type system. The mitigation is that the obligation now lives in exactly
   one written contract, every slicing site is `unsafe` and greppable, and no
   out-of-crate caller can obtain the slice from safe code at all.
+
+- **D8 — Is a budget refusal sticky or scoped? (open; found by `P1-2`.)**
+  The two guards implement opposite policies and nothing states which is
+  intended.
+
+  *Scoped* is what `deep_depth` does: incremented at entry, restored on every
+  exit, so a refusal applies only to the subtree past the limit and shallow
+  siblings still walk and are decided. `P1-2` documented the counter that way,
+  on the argument that an inflated nesting counter is never restored except by
+  `reset_apply_budget`, so every later `evaluate_node_deep` in the process would
+  start past the limit.
+
+  *Sticky* is what `apply_depth` does: its refusal returns before the decrement,
+  and the comment there says so deliberately — *"so a caller still inside a
+  refused apply cannot re-enter the walk"*. The `BudgetExhausted` doc points the
+  same way: the verdict is latched because *"a second walk must know it ran
+  against an already abandoned graph rather than discovering the exhaustion
+  again"*. Read plainly, that says once abandoned, stay abandoned.
+
+  So the asymmetry is the symptom, and one of the two is the anomaly. It is not
+  a live bug: in production `evaluate_depth_limit` is 300 000 and the limits are
+  only lowered by tests, so the difference is observable only when a limit is
+  actually tripped. Resolve it as one policy stated on both counters —
+  `P1-2`'s panic fix is independent of the answer.
 
 ## Checked and found clean
 
