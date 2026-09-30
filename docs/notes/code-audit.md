@@ -69,6 +69,7 @@ queue's order is deliberate.
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
+| P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -92,6 +93,9 @@ queue's order is deliberate.
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
+| P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | todo |
+| P4-8 | low | render | Two more ancestor guards scan the path they guard | todo |
+| P4-9 | low | compute | A `NativeOps` slice is leaked per registration | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | done |
@@ -1730,6 +1734,41 @@ The invalidation is exactly the set `P1-3`/`P1-4` already made useless: scalar
 and acyclic-array hashes are byte-identical to the old function, so only the
 cyclic-array, table and function-key payloads — the ones the old hash could not
 survive a freeze for — carry a rewritten hash.
+
+### P1-27 — A leaf name longer than 255 bytes desynchronises the artifact stream `verified`
+
+Found while measuring `P4-6`; the mechanism is verified first-hand, the
+reachability is not.
+
+`crates/lichen-registry/src/codec.rs:42-45`:
+
+```rust
+pub fn leaf(&mut self, name: &str) {
+    self.u8(name.len() as u8);
+    self.bytes(name.as_bytes());
+}
+```
+
+The length is written as a **`u8`** — `as u8` truncates rather than failing — while
+the bytes written are the **whole** name. `Reader::leaf_name` (`:99-102`) then
+reads the truncated length and takes that many bytes, leaving the remainder of the
+name in the stream. Every field after it is read from the wrong offset, so the
+artifact does not fail to parse; it **misparses**, which is the worst of the two
+outcomes for a container whose whole contract is "total validation or a clean
+error" (`P0-1`, `P0-5`, `P0-7`).
+
+A leaf name is program-defined text, so whether this is reachable from ordinary
+source depends on whether any leaf name can exceed 255 bytes — the audit did not
+establish that, and this note does not claim it. **Establish it first**: if a leaf
+name is always a fixed vocabulary word, this is a latent defect and the fix is a
+defensive one; if it can carry a source-derived name, it is reachable and severe.
+
+**Fix.** Either bound the name and refuse it at the writer (a diagnostic, not a
+truncation), or widen the length to `u32` — which is a format change and therefore
+bumps `ARTIFACT_FORMAT_VERSION` (`P1-26` just moved it to `5`, so this would be
+`6`). The choice follows from the reachability answer: a bound is right if names
+are a closed vocabulary, a wider length is right if they are open. Do not simply
+`assert!` the length — a panic in a codec is not a clean error either.
 
 ## P2 — architecture
 
@@ -3542,6 +3581,42 @@ The deserializer's `codec.rs:285` leak is the same shape and rides with it.
   name past 255 bytes truncates and desynchronises the artifact stream.  That
   is an artifact-codec correctness defect, not an optimization, and it belongs
   to `P0-5`/`P0-7`'s container; reported here, not changed.
+
+### P4-7 — `apply_errors` is deduped with a linear scan `verified`
+
+The same shape `P4-4` fixed on two other lists, at a site `P4-4`'s scope did not
+include: `crates/lichen-lowlevel/src/apply.rs` dedupes `apply_errors` with a linear
+`iter().any(...)` over a list that is **append-only and never cleared**, so a run
+that records `n` apply errors pays `n(n−1)/2` comparisons.
+
+**Fix.** The structure `P4-4` chose for its two sites — an index or a set beside
+the list — applied here. The dedup's *decision* must be identical, and the
+diagnostic order must not change. `P4-4`'s Outcome has the measurement method;
+reuse it rather than inventing a second one.
+
+### P4-8 — Two more ancestor guards scan the path they guard `verified`
+
+`crates/lichen-render/src/render.rs`'s type walk (`TypePrinter::path` and the
+`path`/`tpath` pair in `element_any`) uses the same `path.contains` ancestor guard
+`P4-5` replaced with `crates/lichen-lowlevel/src/ancestors.rs`, in a crate `P4-5`
+did not name.
+
+**Fix.** Reuse `ancestors` — it exists now, and a second implementation of the same
+guard is exactly the duplication `P3-1` exists to remove. Note the semantics
+`P4-5` established: the test is the **unordered pair against the current path**
+(ancestor), not a visited mark, so a plain visited set is wrong. Measure on a
+type-printing workload, since `P4-5`'s numbers were taken on unification.
+
+### P4-9 — A `NativeOps` slice is leaked per registration `verified`
+
+`crates/lichen-compute/src/compute.rs` leaks a 9-entry `NativeOps` slice once per
+`compute_native_ops!` call — 144 bytes per `PackageStore::register_compute`. It is
+**bounded** (once per store, because the handle is then served from `native`), so
+this is a tidiness item rather than a leak in the growing sense.
+
+**Fix.** Return the slice from a `&'static` initializer instead of leaking a fresh
+one per call, or state why the leak is deliberate. Do not restructure the
+registration path for 144 bytes.
 
 ## P5 — hygiene and docs
 
