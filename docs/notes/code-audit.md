@@ -93,7 +93,7 @@ queue's order is deliberate.
 | P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | done |
-| P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | todo |
+| P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | done |
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
@@ -1957,6 +1957,39 @@ scans the module's whole node table and is called **per emitted node**
   the trigger never fires and `LICHEN_BUILD_COMMIT` goes stale — and this repo's
   own workflow mandates worktrees. `Command::new("git")` also relies on the
   build script's CWD rather than naming the directory.
+  **The audit's stated consequence was wrong and is corrected here; the path
+  defect is real.** Measured first-hand on this toolchain (cargo 1.97.1, in this
+  worktree): a `rerun-if-changed` path that does not exist does **not** leave the
+  directive inert — cargo re-runs the build script on **every** build. So in a
+  worktree the missing `.git/HEAD` costs an unconditional recompile of this
+  crate (two consecutive `cargo build -p lichen-package` both printed
+  *"Compiling lichen-package"*) while the embedded commit is refreshed every
+  time and is therefore **never** stale there. The real staleness window is the
+  opposite direction and belongs to *both* checkout kinds: only `HEAD` is
+  watched, and a commit, amend, reset or rebase on the **current branch** moves
+  `refs/heads/<branch>` — a commit on a *packed* ref writes a loose file and
+  leaves `packed-refs` untouched (verified in a scratch repository) — so the
+  embedded commit does go stale until some unrelated checkout moves `HEAD`.
+  The note's second half is not a defect: the build script's CWD is the package
+  root, which is exactly where git should walk up from.
+  **Outcome.** The trigger now names the **resolved** git directory's `HEAD` and
+  the directory holding the branch refs — both exist, and cargo watches a
+  directory recursively:
+  `rerun-if-changed=<absolute-git-dir>/HEAD` and
+  `rerun-if-changed=<git-path refs/heads>`, where `--git-path` relocates the
+  latter into the main checkout's git directory for a worktree, since that is
+  where a worktree's refs actually live. A branch-ref write is now observed —
+  the case the old directive could never see in either checkout kind — and the
+  missing-path unconditional rerun is gone. Measured after the change, in this
+  worktree: the second of two consecutive builds did nothing; touching the
+  resolved `HEAD` rebuilt; touching `refs/heads/feature/code-audit` rebuilt;
+  touching an unrelated file did nothing.
+  **Residual, deliberately left.** Any ref write under `refs/heads` re-runs the
+  script, so creating an unrelated local branch costs one recompile of this
+  crate. Narrowing it to the single loose ref below `HEAD` would re-introduce a
+  missing-path directive whenever that ref is packed, which is the defect just
+  removed. `packed-refs` is not watched: a commit never updates it, and packing
+  or unpacking changes the ref files it describes.
 - **P5-7 `reported`** — `toolchain.rs:356-359` prints a progress line to
   **stdout** from library code, while `main.rs:446-449`'s command contract is to
   print a path: `SERVER=$(lichen path language-server --project .)` captures two
