@@ -263,6 +263,23 @@ where
                 })
                 .collect::<Vec<_>>(),
         );
+        // The invariant every consumer of a `Report` relies on: a failed build
+        // carries at least one diagnostic.  `Build::diagnostics` skips a
+        // recorded failure it cannot attribute to an expression — an assert
+        // cloned out of an imported module has no entry in this build's node
+        // tables — so without this the state `!ok && diagnostics.is_empty()`
+        // reaches `Err(report.diagnostics)` as an error rendering *nothing at
+        // all*.  Synthesise exactly one, here, so `run`, the package store and
+        // the editor all inherit it instead of each inventing their own.
+        if diagnostics.is_empty() {
+            let unattributed = lichen_highlevel::diagnostic::Diag::unattributed_failure();
+            diagnostics.push(Diag {
+                span: None,
+                message: crate::render::checker_message(&mut printer, &unattributed),
+                stage: Stage::Check,
+                check: Some(Box::new(unattributed)),
+            });
+        }
     }
     Report {
         build: Some(build),

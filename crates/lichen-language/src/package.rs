@@ -598,15 +598,7 @@ where
                     Some(rest) => dir.join(rest),
                     None => vendored_entry_file::<P>(dir, alias)?,
                 };
-                return self.load_package(&resolved).map_err(|mut diags| {
-                    diags.drain(..).next().unwrap_or_else(|| {
-                        Diag::new(
-                            Stage::Preprocess,
-                            (0, 0),
-                            format!("cannot resolve vendored import '{}'", import_path),
-                        )
-                    })
-                });
+                return self.load_package(&resolved).map_err(first_diagnostic);
             }
         }
         let path = Path::new(import_path);
@@ -626,16 +618,18 @@ where
                 .unwrap_or_else(|| PathBuf::from("."));
             base_dir.join(path)
         };
-        self.load_package(&resolved).map_err(|mut diags| {
-            diags.drain(..).next().unwrap_or_else(|| {
-                Diag::new(
-                    Stage::Preprocess,
-                    (0, 0),
-                    format!("cannot resolve import '{}'", import_path),
-                )
-            })
-        })
+        self.load_package(&resolved).map_err(first_diagnostic)
     }
+}
+
+/// The diagnostic a failed package load reports: the load's own first.  A
+/// failed build always carries at least one (see [`crate::build_report`]), so
+/// this seam needs no fallback message of its own.
+fn first_diagnostic<P: lichen_lowlevel::Program>(mut diags: Vec<Diag<P>>) -> Diag<P> {
+    diags
+        .drain(..)
+        .next()
+        .expect("a failed package load reports a diagnostic")
 }
 
 // The native-package registration impl: compile a plugin's embedded lichen

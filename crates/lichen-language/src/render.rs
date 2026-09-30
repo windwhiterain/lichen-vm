@@ -233,6 +233,12 @@ where
             format!("index {index} out of bounds (array length {length})")
         }
         DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
+        // The report invariant's last resort (see `crate::build_report`): the
+        // build failed, but no failure could be pinned to an expression in this
+        // source, so there is no caret and the message names the whole build.
+        DiagKind::UnattributedFailure => {
+            "the build failed, but the failing check could not be attributed to an expression in this source".to_string()
+        }
         DiagKind::TableKeyUnbound => {
             "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
                 .to_string()

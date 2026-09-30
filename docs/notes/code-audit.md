@@ -57,7 +57,7 @@ queue's order is deliberate.
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
-| P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | todo |
+| P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
@@ -754,6 +754,52 @@ with a synthesised diagnostic.
 
 **Fix.** Guarantee at least one diagnostic on the failure path (synthesise a
 "build failed" diagnostic at the report level), then delete the two workarounds.
+
+**Outcome — the report-level synthesis, and why not to attribute the assert.**
+`build_report` (`lib.rs:274-282`) now appends exactly one synthesised `Diag`
+when `!build.ok` and the assembled diagnostic list is still empty, so the
+invariant "a failure always carries at least one diagnostic" holds where the
+report is assembled and every consumer inherits it. The two workarounds in
+`resolve_import` are gone: it takes the failed load's own first diagnostic
+(`first_diagnostic`, `package.rs:628-632`), which the invariant guarantees
+exists, so the seam no longer has to invent a message.
+
+*Reporting the skipped assert instead was rejected, on both skip conditions.*
+Both are load-bearing and were left untouched:
+- The `Static`-template skip (`highlevel/diagnostic.rs:444`, added in `940ebc6`
+  *"assert metadata moves to a highlevel-side secondary map"*) has **no usable
+  location**. The template is a node of the *imported* module, while both the
+  location table (`node_edges`) and the user-facing flag (`user_asserts`) are
+  keyed by **this build's** own dynamic nodes; the apply's clone has no entry in
+  either, and the lowlevel's `AssertError` carries no apply site. There is
+  nothing to attribute it to. Worse, a static template cannot be *classified*:
+  `user_asserts` is this build's table, so a user `assert` and the generated
+  array-bounds guard are indistinguishable through it — reporting every
+  static-template assert error would re-report exactly the guard failure that
+  the second condition exists to suppress (a bounds guard already fails the read
+  with `EvalError::Index`). Closing it properly means carrying the flag *and* a
+  location across the freeze, in the package metadata — a redesign, not this fix.
+- The `user_asserts` condition (`:446`) is that deliberate dedupe. Untouched.
+
+*Reachability, and how `P1-14` widened it.* This is reachable from **ordinary
+source**, not a corrupt artifact: with `pkg.lichen` = `x => ! (x == 1)` and an
+importer `@{f = import "pkg.lichen"@}f 2`, the apply's assert clone fires in the
+*importer's* module with a `Static` template — measured: `build.ok == false`,
+`assert_errors == 1`, `eval_errors == 0`, `user_asserts == 0`, `diagnostics`
+empty. `ec9c4e4` (`P1-14`) is what puts `run` in this state: `evaluate`/
+`evaluate_raw` now gate on `Report::ok()`, so a failed build with nothing
+rendered returns `Err(vec![])` where the run previously proceeded. The state is
+now a real diagnostic — `DiagKind::UnattributedFailure` with
+`Diag::unattributed_failure()` (`highlevel/diagnostic.rs:134`, `:220`), rendered
+by `render::checker_message` in the language layer — so consumers can match it
+rather than parse a bare string.
+
+**Tests.** `crates/lichen-language/tests/registry.rs:189` pins the direct path
+(one `UnattributedFailure`, no `loc`), and `:207` pins the package-load seam the
+deleted workarounds sat on. Both were confirmed to fail against the unfixed
+sources: the first with `left: 0, right: 1` — the empty diagnostic list — and the
+second with the fabricated *"cannot load package 'b.lichen': cannot resolve
+import 'b.lichen'"*, the workaround's lie (the load failed, not the resolution).
 
 ### P1-16 — `stage_depends` wired on one of two store entry points `reported`
 

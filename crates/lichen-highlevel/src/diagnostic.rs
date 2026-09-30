@@ -123,6 +123,15 @@ pub enum DiagKind {
     /// statement.  The checker reports this as an error instead of panicking.
     /// `a`/`b` are unused.
     NonTerminating,
+    /// A failed build that [`Build::diagnostics`] could attribute *nothing* to:
+    /// the checker recorded a failure, but every recorded failure was skipped
+    /// for want of an expression to blame.  The one live producer is an assert
+    /// cloned out of an imported module — [`AssertError::template`] is then a
+    /// node of that module, and this build's attribution tables hold no entry
+    /// for it.  The assembly layer substitutes exactly one of these so a failed
+    /// report never carries an empty diagnostic list; `loc` is `None`, since
+    /// there is no expression in this source to point at.
+    UnattributedFailure,
 }
 
 /// One checker check, attributed with where it came from.
@@ -201,6 +210,28 @@ impl<P: Program> Diag<P> {
     /// The [`Loc`] this diagnostic is attributed to, if any.
     pub fn loc(&self) -> Option<&Loc> {
         self.loc.as_ref()
+    }
+
+    /// The placeholder for a failed build [`Build::diagnostics`] rendered
+    /// nothing for — see [`DiagKind::UnattributedFailure`].  The report's
+    /// assembly layer emits exactly one of these when a failed build would
+    /// otherwise carry an empty diagnostic list, upholding the invariant that
+    /// every consumer relies on.
+    pub fn unattributed_failure() -> Self {
+        Diag {
+            loc: None,
+            kind: DiagKind::UnattributedFailure,
+            a: NodeId::default(),
+            b: NodeId::default(),
+            value_a: None,
+            value_b: None,
+            assert_value: None,
+            index: None,
+            length: None,
+            field: None,
+            budget: None,
+            error_index: None,
+        }
     }
 }
 
