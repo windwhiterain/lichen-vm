@@ -1057,6 +1057,11 @@ where
 
     /// The children of a variadic expression (`Tuple`, `TypeTuple`,
     /// `Array`, `TypeStruct`, `ShallowArray`).
+    ///
+    /// The non-variadic kinds are named rather than caught by a wildcard: this
+    /// is the *open* end of the encoding — a new kind that stores its children
+    /// as a [`ChildRange`] must be added to the range arm, and a wildcard would
+    /// let it compile and then panic at run time.
     fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
@@ -1066,7 +1071,29 @@ where
             | ExprKind::Table(range) => range,
             ExprKind::TypeStruct { fields, .. } => fields,
             ExprKind::NativeCall { args, .. } => args,
-            _ => unreachable!("expected a variadic expression kind"),
+            ExprKind::Literal(_)
+            | ExprKind::Parameter
+            | ExprKind::Function { .. }
+            | ExprKind::Apply { .. }
+            | ExprKind::BinOp { .. }
+            | ExprKind::Instantiate { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::Assert { .. }
+            | ExprKind::TypeOf { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::RawIndex { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::NamedField { .. }
+            | ExprKind::RawNamedField { .. }
+            | ExprKind::Find { .. }
+            | ExprKind::Annotation { .. }
+            | ExprKind::TypeFunction { .. }
+            | ExprKind::TypeArray { .. }
+            | ExprKind::Placeholder
+            | ExprKind::ErrorBlock
+            | ExprKind::Static { .. } => {
+                unreachable!("expected a variadic expression kind")
+            }
         };
         self.ir.children[range.start as usize..range.end as usize].to_vec()
     }

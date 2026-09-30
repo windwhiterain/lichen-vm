@@ -757,7 +757,40 @@ impl Compiler {
                             ids.push(self.compile_expr(inner));
                             depths.push(*depth);
                         }
-                        _ => {
+                        // Every other kind is a plain element — compile it
+                        // with depth 0.  Named exhaustively, so a new kind has
+                        // to be classified here instead of silently taking the
+                        // `~`-free path.
+                        Expr::Int(..)
+                        | Expr::Str(..)
+                        | Expr::TypeConst(..)
+                        | Expr::TypeOf(..)
+                        | Expr::Name(..)
+                        | Expr::Placeholder(..)
+                        | Expr::Lambda { .. }
+                        | Expr::Apply { .. }
+                        | Expr::BinOp { .. }
+                        | Expr::If { .. }
+                        | Expr::Assert { .. }
+                        | Expr::NativeCall { .. }
+                        | Expr::Index { .. }
+                        | Expr::RawIndex { .. }
+                        | Expr::FieldRead { .. }
+                        | Expr::NamedFieldRead { .. }
+                        | Expr::RawNamedField { .. }
+                        | Expr::TableFind { .. }
+                        | Expr::Annotation { .. }
+                        | Expr::Arrow { .. }
+                        | Expr::Tuple(..)
+                        | Expr::TypeTuple(..)
+                        | Expr::StructType(..)
+                        | Expr::StructInst { .. }
+                        | Expr::Array(..)
+                        | Expr::Table(..)
+                        | Expr::TypeArray { .. }
+                        | Expr::Block { .. }
+                        | Expr::RecordBlock { .. }
+                        | Expr::Err { .. } => {
                             ids.push(self.compile_expr(element));
                             depths.push(0);
                         }

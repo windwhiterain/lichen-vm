@@ -71,7 +71,7 @@ queue's order is deliberate.
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
-| P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
+| P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | done |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
@@ -1847,6 +1847,93 @@ the build. `range_children` should be enumerated.
 
 **Fix.** Enumerate `range_children` (small, do it early). A shared visitor is a
 bigger design call — propose before doing.
+
+**Outcome — the count is six, not five, and the wildcard is not in one of them.**
+The walks, re-derived from this revision (all `#[stacksafe]`, all exhaustive over
+the parser's **31** `Expr` variants, so a new variant breaks the build at every
+one of them):
+
+| walk | extent | note |
+|---|---|---|
+| `analysis.rs` `NameClass::expr` | `:1304-1451` (148) | `:1292-1439` (148) |
+| `analysis.rs` `Walk::expr` | `:1556-1713` (158) | `:1540-1697` (158) |
+| `analysis.rs` `ScopeCapture::expr` | `:1852-2007` (156) | `:1832-1987` (156) |
+| `resolve.rs` `resolve_expr` | `:220-386` (167) | *not listed* |
+| `resolve.rs` `KeyWriter::expr` | `:512-749` (238) | `resolve.rs:478` (the serializer cluster, `:447-749`) |
+| `compile.rs` `compile_expr` | `:388-829` (442) | `:379-832` |
+
+The note's spans are right but drifted 12-20 lines, and its "~110-line" is wrong:
+each of the three analysis walks is ~150 lines. "Adding an `Expr` variant means
+editing five sites" is **six** in these three crates — `resolve.rs` has two walks,
+the resolver's rewrite and the content-key serializer, not one — and seven
+workspace-wide: `lichen-language-parser`'s `collect_error_blocks::walk_expr`
+(`parse.rs:1369-1512`) walks the same AST and is exhaustive too (it is outside
+the note's crate list).
+
+**The wildcard is where the note says it is — and it is not one of the walks.**
+`range_children` (`checker.rs:1060-1072` before this change, in
+`lichen-highlevel`, not the "`lowerlevel`'s sibling" the note calls it) matched
+`Tuple`/`TypeTuple`/`Array`/`ShallowArray`/`Table` → their range, `TypeStruct` →
+`fields`, `NativeCall` → `args`, and `_ => unreachable!("expected a variadic
+expression kind")`.
+*Verified with a scratch variant*: adding `ExprKind::Probe` to the IR broke
+exactly three matches — `persp_combine_children` (`annotations.rs:72`),
+`check_term` (`checker.rs:1204`) and `repoint` (`ir.rs:467`) — and left
+`range_children` compiling, so the note's "its two siblings are fully enumerated
+and *would* break the build" is exact, and a new variadic kind would have
+panicked at run time. The ledger row's "one of them has a wildcard arm" therefore
+fuses two findings: **none** of the six parser-AST walks is partial.
+
+**Nothing was being skipped.** `range_children`'s wildcard arm is reachable only
+by asking a non-variadic kind for children, so no variant relies on it and no
+test can move when it goes. With the fix in place and the same scratch `Probe`
+variant still present, the check reported **four** sites — `range_children`
+(`checker.rs:1066`) joined the three above. That is the whole proof: a new
+variadic kind is now a compile error rather than a run-time panic.
+
+**The other wildcard, the one inside a walk.** `compile_expr`'s array arm
+(`:755-764`) matched `Expr::Shallow(inner, depth, _)` against
+`_ => compile it as a plain element, depth 0`. Unlike `range_children` its
+default is *correct* — all 30 non-`Shallow` variants rely on that arm, and that
+is what they should do — so enumerating them (`:755-796`, what landed) is
+behaviour-preserving, not a bug fix. What it buys is the item's stated
+property: a new kind appearing inside an array literal is a compile error instead
+of a silent depth-0 element.
+
+*Three wildcards deliberately left, and the line.* `range_children`'s neighbour
+`range_depths` (`:1103-1109`), `ir.rs`'s `annotation_attrs` (`:603-608`) and
+`structs.rs`'s `check_type_struct` (`:697-700`) are single-variant extractors:
+their wildcard **is** the caller's contract ("on a non-… expression") and a new
+variant cannot legitimately reach them. The line is whether the match
+*classifies* an open set of kinds — `range_children` (which kinds store children
+as a range: a new one may) and `compile_expr`'s element test (every kind) — or
+*extracts* one known variant.
+
+**Preference 1 — one generic walk — is a redesign, and is left proposed.** The
+six walks' needs genuinely diverge: three per-variant analyses (which name is
+defined where, which frame a statement opens, the scope snapshot at a byte
+offset), an in-place `&mut Expr` rewrite, a *tagged* encoder whose output is the
+artifact's content key (`KEY_FORMAT_VERSION` moves with the variant set), and an
+IR lowering that allocates `ExprId`s. A shared walk needs either a 31-method
+visitor whose methods are the present arms — the per-variant bodies are where
+the 148-442 lines are, so little would shrink — or a children-range function plus
+hooks; and every walk's recursion would move into the shared walk, so its
+`#[stacksafe]` guard has to sit on the new entry point exactly as it sits on the
+old ones or `P1-22`'s overflow returns. That is a design change of the
+language-server's analysis and of the lowering, not a refactor of duplication —
+worth its own decision rather than this item.
+
+**`P1-22`'s guards are intact.** No walk was collapsed and no attribute moved:
+`compile_expr` (`compile.rs:387`), `resolve_expr` (`resolve.rs:219`),
+`KeyWriter::expr` (`resolve.rs:511`), the three analysis walks (`analysis.rs:1303`,
+`:1555`, `:1851`) and the checker's own `check_term` (`checker.rs:1194`) all still
+carry `#[stacksafe]`.
+
+**Evidence.** Scratch `ExprKind` variant before/after as above (removed from the
+commit). `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
+`cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes (72 test
+binaries, 764 tests, 0 failed), and `cargo test -p lichen-language --test
+pipeline --test examples --test compute --test table` passes (24 + 1 + 123 + 11).
 
 ### P2-3 — `Build` is a god-DTO `verified`
 
