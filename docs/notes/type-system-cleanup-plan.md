@@ -731,15 +731,39 @@ the experiment.
   everything observable, and the hazard the review describes is currently
   unreachable rather than merely rare.
 
-  **Left as a genuine open question, because the measurement found something
-  the review did not ask about:** why the `else` arm at `annotations.rs:268`
-  never fires for `Doc` is not explained.  `value_attr_node` returns `None`
-  whenever the value's schema tail is empty, and an un-annotated compound's
-  tail is empty, so on the reading of the code the arm should be reached.  Either
-  the composed `AttrSet::order` does not contain `Doc` on these paths, or a
-  compound's tail is stamped full somewhere this survey did not find.  Until
-  that is answered, `AttrExt::missing_slot` should be treated as **unexercised,
-  not dead** — it is a trait method on a public plugin contract, and the two
-  live call sites are real.  Finding the answer is worth more than the interning
-  ever was.
+  **The `else` arm does fire — for a constraint, never for a label.**  Putting
+  the same `panic!` in `Perspective::missing_slot` and confirming the string
+  was in the binary, `f = x => x` / `a = 3 # 4` / `r = f a` hits it dead on
+  (`lambda.rs:267-275`: the argument carries a constraint slot and the
+  function's parameter does not, so the declared side is the attribute's
+  missing slot).  It is not dead code, and it is **covered — by three tests in
+  `tests/perspective.rs`** (`a_missing_child_reads_zero`,
+  `an_annotated_parameter_accepts_a_uniform_argument`,
+  `an_identity_function_rejects_a_perspective_argument`) while being reached by
+  **none of the 23 examples**.  A label cannot reach it, and the reason is
+  structural rather than accidental:
+
+  - `check_ann` iterates the **merged tail** — the union of what the value
+    carries and what the annotation spells — not a padding out to
+    `AttrSet::ORDER`.  An attribute that neither the value nor the annotation
+    mentions therefore has **no slot in the pair at all**, so nothing ever
+    asks for one.  (The pair's width tracks the tail's length, while
+    `attr_slot(i)` is an *absolute* index from the marker's order, so a hole
+    is skipped rather than shifting later slots.)
+  - Where a slot *is* absent, the two callers either preserve the value's own
+    slot (`value_attr_node`, the `else` arm at `annotations.rs:266-268`) or are
+    gated on `self.attr[e]` being set — and `annotations.rs:269` only sets it
+    `if !ext.is_label()`.  A label never populates the slot a constraint is
+    found through, so `Doc` can satisfy neither condition.
+
+  **So the interning question has a split verdict, and the measurement is what
+  showed it.**  For `Doc` there is nothing to intern: the site is unreachable.
+  For `Perspective` the site is hot in the test suite, its missing value
+  (`USize(0)`) is immutable, and interning is defensible on the top-level
+  subset — but the compute refusal's objection still bites the in-lambda
+  subset, where `alloc_node` tags the node into the enclosing template and the
+  clone walk copies it per apply.  That leaves a top-level-only win of unknown
+  size, and nothing has measured it as worth taking.  The honest disposition is
+  therefore: **refused, and now for a reason that distinguishes the two
+  attributes instead of lumping them together.**
 
