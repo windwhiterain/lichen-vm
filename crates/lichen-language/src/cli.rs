@@ -232,9 +232,8 @@ where
     let mut diags = stage_depends::<P>(&mut store, source);
     for &(virtual_path, wrapper, native_ops) in native {
         if let Err(e) = store.register_native(virtual_path, wrapper, native_ops) {
-            diags.push(crate::diag::Diag::new(
+            diags.push(crate::diag::Diag::unattributed(
                 crate::diag::Stage::Preprocess,
-                (0, 0),
                 format!("cannot register native package {virtual_path}: {e}"),
             ));
         }

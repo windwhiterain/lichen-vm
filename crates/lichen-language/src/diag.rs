@@ -16,11 +16,18 @@ pub enum Stage {
     Parse,
     Resolve,
     Check,
+    /// The filesystem, not the pipeline: a path that cannot be read, a
+    /// permission failure, a disk error.  A diagnostic at this stage carries
+    /// no source span.
+    Io,
 }
 
-/// A rendered diagnostic: a message plus the source position it is grounded
-/// in.  Every frontend error carries a span — the highlevel bar, no panics,
-/// no "internal" messages.
+/// A rendered diagnostic: a message plus, when the failure is a property of
+/// the source, the position it is grounded in.  A frontend or checker error
+/// carries a span; a failure that is about no source text at all (an I/O
+/// error, a package-resolution failure) carries `None` and renders without a
+/// caret.  Either way the message is user-facing — no panics, no "internal"
+/// messages.
 ///
 /// `P` is the program marker the diagnostic belongs to.  It only appears in
 /// the `check` slot (the checker's structured facts, `None` for a frontend
@@ -46,6 +53,24 @@ impl<P: lichen_lowlevel::Program> Diag<P> {
             stage,
             check: None,
         }
+    }
+
+    /// A diagnostic with no source position: the failure is not a property of
+    /// any source text, so [`crate::render::render`] prints it without a caret.
+    /// This is the shape the highlevel's own unattributed failures take.
+    pub fn unattributed(stage: Stage, message: impl Into<String>) -> Self {
+        Diag {
+            span: None,
+            message: message.into(),
+            stage,
+            check: None,
+        }
+    }
+
+    /// A filesystem failure — a path that cannot be read, a permission error,
+    /// a disk error — at [`Stage::Io`] with no source span.
+    pub fn io(message: impl Into<String>) -> Self {
+        Self::unattributed(Stage::Io, message)
     }
 
     /// Widen a lexer diagnostic into the pipeline's [`Diag`] at `Stage::Lex`.

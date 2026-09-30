@@ -1077,9 +1077,12 @@ fn severity_for(stage: Stage) -> DiagnosticSeverity {
     // The frontend/checker report only errors; keep the mapping explicit so a
     // future warning stage slots in.
     match stage {
-        Stage::Preprocess | Stage::Lex | Stage::Parse | Stage::Resolve | Stage::Check => {
-            DiagnosticSeverity::ERROR
-        }
+        Stage::Preprocess
+        | Stage::Lex
+        | Stage::Parse
+        | Stage::Resolve
+        | Stage::Check
+        | Stage::Io => DiagnosticSeverity::ERROR,
     }
 }
 

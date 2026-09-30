@@ -104,6 +104,10 @@ where
 ///  1 | x => y
 ///    |      ^
 /// ```
+///
+/// A diagnostic with no span (an I/O or package-resolution failure — see
+/// [`Diag::unattributed`]) prints its message alone, with no position and no
+/// caret.
 pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> String {
     let mut out = format!("error: {}\n", diag.message);
     if let Some((line, col)) = diag.span {

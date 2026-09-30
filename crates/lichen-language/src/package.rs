@@ -247,7 +247,7 @@ where
         if path.file_name().is_some_and(|n| n == "compute.lichen") {
             let handle = self
                 .register_compute()
-                .map_err(|e| vec![Diag::new(Stage::Preprocess, (0, 0), e)])?;
+                .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
             return Ok(handle);
         }
         // Only `.lichen` files are packages.  Reject any other extension up
@@ -255,9 +255,8 @@ where
         // file ID is always a `.lichen` path (or a `virtual:` path for an
         // embedded source), which is exactly what the `gc` "clean" rule keeps.
         if path.extension().is_none_or(|ext| ext != "lichen") {
-            return Err(vec![Diag::new(
+            return Err(vec![Diag::unattributed(
                 Stage::Preprocess,
-                (0, 0),
                 format!(
                     "cannot load package {}: only .lichen files are packages",
                     path.display()
@@ -267,17 +266,15 @@ where
         let canonical = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
             Err(e) => {
-                return Err(vec![Diag::new(
-                    Stage::Preprocess,
-                    (0, 0),
-                    format!("cannot read package {}: {e}", path.display()),
-                )]);
+                return Err(vec![Diag::io(format!(
+                    "cannot read package {}: {e}",
+                    path.display()
+                ))]);
             }
         };
         if self.loading.contains(&canonical) {
-            return Err(vec![Diag::new(
+            return Err(vec![Diag::unattributed(
                 Stage::Preprocess,
-                (0, 0),
                 format!(
                     "circular import: {} is already being loaded",
                     canonical.display()
@@ -376,11 +373,10 @@ where
     fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
         let source = std::fs::read_to_string(canonical).map_err(|e| {
-            vec![Diag::new(
-                Stage::Preprocess,
-                (0, 0),
-                format!("cannot read package {}: {e}", canonical.display()),
-            )]
+            vec![Diag::io(format!(
+                "cannot read package {}: {e}",
+                canonical.display()
+            ))]
         })?;
         if let Some(device) = &self.device {
             if let Some(verified) = device.verify(&file_id, source.as_bytes()) {
@@ -815,14 +811,20 @@ fn vendored_entry_file<P: lichen_lowlevel::Program>(
             .map(|e| e.path())
             .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
             .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
+        // A directory that cannot be read at all is a filesystem failure, not
+        // "this dependency has no entry package": keep the error.
+        Err(e) => {
+            return Err(Diag::io(format!(
+                "cannot read vendored dependency '{alias}' at {}: {e}",
+                dir.display()
+            )));
+        }
     };
     files.sort();
     match files.len() {
         1 => Ok(files.into_iter().next().expect("one file")),
-        0 => Err(Diag::new(
+        0 => Err(Diag::unattributed(
             Stage::Preprocess,
-            (0, 0),
             format!(
                 "vendored dependency '{alias}' has no .lichen entry package (no _.lichen, \
                  {alias}.lichen, or a single .lichen file)"
@@ -839,9 +841,8 @@ fn vendored_entry_file<P: lichen_lowlevel::Program>(
                 })
                 .collect::<Vec<_>>()
                 .join(", ");
-            Err(Diag::new(
+            Err(Diag::unattributed(
                 Stage::Preprocess,
-                (0, 0),
                 format!(
                     "vendored dependency '{alias}' is ambiguous: pick one of {names} (or add a _.lichen)"
                 ),

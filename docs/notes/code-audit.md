@@ -96,7 +96,7 @@ queue's order is deliberate.
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | done |
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | done |
-| P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
+| P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | done |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
@@ -2166,6 +2166,49 @@ scans the module's whole node table and is called **per emitted node**
   with a fabricated `(0, 0)` span, which `render.rs:109-116` prints as a caret
   at line 1 column 0. There is no `Stage::Io`, so a permission error and a syntax
   error are indistinguishable to a consumer.
+  **Outcome.** The premise held; the count and the mechanism are both corrected
+  here.  Re-derived, the sites are **eight**, not ten, and the line numbers had
+  drifted: `package.rs:250` (embedded-wrapper registration), `:258` (a non-`.lichen`
+  path), `:270` (`fs::canonicalize`), `:278` (circular import), `:379`
+  (`fs::read_to_string`), `:823` and `:842` (the vendored entry package missing
+  or ambiguous), and `cli.rs:235` (native-package registration).  **Only three
+  of the eight are filesystem failures** — `canonicalize`, `read_to_string`, and
+  the `fs::read_dir` error that `vendored_entry_file` used to swallow into
+  `Vec::new()` and then report as "has no `.lichen` entry package" (a permission
+  error read as a missing file); the other five are package-resolution and
+  registration failures that fabricated the same span.  The note's "an
+  `io::Error`" is true of the first three and false of the last five; the
+  fabricated span was real in all eight.
+  **Representation.** `Stage::Io` joins the stage enum, and `Diag::unattributed`
+  / `Diag::io` build a diagnostic with `span: None` — the shape the highlevel's
+  own unattributed failure already takes (`lib.rs`'s `!build.ok` fallback), so
+  this is that one convention rather than a second.  `render` already prints a
+  span-less diagnostic as its message alone: no `-->`, no line, no caret.  All
+  eight sites now carry no span; the three filesystem ones are `Stage::Io`, the
+  five others keep `Stage::Preprocess` and are span-less.  Every message keeps
+  its path, and the `read_dir` case now keeps the underlying error too.  The
+  language server's exhaustive `severity_for` gained `Stage::Io => ERROR`; its
+  `lsp_diagnostics` already maps `span: None` to the zero-width `0:0` range the
+  protocol requires, so a span-less diagnostic reaches the editor with no
+  position rather than a wrong one.
+  **Test.** `crates/lichen-language/tests/persist.rs`'s
+  `a_missing_package_is_an_io_diagnostic_not_a_line_one_syntax_error` loads a
+  path that does not exist and asserts `stage == Stage::Io`, `span.is_none()`,
+  that the path survives in the message, and that the rendering has neither a
+  caret nor a `-->`.  Against the unfixed tree it failed on the span with
+  `Diag { span: Some((0, 0)), message: "cannot read package …absent.lichen: …
+  (os error 2)", stage: Preprocess, check: None }` — the missing file reported
+  as a preprocess diagnostic at line 1, column 1.
+  **Adjacent, not fixed (another crate, and a different item's shape):**
+  `lichen-preprocess`'s `PreprocessDiag::at_zero` (`lib.rs:61-66`, used at
+  `:468` and `:475`) still fabricates `(0, 0)` for two position-less failures,
+  one of which — *"dependency '{alias}' is not fetched … run `lichen fetch`
+  first"* — is this item's defect in the preprocessor: a missing directory
+  reported as a source diagnostic at 1:1.  Giving it `Stage::Io` needs a kind on
+  `PreprocessDiag`, which that type does not have, so it is left for its own
+  item rather than redesigned here.  `language-server/analysis.rs:415` and
+  `:472`'s `StatementValue { span: (0, 0), … }` is a hover snapshot's fallback,
+  not a diagnostic, and is out of this item.
 - **P5-10 `reported`** — `render/src/render.rs:869` indexes `kind.items()[0]`
   with no length check (its sibling `kind_is_struct` at `:1034` checks), and
   `:932-941` walks `equality.parent` unguarded, uncompressed and cycle-unsafe,

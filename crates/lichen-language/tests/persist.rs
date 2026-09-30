@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lichen_language::diag::Stage;
 use lichen_language::package::PackageStore;
 use lichen_language::persist::{
     DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex,
@@ -332,6 +333,37 @@ fn non_lichen_package_is_rejected_at_load() {
             .map(|d| d.message.as_str())
             .collect::<Vec<_>>()
             .join("; ")
+    );
+}
+
+#[test]
+fn a_missing_package_is_an_io_diagnostic_not_a_line_one_syntax_error() {
+    // A path that does not exist is a filesystem failure, so it carries no
+    // source position: it must not be reported as a source problem at line 1,
+    // column 1 (a caret at the first character of a file that is not there).
+    let dir = temp_dir("missing");
+    let missing = dir.join("absent.lichen");
+    let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
+    let err = store.load_package(&missing).unwrap_err();
+    let diagnostic = err.first().expect("a diagnostic");
+    assert_eq!(
+        diagnostic.stage,
+        Stage::Io,
+        "a filesystem failure is its own stage: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic.span.is_none(),
+        "an I/O failure is not grounded in the source: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message.contains("absent.lichen"),
+        "the path must survive: {}",
+        diagnostic.message
+    );
+    let rendered = lichen_language::render::render("", diagnostic);
+    assert!(
+        !rendered.contains('^') && !rendered.contains("-->"),
+        "an I/O failure renders without a caret:\n{rendered}"
     );
 }
 
