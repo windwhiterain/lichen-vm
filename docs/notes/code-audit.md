@@ -35,7 +35,8 @@ queue's order is deliberate.
 | id | severity | area | item | status |
 |---|---|---|---|---|
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
-| P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | todo |
+| P0-2a | critical | lowlevel | Private raw-pointer fields, checked constructors, the missing contracts | todo |
+| P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | todo |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
@@ -140,6 +141,10 @@ checksum in the container as the durable fix (see `D1`).
 
 ### P0-2 — `&'static` laundering and `pub` raw-pointer fields `verified`
 
+Split into `P0-2a` (encapsulation, contracts, missing `# Safety`) and `P0-2b`
+(the accessors become `unsafe`, and every call site acknowledges it) by decision
+`D7`. The finding:
+
 `crates/lichen-lowlevel/src/lib.rs:253-275`:
 
 ```rust
@@ -166,22 +171,29 @@ whose prose argues about "the lifetime of `&self`" while the signature says
 `lib.rs:395-411`: `Handle<T>(pub *const T)` and
 `StaticHandle { pub offset: *const T }` are public raw-pointer fields, and
 `lib.rs:403`'s comment — *"Not really pointing to anything, just offset encoded
-with possible slice length"* — is **false**: `offset` is dereferenced at
-`lib.rs:271`, `lib.rs:470`, `codec.rs:115`, `codec.rs:126`, `static_module.rs:665`,
-`static_module.rs:684`. It describes the *serialized* integer form and was left
-on the in-memory field.
+with possible slice length"* — is **false**: the codec resolves `offset` to a
+real arena address at load (`codec.rs:180`, `:223`) and it is dereferenced at
+`lib.rs:271`, `lib.rs:470`, `codec.rs:115`, `codec.rs:126`,
+`static_module.rs:665`, `:684`. It describes the *serialized* integer form and
+was left on the in-memory field.
 
-Also note `copy_ext` (`utils.rs:49-63`) copies `old.len()` **bytes** into a slot
+Also `copy_ext` (`utils.rs:49-63`) copies `old.len()` **bytes** into a slot
 aligned to `P::Value::alignment()`, and `ValueExt` (`lib.rs:311-351`) has no
-trait-level doc at all — no statement that `handle()` must stay stable, that
-`alignment()` must be a power of two, or that `len()` is a byte count.
-`Layout::from_size_align(..).unwrap()` (`utils.rs:55`) panics on a non-power-of-two
-`alignment()`.
+trait-level doc at all — no statement that `handle()` must stay stable while the
+value lives, that `alignment()` must be a power of two, or that `len()` is a byte
+count. `Layout::from_size_align(..).unwrap()` (`utils.rs:55`) panics on a
+non-power-of-two `alignment()`. 21 of the crate's 26 `unsafe` sites have no
+`SAFETY` justification at all — including the two most dangerous (`items()`,
+`value_eq`) — while the crate's prose is otherwise unusually careful.
 
-**Fix direction (needs `D1`).** Tie the returned slice to a lifetime the caller
-must hold (`fn items<'m>(&'m self, module: &'m Module<P>) -> &'m [ArrayItem]`), or
-make the accessors `unsafe` with a real contract. Make the pointer fields
-private behind checked constructors. Document `ValueExt`'s three obligations.
+**P0-2a** — privatise the pointer fields behind checked constructors; correct the
+`lib.rs:403` comment; give `ValueExt` its three obligations; add the missing
+`# Safety`/`SAFETY` notes. No signature changes, so no call-site churn.
+
+**P0-2b** — mark `items()`, `array_items` and the `[u8]` handle accessors
+`unsafe` with one written contract, then update every call site (the compiler
+enumerates them). Internal sites that uphold the invariant get a one-line
+`SAFETY`; external sites must acknowledge it explicitly.
 
 ### P0-3 — `git clone`/`checkout` argument injection `verified`
 
@@ -1130,6 +1142,37 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   helps lex/parse until T3 exists; (c) add cancellation and a debounce — a
   correctness/UX fix independently of (a)/(b). Compute's registry eviction and
   wasm-module caching are separate from all three and can proceed regardless.
+- **D7 — How to close `P0-2`. — DECIDED: make the obligation explicit (`B'`).**
+  The accessors stay unbounded but become `unsafe` with one written contract, and
+  the raw-pointer fields are privatised behind checked constructors.
+
+  *Rejected — full lifetime binding (`A'`):* tying the returned slice to `&self`
+  does not compile at the VM's own hot spots, because they read an arena slice
+  **while mutating the module**. Verified at `gc.rs:57-68` (iterates
+  `array.items()` across `self.garbage_collect_node`, then passes
+  `array.items()` to `self.alloc_array`), `evaluation.rs:559-570` and `:578-582`
+  (the deep pass), and `equality.rs:391-424` (holds `pa.items()`/`pb.items()`
+  across `self.unify_inner`/`add_equality`/`record_error`); the same shape is at
+  `function.rs:252`, `:555-580`, `table.rs:222`, `:264`, `apply.rs:143-144`.
+  Every one of those would have to copy its node ids into a `Vec` before
+  descending — an extra allocation per array/table visit in the deep pass,
+  unification and GC. That is a hot-path regression, and it works directly
+  against `P4-6`, which exists to remove exactly that kind of per-visit clone.
+  Type safety bought with a permanent per-visit allocation in the VM's three
+  hottest loops is not the trade this project should make.
+
+  *Rejected — the audience split:* a lifetime-bound accessor for outside crates
+  plus a crate-private raw one for the VM internals avoids the allocation
+  entirely, but it still forces the callers that mutate inside the loop to be
+  restructured (the checker's table walks, among others), and it adds a second
+  accessor to a type that is already hard to read. Not worth the extra surface
+  when `B'` reaches the same bound on the external hole.
+
+  *What `B'` leaves open, stated so it is not mistaken for done:* inside the
+  crate the one-clause invariant is enforced by discipline and review rather than
+  by the type system. The mitigation is that the obligation now lives in exactly
+  one written contract, every slicing site is `unsafe` and greppable, and no
+  out-of-crate caller can obtain the slice from safe code at all.
 
 ## Checked and found clean
 
