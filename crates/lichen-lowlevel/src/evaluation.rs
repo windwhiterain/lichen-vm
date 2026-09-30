@@ -713,7 +713,15 @@ impl<P: Program> Module<P> {
     }
 
     fn evaluate_block(&mut self, root: NodeId) -> P::Value {
-        self.evaluate_node_deep(root, None);
-        self.garbage_collect(root).expect("evaluated return node")
+        let value = self.evaluate_node_deep(root, None);
+        // The deep pass answers without caching the root in two legitimate
+        // cases, so the compaction below may have no moved value to return:
+        // a budget refusal returns before `evaluate_node`, and a
+        // `Parameterized` answer is deliberately left uncached by the
+        // postlude.  Both are leaf markers owned by no arena, so the pass's
+        // own answer is the block's value verbatim — `Void` for a refusal,
+        // whose budget verdict is already recorded, so this propagates the
+        // refusal rather than reporting it a second time.
+        self.garbage_collect(root).unwrap_or(value)
     }
 }

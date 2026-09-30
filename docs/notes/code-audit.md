@@ -61,7 +61,7 @@ queue's order is deliberate.
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
-| P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
+| P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
@@ -990,12 +990,48 @@ Found while fixing `P1-2`, same class, second site: `evaluation.rs`'s
 `evaluate_node`, so the root's cached value stays `None`, `garbage_collect`
 returns `None`, and the `expect` fires — **after** `drop_block` has already run.
 `Parameterized` is a first-class, expected answer everywhere else in the crate,
-so treating it as an internal error here is inconsistent. Reachability was
-reasoned but not demonstrated (it needs a child-block delegation with
-`deep_depth` already at the limit), so this is `reported`, not `verified`.
+so treating it as an internal error here is inconsistent. Reachability **was**
+demonstrated, not merely reasoned: a child-block delegation with `deep_depth`
+already at the limit fires it. Bare reads of the same `expect` also found a
+**second, more ordinary trigger the item did not name**: a block whose root is
+still `Parameterized`, which `evaluate_node_operation`'s postlude deliberately
+never caches, so `garbage_collect` has nothing to move there either.
 `P2-7` names the same line among the panics inside the descent, but `P2-7`'s
 stated fix — the `VisitGuard` — would not change this trigger, so the two are
 separate.
+
+**Outcome.** The panic is gone; the fix is one line and does **not** touch
+`P2-7`'s `visiting` work. `evaluate_block` now keeps the deep pass's own answer
+and falls back to it when the compaction has no moved value:
+
+```rust
+let value = self.evaluate_node_deep(root, None);
+self.garbage_collect(root).unwrap_or(value)
+```
+
+`unwrap_or(value)`, not `unwrap_or_else(Void)`, because the two no-cached-value
+cases answer differently and the pass already said which: a refusal returns
+`Void` *before* `evaluate_node` and never ran anything (its budget verdict is
+already recorded, so the return is a **propagation** of that verdict, not a
+second report), while a lazy block returns `Parameterized` and must stay lazy —
+yielding `Void` there would forge a "computed nothing" (the residue of a
+recorded failure) out of a legitimate "try again later", which readers like the
+`TableGet` arm act on. Both markers are leaf values owned by no arena, so
+neither needs the relocation `garbage_collect` exists to perform; the postlude
+writes every arena-carrying answer, which is why "no cached value" implies the
+pass's answer was one of the two leaves.
+
+**Tests.** Both triggers are pinned in
+`crates/lichen-lowlevel/tests/basic/evaluation.rs`:
+`a_block_root_the_budget_refuses_yields_a_computed_nothing` (limit 2, the
+refusal lands on the child block's root; asserts the recorded
+`BudgetExhausted::EvaluateDepth` and a `Void` result) and
+`a_block_root_that_stays_lazy_is_not_an_internal_error` (an unbound operand
+makes the child block's root stay `Parameterized`; asserts the result is
+`Parameterized`, not `Void`). Both were confirmed to fail against the unfixed
+line — `panicked at crates\lichen-lowlevel\src\evaluation.rs:717:36: evaluated
+return node` — before the fix. The whole `basic` target (134 tests) passes
+after it.
 
 ### P1-20 — `download` uses a predictable shared temp name and skips `fsync` `verified`
 

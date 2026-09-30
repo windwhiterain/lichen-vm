@@ -398,3 +398,45 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
         "the refused frame wrote no flag"
     );
 }
+#[test]
+fn a_block_root_the_budget_refuses_yields_a_computed_nothing() {
+    // The delegation into a child block runs a fresh deep pass whose first
+    // frame is the child's root.  At the limit the pass refuses before it
+    // evaluates the root, so the root caches no value at all and the block's
+    // compaction has nothing to move.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let leaf = u128_node(&mut m, child, 7);
+    let child_op = op_node(&mut m, child, TestOperator::Id, Some(leaf));
+    let read = op_node(&mut m, root, TestOperator::Id, Some(child_op));
+    m.evaluate_depth_limit = 2;
+
+    let value = m.evaluate_node_deep(read, None);
+
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
+        "the guard's verdict is the outcome, not a panic"
+    );
+    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+}
+#[test]
+fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
+    // A `Parameterized` answer is deliberately never cached (the postlude
+    // writes only a decided value), so a block whose root is still lazy also
+    // leaves the block's compaction with nothing to move.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let unbound = unbound_node(&mut m, child);
+    let add = op_node(&mut m, child, TestOperator::Add, Some(unbound));
+    let read = op_node(&mut m, root, TestOperator::Id, Some(add));
+
+    let value = m.evaluate_node_deep(read, None);
+
+    assert!(matches!(
+        value,
+        TestValue::LowValue(LowValue::Parameterized)
+    ));
+}
