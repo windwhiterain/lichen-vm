@@ -88,7 +88,7 @@ queue's order is deliberate.
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
-| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | todo |
+| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | done |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
@@ -2989,9 +2989,9 @@ threads one cache through the whole walk
 (`evaluate_node_deep`/`evaluate_node_forced` create it, `evaluation.rs:483-487`,
 `:502-506`; `evaluate_node_deep_inner` carries it, `:564-571`), so the descent
 read and the parameterized check share it — the check moved into
-`value_is_parameterized` (`:716-775`), whose `.any()` closures now go through
+`value_is_parameterized` (`:716-771`), whose `.any()` closures now go through
 `cache.node_parameterized`. The equality walk threads one cache per
-`class_is_skeleton` (`equality.rs:520-590`). The lookup's *result* is unchanged:
+`class_is_skeleton` (`equality.rs:529-596`). The lookup's *result* is unchanged:
 `StaticModuleCache::read` is `StaticModule::read` on the same registered
 module, and a key's entry is never replaced once registered (`freeze_mapped`
 and `insert_module` both assert the key is free), so a cached key cannot go
@@ -3066,7 +3066,9 @@ before commit):
 The 2 000-member row does not move, and by design: every member must see the
 new value, so that walk is the item's *correctness* requirement, not its cost.
 Measured member visits in that shape are what "O(class size)" means; the shape
-itself does not arise from the frontend's own application (`fib(16)` above).
+itself does not arise from the apply path the note blames — `fib(16)` above runs
+the real `Apply`/`regroup_clones` machinery and never exceeds **2** members. The
+checker's own type-variable unification was not measured here.
 
 *The fix.* Skip the walk for a singleton class — `parent` and `next` both `None`
 on `node`, `disjoint::Meta`'s contract for a representative with no second
@@ -3085,7 +3087,7 @@ singleton workload, and is what the item's title costs in practice.
 constructions), so the change could not be measured, and the same full walk
 stays in place for the six predicates where it is required.
 
-### P4-3 — A thread and a rebuilt combinator graph per parse `reported`
+### P4-3 — A thread and a rebuilt combinator graph per parse `verified`
 
 `language-parser/src/parse.rs:94-103` and `:188-201` each
 `thread::scope` + `Builder::new().stack_size(16 MiB).spawn_scoped`, and
@@ -3095,6 +3097,78 @@ two thread spawns and a full combinator-tree rebuild. A `OnceLock`-held parser
 (chumsky parsers are `Clone` and reusable) removes the construction; by the same
 measure `In<'a> = Stream<Cloned<…>>` (`:77`, `:110`) deep-clones every token
 payload — one heap allocation per identifier and per string literal, per parse.
+
+**Outcome — the mechanism holds, the fix does not: neither named cost is
+removable within this item, and no code changed.** Re-derived first-hand and
+measured on this revision; input A is `examples/struct_generic.lichen` (551 B,
+38 tokens), input B a generated clean 85 567 B / 24 002-token file (2000
+`value_i = [i, i + 1, "name_i"]` bindings). The numbers below are the fastest of
+five *alternating* rounds of `parse` and `parse_inner`, so process drift cannot
+masquerade as a difference between them; the allocation counts come from a
+temporary counting global allocator; every probe was removed before the commit.
+
+| release profile | input A (551 B) | input B (85 KiB) |
+|---|---|---|
+| `parse` (worker + work) | 608 µs | 117.13 ms |
+| `parse_inner` (work, no worker) | 319 µs | 115.73 ms |
+| ⇒ thread's share | **289 µs (47%)** | **1.4 ms (1.2%)** |
+| empty spawn + join, 16 MiB | 169 µs | 44 µs |
+| empty spawn + join, 1 MiB | 173 µs | 40 µs |
+| grammar build (`program_parser`) | 47 µs / 247 allocations | 19 µs / 247 allocations |
+| token copy (`tokens.to_vec()`) | 1.6 µs / 13 allocations | 592 µs / 4002 allocations |
+| allocations for one parse | 2 696 | 1 522 496 |
+
+Repeated runs put the thread's share of input A between 34% and 47% (the machine
+is noisy; the alternation keeps the *comparison* honest, not the absolute
+figure).
+
+*The spawn is the cost, not the size.* An empty worker at 16 MiB and at 1 MiB
+measure the same inside one run (169 µs / 173 µs here; 55 µs / 51 µs in an
+earlier one), so the frozen 16 MiB reservation is not what the item is paying
+for — `std::thread`'s creation is. The rest of the thread's share is the fresh
+stack: the parse's combinator recursion is deep enough (P1-23 measures ~94 KiB of
+stack per nesting level) that a new thread's stack pages are faulted in on every
+parse.
+
+*The graph cannot be hoisted — it captures the per-parse token slice.* Thirteen
+closures in the grammar capture `tokens` to name a recovery node's byte range or
+a node's `(line, col)`: `span_at(tokens, …)` / `err_node(tokens, …)` at
+`:396, 419, 459, 917, 944, 970, 1001, 1009, 1054, 1098, 1121, 1137, 1359`. The
+borrow is in the value's type, so `LazyLock`/`OnceLock` (the note's fix) is
+rejected at compile time — asking the compiler to store the built grammar behind
+a `T: 'static` bound fails with *"`tokens` does not live long enough … argument
+requires that `tokens` is borrowed for `'static`"* (E0597). Hoisting would need
+the position data to come from somewhere other than a captured slice — a parser
+input whose span carries the position, or a post-pass rewriting token indices
+into byte ranges and lines over the AST — which is a redesign of the position
+plumbing, not a hoist. The rebuild is also small: 19–47 µs, 247 allocations, the
+same for both inputs (a fixed per-parse cost, 8% of input A's parse and 0.02% of
+input B's).
+
+*The extent is wrong in one direction, and the token claim is small in size.*
+(a) `parse` and `parse_statement_region_traced` are **alternative** entry points,
+so a parse call spawns **one** worker, not the note's two. (b) The grammar has
+**three** `.boxed()` calls (`:444`, `:588`, `:814`), not ~20; the build's 247
+allocations are chumsky's combinator clones. (c) `In<'a> = Stream<Cloned<…>>`
+does clone every token payload once during the parse, which is 13 allocations on
+input A and 4002 on input B — 0.5% and 0.26% of that parse's 2 696 and 1 522 496
+— and a full `tokens.to_vec()` costs 1.6 µs / 592 µs (0.3% / 0.5% of the full
+parse). Real, and not where the parse's cost is.
+
+*Deliberately not done, and why it is not this item's call.* A process-lived
+16 MiB worker would remove the spawn and keep the stack warm **without** changing
+the overflow behaviour `P1-23`/`D9` fixed — the whole combinator recursion would
+still run on a 16 MiB stack — but it is a design change, not a local fix, and it
+needs a decision among: a per-parse copy of the token stream (592 µs on input B,
+where the thread's whole share is only ~1.4 ms, so the copy could eat the win), a
+lifetime-erased borrow of the caller's tokens sent to a `'static` worker
+(`unsafe`, with the caller blocking until the reply so the borrow cannot outlive
+the tokens), or an `Arc<[Token]>` lexer/parser API (crosses three crates). It
+would also serialize concurrent parses, which one worker per parse does not.
+`P1-23` calls the same kind of change *"a real design change, not an
+annotation"*; this item is not the place to pick one. Measured, the rest of the
+parse is 53% (input A) to 98.8%
+(input B) of the cost and is untouched by either proposed fix.
 
 ### P4-4 — Quadratic diagnostics `reported`
 
