@@ -78,11 +78,14 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(bytes.try_into().expect("8 bytes")))
     }
     pub fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
-        if self.pos + len > self.buf.len() {
+        // `self.pos + len` is an unchecked add: a crafted length wraps in
+        // release and makes the bounds check below vacuous.
+        let end = self.pos.checked_add(len).ok_or("truncated artifact")?;
+        if end > self.buf.len() {
             return Err("truncated artifact".into());
         }
-        let bytes = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
+        let bytes = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(bytes)
     }
     pub fn path(&mut self) -> Result<PathBuf, String> {

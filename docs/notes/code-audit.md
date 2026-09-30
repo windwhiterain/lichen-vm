@@ -34,7 +34,7 @@ queue's order is deliberate.
 
 | id | severity | area | item | status |
 |---|---|---|---|---|
-| P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | todo |
+| P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
 | P0-2 | critical | lowlevel | `&'static` laundering + `pub` raw-pointer fields | blocked:D1 |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | blocked:D2 |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |

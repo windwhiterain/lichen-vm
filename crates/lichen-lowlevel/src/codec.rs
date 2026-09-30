@@ -97,6 +97,50 @@ pub fn handle_offset<P: Program>(module: &StaticModule<P>, offset: *const u8) ->
 
 // --- the structural leaves ------------------------------------------------------
 
+/// Rebuild a static handle for an arena payload read out of an artifact.
+///
+/// The artifact records the payload's **base-relative byte offset** and its
+/// **element count** (see [`ValueCodec::write_value`]), so the bound has to be
+/// made in bytes, and every step of it checked: a crafted `(offset, len)` pair
+/// is a clean `Err`, never a wrap, a panic, or a pointer outside the arena.
+///
+/// **Contract:** `offset` is a whole number of `Item`s from `owner_base` and
+/// the `len * size_of::<Item>()` bytes there are inside `owner_arena` — what
+/// the freeze lays out, so every artifact the writer emits satisfies it.
+fn relocated_handle<Item>(
+    owner: ModuleKey,
+    owner_arena: &[u8],
+    owner_base: *const u8,
+    offset: usize,
+    len: usize,
+) -> Result<StaticHandle<[Item]>, String> {
+    let alignment = std::mem::align_of::<Item>();
+    if !offset.is_multiple_of(alignment) {
+        return Err("artifact handle is not aligned to its payload type".into());
+    }
+    let byte_len = len
+        .checked_mul(std::mem::size_of::<Item>())
+        .ok_or("artifact handle element count overflows its byte length")?;
+    let end = offset
+        .checked_add(byte_len)
+        .ok_or("artifact handle bounds overflow")?;
+    let gap = (owner_base as usize)
+        .checked_sub(owner_arena.as_ptr() as usize)
+        .ok_or("artifact arena base precedes its own buffer")?;
+    let available = owner_arena
+        .len()
+        .checked_sub(gap)
+        .ok_or("artifact arena base lies past the end of its buffer")?;
+    if end > available {
+        return Err("artifact handle out of its arena's bounds".into());
+    }
+    let payload = unsafe { owner_base.add(offset) as *const Item };
+    Ok(StaticHandle {
+        module: owner,
+        offset: std::ptr::slice_from_raw_parts(payload, len),
+    })
+}
+
 impl ValueCodec for LowValue {
     fn write_value<P: Program>(
         w: &mut Writer,
@@ -173,15 +217,9 @@ impl ValueCodec for LowValue {
                     let arena: &[u8] = &module.arena;
                     (arena, arena_base::<P>(arena))
                 };
-                let gap = owner_base as usize - owner_arena.as_ptr() as usize;
-                if offset + len > owner_arena.len() - gap {
-                    return Err("artifact handle out of its arena's bounds".into());
-                }
-                let payload = unsafe { owner_base.add(offset) as *const ArrayItem };
-                LowValue::Array(AnyHandle::Static(StaticHandle {
-                    module: owner,
-                    offset: std::ptr::slice_from_raw_parts(payload, len),
-                }))
+                let handle =
+                    relocated_handle::<ArrayItem>(owner, owner_arena, owner_base, offset, len)?;
+                LowValue::Array(AnyHandle::Static(handle))
             }
             2 => {
                 let module = ModuleKey::from_raw(r.u64()?);
@@ -216,15 +254,9 @@ impl ValueCodec for LowValue {
                     let arena: &[u8] = &module.arena;
                     (arena, arena_base::<P>(arena))
                 };
-                let gap = owner_base as usize - owner_arena.as_ptr() as usize;
-                if offset + len > owner_arena.len() - gap {
-                    return Err("artifact handle out of its arena's bounds".into());
-                }
-                let payload = unsafe { owner_base.add(offset) as *const TableItem };
-                LowValue::Table(AnyHandle::Static(StaticHandle {
-                    module: owner,
-                    offset: std::ptr::slice_from_raw_parts(payload, len),
-                }))
+                let handle =
+                    relocated_handle::<TableItem>(owner, owner_arena, owner_base, offset, len)?;
+                LowValue::Table(AnyHandle::Static(handle))
             }
             tag => return Err(format!("unknown lowlevel value tag {tag}")),
         })
