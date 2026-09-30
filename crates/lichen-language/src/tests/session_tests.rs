@@ -18,6 +18,14 @@ fn parsed(source: &str) -> Parsed {
     parse::parse(&tokens)
 }
 
+/// The resolved content key of a source (lex, parse, resolve, key).
+fn content_key_of(source: &str) -> Vec<u64> {
+    let tokens = lex::lex(source).tokens;
+    let mut program = parse::parse(&tokens).program;
+    crate::resolve::resolve(&mut program, &[]);
+    crate::resolve::content_key(&program)
+}
+
 #[test]
 fn a_recovered_error_block_carries_a_byte_range() {
     // `a = )` — a stray `)` is not an atom, so the binding's *value* is one
@@ -318,6 +326,33 @@ fn an_edited_session_compiles_identically_to_a_fresh_one() {
     }
 }
 
+#[test]
+fn a_bracket_swap_between_forms_rebuilds_instead_of_reusing() {
+    // `[a, b]`, `(a, b)` and `<a, b>` are distinct lowering-visible forms:
+    // `compile` lowers Array, Tuple and TypeTuple through different
+    // `ExprKind`s.  Swapping the brackets is therefore a resolved-content
+    // change — the session must rebuild, and its report must equal a fresh
+    // session's over the same source.  A shared tag left the key byte-equal
+    // and reused the previous form's build.
+    let forms = ["z = [1, 2]\nz\n", "z = (1, 2)\nz\n", "z = <1, 2>\nz\n"];
+    for (i, target) in forms.iter().enumerate() {
+        let previous = forms[(i + forms.len() - 1) % forms.len()];
+        let mut sess = BufferSession::<LangProgram>::new(previous);
+        let _ = sess.compile();
+        sess.replace(0..sess.len(), target);
+        let report = sess.compile();
+        assert_eq!(
+            shape(&report),
+            shape(&BufferSession::<LangProgram>::new(*target).compile()),
+            "the bracket swap {previous:?} -> {target:?} diverged from a fresh compile"
+        );
+        assert!(
+            !report.reused,
+            "the bracket swap {previous:?} -> {target:?} changed the resolved content, so it must rebuild"
+        );
+    }
+}
+
 /// Assert the window splice of `old` → `new` is actually taken (`Some`) and
 /// reproduces exactly a whole-buffer parse of the new source.
 fn assert_splice_equals_full_parse(old: &str, new: &str) {
@@ -394,17 +429,53 @@ fn the_resolved_content_key_tracks_resolution_not_spelling() {
     // The resolver's `content_key` is name-free and exact: a consistent rename
     // leaves it unchanged (so the session reuses), while a literal or
     // structural change moves it (so the session rebuilds).
-    let key_of = |src: &str| -> Vec<u64> {
-        let tokens = lex::lex(src).tokens;
-        let mut program = parse::parse(&tokens).program;
-        crate::resolve::resolve(&mut program, &[]);
-        crate::resolve::content_key(&program)
-    };
-    let base = key_of("f = x => x + 1\nf 2\n");
-    assert_eq!(key_of("g = x => x + 1\ng 2\n"), base, "a rename reuses");
+    let base = content_key_of("f = x => x + 1\nf 2\n");
+    assert_eq!(
+        content_key_of("g = x => x + 1\ng 2\n"),
+        base,
+        "a rename reuses"
+    );
     assert_ne!(
-        key_of("f = x => x + 2\nf 2\n"),
+        content_key_of("f = x => x + 2\nf 2\n"),
         base,
         "a value edit rebuilds"
+    );
+}
+
+#[test]
+fn the_content_key_distinguishes_list_arities_around_an_apply() {
+    // `Apply` concatenates two expression encodings with no separator, so a
+    // count-less list lets a nest boundary move without changing the key:
+    // `(1,) (2, 3)` and `(1, (2,)) 3` are different trees with the same
+    // expression sequence.  Writing each list's length makes them distinct.
+    let split = "(1,) (2, 3)\n";
+    let nested = "(1, (2,)) 3\n";
+    assert!(
+        parsed(split).errors.is_empty() && parsed(nested).errors.is_empty(),
+        "both sources parse cleanly"
+    );
+    assert_ne!(
+        content_key_of(split),
+        content_key_of(nested),
+        "a different tuple arity around an application is different content"
+    );
+}
+
+#[test]
+fn the_content_key_distinguishes_a_string_from_a_named_field_read() {
+    // `Str` and `NamedFieldRead` previously shared tag 24, and a string's raw
+    // bytes occupy the element space, so `Str("\u{2}ab")` and `_.ab` (a
+    // `NamedFieldRead` over the placeholder) encoded to the same key.  Their
+    // tags are now distinct.
+    let literal = format!("\"{}\"\n", "\u{2}ab");
+    let named_field_read = "_.ab\n";
+    assert!(
+        parsed(&literal).errors.is_empty() && parsed(named_field_read).errors.is_empty(),
+        "both sources parse cleanly"
+    );
+    assert_ne!(
+        content_key_of(&literal),
+        content_key_of(named_field_read),
+        "a string literal is not a named field read"
     );
 }

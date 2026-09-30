@@ -47,7 +47,7 @@ queue's order is deliberate.
 | P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | done |
 | P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | blocked:D5 |
-| P1-5 | high | language | `content_key` tag collision across four AST forms | todo |
+| P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | todo |
 | P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
@@ -461,29 +461,47 @@ hash only *finds candidates*, a hash disagreement is an unconditional miss.
 
 ### P1-5 — `content_key` tag collision across four AST forms `verified`
 
-`crates/lichen-language/src/resolve.rs:623-638`:
+`crates/lichen-language/src/resolve.rs`, the expression walk before the fix:
 
 ```rust
 Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => { self.u(18); … }
 Expr::StructType(fields, _) => { self.u(18); … }
 ```
 
-`Tuple`, `TypeTuple` and `Array` write byte-identical keys, while
+`Tuple`, `TypeTuple` and `Array` wrote byte-identical keys, while
 `compile.rs` lowers all four differently (`alloc_tuple` / `alloc_type_tuple` /
 `alloc_array` / `alloc_type_struct`). `session.rs:250` reuses the cached
 `Build` whenever `cache.key == key`, so changing `[a, b]` to `(a, b)` — a pure
-bracket edit — reuses the array's build and reports the array's types and
-diagnostics for a tuple. The key format also carries **no version tag**, so a
-future `Expr` variant reusing tag 18 would silently reintroduce this.
-
-The doc at `resolve.rs:385-394` claims *"Two programs with equal keys have
-literally identical lowering-visible content"* — that assertion is false.
+bracket edit — reused the array's build and reported the array's types and
+diagnostics for a tuple. The doc on `content_key` claimed *"Two programs with
+equal keys have literally identical lowering-visible content"*; that assertion
+was false.
 
 **Impact.** `BufferSession` has no production consumer today (see `P2-1`), so
 this is a real bug in a public API, currently unreachable from the CLI or LSP.
 It becomes user-visible the moment `P1-17` is done.
 
-**Fix.** Version-prefix the key; give the four forms distinct tags.
+**Outcome.** `Tuple`, `TypeTuple` and `Array` now write tags 29, 30 and 31
+(`StructType` keeps 18), and `NamedFieldRead` moved from 24 to 32: it shared
+that tag with `Str`, and a string's raw bytes share the element space, so
+`Str("\u{2}ab")` and `_.ab` encoded alike. The encoding was **not**
+self-delimiting: `Apply` concatenates two expression encodings with no
+separator, so with count-less lists `(1,) (2, 3)` and `(1, (2,)) 3` flattened
+to the same element sequence (both `[0, 2, 8, 18, 0, 1, 18, 0, 2, 0, 3]` under
+the old format). Every list — the program's statements, `NativeCall` args,
+`StructInst` fields, `Tuple`/`TypeTuple`/`Array` elements, `Table` entries and
+`RecordBlock` fields — now writes its length. `KEY_FORMAT_VERSION` (`= 1`) is
+written as the key's first element; adding an `Expr` variant or changing any tag
+bumps it, which invalidates every cached key so every session rebuilds. The
+`content_key` doc now states that version rule and argues the injectivity
+rather than asserting it. Regression tests in
+`crates/lichen-language/src/tests/session_tests.rs` drive the bracket swap
+through the session edit API
+(`a_bracket_swap_between_forms_rebuilds_instead_of_reusing`) and pin both
+collisions (`the_content_key_distinguishes_list_arities_around_an_apply`,
+`the_content_key_distinguishes_a_string_from_a_named_field_read`); the bracket
+swap and arity tests were confirmed to fail against the old encoding before the
+fix was committed.
 
 ### P1-6 — Non-function apply to a deferred callee is silently accepted `verified`
 

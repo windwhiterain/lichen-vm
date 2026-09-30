@@ -382,18 +382,33 @@ impl Resolver {
 /// `BinderId`, which is always a dense `0..n` index).
 const UNRESOLVED: u64 = u64::MAX;
 
+/// The content-key format version — written as the key's **first** element.
+///
+/// Adding an [`Expr`] variant, or changing any tag or field encoding in
+/// [`KeyWriter`], **bumps** this constant.  There is no compatibility path: the
+/// bump invalidates every cached key, so every [`crate::session::BufferSession`]
+/// rebuilds on its next compile.  That is the intended answer — a stale key
+/// must never be silently reusable.
+const KEY_FORMAT_VERSION: u64 = 1;
+
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering
 /// consumes — names encoded by their [`BinderId`] (never their spelling), error
 /// blocks opaque, spans dropped, literals and field/operator names kept (they
 /// become IR nodes), `pub`/field identity kept for record programs.  Two
-/// programs with equal keys have literally identical lowering-visible content,
-/// so the incremental session reuses the established IR+Build when the key is
-/// unchanged (a rename, an error-block growth, an unresolved-name extension all
-/// leave it unchanged).  Built purely from the resolver's annotations, so it
-/// needs no scope walk of its own.
+/// programs with equal keys have literally identical lowering-visible content:
+/// every [`Expr`] variant writes its own tag and every list writes its length,
+/// so the serialization is injective, not merely self-delimiting.  The
+/// incremental session therefore reuses the established IR+Build exactly when
+/// the key is unchanged (a rename, an error-block growth, an unresolved-name
+/// extension all leave it unchanged).  Built purely from the resolver's
+/// annotations, so it needs no scope walk of its own.
+///
+/// The key begins with [`KEY_FORMAT_VERSION`]; see that constant for the bump
+/// rule that keeps a changed encoding from reusing a stale build.
 pub fn content_key(program: &Program) -> Vec<u64> {
     let mut k = KeyWriter { key: Vec::new() };
+    k.u(KEY_FORMAT_VERSION);
     k.program(program);
     k.key
 }
@@ -419,10 +434,12 @@ impl KeyWriter {
 
     /// The program shape and its top level.  A record program (a module) is
     /// signed as fields (`pub`/field-identity significant), a tail program as
-    /// plain statements (the compiler folds `pub` away).
+    /// plain statements (the compiler folds `pub` away).  The statement count
+    /// makes the top-level list self-delimiting.
     fn program(&mut self, program: &Program) {
         let module = program.expr.is_none();
         self.b(module);
+        self.u(program.statements.len() as u64);
         for bs in &program.statements {
             if module {
                 self.record_field(bs);
@@ -475,6 +492,10 @@ impl KeyWriter {
         }
     }
 
+    /// One expression: its own tag, then its fields.  Tags are unique across
+    /// [`Expr`] variants and every list writes its length, so the encoding is
+    /// injective; adding a variant or changing a tag bumps
+    /// [`KEY_FORMAT_VERSION`].
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(n, _) => {
@@ -558,6 +579,7 @@ impl KeyWriter {
             Expr::NativeCall { op, args, .. } => {
                 self.u(12);
                 self.str(op);
+                self.u(args.len() as u64);
                 for a in args {
                     self.expr(a);
                 }
@@ -582,7 +604,7 @@ impl KeyWriter {
             Expr::NamedFieldRead {
                 container, name, ..
             } => {
-                self.u(24);
+                self.u(32);
                 self.expr(container);
                 self.str(name);
             }
@@ -620,14 +642,30 @@ impl KeyWriter {
                 self.expr(parameter);
                 self.expr(r#return);
             }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
-                self.u(18);
+            Expr::Tuple(elems, _) => {
+                self.u(29);
+                self.u(elems.len() as u64);
+                for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::TypeTuple(elems, _) => {
+                self.u(30);
+                self.u(elems.len() as u64);
+                for el in elems {
+                    self.expr(el);
+                }
+            }
+            Expr::Array(elems, _) => {
+                self.u(31);
+                self.u(elems.len() as u64);
                 for el in elems {
                     self.expr(el);
                 }
             }
             Expr::StructType(fields, _) => {
                 self.u(18);
+                self.u(fields.len() as u64);
                 for field in fields {
                     self.b(field.name.is_some());
                     if let Some(name) = &field.name {
@@ -639,6 +677,7 @@ impl KeyWriter {
             Expr::StructInst { callee, fields, .. } => {
                 self.u(19);
                 self.expr(callee);
+                self.u(fields.len() as u64);
                 for f in fields {
                     self.b(f.name.is_some());
                     if let Some(name) = &f.name {
@@ -649,6 +688,7 @@ impl KeyWriter {
             }
             Expr::Table(entries, _) => {
                 self.u(20);
+                self.u(entries.len() as u64);
                 for (k, v) in entries {
                     self.expr(k);
                     self.expr(v);
@@ -680,6 +720,7 @@ impl KeyWriter {
             }
             Expr::RecordBlock { fields, .. } => {
                 self.u(25);
+                self.u(fields.len() as u64);
                 for f in fields {
                     self.b(f.name.is_some());
                     self.b(f.field);
