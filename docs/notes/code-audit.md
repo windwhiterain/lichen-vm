@@ -1799,6 +1799,74 @@ this is a de-facto API.
 **Fix.** Privatise the invariant-bearing fields behind `&mut`-taking methods, as
 `value` already is.
 
+**Outcome — stopped without a fix: the stated mechanism is refuted, and what
+remains is a redesign.** Re-derived first-hand before any change; the row stays
+`todo`.
+
+*What the choke-point is.* The crate documents exactly one write choke-point and
+it is scoped to the **value**: `Module::write_node_value` (`equality.rs:79-107`)
+— *"This is the single choke-point for value writes: every place a value lands on
+a node that might be a member of a unified class goes through here"* — with
+`Node::value`'s own doc (`lib.rs:756-762`) adding *"written only through the
+controlled `Module::write_node_value` API … External crates must never touch the
+field directly"*. Its sibling is `Module::set_node_shape`
+(`static_module.rs:86-90`), the only writer of the private `low_shape`.
+
+*The premise's mechanism is false: the value choke-point is implemented, not
+prose.* `value` and `low_shape` are already private, and the whole crate writes
+`value` in exactly two statements — `equality.rs:94` and the replication loop at
+`:101` — both inside `write_node_value`; `low_shape` is written once, at
+`static_module.rs:88`, inside `set_node_shape`. **No public field lets any code
+bypass the value write path**, and the class-consistency invariant its doc claims
+*is* maintained at one site. The ledger's lines drifted as well: the six fields
+are at `lib.rs:773-793`, not `:646-666`.
+
+*The defect behind it is real, but it is not the choke-point's.* `operation`,
+`function`, `block`, `visiting`, `evaluated_deep` and `equality` are `pub` and
+carry invariants of their own — the deep pass's proven-concreteness flag, the
+template-ownership tag, GC's block membership, `disjoint`'s class links — so a
+safe host can break any of them. What it cannot do is perform a value write other
+than through the choke-point.
+
+*Why that makes the fix a redesign, not a privatisation.* No documented write
+path covers those six fields: the crate writes them from ten of its own modules
+(`add_node`, `add_function`, `gc`'s compaction, `function.rs`'s apply clone,
+`static_module.rs`'s static apply, `evaluation.rs`'s mark and deep pass,
+`equality.rs`'s `force_pending`), so making "the write path" the only one means
+**inventing** a choke-point for node state — the one thing this item must not do.
+The call-site cost is not local either. A temporary privatisation of the six
+fields, run through `cargo check --workspace --all-targets`, produced **119**
+`Node`-field errors: 116 in the crate's own integration tree and 3 in
+`lichen-highlevel`, and that is a floor — the compiler stops before
+`lichen-compute` and everything downstream of the failing crate, so a grep adds
+~12 `operation` reads and one `equality.parent` read there. Of the 116 test-tree
+errors, 26 are **writes** (24 to `operation`, one to `function` at `main.rs:436`,
+one to `equality.parent` at `equality.rs:43`) and 90 are **reads**, including
+`block` (~24), `evaluated_deep` (~13) and `visiting` (3) which have no accessor
+at all. Rust cannot make a field write-private while leaving it read-public, so
+every one of those sites needs an accessor — and the reads are internal state
+(`evaluated_deep`'s proven flag, `visiting`'s in-progress mark, `disjoint`'s
+`Meta`) whose exposure would **widen** the public surface rather than narrow it.
+
+*The tests did not conflict with the choke-point; they conflict with the
+privatisation.* Every test **value** write goes through `write_node_value`
+(`tests/basic/assert.rs:139,186,261,378`, `equality.rs:439-440`,
+`function.rs:62,155,696`, `main.rs:506,548,613,619`, `evaluation.rs:223`) — the
+path is respected throughout the suite, which is the opposite of the ledger's
+"the tests … do write them" read as a bypass of the choke-point. The direct
+writes are real but are graph construction: the 24 `operation` writes close an
+operation cycle the public API cannot express, because the second `add_node` needs
+the first node's id. The extent the ledger gives ("~20 places") is wrong in one
+direction: it is **26** writes, plus ~90 reads. So the tests can construct and
+inspect the graph only by touching fields, and the tension is between the
+invariant and the *harness*, not between the invariant and the choke-point.
+
+**What a future pass owes.** A decision on the accessor surface — whether reading
+`evaluated_deep`, `visiting` and the disjoint `Meta` becomes public API, or the
+integration tree moves to a crate-internal harness — plus the cross-crate change
+in `compute` and `highlevel`. The ledger's one-line fix is under-specified for
+both.
+
 ### P2-5 — `NativeApply` is an unvalidated escape hatch `reported`
 
 `highlevel/src/native.rs:29-34` hands a plugin's `build` back as three raw
