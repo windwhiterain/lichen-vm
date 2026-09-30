@@ -17,8 +17,9 @@ struct VisitGuard<'a, P: Program> {
 }
 
 impl<P: Program> VisitGuard<'_, P> {
-    /// Run one evaluation attempt with the mark held.
-    fn run(self, body: impl FnOnce(&mut Module<P>, NodeId) -> P::Value) -> P::Value {
+    /// Run `body` with the mark held: an evaluation attempt of the marked
+    /// node, or one descent of the deep pass that is cut against it.
+    fn run<R>(self, body: impl FnOnce(&mut Module<P>, NodeId) -> R) -> R {
         let node = self.node;
         body(self.module, node)
     }
@@ -99,10 +100,12 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The mark of one evaluation attempt, held until it drops.
+    /// Take the mark of the node an evaluation attempt — or a deep-pass
+    /// descent that must be cut against it — is computing, held until the
+    /// returned guard drops.
     ///
-    /// Invariant: an evaluation attempt owns `Node::visiting` for exactly its
-    /// own frame and clears it on every exit — a cached answer, a lazy
+    /// Invariant: a frame owns `Node::visiting` for exactly its own scope, and
+    /// the guard clears it on every exit — a cached answer, a lazy
     /// (`Parameterized`) answer, and an unwinding panic alike.  A node is
     /// therefore never left flagged visiting once no frame is computing it,
     /// because the next evaluation of that node must not read the stale flag
@@ -633,40 +636,57 @@ impl<P: Program> Module<P> {
             // The descent below may reach `node` again through the array's own
             // items (a self-referential value), so it is marked for the
             // duration: the same structural-cycle cut as the entry above.
-            self.nodes[node].visiting = true;
-            let block = self.nodes[node].block;
-            // SAFETY: `array` is the value this module just evaluated for
-            // `node`.  The descent below mutates the module but never releases
-            // a block — `drop_block` is called only from `garbage_collect` —
-            // so the payload's arena stays alive for the whole loop.
-            for item in unsafe { array.items() } {
-                // A shallow position is a lazy region: its whole subtree
-                // stays unevaluated (never proven concrete), and a read
-                // forces the single element on demand through `Index` —
-                // unless the forced pass is running, which descends into it
-                // like any other position.
-                if skip_shallow && item.shallow {
-                    continue;
+            let guard = self.retain_node(node);
+            guard.run(|module, node| {
+                let block = module.nodes[node].block;
+                // SAFETY: `array` is the value this module just evaluated for
+                // `node`.  The descent below mutates the module but never releases
+                // a block — `drop_block` is called only from `garbage_collect` —
+                // so the payload's arena stays alive for the whole loop.
+                for item in unsafe { array.items() } {
+                    // A shallow position is a lazy region: its whole subtree
+                    // stays unevaluated (never proven concrete), and a read
+                    // forces the single element on demand through `Index` —
+                    // unless the forced pass is running, which descends into it
+                    // like any other position.
+                    if skip_shallow && item.shallow {
+                        continue;
+                    }
+                    module.evaluate_node_deep_inner(
+                        item.node,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                    );
                 }
-                self.evaluate_node_deep_inner(item.node, Some(block), skip_shallow, force_operand);
-            }
-            self.nodes[node].visiting = false;
+            });
         }
         // A table's entries are edges like array items: its keys were
         // already forced concrete at build, but its values are lazy refs —
         // both must be proven (or disproven) concrete by the descent.
         if let Some(LowValue::Table(table)) = value.as_enum() {
-            self.nodes[node].visiting = true;
-            let block = self.nodes[node].block;
-            // SAFETY: `table` is the value this module just evaluated for
-            // `node`.  The descent below mutates the module but never releases
-            // a block — `drop_block` is called only from `garbage_collect` —
-            // so the payload's arena stays alive for the whole loop.
-            for item in unsafe { table.items() } {
-                self.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, force_operand);
-                self.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, force_operand);
-            }
-            self.nodes[node].visiting = false;
+            let guard = self.retain_node(node);
+            guard.run(|module, node| {
+                let block = module.nodes[node].block;
+                // SAFETY: `table` is the value this module just evaluated for
+                // `node`.  The descent below mutates the module but never releases
+                // a block — `drop_block` is called only from `garbage_collect` —
+                // so the payload's arena stays alive for the whole loop.
+                for item in unsafe { table.items() } {
+                    module.evaluate_node_deep_inner(
+                        item.key,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                    );
+                    module.evaluate_node_deep_inner(
+                        item.value,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                    );
+                }
+            });
         }
         // An array is unproven while any position resolved to the lazy
         // marker, or any position at all sits behind a shallow mark.  A

@@ -75,7 +75,7 @@ queue's order is deliberate.
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
 | P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | todo |
-| P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
+| P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | done |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
@@ -1950,6 +1950,12 @@ poisoning the module for the rest of the build"*). Any panic inside the descent 
 every ancestor frame, permanently.
 
 **Fix.** Wrap the descent in the same guard.
+
+**Outcome.** The premise held with drifted lines and a bounded extent. Re-derived, `Node::visiting` is written in four places: the constructor's initialiser (`lib.rs`), `retain_node` — which already went through `VisitGuard` — and exactly **two** hand-written pairs in `evaluate_node_deep_inner`, the array descent (`:636`/`:653`) and the table descent (`:659`/`:669`); the ledger's `:557/570` and `:576/582` are those two, moved. The readers are the deep pass's structural-cycle cut (`:584`) and the attempt path's cycle panic (`:146`). So "several sites" resolves to two pairs.
+
+Both descents now take the mark through `retain_node` and run their loop inside `VisitGuard::run`, which routes the body through the guard so only `Drop` releases the mark. `run` became generic in its result (`R = ()` for a descent, `P::Value` for an attempt) rather than gaining a second method; the guard is a stack value, so no allocation is added on the hot path. Nothing moved in time: the mark is still taken after `evaluate_node` returns, the home block is still read after the mark, and the mark is still released after the last descent call — `Drop` is now what releases it, so an unwind inside the descent costs one node's mark instead of leaving it set, which is the recorded failure mode (a node stuck `visiting` *with* a cached value silently takes the structural-cycle cut on every later evaluation).
+
+**No test; the panic path is reasoned, not demonstrated.** Reaching an abandoned mark needs an unwind, and this harness can only provoke one through `#[should_panic]` (`cyclic_operations_panic_instead_of_looping`), which cannot inspect the module afterwards; asserting `!visiting` after the unwind would take `catch_unwind` over a `&mut Module`. The normal path is already pinned by `tests/basic/evaluation.rs`'s `visiting_markers_are_cleared_after_evaluation` and the `!n.visiting` assertion in the self-referential-value test, and the lowlevel suite (139 tests) passes unchanged.
 
 ### P2-8 — `missing_slots[order_index()]` guarded only in debug `reported`
 
