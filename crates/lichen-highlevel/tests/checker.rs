@@ -2496,3 +2496,120 @@ fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
         "the all-concrete constraint was decided and consumed"
     );
 }
+
+// --- the compile work budget ---------------------------------------------
+
+/// `count n = [count (n - 1), 0][n == 0]` — the lazy-branch spelling of
+/// `if n == 0 then 0 else count (n - 1)`: a recursion that terminates after
+/// `argument + 1` applications, so how much work it asks of the definition
+/// pass is known exactly.
+fn countdown(argument: u64) -> (ExprId, IR) {
+    let mut ir = IR::new();
+    // A block-wide binding reserves its own id before its value compiles, so
+    // the recursive call in the body resolves to it (the frontend's
+    // block-root discipline).
+    let count = ir.alloc(ExprKind::Placeholder);
+    ir.block_roots.insert(count);
+    let n = param(&mut ir);
+    let zero = int(&mut ir, 0);
+    let condition = eq_binop(&mut ir, n, zero);
+    let one = int(&mut ir, 1);
+    let decrement = ir.alloc(ExprKind::BinOp {
+        operator: lichen_highlevel::ir::BinOp::Sub,
+        left: n,
+        right: one,
+    });
+    let recursive = app(&mut ir, count, decrement);
+    let base = int(&mut ir, 0);
+    let branches = tuple(&mut ir, &[recursive, base]);
+    let body = field(&mut ir, branches, condition);
+    ir.set_kind(
+        count,
+        ExprKind::Function {
+            parameter: n,
+            parameter_type: None,
+            parameter_attribute: None,
+            r#return: body,
+            parent: None,
+        },
+    );
+    let argument = int(&mut ir, argument);
+    let root = app(&mut ir, count, argument);
+    (root, ir)
+}
+
+#[test]
+fn a_caller_supplied_budget_bounds_the_definition_pass() {
+    // `count 3` applies four times.  A caller-supplied total of two refuses
+    // the definition pass, and the refusal is reported as the same
+    // non-termination diagnostic an unbounded recursion gets — so the limit
+    // in force is the caller's, not the tuned default.
+    let (root, mut ir) = countdown(3);
+    ir.set_root(root);
+    let b = Checker::<ProgramImpl>::build_with_budget(
+        ir,
+        lichen_highlevel::checker::WorkBudget {
+            apply_total_limit: 2,
+            ..Default::default()
+        },
+    );
+    assert!(!b.ok, "the caller's budget must refuse the walk");
+    assert_eq!(
+        b.module.budget_exhausted,
+        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2 }),
+        "the caller's limit is the one the guard refused on"
+    );
+    assert_eq!(b.nonterminating.len(), 1, "the refusal is a diagnostic");
+    assert!(
+        b.diagnostics()
+            .iter()
+            .any(|d| d.kind == DiagKind::NonTerminating)
+    );
+}
+
+#[test]
+fn the_default_entry_point_still_uses_the_tuned_budget() {
+    // The same program through the default entry point: `count 3` applies
+    // four times, far below the tuned total, so it checks and runs.
+    let (root, ir) = countdown(3);
+    let b = build(root, ir);
+    assert!(b.ok, "count 3 must check under the default budget");
+    assert!(b.module.budget_exhausted.is_none());
+}
+
+#[test]
+fn a_raised_budget_lets_a_terminating_program_check() {
+    // The same program as above, under a total the caller raised: `count
+    // 2500` terminates after 2_501 applications and now checks.  This is the
+    // capability the tuned-only budget denied — before it, the build above is
+    // the only available answer for a terminating program.
+    let (root, mut ir) = countdown(2_500);
+    ir.set_root(root);
+    let b = Checker::<ProgramImpl>::build_with_budget(
+        ir,
+        lichen_highlevel::checker::WorkBudget {
+            apply_total_limit: 10_000,
+            ..Default::default()
+        },
+    );
+    assert!(
+        b.ok,
+        "a terminating recursion below the raised total must check"
+    );
+    assert!(b.module.budget_exhausted.is_none());
+}
+
+#[test]
+fn the_tuned_total_still_bounds_a_long_but_terminating_recursion() {
+    // The default numbers are unchanged: a terminating recursion past the
+    // tuned total (2_000 applications) is still refused and reported, which
+    // is exactly why the limit has to be the caller's to raise.
+    let (root, ir) = countdown(2_500);
+    let b = build(root, ir);
+    assert!(!b.ok, "the tuned total must still refuse this walk");
+    assert_eq!(
+        b.module.budget_exhausted,
+        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2_000 })
+    );
+    assert_eq!(b.nonterminating.len(), 1);
+}

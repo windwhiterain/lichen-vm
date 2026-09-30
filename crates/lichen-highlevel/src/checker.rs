@@ -411,15 +411,71 @@ where
     pub ok: bool,
 }
 
+/// The compile work budget one [`Checker`] build runs under: the lowlevel
+/// application guards the checker installs before its definition pass.
+///
+/// It is the caller's to set because the two failures are otherwise
+/// indistinguishable to a user: a *terminating* program whose definition pass
+/// exceeds the budget is reported as [`DiagKind::NonTerminating`], exactly
+/// like an infinite loop, so a host compiling a large generated program must
+/// be able to raise it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkBudget {
+    /// Nested applications permitted before the guard refuses — the
+    /// lowlevel's [`Module::apply_depth_limit`].
+    pub apply_depth_limit: usize,
+    /// Cumulative applications permitted before the guard refuses — the
+    /// lowlevel's [`Module::apply_total_limit`].
+    pub apply_total_limit: usize,
+}
+
+impl Default for WorkBudget {
+    /// The checker's tuned pair.  The nesting limit sits below what a thread
+    /// stack survives once the checker's per-call machinery (clone, unify,
+    /// deep pass) is on the stack, so a non-terminating recursion is refused
+    /// cleanly instead of overflowing the stack first; legitimate recursion
+    /// (fib, countdown) nests far below it.  The lazy graph flattens most
+    /// recursion (an apply returns its result pair; the deep pass descends
+    /// into it), so nested depth alone does not bound a run — an infinite
+    /// loop behind a lazy branch stays at depth 1, and a wide recursion (fib)
+    /// is never deep.  The total-application budget is the work bound that
+    /// catches those; each application also grows the module's classes (every
+    /// recursion level's parameter unifies into one shared class), so a tight
+    /// budget stops a runaway recursion in seconds, while legitimate programs
+    /// (the examples, fib up to ~15, countdown) apply far fewer times.
+    fn default() -> Self {
+        WorkBudget {
+            apply_depth_limit: 500,
+            apply_total_limit: 2_000,
+        }
+    }
+}
+
 impl<P: HighProgram> Checker<P>
 where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
     /// Compile an IR with a fresh private registry and no attribute
-    /// extension (a program whose schemas carry no attribute is unaffected).
+    /// extension (a program whose schemas carry no attribute is unaffected),
+    /// under the default [`WorkBudget`] — [`Self::build_with_budget`] with
+    /// [`WorkBudget::default`].
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
-        Self::build_with(ir, Module::new(), Self::no_attr_ext(), no_native_ops())
+        Self::build_with_budget(ir, WorkBudget::default())
+    }
+
+    /// [`Self::build`] under a caller-supplied [`WorkBudget`] — the entry
+    /// point for a host compiling a program that is large but still
+    /// terminating, whose definition pass needs more work than the tuned
+    /// default allows.
+    pub fn build_with_budget(ir: IR<P::Attr, P::Literal>, work_budget: WorkBudget) -> Build<P> {
+        Self::build_with(
+            ir,
+            Module::new(),
+            Self::no_attr_ext(),
+            no_native_ops(),
+            work_budget,
+        )
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
@@ -427,7 +483,13 @@ where
     /// leaves through a `PackageStore`.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, Self::no_attr_ext(), no_native_ops())
+        Self::build_with(
+            ir,
+            module,
+            Self::no_attr_ext(),
+            no_native_ops(),
+            WorkBudget::default(),
+        )
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry — the
@@ -440,7 +502,7 @@ where
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, no_native_ops())
+        Self::build_with(ir, module, attr_ext, no_native_ops(), WorkBudget::default())
     }
 
     /// [`Self::build_in_attr`] with a native-operator registry — the entry
@@ -455,7 +517,7 @@ where
         native_ops: NativeOps<P>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, native_ops)
+        Self::build_with(ir, module, attr_ext, native_ops, WorkBudget::default())
     }
 
     /// The no-op registry of a program with no attribute extension: no schema
@@ -468,11 +530,17 @@ where
         })
     }
 
+    /// The shared body of every entry point above: compile `ir` against
+    /// `module`, resolving an attribute marker through `attr_ext` and a
+    /// `$name` call through `native_ops`, under a caller-supplied
+    /// [`WorkBudget`].  Every public constructor delegates here, with either
+    /// the caller's budget or [`WorkBudget::default`].
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
         attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
         native_ops: NativeOps<P>,
+        work_budget: WorkBudget,
     ) -> Build<P> {
         // The attribute set's canonical order is the pair layout; a generated
         // set proves it at build time, and a hand-written one is checked here
@@ -481,25 +549,11 @@ where
             crate::attr::order_is_canonical::<P::Attr>(),
             "an attribute's canonical index must be its position in the set's order"
         );
-        // The lowlevel's default application guard (10k nested calls) sits
-        // below what a thread stack survives once the checker's per-call
-        // machinery (clone, unify, deep pass) is on the stack — a
-        // non-terminating recursion would overflow the stack before the
-        // guard fires.  Lower it so the guard panics cleanly; legitimate
-        // recursion (fib, countdown) nests far below this.
-        module.apply_depth_limit = 500;
-        // The lazy graph flattens most recursion (an apply returns its
-        // result pair; the deep pass descends into it), so nested depth
-        // alone does not bound a run — an infinite loop behind a lazy
-        // branch stays at depth 1, and a wide recursion (fib) is never deep.
-        // The total-application budget is the work bound that catches those;
-        // the definition pass runs the whole program, so it must be set
-        // here, before it starts.  Each application also grows the module's
-        // classes (every recursion level's parameter unifies into one
-        // shared class), so a tight budget stops a runaway recursion in
-        // seconds; legitimate programs (the examples, fib up to ~15,
-        // countdown) apply far fewer times than this.
-        module.apply_total_limit = 2_000;
+        // The definition pass runs the whole program, so the budget must be
+        // set here, before it starts; the rationale for the default values is
+        // on [`WorkBudget::default`].
+        module.apply_depth_limit = work_budget.apply_depth_limit;
+        module.apply_total_limit = work_budget.apply_total_limit;
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {

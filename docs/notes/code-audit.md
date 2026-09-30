@@ -50,7 +50,7 @@ queue's order is deliberate.
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
 | P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | todo |
-| P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
+| P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | done |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | done |
@@ -638,6 +638,50 @@ fresh `Module`, and no `build*` entry point accepts a caller-supplied limit. A
 loop. The comment at `:484-501` shows the values were tuned against the examples.
 
 **Fix.** Plumb a limits struct through `build_with`, defaulting to today's values.
+
+**Outcome.** The premise held, re-read first-hand before the fix: `build_with`
+assigned both limits to the fresh `Module` with no parameter reaching it from
+any of the four public constructors, and a *terminating* recursion past 2_000
+applications came back as `DiagKind::NonTerminating` — measured pre-fix through
+`Checker::build` on a hand-built `count n = [count (n - 1), 0][n == 0]` at
+`n = 2500`: `budget_exhausted == Some(ApplyTotal { limit: 2000 })`,
+`nonterminating == 1`, one diagnostic indistinguishable from an infinite loop.
+
+The limits are now the caller's. `WorkBudget` (`checker.rs`) carries
+`apply_depth_limit` / `apply_total_limit`, and its `Default` is the tuned pair
+**unchanged** — the tuning rationale that sat inline at the assignment sites is
+now its `Default` doc, stated once. The new public entry point is
+`Checker::build_with_budget(ir, work_budget)`, which `build` now delegates to
+with `WorkBudget::default()`; `build_in`, `build_in_attr` and
+`build_in_attr_native` thread `WorkBudget::default()` into the private
+`build_with`, which gained the budget parameter and now only installs it there.
+No existing public signature changed and no default number moved.
+
+*The private `build_with` deliberately stayed private.* Making it public and
+budget-taking — the ledger's own fix line — was the first shape tried and is
+unusable: its `attr_ext` argument is a
+`Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>` that only the checker can
+build for a program whose set has no `AttrExt`, which is exactly the case
+`Checker::build` exists for, so no host could call it. One convenience entry
+point is the additive half that actually reaches a caller.
+
+**Tests.** `crates/lichen-highlevel/tests/checker.rs` adds a hand-built
+countdown recursion (a lazily-indexed `[recursive, base]` pair, so the
+definition pass really runs it) and three tests:
+`a_caller_supplied_budget_bounds_the_definition_pass` (a total of 2 refuses a
+four-application program: the caller's limit is the one in force, the refusal
+is one `NonTerminating` diagnostic),
+`a_raised_budget_lets_a_terminating_program_check` (`count 2500`, 2_501
+applications, checks under a raised total), and
+`the_default_entry_point_still_uses_the_tuned_budget` /
+`the_tuned_total_still_bounds_a_long_but_terminating_recursion` (the default
+entry point checks the small program and still refuses the long one at
+`ApplyTotal { limit: 2000 }`). The pre-fix observation is the raised test's own
+assertion driven through the only entry point the unfixed tree had: it failed
+with *"a terminating recursion below the raised total must check: budget=
+Some(ApplyTotal { limit: 2000 }), nonterminating=1"*, and the caller-limit test
+cannot be written against the unfixed tree at all because no entry point took a
+budget.
 
 ### P1-9 — `DiaryEntry::errors` doubles as a discriminant `reported`
 
