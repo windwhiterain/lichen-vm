@@ -1156,6 +1156,12 @@ scans the module's whole node table and is called **per emitted node**
   README test rewrites metadata, while both test files say it must *fail*);
   `language/lib.rs:115-117` (claims `build` can be `None`, it cannot);
   `render`'s perspective discriminator doc names a byte the crate never emits.
+  Two more leads, both found while fixing `P0-4`: `crates/lichen-package/README.md`
+  says `lichen update` goes *"to the repo's latest commit"* while `update()` uses
+  `latest_release_tag` (the newest **published release**); and
+  `scripts/release.sh` prints a `releases/tag/<full-sha>` URL although the real
+  tag is the 12-character short SHA (`RELEASE_TAG_LEN`), so the printed link does
+  not resolve.
 - **P5-4 `verified`** — `Cargo.lock` holds **three** `wasmparser`
   (0.227.1 / 0.228.0 / 0.258.0) and two `wasm-encoder` (0.227.1 / 0.258.0).
   The JIT emits with `wasm-encoder 0.258` and `wasmi 2.0` validates with
