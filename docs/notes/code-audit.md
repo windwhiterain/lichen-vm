@@ -45,8 +45,8 @@ queue's order is deliberate.
 | P0-7 | high | language | The artifact container has no body digest | done |
 | P1-1 | high | lowlevel | `insert_module` inserts before it asserts | done |
 | P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | done |
-| P1-3 | high | lowlevel | Table identity hash is a raw address | todo |
-| P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | todo |
+| P1-3 | high | lowlevel | Table identity hash is a raw address | done |
+| P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | done |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | done |
 | P1-7 | low | highlevel | The function pass order relies on slotmap's undocumented iteration order | done |
@@ -465,6 +465,69 @@ impls. This falsifies `table.rs:8-11` (*"content-addressed artifacts stay
 deterministic"*) and `table.rs:20-21` (*"stable for the table's whole life"*).
 No test freezes a table and reads it back.
 
+**Outcome — one change with `P1-4`, per `D5`.**  Step 0 first, because it decides
+what "correct" means and therefore how big the item is: **the stored hash is a
+pre-filter and `key_eq` is the authority.**  The read takes
+`partition_point(|item| item.hash < hash)` to the start of the equal-hash run,
+walks that run, and verifies every candidate with `self.key_eq(key, item.key, ..)`
+(`evaluation.rs:428-439`) — so the hash owes one direction only, *equal keys hash
+equal*, and a collision is always sound.  A stable-but-not-injective content hash
+is therefore sufficient and the item stays tractable; had the hash alone decided
+the hit, the item would have needed an injective encoding of a cyclic graph and
+would have been larger than its scope.
+
+What landed is a canonical **depth-bounded content unfolding** (`table.rs`):
+`hash_node` walks the key's structure — array items positionally, a function
+template, a table's entry-key hashes — and every position at `UNFOLD_DEPTH` (= 8)
+mixes the same `FRONTIER_TOKEN`.  Nothing process-local enters it: no address, no
+node identity, no freeze-assigned index.  It is memoized on
+`(node, mode, remaining depth)`, which is everything the answer depends on, so
+caching cannot change what a key hashes to.
+
+The two identity hashes are gone.  **A table** now hashes as the fold of its
+payload entries' *stored key hashes* — the numbers the payload is already sorted
+by, so the fold is a function of the key *set* — and a freeze copies the payload
+verbatim, which is exactly why the number is the same before and after a reload.
+**A function** now hashes as the shape of its template: its return and its asserts,
+unfolded in a second, *total* mode (`UnfoldMode::Template`), because a template is
+expected to hold unbound cells (its own parameter is one) and `key_eq` never
+compares it.  That mode reads a node's operation edge in preference to its
+memoized value, so the hash does not drift when the definition pass runs the body
+between the build and the freeze — a hazard the regression test pins deliberately.
+
+**Tests** (`crates/lichen-lowlevel/tests/basic/table.rs` — the lowlevel half of the
+freeze/reload path; the artifact container's byte round-trip lives in
+`lichen-language`, and no test froze a table before this one):
+`a_table_key_survives_a_freeze_and_a_reload` and
+`a_function_key_survives_a_freeze_and_a_reload`.  Both fail on the unfixed tree with
+*"[TableMiss { table: Dynamic(NodeId(1v1)), key: Dynamic(NodeId(2v1)) }]"*.
+
+**A third defect found in the same function, and fixed with it.**
+`hash_value`'s `None => unreachable!("a structural value is one of the variants
+above")` arm was reachable: a key holding one of the program's own value variants
+is ordinary source (a type constant as a table key — `t = table { Int ==> 1 };
+t{Int}` panicked the compiler with exactly that message), and a template walk makes
+the arm unavoidable, since a function body holds them.  It is now one opaque
+`EXTENSION_TOKEN` per position, which is sound for the same reason a collision is
+(`key_eq` still tells two of them apart — by payload bytes where the value carries
+a handle, by structural equality otherwise), and
+`a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused` pins both the
+match and the miss.
+
+**Residual, and why it is sound.**  The unfolding cannot distinguish two keys that
+differ only below `UNFOLD_DEPTH`, two function templates that differ only in which
+operator sits at a position (the lowlevel cannot name a program's operator
+vocabulary), or two of the program's own value variants.  Each is a collision, and
+`key_eq` decides every candidate the hash offers.
+
+**One consequence left with the artifact container's owner.**  The *meaning* of the
+hash stored in a table payload changed, and `ARTIFACT_FORMAT_VERSION`
+(`crates/lichen-language/src/persist.rs:105`) was not bumped, so a cache written by
+an older compiler is still accepted and its payload hashes are stale — a spurious
+miss rather than a wrong answer, but a miss.  That constant lives in `P0-7`'s file
+and bumping it was outside this item; it is recorded here rather than changed
+silently.
+
 ### P1-4 — `hash_inner` cycle token vs `key_eq` coinduction `reported`
 
 `table.rs:178-180` cuts a cycle on **node identity plus depth**; `table.rs:248-259`
@@ -473,6 +536,36 @@ under `key_eq` but hash differently; a self-referential universe crossing the
 static/dynamic boundary terminates at different depths on each side. Since the
 hash only *finds candidates*, a hash disagreement is an unconditional miss.
 `tests/basic/table.rs:258` covers only the symmetric case.
+
+**Outcome — the same change as `P1-3`, per `D5`; see its Outcome for the shared
+mechanism and the regression tests.**  Step 0 (`key_eq` is the authority, the hash
+is a pre-filter) is what makes this half small: the comparison decides a cycle by
+the *unordered pair* of nodes on its path, which is equality of the infinite
+unfolding, so a hash only has to be *invariant* under that equality rather than
+reproduce the comparison's traversal.
+
+**The cycle token, before and after.**  Before, a revisited node returned
+`mix(CYCLE_TOKEN ^ depth)` with `depth` its own revisit depth, so the *same* cycle
+closed at different depths produced different tokens — `[1, ↺]` at depth 1,
+`[1, [1, ↺]]` at depth 2 — and two `key_eq`-equal keys hashed unequal.  The token
+is gone, and so is the path check that produced it: the unfolding is cut by
+`UNFOLD_DEPTH` instead, and **every** position at that frontier mixes the same
+`FRONTIER_TOKEN`.  That is the alignment: `key_eq`'s coinduction is bisimulation,
+bisimilar keys have equal unfoldings at *every* depth, so truncating both at one
+depth agrees with the comparison by construction — including across the
+static/dynamic boundary, where the same content is walked through a static ref at
+the same depth.  The bound is now explicitly a *performance* bound, not a
+correctness one: a key it truncates can only collide, never be hidden.
+
+**Tests** (`crates/lichen-lowlevel/tests/basic/table.rs`):
+`coinductively_equal_cyclic_keys_hash_equal_across_depth` is the `A = [1, A]` /
+`B = [1, [1, B]]` pair (fails on the unfixed tree with *"[TableMiss { table:
+Dynamic(NodeId(7v1)), key: Dynamic(NodeId(3v1)) }]"*), and
+`a_cyclic_key_is_found_across_the_static_boundary` closes the cycle one level
+deeper *through a static ref to the frozen module* (fails with *"[TableMiss {
+table: Dynamic(NodeId(1v1)), key: Dynamic(NodeId(5v1)) }]"*).  The pre-existing
+`cyclic_keys_hash_and_compare_equal`, which covered only the symmetric case, still
+passes.
 
 **Decision `D5` — canonical content unfolding.** A hashed key must be a function
 of the key's content, so a table or function used as a table key hashes the same
