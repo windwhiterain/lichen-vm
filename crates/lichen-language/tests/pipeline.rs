@@ -1064,6 +1064,29 @@ fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
 }
 
 #[test]
+fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
+    // `f = g => g 1` applied to a struct instance: the callee is a parameter,
+    // so its type cell stays unbound and the checker's function-ness guard is
+    // skipped, and the instance's value is structurally a `LowValue::Array` —
+    // the same shape a compute kernel's `[native, sig]` pair takes, which the
+    // lowlevel cannot tell apart.  Only the program knows which of its values
+    // are callable (`Program::is_callable`), so its answer has to refuse this
+    // one for the fact to be recorded like the scalar sibling's.
+    let report = compile("S = struct<.a Int>\nf = g => g 1\nf S(.a 1)");
+    assert!(
+        !report.ok(),
+        "an apply of a struct value must not be accepted: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(report.diagnostics.len(), 1);
+    let check = report.diagnostics[0]
+        .check
+        .as_ref()
+        .expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeApplyTarget);
+}
+
+#[test]
 fn struct_occurrences_in_distinct_bodies_keep_distinct_ids() {
     // Two functions each contain their own struct occurrence — each body's
     // `Fresh` node is its own, so the nominal ids stay distinct across the

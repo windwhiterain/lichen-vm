@@ -330,6 +330,12 @@ macro_rules! lang_compose_vocabulary {
         // their program-generic [`::lichen_lowlevel::OperatorExt`] impl in the
         // highlevel; each plugin operator runs its own).  This is the arm that
         // lets a composed program's operators actually execute.
+        //
+        // `is_callable` is the composed applicability policy: the OR of the
+        // extension leaves' policies, so a compute kernel — which only the
+        // compute leaf can recognise inside its struct array — keeps its
+        // cross-kernel apply lazy.  The two structural leaves name no
+        // applicable value, so only the extension list is consulted.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,
@@ -342,6 +348,13 @@ macro_rules! lang_compose_vocabulary {
                     LangOperator::$tyop_name(op) => op.run(operand, block, module),
                     $( LangOperator::$extra_op_name(op) => op.run(operand, block, module), )*
                 }
+            }
+
+            fn is_callable(
+                module: &::lichen_lowlevel::Module<LangProgram>,
+                callee: ::lichen_lowlevel::AnyNodeId,
+            ) -> bool {
+                false $( || <$extra_op as ::lichen_lowlevel::OperatorExt<LangProgram>>::is_callable(module, callee) )*
             }
         }
 

@@ -2,7 +2,7 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
-    LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
+    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -356,12 +356,30 @@ impl<P: Program> Module<P> {
                             // recording a second one.
                             Some(LowValue::Void) => P::Value::from(LowValue::Void),
                             // A structural array and the program's own value
-                            // both stay lazy: a compute `Kernel` is a struct —
-                            // structurally an array — and the compute layer
-                            // compiles that apply, so the lowlevel keeps the
-                            // graph readable for a body's deep pass and the
-                            // JIT instead of refusing a legitimate kernel.
-                            _ => P::Value::from(LowValue::Parameterized),
+                            // both reach here, and neither is provably a
+                            // function: the program's value variant is opaque
+                            // to the lowlevel, and a compute `Kernel` is a
+                            // struct — structurally an array — that the
+                            // compute layer compiles into a cross-kernel call.
+                            // The program answers through its operator
+                            // dispatch (`OperatorExt::is_callable`), whose
+                            // default refuses; a callee it disclaims is a user
+                            // error recorded exactly as a scalar is, and a
+                            // callee it claims stays lazy so a body's deep pass
+                            // and the JIT keep the graph readable.
+                            _ => {
+                                if <P::Operator as OperatorExt<P>>::is_callable(
+                                    self,
+                                    operands[0].node,
+                                ) {
+                                    P::Value::from(LowValue::Parameterized)
+                                } else {
+                                    self.eval_errors.push(EvalError::ApplyTarget {
+                                        function: operands[0].node,
+                                    });
+                                    P::Value::from(LowValue::Void)
+                                }
+                            }
                         }
                     }
                     _ => unreachable!("Apply operand must be an array of [function, argument]"),

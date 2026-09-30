@@ -63,7 +63,7 @@ queue's order is deliberate.
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
-| P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
+| P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | done |
 | P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
@@ -1306,6 +1306,59 @@ while leaving a kernel lazy. Cost: a new method on the `Program` trait, so every
 program type states it — which is why it is its own item and not a footnote to
 `P1-6`. The alternative, having the arm consult the program's operator dispatch,
 was not evaluated and may be cheaper.
+
+**Outcome.** The premise held, and the reproduction was confirmed first-hand
+before the fix: `compile("S = struct<.a Int>\nf = g => g 1\nf S(.a 1)")` was
+`ok` with **zero** diagnostics (the panic message of the new test is the `[]`
+diagnostic list — the silence itself).
+
+*What the callee actually is.* Traced through the arm: the deferred callee of the
+cross-kernel cases (`jit_cross_kernel_call`, `jit_cross_kernel_subexpr`) reaches
+the `_` arm as `LowValue::Array` — a 2-element `[value, type]` pair whose element
+0 is the kernel — while a bare `jit` result can also reach it as the program's
+own `ComputeValue::Kernel` value. The repro's `S(.a 1)` is an array whose element
+0 is a `USize`. So the lowlevel's two lazy classes are exactly one question ("is
+this callee applicable?") with two shapes, and only the program can answer it —
+`kernel_id_of` is the JIT's answer and cannot distinguish a kernel pair from a
+struct instance's pair.
+
+*The route: the operator dispatch, not a `Program` method.* `OperatorExt` gains
+`fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool`, defaulting to
+`false` (read-only; the policy reads the module to recognise its own values
+inside a structural array). The lowlevel's `Apply` catch-all consults
+`<P::Operator as OperatorExt<P>>::is_callable(self, operands[0].node)` and
+refuses with the existing `EvalError::ApplyTarget` when the answer is `false`.
+The composition macro's generated `impl OperatorExt<LangProgram> for LangOperator`
+ORs its **extension** operator leaves' policies (the two structural leaves name
+no applicable value, so they are not consulted), and `lichen-compute` overrides
+the policy on `ComputeOperator` — the leaf that compiles a kernel apply. No
+method was added to `Program`, and no program type has to state anything: this is
+the cheaper route the finding itself offered, and it is also the more honest home
+— the operator leaf that can lower an apply is what declares the apply possible.
+
+*The override.* `ComputeOperator::is_callable` answers
+`kernel_id_of(module, node).is_some() || pending_kernel(module, node)` for a
+dynamic callee (`false` for a static one: a kernel artifact is process-local, so
+a frozen module carries none). `kernel_id_of` is the JIT's own predicate — the
+call `emit_cross_kernel_call` needs to emit — so the lowlevel's laziness and the
+JIT's lowering agree by construction. `pending_kernel` is the undecided half: the
+lowlevel consults the policy **mid-deep-pass**, before the pair's value slot has
+been evaluated (traced: the element's value was `None` while its operation was
+`Index`), so a `Jit` that has not run counts as the kernel it will produce while
+the walk follows the same two value edges `kernel_id_of` follows
+(`value_of_node`'s `Index(pair, 0)` extraction and a struct pair's element 0).
+The answer is a superset of the JIT's, so it can only keep a callee lazy that
+later turns out not to be a kernel (conservative), never refuse one the JIT would
+lower.
+
+*Tests.* `crates/lichen-language/tests/pipeline.rs`'s
+`an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error` (new)
+pins the reproduction as one `DiagKind::RuntimeApplyTarget`; against the unfixed
+arm it fails with `report.ok() == true` and an empty diagnostic list. The kernel
+gate `cargo test -p lichen-language --test compute` is green (24 passed) — it
+went red under both wrong shapes tried first, so it is load-bearing: recording
+`Array` (before `pending_kernel` existed) failed `jit_cross_kernel_call` and
+`jit_cross_kernel_subexpr`, and the lowlevel and highlevel suites are unchanged.
 
 ### P1-22 — The frontend's recursion overflows the caller's stack on a ~500-byte file `verified`
 

@@ -307,6 +307,24 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    /// The compute leaf's applicability policy: a **kernel** apply is the one
+    /// lowlevel `Apply` this vocabulary can lower, as a cross-kernel call, so
+    /// it stays lazy instead of being refused.  Both halves of the answer are
+    /// the JIT's own predicate: [`kernel_id_of`] for a kernel whose value is
+    /// decided — the same call `emit_cross_kernel_call` needs to emit — and
+    /// [`pending_kernel`] for the struct pair whose value slot the lowlevel
+    /// consults before the deep pass has evaluated it.  A static node is never
+    /// a kernel: a kernel artifact is process-local, so a frozen module
+    /// carries none.
+    fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
+        match callee {
+            AnyNodeId::Dynamic(node) => {
+                kernel_id_of(module, node).is_some() || pending_kernel(module, node)
+            }
+            AnyNodeId::Static(_) => false,
+        }
+    }
+
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             ComputeOperator::Jit => {
@@ -1511,6 +1529,47 @@ where
         }
     }
     None
+}
+
+/// Whether `node` is a kernel **in the making** — the undecided half of
+/// [`kernel_id_of`], for [`ComputeOperator::is_callable`], which the lowlevel
+/// consults in the middle of the deep pass, before the struct pair's value slot
+/// has been evaluated.  A `Jit` that has not run yet counts as the kernel it
+/// will produce, and the walk follows the same two value edges `kernel_id_of`
+/// follows ([`value_of_node`]'s `Index(pair, 0)` extraction and a struct
+/// pair's element 0).  The answer is therefore a superset of the JIT's: it can
+/// keep a callee lazy that later turns out not to be a kernel (the conservative
+/// direction), and never refuses one the JIT would lower.
+fn pending_kernel<P>(module: &Module<P>, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // The one operator that produces a `Kernel`; a value that is still lazy
+    // here is a function the definition pass has not run yet.
+    if module.nodes[node].operation.is_some_and(|operation| {
+        matches!(
+            AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+            Some(ComputeOperator::Jit)
+        )
+    }) {
+        return true;
+    }
+    if let Some(inner) = value_of_node(module, node)
+        && pending_kernel(module, inner)
+    {
+        return true;
+    }
+    // SAFETY: `node` is a live node of `module`.
+    if let Some(items) = unsafe { module.array_items(node) }
+        && let Some(first) = items.first()
+        && let Ok(first) = dyn_node(first.node)
+        && pending_kernel(module, first)
+    {
+        return true;
+    }
+    false
 }
 
 /// The *value* node behind a `[value, type]` pair stored as a **concrete array

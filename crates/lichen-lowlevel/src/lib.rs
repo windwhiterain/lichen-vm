@@ -416,6 +416,28 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+
+    /// Whether a callee node the lowlevel cannot prove a function is a value
+    /// this operator vocabulary applies.
+    ///
+    /// [`LowOperator::Apply`] refuses a callee it can prove is not a function —
+    /// a scalar, a string, a table, the unit value — and records
+    /// [`EvalError::ApplyTarget`]; everything else stays lazy.  It has to,
+    /// because the program's own values are opaque to the lowlevel and a
+    /// structural **array** is the same shape for a struct instance and for a
+    /// compute kernel's `[native, sig]` pair.  Only the program knows which of
+    /// its values are callable, and this is where it answers: a composed
+    /// operator union ORs its extension leaves' policies, so the leaf whose
+    /// vocabulary can apply the value declares it.
+    ///
+    /// The default refuses — the honest answer for a program that names none.
+    /// The policy is given the callee node and reads the module (that is how
+    /// it recognises its own values inside a structural array); it must not
+    /// mutate the module.
+    fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
+        let _ = (module, callee);
+        false
+    }
 }
 
 // The structural operators implement [`OperatorExt`] so a composed program's
