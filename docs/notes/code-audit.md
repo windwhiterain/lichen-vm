@@ -251,6 +251,13 @@ back to any `lichen-compiler` on `$PATH` without warning.
 `min(count, remaining_bytes)` before every `with_capacity`; and validate every
 `LocalNodeId` against the declared node count at load.
 
+**Residual, deliberately left.** `LowShape::Array(elem, len)` still carries a
+length read from the stream and never validated. It is inert: the only consumer
+of a domain shape is `lichen-compute`'s `compile_fragment`, which rejects any
+shape that is not `USize` or `Tuple` (`compute.rs:674-679`), and
+`flatten_offset` rejects the rest — so the field never sizes an allocation. No
+follow-up is owed; noted so the next pass does not re-open it.
+
 ### P0-6 — `Depend::sub` is an unvalidated path join `verified`
 
 `crates/lichen-preprocess/src/lib.rs:162-166`:
