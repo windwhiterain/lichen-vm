@@ -221,7 +221,9 @@ where
             Some(root) if P::Codec::PERSISTENT => PackageStore::with_cache_dir(root.to_path_buf()),
             _ => PackageStore::new(),
         };
-        let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
+        let mut diagnostics = preprocess::stage_depends::<P>(&mut store, &source);
+        let (pre, preprocess_diagnostics) = preprocess::preprocess(&source, base, &mut store);
+        diagnostics.extend(preprocess_diagnostics);
 
         // The frontend artifacts (for the editor index): tokens + AST in
         // absolute file coordinates (the lexer maps through `code_base` and the

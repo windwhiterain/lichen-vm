@@ -58,7 +58,7 @@ queue's order is deliberate.
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | todo |
-| P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | todo |
+| P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
 | P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
@@ -765,6 +765,13 @@ false "cannot load package" diagnostic.
 
 **Fix.** One line — stage the aliases in the LSP path too. Worth doing early
 because it is user-visible and free.
+
+**Outcome.** `Doc::new_with_cache` stages the source's `depend` directives on
+the store it already builds, before its `preprocess` call, and folds the
+staging diagnostics into the document's diagnostics — the same order the CLI's
+`staged_store` uses. A vendored `import "alias"` now resolves in the editor as
+it does from the CLI, and a dependency that has not been fetched reports the
+missing-dir diagnostic instead of a false "cannot load package".
 
 ### P1-17 — Every LSP request runs the whole frontend `verified`
 
