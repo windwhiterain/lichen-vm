@@ -3187,6 +3187,56 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   **Not part of this decision:** the README generator and `sync-readme`
   (`P2-6`'s remaining half) are repo tooling rather than a user-facing surface,
   and they leave the library on their own terms.
+- **D11 — How far to encapsulate node state. — DECIDED: all six fields.**
+  `P2-4`'s premise was partly refuted before this decision: the documented
+  write choke-point (`Module::write_node_value`) **is** implemented, and
+  `Node::value`/`low_shape` are private with a single writer each — so no public
+  field bypasses the *value* write path. The real defect is the other six fields
+  (`operation`, `function`, `block`, `visiting`, `evaluated_deep`, `equality`),
+  which are `pub` with invariants of their own and no choke-point covering them.
+
+  *Chosen — privatise all six and add the accessors.* The measured cost is **119**
+  `cargo check` errors (116 in `lichen-lowlevel`'s own integration tree, 3 in
+  `lichen-highlevel`, plus roughly a dozen more in `lichen-compute` that the
+  compiler never reached). The acknowledged tension, recorded so it is not
+  discovered mid-refactor: Rust cannot make a field write-private and read-public,
+  so a write path must be **invented** for `operation` and `equality.parent` (they
+  have none today), and read accessors must be added for `evaluated_deep`,
+  `visiting` and `disjoint::Meta` — the read surface therefore **widens** while the
+  write surface narrows. That is accepted: a documented reader is a contract,
+  whereas a public field is an invitation.
+
+  *Rejected — correcting the docs and leaving the fields:* it would close the item
+  with the encapsulation the crate's own prose claims still absent, and the
+  fields' invariants are load-bearing for *answers* rather than for memory safety,
+  which is exactly the kind of breakage no test catches.
+  *Rejected — privatising only the load-bearing few:* it leaves the boundary
+  arbitrary, and the reader cannot tell which fields are contract and which are
+  convenience.
+
+  **Scope note:** `Module::nodes` is itself `pub`, so the refactor must also
+  decide whether node state is read through the module or through the slotmap.
+  Prefer the module (it is where a checked accessor can live); do not leave both.
+- **D12 — What the CI gate enforces. — DECIDED: clear the backlog, then `-D
+  warnings`.** `P3-3`: the workspace has 66 clippy warnings and CI enforces
+  nothing — no `fmt --check`, no `cargo test`, no clippy.
+
+  *Chosen — pay the backlog down first, then gate hard:* clear the 66 (the
+  dominant clusters are 26 `collapsible_if`, 8 `type_complexity`, 8
+  `needless_borrow`, 3 `arc_with_non_send_sync`), then add a job running
+  `cargo fmt --all -- --check`, `cargo test` and
+  `cargo clippy --workspace --all-targets -- -D warnings`. One gate, one meaning,
+  and no baseline file to keep in sync.
+
+  *Rejected — gating on "no new warnings" from a baseline:* it gets regression
+  protection sooner but adds a file whose drift is itself a maintenance hazard,
+  and this branch has already shown how quickly warning locations move.
+  *Rejected — `fmt` and `test` only:* it would leave `arc_with_non_send_sync` —
+  which is a real finding, not a style preference — unenforced.
+
+  **Order matters and is part of the decision:** the backlog clearing and the gate
+  are one item's work, and the gate must not land before the backlog is gone, or
+  CI is red from its first run.
 
 ## Checked and found clean
 
