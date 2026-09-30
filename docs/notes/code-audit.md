@@ -90,7 +90,7 @@ queue's order is deliberate.
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | todo |
-| P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | todo |
+| P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
 
 ## P0 — memory safety and supply chain
 
