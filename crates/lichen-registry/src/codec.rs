@@ -100,6 +100,16 @@ impl<'a> Reader<'a> {
         let len = self.u8()? as usize;
         self.take(len)
     }
+    /// How many bytes are still unread in the buffer.
+    ///
+    /// This is the bound every length read out of the stream is checked
+    /// against: a list of `n` elements costs at least `n` bytes, so a declared
+    /// count larger than the remaining byte count cannot have been produced by
+    /// any writer.  A reader that preallocates from the count alone lets a
+    /// tiny file request an enormous allocation.
+    pub fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
     pub fn done(&self) -> bool {
         self.pos == self.buf.len()
     }

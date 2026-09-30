@@ -224,6 +224,19 @@ impl ValueCodec for LowValue {
             2 => {
                 let module = ModuleKey::from_raw(r.u64()?);
                 let index = r.u64()? as usize;
+                // A function ref indexes the function list of the module it
+                // names, so it is checked against that module's count whenever
+                // the map holds it.  Only the direct dependencies are in the
+                // map (a ref may name a transitive one), so an absent module
+                // is left to the registry that resolves it later.
+                if let Some(owner) = modules.get(&module)
+                    && index >= owner.functions.len()
+                {
+                    return Err(format!(
+                        "artifact function ref names function {index}, which is not among module {module:?}'s {} functions",
+                        owner.functions.len()
+                    ));
+                }
                 LowValue::Function(AnyFunctionId::Static(StaticFunctionRef {
                     module,
                     index: StaticFunctionId(index),

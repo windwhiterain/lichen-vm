@@ -323,37 +323,95 @@ fn write_low_shape(w: &mut Writer, shape: &LowShape) {
 fn read_low_shape_opt(r: &mut Reader<'_>) -> Result<Option<LowShape>, String> {
     match r.u8()? {
         0 => Ok(None),
-        1 => Ok(Some(read_low_shape(r)?)),
+        1 => Ok(Some(read_low_shape(r, 1)?)),
         _ => Err("bad low_shape option tag".into()),
     }
 }
 
-fn read_low_shape(r: &mut Reader<'_>) -> Result<LowShape, String> {
+/// The deepest [`LowShape`] nesting a node's shape marker may declare.
+///
+/// The wire form spends one byte per level, so without a cap a megabyte of
+/// crafted bytes is a million frames of native stack.  A real shape's depth is
+/// bounded by the nesting of the program's own types — the compute layer builds
+/// one from a kernel's domain shape, and a tuple shape is its element types
+/// recursed — so this cap exists to bound hostile input, not to limit programs.
+const MAX_LOW_SHAPE_DEPTH: usize = 256;
+
+/// Read one shape marker, `depth` levels below the node that carries it.
+///
+/// Every nesting variant passes `depth + 1`, and the cap is checked before the
+/// match, so the recursion cannot outgrow the native stack.
+fn read_low_shape(r: &mut Reader<'_>, depth: usize) -> Result<LowShape, String> {
+    if depth > MAX_LOW_SHAPE_DEPTH {
+        return Err(format!(
+            "artifact low_shape nests deeper than the {MAX_LOW_SHAPE_DEPTH}-level cap"
+        ));
+    }
     match r.u8()? {
         0 => Ok(LowShape::USize),
         1 => {
             let len = r.u64()? as usize;
-            let mut items = Vec::with_capacity(len);
+            let mut items = reserve(r, len, "low_shape tuple elements")?;
             for _ in 0..len {
-                items.push(read_low_shape(r)?);
+                items.push(read_low_shape(r, depth + 1)?);
             }
             Ok(LowShape::Tuple(items))
         }
         2 => {
-            let elem = Box::new(read_low_shape(r)?);
+            let elem = Box::new(read_low_shape(r, depth + 1)?);
             let len = r.u64()? as usize;
             Ok(LowShape::Array(elem, len))
         }
         3 => Ok(LowShape::Function(
-            Box::new(read_low_shape(r)?),
-            Box::new(read_low_shape(r)?),
+            Box::new(read_low_shape(r, depth + 1)?),
+            Box::new(read_low_shape(r, depth + 1)?),
         )),
         4 => Ok(LowShape::Table(
-            Box::new(read_low_shape(r)?),
-            Box::new(read_low_shape(r)?),
+            Box::new(read_low_shape(r, depth + 1)?),
+            Box::new(read_low_shape(r, depth + 1)?),
         )),
         _ => Err("bad low_shape tag".into()),
     }
+}
+
+/// Reserve a vector for a list whose `count` was read out of the stream.
+///
+/// **Contract:** every element of a length-prefixed list costs at least one
+/// byte on the wire, so a `count` past the reader's remaining byte count is
+/// impossible for any artifact a writer produced.  Preallocating from `count`
+/// on faith is what lets a 64-byte file request a 2^60-element allocation and
+/// abort the process; the preallocation itself is still wanted, because for a
+/// real artifact `count` is the list's exact size.
+fn reserve<T>(r: &Reader<'_>, count: usize, what: &str) -> Result<Vec<T>, String> {
+    let remaining = r.remaining();
+    if count > remaining {
+        return Err(format!(
+            "artifact declares {count} {what}, more than the {remaining} bytes it could encode"
+        ));
+    }
+    Ok(Vec::with_capacity(count))
+}
+
+/// Reject a node index the module being loaded does not have.
+///
+/// Every node id in the body is an index into that module's node list, so an
+/// index at or past the declared count names a node that does not exist:
+/// accepted on faith it loads "successfully" and panics much later, far from
+/// the artifact that caused it.
+fn check_node_index(index: usize, node_count: usize, what: &str) -> Result<(), String> {
+    if index >= node_count {
+        return Err(format!(
+            "artifact {what} names node index {index}, which is not among the module's {node_count} nodes"
+        ));
+    }
+    Ok(())
+}
+
+/// Read one node index and validate it against the module's node count.
+fn read_node_id(r: &mut Reader<'_>, node_count: usize, what: &str) -> Result<LocalNodeId, String> {
+    let index = r.u64()? as usize;
+    check_node_index(index, node_count, what)?;
+    Ok(LocalNodeId { index })
 }
 
 /// Deserialize an artifact.  `key` and `hash` are the expected identity of
@@ -408,7 +466,9 @@ where
     let base = arena_base::<P>(&arena);
 
     let node_count = r.u64()? as usize;
-    let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_count);
+    // The export index is read before the count it names, so it is checked here.
+    check_node_index(export.index, node_count, "export")?;
+    let mut nodes: Vec<StaticNode<P>> = reserve(&r, node_count, "nodes")?;
     for _ in 0..node_count {
         let value = if r.u8()? != 0 {
             Some(C::read_value(&mut r, key, &arena, base, modules)?)
@@ -418,9 +478,7 @@ where
         let operation = if r.u8()? != 0 {
             let operator = C::read_operator(&mut r)?;
             let operand = if r.u8()? != 0 {
-                Some(LocalNodeId {
-                    index: r.u64()? as usize,
-                })
+                Some(read_node_id(&mut r, node_count, "node operation operand")?)
             } else {
                 None
             };
@@ -429,23 +487,17 @@ where
             None
         };
         let parent = if r.u8()? != 0 {
-            Some(LocalNodeId {
-                index: r.u64()? as usize,
-            })
+            Some(read_node_id(&mut r, node_count, "node equality parent")?)
         } else {
             None
         };
         let next = if r.u8()? != 0 {
-            Some(LocalNodeId {
-                index: r.u64()? as usize,
-            })
+            Some(read_node_id(&mut r, node_count, "node equality next")?)
         } else {
             None
         };
         let tail = if r.u8()? != 0 {
-            Some(LocalNodeId {
-                index: r.u64()? as usize,
-            })
+            Some(read_node_id(&mut r, node_count, "node equality tail")?)
         } else {
             None
         };
@@ -467,33 +519,29 @@ where
     }
 
     let function_count = r.u64()? as usize;
-    let mut functions: Vec<StaticFunction> = Vec::with_capacity(function_count);
+    let mut functions: Vec<StaticFunction> = reserve(&r, function_count, "functions")?;
     for _ in 0..function_count {
-        let parameter = LocalNodeId {
-            index: r.u64()? as usize,
-        };
-        let r#return = LocalNodeId {
-            index: r.u64()? as usize,
-        };
+        let parameter = read_node_id(&mut r, node_count, "function parameter")?;
+        let r#return = read_node_id(&mut r, node_count, "function return")?;
         let assert_count = r.u64()? as usize;
-        let mut asserts = Vec::with_capacity(assert_count);
+        let mut asserts = reserve(&r, assert_count, "function assert entries")?;
         for _ in 0..assert_count {
-            asserts.push(LocalNodeId {
-                index: r.u64()? as usize,
-            });
+            asserts.push(read_node_id(
+                &mut r,
+                node_count,
+                "function assert condition",
+            )?);
         }
-        let node_count = r.u64()? as usize;
-        let mut nodes = Vec::with_capacity(node_count);
-        for _ in 0..node_count {
-            nodes.push(LocalNodeId {
-                index: r.u64()? as usize,
-            });
+        let scope_count = r.u64()? as usize;
+        let mut scope = reserve(&r, scope_count, "function template nodes")?;
+        for _ in 0..scope_count {
+            scope.push(read_node_id(&mut r, node_count, "function template node")?);
         }
         functions.push(StaticFunction {
             parameter,
             r#return,
             asserts,
-            nodes,
+            nodes: scope,
         });
     }
     if !r.done() {
