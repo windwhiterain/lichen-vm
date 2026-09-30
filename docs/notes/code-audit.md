@@ -39,7 +39,7 @@ queue's order is deliberate.
 | P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | done |
 | P0-2c | critical | highlevel | `shape::array_items` re-exports the unbounded slice from a safe wrapper | done |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
-| P0-4 | critical | package | Downloaded binaries have no integrity check | todo |
+| P0-4 | critical | package | Downloaded binaries have no integrity check | done |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
 | P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
 | P0-7 | high | language | The artifact container has no body digest | done |
@@ -281,6 +281,23 @@ manager are always the same revision"*) while the commit is pinned and the bytes
 are not — the pin says which revision was *asked for*, never what arrived. State
 the real trust model in its place. The mechanical hardening this does not cover
 is `P1-20`.
+
+**Outcome.** Documented and accepted, not hardened. `D4` accepted the trust root,
+so no checksum, signature or download-host restriction was added anywhere; what
+changed is the documentation. `toolchain.rs`'s module doc now states the trust
+model in two parts: the release tag is derived from the binary's embedded build
+commit, so the download *addresses* the release that claims to be that revision,
+and **nothing verifies that the asset delivered is the one that commit
+produced** — the commit is pinned, the contents are trusted as delivered over
+HTTPS. Every sibling that repeated the guarantee (`self_commit`,
+`toolchain_commit` and `install`'s doc, `main.rs`'s `cmd_install`, `build.rs`,
+`crates/lichen-package/README.md`, `docs/notes/language-toolchain.md`, the
+`release-lichen` workflow, the Zed extension's docs) was corrected to the address
+it can actually make; the docs that stated only the tag convention were left
+alone. **The residual risk stands:** the download is unverified content from a
+`curl` fetch, and the mechanical hardening of that path remains open as `P1-20`
+(a predictable shared temp name, no `fsync` before the rename, and the silent
+`$PATH` fallback). A later reader should not expect a check here.
 
 ### P0-5 — Artifact deserialization: unbounded recursion and allocation `reported`
 

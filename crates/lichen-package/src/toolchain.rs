@@ -11,9 +11,13 @@
 //!   fixed binary, at `<lichendir>/tools/<name>`.
 //!
 //! Binaries are fetched as **prebuilt release assets** (never built on the user's
-//! machine), from the GitHub **release at the package manager's own commit** — so
-//! the toolchain and the package manager are always the same revision. The package
-//! manager is only ever *run*; how it got installed (any way) is irrelevant.
+//! machine), from the GitHub release tagged with the short SHA of the commit this
+//! binary was built from (see [`release_tag`]). The tag is derived from that
+//! embedded commit, so the download **addresses** the release that claims to be
+//! that revision — the commit is pinned; the bytes are not. Nothing confirms that
+//! the asset delivered is the one that commit produced: the contents are trusted
+//! as delivered, over HTTPS to GitHub. The package manager is only ever *run*; how
+//! it got installed (any way) is irrelevant.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -32,9 +36,9 @@ pub const PACKAGE_MANAGER_BIN: &str = "lichen";
 /// The commit this `lichen` binary was compiled from, if known.
 ///
 /// Set by [`build.rs`](crate::build) from `git rev-parse HEAD`; `None` when the
-/// crate was built outside a git checkout (the package manager then falls back to
-/// the repo's default-branch tip). The toolchain release is fetched at this commit
-/// so the package manager and the toolchain are the same revision.
+/// crate was built outside a git checkout, in which case `install` cannot derive a
+/// release tag and refuses rather than chasing the repository tip. The release is
+/// addressed by the tag derived from this commit (see [`release_tag`]).
 pub fn self_commit() -> Option<&'static str> {
     let commit = env!("LICHEN_BUILD_COMMIT");
     if commit.is_empty() {
@@ -163,11 +167,11 @@ pub fn tool_dest_path(tool: Tool) -> Result<PathBuf, String> {
 // Prebuilt-release fetch.
 // ---------------------------------------------------------------------------
 
-/// The commit the toolchain release should come from: this binary's own commit.
-/// A `lichen` built outside a git checkout has no pinned commit, so it cannot
-/// install a same-commit toolchain — the caller is told to `liche update` rather
-/// than silently chasing the repo tip (which may have no release, since the user
-/// publishes manually).
+/// The commit the toolchain release is addressed by: this binary's own commit.
+/// A `lichen` built outside a git checkout has no commit to derive a release tag
+/// from, so it cannot pin the download and the caller is told to `liche update`
+/// rather than silently chasing the repo tip (which may have no release, since the
+/// user publishes manually).
 fn toolchain_commit() -> Result<String, String> {
     self_commit().map(str::to_string).ok_or_else(|| {
         "cannot pin the toolchain to a commit: this `lichen` was built outside a \
@@ -304,9 +308,9 @@ fn make_executable(path: &PathBuf) -> Result<(), String> {
 // Public operations.
 // ---------------------------------------------------------------------------
 
-/// Install (refresh) `tool` from the prebuilt release at the package manager's own
-/// commit into Lichen Home. Returns the installed binary path. If the release at
-/// that commit is missing, the error hints at `lichen update`.
+/// Install (refresh) `tool` from the prebuilt release tagged with the package
+/// manager's own commit into Lichen Home. Returns the installed binary path. If
+/// that release is missing, the error hints at `lichen update`.
 pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     let bin = tool.bin_name();
     let commit = toolchain_commit()?;

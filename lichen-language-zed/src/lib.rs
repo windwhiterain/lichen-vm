@@ -15,8 +15,8 @@
 //! launch, if the server is not already on `$PATH`, the extension reports install
 //! progress to Zed and asks the `lichen` package manager to ensure it is present:
 //! `lichen path language-server` installs the **prebuilt** compiler + language
-//! server into **Lichen Home** (`$LICHEN_HOME`, defaulting to `~/.lichen`) at the
-//! package manager's own commit, and prints the binary path.
+//! server into **Lichen Home** (`$LICHEN_HOME`, defaulting to `~/.lichen`) from the
+//! release tagged at the package manager's own commit, and prints the binary path.
 //!
 //! The package manager is the single canonical copy at
 //! `$LICHEN_HOME/tools/lichen[.exe]` — exactly the file `liche update` refreshes
@@ -91,8 +91,8 @@ mod zed_impl {
 
             // The toolchain is managed by the `lichen` package manager, which
             // installs the prebuilt compiler + language server into Lichen Home
-            // at its own commit.  Ask it to ensure the server is present and
-            // print its path, then hand that path to Zed.
+            // from the release tagged at its own commit.  Ask it to ensure the
+            // server is present and print its path, then hand that path to Zed.
             match resolve_via_lichen(worktree, self) {
                 Ok(path) => {
                     set_language_server_installation_status(
@@ -268,11 +268,11 @@ mod zed_impl {
     }
 
     /// Ensure the server is installed (asking the `lichen` package manager, which
-    /// installs the prebuilt compiler + language server into Lichen Home at its
-    /// own commit) and return its absolute path.  When the worktree root is
-    /// available it is passed as `--project <root>` so a project with native
-    /// plugins composes its own server; when no root is available the shipping
-    /// server is resolved.
+    /// installs the prebuilt compiler + language server into Lichen Home from the
+    /// release tagged at its own commit) and return its absolute path.  When the
+    /// worktree root is available it is passed as `--project <root>` so a project
+    /// with native plugins composes its own server; when no root is available the
+    /// shipping server is resolved.
     fn resolve_via_lichen(
         worktree: &Worktree,
         self_: &mut LichenExtension,

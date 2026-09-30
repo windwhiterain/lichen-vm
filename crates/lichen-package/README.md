@@ -32,9 +32,9 @@ lichen rebuild-plugin [<file|dir>] [--repo <u>] build (or reuse) a cached compil
 The toolchain binaries are **never built on the user's machine** — they are
 downloaded as **prebuilt release assets** from `DEFAULT_REPO`, from the **GitHub
 release tagged at the commit the `lichen` binary itself was built from** (recorded
-by `build.rs`). So the package manager and the toolchain are always the **same
-revision**. `lichen update` moves the package manager (and the toolchain it then
-installs) to a later commit.
+by `build.rs`). That tag names the revision the download asks for; nothing verifies
+that what arrives is that revision (see the `toolchain` module doc). `lichen update`
+moves the package manager (and the toolchain it then installs) to a later commit.
 
 There are two classes, living in different places under Lichen Home
 (`$LICHEN_HOME`, default `~/.lichen`):

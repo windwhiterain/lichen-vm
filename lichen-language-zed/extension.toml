@@ -54,11 +54,11 @@ args = ["**"]
 # On first launch, if the server is not already on `$PATH`, the extension reports
 # install progress to Zed and asks the `lichen` package manager to ensure it is
 # present: `lichen path language-server` installs the *prebuilt* compiler + language
-# server into Lichen Home (`$LICHEN_HOME`, default `~/.lichen`) at the package
-# manager's own commit and prints the binary path. `lichen` is found on `$PATH`
-# or at `$LICHEN_HOME/tools/lichen` (the file `liche update` refreshes); on a
-# machine with neither, it is downloaded (prebuilt, from this repo's GitHub
-# release) into `$LICHEN_HOME/tools` on first use.
+# server into Lichen Home (`$LICHEN_HOME`, default `~/.lichen`) from the release
+# tagged at the package manager's own commit and prints the binary path. `lichen` is
+# found on `$PATH` or at `$LICHEN_HOME/tools/lichen` (the file `liche update`
+# refreshes); on a machine with neither, it is downloaded (prebuilt, from this repo's
+# GitHub release) into `$LICHEN_HOME/tools` on first use.
 # Run `lichen update` to move the package manager (and the toolchain it installs)
 # to a later commit.
 #

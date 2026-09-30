@@ -347,8 +347,7 @@ fn cmd_clean() -> ExitCode {
 }
 
 /// `lichen install <tool>`: install a prebuilt toolchain binary into Lichen Home
-/// from the GitHub release at this binary's own commit (so the package manager and
-/// the toolchain are always the same revision).
+/// from the GitHub release tagged with this binary's own commit.
 fn cmd_install(tool: &str, repo: &str) -> ExitCode {
     let tools: Vec<toolchain::Tool> = match tool {
         "all" => toolchain::Tool::ALL_PLUGIN_SENSITIVE.to_vec(),
