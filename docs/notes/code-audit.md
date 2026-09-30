@@ -69,7 +69,7 @@ queue's order is deliberate.
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
-| P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | todo |
+| P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1737,8 +1737,8 @@ survive a freeze for — carry a rewritten hash.
 
 ### P1-27 — A leaf name longer than 255 bytes desynchronises the artifact stream `verified`
 
-Found while measuring `P4-6`; the mechanism is verified first-hand, the
-reachability is not.
+Found while measuring `P4-6`; the mechanism is verified first-hand, and the
+reachability is answered below.
 
 `crates/lichen-registry/src/codec.rs:42-45`:
 
@@ -1757,18 +1757,57 @@ artifact does not fail to parse; it **misparses**, which is the worst of the two
 outcomes for a container whose whole contract is "total validation or a clean
 error" (`P0-1`, `P0-5`, `P0-7`).
 
-A leaf name is program-defined text, so whether this is reachable from ordinary
-source depends on whether any leaf name can exceed 255 bytes — the audit did not
-establish that, and this note does not claim it. **Establish it first**: if a leaf
-name is always a fixed vocabulary word, this is a latent defect and the fix is a
-defensive one; if it can carry a source-derived name, it is reachable and severe.
+**Outcome — the premise held in full, the reachability question answers
+"closed vocabulary", and the fix is the refusal.** Re-derived first-hand before
+any change: `name.len() as u8` truncates, `leaf_name` reads the truncated count,
+and a probe confirmed the consequence rather than inferring it.
 
-**Fix.** Either bound the name and refuse it at the writer (a diagnostic, not a
-truncation), or widen the length to `u32` — which is a format change and therefore
-bumps `ARTIFACT_FORMAT_VERSION` (`P1-26` just moved it to `5`, so this would be
-`6`). The choice follows from the reachability answer: a bound is right if names
-are a closed vocabulary, a wider length is right if they are open. Do not simply
-`assert!` the length — a panic in a codec is not a clean error either.
+**Reachability: the name is a closed vocabulary, so a long one is a compiler
+bug, not source text.** Every producer of a leaf name is a `w.leaf(...)` call in
+`crates/lichen-language/src/program.rs`'s `lang_compose_vocabulary!` expansion
+(`:393`, `:399`, `:407`, `:473`, `:480`, `:488`) — there is no other caller of
+`Writer::leaf` in the workspace. Each passes `stringify!` of a macro parameter
+bound by `$name:ident` in the manifest (`program.rs:95-97`, `:131-132`), i.e. the
+Rust identifier a plugin declares for its carry variant (`LowValue`, `TypeValue`,
+`ComputeValue`, `GcdOp`, …). No binder, string literal, user-defined operator or
+any other source-derived text reaches it: the name is fixed at compile time by
+the plugin set, so a name past 255 bytes cannot be produced by any program a user
+can write. That makes the defect **latent** — but the writer wrote the full name
+anyway, so any future leaf whose identifier is long (a composed vocabulary is
+generated text) would have shipped a silently misparsed artifact. The
+`u8`-widened-to-`u32` half of the fix was rejected on this answer: it would be a
+format change (`ARTIFACT_FORMAT_VERSION` 5 → 6) paying to widen a field no
+producer can overflow, where a refusal keeps the format and removes the failure
+mode.
+
+**The fix.** `Writer::leaf` returns `Result<(), String>` and refuses a name
+longer than `MAX_LEAF_NAME_BYTES` (`codec.rs:12-21`, `:64-79`) instead of writing
+a truncated length; the writer also records the first refusal, and the new
+`Writer::finish` (`:82-88`) hands back the buffer or that error, so a refused
+name can never be handed out as bytes. `into_bytes` (`:94-98`) stays for the two
+writers that write no leaf name (the artifact *header*, the registry file) and
+documents why it cannot fail there. The refusal propagates through the codec's
+write side, which is what the read side already looked like:
+`ArtifactCodec::write_value` and `write_operator` now return
+`Result<(), String>` (`persist.rs:129-152`), the generated `ProgramCodec` uses
+`?` on each `w.leaf(...)` (`program.rs:383-415`, `:469-501`), and
+`serialize_artifact_with` / `serialize_artifact` return
+`Result<Vec<u8>, String>` (`persist.rs:226-244`). The package store's one
+production caller maps it to a spanless `Diag` (`package.rs:578-585`) —
+reachable only by a future vocabulary with an over-long identifier, never by a
+source file. No `assert!`/`panic!` is added on the length path.
+
+**Test** (`crates/lichen-registry/tests/codec.rs`, new; `D3` permits the
+minimal falsifier): `a_leaf_name_the_length_field_cannot_hold_is_refused` and
+`a_leaf_name_the_length_field_holds_round_trips` (255 bytes must still
+round-trip). Run against the unfixed tree through a removed probe, a 256-byte
+name wrote **257 bytes** (`length byte 0` + all 256 name bytes) and
+`leaf_name()` returned **0 bytes** with **256 bytes left unread** — the
+desynchronisation, exactly. `cargo test -p lichen-registry` passes 5/5 with the
+fix; `cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all -- --check` exit 0, and the artifact round-trip gates
+(`-p lichen-language --test persist --test registry --test examples --test
+compute`) pass.
 
 ## P2 — architecture
 

@@ -581,7 +581,8 @@ where
                 hash,
                 export.index,
                 P::Codec::default(),
-            );
+            )
+            .map_err(|error| vec![Diag::io(error)])?;
             device.store_artifact(&file_id, &bytes);
             device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
         }

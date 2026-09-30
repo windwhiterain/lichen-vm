@@ -127,11 +127,16 @@ pub trait ArtifactCodec<P: Program> {
     const PERSISTENT: bool = true;
 
     /// Write one node value.
+    ///
+    /// Fallible for the same reason [`ArtifactCodec::read_value`] is: the
+    /// leaf-name discriminator has a fixed-width length field, and a
+    /// vocabulary leaf whose name does not fit it is refused rather than
+    /// truncated (`Writer::leaf`).
     fn write_value(
         w: &mut Writer,
         value: P::Value,
         modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    );
+    ) -> Result<(), String>;
 
     /// Read one node value.
     fn read_value(
@@ -142,8 +147,9 @@ pub trait ArtifactCodec<P: Program> {
         modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
     ) -> Result<P::Value, String>;
 
-    /// Write one operation's operator tag.
-    fn write_operator(w: &mut Writer, operator: P::Operator);
+    /// Write one operation's operator tag.  Fallible for the same reason
+    /// [`ArtifactCodec::write_value`] is.
+    fn write_operator(w: &mut Writer, operator: P::Operator) -> Result<(), String>;
 
     /// Read one operation's operator tag.
     fn read_operator(r: &mut Reader<'_>) -> Result<P::Operator, String>;
@@ -181,7 +187,7 @@ impl<P: Program> ArtifactCodec<P> for NoPersist {
         _w: &mut Writer,
         _value: P::Value,
         _modules: &HashMap<ModuleKey, Arc<StaticModule<P>>>,
-    ) {
+    ) -> Result<(), String> {
         unreachable!("NoPersist cannot write values — the store has no device cache")
     }
 
@@ -195,7 +201,7 @@ impl<P: Program> ArtifactCodec<P> for NoPersist {
         unreachable!("NoPersist cannot read values — the store has no device cache")
     }
 
-    fn write_operator(_w: &mut Writer, _operator: P::Operator) {
+    fn write_operator(_w: &mut Writer, _operator: P::Operator) -> Result<(), String> {
         unreachable!("NoPersist cannot write operators — the store has no device cache")
     }
 
@@ -213,12 +219,16 @@ impl Default for NoPersist {
 /// Serialize `module` (and the arenas its refs point into, via `modules`)
 /// into the portable artifact format.  `hash` and `export` are the package
 /// metadata the store records alongside the module data.
+///
+/// Fallible only for the vocabulary's own encodability: a leaf name the
+/// one-byte discriminator cannot hold is refused (`Writer::leaf`) rather than
+/// truncated.
 pub fn serialize_artifact(
     module: &StaticModule<LangProgram>,
     modules: &HashMap<ModuleKey, Arc<StaticModule<LangProgram>>>,
     hash: Hash,
     export: LocalNodeId,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, String> {
     serialize_artifact_with(module, modules, hash, export, ProgramCodec)
 }
 
@@ -230,7 +240,7 @@ pub fn serialize_artifact_with<P, C>(
     hash: Hash,
     export: LocalNodeId,
     _codec: C,
-) -> Vec<u8>
+) -> Result<Vec<u8>, String>
 where
     P: Program,
     C: ArtifactCodec<P>,
@@ -247,14 +257,14 @@ where
             None => w.u8(0),
             Some(value) => {
                 w.u8(1);
-                C::write_value(&mut w, value, modules);
+                C::write_value(&mut w, value, modules)?;
             }
         }
         match node.operation {
             None => w.u8(0),
             Some(operation) => {
                 w.u8(1);
-                C::write_operator(&mut w, operation.operator);
+                C::write_operator(&mut w, operation.operator)?;
                 match operation.operand {
                     None => w.u8(0),
                     Some(operand) => {
@@ -302,7 +312,7 @@ where
             w.u64(node.index as u64);
         }
     }
-    let body = w.into_bytes();
+    let body = w.finish()?;
 
     let mut w = Writer::new();
     w.bytes(b"LCHN");
@@ -312,7 +322,7 @@ where
     w.u64(arena_align::<P>() as u64);
     w.bytes(&sha256(&body));
     w.bytes(&body);
-    w.into_bytes()
+    Ok(w.into_bytes())
 }
 
 /// Write an optional [`LowShape`] (the node's stored shape marker).
@@ -664,8 +674,8 @@ mod codec_roundtrip {
     fn roundtrip_value(v: LangValue) -> LangValue {
         let modules: HashMap<ModuleKey, Arc<StaticModule<LangProgram>>> = HashMap::new();
         let mut w = Writer::new();
-        ProgramCodec::write_value(&mut w, v, &modules);
-        let bytes = w.into_bytes();
+        ProgramCodec::write_value(&mut w, v, &modules).expect("a leaf name fits the discriminator");
+        let bytes = w.finish().expect("a complete leaf name");
         let mut r = Reader::new(&bytes);
         let out = ProgramCodec::read_value(
             &mut r,
@@ -711,8 +721,8 @@ mod codec_roundtrip {
 
     fn roundtrip_op(op: LangOperator) -> LangOperator {
         let mut w = Writer::new();
-        ProgramCodec::write_operator(&mut w, op);
-        let bytes = w.into_bytes();
+        ProgramCodec::write_operator(&mut w, op).expect("a leaf name fits the discriminator");
+        let bytes = w.finish().expect("a complete leaf name");
         let mut r = Reader::new(&bytes);
         let out = ProgramCodec::read_operator(&mut r)
             .expect("deserializing an operator the codec itself wrote");

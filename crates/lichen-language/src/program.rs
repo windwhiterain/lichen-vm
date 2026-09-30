@@ -387,28 +387,28 @@ macro_rules! lang_compose_vocabulary {
                     ::lichen_lowlevel::ModuleKey,
                     std::sync::Arc<::lichen_lowlevel::StaticModule<LangProgram>>,
                 >,
-            ) {
+            ) -> Result<(), String> {
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(&value)
                 {
-                    w.leaf(stringify!($low_name));
+                    w.leaf(stringify!($low_name))?;
                     <$low as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
-                    return;
+                    return Ok(());
                 }
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(&value)
                 {
-                    w.leaf(stringify!($tyv_name));
+                    w.leaf(stringify!($tyv_name))?;
                     <$tyv as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
-                    return;
+                    return Ok(());
                 }
                 $(
                     if let Some(v) =
                         <LangValue as ::lichen_utils::extend::AsEnum<$extra_v>>::as_enum(&value)
                     {
-                        w.leaf(stringify!($extra_v_name));
+                        w.leaf(stringify!($extra_v_name))?;
                         <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::write_value(
                             w, v, modules,
                         );
-                        return;
+                        return Ok(());
                     }
                 )*
                 unreachable!("a composed value always carries a leaf")
@@ -466,28 +466,31 @@ macro_rules! lang_compose_vocabulary {
                 ))
             }
 
-            fn write_operator(w: &mut $crate::persist::Writer, operator: LangOperator) {
+            fn write_operator(
+                w: &mut $crate::persist::Writer,
+                operator: LangOperator,
+            ) -> Result<(), String> {
                 if let Some(op) =
                     <LangOperator as ::lichen_utils::extend::AsEnum<$lowop>>::as_enum(&operator)
                 {
-                    w.leaf(stringify!($lowop_name));
+                    w.leaf(stringify!($lowop_name))?;
                     <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                    return;
+                    return Ok(());
                 }
                 if let Some(op) =
                     <LangOperator as ::lichen_utils::extend::AsEnum<$tyop>>::as_enum(&operator)
                 {
-                    w.leaf(stringify!($tyop_name));
+                    w.leaf(stringify!($tyop_name))?;
                     <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                    return;
+                    return Ok(());
                 }
                 $(
                     if let Some(op) =
                         <LangOperator as ::lichen_utils::extend::AsEnum<$extra_op>>::as_enum(&operator)
                     {
-                        w.leaf(stringify!($extra_op_name));
+                        w.leaf(stringify!($extra_op_name))?;
                         <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                        return;
+                        return Ok(());
                     }
                 )*
                 unreachable!("a composed operator always carries a leaf")
