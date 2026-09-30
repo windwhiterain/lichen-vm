@@ -212,9 +212,12 @@ where
     }
 
     /// The stable name of an unbound cell's class: `?a`, `?b`, … — cells in
-    /// the same class share a name.
+    /// the same class share a name.  A node the walk cannot place has no class
+    /// to name, so it renders as the unknown `?`.
     pub fn class_name(&mut self, node: NodeId) -> String {
-        let rep = representative(self.module, node);
+        let Some(rep) = representative(self.module, node) else {
+            return "?".to_string();
+        };
         if let Some(name) = self.names.get(&rep) {
             return name.clone();
         }
@@ -388,11 +391,14 @@ where
         format!("[{}]", parts.join(", "))
     }
 
-    /// Is `node`'s class a checker-registered arrow shape?
+    /// Is `node`'s class a checker-registered arrow shape?  A class the walk
+    /// cannot place is not a registered arrow.
     fn is_arrow(&self, node: NodeId) -> bool {
+        let Some(rep) = representative(self.module, node) else {
+            return false;
+        };
         self.arrows.is_some_and(|arrows| {
-            disjoint::members(&self.module.nodes, representative(self.module, node))
-                .any(|m| arrows.contains(&m))
+            disjoint::members(&self.module.nodes, rep).any(|m| arrows.contains(&m))
         })
     }
 
@@ -903,7 +909,9 @@ where
         };
         // SAFETY: `kind` is the payload of the value read from the live node
         // `kind_node`.
-        let marker = self.module.node_value(unsafe { kind.items() }[0].node)?;
+        let marker = self
+            .module
+            .node_value(unsafe { kind.items() }.first()?.node)?;
         if marker
             .as_enum()
             .is_some_and(|m| matches!(m, LowValue::Array(_)))
@@ -967,16 +975,25 @@ where
 }
 
 /// The class representative of `node`, via a read-only `parent` walk (the
-/// printers never mutate the module).
-fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> NodeId
+/// printers never mutate the module).  `None` when the walk cannot answer: a
+/// node the module's table does not hold, or a `parent` chain longer than the
+/// table (a revisit — corrupt equality state).  Either way the caller renders
+/// its own "no answer" instead of panicking or looping.
+fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P::Value: ValueType,
 {
     let mut n = node;
-    while let Some(parent) = module.nodes[n].equality.parent {
-        n = parent;
+    // A parent chain visits each node at most once, so it cannot be longer
+    // than the node table.
+    for _ in 0..=module.nodes.len() {
+        let entry = module.nodes.get(n)?;
+        match entry.equality.parent {
+            Some(parent) => n = parent,
+            None => return Some(n),
+        }
     }
-    n
+    None
 }
 
 /// `0 → "?a"`, `1 → "?b"`, …, `26 → "?a1"`, `27 → "?b1"`, …
@@ -990,12 +1007,6 @@ fn letter_name(i: usize) -> String {
     }
 }
 
-/// The canonical universe `K = [Type, ↺]` — a node whose value is an array
-/// that contains a member of its own unification class.  A plain
-/// self-referential member (`contains(&node)`) is the canonical node itself;
-/// a cell unified into the universe class carries the replicated value, whose
-/// self-referential member is the canonical node — the class check covers
-/// both.
 /// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
 /// to a struct type term `[shape, kind]`, whose kind slot is such a node).
 fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
@@ -1013,17 +1024,24 @@ where
         })
 }
 
+/// Whether `node`'s class is the canonical universe `K = [Type, ↺]` — a node
+/// whose value is an array containing a member of its own unification class.
+/// The member test is a class comparison, so it covers both the canonical node
+/// itself and a cell that carries the replicated value.  A class the walk
+/// cannot place is not the universe.
 fn is_universe<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
     P::Value: ValueType,
 {
-    let rep = representative(module, node);
+    let Some(rep) = representative(module, node) else {
+        return false;
+    };
     matches!(module.node_value(AnyNodeId::Dynamic(node)), Some(value)
     if matches!(value.as_enum(), Some(LowValue::Array(array))
         // SAFETY: `array` is the payload of the value read from the live node
         // `node`.
         if unsafe { array.items() }.iter().any(|item| match item.node {
-            AnyNodeId::Dynamic(item) => representative(module, item) == rep,
+            AnyNodeId::Dynamic(item) => representative(module, item) == Some(rep),
             AnyNodeId::Static(_) => is_universe_any(module, item.node),
         })))
 }

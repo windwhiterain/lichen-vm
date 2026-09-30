@@ -97,7 +97,7 @@ queue's order is deliberate.
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
 | P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | done |
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | done |
-| P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
+| P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | done |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
 
@@ -2213,6 +2213,42 @@ scans the module's whole node table and is called **per emitted node**
   with no length check (its sibling `kind_is_struct` at `:1034` checks), and
   `:932-941` walks `equality.parent` unguarded, uncompressed and cycle-unsafe,
   forking `disjoint::find`. Both run from `Doc::new`, i.e. every keystroke.
+  **Outcome.** The premise held; both sites re-derived (the lines had drifted):
+  the index is `struct_marker_value`'s `unsafe { kind.items() }[0]` (now `:906`)
+  and the walk is the free `representative` (now `:975-980`), a read-only fork of
+  `disjoint::find` because the lowlevel's `Module::equality_representative` takes
+  `&mut self` for its path compression while the printers hold `&Module`.
+  **Reachability, both first-hand.**  The index panics on a kind array with no
+  first element; its sibling `kind_is_struct` guards with `kind_items.len() == 2`
+  before indexing, and the two other `kind_items[0]` readers
+  (`struct_field_names`, `struct_kind_id`) are guarded by the `kind_is_struct_any`
+  call that precedes them, so this was the one unguarded index in the crate.
+  The walk **indexed** `module.nodes[n]`, while `Module::node_value` documents
+  the opposite contract — "a dynamic ref that names a released node reads `None`
+  (via `SlotMap::get`), so the read API is safe for a node the executor may have
+  dropped" — so a stale id is a state the renderer's own reads already handle,
+  and `drop_block` removes nodes from the table.  It also looped forever on a
+  `parent` cycle, which a corrupt equality forest produces.
+  **Fix.** `struct_marker_value` reads `unsafe { kind.items() }.first()?`; the
+  walk returns `Option<NodeId>`, reading `module.nodes.get(n)` and stopping after
+  one step per node in the table (a parent chain cannot be longer than the table,
+  so a revisit ends the walk instead of looping).  Each caller answers with the
+  crate's own "no answer": `class_name` renders the unknown `?` — the spelling
+  `type_constant` already falls back to — and `is_arrow`/`is_universe` answer
+  `false`.  No error type was added and the renderer was not restructured.
+  **Test.** `crates/lichen-language/src/tests/render_tests.rs`'s
+  `a_node_the_module_no_longer_holds_renders_without_panicking` removes the
+  root type node from a checked build's table and prints it through the public
+  `print_type_lang`.  Against the unfixed walk it panicked at
+  `crates/lichen-render/src/render.rs:976:42: invalid SlotMap key used`; after
+  the fix the same call answers `?`.  The index site has no test — an empty kind
+  array needs a hand-built module — and is covered by `.first()?` plus its
+  sibling's existing guard.
+  **Also corrected, P5-3's class:** the doc block above `is_struct_kind` carried
+  the *universe* paragraph, whose mechanism ("a plain self-referential member
+  (`contains(&node)`)") no longer exists — the test is now a class comparison.
+  The paragraph moved to `is_universe` in the code's terms; `is_struct_kind`
+  keeps its own sentence.
 - **P5-11 `verified`** — `registry/src/device.rs`'s `verify_entry` opened every
   recorded dependency as a filesystem path, while `is_lichen_file_id` in the
   same file accepted `virtual:<name>` as a real file ID. **The audit's stated
