@@ -88,7 +88,7 @@ queue's order is deliberate.
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
-| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | done |
+| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | blocked:D13 |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
@@ -3170,6 +3170,13 @@ annotation"*; this item is not the place to pick one. Measured, the rest of the
 parse is 53% (input A) to 98.8%
 (input B) of the cost and is untouched by either proposed fix.
 
+**Status corrected to `blocked:D13`.** This item was briefly flipped to `done` on
+the strength of "no code changed, the refutation is recorded", which is wrong: an
+optimization item whose measured cost is real and whose fix is unimplemented is
+not done. The cost is real — **47% of a 551-byte parse is the worker's spawn**,
+which is exactly the language server's per-keystroke case — and the fix needs a
+decision, which is `D13`.
+
 ### P4-4 — Quadratic diagnostics `reported`
 
 `highlevel/src/diagnostic.rs:424-428` `orphan_unify_errors` is O(E × D);
@@ -3922,6 +3929,30 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   **Order matters and is part of the decision:** the backlog clearing and the gate
   are one item's work, and the gate must not land before the backlog is gone, or
   CI is red from its first run.
+- **D13 — The parser's per-parse worker. (open; blocks `P4-3`.)** Measured: a
+  fresh thread is **47%** of a 551-byte parse (289 µs of 608 µs, release) and
+  **1.2%** of an 85 KiB one, and the cost is the **spawn**, not the 16 MiB stack
+  (1/16/64 MiB spawns measure the same). The other half of `P4-3`'s finding is
+  closed as refuted: the combinator graph **cannot** be hoisted, because 13 of its
+  closures capture the token slice, and storing it behind a `'static` bound fails
+  to compile (`E0597`, "`tokens` does not live long enough").
+
+  A **process-lived worker** would remove the spawn and keep the stack warm
+  without changing the overflow behaviour `D9` accepted. The three ways to feed it
+  are all unpalatable, which is why this is a decision and not a task:
+  - a **per-parse copy of the token stream** — 592 µs on the large input, where
+    the worker's whole share is only ~1.4 ms, so the copy could eat the win;
+  - a **lifetime-erased borrow** of the caller's tokens sent to a `'static`
+    worker (`unsafe`, with the caller blocking until the reply so the borrow
+    cannot outlive the tokens);
+  - an **`Arc<[Token]>`** lexer/parser API, which crosses three crates.
+
+  All three would also **serialize concurrent parses**, which one worker per parse
+  does not. Against that: the parse itself is 53% (small input) to 98.8% (large
+  input) of the total and is untouched by any of them, so this only pays for the
+  editor's small-file case — which is `P1-17`'s case, and `P1-17` is where the
+  per-keystroke path is being fixed. Decide with that in mind: it may be better
+  resolved by `P1-17`'s caching than by a persistent worker.
 
 ## Checked and found clean
 
