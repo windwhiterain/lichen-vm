@@ -53,7 +53,7 @@ queue's order is deliberate.
 | P1-8 | high | highlevel | Compile work budget is hard-coded and not plumbable | todo |
 | P1-9 | high | highlevel | `DiaryEntry::errors` doubles as a discriminant | todo |
 | P1-10 | high | highlevel | `Static` export `items[0]`/`items[1]` unchecked | done |
-| P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | todo |
+| P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | done |
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
@@ -714,6 +714,30 @@ is false for the artifact path. (`save()` at `:137` does hold the lock.)
 **Fix.** A unique temp name (pid + counter or a random suffix), written under
 the same lock, with `fsync` before the rename, and the errors propagated. Do
 this with `P5-11` — one shared `write_atomic` helper.
+
+**Outcome.** The shared name is gone: `store_artifact` writes to
+`artifacts/<file-id-hash>.tmp.<pid>.<counter>` — unique across processes and
+within one — `fsync`s the file, then renames it into the slot, so a concurrent
+compile cannot install another invocation's bytes and a crash cannot install a
+truncated artifact. **The registry lock is deliberately not taken here**, which
+is where this deviates from the fix line above: the artifact payload is much
+larger than the index, and the lock's own stale detection assumes
+millisecond-scale holders, so serialising a payload write behind it would hold
+the index lock for the length of that write. The rename is what makes the slot
+atomic instead, and the errors stay swallowed — the documented fault-tolerance
+policy (a failed cache write degrades to a miss and a recompile, never a failed
+build) is kept, but it is now honest about its scope: a failed write or `fsync`
+removes the temp file and leaves the **previous** artifact in place, where
+before a half-written shared temp could be renamed over it. The `DeviceRegistry`
+doc now says which mutations the lock serialises (`alloc`/`publish`/`gc`/
+`remove`, whose `save` may keep its fixed temp name because it only runs under
+that lock) and which the unique name makes atomic (`store_artifact`).
+**Residual:** the temp file is only removed best-effort, so a crash mid-write
+can leave one stray `*.tmp.*` file per failed attempt in `artifacts/`; nothing
+reads it (the slot path is `<hash>.module`), and nothing collects it yet. The
+directory entry created by the rename is not `fsync`ed, so on a power loss the
+rename itself can still be lost — the slot then holds the previous artifact,
+which is a miss, not corruption.
 
 ### P1-12 — Unparseable registry discards all state `reported`
 

@@ -12,7 +12,9 @@
 //! [`DeviceRegistry::artifact_file`]).
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::codec::{Reader, Writer};
@@ -70,9 +72,11 @@ pub struct Verified {
 /// identity: an on-disk file's canonical path, or `virtual:<name>` for an
 /// embedded source.  Artifacts are stored at `artifacts/<sha256(file_id)>.module`
 /// and **overwritten** when the file is recompiled, so a frequently modified
-/// file keeps exactly one cache slot.  All mutations go through the
-/// cross-process `mkdir` lock and are saved atomically; reads ([`Self::verify`])
-/// lock nothing.
+/// file keeps exactly one cache slot.  Index mutations (`alloc`, `publish`,
+/// `gc`, `remove`) go through the cross-process `mkdir` lock and are saved by
+/// rename; an artifact payload ([`Self::store_artifact`]) is written **without**
+/// the lock, made atomic by a unique temp name plus a rename instead.  Reads
+/// ([`Self::verify`]) lock nothing.
 pub struct DeviceRegistry {
     dir: PathBuf,
     next_key: u64,
@@ -131,7 +135,8 @@ impl DeviceRegistry {
         }
     }
 
-    /// Atomically write the registry file (temp + rename).
+    /// Write the registry file (a fixed temp name plus a rename).  Only called
+    /// under the registry lock, which is what makes the fixed name safe.
     fn save(&self) {
         let bytes = serialize_registry(self);
         let tmp = self.dir.join("registry.tmp");
@@ -222,12 +227,31 @@ impl DeviceRegistry {
         self.artifact_path(file_id)
     }
 
-    /// Write an artifact file (atomic, overwriting the file ID's slot).
+    /// Write an artifact file, overwriting the file ID's slot.
+    ///
+    /// Deliberately **not** taken under the registry lock: artifact payloads are
+    /// far larger than the index, and the lock's stale detection assumes
+    /// millisecond-scale holders, so serialising payload writes behind it would
+    /// hold the index lock for the length of a write.  A unique temp name in the
+    /// artifacts directory plus a rename gives each slot the same atomicity;
+    /// `fsync` before the rename closes the crash window, so the slot holds
+    /// either the previous artifact or the complete new one, never a partial
+    /// write or another invocation's bytes.
+    ///
+    /// Every failure here is swallowed on purpose: the cache degrades to a miss
+    /// and a recompile rather than failing the build, so a failed store must
+    /// leave the previous artifact untouched — the destination is never
+    /// truncated, and the temp file is removed.
     pub fn store_artifact(&mut self, file_id: &str, bytes: &[u8]) {
         let path = self.artifact_path(file_id);
-        let tmp = self.dir.join("artifacts").join("tmp");
-        if std::fs::write(&tmp, bytes).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
+        let nonce = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("tmp.{}.{nonce}", std::process::id()));
+        if write_synced(&tmp, bytes).is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return;
+        }
+        if std::fs::rename(&tmp, &path).is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
     }
 
@@ -298,6 +322,18 @@ impl DeviceRegistry {
             true
         })
     }
+}
+
+/// A per-process counter making artifact temp names unique within one process;
+/// the pid separates processes.
+static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Write `bytes` to `path` and flush them to disk, so a crash after this
+/// returns cannot leave a truncated file behind the rename that follows.
+fn write_synced(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
 }
 
 fn verify_entry(
