@@ -1740,6 +1740,132 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
     }
 }
 
+/// The compiled **module cache** — the launch paths' derived-data cache: an
+/// assembled, validated wasm module per launch, so a repeated launch of the
+/// same kernel does not re-assemble and re-validate it.
+///
+/// The key is everything the module depends on: the launch mode (which owns
+/// the *fragment set* — [`run_kernel`] assembles the root's relative launch
+/// set, [`run_parallel_kernel`] one parallel fragment) and the root
+/// [`KernelId`].  The id alone is sufficient because a registered fragment is
+/// immutable and an id is never reused, so a key's assembly is fixed for the
+/// process's life; it is also process-unique, so two different programs can
+/// never share an entry — only a repeated launch of one kernel hits.  Both
+/// facts are the kernel registry's contract (see its doc): the day an entry
+/// can be removed or replaced there, this cache must be keyed on the fragments
+/// themselves or cleared with it.
+///
+/// An entry here is *derived*: it can always be rebuilt from the fragment, so
+/// eviction cannot lose anything a value refers to — unlike the kernel and
+/// buffer registries, whose entries **are** the referents of `Kernel`/
+/// `ParKernel`/`Buffer` values.  That is why a bound with eviction is sound
+/// here and not there.
+///
+/// The [`wasmi::Engine`] is cached **with** its module and deliberately not
+/// shared process-wide: wasmi's default `CompilationMode::LazyTranslation`
+/// validates eagerly and translates each function on first use into the
+/// **engine's** code map, which is append-only and freed only with the engine.
+/// Dropping an evicted entry's engine is therefore what frees its translated
+/// code, and one shared engine would turn this cache into a second unbounded
+/// accumulator — the defect it exists to avoid.
+static MODULES: OnceLock<Mutex<ModuleCache>> = OnceLock::new();
+fn modules() -> &'static Mutex<ModuleCache> {
+    MODULES.get_or_init(Default::default)
+}
+
+/// How many compiled modules stay resident.  The entries are rebuildable, so
+/// this only trades recompiles against memory; it is a bound, not a policy.
+const MAX_CACHED_MODULES: usize = 64;
+
+/// Which launch assembled a cached module.  The fragment set is the mode's, so
+/// the mode is part of the cache key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LaunchMode {
+    /// [`run_kernel`]: the root's relative launch set.
+    Kernel,
+    /// [`run_parallel_kernel`]: the single parallel fragment.
+    Parallel,
+}
+
+/// One cached module and the engine that compiled it.
+struct CachedModule {
+    /// The engine the module was compiled by — see [`MODULES`] for why it is
+    /// cached here rather than shared.
+    engine: wasmi::Engine,
+    module: wasmi::Module,
+    /// Insertion stamp: the eviction order, oldest (smallest) first.
+    stamp: u64,
+}
+
+/// The bounded map behind [`MODULES`].
+#[derive(Default)]
+struct ModuleCache {
+    entries: HashMap<(LaunchMode, KernelId), CachedModule>,
+    next_stamp: u64,
+}
+
+impl ModuleCache {
+    /// A resident module, cloned out (both are `Arc` handles) so the caller
+    /// does not hold the lock while instantiating.
+    fn get(&self, key: (LaunchMode, KernelId)) -> Option<(wasmi::Engine, wasmi::Module)> {
+        self.entries
+            .get(&key)
+            .map(|cached| (cached.engine.clone(), cached.module.clone()))
+    }
+
+    /// Insert a freshly compiled module, evicting the oldest entry once the
+    /// bound is reached.  Replacing a resident key evicts nothing: the assembly
+    /// for a key is deterministic, so the entry is the same module.
+    fn insert(
+        &mut self,
+        key: (LaunchMode, KernelId),
+        engine: wasmi::Engine,
+        module: wasmi::Module,
+    ) {
+        if self.entries.len() >= MAX_CACHED_MODULES
+            && !self.entries.contains_key(&key)
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.stamp)
+                .map(|(key, _)| *key)
+        {
+            self.entries.remove(&oldest);
+        }
+        let stamp = self.next_stamp;
+        self.next_stamp += 1;
+        self.entries.insert(
+            key,
+            CachedModule {
+                engine,
+                module,
+                stamp,
+            },
+        );
+    }
+}
+
+/// The compiled module for `(mode, root)`, assembling and compiling it on a
+/// miss.  `assemble` is the one half the launch paths do differently.
+fn cached_module(
+    mode: LaunchMode,
+    root: KernelId,
+    assemble: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<(wasmi::Engine, wasmi::Module), String> {
+    let key = (mode, root);
+    if let Some(cached) = modules().lock().unwrap().get(key) {
+        return Ok(cached);
+    }
+    let bytes = assemble()?;
+    let engine = wasmi::Engine::default();
+    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+    modules()
+        .lock()
+        .unwrap()
+        .insert(key, engine.clone(), module.clone());
+    Ok((engine, module))
+}
+
 /// Execute a compiled kernel on an argument vector with wasmi, returning the
 /// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number of
 /// `i64` inputs, so a tuple-domain kernel (arity N) launches with N arguments
@@ -1748,10 +1874,38 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
 /// The kernel's **relative launch set** — the kernel itself plus every kernel
 /// it (transitively) cross-calls, discovered by scanning each fragment's
 /// cross-kernel instructions — is assembled into one wasm module (launch-time
-/// assembly, the deferred linker), the root exported as `main`.
+/// assembly, the deferred linker), the root exported as `main`.  The module is
+/// fetched through [`cached_module`], so a repeat launch of the same kernel
+/// reuses it (`P1-18`).
 fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
-    // Discover the relative kernel set in BFS order: `ordered[i]` becomes wasm
-    // function index `i`; `index` maps a callee kernel-id to that index.
+    let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
+    let mut store = wasmi::Store::new(&engine, ());
+    let linker = wasmi::Linker::new(&engine);
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| e.to_string())?;
+    let main = instance
+        .get_func(&store, "main")
+        .ok_or_else(|| "kernel has no export `main`".to_string())?;
+    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
+    let mut outputs = [wasmi::Val::I64(0)];
+    main.call(&mut store, &inputs, &mut outputs)
+        .map_err(|e| e.to_string())?;
+    let result = outputs[0]
+        .i64()
+        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
+    Ok(result as usize)
+}
+
+/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
+/// root plus every kernel it (transitively) cross-calls.
+///
+/// The set is discovered in BFS order: `ordered[i]` becomes wasm function
+/// index `i`; `index` maps a callee kernel-id to that index.  The result is a
+/// function of the root id alone (the registry's fragments are immutable and
+/// ids are never reused), which is what makes the id a sufficient cache key
+/// for [`cached_module`].
+fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
     let mut seen: HashSet<KernelId> = HashSet::new();
@@ -1782,25 +1936,7 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     }
     drop(fragments);
 
-    let bytes = assemble_module(&ordered, &index)?;
-    let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
-    let mut store = wasmi::Store::new(&engine, ());
-    let linker = wasmi::Linker::new(&engine);
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|e| e.to_string())?;
-    let main = instance
-        .get_func(&store, "main")
-        .ok_or_else(|| "kernel has no export `main`".to_string())?;
-    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
-    let mut outputs = [wasmi::Val::I64(0)];
-    main.call(&mut store, &inputs, &mut outputs)
-        .map_err(|e| e.to_string())?;
-    let result = outputs[0]
-        .i64()
-        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
-    Ok(result as usize)
+    assemble_module(&ordered, &index)
 }
 
 /// The execution state a parallel kernel's host imports read/write against:
@@ -1814,6 +1950,34 @@ struct ParallelState {
     output: Vec<i64>,
 }
 
+/// Assemble the wasm bytes of one **parallel** fragment — the degenerate
+/// single-fragment link (`assemble_module`, which `run_kernel` uses for a whole
+/// relative launch set).  Like [`assemble_launch_set`] this is a function of
+/// the kernel id alone, and it is the other half of [`cached_module`]'s key:
+/// the two modes assemble different fragment sets for one id.
+fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
+    let fragment = kernels()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+    let index: HashMap<KernelId, u32> = [(id, 0)].into();
+    assemble_module(&[fragment], &index)
+}
+
+/// The most elements one `plrun` may collect — the bound on the count the
+/// program controls (the `cfg(0)` the index function is run over).
+///
+/// The count sizes the output buffer (`count` × 8 bytes = 8 MiB at the limit)
+/// and, because the kernel is called once per element, the interpreted work a
+/// single launch can do.  Both are otherwise unbounded: `2^40` is a legal
+/// `Int`, and it asks for 8 TiB and 10^12 wasm calls.  A count past the limit
+/// is **refused**, never truncated: a short buffer would be a wrong answer,
+/// and there is no diagnostic channel for a runtime refusal in this plugin's
+/// vocabulary (see `run_parallel_kernel`).
+const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
+
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
 /// index function once per index with `cfg(0) = count` and the cfg input
 /// buffers fixed, and collecting the writes into the output buffer.
@@ -1825,23 +1989,33 @@ struct ParallelState {
 /// the writes accumulate into the output buffer (last write to a slot wins, a
 /// scatter).  v1 runs sequentially (the data-parallelism is logical); a worker
 /// pool is future work.
+///
+/// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
+/// buffer is allocated.  The caller turns a refusal into the lazy
+/// (`Parameterized`) marker — this plugin's channel for every runtime refusal,
+/// since `Module::eval_errors` is a closed enum of structural value facts and
+/// `BudgetExhausted` names the apply/depth budgets; a dedicated message would
+/// be a new cross-crate variant, not a local choice.  **Queueing is not the
+/// alternative:** `plrun` is a synchronous, caller-blocking call, so there is
+/// nothing to queue onto — the choice is refuse or run.
+///
+/// The module comes from [`cached_module`].  The [`wasmi::Linker`] is
+/// deliberately rebuilt per launch rather than cached: it is the object that
+/// carries host-function bindings, so keeping it out of the cache makes "no
+/// host binding is shared between two launches" true by construction, and its
+/// cost is the two fixed registrations below.
 fn run_parallel_kernel(
     id: KernelId,
     count: usize,
     inputs: Vec<Vec<i64>>,
 ) -> Result<Vec<i64>, String> {
-    let fragment = kernels()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    let ordered = vec![fragment];
-    let index: HashMap<KernelId, u32> = [(id, 0)].into();
-
-    let bytes = assemble_module(&ordered, &index)?;
-    let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+    if count > MAX_PARALLEL_ELEMENTS {
+        return Err(format!(
+            "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
+        ));
+    }
+    let (engine, module) =
+        cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
     let output = vec![0i64; count];
     let mut store = wasmi::Store::new(&engine, ParallelState { inputs, output });
     let mut linker = wasmi::Linker::new(&engine);

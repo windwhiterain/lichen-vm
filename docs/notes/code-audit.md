@@ -60,7 +60,7 @@ queue's order is deliberate.
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
-| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
+| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D15 |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | done |
@@ -1288,6 +1288,136 @@ docs overstate what runs.
 per-launch wasm rebuild and `plrun`'s uncapped count share nothing with the
 language-server path, so they proceed on their own rather than waiting on the
 `P1-17` sequence.
+
+**Outcome — three claims, three verdicts: two fixed, one a redesign.** The
+note's line numbers had drifted (the file splits and the later compute items);
+every citation below is re-derived.
+
+**Claim 1 — the registries: verified, and it needs an owner rather than a
+bound.** `KERNELS` (`compute.rs:91`) and `BUFFERS` (`:106`) are
+`OnceLock<Mutex<HashMap<…>>>` whose only writers are the two compile arms
+(`:348`, `:458`) and `ParLaunch` (`:535`); a workspace grep finds no `remove`,
+`clear`, reset or LRU, and `KernelId`/`BufferId` are `pub type … = usize`, so a
+value carries a bare `Copy` index. Measured: **one distinct program evaluation
+adds exactly one kernel fragment and one buffer**, monotonically — 60
+evaluations took the registries from 179 to 239 kernels and 2 to 62 buffers.
+
+*Why a bound is not the fix.* What makes an entry unreachable is "no live
+`Kernel`/`ParKernel`/`Buffer` value references it", and the registry cannot
+observe that: the id is `Copy` and is copied into node value caches, equality
+classes, apply clones and (through the frozen wrapper) static modules, nothing
+reports the last copy dying, and the arena has no per-value `Drop` to hang a
+release on. So eviction could only guess, and the first eviction of a live id
+turns a later `launch`/`read` into the lazy marker — a **silent wrong answer**,
+worse than the leak. A bound that *refuses* new entries instead never drops a
+live one, but it permanently bricks a long-lived host at N programs and turns a
+working program's answer into the lazy marker, which is a functional
+regression rather than a memory bound. The answer needs an owner; it is
+`D15`, and the item's row is `blocked:D15`.
+
+**Claim 2 — the per-launch rebuild: verified, fixed, and much smaller than the
+note says.** `run_kernel` and `run_parallel_kernel` each built
+`wasmi::Engine::default()` + `assemble_module` + `Module::new` + `Linker::new`
+per call with only the fragment cached. A **derived-module cache** now maps
+`(LaunchMode, KernelId)` to `(Engine, Module)`, bounded at 64 entries with
+oldest-first eviction.
+
+*The key is everything the module depends on.* The mode owns the fragment set
+(the root's relative launch set vs one parallel fragment), and the root id is
+sufficient because a registered fragment is immutable and an id is never
+reused, so a key's assembly is fixed for the process's life. The id is also
+process-unique, so **two programs can never share an entry** — only a repeat
+launch of one kernel hits. Eviction is sound only because the entry is
+*derived*: it can always be rebuilt from the fragment, so dropping it cannot
+lose anything a value refers to (exactly what is not true of claim 1's
+entries).
+
+*The `Engine` is cached with its module, deliberately.* wasmi's default
+`CompilationMode::LazyTranslation` validates eagerly and translates each
+function on first use into the **engine's** code map, which is append-only and
+freed only with the engine — so a shared process-global engine would make this
+cache a second unbounded accumulator, and per-entry engines are what make
+eviction actually free the translated code. The `Linker` is deliberately **not**
+cached: it is the object that carries host-function bindings, keeping it out
+makes "no host binding is shared between two launches" true by construction,
+and its cost is the two fixed `env.read`/`env.write` registrations. Instances
+are never cached either — every launch still makes a fresh `Store` and
+instantiates, so two launches share compiled code and no state.
+
+*Measured* (release, one binary, 40 alternating rounds with a temporary cache
+kill-switch, so the cache is the only difference between the two runs; the
+input is `k = compute.jit (y => y + 1)` plus 41 statements
+`r{i} = compute.launch k {i}` and root `r0`; this machine varies ~3% run to
+run):
+
+| probe | without the cache | with it |
+|---|---|---|
+| marginal per launch (2nd..41st), round 1 | 81.06 µs | 76.72 µs (**−4.34 µs, 5.4%**) |
+| marginal per launch (2nd..41st), round 2 | 80.95 µs | 77.82 µs (**−3.13 µs, 3.9%**) |
+| the 41-launch program (round 1) | 5.248 ms | 5.123 ms (−2.4%) |
+
+The prediction from the step breakdown below is 4.5–5.4 µs per launch, so the
+measurement matches the mechanism.
+
+*The note's "single largest optimisation opportunity" is refuted.* One
+sequential launch, step by step (minimum of 200 rounds, release):
+`Module::new` (validation; translation is lazy) **3.7–4.5 µs**, the first call
+(lazy translation + execute) 1.1–1.2, `assemble_module` 0.7–0.8, instantiate
+0.4–0.5, `Engine::default` 0.1. Through the whole pipeline a launch *statement*
+costs 75–88 µs against 21–23 µs for a plain `r{i} = {i} + 1` statement — a
+launch-specific 53–65 µs of which the **entire** wasmi share is 4–6 µs
+(measured by skipping the rebuild and the run behind a temporary switch:
+88.4 → 82.4 µs and 74.5 → 70.8 µs). `run_kernel` runs exactly once per launch
+statement (41 calls for 41 statements), so the remaining ~50 µs is the checker
+applying the frozen `launch` wrapper — `launch = k => a => $launch(k.native,
+k.sig, a)`, two curried applies — which is `P4-6`'s per-apply-clone territory
+and which this cache does not touch. The change moves the number 4–5%, not by a
+factor.
+
+**Claim 3 — the `plrun` count: verified, fixed with a refusal.**
+`run_parallel_kernel` took the program-controlled `cfg(0)`
+(`LowValue::USize`), allocated `vec![0i64; count]` and made one wasm call per
+element, uncapped; it is reachable from **checking**, because the checker's
+statement pass evaluates every top-level statement
+(`checker.rs:714-739`). The bound is `MAX_PARALLEL_ELEMENTS = 1 << 20`
+(1,048,576 elements = 8 MiB at the limit, one kernel call per element ≈ 190 ms
+measured), checked **before** the allocation.
+
+*Behaviour at the bound: refuse — never truncate, never queue.* Truncating
+would be a wrong answer, and there is nothing to queue onto: `plrun` is a
+synchronous, caller-blocking call, so the choice is refuse or run. The refusal
+returns `Err` and the caller's existing arm turns it into the lazy marker.
+
+*Measured.* Count `2^24` (16,777,216) was **accepted in 2790.9 ms** and left a
+128 MiB vector in `BUFFERS` before; after, the same program is **refused in
+2.7 ms** and allocates nothing (`buffers` unchanged). At the bound 1,048,576 is
+accepted (`0: Int`, 193.7 ms) and one past it (1,048,577) is refused in
+2.74 ms. `count = 4` is unchanged (`0: Int`), as are the 24 `compute` tests and
+the `compute_jit.lichen` example.
+
+*Residual, and it is the honest half of "refuse with a diagnostic".* The
+refusal has **no message**: the observable answer is `parameterized: Int`, this
+plugin's channel for every runtime refusal (a kernel that fails to compile, an
+unregistered kernel). A dedicated diagnostic needs a variant in another crate —
+`Module::eval_errors` is a closed enum of structural value facts, and every
+`BudgetExhausted` variant renders *"this binding never terminates"*, which would
+be false here — so it was not invented locally. Recorded so the next sweep does
+not re-derive it; no queue item owns it.
+
+**Also in this item's body, and deliberately not changed.** The fourth
+paragraph (module docs and operator names advertising a data-parallel `plrun`)
+was already refuted by `P5-3`'s outcome: `:41-45` describes `parallel`'s
+type-level effect and `plrun`'s index range, and `run_parallel_kernel`'s own
+doc says v1 runs sequentially. What remains is the operator *names*, a
+language-surface change that no item owns.
+
+**Verification.** `cargo clippy --workspace --all-targets -- -D warnings` exit
+0; `cargo fmt --all -- --check` exit 0; `cargo test --workspace` exit 0 (72
+targets, 765 passed, 0 failed); `cargo test -p lichen-language --test compute
+--test examples` 24 + 1 passed. The measurement probes (a registry-size
+accessor, a launch-call counter, the cache kill-switch and a launch-step
+breakdown) and `crates/lichen-language/tests/probe_p1_18.rs` were removed
+before the commit.
 
 ### P1-19 — `evaluate_block` expects a return the budget may refuse `reported`
 
@@ -5163,6 +5293,50 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   Decide how long interned source text must live before either is written; do
   not pick one silently. `lowlevel/codec.rs:285` (the deserializer's own
   `Box::leak`) is the same shape and rides with whatever is decided.
+- **D15 — Who owns a compiled kernel or buffer? (open; blocks `P1-18`'s
+  registry half.)** `KERNELS`/`BUFFERS` (`compute.rs:91`, `:106`) grow without
+  bound: one fragment per `$jit`/`$parallel` evaluation and one `count`-element
+  vector per `plrun`, and nothing is ever removed. Measured: one distinct
+  program evaluation adds exactly one of each; 60 evaluations took the
+  registries from 179 to 239 kernels and 2 to 62 buffers, monotonically.
+  (`P1-18`'s other two claims are fixed — the derived-module cache and
+  `plrun`'s element bound — and its row is `blocked:D15`.)
+
+  The reason this is a decision: the registry cannot tell when an entry is
+  unreachable. `KernelId`/`BufferId` are `pub type … = usize`, so the id is
+  `Copy` and is copied into node value caches, equality classes, apply clones
+  and static modules; nothing observes the last copy dying, and the arena has
+  no per-value `Drop` to hang a release on. Eviction would have to guess, and
+  the first eviction of a live id turns a later `launch`/`read` into the lazy
+  marker — a silent wrong answer, worse than the leak. A bound that *refuses*
+  new entries instead never drops a live one, but it permanently bricks a
+  long-lived host at N programs and changes a working program's answer, which
+  is a functional regression rather than a memory bound. The answer needs an
+  **owner**, not a number.
+
+  The three shapes, and what each costs:
+  - **an owning handle in the value** — `ComputeValue::Kernel(Arc<…>)`. The
+    composed value enum is `#[derive(Debug, Clone, Copy, PartialEq)]`
+    (`language/src/program.rs:153`) and `LowValue` is `Copy` as well
+    (`lowlevel/lib.rs:155`), so `Copy` has to leave the whole vocabulary; every
+    `Copy` site, `enum_ext!` leaf and codec path follows.
+  - **a per-module registry** — the id names its module. Cross-module kernel
+    sharing (a documented property: kernels "are immutable artifacts shared
+    across modules in the process") goes away, and
+    `KernelInstr::CallKernel(KernelId)` plus the launch-set assembly change
+    with it.
+  - **a host-driven generation/release** — an explicit "this program's kernels
+    are done" call. The host must state the lifetime *and* guarantee that no
+    live `Build` holds a kernel value; the command line could (one program per
+    process), the language server cannot (it holds a `Build` across requests),
+    and a wrong guarantee is the silent-wrong-answer failure again.
+
+  Decide the owner before either the bound or the eviction is written. One
+  coupling to record with the decision: the module cache added by `P1-18` is
+  keyed on `(LaunchMode, KernelId)` and is sound only while a fragment is
+  immutable and an id is never reused, so a registry that starts removing or
+  replacing entries must clear that cache (or key it on the fragments) in the
+  same change.
 
 ## Checked and found clean
 
@@ -5177,8 +5351,8 @@ Recorded so the next pass does not re-audit them.
 - **No `unsafe` outside `lichen-lowlevel`** (and none in `registry`, `compute`,
   `package`, `language`, `language-server`, `render`, `perspective`, `doc`,
   `utils`, `span`). No `transmute`. No `unsafe impl Send`/`Sync` anywhere. No
-  `static mut`, no `thread_local!`, no lazy statics outside compute's two
-  registries.
+  `static mut`, no `thread_local!`, no lazy statics outside compute's own
+  registries and the derived-module cache beside them.
 - **No `Rc`/`RefCell`/`Cell` in the lowlevel** — zero interior mutability, zero
   borrow-flag panics, zero reference cycles; the `&mut Module` discipline is
   explicit and consistent.
