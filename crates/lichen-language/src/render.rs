@@ -113,7 +113,11 @@ pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> Stri
     if let Some((line, col)) = diag.span {
         out.push_str(&format!("  --> {line}:{col}\n"));
         out.push_str("   |\n");
-        if let Some(text) = source.lines().nth((line as usize).saturating_sub(1)) {
+        // The line the caret sits on comes from the shared line model
+        // (`line_starts`), not from a second scan of the source — so the text
+        // and the `(line, col)` name the same line.
+        let starts = crate::lex::line_starts(source);
+        if let Some(text) = crate::lex::line_text(source, &starts, line) {
             let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
             out.push_str(&format!(" {line} | {text}\n"));
             out.push_str(&format!("   | {caret}\n"));

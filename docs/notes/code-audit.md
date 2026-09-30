@@ -85,7 +85,7 @@ queue's order is deliberate.
 | P3-1 | medium | all | Duplication clusters | done |
 | P3-2 | medium | all | Workspace manifest duplication | done |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
-| P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | todo |
+| P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | todo |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | todo |
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | todo |
@@ -2861,6 +2861,95 @@ start for an out-of-range line — a silently wrong offset), `:50-63`, `:87-94`.
 
 **Fix.** One shared implementation over the already-computed `line_starts`
 (every call site has it), with one documented out-of-range answer.
+
+**Outcome — the premise held, and the divergences are worse than "disagree":
+two of the conversions *panicked* on inputs the others answered.**  The count is
+not four.  The four sites the item names (`span`'s `line_col`, `lsp`'s
+`offset_of_span`, `position_at_offset` and `span_of_offset`) all exist, plus
+`render.rs`; but `lsp::offset_from_position` (`lsp.rs:66-83`) is a **fifth**
+conversion — the UTF-16 reverse of `position_at_offset` — that the item never
+mentions, and `render.rs:112` is not a conversion at all.  It is a second
+**line model** (`str::lines()`), and that is where it diverged.
+
+*Measured before the fix.*  `line_col` from `lichen-span`; the rest from
+`lichen_language_server::lsp`.  All inputs listed as "byte N" are byte offsets.
+
+| input | `line_col` | `span_of_offset` | `position_at_offset` | `offset_of_span` |
+|---|---|---|---|---|
+| empty `starts`, byte 0 | **panic**: `attempt to subtract with overflow` | `(1, 1)` | — | `0` |
+| `"é=1"`, byte 1 (inside `é`) | `(1, 2)` | `(1, 2)` | **panic**: `byte index 1 is not a char boundary` | — |
+| `"ab"`, byte 5 (past the end) | `(1, 6)` | `(1, 6)` | `(0, 2)` — clamped | — |
+| `"ab"`, span `(99, 3)` | — | — | — | `0` |
+| `"ab\n"`, span `(99, 3)` | — | — | — | `3` |
+| `"ab"`, span `(1, 999)` | — | — | — | `998` |
+
+`line_col` and `span_of_offset` were already the same formula, so they never
+disagreed — what the first row shows is that the shared formula was not total.
+The line model differed too: `"ab\n"` is `["ab"]` under `str::lines()` but
+`["ab\n", ""]` under `line_starts`; `""` is `[]` against `[""]`; and `"a\r\nb"`
+is `["a", "b"]` against `["a\r\n", "b"]`, so a span at or past the `\r` had its
+caret placed against text one byte shorter than the column counted.  A lone `\r`
+and a byte inside a multi-byte character are *not* line-model divergences:
+`line_starts` breaks on `\n` only and `line_col`'s column is byte-exact.
+
+*What landed — `lichen-span` owns the concept, and its doc states the model.*
+
+- `line_col` (`span/src/lib.rs:57`) is **total**: an empty `starts` is "line 1
+  starts at byte 0", a table that does not begin at byte 0 saturates the column
+  instead of underflowing, and nothing panics on any table.  The column is
+  **1-based and byte-exact**, and **end of file is a valid position** (for a
+  source ending in `\n`, `source.len()` is the empty line after it, column 1).
+- `offset_of_span` (`:76`) is new to the crate — the reverse had lived only in
+  the language server.  Its out-of-range answer is **saturation on the line with
+  the column kept**: a line past the last is the last line, a line below 1 is
+  line 1, and an empty `starts` is line 1 at byte 0, so it can no longer answer
+  with a *different* line's start.
+- `line_text` (`:86`) is the line's text without its terminator — the display
+  half of the same model.
+- `lichen-language-lex` re-exports both new names, so `lichen_language::lex`
+  keeps being the path a crate with no direct `lichen-span` dependency uses.
+
+*The language server keeps only the protocol dialect.*  `span_of_offset`
+(`lsp.rs:113`) is `line_col` under the name its callers use, and
+`offset_of_span` (`:40`) is the span crate's.  `position_at_offset` (`:74`) gets
+its line and byte column from `line_col` and applies the two clamps LSP's units
+force: the offset is clamped to `source.len()`, and a byte inside a multi-byte
+character is floored to the character's start (`floor_char_boundary`, `:52`),
+because a `character` in UTF-16 code units cannot name a mid-character position.
+`offset_from_position` (`:91`) stays as that dialect's reverse and returns `None`
+for a line outside the source — the protocol's "no such position".  Every doc
+comment names the units, 0- or 1-based, so the two dialects cannot be mistaken
+for two implementations.
+
+*`render.rs` uses the one model.*  `render.rs:111` slices the line through
+`line_text(source, &line_starts(source), line)` instead of `str::lines()`, so
+the text and the `(line, col)` name the same line; it strips the terminator, so
+display behaviour for every ordinary line (including `\r\n`) is unchanged.  One
+behaviour change follows: a diagnostic on the valid empty line after a trailing
+newline — or on line 1 of an empty source — now prints that empty line instead
+of nothing.  No existing test pinned that (the only span-carrying render test is
+`pipeline.rs`'s `diagnostics_render_with_carets`).  The per-call scan is
+*unchanged* in cost; `P4-4` owns it.
+
+*Tests, and the before-state.*  `D3` grants permission, and the tests live in
+their own files.  `crates/lichen-span/tests/line_model.rs` (13 tests) pins the
+decided model — the empty table, a table not beginning at byte 0, end of file, a
+byte inside a character, a byte past the end, `\r\n` and a lone `\r`, the
+inverse, and the saturated out-of-range answer.
+`crates/lichen-language-server/tests/lsp_position.rs`
+(9 tests) pins the boundary against that model.  **Four of the boundary tests
+fail on the unfixed tree**, with the exact defects measured above:
+`an_empty_line_start_table_is_a_total_input` panicked at `lichen-span/src/lib.rs:37`
+with *"attempt to subtract with overflow"*; both
+`a_byte_inside_a_character_clamps_to_the_character_start` and
+`the_lsp_line_is_the_span_line_zero_based` panicked at `lsp.rs:58` with *"byte
+index 1 is not a char boundary; it is inside 'é'"*; and
+`an_out_of_range_span_saturates_instead_of_naming_another_line` failed
+`assert_eq!(offset_of_span(&[0], (99, 3)), 2)` with `left: 0, right: 2`.  The
+span-side test `a_table_that_does_not_begin_at_zero_is_total_too` covers the
+item's own second symptom, *"`Err(0)` → index `usize::MAX`"*: the old
+`starts[line - 1]` indexed `usize::MAX` when the first recorded start was past
+`pos`.
 
 ## P4 — optimization
 

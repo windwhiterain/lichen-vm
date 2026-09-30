@@ -25,20 +25,20 @@ use lichen_language::lex::Span;
 // ---------------------------------------------------------------------------
 // Span ↔ position conversion
 //
-// All helpers take the source text and its precomputed line-start byte offsets
-// (`lichen_language::lex::line_starts`), so they are pure and reusable.
+// Lichen's own byte ↔ line/column conversion is `lichen_span`'s: a `Span` is a
+// 1-based `(line, column-in-bytes)`, and `line_col` / `offset_of_span` are the
+// only implementation of it.  What lives here is the **protocol dialect** LSP
+// requires — a 0-based line and a `character` in UTF-16 code units — and the
+// two clamps the protocol forces.  Everything takes the source text and its
+// precomputed line-start byte offsets (`lichen_language::lex::line_starts`), so
+// it is pure and reusable.
 
-/// The byte offset of a 1-based `(line, col)` span in `source`.
+/// The byte offset of a 1-based `(line, column-in-bytes)` span
+/// (`lichen_language::lex::offset_of_span`): the workspace's one conversion,
+/// whose contract also states the out-of-range answer (the line saturates to
+/// the first/last line, the column is kept).
 pub fn offset_of_span(line_starts: &[usize], span: Span) -> usize {
-    let (line, col) = (span.0 as usize, span.1 as usize);
-    if line == 0 || line > line_starts.len() {
-        return line_starts
-            .len()
-            .checked_sub(1)
-            .map(|i| line_starts[i])
-            .unwrap_or(0);
-    }
-    line_starts[line - 1] + (col.saturating_sub(1))
+    lichen_language::lex::offset_of_span(line_starts, span)
 }
 
 /// The number of UTF-16 code units in `text` (LSP's `character` unit).
@@ -46,23 +46,48 @@ fn utf16_len(text: &str) -> usize {
     text.encode_utf16().count()
 }
 
+/// The largest character boundary at or below `offset`, clamped to `source`.
+/// LSP's `character` can only address a character boundary, so a byte inside a
+/// multi-byte character has to be answered with the character's start.
+fn floor_char_boundary(source: &str, offset: usize) -> usize {
+    let mut offset = offset.min(source.len());
+    while !source.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
 /// Convert a byte offset to a 0-based LSP `Position`.
+///
+/// This is the protocol dialect of `lichen_language::lex::line_col`, and both
+/// differences are LSP's: the line is 0-based, and `character` counts UTF-16
+/// code units instead of bytes.  Two clamps come with that dialect:
+///
+/// - the offset is clamped to `source.len()`, and
+/// - a byte inside a multi-byte character is clamped **down** to that
+///   character's start, because `character` cannot name a mid-character
+///   position.
+///
+/// The byte model performs neither clamp (it is given no source), so the two
+/// agree about every byte that is on a character boundary and inside the
+/// source — which is every byte the frontend reports.
 pub fn position_at_offset(source: &str, line_starts: &[usize], offset: usize) -> Position {
-    let offset = offset.min(source.len());
-    // `line` is the largest index with `line_starts[line] <= offset`.
-    let line = match line_starts.binary_search(&offset) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    let line_start = line_starts.get(line).copied().unwrap_or(0);
-    let character = utf16_len(&source[line_start.min(source.len())..offset]);
+    let offset = floor_char_boundary(source, offset);
+    let (line, column) = lichen_language::lex::line_col(line_starts, offset as u32);
+    // `column` is byte-exact, so the line starts exactly this far back.
+    let line_start = offset - (column as usize - 1);
+    let character = utf16_len(&source[line_start..offset]);
     Position {
-        line: line as u32,
+        line: line - 1,
         character: character as u32,
     }
 }
 
 /// Convert an LSP `Position` to a byte offset, if it is within `source`.
+///
+/// The UTF-16 reverse of [`position_at_offset`], and the one place LSP's "no
+/// such position" is expressible: a `line` outside the source is `None` (a
+/// character past the line's end clamps to the line's end).
 pub fn offset_from_position(source: &str, line_starts: &[usize], pos: Position) -> Option<usize> {
     let line = pos.line as usize;
     let line_start = *line_starts.get(line)?;
@@ -82,15 +107,11 @@ pub fn offset_from_position(source: &str, line_starts: &[usize], pos: Position) 
     Some(line_start + byte)
 }
 
-/// A 1-based `(line, col-byte)` span for a byte offset (the reverse of
-/// [`offset_of_span`]).
+/// A 1-based `(line, col-byte)` span for a byte offset —
+/// `lichen_language::lex::line_col`, under the name the server's own callers
+/// use.
 pub fn span_of_offset(line_starts: &[usize], offset: usize) -> Span {
-    let line = match line_starts.binary_search(&offset) {
-        Ok(i) => i,
-        Err(i) => i.saturating_sub(1),
-    };
-    let line_start = line_starts.get(line).copied().unwrap_or(0);
-    ((line + 1) as u32, (offset - line_start + 1) as u32)
+    lichen_language::lex::line_col(line_starts, offset as u32)
 }
 
 /// An LSP `Range` for a 1-based `(line, col)` span, expanded to one character

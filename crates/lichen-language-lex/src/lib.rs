@@ -43,7 +43,7 @@ use logos::Logos;
 // crate) so a crate that only needs to name a source position doesn't have to
 // depend on the lexer.  Re-exported here for the existing
 // `lichen_language_lex::{Span, line_starts, line_col}` paths.
-pub use lichen_span::{Span, line_col, line_starts};
+pub use lichen_span::{Span, line_col, line_starts, line_text, offset_of_span};
 
 /// A lex diagnostic: a message plus the source position it is grounded in.
 /// Check-free (no checker payload), so it is `Send` and stays entirely in this
