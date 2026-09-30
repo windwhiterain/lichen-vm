@@ -44,7 +44,7 @@ queue's order is deliberate.
 | P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
 | P0-7 | high | language | The artifact container has no body digest | done |
 | P1-1 | high | lowlevel | `insert_module` inserts before it asserts | done |
-| P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | todo |
+| P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | done |
 | P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |
 | P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | blocked:D5 |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | todo |

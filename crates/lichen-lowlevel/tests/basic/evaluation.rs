@@ -339,3 +339,33 @@ fn sub_eq_lt_operators_compute_concrete_results() {
         TestValue::LowValue(LowValue::USize(0))
     ));
 }
+#[test]
+fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
+    // The extension-operator arm reads its operand's `evaluated_deep` after
+    // the deep pass, but the pass returns before writing that flag when it
+    // refuses on depth.  Three Id frames put the innermost operand one frame
+    // past the limit, so the arm reads a node the pass never flagged.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let leaf = u128_node(&mut m, root, 7);
+    let first = op_node(&mut m, root, TestOperator::Id, Some(leaf));
+    let second = op_node(&mut m, root, TestOperator::Id, Some(first));
+    let top = op_node(&mut m, root, TestOperator::Id, Some(second));
+    m.evaluate_depth_limit = 2;
+
+    let value = m.evaluate_node_deep(top, None);
+
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
+        "the guard's verdict is the outcome, not a panic"
+    );
+    assert!(matches!(
+        value,
+        TestValue::LowValue(LowValue::Parameterized)
+    ));
+    assert_eq!(
+        m.nodes[first].evaluated_deep, None,
+        "the refused frame wrote no flag"
+    );
+}

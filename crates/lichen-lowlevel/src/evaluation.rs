@@ -265,7 +265,15 @@ impl<P: Program> Module<P> {
                 let operand = match operation.operand {
                     Some(operand) => {
                         let value = self.evaluate_node_deep(operand, Some(block));
-                        if self.nodes[operand].evaluated_deep.unwrap().parameterized {
+                        // The deep pass returns before it writes
+                        // `evaluated_deep` when it refuses on budget
+                        // exhaustion, so an absent node or an unset flag means
+                        // "concreteness unknown" — read as parameterized, never
+                        // as proven concrete.
+                        let parameterized = self.nodes.get(operand).is_none_or(|node| {
+                            node.evaluated_deep.is_none_or(|deep| deep.parameterized)
+                        });
+                        if parameterized {
                             P::Value::from(LowValue::Parameterized)
                         } else {
                             value
@@ -548,8 +556,16 @@ impl<P: Program> Module<P> {
             // this value is never cached onto a node (this returns before
             // `evaluate_node`, whose postlude does the writing), so it cannot
             // be mistaken for a decided proven answer — the node's
-            // `evaluated_deep` stays `None`, "never ran".  The nested counter
-            // deliberately stays inflated, as it did when the guard unwound.
+            // `evaluated_deep` stays `None`, "never ran".  The counter is
+            // decremented on the way out because `deep_depth` is a *nesting*
+            // counter, not a cumulative budget: it is incremented at entry and
+            // restored on every exit.  Left inflated, the refusal would be
+            // permanent — nothing else restores the counter except
+            // `reset_apply_budget`, so every later `evaluate_node_deep` in the
+            // process would start already past the limit and refuse too.
+            // Restoring it scopes the refusal to the subtree that is too deep:
+            // shallow siblings still walk and are decided, and only the nodes
+            // past the limit yield `Void`.
             self.deep_depth -= 1;
             return P::Value::from(LowValue::Void);
         }
