@@ -389,13 +389,54 @@ fn plugin_lines(plugins: &[Depend]) -> String {
     plugin_lines
 }
 
+/// The Rust keywords, so a crate identifier spelled like one is refused: the
+/// generated source uses the identifier as a path segment, where a keyword
+/// cannot parse.  Reserved words are included, because a future edition may
+/// promote one into the strict set.
+const RUST_KEYWORDS: &[&str] = &[
+    "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+    "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
+    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref",
+    "return", "self", "Self", "static", "struct", "super", "trait", "true", "try", "type",
+    "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+];
+
+/// Whether `value` is spelled in the identifier alphabet the generated source
+/// can carry: an ASCII letter or `_`, then ASCII letters, digits, or `_`.  It
+/// is the alphabet the preprocessor lexes a binding name from
+/// (`[A-Za-z_][A-Za-z0-9_]*`), so a name that reaches generation from a source
+/// file always passes, and a hand-composed `Depend` is refused rather than
+/// written into code or into a string literal.
+fn is_identifier_name(value: &str) -> bool {
+    let mut characters = value.chars();
+    match characters.next() {
+        Some(first) if first.is_ascii_alphabetic() || first == '_' => {}
+        _ => return false,
+    }
+    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+}
+
 /// The Rust crate identifier for a plugin dependency — its crate name with
 /// hyphens replaced by underscores (the extern-prelude / macro-preferred
 /// spelling).  The Cargo.toml dependency key keeps the hyphenated package
 /// name; the Rust source uses this ident for `<crate>` and derives the leaf
 /// macro name `<crate>_leaves`.
-fn crate_ident(dep: &Depend) -> String {
-    git::crate_name(dep).replace('-', "_")
+///
+/// The value is written into generated **Rust source**, and a `package` is a
+/// source-file string the preprocessor lexes with `"[^"@]*"` (no escapes, may
+/// be multiline), so it is refused unless it is a valid Rust identifier: a
+/// newline or a `}` would close the generated item and inject arbitrary code
+/// that `cargo build` then compiles.
+fn crate_ident(dep: &Depend) -> Result<String, String> {
+    let name = git::crate_name(dep);
+    let ident = name.replace('-', "_");
+    if !is_identifier_name(&ident) || RUST_KEYWORDS.contains(&ident.as_str()) {
+        return Err(format!(
+            "plugin '{}' has package name '{name}', which is not a Rust crate identifier",
+            dep.alias()
+        ));
+    }
+    Ok(ident)
 }
 
 /// The composed-vocabulary body shared by the compiler (`src/lib.rs`) and the
@@ -404,7 +445,7 @@ fn crate_ident(dep: &Depend) -> String {
 /// and its `Program` alias.  Both generated crates put this at the crate root,
 /// so `LangProgram` is available as `<crate>::LangProgram` (the bin-only server
 /// crate resolves it from `main`).
-fn compose_source(plugins: &[Depend], leaves: &Leaves) -> String {
+fn compose_source(plugins: &[Depend], leaves: &Leaves) -> Result<String, String> {
     let mut attrs = String::new();
     for (ty, variant) in &leaves.attrs {
         attrs.push_str(&format!("        {ty} as {variant};\n"));
@@ -419,10 +460,10 @@ fn compose_source(plugins: &[Depend], leaves: &Leaves) -> String {
     }
     let mut plugin_line = String::new();
     for dep in plugins {
-        let ident = crate_ident(dep);
+        let ident = crate_ident(dep)?;
         plugin_line.push_str(&format!("    {ident} as {ident}_leaves;\n"));
     }
-    format!(
+    Ok(format!(
         r#"// The value/operator/attribute vocabulary and the program marker, composed
 // from the shipping leaves plus each plugin's own leaf macro (the
 // `plugins = [<crate> as <crate>_leaves; ...]` arm stitches their leaves in —
@@ -446,7 +487,7 @@ pub type Program = LangProgram;
         values = values,
         operators = operators,
         plugin_line = plugin_line,
-    )
+    ))
 }
 
 /// The `register_native` slots a plugin's embedded wrapper against its private
@@ -461,16 +502,27 @@ pub type Program = LangProgram;
 /// `<crate_ident>::<crate_ident>_ops!(crate::LangProgram)` — the plugin's
 /// `WRAPPER_SOURCE` const and the `<crate>_ops!` macro, both named from the
 /// plugin's crate ident (the Cargo.toml dependency key with `-`→`_`).
-fn native_package_lines(plugins: &[Depend]) -> String {
+///
+/// The alias is written into a Rust **string literal**, so it is refused
+/// unless it is spelled in the same identifier alphabet: `dep.alias()` is the
+/// dependency's binding name, which a source file lexes from exactly that
+/// alphabet (so no escaping is needed), and a hand-composed `Depend` carrying
+/// a `"` cannot end the literal and inject code after it.
+fn native_package_lines(plugins: &[Depend]) -> Result<String, String> {
     let mut out = String::new();
     for dep in plugins {
-        let ident = crate_ident(dep);
+        let ident = crate_ident(dep)?;
         let alias = dep.alias();
+        if !is_identifier_name(&alias) {
+            return Err(format!(
+                "plugin alias '{alias}' is not a name the generated source can spell"
+            ));
+        }
         out.push_str(&format!(
             "            (\"{alias}.lichen\", {ident}::WRAPPER_SOURCE, {ident}::{ident}_ops!(crate::LangProgram)),\n"
         ));
     }
-    out
+    Ok(out)
 }
 
 /// The generated crate's `src/main.rs` (the **bin-only** compiler): the
@@ -512,9 +564,9 @@ fn main() -> std::process::ExitCode {{
     )
 }}
 "#,
-        compose = compose_source(plugins, leaves),
+        compose = compose_source(plugins, leaves)?,
         key = key,
-        native = native_package_lines(plugins),
+        native = native_package_lines(plugins)?,
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
@@ -550,7 +602,7 @@ fn main() {{
     lichen_language_server::server::main::<crate::LangProgram>(&cache_root);
 }}
 "#,
-        compose = compose_source(plugins, leaves),
+        compose = compose_source(plugins, leaves)?,
         key = key,
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
@@ -559,6 +611,10 @@ fn main() {{
 #[cfg(test)]
 #[path = "tests/plugin_manifest_tests.rs"]
 mod plugin_manifest_tests;
+
+#[cfg(test)]
+#[path = "tests/plugin_source_tests.rs"]
+mod plugin_source_tests;
 
 #[cfg(test)]
 mod generated_main_tests {
@@ -635,7 +691,8 @@ mod generated_main_tests {
             sub: Some("lichen-std-native/src".into()),
             plugin: true,
         };
-        let lines = native_package_lines(&[dep]);
+        let lines =
+            native_package_lines(&[dep]).expect("a well-formed plugin registers its wrapper");
         assert!(
             lines.contains(
                 "(\"std.lichen\", lichen_std_native::WRAPPER_SOURCE, \
@@ -643,7 +700,11 @@ mod generated_main_tests {
             ),
             "must register the plugin's wrapper at its alias:\n{lines}"
         );
-        assert!(native_package_lines(&[]).is_empty());
+        assert!(
+            native_package_lines(&[])
+                .expect("no plugins, no lines")
+                .is_empty()
+        );
     }
 
     #[test]

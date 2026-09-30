@@ -67,7 +67,7 @@ queue's order is deliberate.
 | P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
-| P1-25 | high | package | A dependency's package name is written as Rust source | todo |
+| P1-25 | high | package | A dependency's package name is written as Rust source | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1483,6 +1483,57 @@ is a dependency declaration, which is exactly what a user pastes from a README,
 and the outcome is code execution inside the compiler's own build. The manifest
 half was bad enough to be its own item; this half is what makes the pair a
 supply-chain concern rather than a formatting bug.
+
+**Outcome.** The identifier half held, and was reproduced first-hand before the
+fix. Re-derived on this revision: `crate_ident` was
+`git::crate_name(dep).replace('-', "_")`, written as **Rust code** at two sites
+(`compose_source`'s `plugins = [<ident> as <ident>_leaves;]` arm and
+`native_package_lines`'s tuple), and `git::crate_name` is `dep.package` else the
+binding name. `dep.package` is a source-file string: `parse_depend` reads it with
+`expect_string_after_eq`, whose token is the lexer's `"[^"@]*"`
+(`lichen-preprocess/src/lex.rs:42-48`, pinned by
+`a_string_may_span_lines_and_hold_commas`, `:197-206`), documented "no escapes,
+may be multiline" — so a `}` or a newline reaches generation intact.
+
+*Pre-fix, observed.* A plugin whose `package` was
+`x;\n}\nfn injected_by_a_package_name() {}\n//` generated, verbatim,
+`plugins = [ x;⏎}⏎fn injected_by_a_package_name() {}⏎// as x; …` — a top-level
+function injected beside the composition, compiled by `cargo build` and run by
+the plugin-built compiler. The same `package` was repeated inside the
+`native_package_lines` tuple. The new
+`crates/lichen-package/src/tests/plugin_source_tests.rs` fails against the
+unfixed generator with that text in the panic message and passes after the fix.
+
+*One correction to the finding's mechanism.* The string-literal site does **not**
+carry the identifier. `native_package_lines` writes `{ident}` as code (three
+times) and puts the **alias** — `dep.alias()`, the `name` binding — inside
+`"{alias}.lichen"`. That alias is not arbitrary from a source file: `parse`
+lexes it from a `Name` token, `[A-Za-z_][A-Za-z0-9_]*`, so a source-file
+`depend`/`plug` declaration can never carry the `"` that would end the literal.
+It *is* arbitrary from a host that composes a `Depend` by hand and calls the
+public `plugin::rebuild`/`rebuild_lsp` — `Depend` has public fields — and that
+host can inject through the literal, which the second test pins with
+`name = evil"); fn injected_by_an_alias() {} //` (pre-fix output:
+`("evil"); fn injected_by_an_alias() {} //.lichen", …`).
+
+*Fix.* `crate_ident` now returns `Result`: hyphens become underscores, then the
+result must be a Rust identifier (ASCII letter or `_` first, ASCII
+alphanumerics or `_` after) and not a keyword, so `compose_source` and
+`native_package_lines` refuse the dependency with a diagnostic —
+`"plugin '<alias>' has package name '<package>', which is not a Rust crate
+identifier"`, the same refusal style `Depend::vendored_dir` uses for a bad
+`sub`. Both functions return `Result`, and both `write_*_main_rs` callers
+propagate before any source is written.
+
+*The string-literal site needs no escaper.* The alias is required to be spelled
+in the identifier alphabet — the alphabet a source-file binding name is lexed
+from, so every in-tree `Depend` passes — which is the construction that needs no
+escaping at all. `toml_string` was not reused as an escaper: TOML spells a
+control character `\uXXXX` and Rust spells it `\u{…}`, so the manifest helper's
+output is not a Rust literal, and a second escaper is exactly the convention
+this item says not to add. No behaviour changes for a source-file plugin; a
+hand-composed alias carrying `-`, `.`, or `"` is now refused rather than
+written.
 
 ## P2 — architecture
 
