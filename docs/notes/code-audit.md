@@ -68,6 +68,7 @@ queue's order is deliberate.
 | P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
 | P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
+| P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1685,6 +1686,28 @@ this item says not to add. No behaviour changes for a source-file plugin; a
 hand-composed alias carrying `-`, `.`, or `"` is now refused rather than
 written.
 
+### P1-26 — The table-key hash changed meaning without an artifact version bump `verified`
+
+Found while fixing `P1-3`/`P1-4`, which changed **what a stored table-key hash
+means**. The artifact container's version was not bumped, and it is the reader's
+only guard: `crates/lichen-language/src/persist.rs`'s `ARTIFACT_FORMAT_VERSION`
+is still `4`, so a cache written by an earlier build is accepted, its payload
+hashes are stale, its payload entries are **sorted by the old hash**, and every
+lookup for a cyclic-array, table or function key misses — silently, as a
+`TableMiss` the user cannot distinguish from a genuine one.
+
+Scalar and acyclic-array hashes are byte-identical to the old function (`P1-3`
+kept `NONE_TOKEN`, `ARRAY_SEED` and the fold structure), so the exposure is
+exactly the key kinds the old hash could not survive a freeze for anyway — which
+is why this is a one-line fix and not a migration: the artifacts it invalidates
+were already useless.
+
+**Fix.** Bump `ARTIFACT_FORMAT_VERSION` from `4` to `5`. The constant's own doc
+already states the rule this restores (*"a change to either half bumps it and
+retires the artifacts written before the change: they fail the version check and
+recompile"*), so the fix is the number and nothing else. Do not add a
+compatibility path — there is no version of this format worth reading.
+
 ## P2 — architecture
 
 ### P2-1 — `BufferSession` is built but unwired `verified`
@@ -2101,12 +2124,8 @@ build time**. Any answer has to move three things together: the generated plugin
 manifest (`core_dep_line` emits no features today), `[[bin]] required-features`
 for the compiler binary, and the release workflows that build it.
 
-**Open question, and the reason this item is not started:** whether the CLI should
-be a **feature** of `lichen-language` (additive, so the generated plugin must emit
-the feature and the workflows must pass it) or its own **crate** (a cleaner graph,
-but a new workspace member that the generated plugin depends on by path or
-version). Both are real; neither is obviously cheaper, and the choice is the
-superior's rather than an implementation detail. Do not pick one silently.
+**Resolved by `D10`: its own crate.** The feature route was considered and
+rejected there; see that entry for what the move must carry with it.
 
 ## P3 — refactor
 
@@ -2869,6 +2888,32 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   ever becomes a service, if the language server starts accepting files it was
   not handed by the user, or if a legitimate program is found in the wild that
   nests past 175 levels.
+
+- **D10 — Where the command-line surface lives. — DECIDED: its own crate.**
+  `lichen-language` is the compiler **library**, and `clap` is a hard dependency
+  whose entire use is `cli.rs`, so every embedder — including
+  `lichen-language-server` — links a command-line parser it never calls. The CLI
+  moves out of the library into a crate of its own (`P2-12`).
+
+  *Rejected — a feature of `lichen-language`:* it is additive, so the surface
+  stays in the library and every consumer still compiles the module; the generated
+  plugin manifest would have to emit the feature, `[[bin]]` would need
+  `required-features`, and the release workflows would have to pass it — the same
+  three things that have to move for a separate crate, but with the CLI still
+  inside the library afterwards.
+
+  **What the move must carry, because each of these is a caller and not a detail:**
+  `crates/lichen-package/src/plugin.rs` generates a plugin compiler's `main.rs`
+  that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>`,
+  so the generated manifest's dependency line changes with the move; the compiler
+  binary's target moves with it; and the release workflows that build and ship it
+  follow. Keep the flag surface and the behaviour identical — this is a move, not
+  a redesign, and `AGENTS.md`'s rule about not considering forward compatibility
+  unless asked applies to any temptation to tidy the flags while in there.
+
+  **Not part of this decision:** the README generator and `sync-readme`
+  (`P2-6`'s remaining half) are repo tooling rather than a user-facing surface,
+  and they leave the library on their own terms.
 
 ## Checked and found clean
 
