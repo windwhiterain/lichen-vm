@@ -89,7 +89,7 @@ queue's order is deliberate.
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
-| P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | todo |
+| P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | todo |
@@ -1873,6 +1873,26 @@ scans the module's whole node table and is called **per emitted node**
   (the rest of Phase 3, Phase 4+)"* while the note itself says *"**Phases 0–5
   complete**"*. Reconcile, and decide whether a completed plan stays (the
   project's own rule is that stale material is removed).
+  **Outcome.** Re-read first-hand, and the note's own content decides it: its
+  status line says **Phases 0–5 complete.** and its body closes Phase 3a, 3b
+  and 3c, Phase 4 and Phase 5, so the README's
+  *"proposed (the rest of Phase 3, Phase 4+)"* was the stale half and the note
+  is the authority on itself. The row's status cell now reads
+  `current (Phases 0–5 complete)` — `current` per the index's own legend,
+  because the note describes behaviour the code now has. The completed plan
+  **stays** in the index: it is cited from the code
+  (`checker.rs:305-306`) and carries decisions the type-system work still refers
+  to, so it is a record rather than superseded material. The row is otherwise
+  accurate — its label is a shortened form of the note's own title
+  (*"Type-system cleanup and standardization plan"*) and its crate list names
+  the plan's three subjects. Nothing else in the index changed.
+  *Which row, exactly:* this ledger's item was summarized elsewhere as being
+  about the **code-audit** row, but `docs/README.md:73` already agreed with this
+  note verbatim (*"current — the queue is the work list; each item's status is
+  live"*); the one status cell the sweep found in disagreement is the
+  `type-system-cleanup-plan.md` row above, as the *Checked and found clean*
+  summary records. The latter's "the disagreement is the one status cell,
+  `P5-2`" is therefore historical from this commit on.
 - **P5-3 `verified`** — doc comments contradicted by the code:
   `analysis.rs:5-7` (claims `BufferSession`, `P2-1`); `device.rs:74-75` (claims
   all mutations are locked, `P1-11`); `device.rs:115-117` (claims the next save
