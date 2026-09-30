@@ -37,6 +37,7 @@ queue's order is deliberate.
 | P0-1 | critical | lowlevel, registry | Byte-reader bounds: unit mismatch, overflow, alignment | done |
 | P0-2a | critical | lowlevel | Private raw-pointer fields, checked constructors, the missing contracts | done |
 | P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | done |
+| P0-2c | critical | highlevel | `shape::array_items` re-exports the unbounded slice from a safe wrapper | todo |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
@@ -206,13 +207,21 @@ without forming a reference, and two `unsafe` blocks went away instead.
 `as_ptr` is deliberately safe as well: producing a raw pointer is not a
 dereference, and building a handle is already `unsafe` (`P0-2a`).
 
-**Residual, deliberately left.** `lichen_highlevel::shape::array_items` is a
-safe wrapper that hands back the same `&'static [ArrayItem]`, so an
-out-of-crate caller can still reach the slice without an `unsafe` block: the
-"`B'` closes the external hole" claim now holds for the lowlevel, not for this
-re-export.  Its doc states the obligation it forwards.  Making it `unsafe`
-touches 17 more sites (15 inside `shape` itself, two in the checker); that is a
-follow-up, not a reopening of `D7`.
+**P0-2c — the re-export that reopens the hole.** `lichen-highlevel`'s
+`shape::array_items` (`crates/lichen-highlevel/src/shape.rs:181`) is declared
+`pub fn ... -> Option<&'static [ArrayItem]>` — **safe** — and forwards the same
+slice `Module::array_items` now guards with `unsafe`. Every other accessor in
+`shape` is built on it, so after `P0-2b` an out-of-crate caller can still obtain
+the unbounded slice without an `unsafe` block, through this one wrapper: `D7`'s
+"no out-of-crate caller can obtain the slice from safe code at all" holds for
+`lichen-lowlevel` but not for this re-export. `P0-2b` left it alone rather than
+silently widening its own scope, which was right.
+
+It is cheap to close: a workspace grep shows all 17 call sites are **inside
+`lichen-highlevel`** (15 in `shape` itself, `checker/annotations.rs:112` and
+`checker/structs.rs`), so this is a single-crate change — mark it `unsafe` with
+the contract it already documents, and give each of its own call sites the
+one-line `SAFETY` the rest of `P0-2b` now carries.
 
 ### P0-3 — `git clone`/`checkout` argument injection `verified`
 
