@@ -39,14 +39,14 @@ queue's order is deliberate.
 | P0-2b | critical | lowlevel, all | The arena accessors are safe but unbounded; make them `unsafe` | done |
 | P0-2c | critical | highlevel | `shape::array_items` re-exports the unbounded slice from a safe wrapper | done |
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | done |
-| P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
+| P0-4 | critical | package | Downloaded binaries have no integrity check | todo |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
 | P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
 | P0-7 | high | language | The artifact container has no body digest | done |
 | P1-1 | high | lowlevel | `insert_module` inserts before it asserts | done |
 | P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | done |
-| P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |
-| P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | blocked:D5 |
+| P1-3 | high | lowlevel | Table identity hash is a raw address | todo |
+| P1-4 | high | lowlevel | `hash_inner` cycle token vs `key_eq` coinduction | todo |
 | P1-5 | high | language | `content_key` tag collision across four AST forms | done |
 | P1-6 | high | highlevel, lowlevel | Non-function apply to a deferred callee is silently accepted | todo |
 | P1-7 | high | highlevel | Function pass order is non-deterministic | todo |
@@ -59,9 +59,10 @@ queue's order is deliberate.
 | P1-14 | high | language | `run.rs` never checks `Build::ok` | todo |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | todo |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | todo |
-| P1-17 | high | language-server | Every request runs the whole frontend | blocked:D6 |
-| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D6 |
+| P1-17 | high | language-server | Every request runs the whole frontend | todo |
+| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | todo |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | todo |
+| P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -272,7 +273,14 @@ the bytes are not**. `-L` follows redirects to any host; the temp name
 crash can leave a truncated binary in place. `toolchain.rs:326-333` also falls
 back to any `lichen-compiler` on `$PATH` without warning.
 
-**Fix direction: `D4`.**
+**Decision `D4` — accepted risk, fix the docs.** The trust root is HTTPS to
+GitHub plus the release the maintainer published; no checksum, signature or host
+restriction is added. The change is to **delete the provenance claim the docs
+make**: the module doc reads as a guarantee (*"the toolchain and the package
+manager are always the same revision"*) while the commit is pinned and the bytes
+are not — the pin says which revision was *asked for*, never what arrived. State
+the real trust model in its place. The mechanical hardening this does not cover
+is `P1-20`.
 
 ### P0-5 — Artifact deserialization: unbounded recursion and allocation `reported`
 
@@ -414,21 +422,6 @@ start past the limit.
 That argument is not obviously the whole story, so the semantics are **not**
 declared settled here — see `D8`. The panic fix above holds either way.
 
-### P1-19 — `evaluate_block` expects a return the budget may refuse `reported`
-
-Found while fixing `P1-2`, same class, second site: `evaluation.rs`'s
-`evaluate_block` ends with `.expect("evaluated return node")` after
-`evaluate_node_deep(root, None)`. A depth refusal returns `Void` before
-`evaluate_node`, so the root's cached value stays `None`, `garbage_collect`
-returns `None`, and the `expect` fires — **after** `drop_block` has already run.
-`Parameterized` is a first-class, expected answer everywhere else in the crate,
-so treating it as an internal error here is inconsistent. Reachability was
-reasoned but not demonstrated (it needs a child-block delegation with
-`deep_depth` already at the limit), so this is `reported`, not `verified`.
-`P2-7` names the same line among the panics inside the descent, but `P2-7`'s
-stated fix — the `VisitGuard` — would not change this trigger, so the two are
-separate.
-
 ### P1-3 — Table identity hash is a raw address `verified`
 
 `crates/lichen-lowlevel/src/table.rs:232-237` hashes a table/function key by
@@ -457,7 +450,13 @@ static/dynamic boundary terminates at different depths on each side. Since the
 hash only *finds candidates*, a hash disagreement is an unconditional miss.
 `tests/basic/table.rs:258` covers only the symmetric case.
 
-**Fix direction: `D5`.**
+**Decision `D5` — canonical content unfolding.** A hashed key must be a function
+of the key's content, so a table or function used as a table key hashes the same
+after a freeze and a reload as before it. This and `P1-4` are **one change**: a
+self-referential key needs a canonical unfolding so two coinductively equal keys
+unfold identically, and `hash_inner`'s cycle token must then agree with
+`key_eq`'s coinduction instead of counting depth. Expect the hardest item in the
+queue — the unfolding has to be well-defined on a cyclic graph.
 
 ### P1-5 — `content_key` tag collision across four AST forms `verified`
 
@@ -713,10 +712,13 @@ Amplifiers:
   `did_change_watched_files` handler, so editing an imported `math.lichen` never
   refreshes the importer.
 
-**Fix direction: `D6`.** The stated obstacle — `Doc` is `!Send` — does not
-prevent *caching*: keep the last `(uri, version)` → extracted indexes (all
-`Send`) and re-run only on change, and reuse one `PackageStore`/registry
-handle across requests.
+**Decision `D6` — (a) and (c) first, then (b).** Cache the extracted indexes per
+`(uri, version)` and reuse one `PackageStore`/registry handle across requests,
+and add cancellation plus a debounce; wire `BufferSession` afterwards (`P1-5` is
+done, so the key is now genuinely injective and no longer blocks it). While T3 —
+the memoized check — does not exist, (b) avoids the lex and parse but not the
+check, so it is worth doing for the keystroke path and is not a substitute for
+(a).
 
 ### P1-18 — Compute: unbounded globals, per-launch rebuild, unbounded `plrun` `verified`
 
@@ -741,7 +743,46 @@ Also `:41-45` advertises a data-parallel `plrun` while `:1737-1738` admits it is
 sequential — there are **no threads** in the crate. Operator names and module
 docs overstate what runs.
 
-**Fix direction: `D6`.**
+**Decision `D6` — not part of the editor work.** Compute's registries, the
+per-launch wasm rebuild and `plrun`'s uncapped count share nothing with the
+language-server path, so they proceed on their own rather than waiting on the
+`P1-17` sequence.
+
+### P1-19 — `evaluate_block` expects a return the budget may refuse `reported`
+
+Found while fixing `P1-2`, same class, second site: `evaluation.rs`'s
+`evaluate_block` ends with `.expect("evaluated return node")` after
+`evaluate_node_deep(root, None)`. A depth refusal returns `Void` before
+`evaluate_node`, so the root's cached value stays `None`, `garbage_collect`
+returns `None`, and the `expect` fires — **after** `drop_block` has already run.
+`Parameterized` is a first-class, expected answer everywhere else in the crate,
+so treating it as an internal error here is inconsistent. Reachability was
+reasoned but not demonstrated (it needs a child-block delegation with
+`deep_depth` already at the limit), so this is `reported`, not `verified`.
+`P2-7` names the same line among the panics inside the descent, but `P2-7`'s
+stated fix — the `VisitGuard` — would not change this trigger, so the two are
+separate.
+
+### P1-20 — `download` uses a predictable shared temp name and skips `fsync` `verified`
+
+Split out of `P0-4` by decision `D4`, which accepted the GitHub-over-TLS trust
+root and narrowed `P0-4` to its documentation. What is left is mechanical, and
+independent of the integrity question:
+
+- `crates/lichen-package/src/toolchain.rs`'s `download` writes to
+  `dest.with_extension("download.tmp")` — a **predictable** name derived from the
+  destination, so two concurrent invocations targeting the same tool race on one
+  file, and anything else on the machine can pre-create or replace it.
+- There is no `fsync` between the write and the `rename`, so a crash can leave a
+  truncated binary in place under the final name.
+- The same module falls back to any `lichen-compiler` found on `$PATH` when the
+  pinned release is unavailable, without saying so; a shadowing binary is then
+  executed silently.
+
+**Fix.** A unique temp name in the destination's directory, `fsync` the file (and
+the directory) before the rename, and make the `$PATH` fallback say what it
+picked. Do not add a checksum or a signature here — `D4` decided against both,
+and re-adding one is a new decision, not a finishing touch.
 
 ## P2 — architecture
 
@@ -1200,22 +1241,45 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   means `P1-6` can now be pinned before it is touched. Tests stay in separate
   files from sources per `AGENTS.md`, and a fix must still not run the
   full-scale suite.
-- **D4 — Toolchain integrity.** (blocks `P0-4`) Options: a published
-  `SHA256SUMS` asset verified after download; a signed release; or accepting
-  GitHub-over-TLS and dropping the "same revision" framing from the docs. The
-  last is free but removes a claim the docs currently make.
-- **D5 — Table key hashing.** (blocks `P1-3`, `P1-4`) A table/function key
-  cannot hash by address across a freeze. Options: a canonical content
-  unfolding for the hashable key; a structural (non-address) identity assigned
-  at freeze; or declaring such keys unsupported with a diagnostic. `P1-3` and
-  `P1-4` must be decided together — they are the same key-comparison contract.
-- **D6 — How far to wire incrementality.** (blocks `P1-17`, `P1-18`) Options:
-  (a) cache the extracted indexes per `(uri, version)` and reuse one
-  `PackageStore` — removes most of the per-request cost, no new architecture;
-  (b) additionally wire `BufferSession` — needs `P1-5` fixed first and only
-  helps lex/parse until T3 exists; (c) add cancellation and a debounce — a
-  correctness/UX fix independently of (a)/(b). Compute's registry eviction and
-  wasm-module caching are separate from all three and can proceed regardless.
+- **D4 — Toolchain integrity. — DECIDED: accept GitHub-over-TLS, and fix the
+  docs instead.** The trust root is HTTPS to GitHub plus the release the
+  maintainer published; no checksum or signature is added, and the download is
+  not narrowed to github.com. What this commits to, and what the change must do:
+  **delete the provenance claim the docs currently make.** `toolchain.rs`'s
+  module doc reads as a guarantee (*"the toolchain and the package manager are
+  always the same revision"*) while the commit is pinned and the bytes are not —
+  the pin says *which* revision was asked for, never *what* arrived. State the
+  actual trust model in its place, and state it once. The mechanical hardening
+  the decision does not cover is split out as `P1-20` (a predictable shared temp
+  name and no `fsync` before the rename), and the undocumented `$PATH` fallback
+  is named there too.
+  *Rejected — `SHA256SUMS`:* it would have kept the claim honest, at the cost of
+  a release step and a verification path. *Rejected — signing:* strongest, and
+  the most work; revisit if the toolchain ever ships to third parties.
+- **D5 — Table key hashing. — DECIDED: canonical content unfolding.**
+  A hashed key must be a function of the key's *content*, so a table or function
+  value used as a table key hashes the same after a freeze and a reload as it did
+  before. Chosen over a freeze-assigned structural identity (which would make the
+  hash depend on the layout pass rather than on the value) and over declaring
+  such keys unsupported (which would turn a silent miss into a refusal, narrowing
+  the language rather than fixing the contract).
+  What this commits to: `P1-3` and `P1-4` are one change, because they are the
+  same key-comparison contract — a self-referential key needs a *canonical*
+  unfolding so that two coinductively equal keys unfold identically, and the
+  cycle token `hash_inner` uses must then agree with `key_eq`'s coinduction
+  rather than counting depth. Expect the pair to be the hardest item in the
+  queue: the unfolding has to be well-defined for a cyclic graph.
+- **D6 — How far to wire incrementality. — DECIDED: (a) and (c) first, then (b).**
+  Order: cache the extracted indexes per `(uri, version)` and reuse one
+  `PackageStore` across requests, and add cancellation plus a debounce; wire
+  `BufferSession` afterwards, once the first two have landed. `P1-5` is done, so
+  the key is now genuinely injective and (b) is no longer blocked by it. Note
+  what (b) does and does not buy while T3 (the memoized check) does not exist: it
+  avoids the lex and parse, not the check, so the follow-up is worth doing for
+  the keystroke path and is not a substitute for (a).
+  `P1-18` — compute's registry eviction, per-launch wasm rebuild and unbounded
+  `plrun` — is **not** part of this: it shares nothing with the editor path and
+  proceeds on its own.
 - **D7 — How to close `P0-2`. — DECIDED: make the obligation explicit (`B'`).**
   The accessors stay unbounded but become `unsafe` with one written contract, and
   the raw-pointer fields are privatised behind checked constructors.
