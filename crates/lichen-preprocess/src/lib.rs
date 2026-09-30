@@ -40,10 +40,14 @@ mod parse;
 
 pub use parse::Directive;
 
-/// A preprocessor diagnostic: a message plus the source position it is
-/// grounded in.  Check-free — the preprocessor never touches a checker or a
-/// program marker — so it is not typed over a vocabulary.  A caller (the
-/// language layer) widens it into its own diagnostic at `Stage::Preprocess`.
+/// A preprocessor diagnostic: a message plus, when the failure is a property of
+/// the source, the position it is grounded in.  A failure that is about no
+/// source text at all — a dependency directory that has not been fetched, a
+/// `sub` path that is not a relative path inside its clone — carries `None` and
+/// is rendered as its message alone.  Check-free — the preprocessor never
+/// touches a checker or a program marker — so it is not typed over a
+/// vocabulary.  A caller (the language layer) widens it into its own diagnostic
+/// at `Stage::Preprocess`.
 #[derive(Clone, Debug)]
 pub struct PreprocessDiag {
     pub span: Option<Span>,
@@ -58,9 +62,11 @@ impl PreprocessDiag {
         }
     }
 
-    pub fn at_zero(message: impl Into<String>) -> Self {
+    /// A diagnostic with no source position: the failure is not a property of
+    /// any source text, so it renders as its message alone, with no caret.
+    pub fn unattributed(message: impl Into<String>) -> Self {
         PreprocessDiag {
-            span: Some((0, 0)),
+            span: None,
             message: message.into(),
         }
     }
@@ -465,14 +471,14 @@ where
         let dir = match dep.vendored_dir() {
             Ok(dir) => dir,
             Err(message) => {
-                diags.push(PreprocessDiag::at_zero(message));
+                diags.push(PreprocessDiag::unattributed(message));
                 continue;
             }
         };
         if dir.is_dir() {
             resolver.register_vendored(alias, dir);
         } else {
-            diags.push(PreprocessDiag::at_zero(format!(
+            diags.push(PreprocessDiag::unattributed(format!(
                 "dependency '{alias}' is not fetched (expected {}) — run `lichen fetch` first",
                 dir.display()
             )));

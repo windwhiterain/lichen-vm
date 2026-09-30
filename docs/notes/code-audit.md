@@ -103,7 +103,7 @@ queue's order is deliberate.
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | done |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
-| P5-13 | low | preprocess | `PreprocessDiag::at_zero` fabricates a source span | todo |
+| P5-13 | low | preprocess | `PreprocessDiag::at_zero` fabricates a source span | done |
 
 ## P0 — memory safety and supply chain
 
@@ -2754,6 +2754,40 @@ span-less diagnostic at its boundary. Which of the two is right depends on
 whether `PreprocessDiag`'s consumers ever need a span at all; `P5-9`'s
 implementation settled it for the language layer, so read that before choosing.
 Report which you chose and why.
+
+**Outcome.** The premise held, and the whole set was one defect: both `at_zero`
+call sites sit in `stage_depends` and both report a failure that is not a
+property of any source text. The choice the note left open went to the
+preprocessor, on the consumers' evidence rather than on symmetry.
+
+* `PreprocessDiag::span` was already an `Option`. The language layer's widening
+  (`diag.rs:101-108`) copies it verbatim into `Diag::span`; `render`
+  (`render.rs:111-123`) already prints a span-less diagnostic as its message
+  alone; the language server (`analysis.rs:552-582`, the `None` arm at `:556-568`)
+  already maps `None` to the zero-width `0:0` range the protocol requires.
+  Nothing a consumer does with a preprocess diagnostic needs a span.
+* The preprocessor has no honest position to offer either: a `Depend` carries no
+  span at all (`lib.rs:131-144`), and the two failures are a missing clone
+  directory (`lib.rs:481`) and a `sub` path that escapes its clone
+  (`lib.rs:474`).
+* So `P5-9`'s convention is kept, not duplicated. `at_zero` is **deleted**;
+  `PreprocessDiag::unattributed` (`lib.rs:65-72`) is the same name and the same
+  shape as `Diag::unattributed`, and the language layer needed **no change** —
+  no second laundering convention, because there was never a span to launder.
+
+*Not this defect.* An `import` that fails to resolve already gets the real span
+of its `@import` directive: `preprocess` overwrites the resolver's span with the
+statement's own (`lib.rs:290-295`). That path was honest before and after; only
+`stage_depends` fabricated a position.
+
+**Test.** `crates/lichen-language/tests/preprocess.rs`'s
+`an_unfetched_dependency_is_not_reported_at_line_one` stages a `depend` under a
+unique alias — so no fetch could have created the directory — and asserts the
+message names the directory and `lichen fetch`, that `span` is `None`, and that
+the rendering has neither `-->` nor a caret. Against the unfixed tree it fails
+with `span: Some((0, 0))` (the panic prints the whole `Diag`). A second test,
+`a_dependency_sub_path_outside_its_clone_is_not_reported_at_line_one`, pins the
+other `at_zero` site.
 
 ## Decisions
 
