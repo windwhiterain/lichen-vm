@@ -86,7 +86,7 @@ queue's order is deliberate.
 | P3-2 | medium | all | Workspace manifest duplication | done |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
-| P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | todo |
+| P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | todo |
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | todo |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
@@ -2963,6 +2963,45 @@ pass's inner loop — once per array element and twice per table entry
 acquisitions and 2N refcount bumps per visit. Hoisting
 `let module = self.static_module(sref.module);` above the iterator removes
 almost all of it.
+
+**Outcome.** The premise held; the cited lines had drifted, and the extent is
+larger than the note's account. Re-derived, the deep pass's per-element calls
+are in `evaluate_node_deep_inner`: the **descent** loop over an array's items
+(`evaluation.rs:646-661` before the fix — one `static_read` per element, which
+is one registry lookup) *and* the parameterized check's `.iter().any(...)`
+closures for the array arm and the table's key/value arms
+(`evaluation.rs:703-746`, one lookup per static element each). The equality
+side is `value_is_skeleton`
+(`equality.rs:554-579`), called once per array element from
+`class_is_skeleton`.
+
+*Measured, before:* one `evaluate_node_deep` of a 20,000-element array whose
+items are all static refs into one frozen module — **40,000 registry lookups**
+(2 per element: the descent read plus the parameterized check), 9.9 ms in the
+`test` profile. *After:* **1 lookup**, 2.4 ms, same input and profile. (The
+counter was a temporary probe inside `Module::static_module`; it is removed.)
+
+*The fix.* `StaticModuleCache` (`static_module.rs:41-73`) is a one-entry
+`(ModuleKey, Arc<StaticModule>)` memo: each lookup takes the registry read lock
+exactly as `Module::static_module` does and releases it before the next, so the
+lock's scope is unchanged and no writer can be blocked by a walk. The deep pass
+threads one cache through the whole walk
+(`evaluate_node_deep`/`evaluate_node_forced` create it, `evaluation.rs:483-487`,
+`:502-506`; `evaluate_node_deep_inner` carries it, `:564-571`), so the descent
+read and the parameterized check share it — the check moved into
+`value_is_parameterized` (`:716-775`), whose `.any()` closures now go through
+`cache.node_parameterized`. The equality walk threads one cache per
+`class_is_skeleton` (`equality.rs:520-590`). The lookup's *result* is unchanged:
+`StaticModuleCache::read` is `StaticModule::read` on the same registered
+module, and a key's entry is never replaced once registered (`freeze_mapped`
+and `insert_module` both assert the key is free), so a cached key cannot go
+stale.
+
+*Deliberately not done.* `table.rs:224` (`key_state`'s static arm) and the
+other single-shot lookups (`static_read`, `node_value`) are not in a loop and
+have no walk to share a cache with; the table's `hash_step` lookups
+(`table.rs:405`, `:454`) are per-function/per-node calls inside an unfolding
+memo, not per-element walks.
 
 ### P4-2 — `write_node_value` is O(class size) `verified`
 

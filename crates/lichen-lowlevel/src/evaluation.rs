@@ -2,7 +2,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
-    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, table::KeyState,
+    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
+    table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -480,7 +481,8 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(Dyn(node), current, true, false)
+        let mut cache = StaticModuleCache::new();
+        self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
     }
 
     /// Deep-evaluate `id` *ignoring laziness*: unlike
@@ -498,7 +500,8 @@ impl<P: Program> Module<P> {
     /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(Dyn(node), current, false, true)
+        let mut cache = StaticModuleCache::new();
+        self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
     }
 
     /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
@@ -555,6 +558,8 @@ impl<P: Program> Module<P> {
     /// into); `force_operand` runs an unevaluated operation's operand chain
     /// first, so a forced evaluation resolves the operation against fully
     /// evaluated operands instead of the parameterized gate keeping it lazy.
+    /// `cache` is the walk's one-entry static-module resolution cache (see
+    /// [`StaticModuleCache`]) — one lookup per module per walk, not per ref.
     #[stacksafe]
     fn evaluate_node_deep_inner(
         &mut self,
@@ -562,13 +567,14 @@ impl<P: Program> Module<P> {
         current: Option<BlockId>,
         skip_shallow: bool,
         force_operand: bool,
+        cache: &mut StaticModuleCache<P>,
     ) -> P::Value {
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
         // Even a forced pass gains nothing from a solved subtree (residuals
         // never re-run), so the leaf rule is unconditional.
         if let AnyNodeId::Static(sref) = node {
-            return self.static_read(sref);
+            return cache.read(self, sref);
         }
         let node = match node {
             Dyn(node) => node,
@@ -629,7 +635,7 @@ impl<P: Program> Module<P> {
             && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
         {
             let block = self.nodes[node].block;
-            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true);
+            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true, cache);
         }
         let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.as_enum() {
@@ -657,6 +663,7 @@ impl<P: Program> Module<P> {
                         Some(block),
                         skip_shallow,
                         force_operand,
+                        cache,
                     );
                 }
             });
@@ -678,12 +685,14 @@ impl<P: Program> Module<P> {
                         Some(block),
                         skip_shallow,
                         force_operand,
+                        cache,
                     );
                     module.evaluate_node_deep_inner(
                         item.value,
                         Some(block),
                         skip_shallow,
                         force_operand,
+                        cache,
                     );
                 }
             });
@@ -692,7 +701,25 @@ impl<P: Program> Module<P> {
         // marker, or any position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
-        let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
+        let parameterized = self.value_is_parameterized(cache, value, node);
+        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
+        self.deep_depth -= 1;
+        value
+    }
+
+    /// Whether `value` — the value this module just evaluated for `node` — is
+    /// unproven: the lazy marker itself, an array or table with a shallow
+    /// position or a parameterized element, or an operation whose operand is
+    /// parameterized.  `cache` is the walk's static-module resolution cache,
+    /// so a static element's solved flag costs one lookup per module for the
+    /// whole walk rather than one per element.
+    fn value_is_parameterized(
+        &self,
+        cache: &mut StaticModuleCache<P>,
+        value: P::Value,
+        node: NodeId,
+    ) -> bool {
+        matches!(value.as_enum(), Some(LowValue::Parameterized))
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Array(array))
@@ -701,39 +728,35 @@ impl<P: Program> Module<P> {
                     // not evaluated, and even an assert's forced pass that
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
-                    // SAFETY: `array` is the value this module just evaluated
-                    // for `node`; its home block is alive.  The note covers the
-                    // two `items()` calls in this arm.
+                    // SAFETY: `array` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
                     if unsafe { array.items() }.iter().any(|item| item.shallow)
                         || unsafe { array.items() }.iter().any(|item| match item.node {
                             Dyn(node) => self.nodes[node]
                                 .evaluated_deep
                                 .is_some_and(|e| e.parameterized),
-                            AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                                [sref.index.index]
-                                .parameterized,
+                            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
                         })
             )
             || matches!(
                 value.as_enum(),
                 Some(LowValue::Table(table))
-                    // SAFETY: `table` is the value this module just evaluated
-                    // for `node`; its home block is alive.  The note covers the
-                    // two `items()` calls in this arm.
+                    // SAFETY: `table` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
                     if unsafe { table.items() }.iter().any(|item| match item.key {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                            [sref.index.index]
-                            .parameterized,
+                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
                     }) || unsafe { table.items() }.iter().any(|item| match item.value {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                            [sref.index.index]
-                            .parameterized,
+                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
                     })
             )
             || self.nodes[node].operation.is_some_and(|op| {
@@ -744,10 +767,7 @@ impl<P: Program> Module<P> {
                         .get(operand)
                         .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
                 })
-            });
-        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
-        self.deep_depth -= 1;
-        value
+            })
     }
 
     fn evaluate_block(&mut self, root: NodeId) -> P::Value {

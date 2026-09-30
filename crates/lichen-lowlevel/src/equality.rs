@@ -4,7 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyNodeId, AnyNodeId::Dynamic as Dyn, Deferral, LowOperator, LowValue, Module, Node, NodeId,
-    Operation, PendingSide, PendingSides, Program, StaticNodeId, ValueExt as _, is_unbound,
+    Operation, PendingSide, PendingSides, Program, StaticModuleCache, StaticNodeId, ValueExt as _,
+    is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -517,6 +518,9 @@ impl<P: Program> Module<P> {
     /// concrete value or operation is not a skeleton, and binding a
     /// computation onto it would corrupt it.
     fn class_is_skeleton(&self, rep: NodeId) -> bool {
+        // One resolution cache for the whole class walk: an array member's
+        // static elements usually name one module.
+        let mut cache = StaticModuleCache::new();
         let mut member = rep;
         loop {
             if self.nodes[member].operation.is_some() {
@@ -532,7 +536,7 @@ impl<P: Program> Module<P> {
                     let mut seen = HashSet::new();
                     if items
                         .iter()
-                        .any(|item| !self.value_is_skeleton(item.node, &mut seen))
+                        .any(|item| !self.value_is_skeleton(&mut cache, item.node, &mut seen))
                     {
                         return false;
                     }
@@ -550,15 +554,19 @@ impl<P: Program> Module<P> {
     /// skeletons; `seen` cuts the cycle of a self-referential structure
     /// (which is a skeleton only if its own elements are).  A static ref is
     /// a decided leaf: its solved flag says whether it reads `Parameterized`
-    /// (a skeleton position) or concrete (not).
-    fn value_is_skeleton(&self, node: AnyNodeId, seen: &mut HashSet<AnyNodeId>) -> bool {
+    /// (a skeleton position) or concrete (not).  `cache` is the enclosing
+    /// walk's static-module resolution cache.
+    fn value_is_skeleton(
+        &self,
+        cache: &mut StaticModuleCache<P>,
+        node: AnyNodeId,
+        seen: &mut HashSet<AnyNodeId>,
+    ) -> bool {
         if !seen.insert(node) {
             return true;
         }
         let ok = match node {
-            AnyNodeId::Static(sref) => {
-                self.static_module(sref.module).nodes[sref.index.index].parameterized
-            }
+            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
             Dyn(node) => {
                 self.nodes[node].operation.is_none()
                     && match self.nodes[node].value.and_then(|value| value.as_enum()) {
@@ -569,7 +577,7 @@ impl<P: Program> Module<P> {
                         // dropped.
                         Some(LowValue::Array(array)) => unsafe { array.items() }
                             .iter()
-                            .all(|item| self.value_is_skeleton(item.node, seen)),
+                            .all(|item| self.value_is_skeleton(cache, item.node, seen)),
                         _ => false,
                     }
             }

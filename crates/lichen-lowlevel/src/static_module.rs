@@ -32,6 +32,45 @@ use crate::{
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
+/// A one-entry resolution cache for a value walk: a walk over a value's items
+/// resolves many static refs, and the common case names one module, so the
+/// registry read lock and the `Arc` clone are paid once per *distinct* module
+/// instead of once per ref.  Each lookup takes the lock exactly as
+/// [`Module::static_module`] does and releases it before the next — the lock
+/// is never held across the walk, so a writer is never blocked by one.
+pub(crate) struct StaticModuleCache<P: Program> {
+    last: Option<(ModuleKey, Arc<StaticModule<P>>)>,
+}
+
+impl<P: Program> StaticModuleCache<P> {
+    pub(crate) fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// The registered module behind `key`, resolved at most once per cache.
+    fn module<'a>(&'a mut self, host: &'a Module<P>, key: ModuleKey) -> &'a StaticModule<P> {
+        if self.last.as_ref().is_none_or(|(cached, _)| *cached != key) {
+            self.last = Some((key, host.static_module(key)));
+        }
+        &self
+            .last
+            .as_ref()
+            .expect("the lookup above filled the cache")
+            .1
+    }
+
+    /// Whether the node behind `sref` is marked parameterized: the module's
+    /// solved flag, read without a registry lookup per ref.
+    pub(crate) fn node_parameterized(&mut self, host: &Module<P>, sref: StaticNodeId) -> bool {
+        self.module(host, sref.module).nodes[sref.index.index].parameterized
+    }
+
+    /// [`StaticModule::read`] through the cache.
+    pub(crate) fn read(&mut self, host: &Module<P>, sref: StaticNodeId) -> P::Value {
+        self.module(host, sref.module).read(sref.index)
+    }
+}
+
 impl<P: Program> Module<P> {
     /// The static module behind `key` — the `get` of the device's registry
     /// (its virtual file system).  The `Arc` is cloned out of the lock

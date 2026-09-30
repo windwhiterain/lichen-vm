@@ -13,6 +13,7 @@ pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
+pub(crate) use crate::static_module::StaticModuleCache;
 
 mod apply;
 mod assert;
