@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    BlockId, Deferral, GlobalExt, LowOperator, LowValue, Module, ModuleKey, NodeId, OperatorExt,
-    PendingSides, Program, StaticModule, ValueExt, is_unbound,
+    BlockId, Deferral, GlobalExt, LowOperator, LowShape, LowValue, Module, ModuleKey, NodeId,
+    OperatorExt, PendingSides, Program, StaticModule, ValueExt, is_unbound,
 };
 use lichen_utils::compose::AsField;
 use lichen_utils::extend::AsEnum;
@@ -626,6 +626,21 @@ where
             HighProgramOperator::TypeOperator(op) => op.run(operand, _block, module),
         }
     }
+
+    /// The union's low-type transfer is the same uniform dispatch: each leaf
+    /// states what its own computation produces, and the structural leaf is
+    /// unreachable because the pass owns the [`LowOperator`] transfers.
+    fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
+        match self {
+            HighProgramOperator::LowOperator(_) => None,
+            // Qualified: a transfer is a method of the program-generic
+            // `OperatorExt` impl, and it mentions no `P`-typed argument, so an
+            // unqualified call could not infer which program's impl is meant.
+            HighProgramOperator::TypeOperator(op) => <TypeOperator as OperatorExt<
+                ProgramImpl<V, HighProgramOperator, A, L, G>,
+            >>::low_type(op, arguments),
+        }
+    }
 }
 
 /// The highlevel's own type-level operators, dispatched as an extension
@@ -704,6 +719,26 @@ where
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                 }
             }
+        }
+    }
+
+    /// The low-type transfer of the type-level operators.
+    ///
+    /// `Add`/`Sub`/`Leq`/`Eq` all produce a `USize` — lichen has no `Bool`
+    /// value, so a comparison result *is* a machine scalar — whatever their
+    /// operands are, which is what lets a pre-apply template decide a body's
+    /// arithmetic before any argument exists.  `Fresh` produces a nominal type
+    /// id, which the low type vocabulary has no shape for, so it declines.
+    ///
+    /// The `==` result is the honest one here: the generalized equality
+    /// compares any two *same-typed* values, so its result is a scalar even
+    /// when its operands are not.
+    fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
+        match self {
+            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
+                Some(LowShape::USize)
+            }
+            TypeOperator::Fresh => None,
         }
     }
 }

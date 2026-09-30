@@ -21,6 +21,7 @@ mod equality;
 mod evaluation;
 mod function;
 mod gc;
+mod low_type;
 mod static_module;
 mod table;
 mod utils;
@@ -417,6 +418,26 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+
+    /// The **low-type transfer** of this operator: the low type its result
+    /// has, given the low types of its operand array's elements.
+    ///
+    /// `arguments` is one entry per element of the operand array, in order;
+    /// an entry is `None` when that element's class is untraced, and a
+    /// `Some(Unknown)` when it is traced but undecided.  Returning `None`
+    /// means the operator **declines**: its result stays undecided and a
+    /// reader falls back conservatively — which is the honest default, and
+    /// the only one a generic operator can give.
+    ///
+    /// This is the sole place an operator vocabulary *outside* the lowlevel's
+    /// own [`LowOperator`] set states what its computation produces.  It
+    /// lives on the operator rather than in the pass because the meaning of an
+    /// operator belongs to whoever defined it — the same split that put the
+    /// unification policy on [`Program::defer_pending`].
+    fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape> {
+        let _ = arguments;
+        None
+    }
 }
 
 // The structural operators implement [`OperatorExt`] so a composed program's
@@ -425,7 +446,9 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 // leaves through [`AsEnum`] *before* `run` is ever reached — the `None` arm
 // of the dispatch is the extension fall-through — so a structural `run` is
 // genuinely unreachable: a structural operator is never an extension
-// computation.
+// computation.  The low-type pass makes the same routing choice for the same
+// reason: it owns the [`LowOperator`] transfers itself, so the default
+// [`OperatorExt::low_type`] below is unreachable for them.
 impl<P: Program> OperatorExt<P> for LowOperator {
     fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> P::Value {
         unreachable!("structural operators are dispatched by the VM")

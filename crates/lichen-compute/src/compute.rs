@@ -588,6 +588,34 @@ where
             }
         }
     }
+
+    /// The compute operators' low-type transfer: what a kernel's own operators
+    /// state they produce.
+    ///
+    /// The launch operators are the load-bearing ones — a cross-kernel call in
+    /// a pre-apply template is exactly the position where no argument exists
+    /// yet, so a `Launch`/`Call` that declines leaves the whole surrounding
+    /// expression undecided.  They are honest scalars: `run` yields a `USize`
+    /// or stays lazy, and the arithmetic they wrap is Int-only.
+    ///
+    /// `Jit`/`Parallel` produce a host-owned artifact (a kernel id), and
+    /// `Write` is a side effect with no value at all, so all three decline.
+    /// So does `BufferCollect`: it does produce an array of scalars, but of a
+    /// length no low type can name — and a length nobody has decided is
+    /// `Unknown`, not a guess.
+    fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
+        match self {
+            ComputeOperator::Launch
+            | ComputeOperator::Call
+            | ComputeOperator::Range
+            | ComputeOperator::Read => Some(LowShape::USize),
+            ComputeOperator::Jit
+            | ComputeOperator::Parallel
+            | ComputeOperator::ParLaunch
+            | ComputeOperator::Write
+            | ComputeOperator::BufferCollect => None,
+        }
+    }
 }
 
 // --- Codegen: lichen graph → a scalar `(i64) -> i64` wasm function body -----

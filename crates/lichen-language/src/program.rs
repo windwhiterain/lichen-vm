@@ -330,6 +330,11 @@ macro_rules! lang_compose_vocabulary {
         // their program-generic [`::lichen_lowlevel::OperatorExt`] impl in the
         // highlevel; each plugin operator runs its own).  This is the arm that
         // lets a composed program's operators actually execute.
+        //
+        // `low_type` is the same uniform dispatch for the low-type pass: each
+        // leaf states what its own computation produces, so a composed
+        // program inherits its plugin's transfer without the lowlevel knowing
+        // the vocabulary.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,
@@ -341,6 +346,26 @@ macro_rules! lang_compose_vocabulary {
                     LangOperator::$lowop_name(op) => op.run(operand, block, module),
                     LangOperator::$tyop_name(op) => op.run(operand, block, module),
                     $( LangOperator::$extra_op_name(op) => op.run(operand, block, module), )*
+                }
+            }
+            fn low_type(
+                &self,
+                arguments: &[Option<::lichen_lowlevel::LowShape>],
+            ) -> Option<::lichen_lowlevel::LowShape> {
+                // Every leaf's transfer is a method of the program-generic
+                // `OperatorExt` impl, and it mentions no `P`-typed argument, so
+                // an unqualified call cannot infer *which* program's impl is
+                // meant — the impl is named, once, as `LangProgram`.
+                match self {
+                    // The structural leaves' transfers are owned by the pass
+                    // itself, so the hook is never consulted for them.
+                    LangOperator::$lowop_name(_) => None,
+                    LangOperator::$tyop_name(op) => {
+                        <$tyop as ::lichen_lowlevel::OperatorExt<LangProgram>>::low_type(op, arguments)
+                    }
+                    $( LangOperator::$extra_op_name(op) => {
+                        <$extra_op as ::lichen_lowlevel::OperatorExt<LangProgram>>::low_type(op, arguments)
+                    } )*
                 }
             }
         }
