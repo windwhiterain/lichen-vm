@@ -31,8 +31,8 @@
 //!   unaffected.
 
 use lichen_lowlevel::{
-    AnyHandle, AnyNodeId, ArrayItem, Deferral, LowValue, Module, NodeId, PendingSides, Program,
-    StaticNodeId, TableItem, UnifyStep,
+    AnyHandle, AnyNodeId, ArrayItem, Deferral, LowShape, LowValue, Module, NodeId, PendingSides,
+    Program, StaticNodeId, TableItem, UnifyStep,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -159,6 +159,28 @@ pub const STRUCT_MARKER_NAMES_SLOT: usize = 1;
 /// The struct marker's field count: exactly `[id, names]`.  This is also the
 /// arity [`is_struct_marker_any`] guesses on — see its documented weakness.
 pub const STRUCT_MARKER_LEN: usize = 2;
+
+// --- shape-half layout -----------------------------------------------------------
+//
+// A compound type's **shape** (element 0 of `[shape, kind]`) is itself a pair
+// or a list, and what its two positions *mean* depends on the kind.  They get
+// their own names for the same reason the kinded-type slots do: an array's
+// element position and a function's domain position are both "0", but they
+// mean different things, and a reader that reused one spelling for both would
+// be reading a convention rather than the layout.
+
+/// Element 0 of an **array type**'s `[element type, length]` shape.
+pub const ARRAY_TYPE_ELEMENT_SLOT: usize = 0;
+/// Element 1 of an array type's shape — a `USize` value slot.
+pub const ARRAY_TYPE_LENGTH_SLOT: usize = 1;
+/// Element 0 of a **table type**'s `[key type, value type]` shape.
+pub const TABLE_TYPE_KEY_SLOT: usize = 0;
+/// Element 1 of a table type's shape.
+pub const TABLE_TYPE_VALUE_SLOT: usize = 1;
+/// Element 0 of a **function type**'s `[domain, codomain]` shape.
+pub const FUNCTION_TYPE_DOMAIN_SLOT: usize = 0;
+/// Element 1 of a function type's shape.
+pub const FUNCTION_TYPE_CODOMAIN_SLOT: usize = 1;
 
 /// The lazy index path from a struct **type** `[shape, kind]` to its name
 /// table — kind at `[1]`, then the marker at `[0]`, then the names at `[1]`.
@@ -559,6 +581,191 @@ where
         Some(LowValue::Table(table)) => Some(table),
         _ => None,
     }
+}
+
+// --- low types -----------------------------------------------------------------
+
+/// The **low type** a kinded type expression denotes — the highlevel half of
+/// the low-type layer, and the only place the type encoding is read to produce
+/// one (see `docs/notes/lowlevel-low-types.md`).
+///
+/// This is the *seed* of the mechanism: a template's parameter position is the
+/// one thing the value graph can never decide, because a template is never
+/// evaluated and an apply binds the clones instead — so its domain is read
+/// here, out of the type slot, and handed to the lowlevel as a
+/// [`LowShape`].  Everything else about a body is decided by the value graph.
+///
+/// The decode is by **kind marker**, and it says [`LowShape::Unknown`]
+/// explicitly rather than falling back to a scalar.  That difference is the
+/// whole point of the function: a type the low type vocabulary has no shape
+/// for — a `string`, a nominal struct, an inference cell that has not bound
+/// yet — states *nothing*, and a reader must treat nothing as undecided.  A
+/// silent scalar fallback would let a `jit` compile a domain it invented.
+///
+/// A struct is the interesting refusal: its fields are positional, so the
+/// shape reads like a tuple, but a nominal struct is not a tuple value and the
+/// low type vocabulary has no nominal shape.  Answering `Tuple(..)` would drop
+/// exactly the identity that makes it a struct.
+///
+/// The marker is read from the slot that carries it, and the two kinds of type
+/// carry it differently — that asymmetry is the encoding, not an accident:
+/// an **atomic** type's shape *is* its marker (`int` is literally `[int, K]`),
+/// while a **compound** type's shape is a list or a pair and its marker lives
+/// in the kind.  Reading the kind's marker for both — the obvious mistake, and
+/// the one an earlier structural decoder made — silently classifies every
+/// scalar as an unrecognised kind.
+///
+/// The argument is a **type value** — the `[shape, kind]` expression itself.
+/// A caller holding a term that *names* a type (an expression's type slot)
+/// wants [`low_type_of_slot`], which resolves the indirection.
+pub fn low_type_of<P: Program>(module: &Module<P>, type_value: AnyNodeId) -> LowShape
+where
+    P::Value: ValueType,
+{
+    // A type expression is `[shape, kind]`; anything else is not a type this
+    // decoder can read.
+    let Some(kinded) = array_items(module, type_value) else {
+        return LowShape::Unknown;
+    };
+    if kinded.len() != 2 {
+        return LowShape::Unknown;
+    }
+    let shape = kinded[TYPE_SHAPE_SLOT].node;
+    // An atomic type: its shape slot holds the marker itself.
+    let Some(shape_value) = module.node_value(shape) else {
+        return LowShape::Unknown;
+    };
+    if shape_value == P::Value::int_marker() {
+        return LowShape::USize;
+    }
+    if shape_value == P::Value::string_marker() || shape_value == P::Value::type_marker() {
+        // A string is not a machine scalar, and a type is not a value at all.
+        return LowShape::Unknown;
+    }
+    // A compound type: the marker is the kind's, and the shape is a list or a
+    // pair whose two positions mean different things per kind.
+    let Some(kind) = array_items(module, kinded[TYPE_KIND_SLOT].node) else {
+        return LowShape::Unknown;
+    };
+    if kind.len() != 2 {
+        return LowShape::Unknown;
+    }
+    let Some(marker) = module.node_value(kind[KIND_MARKER_SLOT].node) else {
+        return LowShape::Unknown;
+    };
+    if marker == P::Value::tuple_type_marker() {
+        // A tuple type's shape *is* its element-type list.
+        let Some(elements) = array_items(module, shape) else {
+            return LowShape::Unknown;
+        };
+        return LowShape::Tuple(
+            elements
+                .iter()
+                .map(|element| low_type_of(module, element.node))
+                .collect(),
+        );
+    }
+    if marker == P::Value::array_type_marker() {
+        // An array type's shape is `[element type, length]`, and the length is
+        // a value slot — an undecided length makes the whole shape undecided,
+        // because a length nobody knows is not a length of zero.
+        return match low_type_of_array(module, shape) {
+            Some((element, length)) => LowShape::Array(Box::new(element), length),
+            None => LowShape::Unknown,
+        };
+    }
+    if marker == P::Value::table_type_marker() {
+        // A table type's shape is `[key type, value type]`.
+        let Some(halves) = array_items(module, shape) else {
+            return LowShape::Unknown;
+        };
+        return LowShape::Table(
+            Box::new(low_type_of(module, halves[TABLE_TYPE_KEY_SLOT].node)),
+            Box::new(low_type_of(module, halves[TABLE_TYPE_VALUE_SLOT].node)),
+        );
+    }
+    if marker == P::Value::function_type_marker() {
+        // A function type's shape is the `[domain, codomain]` pair — the same
+        // node `function_type_parts` returns.
+        let Some(halves) = array_items(module, shape) else {
+            return LowShape::Unknown;
+        };
+        return LowShape::Function(
+            Box::new(low_type_of(module, halves[FUNCTION_TYPE_DOMAIN_SLOT].node)),
+            Box::new(low_type_of(
+                module,
+                halves[FUNCTION_TYPE_CODOMAIN_SLOT].node,
+            )),
+        );
+    }
+    // A struct, or a kind this decoder does not know.
+    LowShape::Unknown
+}
+
+/// The low type an expression's **type slot** names — the seed a backend
+/// takes for a template's parameter domain.
+///
+/// The slot is not always a type value, and the indirection is the checker's:
+/// an *annotated* parameter's type cell is unified with the annotation
+/// expression's own `[value, type]` term ([`crate::checker::lambda`]), so the
+/// slot holds that pair, while an *inferred* one is bound straight to a type
+/// value by the body's own unifications.  Both name the same type — the pair's
+/// value slot — and resolving that here is the authority's job precisely
+/// because a backend that had to know would be reading the layout again.
+///
+/// The two are told apart by **whether the decode succeeds**, not by a
+/// structural guess, and the guess would not be sound: a term pair and a type
+/// value have the same two-slot silhouette.  What separates them is the
+/// terminal marker: the type slot of a term names the *type of an expression*,
+/// which for a type expression is the `Type` marker — and `Type` is the one
+/// kind marker [`low_type_of`] refuses, because a type is not a value shape.
+/// So a pair never decodes directly, and a bare type value always decodes on
+/// the first try.
+///
+/// An undecidable answer is [`LowShape::Unknown`], never a fallback: a
+/// polymorphic parameter has no domain at this boundary, and a backend that
+/// invented one would compile a kernel for a type nobody wrote.
+pub fn low_type_of_slot<P: Program>(module: &Module<P>, slot: AnyNodeId) -> LowShape
+where
+    P::Value: ValueType,
+{
+    let direct = low_type_of(module, slot);
+    if direct.is_known() {
+        return direct;
+    }
+    // The pair indirection: the term's own value slot, tried once.  A value
+    // slot that does not decode either is not a type this decoder can read.
+    let Some(items) = array_items(module, slot) else {
+        return LowShape::Unknown;
+    };
+    let Some(value) = items.first() else {
+        return LowShape::Unknown;
+    };
+    low_type_of(module, value.node)
+}
+
+/// [`low_type_of`]'s array arm: an array type's `[element type, length]`
+/// shape.  `None` when either half is undecided, so the caller answers
+/// [`LowShape::Unknown`] instead of a length it guessed.
+fn low_type_of_array<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option<(LowShape, usize)>
+where
+    P::Value: ValueType,
+{
+    let parts = array_items(module, shape)?;
+    if parts.len() != 2 {
+        return None;
+    }
+    let element = low_type_of(module, parts[ARRAY_TYPE_ELEMENT_SLOT].node);
+    if !element.is_known() {
+        return None;
+    }
+    let LowValue::USize(length) = module
+        .node_value(parts[ARRAY_TYPE_LENGTH_SLOT].node)?
+        .as_enum()?
+    else {
+        return None;
+    };
+    Some((element, length))
 }
 
 // --- diagnostic descent ---------------------------------------------------------

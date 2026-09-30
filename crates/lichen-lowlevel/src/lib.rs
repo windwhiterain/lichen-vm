@@ -250,12 +250,24 @@ impl LowShape {
     /// one — so the tuple view wins: it is strictly more precise, and a class
     /// legitimately carries both writers' contributions.
     ///
-    /// Two *different* decided shapes are unreachable on a checked graph (the
-    /// checker already proved `value : type` consistent, so a low type can
-    /// never contradict the highlevel type); the `debug_assert` states that
-    /// invariant, and the release answer is the conservative
-    /// [`LowShape::Unknown`] — a reader degrades to "undecided" rather than to
+    /// Two *different* decided shapes join to [`LowShape::Unknown`], and
+    /// deliberately so.  The design note expected this case to be unreachable
+    /// ("the checker already proved `value : type` consistent, so a debug_assert
+    /// suffices"); measurement says otherwise.  A unification **deferral**
+    /// merges two classes whose values were never compared — a pending
+    /// computation against a skeleton, a deferred field read, a type
+    /// round-trip — so two arrays of different arity can legitimately end up
+    /// on one class, and the class is only reconciled later, if at all.  An
+    /// assertion would therefore fire on ordinary checked programs; the
+    /// conservative `Unknown` is the sound answer, and the one the design's own
+    /// safety argument requires: a reader degrades to "undecided" rather than to
     /// a wrong shape.
+    ///
+    /// The cost is bounded by what reads low types: a class whose two writers
+    /// disagree is a class the *encoding* arrays live on — a `[value, type]`
+    /// pair, a kind, a tuple type's element list — none of which a backend
+    /// compiles against.  A kernel domain is a seeded `Tuple` whose arity the
+    /// argument agrees with, which is the overlap rule above.
     pub fn join(left: &LowShape, right: &LowShape) -> LowShape {
         match (left, right) {
             (LowShape::Unknown, other) | (other, LowShape::Unknown) => other.clone(),
@@ -266,13 +278,7 @@ impl LowShape {
                 LowShape::Tuple(items.clone())
             }
             _ if left == right => left.clone(),
-            _ => {
-                debug_assert!(
-                    false,
-                    "two different decided low types joined on one equality class: {left:?} vs {right:?}"
-                );
-                LowShape::Unknown
-            }
+            _ => LowShape::Unknown,
         }
     }
 
@@ -779,6 +785,34 @@ pub struct StaticNode<P: Program> {
     pub parameterized: bool,
 }
 
+/// A diagnostic a **layer above the lowlevel** recorded, through
+/// [`Module::record_extension_diagnostic`].
+///
+/// Every other channel on a [`Module`] — [`Module::unify_errors`],
+/// [`Module::eval_errors`], [`Module::assert_errors`] — is one the VM itself
+/// produces, so each is a typed channel for a fact the lowlevel can describe.
+/// This is the general channel for everything that has no such home: a native
+/// plugin refusing to lower a computation, a backend declining to compile a
+/// shape, a host error a future extension needs to surface.  The lowlevel
+/// stores the entry and knows nothing else about it — not the meaning of
+/// `category`, not the node it points at — so adding an external error kind
+/// never means adding a channel here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionDiagnostic {
+    /// The recording layer's own category, so a consumer can select the
+    /// diagnostics it renders without parsing the message (for example
+    /// `"compute.jit"`).  It is a `&'static str` because a layer's categories
+    /// are its own compile-time constants, never a runtime string.
+    pub category: &'static str,
+    /// The node the diagnostic is about, when the recorder can name one.  A
+    /// `None` is an honest "not about a node", not a placeholder: a record
+    /// with no attributable node still carries its reason.
+    pub node: Option<NodeId>,
+    /// The message, rendered by the layer that recorded it — the lowlevel has
+    /// no vocabulary for it and must not try to re-render one.
+    pub message: String,
+}
+
 /// Which evaluation budget a [`Module`] exhausted, and what its limit was.
 ///
 /// The budget guards (see [`Module::apply_depth_limit`],
@@ -864,6 +898,12 @@ pub struct Module<P: Program> {
     /// failed `function_apply`; the raw [`UnifyError`] entries it produced
     /// stay in [`Self::unify_errors`] alongside it.
     pub apply_errors: Vec<ApplyError>,
+    /// Diagnostics recorded by layers above the lowlevel — see
+    /// [`ExtensionDiagnostic`].  Append-only and never cleared, the same
+    /// contract as [`Self::unify_errors`] and [`Self::eval_errors`]: an entry
+    /// is a fact about work that already happened, and a second pass must be
+    /// able to see the first pass's records.
+    pub extension_diagnostics: Vec<ExtensionDiagnostic>,
     /// Program-global extension state — see [`Program::GlobalExt`].
     pub global_ext: P::GlobalExt,
     apply_depth: usize,
@@ -1092,6 +1132,7 @@ impl<P: Program> Module<P> {
             asserts: Vec::new(),
             assert_errors: Vec::new(),
             apply_errors: Vec::new(),
+            extension_diagnostics: Vec::new(),
             global_ext: P::GlobalExt::default(),
             apply_depth: 0,
             apply_total: 0,
@@ -1128,8 +1169,7 @@ impl<P: Program> Module<P> {
             .freeze_mapped(source, key, hash)
     }
 
-    /// Resets the per-run evaluation budgets ([`Self::apply_depth`],
-    /// [`Self::apply_total`], [`Self::deep_depth`]) so a host can drive the
+    /// Resets the per-run evaluation budgets ([`Self::apply_depth`],    /// [`Self::apply_total`], [`Self::deep_depth`]) so a host can drive the
     /// module in a long-running loop (e.g. one kernel call per GUI frame)
     /// without the cumulative apply count exhausting
     /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
@@ -1186,6 +1226,27 @@ impl<P: Program> Module<P> {
             self.observe_class_low_type(node, value);
         }
         node
+    }
+
+    /// Record a diagnostic a **layer above the lowlevel** produced, through the
+    /// general channel ([`Self::extension_diagnostics`]).
+    ///
+    /// A layer records when it has decided something the lowlevel cannot
+    /// describe on its behalf — a backend that refuses to lower a shape, a
+    /// plugin that cannot compile a body.  The companion decision is always the
+    /// caller's: a record is not an error state, and recording one never
+    /// changes what the VM does next.
+    pub fn record_extension_diagnostic(
+        &mut self,
+        category: &'static str,
+        node: Option<NodeId>,
+        message: impl Into<String>,
+    ) {
+        self.extension_diagnostics.push(ExtensionDiagnostic {
+            category,
+            node,
+            message: message.into(),
+        });
     }
 
     /// Registers `condition` as an assert — an explicit constraint, not a

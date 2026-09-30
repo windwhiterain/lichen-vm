@@ -52,6 +52,7 @@ use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
+use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module,
@@ -66,6 +67,12 @@ use lichen_utils::extend::AsEnum;
 /// structural [`LowOperator`], the highlevel's [`TypeOperator`] (the scalar
 /// arithmetic the kernel-safe subset lowers), and [`ComputeOperator`]
 /// (`Jit`/`Launch`).
+///
+/// [`ValueType`] is among them because a kernel's domain is *seeded* from the
+/// parameter's type slot, and decoding a type slot is the encoding
+/// authority's job ([`lichen_highlevel::shape::low_type_of`]) — the one place
+/// this crate is allowed to read the `[value, type]` pair, and the read that
+/// the low-type layer exists to end.
 ///
 /// A host program satisfies these automatically whenever its `enum_ext!`
 /// vocabulary carries those leaves (as `LangProgram` does).  Every codegen
@@ -159,6 +166,13 @@ enum KernelInstr {
     /// `[out_pos, idx, val]`.
     BufferWriteCall,
 }
+
+/// The diagnostic categories this plugin records through the lowlevel's
+/// general extension channel ([`Module::record_extension_diagnostic`]).  They
+/// are the plugin's own compile-time constants, so a consumer selects on them
+/// without parsing a message.
+const JIT_DIAGNOSTIC: &str = "compute.jit";
+const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
 
 /// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
 /// module.
@@ -304,7 +318,7 @@ impl OperatorCodec for ComputeOperator {
 impl<P> OperatorExt<P> for ComputeOperator
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
@@ -330,10 +344,13 @@ where
                         <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
                     }
                     Err(err) => {
-                        // The body uses an operator outside the kernel-safe
-                        // subset — record nothing and stay lazy; the definition
-                        // pass's error channel reports the unbound result.
-                        let _ = err;
+                        // The body is outside the kernel-safe subset, or the
+                        // parameter's domain is undecided.  Either way the
+                        // honest result is a lazy value plus a recorded reason:
+                        // the definition pass reports the unbound result, and
+                        // this says *why* — which is the difference between a
+                        // user who can fix the program and one who cannot.
+                        module.record_extension_diagnostic(JIT_DIAGNOSTIC, None, err);
                         <P::Value as From<LowValue>>::from(LowValue::Parameterized)
                     }
                 }
@@ -434,7 +451,7 @@ where
                         <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id))
                     }
                     Err(err) => {
-                        let _ = err;
+                        module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
                         <P::Value as From<LowValue>>::from(LowValue::Parameterized)
                     }
                 }
@@ -668,18 +685,30 @@ where
 /// can emit fragments lazily and a `launch` assembles a reachable set of them
 /// into one module.
 ///
-/// The parameter's domain shape (scalar vs tuple of scalars) is derived from
-/// its *type* and recorded on the parameter's value cell — the level-3 shape
-/// marker a backend reads instead of re-deriving the type half.  The body
-/// emitter then reads that shape to distinguish a scalar parameter read
-/// (`local.get 0`) from a tuple-element read (`local.get k`).
+/// The domain is **seeded, passed, then read back** — never computed and held
+/// in a local:
+///
+/// 1. **Seed.** The parameter's type slot is the one thing the value graph can
+///    never decide here: a template is never evaluated, and an apply binds the
+///    clones, so the template's own cell stays empty.  The encoding authority
+///    decodes it ([`lichen_highlevel::shape::low_type_of`]) and the lowlevel
+///    takes it as a lower bound on the parameter's class.
+/// 2. **Pass.** The body's own low types are computed to a fixed point, before
+///    any apply — what makes a pre-apply `jit` work at all.
+/// 3. **Read.** The domain is then the class's lower bound, exactly as a
+///    backend reads any other node's.
+///
+/// A parameter whose type is undecided at that point is the hard boundary the
+/// design names (a polymorphic template's domain is not a fact any mechanism
+/// can recover before an apply), so this refuses with an actionable reason
+/// rather than compiling a domain it invented.
 fn compile_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
 ) -> Result<KernelFragment, String>
 where
     P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let AnyFunctionId::Dynamic(fid) = function else {
@@ -696,25 +725,29 @@ where
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => ret,
     };
-
-    // The domain shape from the parameter's type cell.
-    let param_shape = kernel_param_shape(module, param_pair)?;
-    match &param_shape {
-        LowShape::USize | LowShape::Tuple(_) => {}
-        _ => {
-            return Err("kernel domain must be a scalar or a tuple of scalars".into());
-        }
-    }
-    // The parameter's value cell (element 0 of the `[value, type]` pair) is
-    // where the domain shape is stored — the node the body emitter consults.
-    let param_value = match module
-        .array_items(param_pair)
-        .and_then(|items| items.first())
-    {
-        Some(first) => dyn_node(first.node)?,
-        None => return Err("parameter is not a [value, type] pair".into()),
+    // The parameter's two cells, read once and released before the pass needs
+    // the module mutably.  `None` for the type cell is not a failure here — it
+    // is an undecided domain, and the refusal below says so.
+    let (param_value, param_type) = match module.array_items(param_pair) {
+        Some(items) if !items.is_empty() => (
+            dyn_node(items[PAIR_VALUE_SLOT].node)?,
+            items.get(PAIR_TYPE_SLOT).map(|item| item.node),
+        ),
+        _ => return Err("parameter is not a [value, type] pair".into()),
     };
-    module.seed_class_low_type(param_value, param_shape.clone());
+
+    // 1. Seed.  A parameter with no type cell seeds `Unknown`, which is the
+    //    honest statement: this class has been traced and nothing has decided
+    //    it.
+    let seed = param_type.map_or(LowShape::Unknown, |slot| low_type_of_slot(module, slot));
+    module.seed_class_low_type(param_value, seed);
+    // 2. Pass.
+    module.infer_template_low_types(fid);
+    // 3. Read.
+    let Some(domain) = module.low_type_of_node(param_value) else {
+        return Err(UNDECIDED_DOMAIN.into());
+    };
+    let param_shape = kernel_domain(domain)?;
 
     let params = vec![ParamSlot {
         pair: param_pair,
@@ -764,10 +797,20 @@ where
     // scalar wasm param from cfg; the buffer tuple is host-side (read via the
     // `read` import by its position in `cfg(1)`).  Model the cfg's scalar part
     // as a `Tuple([USize])` so the emitter maps `cfg(0)` → `local.get 0`.
+    //
+    // This seed is the *host ABI's*, not a type fact: the parallel signature is
+    // `(n, index)` by construction, whatever the lichen type says, so it is
+    // stated here rather than decoded.  The pass then runs as usual, and the
+    // slot's shape is read back off the class — the same seed → pass → read
+    // chain `compile_fragment` uses.
     let cfg_value = pair_value_node(module, cfg_pair)
         .ok_or_else(|| "parallel cfg parameter is not a [value, type] pair".to_string())?;
-    let cfg_shape = LowShape::Tuple(vec![LowShape::USize]);
-    module.seed_class_low_type(cfg_value, cfg_shape.clone());
+    module.seed_class_low_type(cfg_value, LowShape::Tuple(vec![LowShape::USize]));
+    module.infer_template_low_types(fid);
+    let Some(cfg_shape) = module.low_type_of_node(cfg_value) else {
+        return Err(UNDECIDED_DOMAIN.into());
+    };
+    let cfg_shape = kernel_domain(cfg_shape)?;
     let params = vec![ParamSlot {
         pair: cfg_pair,
         value: cfg_value,
@@ -936,58 +979,45 @@ fn lower_body(
     Ok(())
 }
 
-/// The [`LowShape`] of a function's parameter, from its type cell: a tuple
-/// parameter `(T0, .., Tn)` yields `Tuple(..)` with arity `n + 1`; an
-/// (annotated or unannotated) scalar `Int` yields `USize`.  This is the one
-/// place the codegen reads the type half — once, to seed the parameter's
-/// shape marker; afterwards the body emitter reads only [`LowShape`]s.
-fn kernel_param_shape<P>(module: &Module<P>, param_pair: NodeId) -> Result<LowShape, String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let pair = module
-        .array_items(param_pair)
-        .ok_or_else(|| "parameter is not a [value, type] pair".to_string())?;
-    let Some(type_cell) = pair.get(1) else {
-        return Ok(LowShape::USize);
-    };
-    element_shape(module, type_cell.node)
+/// The reason a `jit` reports when the parameter's domain is not decided at
+/// compile time.  Wording matters here: the user can only fix this by
+/// annotating the parameter, so the message says what to write.
+///
+/// This is the hard boundary of the low-type design, not a gap in it — lichen
+/// binds names per apply, so a polymorphic template's domain is a per-call-site
+/// fact by construction and no pre-apply mechanism can recover it.
+const UNDECIDED_DOMAIN: &str = "the kernel parameter's type is not decided when the kernel is compiled; \
+annotate it (for example `p : <Int, Int>`) so its domain is known";
+
+/// A kernel domain must be a decided scalar or a tuple of decided scalars —
+/// everything else is a refusal, and each refusal names its own cause rather
+/// than falling back to a shape that would compile into a wrong signature.
+fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
+    if !domain_is_known(&domain) {
+        return Err(UNDECIDED_DOMAIN.into());
+    }
+    match &domain {
+        LowShape::USize | LowShape::Tuple(_) => Ok(domain),
+        _ => Err("kernel domain must be a scalar or a tuple of scalars".into()),
+    }
 }
 
-/// The [`LowShape`] of a type value node — recursive, so a tuple whose
-/// element is itself a tuple yields a nested [`LowShape::Tuple`].  A type's
-/// value is `[shape, kind]`; a tuple type's `shape` is an array of element
-/// types (each recursed), a scalar `Int`'s `shape` is the `Int` marker (a
-/// leaf → `USize`).  The `_` fallback keeps an unannotated `x => x + 1`
-/// compiling (its type cell ends up `[Int, k]`, element 0 a leaf).
-fn element_shape<P>(module: &Module<P>, type_node: AnyNodeId) -> Result<LowShape, String>
-where
-    P: Program,
-    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
-    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
-{
-    let type_node = dyn_node(type_node)?;
-    let Some(type_items) = module.array_items(type_node) else {
-        return Ok(LowShape::USize);
-    };
-    if type_items.len() < 2 {
-        return Ok(LowShape::USize);
-    }
-    let shape = dyn_node(type_items[0].node)?;
-    match module
-        .node_value(AnyNodeId::Dynamic(shape))
-        .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
-    {
-        Some(LowValue::Array(shape_array)) => {
-            let mut items = Vec::with_capacity(shape_array.items().len());
-            for item in shape_array.items() {
-                items.push(element_shape(module, item.node)?);
-            }
-            Ok(LowShape::Tuple(items))
+/// Whether a shape has no undecided position anywhere in it.  A domain with a
+/// single `Unknown` leaf is as undecided as an all-`Unknown` one: the wasm
+/// arity comes from flattening, so one unknown leaf is one unknown local.
+fn domain_is_known(shape: &LowShape) -> bool {
+    match shape {
+        LowShape::Unknown => false,
+        LowShape::USize => true,
+        LowShape::Tuple(items) => items.iter().all(domain_is_known),
+        LowShape::Array(element, _)
+        | LowShape::Function(element, _)
+        | LowShape::Table(element, _) => {
+            // The second position of a function/table shape is deliberately
+            // not walked: only a scalar or tuple ever reaches a domain, and
+            // those two positions are decided together or not at all.
+            element.is_known()
         }
-        _ => Ok(LowShape::USize),
     }
 }
 
