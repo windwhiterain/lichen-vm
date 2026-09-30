@@ -90,7 +90,7 @@ queue's order is deliberate.
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | blocked:D13 |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
-| P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
+| P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
@@ -3266,6 +3266,127 @@ beside the existing `Vec` gives O(1) membership with the same push/pop
 discipline. Separately, `compute.rs:1009-1011` `class_computation_node` linearly
 scans the module's whole node table and is called **per emitted node**
 (`emit_node`, `:1069`); `equality_rep` has no path compression.
+
+**Outcome — both premises held as defects, but each needed its extent and its
+mechanism corrected; one half of the first claim is stale.**  The guards are
+**three**, not four, and none of them is where the note says.  The two halves
+of the cycle claim needed opposite verdicts, so they are separated below.
+
+### The `path.contains` guards — three sites, ancestor semantics
+
+Re-derived, the two `Vec` guards are `equality.rs:287` (inside `unify_inner`)
+and `equality.rs:872` (inside `reconcile_node`), and the table one is
+`table.rs:481` (inside `key_eq`).  `table.rs:178`/`:257` are not guards at all
+any more: `:178` is `TableItem` construction in `build_table` and `:257` is
+`hash_step`, because `P1-4` deleted the hash's own path check and replaced it
+with the `UNFOLD_DEPTH` frontier — the module docs at `table.rs:24-33` state
+that.  So the note's "*`key_eq`/`hash_inner` hash each element, so a table key
+of depth d costs O(d²) hashes*" is **refuted**: `hash_inner` no longer exists,
+and the surviving guard hashes nothing.
+
+*What the guard asks.*  All three test `path.contains(&(a, b)) ||
+path.contains(&(b, a))` — the **unordered** pair against the current recursion
+path.  That is an ancestor relation, not a visited mark: a pair the walk meets
+again in a sibling subtree is not on the path and must be compared again, so
+the replacement has to be removed from on the way out.  A plain visited set
+would answer "have I seen this node at all?" and would cut comparisons the
+comparison is required to make.
+
+*The replacement.*  `AncestorPairs<K>` (`crates/lichen-lowlevel/src/ancestors.rs`,
+new) is a `HashSet<(K, K)>` whose `insert` stores **both** orientations and
+whose `remove` deletes both, so one hash probe answers the symmetric test.
+Each of the three call sites keeps its exact push/pop discipline — the same
+frame that inserts removes, on every exit — which is what makes the decision
+identical.  The key type is `NodeId` for `unify_inner` (class representatives)
+and `AnyNodeId` for `reconcile_node`/`key_eq` (raw nodes), unchanged.
+
+*Measured, before → after* (`test` profile; the input is a right-nested chain
+`[0, [0, …]]` of depth *d*, so the walk descends *d* levels and the path is
+*d* long at the bottom; the counts are exact — a temporary counter in the
+guard, removed before commit — and the times are the minimum of 5 before / 4
+after alternating rounds, because this machine varies by ~3× run to run):
+
+| probe | guard scans at d = 50/100/200/400/800, before | after |
+|---|---|---|
+| `Module::unify` of two equal chains | 5 100 / 20 200 / 80 400 / 320 800 / 1 281 600 | 101 / 201 / 401 / 801 / **1 601** |
+| a table read (`key_eq`) against a deep equal key | same | same |
+| forcing a deferred read against a committed deep value (`reconcile_node`) | 4 900 / 19 800 / 79 600 / 319 200 / 1 278 400 | 101 / 201 / 401 / 801 / **1 601** |
+
+Before: exactly `2·d(d+1)` entries scanned for the first two probes and
+`2·d(d-1)` for the third (its path is one pair shorter) — both quadratic.
+After: `d + 1` O(1) probes.  Wall time at d = 800: `unify`
+8.62 → 5.30 ms, `key_eq` 9.83 → 4.66 ms, `reconcile` 9.67 → 4.46 ms — about 2×,
+not 800×, because the guard was a small share of a walk that also does
+disjoint-set finds and node reads; the scan count is the claim, and it is the
+number that collapses.
+
+*Also found by this sweep, and deliberately not changed.*  `render.rs:196`
+(`TypePrinter::path`) and `render.rs:863` (`TypePrinter::path`/`tpath`) in
+`lichen-render` are the same ancestor guard on the type/value walk.  They are
+outside this item's area (`lowlevel, compute`), no queue item owns them, and
+changing them would need this item's measurement repeated on a type-printing
+workload; they are recorded here so the next sweep does not have to find them
+again rather than folded in.
+
+### The kernel codegen — quadratic, but only for bodies that reach a bare cell
+
+Re-derived, `class_computation_node` is `compute.rs:1042-1063` and `emit_node`
+is `:1096`; the note's lines had drifted about 35 lines.  The mechanism the note
+names is real, and the extent is narrower than "codegen":
+
+| program | `class_computation_node` calls | node-table entries scanned |
+|---|---|---|
+| `k{i} = compute.jit (x => x + i)`, N = 25…400 | **0** | 0 |
+| `k{i} = compute.jit (x => compute.launch k0 (x + i))`, N = 10/20/40/80/160 | N | 4 050 / 14 700 / 55 800 / 217 200 / **856 800** |
+
+A plain kernel body is an operation node with a value, so `class_computation_node`
+is never reached and its compile time is linear (19.3 / 30.8 / 57.8 / 119.2 /
+263.2 ms at N = 25/50/100/200/400).  A **wrapper** body — the
+`compute.launch k0 (x + i)` form — collapses the argument to a bare
+`Parameterized` cell, which is exactly the case `emit_node` resolves through
+`class_computation_node`, so each of the N kernels scans the module's whole
+node table (which holds every kernel's nodes): quadratic.  The claim therefore
+holds for wrapper-shaped kernels and not in general.
+
+*The fix.*  The class's own member list already lists its members, so the scan
+was a lookup with no index: `disjoint::members(&module.nodes, root)`.  A
+class is 2–3 members here, so the per-call cost becomes O(class) instead of
+O(module).
+
+*Measured, before → after* (min of 3 alternating rounds each; same generated
+wrapper program, N kernels):
+
+| N | entries scanned before | members visited after | compile before | compile after |
+|---|---|---|---|---|
+| 10 | 4 050 | 30 | 18.2 ms | 16.8 ms |
+| 20 | 14 700 | 60 | 27.9 ms | 26.1 ms |
+| 40 | 55 800 | 120 | 50.8 ms | 48.3 ms |
+| 80 | 217 200 | 240 | 103.9 ms | 90.5 ms |
+| 160 | 856 800 | 480 | 317.7 ms | **182.9 ms** |
+
+The scan count goes from ~N² to 3N; the wall clock moves from 1.7× at N = 160
+and grows, since the removed term is the growing one.  The plain-kernel row is
+unchanged, as its zero calls predict.
+
+*The one selection-order hazard, measured rather than argued.*  The old scan
+returned the first computational member in `nodes.keys()` (slot) order; the
+member walk returns the first in the class's *member-list* order, which
+`disjoint::union` builds by splicing the smaller set onto the larger one's
+tail.  The two can differ only when a class holds **more than one**
+computational member, and then the emitter could emit a different one of
+them — a behavioural change, not a refactor.  A temporary probe counted the
+candidates per call across the whole workspace suite (`cargo test --workspace
+-- --nocapture`): **no class ever held more than one**, so on every class any
+test reaches the two orders return the same member, and the suite's kernel
+execution tests assert the emitted code's results unchanged.  The residual is
+stated rather than hidden: a future program whose equality class unifies two
+*different* computations could select a different member than the scan did.
+
+*Deliberately not done.*  `equality_rep`'s lack of path compression
+(`compute.rs:1044-1055`) is untouched.  The note names it beside the scan, but
+it is not what was quadratic: `disjoint::union` attaches the smaller set under
+the larger, so a chain is O(log n) deep, and adding compression needs `&mut`
+(a read-only `&Module` cannot carry it) or a second representation.
 
 ### P4-6 — Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak `reported`
 

@@ -3,7 +3,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
     LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
-    table::KeyState,
+    ancestors::AncestorPairs, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -430,7 +430,7 @@ impl<P: Program> Module<P> {
                                         // module; its home block is alive.
                                         let items = unsafe { payload.items() };
                                         let start = items.partition_point(|item| item.hash < hash);
-                                        let mut path = Vec::new();
+                                        let mut path = AncestorPairs::new();
                                         let mut found = None;
                                         for item in &items[start..] {
                                             if item.hash != hash {

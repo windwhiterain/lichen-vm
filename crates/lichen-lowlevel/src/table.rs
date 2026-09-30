@@ -74,6 +74,7 @@ use std::collections::HashMap;
 use crate::{
     AnyFunctionId, AnyHandle, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, EvalError,
     LocalNodeId, LowValue, Module, Program, StaticNodeId, TableItem, ValueExt as _,
+    ancestors::AncestorPairs,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -473,15 +474,15 @@ impl<P: Program> Module<P> {
         &self,
         a: AnyNodeId,
         b: AnyNodeId,
-        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+        path: &mut AncestorPairs<AnyNodeId>,
     ) -> bool {
         if a == b {
             return true;
         }
-        if path.contains(&(a, b)) || path.contains(&(b, a)) {
+        if path.contains(a, b) {
             return true;
         }
-        path.push((a, b));
+        path.insert(a, b);
         let ok = match (self.node_value(a), self.node_value(b)) {
             (Some(va), Some(vb)) => match (va.as_enum(), vb.as_enum()) {
                 (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
@@ -502,7 +503,7 @@ impl<P: Program> Module<P> {
             },
             _ => false,
         };
-        path.pop();
+        path.remove(a, b);
         ok
     }
 }

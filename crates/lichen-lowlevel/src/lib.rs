@@ -15,6 +15,7 @@ pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
 pub(crate) use crate::static_module::StaticModuleCache;
 
+mod ancestors;
 mod apply;
 mod assert;
 pub mod codec;

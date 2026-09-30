@@ -57,6 +57,7 @@ use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module,
     ModuleKey, NodeId, OperatorExt, Program, StaticModule,
 };
+use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
 /// The program-generic bounds the kernel-safe JIT requires.
@@ -1039,6 +1040,11 @@ where
 /// (a kernel call's result, a `launch` argument); the emitter reaches the
 /// computation through the class.  Returns `None` when the class has no such
 /// member — the value is genuinely opaque (an uncomputable leaf).
+///
+/// The walk is the class's own member list, not a scan of the module's whole
+/// node table.  The table holds every kernel's nodes while the emitter is
+/// compiling one kernel, and this call is made per kernel that reaches a bare
+/// cell, so scanning it made codegen quadratic in the number of kernels.
 fn class_computation_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
@@ -1046,17 +1052,14 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let root = equality_rep(module, node);
-    for n in module.nodes.keys() {
-        if equality_rep(module, n) != root {
-            continue;
-        }
-        if let Some(op) = module.node_operation(n).as_ref()
+    for member in disjoint::members(&module.nodes, root) {
+        if let Some(op) = module.node_operation(member).as_ref()
             && !matches!(
                 AsEnum::<LowOperator>::as_enum(&op.operator),
                 Some(LowOperator::Index)
             )
         {
-            return Some(n);
+            return Some(member);
         }
     }
     None

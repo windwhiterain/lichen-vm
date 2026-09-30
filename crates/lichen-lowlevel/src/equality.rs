@@ -5,7 +5,7 @@ use stacksafe::stacksafe;
 use crate::{
     AnyNodeId, AnyNodeId::Dynamic as Dyn, Deferral, LowOperator, LowValue, Module, Node, NodeId,
     Operation, PendingSide, PendingSides, Program, StaticModuleCache, StaticNodeId, ValueExt as _,
-    is_unbound,
+    ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -152,7 +152,7 @@ impl<P: Program> Module<P> {
     /// Returns the representative of the merged class on success, or of
     /// `a`'s class when unification fails.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        let mut path = Vec::new();
+        let mut path = AncestorPairs::new();
         let mut materialized = HashMap::new();
         // The descent path, seeded empty; the root operands are carried
         // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
@@ -272,7 +272,7 @@ impl<P: Program> Module<P> {
         &mut self,
         a: AnyNodeId,
         b: AnyNodeId,
-        path: &mut Vec<(NodeId, NodeId)>,
+        path: &mut AncestorPairs<NodeId>,
         materialized: &mut HashMap<StaticNodeId, NodeId>,
         steps: &mut Vec<UnifyStep>,
         root: (NodeId, NodeId),
@@ -284,7 +284,7 @@ impl<P: Program> Module<P> {
         if ra == rb {
             return true;
         }
-        if path.contains(&(ra, rb)) || path.contains(&(rb, ra)) {
+        if path.contains(ra, rb) {
             self.record_error(ra, rb, steps, root);
             return false;
         }
@@ -419,7 +419,7 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                     return true;
                 }
-                path.push((ra, rb));
+                path.insert(ra, rb);
                 let mut ok = true;
                 for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
                     // Record the descent step before recursing, so the deep
@@ -437,7 +437,7 @@ impl<P: Program> Module<P> {
                         break;
                     }
                 }
-                path.pop();
+                path.remove(ra, rb);
                 if ok {
                     self.add_equality(ra, rb);
                 }
@@ -805,7 +805,7 @@ impl<P: Program> Module<P> {
         // (it binds to the computed result); a concrete conflict is the
         // deferred error surfacing now, at the moment the computation ran.
         if let Some(prior) = prior {
-            let mut path = Vec::new();
+            let mut path = AncestorPairs::new();
             if !self.reconcile_value(prior, value, &mut path) {
                 self.unify_errors.push(UnifyError {
                     root_a: rep,
@@ -837,7 +837,7 @@ impl<P: Program> Module<P> {
         &self,
         a: P::Value,
         b: P::Value,
-        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+        path: &mut AncestorPairs<AnyNodeId>,
     ) -> bool {
         // A free (unbound) cell matches anything — it resolves by binding.
         if is_unbound(Some(a)) || is_unbound(Some(b)) {
@@ -864,22 +864,22 @@ impl<P: Program> Module<P> {
         &self,
         a: AnyNodeId,
         b: AnyNodeId,
-        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+        path: &mut AncestorPairs<AnyNodeId>,
     ) -> bool {
         if a == b {
             return true;
         }
-        if path.contains(&(a, b)) || path.contains(&(b, a)) {
+        if path.contains(a, b) {
             return true;
         }
-        path.push((a, b));
+        path.insert(a, b);
         let ok = match (self.node_value(a), self.node_value(b)) {
             (Some(va), Some(vb)) => self.reconcile_value(va, vb, path),
             // A node without a value is unknown (free or released) — a
             // wildcard, never a conflict.
             _ => true,
         };
-        path.pop();
+        path.remove(a, b);
         ok
     }
 
