@@ -274,28 +274,28 @@ where
                 }
             }
         }
-        match node.equality.parent {
+        match node.equality.parent() {
             None => w.u8(0),
             Some(parent) => {
                 w.u8(1);
                 w.u64(parent.index as u64);
             }
         }
-        match node.equality.next {
+        match node.equality.next() {
             None => w.u8(0),
             Some(next) => {
                 w.u8(1);
                 w.u64(next.index as u64);
             }
         }
-        match node.equality.tail {
+        match node.equality.tail() {
             None => w.u8(0),
             Some(tail) => {
                 w.u8(1);
                 w.u64(tail.index as u64);
             }
         }
-        w.u32(node.equality.size);
+        w.u32(node.equality.size());
         w.u8(node.parameterized as u8);
         write_low_shape_opt(&mut w, &node.low_shape);
     }
@@ -561,12 +561,7 @@ where
             value,
             operation,
             low_shape,
-            equality: lichen_utils::disjoint::Meta {
-                parent,
-                next,
-                tail,
-                size,
-            },
+            equality: lichen_utils::disjoint::Meta::new(parent, next, tail, size),
             parameterized,
         });
     }

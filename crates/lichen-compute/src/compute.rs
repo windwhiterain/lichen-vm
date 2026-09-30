@@ -1026,7 +1026,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut root = node;
-    while let Some(parent) = module.node_equality(root).parent {
+    while let Some(parent) = module.node_equality(root).parent() {
         root = parent;
     }
     root

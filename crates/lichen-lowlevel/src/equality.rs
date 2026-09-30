@@ -51,7 +51,7 @@ impl<P: Program> disjoint::Node for Node<P> {
     fn meta(&self) -> &disjoint::Meta<NodeId> {
         &self.equality
     }
-    fn meta_mut(&mut self) -> &mut disjoint::Meta<NodeId> {
+    fn meta_mut(&mut self, _permit: disjoint::MetaPermit) -> &mut disjoint::Meta<NodeId> {
         &mut self.equality
     }
 }
@@ -71,7 +71,7 @@ impl<P: Program> Module<P> {
     /// union-find tree.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         let mut root = node;
-        while let Some(parent) = self.nodes[root].equality.parent {
+        while let Some(parent) = self.nodes[root].equality.parent() {
             root = parent;
         }
         self.nodes[root].value
@@ -98,15 +98,15 @@ impl<P: Program> Module<P> {
             // `None`, `disjoint::Meta`'s contract for a representative with no
             // second member — holds nobody to replicate to, so the write above
             // is the whole effect.  See `P4-2` in `docs/notes/code-audit.md`.
-            if self.nodes[node].equality.parent.is_none()
-                && self.nodes[node].equality.next.is_none()
+            if self.nodes[node].equality.parent().is_none()
+                && self.nodes[node].equality.next().is_none()
             {
                 return;
             }
             let rep = self.equality_representative(node);
             let mut member = rep;
             loop {
-                let next = self.nodes[member].meta().next;
+                let next = self.nodes[member].meta().next();
                 if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
                     self.nodes[member].value = Some(value);
                 }
@@ -492,7 +492,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 return true;
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return false;
             };
             member = next;
@@ -513,7 +513,7 @@ impl<P: Program> Module<P> {
             {
                 return false;
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return true;
             };
             member = next;
@@ -552,7 +552,7 @@ impl<P: Program> Module<P> {
                 }
                 _ => return false,
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return true;
             };
             member = next;
@@ -608,7 +608,7 @@ impl<P: Program> Module<P> {
             return false;
         };
         let mut n = target;
-        while let Some(parent) = self.nodes[n].equality.parent {
+        while let Some(parent) = self.nodes[n].equality.parent() {
             n = parent;
         }
         n == rep
@@ -676,7 +676,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 return Some(member);
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
     }
 
@@ -770,7 +770,7 @@ impl<P: Program> Module<P> {
             {
                 return Some(value);
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
     }
 
@@ -786,7 +786,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 break;
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
         let block = self.nodes[member].block;
         // Capture the value the class already committed *before* forcing — the

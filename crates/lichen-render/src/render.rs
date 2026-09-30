@@ -989,7 +989,7 @@ where
     // than the node table.
     for _ in 0..=module.nodes.len() {
         module.nodes.get(n)?;
-        match module.node_equality(n).parent {
+        match module.node_equality(n).parent() {
             Some(parent) => n = parent,
             None => return Some(n),
         }

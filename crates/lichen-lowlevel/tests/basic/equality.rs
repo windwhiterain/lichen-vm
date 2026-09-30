@@ -42,8 +42,8 @@ fn root_node_compresses_deep_paths() {
     // `1 <- 2`, grow the other class past it, then merge the two — `1`'s
     // root is attached under `3` and leaves `2` two edges deep.  This is the
     // deepest chain union-by-size produces at this size; a longer one would
-    // have to write `equality.parent` by hand, which is the bypass this API
-    // refuses.
+    // have to install a `parent` link by hand, outside the union-find's own
+    // operations — the bypass this API refuses.
     m.add_equality(nodes[1], nodes[2]);
     m.add_equality(nodes[3], nodes[4]);
     m.add_equality(nodes[3], nodes[0]);
@@ -56,7 +56,7 @@ fn root_node_compresses_deep_paths() {
     // The whole path was flattened onto the representative.
     for &n in &nodes {
         assert_eq!(
-            m.node_equality(n).parent,
+            m.node_equality(n).parent(),
             (n != nodes[3]).then_some(nodes[3])
         );
     }

@@ -511,7 +511,7 @@ struct StaticApplyCtx<P: Program> {
 /// solved structure is immutable).
 fn static_find<P: Program>(nodes: &[StaticNode<P>], key: LocalNodeId) -> LocalNodeId {
     let mut current = key;
-    while let Some(parent) = nodes[current.index].equality.parent {
+    while let Some(parent) = nodes[current.index].equality.parent() {
         current = parent;
     }
     current
@@ -585,12 +585,12 @@ impl<P: Program> StaticModule<P> {
                     operator: operation.operator,
                     operand: operation.operand.map(|operand| node_map[&operand]),
                 }),
-                equality: disjoint::Meta {
-                    parent: node.equality.parent.map(|p| node_map[&p]),
-                    next: node.equality.next.map(|n| node_map[&n]),
-                    tail: node.equality.tail.map(|t| node_map[&t]),
-                    size: node.equality.size,
-                },
+                equality: disjoint::Meta::new(
+                    node.equality.parent().map(|p| node_map[&p]),
+                    node.equality.next().map(|n| node_map[&n]),
+                    node.equality.tail().map(|t| node_map[&t]),
+                    node.equality.size(),
+                ),
                 // A node the deep pass never ran on is unproven — treated as
                 // parameterized (conservative: it materializes as a clone).
                 parameterized: node.evaluated_deep.is_none_or(|e| e.parameterized),

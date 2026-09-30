@@ -152,40 +152,16 @@ impl<P: Program> Module<P> {
     /// Must run before the block's nodes are removed — the walk reads the
     /// `next` pointers of the members being removed.
     fn flatten_class(&mut self, rep: NodeId, dropped: BlockId) {
+        let mut survivors = Vec::new();
         let mut current = Some(rep);
-        let mut new_rep: Option<NodeId> = None;
-        let mut prev: Option<NodeId> = None;
-        let mut tail: Option<NodeId> = None;
-        let mut size = 0u32;
         while let Some(member) = current {
-            current = self.nodes[member].meta().next;
+            current = self.nodes[member].meta().next();
             if self.nodes[member].block == dropped {
                 continue; // removed below; keep walking past it
             }
-            let representative = match new_rep {
-                Some(representative) => representative,
-                None => {
-                    new_rep = Some(member);
-                    member
-                }
-            };
-            if let Some(prev) = prev {
-                self.nodes[prev].meta_mut().next = Some(member);
-            }
-            self.nodes[member].meta_mut().parent =
-                (member != representative).then_some(representative);
-            prev = Some(member);
-            tail = Some(member);
-            size += 1;
+            survivors.push(member);
         }
-        let Some(representative) = new_rep else {
-            return;
-        };
-        let last = prev.expect("a surviving member was elected representative");
-        self.nodes[last].meta_mut().next = None;
-        let meta = self.nodes[representative].meta_mut();
-        meta.tail = tail;
-        meta.size = size;
+        disjoint::rebuild(&mut self.nodes, &survivors);
     }
 
     /// Drops `block` and everything homed in it (children, functions,

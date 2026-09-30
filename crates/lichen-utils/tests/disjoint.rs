@@ -13,7 +13,7 @@ impl Node for TestNode {
     fn meta(&self) -> &Meta<TestKey> {
         &self.set
     }
-    fn meta_mut(&mut self) -> &mut Meta<TestKey> {
+    fn meta_mut(&mut self, _permit: disjoint::MetaPermit) -> &mut Meta<TestKey> {
         &mut self.set
     }
 }
@@ -28,8 +28,13 @@ fn add(nodes: &mut SlotMap<TestKey, TestNode>) -> TestKey {
 
 /// Link `child` directly under `parent`, bypassing [`disjoint::union`], to
 /// build a deliberately deep path for compression tests.
+///
+/// The links live in this file's own node type, so building one is field
+/// assignment on `TestNode` — not a write through the union-find, which
+/// hands out no mutable [`Meta`].
 fn link(nodes: &mut SlotMap<TestKey, TestNode>, child: TestKey, parent: TestKey) {
-    nodes[child].meta_mut().parent = Some(parent);
+    let meta = nodes[child].set;
+    nodes[child].set = Meta::new(Some(parent), meta.next(), meta.tail(), meta.size());
 }
 
 // --- tests ------------------------------------------------------------
@@ -38,10 +43,10 @@ fn link(nodes: &mut SlotMap<TestKey, TestNode>, child: TestKey, parent: TestKey)
 fn make_set_initializes_singleton() {
     let mut nodes = SlotMap::with_key();
     let key = add(&mut nodes);
-    assert_eq!(nodes[key].meta().parent, None);
-    assert_eq!(nodes[key].meta().next, None);
-    assert_eq!(nodes[key].meta().tail, Some(key));
-    assert_eq!(nodes[key].meta().size, 1);
+    assert_eq!(nodes[key].meta().parent(), None);
+    assert_eq!(nodes[key].meta().next(), None);
+    assert_eq!(nodes[key].meta().tail(), Some(key));
+    assert_eq!(nodes[key].meta().size(), 1);
     assert_eq!(disjoint::find(&mut nodes, key), key);
 }
 
@@ -57,7 +62,7 @@ fn find_returns_representative_and_compresses_path() {
 
     assert_eq!(root, ids[0]);
     for &id in &ids {
-        assert_eq!(nodes[id].meta().parent, (id != ids[0]).then_some(ids[0]));
+        assert_eq!(nodes[id].meta().parent(), (id != ids[0]).then_some(ids[0]));
     }
 }
 
@@ -77,7 +82,7 @@ fn find_is_stack_safe_on_deep_chains() {
     assert_eq!(root, chain[0]);
     for &id in &chain {
         assert_eq!(
-            nodes[id].meta().parent,
+            nodes[id].meta().parent(),
             (id != chain[0]).then_some(chain[0])
         );
     }
@@ -109,7 +114,7 @@ fn union_attaches_smaller_under_larger() {
     let rep = disjoint::union(&mut nodes, small[0], big[0]);
 
     assert_eq!(rep, big[0]); // the larger set's root stays representative
-    assert_eq!(nodes[rep].meta().size, 5);
+    assert_eq!(nodes[rep].meta().size(), 5);
     let list: Vec<_> = disjoint::members(&nodes, rep).collect();
     assert_eq!(list, vec![big[0], big[1], big[2], small[0], small[1]]);
 }
@@ -127,7 +132,7 @@ fn union_of_joined_sets_is_noop() {
     assert_eq!(again, rep);
     let after: Vec<_> = disjoint::members(&nodes, rep).collect();
     assert_eq!(after, before); // no member is linked in twice
-    assert_eq!(nodes[rep].meta().size, 2);
+    assert_eq!(nodes[rep].meta().size(), 2);
 }
 
 #[test]
@@ -179,7 +184,7 @@ fn compression_does_not_disturb_member_lists() {
 
     assert_eq!(root, a);
     for &id in &[z, y, x, a3] {
-        assert_eq!(nodes[id].meta().parent, Some(a)); // path flattened
+        assert_eq!(nodes[id].meta().parent(), Some(a)); // path flattened
     }
     let after: Vec<_> = disjoint::members(&nodes, a).collect();
     assert_eq!(after, before); // find rewrites only parent pointers

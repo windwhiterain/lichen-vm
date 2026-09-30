@@ -82,7 +82,7 @@ queue's order is deliberate.
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
-| P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | todo |
+| P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | done |
 | P3-1 | medium | all | Duplication clusters | done |
 | P3-2 | medium | all | Workspace manifest duplication | done |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
@@ -2594,6 +2594,92 @@ question is worth its own decision if it comes to that.
 is an invitation rather than a contract, and leaving a public `Meta` means the
 invitation is still open — one indirection away. A reader who checks `Node`'s
 fields, finds them private, and concludes the write is impossible would be wrong.
+
+**Outcome — done, but not by opacity alone: the accessor was the route, not the
+fields.** Both routes are re-derived first-hand.
+
+*Route 2 reproduces as recorded.* From `crates/lichen-lowlevel/tests/basic/` — an
+external crate to both `lichen-lowlevel` and `lichen-utils` — this compiles and
+makes `equality_representative(a)` return `b`:
+
+```text
+m.nodes[a].meta_mut().parent = Some(b);
+```
+
+*A probe was run against exactly that intermediate state.* With `Meta`'s fields
+private, the read accessors added and `Meta::new` supplied for the frozen mirror,
+both of these still compile and still write the live link:
+
+```text
+*m.nodes[a].meta_mut() = Meta::new(Some(b), None, None, 1);   // an arbitrary parent
+*m.nodes[other].meta_mut() = Meta::default();                 // split a node out of its class
+```
+
+The constructor has to be public — `static_module.rs`'s freeze and
+`persist.rs`'s artifact decoder both build a `Meta` from solved links — and the
+accessor hands out `&mut Meta`, so assignment through it is the field write one
+indirection further out; `Default` alone is enough for the second. **Opacity does
+not close the write**, and `D11`'s "a documented reader is a contract, whereas a
+public field is an invitation" applies to the mutable accessor too: it was the
+accessor that had to change.
+
+*Route 1 is the same statement's other half.* `nodes` being public is what makes
+`&mut Node<P>` nameable, but after `P2-4` every state field of `Node` is private,
+so the only *write* a `&mut Node<P>` yields is `meta_mut`. Closing it closed both
+recorded routes; `Module::nodes` therefore stays public, as this item required.
+
+**What landed.** `Meta` is opaque (`disjoint.rs`): private fields, four read
+accessors (`parent`/`next`/`tail`/`size`), and `Meta::new(parent, next, tail,
+size)` for the two external construction sites (`static_module.rs:588`,
+`persist.rs:564`). `Node::meta_mut` now takes a `MetaPermit` whose field is
+private to `lichen_utils::disjoint`, so no other crate can mint one; the four
+operations inside the module do. The one legitimate writer outside it —
+garbage collection's class splice — moved into the union-find as
+`disjoint::rebuild`: `gc.rs`'s `flatten_class` walks the member list read-only
+(`meta().next()`) collecting the survivors, then hands them over in visit order,
+and `rebuild` writes the same links the in-place loop wrote (each survivor's
+parent to the first survivor, the list re-linked in order, the last one
+terminated, the representative's `tail`/`size`) — so the tree, the member list
+and the counts are identical. `flatten_class` now collects the survivors in a
+`Vec<NodeId>` — one allocation per class spliced, where the old loop wrote in
+place; `drop_block` already builds a `HashSet` per call, and no other pass
+changed. `find`/`union`/`make_set` are unchanged apart from minting the permit.
+
+*The read surface widened exactly as `D11` accepted it.* Every read of the four
+links now goes through an accessor: 23 sites outside `lichen-utils` — eleven in
+`equality.rs` (three `equality.parent`, one `equality.next`, seven member-list
+`meta().next`), five in `static_module.rs` (the `static_find` walk and the
+freeze's four-link remap), four in `persist.rs` (the artifact encoder), and one
+each in `compute.rs`, `render.rs` and `lichen-lowlevel`'s own equality test —
+plus nine in `lichen-utils`' test node.
+
+*Two things this deliberately leaves alone.* `disjoint::union`/`find`/`make_set`
+remain public and callable on `Module::nodes`: they are the union-find's own
+invariant-preserving API — and `Module::add_equality`/`equality_representative`
+are thin wrappers over them — so a host merging two classes that way performs a
+legitimate merge, not the wrong-link write this item is about. The frozen
+mirror's own links (`StaticNode::equality` is a `pub` field) stay `pub` too: a
+`StaticModule` is only reachable as `Arc<StaticModule<P>>`, so no `&mut
+StaticNode` exists to write through.
+
+*The extent the note gives does not reproduce.* "184 `.nodes` uses outside
+`lichen-lowlevel/src`" measures as **56** field uses (`\.nodes`) — 42 in
+`lichen-lowlevel`'s own integration tests and 14 across `lichen-language` (7),
+`lichen-highlevel` (3), `lichen-render` (3) and `lichen-compute` (1). That is
+still five crates including the test tree, and the table is still the larger
+change; the number is corrected, not the deferral.
+
+**Evidence.** The probe was an integration test in `lichen-lowlevel`'s `basic`
+crate (an external crate): the two writes above passed before the gate and fail
+to compile after it — `E0061` (the missing `MetaPermit`), then `E0423` (`cannot
+initialize a tuple struct which contains private fields`) once the permit is
+passed explicitly. The probe was deleted before the commit. `cargo clippy
+--workspace --all-targets -- -D warnings` exits 0, `cargo fmt --all -- --check`
+exits 0, `cargo test --workspace` passes — including the frozen-mirror path
+(`static_module`'s freeze and `persist`'s artifact round-trip) and the DSU suite
+(`find`'s stack-safety on a 100,000-deep hand-built chain included, whose
+`link` helper now assigns the test's own node field instead of writing through
+the union-find).
 
 ## P3 — refactor
 
