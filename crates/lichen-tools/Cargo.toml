@@ -1,0 +1,16 @@
+[package]
+name = "lichen-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Repository tooling for the lichen tree — the README example sync, split out of the compiler library so no embedder links it."
+
+[lib]
+name = "lichen_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sync-readme"
+path = "src/bin/sync-readme.rs"
+
+[dependencies]
+lichen-language = { path = "../lichen-language" }

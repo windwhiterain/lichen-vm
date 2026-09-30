@@ -74,7 +74,7 @@ queue's order is deliberate.
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
-| P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | todo |
+| P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | done |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | done |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
@@ -2004,6 +2004,79 @@ up from it (`:55-57`), and `example_files` panics on a directory it cannot read
 (`:77-78`) — so the `cargo install` panic is real for a caller that invokes the
 generator, which is an argument for the move, not against it. What blocks the
 move is that those callers are inside this crate's own test targets.
+
+**Outcome — the remaining half; the item is closed.** The premise held, re-derived
+first-hand at the then-current lines. The extent it names was checked: *two `..`
+hops* (`crate_dir()` = the compile-time `CARGO_MANIFEST_DIR`, `example_dir()` and
+`readme_path()` both `../../…`) is exact, and it is why the move kept working —
+the tools crate sits at the same depth (`crates/lichen-tools`), so both paths
+still resolve to the repository root and no path constant changed. *Executes
+every example program* is exact: `sync_output_comments` runs
+`program_output` over every file the walk yields. *Panics on a missing examples
+dir* is exact (the walk's `fs::read_dir(..).unwrap_or_else(panic!)`), and
+*follows symlinks with unbounded recursion* is exact in both walks — `walk`'s
+`path.is_dir()` and `render_dir`'s entry classification both follow a directory
+symlink, so one pointing at an ancestor recurses forever.
+
+*The move.* The renderer is now `crates/lichen-tools/src/readme.rs`, the command
+`crates/lichen-tools/src/bin/sync-readme.rs` (binary name unchanged, so the
+README's command is `cargo run -p lichen-tools --bin sync-readme`), and the
+crate is `lichen-tools` — package, library `lichen_tools`, its own workspace
+member. `lichen-language` lost `pub mod readme;` and its only binary, so no
+consumer of the library links the generator: the defect is the *library*
+shipping it, and that is what changed. The unit tests moved with the module
+(`crates/lichen-tools/src/tests/readme_tests.rs`) because they call private
+items (`declared_order`, `replace_output_comment`, `render_examples_in`,
+`DEFAULT_ORDER`) and the fixture tree moved to
+`crates/lichen-tools/tests/fixtures/readme/` (the unit test's
+`crate_dir()/tests/fixtures/readme`).
+
+*The two tests that did **not** move, and why that is not a dodge.*
+`tests/readme.rs` and `tests/examples.rs` stay in `lichen-language`'s test tree
+and reach the generator through a **dev-dependency** on `lichen-tools`. A
+dev-dependency is not linked by a consumer of the library, so the shipped
+surface is unchanged; what it buys is that the mandated
+`cargo test -p lichen-language --test examples --test readme` keeps naming
+targets that exist and that still mean the same thing. The alternative — moving
+both suites into `lichen-tools` — would break that command's target selection,
+which is a worse outcome for a suite whose subject is the repository's examples,
+not the compiler. There is no test here that *can only* live in the library: the
+two integration tests use only public items, and the unit tests moved.
+
+*The panic became a diagnostic.* The two tree walks and the three public drives
+now return `ReadmeResult` (`Result<_, String>`, the module's own convention — the
+one `replace_examples` already used) instead of panicking: a missing `examples/`
+yields `read <path>: <io error>`, and `sync-readme` prints it and returns
+`ExitCode::FAILURE`. Left as panics on purpose, because none is "the tool invoked
+in the wrong place": `read_normalized` (a read of a file the walk just found, or
+of the README itself), `program_output` (which *is* the diagnostic rendering for
+a failing example, and what `tests/examples.rs` asserts on), and
+`declared_order`'s non-numeric `order =` — the typo the sync command exists to
+catch.
+
+*The symlink recursion is bounded, not merely tolerated.* `MAX_DEPTH` (= 32,
+`pub` like the markers) is checked at the entry of both walks and exceeding it is
+an error naming the path, so a directory symlink cycle is a diagnostic instead of
+a stack overflow; the bound is a report, never a silent truncation of the README.
+
+*Tests.* `crates/lichen-tools/src/tests/readme_tests.rs` adds
+`a_missing_example_directory_is_reported_not_a_panic`: it asserts
+`render_examples_in` on an absent tree is an `Err` naming the path. Against the
+unfixed panic path (temporarily restored for the check) it failed with
+*"panicked at readme.rs: … read …\tests\fixtures\no-such-tree: … (os error 3)"*;
+with the fix it passes. The other nine unit tests, and
+`tests/examples.rs` and `tests/readme.rs` under `-p lichen-language`, pass
+unchanged — the README was not rewritten, so the rendered section is byte-identical
+to what the pre-move code produced. The depth bound is reasoned rather than
+demonstrated: tripping it needs a 33-level tree, and no fixture can carry one
+without a directory per level.
+
+*One stale reference this leaves behind, named so it is not mistaken for
+history.* `P2-12`'s Outcome ("What did not move, and why") still says the
+generator stayed and that `lichen-language` "still has a binary"; both are now
+false. That paragraph is another item's record and was left untouched — it is the
+same class of stale reference `18dfad0` re-pointed after the CLI move, and wants
+the same one-line correction in a `docs:` commit.
 
 ### P2-7 — `visiting` is set by hand, bypassing the `Drop` guard `reported`
 

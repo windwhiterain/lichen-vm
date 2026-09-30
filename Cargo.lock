@@ -690,6 +690,7 @@ dependencies = [
  "lichen-registry",
  "lichen-render",
  "lichen-std-native",
+ "lichen-tools",
  "lichen-utils",
  "stacksafe",
 ]
@@ -805,6 +806,13 @@ dependencies = [
  "lichen-highlevel",
  "lichen-lowlevel",
  "lichen-utils",
+]
+
+[[package]]
+name = "lichen-tools"
+version = "0.1.0"
+dependencies = [
+ "lichen-language",
 ]
 
 [[package]]

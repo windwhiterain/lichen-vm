@@ -22,3 +22,7 @@ lichen-utils = { path = "../lichen-utils" }
 # the slot this crate reads with the one the package manager installs into.
 lichen-package = { path = "../lichen-package" }
 lichen-std-native = { path = "../../lichen-std-native" }
+# `tests/readme.rs` and `tests/examples.rs` drive the README tooling, which
+# moved to its own crate (`P2-6`); a dev-dependency keeps them here without
+# putting the generator back in the library.
+lichen-tools = { path = "../lichen-tools" }

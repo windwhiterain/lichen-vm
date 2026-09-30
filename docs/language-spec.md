@@ -286,7 +286,7 @@ A string is `"…"` with no escape characters and may span newlines; its content
 is any character except `"` or `@`.  `@` is reserved for the block delimiters,
 so it cannot appear in the surrounding code or inside a string.  The block
 carries `order` / `output` / prose for the README tooling (see
-`crates/lichen-language/src/readme.rs`).  The code to compile is the source
+`crates/lichen-tools/src/readme.rs`).  The code to compile is the source
 after the block (or the whole source when there is no `@`); the preprocessor
 returns that borrowed slice plus a base byte offset so the lexer maps every
 span back to the original file.

@@ -21,18 +21,43 @@
 //! agree.
 //! [`replace_examples`] splices the rendered blob into the region between
 //! the `<!-- begin: examples -->` / `<!-- end: examples -->` markers, and
-//! `cargo run -p lichen-language --bin sync-readme` writes it back.
+//! `cargo run -p lichen-tools --bin sync-readme` writes it back.
 //! `tests/readme.rs` rewrites the README's generated region in place whenever
 //! it drifts, so the README cannot go stale.  A program's `output = "..."`
 //! metadata is *not* self-healed: it is a claim about observable behaviour, so
 //! `tests/examples.rs` asserts it and fails on drift, while the `sync-readme`
 //! binary rewrites both for committing on demand.
+//!
+//! This is repository tooling, not a compiler surface: it walks the checkout
+//! through the compile-time `CARGO_MANIFEST_DIR`, so it lives in `lichen-tools`
+//! and no consumer of the compiler library links it (`P2-6`).  Both drives of
+//! the tree are fallible — a run outside the repository names the unreadable
+//! path instead of panicking — and bounded in depth ([`MAX_DEPTH`]), so a
+//! directory symlink that points back into the tree is a diagnostic rather
+//! than a stack overflow.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::preprocess::Directive;
-use crate::preprocess::{block_directives, split_block};
+use lichen_language::package::PackageStore;
+use lichen_language::preprocess::{Directive, block_directives, block_metadata, split_block};
+use lichen_language::program::LangProgram;
+use lichen_language::render::render_all;
+use lichen_language::run::evaluate_raw;
+
+/// A fallible drive of the checkout.  The message names the path and the
+/// cause, so `sync-readme` reports it as a diagnostic and exits non-zero when
+/// it is run outside the repository (where the `CARGO_MANIFEST_DIR`-relative
+/// `examples/` does not exist).
+pub type ReadmeResult<T> = std::result::Result<T, String>;
+
+/// The deepest directory nesting either tree walk descends.
+///
+/// The bound exists because the walks follow directory entries: a symlink
+/// pointing at an ancestor recurses forever, and the walk that finds it is the
+/// one that must stop.  It is generous for `examples/` (a handful of levels),
+/// and exceeding it is reported, never a silent truncation.
+pub const MAX_DEPTH: usize = 32;
 
 /// The marker that opens the generated region in the READMEs.
 pub const BEGIN_MARKER: &str = "<!-- begin: examples -->";
@@ -42,6 +67,11 @@ pub const END_MARKER: &str = "<!-- end: examples -->";
 /// A directory's own program: its `order =` places the whole directory
 /// among its siblings, and its code opens the directory's section.
 const DIR_FACE: &str = "_.lichen";
+
+/// Read a directory, or report why it cannot be read.
+fn read_dir(dir: &Path) -> ReadmeResult<fs::ReadDir> {
+    fs::read_dir(dir).map_err(|e| format!("read {}: {e}", dir.display()))
+}
 
 /// The crate directory, embedded at compile time so it is independent of the
 /// current working directory (tests run from the crate dir, the sync binary
@@ -71,25 +101,36 @@ pub fn read_normalized(path: &Path) -> String {
 
 /// Every example program: every `.lichen` file anywhere under the example
 /// directory, including each directory's `_.lichen` face.  Order within the
-/// list is irrelevant — [`render_examples`] re-sorts the tree.
-pub fn example_files() -> Vec<(String, PathBuf)> {
-    fn walk(dir: &Path, prefix: &str, files: &mut Vec<(String, PathBuf)>) {
-        for entry in fs::read_dir(dir)
-            .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-            .flatten()
-        {
+/// list is irrelevant — [`render_examples`] re-sorts the tree.  Reports an
+/// unreadable directory instead of panicking, so a run outside the repository
+/// names the missing `examples/`.
+pub fn example_files() -> ReadmeResult<Vec<(String, PathBuf)>> {
+    fn walk(
+        dir: &Path,
+        prefix: &str,
+        depth: usize,
+        files: &mut Vec<(String, PathBuf)>,
+    ) -> ReadmeResult<()> {
+        if depth > MAX_DEPTH {
+            return Err(format!(
+                "{}: directory nesting is deeper than {MAX_DEPTH} levels",
+                dir.display()
+            ));
+        }
+        for entry in read_dir(dir)?.flatten() {
             let path = entry.path();
             let name = format!("{prefix}{}", entry.file_name().to_string_lossy());
             if path.is_dir() {
-                walk(&path, &format!("{name}/"), files);
+                walk(&path, &format!("{name}/"), depth + 1, files)?;
             } else if path.extension().is_some_and(|e| e == "lichen") {
                 files.push((name, path));
             }
         }
+        Ok(())
     }
     let mut files = Vec::new();
-    walk(&example_dir(), "", &mut files);
-    files
+    walk(&example_dir(), "", 0, &mut files)?;
+    Ok(files)
 }
 
 /// The order an unnumbered entry sorts after — after every numbered entry.
@@ -103,7 +144,7 @@ const DEFAULT_ORDER: usize = usize::MAX;
 fn declared_order(file: &Path, source: &str) -> Option<usize> {
     let (interior, _) = split_block(source);
     let interior = interior?;
-    let value = crate::preprocess::block_metadata(interior)
+    let value = block_metadata(interior)
         .into_iter()
         .find(|(name, _)| name == "order")
         .map(|(_, value)| value)?;
@@ -152,7 +193,7 @@ impl Entry {
 /// output are both read through these and never through a second notion.
 pub fn declared_output(source: &str) -> Option<String> {
     let (interior, _) = split_block(source);
-    crate::preprocess::block_metadata(interior?)
+    block_metadata(interior?)
         .into_iter()
         .find(|(name, _)| name == "output")
         .map(|(_, value)| value)
@@ -164,13 +205,9 @@ pub fn declared_output(source: &str) -> Option<String> {
 /// `@import` lines resolve relative to the file (import-free programs are
 /// unaffected).
 pub fn program_output(file: &Path, source: &str) -> String {
-    let mut store = crate::package::PackageStore::<crate::program::LangProgram>::new();
-    crate::run::evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
-        panic!(
-            "{}: failed\n{}",
-            file.display(),
-            crate::render::render_all(source, &diags)
-        )
+    let mut store = PackageStore::<LangProgram>::new();
+    evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
+        panic!("{}: failed\n{}", file.display(), render_all(source, &diags))
     })
 }
 
@@ -188,30 +225,33 @@ fn render_program_body(path: &Path) -> String {
 /// each already ordered by [`Entry::order`] (ties by name) — as markdown
 /// blocks at the given heading level.  The `_.lichen` face is not an entry:
 /// [`render_entry`] opens the directory with it.
-fn render_dir(dir: &Path, prefix: &str, level: usize) -> Vec<String> {
-    let mut entries: Vec<(usize, Entry)> = fs::read_dir(dir)
-        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
-        .flatten()
-        .filter_map(|item| {
-            let path = item.path();
-            let is_dir = path.is_dir();
-            if !is_dir
-                && (!path.extension().is_some_and(|e| e == "lichen")
-                    || path.file_name().is_some_and(|f| f == DIR_FACE))
-            {
-                return None;
-            }
-            let name = format!("{prefix}{}", path.file_name().unwrap().to_string_lossy());
-            let entry = Entry { name, path, is_dir };
-            Some((entry.order(), entry))
-        })
-        .collect();
+fn render_dir(dir: &Path, prefix: &str, level: usize, depth: usize) -> ReadmeResult<Vec<String>> {
+    if depth > MAX_DEPTH {
+        return Err(format!(
+            "{}: directory nesting is deeper than {MAX_DEPTH} levels",
+            dir.display()
+        ));
+    }
+    let mut entries: Vec<(usize, Entry)> = Vec::new();
+    for item in read_dir(dir)?.flatten() {
+        let path = item.path();
+        let is_dir = path.is_dir();
+        if !is_dir
+            && (!path.extension().is_some_and(|e| e == "lichen")
+                || path.file_name().is_some_and(|f| f == DIR_FACE))
+        {
+            continue;
+        }
+        let name = format!("{prefix}{}", path.file_name().unwrap().to_string_lossy());
+        let entry = Entry { name, path, is_dir };
+        entries.push((entry.order(), entry));
+    }
     entries.sort_by(|(order_a, entry_a), (order_b, entry_b)| {
         (*order_a, &entry_a.name).cmp(&(*order_b, &entry_b.name))
     });
     entries
         .into_iter()
-        .map(|(_, entry)| render_entry(&entry, level))
+        .map(|(_, entry)| render_entry(&entry, level, depth))
         .collect()
 }
 
@@ -220,14 +260,14 @@ fn render_dir(dir: &Path, prefix: &str, level: usize) -> Vec<String> {
 /// by its `_.lichen` when it has one — over its entries, one level deeper.
 /// Headings start at `###` for the top level and deepen per directory,
 /// capped at `######`, so nesting of any depth still renders as markdown.
-fn render_entry(entry: &Entry, level: usize) -> String {
+fn render_entry(entry: &Entry, level: usize, depth: usize) -> ReadmeResult<String> {
     let hashes = "#".repeat(level.min(6));
     if !entry.is_dir {
-        return format!(
+        return Ok(format!(
             "{hashes} `{}`\n\n{}",
             entry.name,
             render_program_body(&entry.path)
-        );
+        ));
     }
     let mut blocks = vec![format!("{hashes} `{}`", entry.name)];
     let face = entry.path.join(DIR_FACE);
@@ -238,8 +278,9 @@ fn render_entry(entry: &Entry, level: usize) -> String {
         &entry.path,
         &format!("{}/", entry.name),
         level + 1,
-    ));
-    blocks.join("\n\n")
+        depth + 1,
+    )?);
+    Ok(blocks.join("\n\n"))
 }
 
 /// Render every example program as the markdown section between the markers.
@@ -252,7 +293,7 @@ fn render_entry(entry: &Entry, level: usize) -> String {
 /// shown as its whole file, so its `output =` metadata must be current —
 /// [`sync_output_comments`] keeps it that way (and `tests/readme.rs` runs
 /// it before rendering).
-pub fn render_examples() -> String {
+pub fn render_examples() -> ReadmeResult<String> {
     render_examples_in(&example_dir())
 }
 
@@ -264,7 +305,7 @@ pub fn render_examples() -> String {
 /// controlled fixture instead of the live example set (which is a moving spec,
 /// so asserting it in a unit test would force a test edit per add/rename/
 /// reorder).
-fn render_examples_in(dir: &Path) -> String {
+fn render_examples_in(dir: &Path) -> ReadmeResult<String> {
     let root = dir;
     let mut blocks = Vec::new();
     // A `_.lichen` directly in the example directory has no directory to
@@ -277,8 +318,8 @@ fn render_examples_in(dir: &Path) -> String {
             render_program_body(&face)
         ));
     }
-    blocks.extend(render_dir(&root, "", 3));
-    blocks.join("\n\n")
+    blocks.extend(render_dir(&root, "", 3, 0)?);
+    Ok(blocks.join("\n\n"))
 }
 
 /// Rewrite every example program's `output = "..."` metadata entry to its
@@ -294,9 +335,9 @@ fn render_examples_in(dir: &Path) -> String {
 /// output that changed on its own is a behaviour change, and rewriting it away
 /// would absorb the regression into a passing test and a dirty tree.  Reaching
 /// for this to make a failing suite green is exactly the case it is not for.
-pub fn sync_output_comments() -> bool {
+pub fn sync_output_comments() -> ReadmeResult<bool> {
     let mut changed = false;
-    for (_, file) in example_files() {
+    for (_, file) in example_files()? {
         let source = read_normalized(&file);
         let output = program_output(&file, &source);
         let updated = replace_output_comment(&source, &output);
@@ -305,7 +346,7 @@ pub fn sync_output_comments() -> bool {
             changed = true;
         }
     }
-    changed
+    Ok(changed)
 }
 
 /// Replace the `output = "..."` metadata entry in `source` with `comment`;

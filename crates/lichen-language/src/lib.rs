@@ -33,7 +33,6 @@ pub mod package;
 pub mod persist;
 pub mod preprocess;
 pub mod program;
-pub mod readme;
 pub mod render;
 pub mod resolve;
 pub mod run;

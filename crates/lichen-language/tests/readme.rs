@@ -11,13 +11,16 @@
 //! so `tests/examples.rs` asserts it rather than rewriting it.  That is why
 //! [`readme::sync_output_comments`] is deliberately **not** called here — see
 //! its documentation for when it is the right tool.
+//!
+//! The renderer lives in `lichen-tools` (`P2-6`), so this suite is one of the
+//! library's test targets that drives another crate through a dev-dependency.
 
-use lichen_language::readme;
+use lichen_tools::readme;
 use std::fs;
 
 #[test]
 fn readme_embeds_the_current_example_programs() {
-    let blob = readme::render_examples();
+    let blob = readme::render_examples().unwrap_or_else(|e| panic!("{e}"));
     let path = readme::readme_path();
     let content = readme::read_normalized(&path);
     let expected = readme::replace_examples(&content, &blob)

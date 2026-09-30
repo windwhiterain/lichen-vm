@@ -98,7 +98,7 @@ compiler when a native plugin is imported: see [`crates/lichen-package`](crates/
 
 ## Examples
 
-This section is generated from [`examples`](examples) by `cargo run -p lichen-language --bin sync-readme` and enforced by [`tests/readme.rs`](crates/lichen-language/tests/readme.rs).
+This section is generated from [`examples`](examples) by `cargo run -p lichen-tools --bin sync-readme` and enforced by [`tests/readme.rs`](crates/lichen-language/tests/readme.rs).
 
 <!-- begin: examples -->
 

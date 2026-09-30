@@ -32,7 +32,7 @@ fn renders_the_tree_grouped_and_ordered() {
     // sorting last, a directory opened by its `_.lichen`, and a nested
     // directory rendered a level deeper.
     let fixture = crate_dir().join("tests").join("fixtures").join("readme");
-    let blob = render_examples_in(&fixture);
+    let blob = render_examples_in(&fixture).unwrap_or_else(|e| panic!("{e}"));
     let headings: Vec<(usize, String)> = blob
         .lines()
         .filter_map(|line| {
@@ -81,6 +81,23 @@ fn renders_the_tree_grouped_and_ordered() {
     assert!(
         !blob.contains("output:\n```text"),
         "no separate output block"
+    );
+}
+
+#[test]
+fn a_missing_example_directory_is_reported_not_a_panic() {
+    // The tool invoked outside the repository: the `CARGO_MANIFEST_DIR`-
+    // relative `examples/` is absent, so the walk must report the unreadable
+    // path (the `sync-readme` command prints it and exits non-zero) rather
+    // than panicking.
+    let missing = crate_dir()
+        .join("tests")
+        .join("fixtures")
+        .join("no-such-tree");
+    let error = render_examples_in(&missing).unwrap_err();
+    assert!(
+        error.contains("no-such-tree"),
+        "the message names the unreadable path: {error}"
     );
 }
 

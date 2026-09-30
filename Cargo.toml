@@ -14,6 +14,7 @@ members = [
     "crates/lichen-doc",
     "crates/lichen-perspective",
     "crates/lichen-language",
+    "crates/lichen-tools",
     "crates/lichen-compiler",
     "crates/lichen-language-server",
     "lichen-language-zed",
