@@ -111,7 +111,7 @@ queue's order is deliberate.
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
 | P5-12 | medium | workspace | A worktree nested in the checkout breaks `cargo metadata`/`fmt` for `tree-sitter-lichen` | done |
 | P5-13 | low | preprocess | `PreprocessDiag::at_zero` fabricates a source span | done |
-| P5-14 | low | docs | Citations invalidated by the file splits | todo |
+| P5-14 | low | docs | Citations invalidated by the file splits | done |
 
 ## P0 — memory safety and supply chain
 
@@ -4756,6 +4756,70 @@ Also fix the truncated doc comment `P2-11` moved verbatim:
 `crates/lichen-highlevel/src/checker/native_call.rs`'s module doc jumps from
 *"…the private contract with its own source."* straight into a parenthetical — the
 lead-in sentence was already missing before the move (`P5-3`'s class).
+
+**Outcome.** Both known citations reproduced, and the sweep found the drift
+confined to three notes; nothing else in the 33 notes (the ledger aside) cites a
+split file by line.
+
+*The sweep's method, so it can be repeated.*  Every note under `docs/notes/`
+except `code-audit.md` was searched for a split file followed by a line number
+(`(render|static_module|resolve|checker|compile|package|parse)\.rs:<digit>`) and
+for the bare shorthand form (`` `:<digit> ``).  After the fix the only surviving
+match is `type-system-cleanup-plan.md`'s `tests/checker.rs:167-184, 1066-1070` —
+a *test* file, which the splits did not touch.  The ledger itself was left
+alone: its citations are each item's own pre-fix evidence, not pointers to live
+code, and rewriting them would rewrite the records.
+
+*`lowlevel-low-types.md:125` — re-pointed.*  `static_module.rs:539` at the
+pre-split revision (`f5b2d72^`) is the `from_module` doc block, the freeze entry.
+The split moved the whole `impl StaticModule` freeze to
+`crates/lichen-lowlevel/src/static_module/freeze.rs` (the doc at `:13`,
+`from_module` at `:34`, `align_up` at `:183`, `rewrite_value` at `:195`), so the
+citation is now `static_module/freeze.rs` — the file, no line, since the note's
+claim is only that the plumbing exists.
+
+*`frontend-syntax-separation.md:109` — line deleted.*  Its `compile.rs:201` is
+not the split's doing: even at the pre-split revision that line is the `spans`
+field's doc comment, while the row describes a *span copy*.  The live analogue
+is `compile.rs:310` (`self.spans[p.0 as usize] = self.spans[value.0 as usize]`,
+the placeholder's span index taking the resolved value's), but the table is the
+note's own pre-split coupling inventory — its status line says so — so
+re-pointing the row at a live line would misdate it.  The line number was
+deleted; the file reference stays.
+
+*`type-system-cleanup-plan.md` — 16 citations.*  Every `checker.rs:<line>` in the
+diagnosis (`:81`, `:82`, `:104`, `:105`), the B1 row (`:115`) and the panic
+census (`:303`, `:315-322`) names the pre-split checker root, which is 1765 lines
+at `f5b2d72^` and 957 now; `lowlevel/static_module.rs:45, 747, 783, 835`
+(`:344`) names the pre-split 933-line file, 248 now.  The two that still have a
+live home were re-pointed: `tag_descent`'s structural guess, which the plan's own
+§3 says moved to `shape.rs` (`tag_descent` is at `shape.rs:616`), and the
+`static_module` row, whose four sites are now `static_module.rs`
+(`StaticModuleCache::new`, `:52`) and `static_module/freeze.rs` (the phase-2
+layout).  The rest lost their line numbers, keeping the file, and the census
+carries a note saying why.  A closed plan's methodology — the classification, the
+probe results, the branch and commit ids — is untouched.
+
+*The truncated doc.*  The lead-in was already missing when the sentence was
+written, not produced by the move: `a8a0be8` introduced
+*"…the private contract with its own source."* immediately followed by
+*"a diagnostic rather than a panic (…)"*, with no subject.  Read off the
+function below it, the doc now reads: *"An unregistered `name` is refused with a
+diagnostic rather than a panic (the frontend compiles `$name` blind, so the
+checker is the first layer that can see the registry)."* — which is what the
+`None` arm does (`record_guard` with `DiagKind::NativeOpUnresolved` at the
+call's own span, leaving the expression uncompiled so `check_failed` skips the
+definition pass).
+
+*Found and left, because it is not this item.*  The same census probes with
+`cargo run -p lichen-language --bin lichen-compiler -- <file>`, which `P2-12`
+invalidated when the CLI moved to its own crate; that is a `P2-12` residual
+reference, not split drift, and is reported rather than fixed here.
+
+*Gates.*  `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
+`cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes, and
+`cargo test -p lichen-language --test pipeline --test examples --test persist
+--test registry` passes.
 
 ## Decisions
 

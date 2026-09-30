@@ -78,8 +78,8 @@ and **one boundary violation**:
 conventions.** A type is a `[shape, [marker, universe]]` node pattern; there
 is no typed view of it. Every rule re-derives meaning from raw array offsets
 (`container_ty[0][1]` vs `container_ty[1][0][1]` for the same name table,
-`checker.rs:1927-1940` / `2018-2037`), from structural guesses ("marker is a
-2-element array ⇒ struct", `checker.rs:1027-1029`), and from magic sentinels
+`checker.rs`), from structural guesses ("marker is a
+2-element array ⇒ struct", `checker.rs`), and from magic sentinels
 (`usize::MAX`, `NodeId::default()`). There is nowhere to attach an invariant,
 so each new feature (structs, named fields, raw reads, attributes, tables)
 patched the encoding, the unifier, and the checker in an ad-hoc way. The
@@ -101,8 +101,8 @@ compute JIT reverse-engineers the checker's encoding from raw nodes
 
 Secondary amplifiers: errors flow through global append-only vectors detected
 by length-delta and *suppressed* by truncation (`check_unify_relaxed`,
-`checker.rs:905-934`); panics are used as control flow
-(`catch_unwind` for non-termination, `checker.rs:418-440` — **removed**: the
+`checker.rs`); panics are used as control flow
+(`catch_unwind` for non-termination, `checker.rs` — **removed**: the
 budget guards now record `Module::budget_exhausted` instead of panicking, so
 non-termination is no longer control-flow-by-unwind); and the docs
 lag the code (spec still spells `Int<n>`, `type_of` and named instantiation
@@ -112,7 +112,7 @@ are implemented but undocumented, `docs/README.md` indexes 14 of 30 notes).
 
 | # | Defect | Status |
 |---|---|---|
-| B1 | **Compiler stack overflow**: the cycle-cut skeleton gate (`checker.rs:1085-1106`) omitted `Field`/`NamedField`/`RawNamedField`/`Record`; `a = a.x` etc. overflowed the stack | **fixed** (`ab03da4`): gate is now `block_roots` membership alone — exhaustive by construction; regression tests added |
+| B1 | **Compiler stack overflow**: the cycle-cut skeleton gate (`checker.rs`) omitted `Field`/`NamedField`/`RawNamedField`/`Record`; `a = a.x` etc. overflowed the stack | **fixed** (`ab03da4`): gate is now `block_roots` membership alone — exhaustive by construction; regression tests added |
 | B2 | **Codec tag collision**: `ComputeValue::write_value` wrote tag `0` for both `TypeBuffer` and `TypeWrite` | **fixed** (`216555e`) + round-trip coverage |
 | B3 | **Vacuous test**: `pipeline.rs:1626` `Int<_>` (now a `RawIndex`) tested nothing | **fixed** (`997dc88`): respelled `array<Int, _>`, asserts inferred length |
 | B4 | **Release-mode deadlock**: self-freeze guarded only by a `debug_assert` | **fixed** (`cfe6f44`): hard `assert!` |
@@ -130,7 +130,7 @@ One new module in `lichen-highlevel` (working name `shape.rs`) becomes the
   kind shape `[shape, [marker, universe]]`, the universe, each kind marker,
   the struct marker `[id, names]`, both name-table paths, attribute slot
   arithmetic (`2 + tail index`). Every `is_*_any` family, every magic offset,
-  and `tag_descent`'s structural guess (`checker.rs:3097-3142`) move here.
+  and `tag_descent`'s structural guess live in `shape.rs`.
 - The 8 kind markers are defined once (one macro or const table) and the
   `TypeValue` variants, `ValueType` methods, `Ctx` accessors, `Checker`
   fields, `Build` fields, and codec tags are all *derived* from it — adding a
@@ -295,12 +295,16 @@ Either way, independent of D1:
   was probed with source programs through
   `cargo run -p lichen-language --bin lichen-compiler -- <file>`; every site not
   listed under "left" below is reachable only through a checker-invariant path.
+  The per-site line numbers for `checker.rs` and `lowlevel/static_module.rs` are
+  dropped from the tables below: those two files were later split into rule
+  modules and their line numbers no longer resolve, so a site names its file
+  and its classification only (`P5-14`).
 
   #### Changed (user-reachable — now a diagnostic or a recorded failure)
 
   | Site | Class | Evidence | New behaviour |
   |---|---|---|---|
-  | `highlevel/src/checker.rs:1076` | user-reachable, check time | a package whose last statement is a raw read (`[1, 2]<0>`), imported by another file | a recorded `ImportExport` guard at the import's location; the expression still compiles to a pair of fresh cells, so the descent stays total |
+  | `highlevel/src/checker.rs` | user-reachable, check time | a package whose last statement is a raw read (`[1, 2]<0>`), imported by another file | a recorded `ImportExport` guard at the import's location; the expression still compiles to a pair of fresh cells, so the descent stays total |
   | `lowlevel/src/evaluation.rs:162` | user-reachable, runtime | `a = [1,2,3]` / `i = "x"` / `a[i]`; also `a(k)`, raw `<…>`, and the same through a parameter (`f = x => a[x]`; `f "x"`) | `EvalError::IndexSubscript` + a computed nothing (`Void`), rendered as "this value is not an index" at the subscript's own span |
   | `lowlevel/src/evaluation.rs:154` (target not an array) | user-reachable, runtime | `f = s => s.x; f (1)` | `EvalError::IndexTarget` + `Void` — done at `62aad04`, kept as the model for the rows above |
 
@@ -312,14 +316,14 @@ Either way, independent of D1:
 
   | Site | Class | Reasoning |
   |---|---|---|
-  | `checker.rs:369` | unreachable | the no-attribute-extension `attr_ext` is only installed for a program whose every schema carries no attribute, so it is never consulted; the language composition always supplies an extension |
-  | `checker.rs:454` | frontend-only | every `check_term` arm sets `ty[root]`; the root is a compiled statement or a literal pair by construction |
-  | `checker.rs:784`, `794` | frontend-only | `range_children`/`range_depths` are called only from the arm that matched the same `ExprKind`; `check_record`'s and `named_instantiate`'s `value` is always an `alloc_tuple` (frontend contract) |
-  | `checker.rs:807`, `1276` | frontend-only | `check_expr` immediately precedes both, and every arm sets `term` |
-  | `checker.rs:1091` | frontend-only | B1's `block_roots`-only skeleton gate is exhaustive by construction; all 26 self-referential root shapes (`a = a.x`, `a(0)`, `a[0]`, `a::x`, `a{0}`, `a<0>`, `type_of a`, `a # 2`, `a ? "d"`, …) compile clean |
-  | `checker.rs:1128`, `1125` | frontend-only | the `NativeCall` registry is validated against the frontend before the build; a name cannot reach here unregistered |
-  | `checker.rs:1150-1163`, `1201`, `1235` | frontend-only | each follows a `check_expr` of its operand, which sets `ty`/`term` |
-  | `checker.rs:1284` | frontend-only | every `Parameter` use is compiled inside `check_lam` after the scope push (line 131), including `parameter_type`/`parameter_attribute` |
+  | `checker.rs` | unreachable | the no-attribute-extension `attr_ext` is only installed for a program whose every schema carries no attribute, so it is never consulted; the language composition always supplies an extension |
+  | `checker.rs` | frontend-only | every `check_term` arm sets `ty[root]`; the root is a compiled statement or a literal pair by construction |
+  | `checker.rs` | frontend-only | `range_children`/`range_depths` are called only from the arm that matched the same `ExprKind`; `check_record`'s and `named_instantiate`'s `value` is always an `alloc_tuple` (frontend contract) |
+  | `checker.rs` | frontend-only | `check_expr` immediately precedes both, and every arm sets `term` |
+  | `checker.rs` | frontend-only | B1's `block_roots`-only skeleton gate is exhaustive by construction; all 26 self-referential root shapes (`a = a.x`, `a(0)`, `a[0]`, `a::x`, `a{0}`, `a<0>`, `type_of a`, `a # 2`, `a ? "d"`, …) compile clean |
+  | `checker.rs` | frontend-only | the `NativeCall` registry is validated against the frontend before the build; a name cannot reach here unregistered |
+  | `checker.rs` | frontend-only | each follows a `check_expr` of its operand, which sets `ty`/`term` |
+  | `checker.rs` | frontend-only | every `Parameter` use is compiled inside `check_lam` after the scope push (line 131), including `parameter_type`/`parameter_attribute` |
   | `checker/annotations.rs:153`, `155`, `162`, `216` | frontend-only | `check_expr` precedes each; every arm sets `term`/`ty` |
   | `checker/annotations.rs:205` | frontend-only | the frontend emits `attrs.len() == tail.len()` sorted by `order_index`, and `merge_slots` is a union, so the spelled-marker count equals the attribute-expression count; ~20 multi-attribute spellings probed clean |
   | `checker/indexing.rs:48`, `160`, `198`, `246`, `252`, `292`, `296`, `395` | frontend-only | each follows `check_expr` of the same expression |
@@ -341,7 +345,7 @@ Either way, independent of D1:
   | `lowlevel/apply.rs:28`, `34` | **done** | the two apply budget guards — same conversion: they record `Module::budget_exhausted`, return the undecided marker, and never unwind |
   | `lowlevel/codec.rs:120`, `131`, `139` | frontend-only | a frozen module's payloads were relocated by the freeze layout pass |
   | `lowlevel/lib.rs:315`, `319`, `366`, `903` | frontend-only | total matches inside one impl; the operator arms are dispatched by the VM |
-  | `lowlevel/static_module.rs:45`, `747`, `783`, `835` | frontend-only | registration and the phase-2 layout precede every read |
+  | `lowlevel/static_module.rs`, `lowlevel/static_module/freeze.rs` | frontend-only | registration and the phase-2 layout precede every read |
   | `lowlevel/table.rs:128`, `163` | frontend-only | the deep pass resolves a key before it is hashed; the value variants are total |
   | `lowlevel/utils.rs:55` | frontend-only | a non-empty length and a non-zero alignment always form a valid `Layout` |
 

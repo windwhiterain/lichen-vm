@@ -122,7 +122,7 @@ requires pre-apply compilation, which is why it is the mainstream.
 
 | Phase | Content | Touch points |
 |---|---|---|
-| 3a | `LowShape` gains `Unknown`; class-routed storage (read through the representative); observation hook in `write_node_value`; join in `add_equality`; read APIs (`class_low_type`, recursive `low_type_of_node`) | `lowlevel/src/equality.rs`, `lib.rs`; clone/freeze/codec plumbing already exists (`function.rs:303`, `static_module.rs:539`) |
+| 3a | `LowShape` gains `Unknown`; class-routed storage (read through the representative); observation hook in `write_node_value`; join in `add_equality`; read APIs (`class_low_type`, recursive `low_type_of_node`) | `lowlevel/src/equality.rs`, `lib.rs`; clone/freeze/codec plumbing already exists (`function.rs:303`, `static_module/freeze.rs`) |
 | 3b | The abstract-interpretation pass: seeds, `LowOperator` transfer table, `OperatorExt` hook, template fixed point | new lowlevel module |
 | 3c | highlevel `low_type_of` in `shape.rs` (Unknown explicit); `compile_fragment` rewired to seed → pass → read; `kernel_param_shape`/`element_shape` raw walks deleted; polymorphic `jit` → honest lazy + diagnostic | `highlevel/src/shape.rs`, `compute/src/compute.rs` |
 

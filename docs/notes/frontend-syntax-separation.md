@@ -106,7 +106,7 @@ when highlevel goes span-free):
 | Site | Reads |
 |---|---|
 | `crates/lichen-language/src/lib.rs:153` | `build.ir[loc.expr].span` — map a checker `Loc` back to a source span |
-| `crates/lichen-language/src/compile.rs:201` | copies the resolved value's span onto the placeholder `self.ir.expr[p].span` |
+| `crates/lichen-language/src/compile.rs` | copies the resolved value's span onto the placeholder `self.ir.expr[p].span` |
 | `crates/lichen-language/src/tests/compile_tests.rs:105,148` | asserts `expr.span` / `ir[root].span` |
 | `crates/lichen-language-server/src/analysis.rs:208,250,344` | `e.span`, `build.ir[id].span`, `build.ir[container].span` |
 | `crates/lichen-highlevel/tests/checker.rs` (many) | sets/reads `ir.expr[…].span` to assert diagnostic positions |

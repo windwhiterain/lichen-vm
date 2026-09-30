@@ -12,9 +12,9 @@ where
     /// pair the plugin's [`NativeOp`] builder returns.  The checker has no
     /// knowledge of what the operator does — the plugin's registration owns the
     /// lowering and the type construction (the private contract with its own
-    /// source).
-    /// a diagnostic rather than a panic (the frontend compiles `$name`
-    /// blind, so the checker is the first layer that can see the registry).
+    /// source).  An unregistered `name` is refused with a diagnostic rather
+    /// than a panic (the frontend compiles `$name` blind, so the checker is the
+    /// first layer that can see the registry).
     pub(super) fn check_native_call(
         &mut self,
         e: ExprId,
