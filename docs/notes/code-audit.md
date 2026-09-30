@@ -85,7 +85,7 @@ queue's order is deliberate.
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
-| P5-1 | low | language | `tests/scratch.rs` has no assertions | todo |
+| P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | todo |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | todo |
 | P5-4 | low | compute | `wasm-encoder` 0.258 vs wasmi's `wasmparser` 0.228 | todo |
