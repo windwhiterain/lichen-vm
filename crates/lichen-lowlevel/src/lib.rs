@@ -911,17 +911,16 @@ impl<P: Program> Registry<P> {
     /// reallocated after reclamation).
     pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
         assert!(
-            self.entries
-                .insert(
-                    key,
-                    Package {
-                        module: Arc::new(module),
-                        meta: Default::default(),
-                        hash,
-                    }
-                )
-                .is_none(),
+            !self.entries.contains_key(&key),
             "inserting a module under device key {key:?}, which is already registered — a loaded module is never shadowed"
+        );
+        self.entries.insert(
+            key,
+            Package {
+                module: Arc::new(module),
+                meta: Default::default(),
+                hash,
+            },
         );
     }
 
