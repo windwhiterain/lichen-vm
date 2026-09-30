@@ -94,6 +94,15 @@ impl<P: Program> Module<P> {
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+            // A class whose sole member is `node` — `parent` and `next` both
+            // `None`, `disjoint::Meta`'s contract for a representative with no
+            // second member — holds nobody to replicate to, so the write above
+            // is the whole effect.  See `P4-2` in `docs/notes/code-audit.md`.
+            if self.nodes[node].equality.parent.is_none()
+                && self.nodes[node].equality.next.is_none()
+            {
+                return;
+            }
             let rep = self.equality_representative(node);
             let mut member = rep;
             loop {

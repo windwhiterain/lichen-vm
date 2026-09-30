@@ -87,7 +87,7 @@ queue's order is deliberate.
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | done |
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
-| P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | todo |
+| P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | todo |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
@@ -3016,6 +3016,74 @@ so this is quadratic in the common recursive case.
 
 **Fix.** A small summary maintained at union time (has-concrete-value,
 has-pending-op) collapses most of these to O(1).
+
+**Outcome — half held, half refuted.**
+
+*The class-size walk: held, and it is the whole of the real cost.* `write_node_value`
+(`equality.rs:94-125`) does walk the entire member list on every concrete write.
+The note's extrapolation — *"classes grow with application count … quadratic in
+the common recursive case"* — is **refuted by measurement**: on a real recursive
+apply (`fib(16)` through the `lowlevel` harness: definition pass, then one call)
+the **largest class reached by any write is 2 members**. Classes are grown only
+by `disjoint::union` (`bind`, `add_equality`, `unify_clone_groups`), and a
+template's class topology — not the apply count — sets their size; the 100 000
+apply budget bounds how many *copies* exist, not how many members one class has.
+
+*The seven walks: held as a count, refuted as "a narrower one would do".* The
+seven are `write_node_value` plus the six predicates the note names, and each
+does walk the whole member list. Re-derived, each needs the whole list:
+
+| site | what it needs |
+|---|---|
+| `write_node_value` `:94` | every member that is an operation-free unbound cell — replication is the point (`bind` reads the representative) |
+| `class_has_pending_op` `:489` | **any** member with an unbound operation |
+| `class_is_pure_cell` `:507` | **every** member is not an independent pending computation |
+| `class_is_skeleton` `:529` | **every** member is a cell or a skeleton array |
+| `pending_op` `:673` | the **first** pending member *in member-list order* — its identity is used (`alias_index` binds that node, `force_pending` evaluates it) |
+| `class_committed_value` `:765` | the **first** concrete value in list order (the doc says why it is not on the representative) |
+| `force_pending` `:783` | acts on the **first** pending member |
+
+So a narrower walk is not available at any of the six predicates: an `∃`/`∀` over
+a list, or an order-dependent `first`, is the list. The only way to collapse them
+is the summary the note proposes, which would have to live in `disjoint::Meta`
+or in node state maintained on every value/operation transition — the state
+`P2-13` is about, and a wider change than this item. The six also repeat the
+same walk inside one `unify_inner` failure step (`class_has_pending_op` once,
+`pending_op` up to twice, `class_is_skeleton` up to twice per side); that is a
+redundancy, not a narrower walk, and the step is not reached at all in the
+workload measured below.
+
+*Measured, before → after* (all on the `lowlevel` harness, `test` profile;
+counters were temporary probes in `write_node_value` and the six loops, removed
+before commit):
+
+| input | concrete writes | writes that walked a class | member visits |
+|---|---|---|---|
+| 20 000 nodes, each its own class | 20 000 | 20 000 → **0** | 20 000 → **0** |
+| one 2 000-member class, every member written | 2 000 | 2 000 → 2 000 | 4 000 000 → **4 000 000** |
+| `fib(16)`: definition pass + one call | 49 490 | 49 490 → **3 193** | 52 683 → **6 386** |
+
+The 2 000-member row does not move, and by design: every member must see the
+new value, so that walk is the item's *correctness* requirement, not its cost.
+Measured member visits in that shape are what "O(class size)" means; the shape
+itself does not arise from the frontend's own application (`fib(16)` above).
+
+*The fix.* Skip the walk for a singleton class — `parent` and `next` both `None`
+on `node`, `disjoint::Meta`'s contract for a representative with no second
+member (`equality.rs:97-105`); `make_set` and `flatten_class` (`gc.rs:154-189`)
+are the only writers of that metadata and both leave a lone member exactly that
+way. For a singleton the loop could only have re-visited `node` itself, whose
+slot the write above already set, so the skip is provably the same effect. That
+one test removes 88% of the member visits on `fib(16)` and all of them on the
+singleton workload, and is what the item's title costs in practice.
+
+*Deliberately not done.* The `PendingSides` construction
+(`equality.rs:356-370`) calls `class_is_pure_cell` even when
+`class_has_pending_op` returned false, where the answer is provably `true`
+(`pure_cell` is false only for a pending operation). It is left alone: the
+`PendingSides` site is not reached at all in the `fib(16)` workload (measured: 0
+constructions), so the change could not be measured, and the same full walk
+stays in place for the six predicates where it is required.
 
 ### P4-3 — A thread and a rebuilt combinator graph per parse `reported`
 
