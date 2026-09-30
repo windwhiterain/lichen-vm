@@ -39,7 +39,7 @@ queue's order is deliberate.
 | P0-3 | critical | package | `git clone`/`checkout` argument injection | blocked:D2 |
 | P0-4 | critical | package | Downloaded binaries have no integrity check | blocked:D4 |
 | P0-5 | critical | language, registry | Artifact deserialization: unbounded recursion and allocation | done |
-| P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | todo |
+| P0-6 | high | preprocess | `Depend::sub` is an unvalidated path join | done |
 | P1-1 | high | lowlevel | `insert_module` inserts before it asserts | todo |
 | P1-2 | high | lowlevel | `.unwrap()` on the budget-refusal path; comment contradicts code | todo |
 | P1-3 | high | lowlevel | Table identity hash is a raw address | blocked:D5 |

@@ -70,6 +70,8 @@ pub fn git_available() -> bool {
 /// revision; an existing source is `fetch`ed and the pinned revision is
 /// checked out.
 pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
+    // Reject an invalid `sub` before any git command or cache write.
+    let vendored = dep.vendored_dir()?;
     if !git_available() {
         return Err(
             "the `git` CLI is required to fetch dependencies, but it is not on $PATH".into(),
@@ -93,7 +95,7 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
             git_in(&dir_git, &["checkout", rev])?;
         }
     }
-    Ok(dep.vendored_dir())
+    Ok(vendored)
 }
 
 /// The resolved version (commit hash) of a fetched dependency: the current

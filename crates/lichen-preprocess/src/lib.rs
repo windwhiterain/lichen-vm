@@ -31,7 +31,7 @@
 //! the package manager fetches each `depend` into and the compiler reads the
 //! vendored aliases from (see [`Depend::vendored_dir`]).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use lichen_span::{Span, line_col, line_starts};
 
@@ -158,11 +158,32 @@ impl Depend {
     }
 
     /// The vendored directory the alias resolves to: the clone root, or its
-    /// `sub` subdirectory (a monorepo dependency).
-    pub fn vendored_dir(&self) -> PathBuf {
+    /// `sub` subdirectory (a monorepo dependency).  `sub` is free-form text
+    /// from the source file, so it is validated here — the one place every
+    /// consumer reads the path from — and rejected unless it is a plain
+    /// relative path inside the clone.
+    pub fn vendored_dir(&self) -> Result<PathBuf, String> {
+        let root = self.sources_dir();
         match &self.sub {
-            Some(sub) => self.sources_dir().join(sub),
-            None => self.sources_dir(),
+            Some(sub) => {
+                let sub_path = Path::new(sub);
+                if sub_path.is_absolute()
+                    || sub_path.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+                {
+                    return Err(format!(
+                        "dependency '{}' has a `sub` path '{sub}' that is not a relative path \
+                         inside the clone",
+                        self.alias()
+                    ));
+                }
+                Ok(root.join(sub_path))
+            }
+            None => Ok(root),
         }
     }
 }
@@ -426,9 +447,10 @@ pub fn depend_of(dir: Directive) -> Option<Depend> {
 /// `resolver` as vendored aliases, resolving each against the lichen-home
 /// source cache (see [`Depend::vendored_dir`]).  A dependency that has not
 /// been fetched by the package manager (`lichen fetch`) is reported as a
-/// preprocess diagnostic naming the missing dir — the compiler never fetches
-/// git sources itself, it only reads what the package manager put in the
-/// cache.
+/// preprocess diagnostic naming the missing dir, and one whose `sub` is not a
+/// relative path inside the clone is reported the same way — the compiler
+/// never fetches git sources itself, it only reads what the package manager
+/// put in the cache.
 pub fn stage_depends<E, R>(resolver: &mut R, source: &str) -> Vec<PreprocessDiag>
 where
     R: ImportResolver<E>,
@@ -440,7 +462,13 @@ where
     };
     for dep in block_depends(interior) {
         let alias = dep.alias();
-        let dir = dep.vendored_dir();
+        let dir = match dep.vendored_dir() {
+            Ok(dir) => dir,
+            Err(message) => {
+                diags.push(PreprocessDiag::at_zero(message));
+                continue;
+            }
+        };
         if dir.is_dir() {
             resolver.register_vendored(alias, dir);
         } else {
