@@ -1938,13 +1938,25 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 /// own embedded source.  The host names only the plugin crate and its program
 /// marker — never the plugin's op structs — so this is the composition point a
 /// package manager would generate.
+///
+/// The table is **leaked deliberately, and the leak is bounded**: the slice is
+/// nine entries of `(&'static str, &'static dyn NativeOp<$program>)`, 144 bytes
+/// on a 64-bit target, and exactly one is allocated per call.  The slice cannot
+/// be hoisted into a `static` initializer instead: a `static` may not name a
+/// type parameter, and two invocations of this macro are distinct items even
+/// when they name the same program, so no shape of `static` or `OnceLock` can be
+/// shared across them.  Caching it on the host would be no better: a table held
+/// per store serves a compilation that already happens per store, so the same
+/// single allocation is made either way.  The one call site
+/// (`PackageStore::register_compute`, reached from `PackageStore::new`) runs
+/// once per store — the store compiles its embedded wrapper source once and
+/// keeps the frozen module — so this is a fixed handful of bytes per store, not
+/// a per-compile or per-keystroke cost.
 #[macro_export]
 macro_rules! compute_native_ops {
     ($program:ty) => {{
-        // The registry is a `&'static [(&str, &dyn NativeOp<P>)]`.  A `static`
-        // of that type cannot reference a *generic* `$program` (statics are
-        // never generic), so build it per call and leak it — once per host
-        // `register_compute`, a handful of small allocations.
+        // The self-supporting `static`s below are the operator structs, which
+        // are program-independent; the leaked slice is the table above.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
         static CALL: $crate::CallOp = $crate::CallOp;

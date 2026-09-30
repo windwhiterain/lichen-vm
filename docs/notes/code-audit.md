@@ -95,7 +95,7 @@ queue's order is deliberate.
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
 | P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | done |
 | P4-8 | low | render | Two more ancestor guards scan the path they guard | done |
-| P4-9 | low | compute | A `NativeOps` slice is leaked per registration | todo |
+| P4-9 | low | compute | A `NativeOps` slice is leaked per registration | done |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | done |
@@ -3609,19 +3609,23 @@ The deserializer's `codec.rs:285` leak is the same shape and rides with it.
 
 ### Found, not one of the four, and not fixed here
 
-- `apply.rs:116` (the note's `:114`) dedupes `apply_errors` with a linear
-  `iter().any(...)` over a list that is append-only and never cleared — the
-  same shape as `P4-4`'s parser dedup, on a different list.  `P4-4` is done and
-  its scope was the highlevel/render/parser; this site is unowned, so it is
-  reported rather than folded in.
-- `compute.rs:1968` (the note's `:1879`) leaks the 9-entry `NativeOps` slice
+- `apply_errors` was deduped with a linear `iter().any(...)` (`apply.rs:114`
+  before this item's rewrite — the note's `:114`) over a list that is
+  append-only and never cleared: the same shape as `P4-4`'s parser dedup, on a
+  different list.  `P4-4` is done and its scope was the highlevel/render/parser;
+  this site was unowned, so it was reported rather than folded in — and `P4-7`
+  has since taken it.
+- `compute.rs:1968` (the note's `:1879`) leaked the 9-entry `NativeOps` slice
   once per `compute_native_ops!` call — 144 bytes per
   `PackageStore::register_compute`, which is once per store because the handle
-  is then served from `native`.  Bounded, and not this item's claim.
-- `registry/codec.rs:42-45` writes a `u8` leaf-name length, so a carry-variant
-  name past 255 bytes truncates and desynchronises the artifact stream.  That
-  is an artifact-codec correctness defect, not an optimization, and it belongs
-  to `P0-5`/`P0-7`'s container; reported here, not changed.
+  is then served from `native`.  Bounded, and not this item's claim; `P4-9` has
+  since stated the bound in the macro's doc (`compute.rs:1942-1951`).
+- `registry/codec.rs:42-45` (the note's citation, before `P1-27` grew the leaf
+  writer) wrote a `u8` leaf-name length, so a carry-variant name past 255 bytes
+  truncated and desynchronised the artifact stream.  That is an artifact-codec
+  correctness defect, not an optimization, and it belongs to `P0-5`/`P0-7`'s
+  container; reported here, not changed.  `P1-27` has since taken it
+  (`Writer::leaf` is now `codec.rs:64-79`).
 
 ### P4-7 — `apply_errors` is deduped with a linear scan `verified`
 
@@ -3761,9 +3765,52 @@ every type- and value-printing test, 70 + 123 + 139 among them);
 **bounded** (once per store, because the handle is then served from `native`), so
 this is a tidiness item rather than a leak in the growing sense.
 
-**Fix.** Return the slice from a `&'static` initializer instead of leaking a fresh
-one per call, or state why the leak is deliberate. Do not restructure the
-registration path for 144 bytes.
+**Outcome — the premise held, the "`&'static` initializer" half of the fix was
+attempted and is structurally unavailable, and the leak is documented as
+deliberate rather than removed.**  Re-derived first-hand: `compute.rs:1980` is
+`Box::leak(ops.into_boxed_slice()) as NativeOps<$program>` (the counter addresses
+19 fields below the note's `:1879`), the table is the nine `(name, &dyn NativeOp)`
+entries above it (`:1969-1979`), and `&'static dyn` is two words, so the slice is
+`9 × 16 = 144` bytes on a 64-bit target — the note's own figure.
+
+*The fix that does not exist, and the evidence.*  Returning the slice from a
+`&'static` initializer — a `static TABLE: OnceLock<Box<[...]>>` in the macro
+expansion, with `get_or_init` — was written and **fails to compile**:
+`error[E0401]: can't use generic parameters from outer item`, at the static in
+the expansion of `lichen-language/src/package.rs:53` (the macro is invoked from
+the generic `compute_native_ops::<P>()`).  This is not a syntax problem: a
+`static` may never name a type parameter, and an item declared in a macro
+expansion is a *distinct item per invocation*, so two invocations naming the
+same program cannot share one `static` either.  A host-side cache is no better —
+the table would be built per store, which is exactly the one call per store that
+happens today.  The attempt was reverted, and `Box::leak` stays; no second
+mechanism was added for 144 bytes (`P4-9`'s own constraint: do not restructure
+the registration path for it).  What changed is that the macro now **states the
+bound** (`compute.rs:1942-1951`): the slice is 144 bytes, exactly one is
+allocated per call, the initializer alternative is impossible for the reason
+above, and the one call site runs once per store.
+
+*Why "once per store" is exact here.*  `register_compute` is reached from
+`load_package` when the path's file name is `compute.lichen`
+(`package.rs:247-252`), and it inserts the frozen handle into `self.native`
+(`:364-365`).  `load_package` consults `self.native` first (`:240-243`), so a
+second import of the same store's `compute.lichen` is served from the map and
+does not recompile.  The leak is therefore one 144-byte slice per `PackageStore`
+that ever imports compute — bounded, and not per keystroke or per compile.
+
+**Verification.**  `cargo test -p lichen-language --test compute` (24 tests,
+including the `jit_cross_kernel_*` paths that resolve `$jit`/`$launch` through
+this registry) and `cargo test -p lichen-compute -p lichen-language --test
+std_native` pass; `cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --all -- --check` exit 0.
+
+**Worth stating while reasoning about the bound, and not a finding of this
+item.**  `load_package` consults `self.native` (`package.rs:240-243`) **before**
+the `compute.lichen` arm (`:247-252`), so after the first registration
+(`:364-365`) a second import is served from the map rather than recompiling the
+wrapper.  This is pre-existing — `P4-9` changed no load-path behaviour — and it
+is what makes "once per store" exact; the comment at `:245-246` ("it
+self-registers on first import") describes the import that compiles.
 
 ## P5 — hygiene and docs
 
