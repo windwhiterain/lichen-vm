@@ -676,13 +676,42 @@ the experiment.
   that name themselves in review, where the accidental form was one call that
   type-checked.
 
-#### Still open
+- **The attribute's `missing_slot` node — measured, there is nothing there.**
+  The last open item was whether to intern the node an absent attribute reads
+  (`AttrExt::missing_slot`, `attr.rs`), by analogy with the `USize` constants.
+  A design review recommended **not** doing it, and improved on the original
+  reasoning: the barrier is not that `Doc`'s missing value is "not a `USize`"
+  but that it is `Parameterized` — **an unbound cell `unify_slots` binds by
+  design** (`doc.rs`), so sharing one across occurrences would let the first
+  bind poison every later read.  That is a correctness argument, and it holds
+  (`unify_slots` calls `check_unify_relaxed`, which binds).  The separate
+  objection also holds and transfers from the compute refusal: the node is
+  allocated through `Ctx::value_node` → `alloc_node`, so inside a lambda body
+  `alloc_node` tags it into that function's template and the clone walk copies
+  it per apply — the opposite of what sharing buys.
 
-- **Two `Ctx` sites that reach the constant through the public
-  `AttrExt::missing_slot` contract** (`attr.rs` and `lichen-perspective`) still
-  allocate per occurrence.  They are not the same shape as the interned sites —
-  the missing value is the *attribute's* to define, and `Doc`'s is not even a
-  `USize` — so interning them means routing every attribute's missing value
-  through the checker's table, which is a design question rather than a
-  dedup.
+  **Then the premise itself turned out to be wrong, and by measurement.**  The
+  review's cost estimate was "attributes × expressions, low hundreds of nodes".
+  Putting a `panic!` in `Doc::missing_slot` and confirming the string was in the
+  binary before running anything: **it never fires** — not for any of the 23
+  examples, not for `doc.lichen`, not for `perspective.lichen`, and not for
+  four probes written specifically to reach it, including `c = [5, 6] # 4`
+  where the value carries no doc at all (the `else` arm at
+  `annotations.rs:268`, where `value_attr_node` returns `None` and the missing
+  slot is demanded).  Substituting a distinctive `USize(999)` for the missing
+  value changed no output either.  So the cost being debated is **zero** on
+  everything observable, and the hazard the review describes is currently
+  unreachable rather than merely rare.
+
+  **Left as a genuine open question, because the measurement found something
+  the review did not ask about:** why the `else` arm at `annotations.rs:268`
+  never fires for `Doc` is not explained.  `value_attr_node` returns `None`
+  whenever the value's schema tail is empty, and an un-annotated compound's
+  tail is empty, so on the reading of the code the arm should be reached.  Either
+  the composed `AttrSet::order` does not contain `Doc` on these paths, or a
+  compound's tail is stamped full somewhere this survey did not find.  Until
+  that is answered, `AttrExt::missing_slot` should be treated as **unexercised,
+  not dead** — it is a trait method on a public plugin contract, and the two
+  live call sites are real.  Finding the answer is worth more than the interning
+  ever was.
 
