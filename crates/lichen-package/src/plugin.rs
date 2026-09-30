@@ -209,20 +209,52 @@ pub fn server_bin_name(name: &str) -> String {
     if cfg!(windows) { format!("{n}.exe") } else { n }
 }
 
+/// The TOML basic-string literal for `value` — the only way a value reaches the
+/// generated manifest.  Every interpolated value (a dependency key, a path, a
+/// URL, a revision, a package name) goes through here, so a `"`, a backslash (a
+/// Windows directory path), or a control character (the preprocessor's string
+/// lexer allows a newline inside a string) can neither end the literal nor
+/// become an escape sequence of its own.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for ch in value.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\u{8}' => out.push_str("\\b"),
+            '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
+            '\u{c}' => out.push_str("\\f"),
+            '\r' => out.push_str("\\r"),
+            // The remaining control characters (and DEL) have no short escape.
+            ch if (ch as u32) < 0x20 || ch == '\u{7f}' => {
+                out.push_str(&format!("\\u{:04X}", ch as u32));
+            }
+            ch => out.push(ch),
+        }
+    }
+    out.push('"');
+    out
+}
+
 /// The `lichen-language-server` dependency line for a generated crate: a local
 /// path dep (in `core_repo/crates/lichen-language-server`) when `core_repo` is a
 /// directory here, else a git dep, both without the default `server` feature
 /// (so the server's own default is not double-enlisted) and with `server`
 /// enabled explicitly.
 fn server_dep(core_repo: &str) -> String {
+    let key = toml_string("lichen-language-server");
     if std::path::Path::new(core_repo).is_dir() {
         let rel = format!("{core_repo}/crates/lichen-language-server");
         format!(
-            "lichen-language-server = {{ path = \"{rel}\", default-features = false, features = [\"server\"] }}"
+            "{key} = {{ path = {}, default-features = false, features = [\"server\"] }}",
+            toml_string(&rel)
         )
     } else {
         format!(
-            "lichen-language-server = {{ git = \"{core_repo}\", default-features = false, features = [\"server\"] }}"
+            "{key} = {{ git = {}, default-features = false, features = [\"server\"] }}",
+            toml_string(core_repo)
         )
     }
 }
@@ -230,7 +262,11 @@ fn server_dep(core_repo: &str) -> String {
 /// The generated crate's `Cargo.toml`: depends on the language crate, the
 /// plugin dependencies (from a local path when `git` is a path that exists),
 /// core crates from `core_repo` (a local checkout path or a git URL), and any
-/// `extra_deps` (the language-server dependency for an LSP crate).
+/// `extra_deps` (the language-server dependency for an LSP crate — a fragment
+/// already rendered by [`server_dep`], the only producer).
+///
+/// Every value in the document is written through [`toml_string`], so no value
+/// can end the literal it sits in.
 ///
 /// `package_name` is the generated package's name (e.g.
 /// `lichen-compiler-{name}` or `lichen-language-server-{name}`); the binary
@@ -245,7 +281,7 @@ fn write_cargo_toml(
 ) -> Result<(), String> {
     let toml = format!(
         r#"[package]
-name = "{package_name}"
+name = {package_name}
 version = "0.1.0"
 edition = "2024"
 
@@ -258,7 +294,7 @@ edition = "2024"
 {core_doc}
 {core_utils}
 {plugin_lines}{extra_deps}{core_patch}"#,
-        package_name = package_name,
+        package_name = toml_string(package_name),
         core_language = core_dep_line(core_repo, "lichen-language"),
         core_lowlevel = core_dep_line(core_repo, "lichen-lowlevel"),
         core_highlevel = core_dep_line(core_repo, "lichen-highlevel"),
@@ -279,11 +315,16 @@ edition = "2024"
 /// `package = <crate_name>` (the repo root is a virtual workspace, so without
 /// it cargo looks for a package there and fails).
 fn core_dep_line(core_repo: &str, crate_name: &str) -> String {
+    let key = toml_string(crate_name);
     if std::path::Path::new(core_repo).is_dir() {
         let rel = format!("{core_repo}/crates/{crate_name}");
-        format!("{crate_name} = {{ path = \"{rel}\" }}")
+        format!("{key} = {{ path = {} }}", toml_string(&rel))
     } else {
-        format!("{crate_name} = {{ git = \"{core_repo}\", package = \"{crate_name}\" }}")
+        format!(
+            "{key} = {{ git = {}, package = {} }}",
+            toml_string(core_repo),
+            toml_string(crate_name)
+        )
     }
 }
 
@@ -306,9 +347,10 @@ fn core_patch(core_repo: &str) -> String {
     if core_repo == crate::toolchain::DEFAULT_REPO {
         return String::new();
     }
-    let mut out = String::from("\n[patch.\"");
-    out.push_str(crate::toolchain::DEFAULT_REPO);
-    out.push_str("\"]\n");
+    let mut out = format!(
+        "\n[patch.{}]\n",
+        toml_string(crate::toolchain::DEFAULT_REPO)
+    );
     for crate_name in ["lichen-utils", "lichen-lowlevel", "lichen-highlevel"] {
         out.push_str(&core_dep_line(core_repo, crate_name));
         out.push('\n');
@@ -323,11 +365,12 @@ fn plugin_lines(plugins: &[Depend]) -> String {
     let mut plugin_lines = String::new();
     for dep in plugins {
         let crate_name = git::crate_name(dep);
+        let key = toml_string(&crate_name);
         if std::path::Path::new(&dep.url).exists() {
-            plugin_lines.push_str(&format!("{crate_name} = {{ path = \"{}\" }}\n", dep.url));
+            plugin_lines.push_str(&format!("{key} = {{ path = {} }}\n", toml_string(&dep.url)));
         } else {
             let rev = git::checkout(dep)
-                .map(|r| format!(", rev = \"{r}\""))
+                .map(|r| format!(", rev = {}", toml_string(r)))
                 .unwrap_or_default();
             // A remote plugin is a **git** dep on a crate inside the plugin
             // repo's workspace (e.g. `lichen-std-native` inside the lichen-vm
@@ -337,8 +380,9 @@ fn plugin_lines(plugins: &[Depend]) -> String {
             // are git too, so cargo resolves the whole subtree from git — a
             // path dep into the workspace is what it cannot fresh-resolve.
             plugin_lines.push_str(&format!(
-                "{crate_name} = {{ git = \"{}\", package = \"{crate_name}\"{rev}}}\n",
-                dep.url
+                "{key} = {{ git = {}, package = {}{rev} }}\n",
+                toml_string(&dep.url),
+                toml_string(&crate_name)
             ));
         }
     }
@@ -511,6 +555,10 @@ fn main() {{
     );
     std::fs::write(dir.join("src/main.rs"), lines).map_err(|e| format!("write src/main.rs: {e}"))
 }
+
+#[cfg(test)]
+#[path = "tests/plugin_manifest_tests.rs"]
+mod plugin_manifest_tests;
 
 #[cfg(test)]
 mod generated_main_tests {

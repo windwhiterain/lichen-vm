@@ -95,7 +95,7 @@ queue's order is deliberate.
 | P5-5 | low | language-lex | `~` overflow silently saturates to `usize::MAX` | done |
 | P5-6 | low | package | `build.rs`'s `.git/HEAD` trigger never fires in a worktree | done |
 | P5-7 | low | package | `lichen path language-server` pollutes stdout | done |
-| P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | todo |
+| P5-8 | low | package | Generated `Cargo.toml`: TOML injection and a Windows path escape | done |
 | P5-9 | low | language | `io::Error` modelled as a `(0,0)` source diagnostic, 10 sites | todo |
 | P5-10 | low | render, language-server | Unguarded parent walk and unchecked index on the render hot path | todo |
 | P5-11 | low | registry | `virtual:` file IDs can never verify | done |
@@ -2119,6 +2119,48 @@ scans the module's whole node table and is called **per emitted node**
   `Cargo.toml` by string interpolation: a `--repo` containing `"` injects
   manifest keys, and a Windows local path is emitted as `path = "C:\dir\crate"`
   where `\d` is an invalid TOML escape, so the generated manifest does not parse.
+  **Outcome.** The premise held; the cited lines are still the sites
+  (`server_dep`, `core_dep_line`, `core_patch`, plus `plugin_lines` and
+  `write_cargo_toml`'s own `name =`).  Reachability, each half re-derived:
+  *a newline is reachable from a plugin's own manifest* — the preprocessor's
+  string literal is `"[^"@]*"`, documented "no escapes, may be multiline" and
+  pinned by `a_string_may_span_lines_and_hold_commas`, so `dep.url`,
+  `dep.rev`/`branch`/`tag`, and `dep.package` (all strings) can each carry one
+  and inject a whole key or table; *a `"` is not reachable from the lexer* (the
+  same regex forbids it) *but is reachable from `--repo`*, which is an argv
+  string that never passes through that lexer; and a Windows directory path is
+  reachable whenever `--repo` (or the monorepo's local-checkout flow) is a local
+  directory, which the path branch turns into an unescaped `path = "C:\…"`.
+  **The `toml` crate is not a dependency of this workspace** — it appears in no
+  manifest and in no `Cargo.lock` entry — so the note's preferred "serialize a
+  real value" route was unavailable and the fallback applies.
+  **One helper, every value.** `plugin::toml_string` renders a TOML basic-string
+  literal (`"`, `\`, `\b`/`\t`/`\n`/`\f`/`\r`, and `\uXXXX` for the other
+  control characters and DEL), and *every* interpolated value now goes through
+  it — a dependency key as well as a value, since a key is a string too: in
+  `server_dep`, `core_dep_line`, `core_patch`'s `[patch.…]` header,
+  `plugin_lines` (path, git URL, `package`, `rev`), and `write_cargo_toml`'s
+  `name =`.  `extra_deps` stays a pre-rendered fragment, and its only producer
+  is the now-escaping `server_dep`, which its doc states.
+  **Tests.** `crates/lichen-package/src/tests/plugin_manifest_tests.rs` (new,
+  reached through a `#[path]` module) generates the document for a plugin whose
+  URL, package name, and revision carry a newline and for a `--repo` that is a
+  Windows path, and parses it with the `toml` crate (a new **dev**-dependency
+  only; the shipped graph is unchanged).  Against the unfixed generator both
+  tests failed with `TOML parse error at line 7, column 32 … invalid escape
+  sequence` on `git = "C:\work\lichen-vm"`, and the dumped manifest showed the
+  injection beside it: `plug\nbad = 1 = { git = "https://example.com/plug\n
+  [package]", package = "plug\nbad = 1", rev = "dead\nbeef" }`.  Both pass after
+  the fix, and a generated manifest with quoted keys and escaped Windows paths
+  was also accepted by the real consumer (`cargo metadata --no-deps`).
+  **Adjacent finding, not fixed here (no item owns it):** the generated
+  `src/main.rs` has the same hole in a worse place —
+  `compose_source` writes `{crate_ident} as {crate_ident}_leaves;` as **Rust
+  code** and `native_package_lines` writes it inside a Rust string literal,
+  where `crate_ident` is `dep.package` with `-`→`_`.  `dep.package` is a
+  multiline-capable string, so a `}` or a newline there is injected Rust source
+  that `cargo build` then compiles.  That is a code-generation defect, not the
+  manifest one this item names, and it needs its own item.
 - **P5-9 `reported`** — `language/src/package.rs:233, 241, 253, 261, 362, 603,
   631, 810, 829` and `cli.rs:235` report an `io::Error` as a *source* diagnostic
   with a fabricated `(0, 0)` span, which `render.rs:109-116` prints as a caret
