@@ -81,6 +81,7 @@ queue's order is deliberate.
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
 | P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | done |
+| P2-13 | medium | lowlevel, utils | Node state is still writable through the node table and `disjoint::Meta` | todo |
 | P3-1 | medium | all | Duplication clusters | todo |
 | P3-2 | medium | all | Workspace manifest duplication | todo |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | todo |
@@ -2487,6 +2488,33 @@ has no runnable binary now). A closed plan's methodology in
 lichen-compiler`) is genuinely historical and was left. Every live reference was
 re-pointed: `README.md`, `crates/lichen-package/{README.md,src/lib.rs}` and
 `docs/notes/{artifact-cache,language-toolchain,plugin-taxonomy,venv-test,package-manager}.md`.
+
+### P2-13 — Node state is still writable through the node table and `disjoint::Meta` `verified`
+
+Found while implementing `D11`, and recorded rather than quietly closed: `P2-4`
+privatised the six fields, but two routes around them survive, and both are
+outside the six-field scope `D11` set.
+
+1. `Module::nodes` is `pub` and is a `SlotMap` of `Node<P>`, so an external crate
+   can still obtain `&mut Node<P>` from it.
+2. `crates/lichen-utils`' `impl disjoint::Node for Node<P>` exposes
+   `meta_mut() -> &mut Meta<NodeId>`, and **`Meta`'s fields are public** — so
+   `module.nodes[id].meta_mut().parent = Some(other)` writes the union-find link
+   from outside, which is exactly the write `P2-4` routed through `add_equality`
+   and declared to have no other legitimate writer.
+
+**Fix.** One of two shapes, and the choice depends on how the frozen mirror is
+built: make `Meta` **opaque** (private fields, read accessors, plus a constructor
+for the mirror `static_module.rs` assembles at load), or make the node table
+itself private behind the accessors `P2-4` just added. Making the table private is
+the larger change — 184 `.nodes` uses live outside `lichen-lowlevel/src` across
+five crates — so opacity for `Meta` is the narrower first step, and the container
+question is worth its own decision if it comes to that.
+
+**Why this is not a `P2-4` footnote:** `D11`'s whole point was that a public field
+is an invitation rather than a contract, and leaving a public `Meta` means the
+invitation is still open — one indirection away. A reader who checks `Node`'s
+fields, finds them private, and concludes the write is impossible would be wrong.
 
 ## P3 — refactor
 
