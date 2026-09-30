@@ -56,6 +56,7 @@
 use chumsky::error::RichReason;
 use chumsky::input::Stream;
 use chumsky::prelude::*;
+use std::collections::HashSet;
 
 use lichen_language_lex::{Span, Token, TokenKind};
 
@@ -112,12 +113,14 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
     let parser = program_parser(tokens);
     let (output, errs) = parser.parse(stream).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
+    // The dedup key is the diagnostic's whole content, so the set answers
+    // "has this exact diagnostic been emitted?" in one hash lookup instead of
+    // a scan of the list built so far — chumsky emits the same rich error
+    // more than once, and the list it feeds is the recovery's whole output.
+    let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
-        if !errors
-            .iter()
-            .any(|d| d.span == diag.span && d.message == diag.message)
-        {
+        if seen.insert((diag.span, diag.message.clone())) {
             errors.push(diag);
         }
     }
@@ -245,12 +248,11 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let stream = Stream::from_iter(region.iter().cloned());
     let (output, errs) = parser.parse(stream).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
+    // The same content-keyed dedup as [`parse_inner`]'s.
+    let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
     for e in &errs {
         let diag = diag_from(region, e);
-        if !errors
-            .iter()
-            .any(|d| d.span == diag.span && d.message == diag.message)
-        {
+        if seen.insert((diag.span, diag.message.clone())) {
             errors.push(diag);
         }
     }

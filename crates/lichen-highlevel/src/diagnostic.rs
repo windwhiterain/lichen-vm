@@ -285,6 +285,9 @@ where
     /// issued) is emitted after all of them, then come the runtime evaluation
     /// failures (deduplicated) and the user-facing asserts.
     pub fn diagnostics(&self) -> Vec<Diag<P>> {
+        // One index for the whole report: the diary scan below is per error
+        // without it, and an editor calls this on every keystroke.
+        let index = self.unify_error_index();
         let mut out = Vec::new();
         for entry in &self.nonterminating {
             out.push(Diag {
@@ -315,7 +318,7 @@ where
                 continue;
             };
             for i in errors {
-                attributed.push((entry.seq, self.mismatch(i)));
+                attributed.push((entry.seq, self.mismatch(i, &index)));
             }
         }
         attributed.sort_by_key(|&(seq, _)| seq);
@@ -323,11 +326,7 @@ where
         // A unification error no diary entry owns — a deep apply-time failure,
         // recorded by the lowlevel rather than by a checker-issued check.  It
         // has no recording position, so it lands after every attributed one.
-        out.extend(
-            self.orphan_unify_errors()
-                .into_iter()
-                .map(|i| self.mismatch(i)),
-        );
+        out.extend(index.orphan_indexes().map(|i| self.mismatch(i, &index)));
         // Runtime evaluation failures (an out-of-bounds index, a table read).
         // The value and type evaluation of the same expression each record
         // one, so identical facts collapse to a single diagnostic — the key
@@ -418,6 +417,45 @@ where
         out
     }
 
+    /// The per-`unify_errors` attribution index [`Self::diagnostics`] reads:
+    /// for each error index, the diary entry that owns it and the first
+    /// [`ApplyError`](lichen_lowlevel::ApplyError) that names it.
+    ///
+    /// Both lists are built in **one pass over their source**, which is what
+    /// removes the quadratic term: the diary's owned ranges are disjoint
+    /// slices of the append-only error list (recorded before the next check
+    /// ran), so filling `owner` visits each error index at most once.
+    fn unify_error_index(&self) -> UnifyErrorIndex {
+        let count = self.module.unify_errors.len();
+        let mut index = UnifyErrorIndex {
+            owner: vec![None; count],
+            apply: vec![None; count],
+        };
+        for (entry_index, entry) in self.diary.iter().enumerate() {
+            let Some(range) = entry.errors.as_ref() else {
+                continue;
+            };
+            for error_index in range.clone() {
+                // First owner wins, matching the `find` this replaces.
+                if let Some(slot) = index.owner.get_mut(error_index)
+                    && slot.is_none()
+                {
+                    *slot = Some(entry_index);
+                }
+            }
+        }
+        for (apply_index, apply) in self.module.apply_errors.iter().enumerate() {
+            // First apply error wins, matching the `find` this replaces; an
+            // error index past the list is one no unify error can name.
+            if let Some(slot) = index.apply.get_mut(apply.error_index)
+                && slot.is_none()
+            {
+                *slot = Some(apply_index);
+            }
+        }
+        index
+    }
+
     /// The structured location for a node, or `None` for a static ref (which
     /// has no importer expression).
     fn node_loc(&self, node: AnyNodeId) -> Option<Loc> {
@@ -427,27 +465,12 @@ where
         self.node_edges.get(&node).cloned()
     }
 
-    /// The `unify_errors` indices no diary entry owns — a deep apply-time
-    /// failure the lowlevel recorded rather than a checker-issued check, so
-    /// there is no recording position behind it.  Ascending, so they keep the
-    /// order the lowlevel recorded them in.
-    fn orphan_unify_errors(&self) -> Vec<usize> {
-        (0..self.module.unify_errors.len())
-            .filter(|&i| {
-                !self
-                    .diary
-                    .iter()
-                    .any(|e| e.errors.as_ref().is_some_and(|range| range.contains(&i)))
-            })
-            .collect()
-    }
-
     /// One unification-failure diagnostic — the `unify_errors` entry at `i`,
     /// attributed through whichever diary entry owns that index.
-    fn mismatch(&self, i: usize) -> Diag<P> {
+    fn mismatch(&self, i: usize, index: &UnifyErrorIndex) -> Diag<P> {
         let err = &self.module.unify_errors[i];
         // An apply-time parameter-check failure: attribute to the argument.
-        if let Some(apply) = self.module.apply_errors.iter().find(|a| a.error_index == i) {
+        if let Some(apply) = index.apply[i].map(|a| &self.module.apply_errors[a]) {
             // The highlevel parses the argument's structure (the "who encodes,
             // parses" rule): the descent tags each level as a `[value, type]`
             // pair slot or a tuple/array shape, so the language can build the
@@ -477,10 +500,7 @@ where
         // error (one unify may own several, e.g. elementwise).  Ranges are
         // disjoint by construction — each is a slice of the append-only error
         // vec, recorded before the next unify ran — so exactly one matches.
-        let entry = self
-            .diary
-            .iter()
-            .find(|e| e.errors.as_ref().is_some_and(|range| range.contains(&i)));
+        let entry = index.owner[i].map(|e| &self.diary[e]);
         let (a, b) = match entry {
             Some(entry) => (entry.a, entry.b),
             None => (err.a, err.b),
@@ -504,5 +524,33 @@ where
             field,
             error_index: Some(i),
         }
+    }
+}
+
+/// [`Build::unify_error_index`]'s answer: for every `unify_errors` index, the
+/// diary entry that owns it (`owner`) and the first apply error that names it
+/// (`apply`).  Index-aligned with `Module::unify_errors`.
+///
+/// It exists so that collecting one report's diagnostics is linear in their
+/// number: without it, attributing each error rescans the whole diary (and
+/// each orphan rescans it again), which is quadratic in the count an editor
+/// produces on every keystroke.
+#[derive(Default)]
+struct UnifyErrorIndex {
+    /// `owner[i]` is the index into [`Build::diary`] of the entry whose owned
+    /// range contains `i`; `None` when no entry owns it (an orphan).
+    owner: Vec<Option<usize>>,
+    /// `apply[i]` is the index into `Module::apply_errors` of the first entry
+    /// naming `i`; `None` when no apply error does.
+    apply: Vec<Option<usize>>,
+}
+
+impl UnifyErrorIndex {
+    /// The `unify_errors` indices no diary entry owns — a deep apply-time
+    /// failure the lowlevel recorded rather than a checker-issued check, so
+    /// there is no recording position behind it.  Ascending, so they keep the
+    /// order the lowlevel recorded them in.
+    fn orphan_indexes(&self) -> impl Iterator<Item = usize> + '_ {
+        (0..self.owner.len()).filter(|&i| self.owner[i].is_none())
     }
 }

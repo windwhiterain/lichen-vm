@@ -109,6 +109,17 @@ where
 /// [`Diag::unattributed`]) prints its message alone, with no position and no
 /// caret.
 pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> String {
+    let starts = crate::lex::line_starts(source);
+    render_with_line_starts(source, &starts, diag)
+}
+
+/// [`render`] against an already-computed line model, so a whole report costs
+/// one scan of the source instead of one per diagnostic.
+fn render_with_line_starts<P: lichen_lowlevel::Program>(
+    source: &str,
+    starts: &[usize],
+    diag: &Diag<P>,
+) -> String {
     let mut out = format!("error: {}\n", diag.message);
     if let Some((line, col)) = diag.span {
         out.push_str(&format!("  --> {line}:{col}\n"));
@@ -116,8 +127,7 @@ pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> Stri
         // The line the caret sits on comes from the shared line model
         // (`line_starts`), not from a second scan of the source — so the text
         // and the `(line, col)` name the same line.
-        let starts = crate::lex::line_starts(source);
-        if let Some(text) = crate::lex::line_text(source, &starts, line) {
+        if let Some(text) = crate::lex::line_text(source, starts, line) {
             let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
             out.push_str(&format!(" {line} | {text}\n"));
             out.push_str(&format!("   | {caret}\n"));
@@ -129,7 +139,11 @@ pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> Stri
 /// Render a whole diagnostic list back to back, exactly as the CLI prints
 /// them: one caret block per diagnostic, no separator.
 pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
-    diags.iter().map(|d| render(source, d)).collect()
+    let starts = crate::lex::line_starts(source);
+    diags
+        .iter()
+        .map(|d| render_with_line_starts(source, &starts, d))
+        .collect()
 }
 
 // --- the pretty checker message ----------------------------------------------

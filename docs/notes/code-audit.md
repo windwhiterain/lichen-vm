@@ -89,7 +89,7 @@ queue's order is deliberate.
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | blocked:D13 |
-| P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | todo |
+| P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | todo |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
@@ -3185,6 +3185,77 @@ per-error it also does `apply_errors.iter().find` (`:435`) and
 keystroke. One O(E + D) sweep over the diary (marking owned indices in a
 `Vec<bool>`) replaces all three. In `language/src/render.rs:112,124`,
 `render_all` is O(diags × lines) for the same reason.
+
+**Outcome — four scans, three premises held, and the parser's is two loops
+rather than one.**  Re-derived, every cited line had drifted ten to twenty
+lines, and the parser site the sweep reported (`parse.rs:114-123`) is not the
+only one: the same `errors.iter().any` dedup sits again at `:247-256` in
+`region_inner` (the incremental re-parse path).  Both were fixed here — it is
+the same defect in the same shape, and splitting one dedup across two items
+would have left the other quadratic.
+
+*What each scan was for.*  All four are a linear rescan of a list that grows
+as it is built, but they answer three different questions, and only two of
+them wanted an index over the diary:
+
+| site (before) | what the scan answered | replacement |
+|---|---|---|
+| `diagnostic.rs:434-443` `orphan_unify_errors` | "does any diary entry own error `i`?" — asked once per error, over every entry | one `Vec<Option<usize>>` of owners |
+| `diagnostic.rs:450` `apply_errors.iter().find` | "which apply error names error `i`?" — the same short list rescanned per error | one `Vec<Option<usize>>` of apply-error indices |
+| `diagnostic.rs:480-483` `diary.iter().find` | "which entry owns error `i`?" | the same owner vector |
+| `render.rs:119` `line_starts` per diagnostic | the line model, recomputed per caret block | hoisted into `render_all` |
+| `parse.rs:117-120` and `:250-253` `errors.iter().any` | "has this exact diagnostic already been emitted?" — a membership test with no set | one `HashSet` keyed on the diagnostic's content |
+
+*The index, and the order it has to preserve.*  `Build::unify_error_index`
+(`diagnostic.rs`) fills both vectors in one pass each: the diary's owned ranges
+are disjoint slices of the append-only error list, so filling `owner` visits
+each index at most once, and both vectors take the **first** writer — `find`'s
+semantics, not `insert`'s.  `orphan_indexes()` is then a read of that vector,
+so the orphan set and its ascending order are exactly what the old filter
+produced, and `mismatch` reads both vectors instead of scanning.  The
+`Vec<bool>` the note proposed would have worked for the orphan filter too, but
+`Vec<Option<usize>>` is the same size and also answers *which* entry, so the
+attribution path reads it rather than keeping a second structure.
+
+*Measured, before → after* (`test` profile, fastest of three rounds; the input
+is generated source, described per row).  The parser row's before/after counts
+come from a temporary probe that counted loop iterations and was removed:
+
+| input | measure | before | after |
+|---|---|---|---|
+| N independent `a{i} = 1 + "s{i}"` mismatches, E = D = N, N = 50/100/200/400 | `Build::diagnostics()` | 0.046 / 0.140 / 0.501 / 1.803 ms | 0.019 / 0.035 / 0.077 / 0.208 ms |
+| N unresolved names, one per line: D = N diagnostics over L = N lines, N = 200/400/800/1600 | `render::render_all` | 7.005 / 28.998 / 116.400 / 528.302 ms | 0.317 / 0.654 / 1.227 / 2.639 ms |
+| 2000 unresolved names over 2001 lines | `render_all` | 854.611 ms | 3.384 ms |
+| N statements of `x{i} a => => =>`, 4·N rich errors, N = 4000/8000 | `parse::parse` | 1455.998 / 9967.020 ms | 665.933 / 1273.213 ms |
+
+The first two rows are the claimed shape and it is unmistakable: both grew ~4×
+per doubling before and ~2× after, and at 2000 diagnostics the render is 252×
+faster.  The parser row is the part of the measurement that needs saying out
+loud: **the dedup is genuinely quadratic, and at the error counts a normal file
+produces it is invisible.**  The same input at 1600 errors read 303.9 ms
+before against 289.2 ms after — inside the noise, because chumsky's recovery
+(~0.2 ms per error) dominates the scan (~1 ns per comparison).  At 32 000
+errors the linear `any` costs about 8.7 s of the 9.97 s parse — 512 M element
+comparisons — and the set makes that parse 1.27 s.  The comparison count is the
+premise's own number: `n(n-1)/2` before, `n` after.
+
+*No behavioural change, checked directly.*  A probe dumped `render_all`'s whole
+output plus the highlevel diagnostic count for ten failing programs (a unify
+mismatch, a runtime apply of a non-function, an array-element mismatch, an
+unresolved name, a table miss, a parse-recovery failure, an unresolved name
+inside a lambda, a `p = q => q 1; p 5` apply, and two clean programs); the
+before and after dumps are identical line for line — same diagnostics, same
+order, same carets.  The probe is removed and the workspace suite passes
+unchanged.
+
+*Deliberately not done.*  `render` keeps its own `line_starts` call: it is the
+public single-diagnostic entry point and has no caller-provided line model to
+reuse, so only `render_all` — which already owns the list — hoists it.  The
+set's extra allocation (one `String` clone per *unique* diagnostic, to key the
+set) is left in: it is one allocation per diagnostic against the n² element
+comparisons the scan performed, and avoiding it needs a key borrowed from the
+list being built, which the borrow checker will not allow while the list is
+being pushed to.
 
 ### P4-5 — `path.contains` as a cycle guard; O(n²) kernel codegen `reported`
 
