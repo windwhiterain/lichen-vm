@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 chumsky = "0.13.0"
+stacksafe.workspace = true
 lichen-language-lex.workspace = true

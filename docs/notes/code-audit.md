@@ -70,7 +70,7 @@ queue's order is deliberate.
 | P1-25 | high | package | A dependency's package name is written as Rust source | done |
 | P1-26 | high | language | The table-key hash changed meaning without an artifact version bump | done |
 | P1-27 | high | registry | A leaf name longer than 255 bytes desynchronises the artifact stream | done |
-| P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | todo |
+| P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -1835,6 +1835,51 @@ wiring, not after.
 **Fix.** Add `stacksafe` to `lichen-language-parser`'s manifest and annotate the
 walk's recursive entry point, matching what `P1-22` did for the other six. Do not
 change the parser's worker or its stack size (`P1-23`, `wontfix:D9`).
+
+**Outcome.** The premise held as written, re-derived first-hand before the
+change.
+
+*The three facts.*  `crates/lichen-language-parser/Cargo.toml` listed `chumsky`
+and `lichen-language-lex` and nothing else, so `stacksafe` was not in that
+crate's dependency graph at all.  The walk's two functions are nested in
+`collect_error_blocks` (in
+`crates/lichen-language-parser/src/parse/error_blocks.rs`): `walk_expr` calls
+`walk_stmt` for a block and `walk_stmt` calls back into `walk_expr`, so every
+cycle re-enters at `walk_expr`, which is the hub `P1-22`'s rule names.
+And the crate's only out-of-parser caller is
+`crates/lichen-language/src/session.rs:524`, the `BufferSession` splice that
+`P2-1` records as built but unwired; the in-parser call site (`parse.rs:164`)
+does sit inside the 16 MiB worker, as the item says.
+
+*What landed.*  `stacksafe.workspace = true` in the parser's manifest (the
+workspace root already pins `stacksafe = "1"`), `use stacksafe::stacksafe;` and
+one `#[stacksafe]` on `walk_expr` — the re-entry hub, exactly the arrangement
+`P1-22` gave the frontend's six walks.  No other function is annotated, and
+`walk_stmt` needs none: it is only reachable from `walk_expr`, so the cycle is
+covered by the hub.  The parser's worker, its 16 MiB stack and the absence of a
+depth limit are untouched (`P1-23`, `D9`).
+
+*What could be pinned, and what could not.*  The guard changes no output — the
+`Vec<ErrorBlock>` a deep program yields is identical with and without it — so no
+behavioural assertion can falsify its absence, and the only path that reaches
+the walk on a shallow stack is the unwired session.  What was pinned is the
+abort, following `P1-22`'s pattern:
+`crates/lichen-language-parser/src/tests/parse_tests.rs`'s
+`the_recovered_error_walk_does_not_overflow_a_shallow_caller_stack` parses a
+2000-term `1+1+…` chain (flat in the token stream, left-nested in the AST) and
+runs `collect_error_blocks` on it on a 128 KiB thread, standing in for the
+caller's stack.  Against the unfixed tree the test binary dies with
+`STATUS_STACK_OVERFLOW (0xc00000fd)` — a process abort, not an assertion, which
+is the limit `P1-22` recorded for the same kind of pin — and with the attribute
+it passes in 0.07 s.  What could **not** be pinned is the session path itself:
+driving `splice_program` to that depth would exercise code no production caller
+reaches while `P2-1` is open, and the test's 128 KiB thread is an explicit
+stand-in rather than any real caller's stack.
+
+*Gates.*  `cargo clippy --workspace --all-targets -- -D warnings` exits 0,
+`cargo fmt --all -- --check` exits 0, `cargo test --workspace` passes, and
+`cargo test -p lichen-language --test pipeline --test examples --test persist
+--test registry` passes.
 
 ## P2 — architecture
 
