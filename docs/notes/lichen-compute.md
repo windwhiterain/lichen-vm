@@ -168,7 +168,8 @@ graph the checker has already accepted.
 
 A **multi-arg (tuple) kernel** is just a wider shape: `compute.jit (p : <Int, Int> =>
 p(0) + p(1))` compiles to wasm `(i64, i64) -> i64`. The arity comes from the parameter's
-*type* cell (`kernel_param_shape`/`element_shape` yield `LowShape::Tuple(..)`), which
+**low type** — seeded from the parameter's type cell by the encoding authority, then read
+back off the parameter's class (see [compute-jit-low-types](compute-jit-low-types.md)) — which
 drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element reads:
 `param_path`/`is_param_value` recognise `Index(param_pair, 0)` → `local.get 0` (scalar) and
 `Index(Index(param_pair, 0), k)` → `local.get k` (tuple element k), via `flat_arity`/

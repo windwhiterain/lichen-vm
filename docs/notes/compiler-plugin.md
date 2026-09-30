@@ -102,7 +102,36 @@ they land here. `run` sees the possibly-lazy operand and returns a (possibly
 `Parameterized`) value — staying lazy on an unbound operand is the disciplined behaviour,
 leaving the type-error reporting to the definition pass.
 
-## Extension point 4: global extension state (`GlobalExt`)
+`run` has one sibling, `low_type`, which states what the operator's computation *produces*
+for the low-type pass (see [lowlevel-low-types](lowlevel-low-types.md)):
+
+```rust
+fn low_type(&self, arguments: &[Option<LowShape>]) -> Option<LowShape>;
+```
+
+`arguments` is one entry per element of the operand array; `None` returned means the
+operator declines and its result stays undecided. The default declines, so a plugin that
+needs no low-type statement implements nothing. Like `run`, it lives on the operator
+because the meaning of an operator belongs to whoever defined it.
+
+## Extension point 4: recording a diagnostic (`Module::extension_diagnostics`)
+
+A plugin regularly decides something the lowlevel cannot describe on its own — a backend
+that cannot lower a shape, a compiler that cannot compile a body. `Module::record_extension_diagnostic`
+is the general channel for it:
+
+```rust
+fn record_extension_diagnostic(&mut self, category: &'static str, node: Option<NodeId>, message: impl Into<String>);
+```
+
+Every other channel on a `Module` (`unify_errors`, `eval_errors`, `assert_errors`,
+`apply_errors`) is a typed channel for a fact the VM itself produces, so each is fixed by
+the VM's own vocabulary. This one is not: the lowlevel stores the entry and knows nothing
+about what `category` means, so **a new external error kind never means a new channel
+here**. `compute.jit` uses it to say why a kernel stayed lazy instead of discarding the
+reason. What a host *renders* from these entries is the host's own decision.
+
+## Extension point 5: global extension state (`GlobalExt`)
 
 A plugin can carry per-module, program-global state in the module's `global_ext` slot.
 `GlobalExt` is a marker over a host struct whose components are composed with
@@ -132,7 +161,7 @@ Then a host composes it: `lichen-language`'s `program.rs` composes
 plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
 `compute.lichen` import.
 
-## Extension point 5: a compile-time attribute
+## Extension point 6: a compile-time attribute
 
 A plugin can contribute an *attribute* — a marker (`AttrSpec`) plus its lowering
 behaviour (`AttrExt<P>`: missing value, combine, unify, subtype, label, render),

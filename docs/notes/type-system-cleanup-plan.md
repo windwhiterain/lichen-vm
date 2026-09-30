@@ -46,8 +46,9 @@
 > [README](../../README.md)). D5 = compute JIT out of scope for now; the
 > checker encoding is labelled unstable for external consumers — see
 > [checker-encoding-instability](checker-encoding-instability.md) — and the
-> future JIT decoupling is to be built on the low-type layer — see
-> [lowlevel-low-types](lowlevel-low-types.md).
+> JIT decoupling was to be built on the low-type layer, which is now
+> [implemented](lowlevel-low-types.md); the label survives, narrowed to the
+> body's graph walk.
 > Basis: five-point survey of `lichen-lowlevel`, `lichen-highlevel` (checker,
 > IR, program), `lichen-utils` / `lichen-compute` / `lichen-perspective`, and
 > the docs/tests, performed 2025 — findings cited inline as `file:line`.
@@ -529,7 +530,7 @@ These change or bless semantics; each needs an explicit decision (§7):
 | D2 | Occurs check | **Document** equi-recursive unification (no occurs check) as designed semantics |
 | D3 | Struct instantiation recognition | **Syntactic at parse time (already the reality); the checker total + type-directed with a nominal callee check** — landed on `fix/phase1-instantiate` |
 | D4 | `Type : Type` statement | **Terminal, not supertype** — the chain closes in a cycle at `Type`, and that cycle is what admits recursive types; no subtyping, a compound type is typed by its kind. Landed in the [spec](../language-spec.md) §3 and the [README](../../README.md) |
-| D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now: [checker-encoding-instability](checker-encoding-instability.md) |
+| D5 | Compute JIT in scope | **Deferred** — mark the checker encoding as unstable for now: [checker-encoding-instability](checker-encoding-instability.md). The decoupling this deferred was has since been built, on the low-type layer ([lowlevel-low-types](lowlevel-low-types.md), Phases 3a–3c): the JIT's *domain* read no longer touches the encoding, and the label is narrowed to the body's graph walk |
 
 ## 8. Tests and documentation (Phase 5, continuous)
 

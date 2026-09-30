@@ -2,7 +2,8 @@
 
 > Status: current
 > Points at: `crates/lichen-lowlevel` — see the module rustdoc for `evaluation`,
-> `apply`, `function`, `equality`, `gc`, `table`, `assert`, `static_module`.
+> `apply`, `function`, `equality`, `gc`, `table`, `assert`, `low_type`,
+> `static_module`.
 
 `lichen-lowlevel` is the runtime the whole system is built on. It evaluates a
 `[value, type]` program and, because unification runs here, it is also the
@@ -40,5 +41,8 @@ value/attribute/operator/literal types, so one runtime serves every layer.
 ## Observing it
 
 - `evaluation::evaluate_node` / `evaluate_node_deep` force a node to a value.
+- `Module::class_low_type` / `low_type_of_node` read a class's **low type**, and
+  `Module::infer_template_low_types` computes one for a template that is never
+  evaluated (see [lowlevel-low-types](lowlevel-low-types.md)).
 - The `tests/basic/` integration tests cover evaluation, equality, GC, recursion,
   tables, asserts and static modules.

@@ -1,12 +1,13 @@
 # Checker encoding: unstable at the `lichen-compute` boundary
 
-> Status: current — describes the coupling as it stands and the decision that
-> accepted it (D5 of [type-system-cleanup-plan](type-system-cleanup-plan.md));
-> the design that would remove the label is
-> [lowlevel-low-types](lowlevel-low-types.md), which is only `proposed`.
+> Status: current — the label **stands, in a narrowed scope**. The kernel
+> *domain* read is gone: `kernel_param_shape`/`element_shape` were deleted and
+> `compile_fragment` now seeds, passes, and reads the parameter's **low type**
+> ([lowlevel-low-types](lowlevel-low-types.md)). What remains is the body's
+> graph walk, and that is what this note now describes.
 > Points at: `crates/lichen-highlevel/src/shape.rs` (the encoding authority)
-> and `crates/lichen-compute/src/compute.rs` (the one component that reads
-> around it).
+> and `crates/lichen-compute/src/compute.rs` (the one component that still
+> reads around it).
 
 lichen's type representation is an untyped node graph with positional
 conventions: every expression compiles to a `[value, type, attrs…]` pair, every
@@ -23,12 +24,21 @@ is no second copy anywhere to keep in step.
 `lichen-compute`'s JIT is the one component that does not use that authority.
 It reads the same conventions out of raw nodes:
 
-- `value_of_node` (`compute.rs:1406-1440`) follows a `value_of` extraction — an
+- `value_of_node` (`compute.rs`) follows a `value_of` extraction — an
   `Index(pair, 0)` over a pair node — down to the pair's value slot, the same
   access path the checker itself uses to reach most values.
 - The native operators read a kernel signature's domain and codomain through
   raw `Index` chains — `Index(sig.ty, 0)`, then `Index(sig_shape, 0)` /
   `Index(sig_shape, 1)`.
+
+**The domain read is gone.** Phase 3c of the low-type design deleted
+`kernel_param_shape` and `element_shape` — the two functions that re-derived a
+kernel's domain by walking the type half of the parameter pair. The domain now
+comes from the parameter's low type, and the *seed* for that low type is read
+once through the authority (`shape::low_type_of_slot`), which is a single named
+call rather than a convention the JIT re-derives. That was the read with the
+most reach: a `string` domain used to decode as a machine scalar, so the old
+walk was not merely coupled, it was wrong where it was silent.
 
 **The write side was closed in Phase 5.**  All four native operators used to
 assemble a function type by hand out of array positions —
@@ -47,7 +57,8 @@ and the damage is wrong kernel code rather than a build error. This is the "any
 encoding change breaks it silently" the cleanup plan records
 ([type-system-cleanup-plan](type-system-cleanup-plan.md) §1). Decision D5
 deferred cleaning this component up and asked for this label instead; Phase 5
-narrowed the label to the read side rather than removing it.
+narrowed the label to the read side, and Phase 3c of the low-type design
+narrowed it again, to the body's graph walk.
 
 ## What "unstable" means here
 
@@ -70,12 +81,16 @@ narrowed the label to the read side rather than removing it.
 
 ## What would remove the label
 
-[lowlevel-low-types](lowlevel-low-types.md) (status `proposed`, not approved)
-proposes giving the lowlevel **low types** — the `LowValue` variant tag of a
-node's value, refined by observation and by abstract interpretation — and
-making the JIT read only those. A JIT that reads low types never reads the
-`[value, type]` pair encoding, which is precisely the reason this label
-exists: once the JIT is on low types, re-encoding stops being a hazard for it,
-and this note becomes the historical record of a coupling that is gone instead
-of a live warning. That design is neither approved nor implemented, so the
-label stands.
+[lowlevel-low-types](lowlevel-low-types.md) gave the lowlevel **low types** —
+the `LowValue` variant tag of a node's value, refined by observation, by the
+class merge, and by an abstract-interpretation pass over a template — and moved
+the JIT's domain read onto them. A JIT that reads low types never reads the
+`[value, type]` pair encoding, which is precisely the reason this label exists:
+once the JIT is on low types, re-encoding stops being a hazard for it.
+
+That is done for the domain; the **body** is the residue. The emitter reaches a
+value's computation by following `Index` chains from a known pair, and reaches
+a parameter element by its index path. A backend that read each body node's low
+type instead — which the pass now computes and stores — would remove the last
+of it. That is recorded as the open item in
+[compute-jit-low-types](compute-jit-low-types.md), not as work in flight.

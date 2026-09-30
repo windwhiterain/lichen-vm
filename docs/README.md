@@ -40,10 +40,10 @@ Every note opens with a `> Status:` line:
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
-| [Optional static shape](notes/lichen-lowlevel-shape.md) | `lichen-lowlevel` (`LowShape`), `lichen-language` (`compute`/`persist`) | current |
-| [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-compute` | approved (phased, 3a in progress) |
+| [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
+| [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | implemented (Phases 3a–3c) |
 | [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0/1a/1b/1c/2/3a); proposed (the rest of Phase 3, Phase 4+) |
-| [Checker encoding: unstable at the `lichen-compute` boundary](notes/checker-encoding-instability.md) | `lichen-highlevel` (`shape`), `lichen-compute` | current |
+| [Checker encoding: unstable at the `lichen-compute` boundary](notes/checker-encoding-instability.md) | `lichen-highlevel` (`shape`), `lichen-compute` | current (narrowed: the domain read is on low types; the body walk is the residue) |
 | [Extensible attributes](notes/attributes.md) | `lichen-highlevel` (`attr`/`shape`/`ir`/`checker`), `lichen-language` (`program`/`compile`) | current |
 | [Doc attribute rework plan](notes/doc-attribute-rework-plan.md) | `lichen-language`, `lichen-highlevel` (`attr`), `lichen-language-server` (`analysis`) | current |
 | [The compiler-plugin model](notes/compiler-plugin.md) | `lichen-utils` (`extend`), `lichen-lowlevel`, `lichen-highlevel` (`program`/`native`), `lichen-compute` | current |

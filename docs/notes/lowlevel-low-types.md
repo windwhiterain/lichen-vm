@@ -1,12 +1,16 @@
 # Low types: a variant-tag layer for a lowlevel-based JIT
 
-> Status: **approved** — the mechanism below is the decided design (recorded
-> 2025, direction set in the ComputeJIT review: pre-apply JIT is the mainstream
-> scenario, `LowShape` gains `Unknown` and becomes the low type). Relates to
-> decision D5 in [type-system-cleanup-plan](type-system-cleanup-plan.md), to
-> [lichen-lowlevel-shape](lichen-lowlevel-shape.md), and removes the coupling
-> labelled in [checker-encoding-instability](checker-encoding-instability.md).
-> Implementation is phased (§4); each phase updates this status as it lands.
+> Status: **implemented** (Phases 3a–3c landed; `feature/low-types`) — the
+> mechanism below is the decided design (recorded 2025, direction set in the
+> ComputeJIT review: pre-apply JIT is the mainstream scenario, `LowShape`
+> gains `Unknown` and becomes the low type). Relates to decision D5 in
+> [type-system-cleanup-plan](type-system-cleanup-plan.md) and to
+> [compute-jit-low-types](compute-jit-low-types.md); it removes the coupling
+> labelled in [checker-encoding-instability](checker-encoding-instability.md),
+> which that note now tracks in its narrowed scope.
+>
+> Three things the implementation found that the design below did not say, all
+> recorded in §6.
 
 ## The problem
 
@@ -19,11 +23,11 @@ raw nodes (`compute.rs:1410-1630`), silently breaking on any encoding change.
 
 But a JIT reading only the **lowlevel** graph has no types at all.
 
-A measured fact about the current state: the `Node::low_shape` channel is
-**write-only** — the only writer is the compute JIT itself
-(`compute.rs:689`, `compute.rs:742`) and no reader exists anywhere; the JIT
-carries shapes in its own `KernelFragment::ParamSlot` instead. The whole
-`LowShape` mechanism is plumbing with no traffic, which is what this design
+A measured fact about the state before this landed: the `Node::low_shape`
+channel was **write-only** — the only writer was the compute JIT itself
+(`compute.rs:689`, `compute.rs:742`) and no reader existed anywhere; the JIT
+carried shapes in its own `KernelFragment::ParamSlot` instead. The whole
+`LowShape` mechanism was plumbing with no traffic, which is what this design
 turns into the real low-type layer.
 
 ## 1. The idea: low types
@@ -54,9 +58,9 @@ class (read through the representative, the same `&self` walk
 `class_value` already uses, `equality.rs:71-77`), stored in the existing
 `Node::low_shape` field. Two writers maintain it:
 
-- **Observation — hooked into `write_node_value`** (`equality.rs:93`), the
-  single choke-point every value write already flows through (evaluation
-  results, apply-clone bindings, launch-argument unification). When a
+- **Observation — hooked into `write_node_value`** (`equality.rs:93`) and into
+  `add_node`, the single choke-point every value write already flows through
+  (evaluation results, apply-clone bindings, launch-argument unification). When a
   concrete value binds, the class's low type refines from the value's variant
   tag — O(1), monotone, no extra traversal. Deep shapes are not unfolded at
   write time; a read recurses into element classes, which refine
@@ -64,9 +68,8 @@ class (read through the representative, the same `&self` walk
 - **Class merge — hooked into `add_equality`** (`equality.rs:59`): a union
   joins the two representatives' low types onto the new representative.
   `Unknown ∨ k = k`; two equal `Known`s are unchanged; two different `Known`s
-  are unreachable on a checked graph (the checker already proved
-  `value : type` consistent — consistency comes free), so a debug_assert
-  suffices.
+  join to `Unknown` — which the design expected to be unreachable, and is not
+  (§6).
 
 And one computation route for what observation cannot reach:
 
@@ -82,7 +85,9 @@ And one computation route for what observation cannot reach:
     — the encoding authority — with `Unknown` explicit instead of the current
     silent `USize` fallback (`compute.rs:937-964`). The lowlevel pass itself
     never learns the pair layout; the caller (the JIT's `compile_fragment`)
-    seeds the parameter class and runs the pass.
+    seeds the parameter class and runs the pass. The authority also resolves
+    the type slot's one indirection (`low_type_of_slot`), so the caller still
+    reads no layout at all (§6).
   - **Transfers**: `Add`/`Sub`/`Leq`/`Eq → `USize`;
     `Index(Tuple(ts), k) → ts[k]`; `Apply(Function(d, c), _) → c`; the
     lowlevel owns the `LowOperator` transfers, extension operators go through
@@ -118,7 +123,7 @@ call sites, or launch-time) is a separate future feature, to be decided on
 its own; the freeze/persist roadmap (static kernel artifacts) independently
 requires pre-apply compilation, which is why it is the mainstream.
 
-## 4. Phases
+## 4. Phases (all landed)
 
 | Phase | Content | Touch points |
 |---|---|---|
@@ -129,6 +134,12 @@ requires pre-apply compilation, which is why it is the mainstream.
 `Option<LowShape>` keeps its two distinguished states: `None` = untraced
 scaffolding (default, costs nothing), `Some(Unknown)` = traced but undecided.
 
+The reads and the seed are `Module::class_low_type` (through the
+representative), `Module::low_type_of_node` (the recursive read), and
+`Module::seed_class_low_type`; `node_shape`/`set_node_shape` are gone, because
+a node's own slot is no longer where the answer lives. `refine_class_low_type`
+is the single write side all three routes share.
+
 ## 5. Open questions (resolved)
 
 - ~~The exact lattice~~ — recursive shapes, decided: tuple domains require
@@ -138,3 +149,62 @@ scaffolding (default, costs nothing), `Some(Unknown)` = traced but undecided.
 - ~~Whether `LowShape` is absorbed~~ — yes: `LowShape` **is** the low type,
   plus `Unknown`. The dead variants and the write-only channel are resolved
   by giving the channel real traffic (Phase 3a), not by removal.
+
+## 6. What the implementation found, and what it is still open
+
+Three corrections to the design above, all from measurement rather than
+argument, and all still true of the code.
+
+**The join's "unreachable" case is reachable, so it is not an assertion.**
+The design reasoned that two different decided low types on one class cannot
+happen, because the checker proved `value : type` consistent — and a
+`debug_assert` sufficed. The first run of the compute suite fired it on 21 of
+24 programs. The reason is that a unification **deferral** merges two classes
+whose values were never compared: a pending computation against a skeleton, a
+deferred field read, a type round-trip (`equality.rs`, `shape::defer_pending`).
+Two arrays of different arity then legitimately share a class, and the class
+is only reconciled later, if at all. The join therefore answers
+`LowShape::Unknown`, which is the design's own safety argument: a reader
+degrades to "undecided" rather than to a wrong shape. The cost is bounded by
+what reads low types — a class whose writers disagree is a class the *encoding*
+arrays live on (a pair, a kind, a tuple type's element list), none of which a
+backend compiles against. One overlap *is* resolved rather than degraded: a
+seeded `Tuple(..)` of arity `n` and an observed `Array(_, n)` are two views of
+the same array value, so the tuple view wins.
+
+**Observation needs two sites, not one.** The design names
+`write_node_value` as the choke-point. It is the choke-point for *re-binding* a
+node, but a literal, a kind marker, or a freshly built array arrives through
+`add_node` with its value already concrete — so observing only at
+`write_node_value` would have left every one of them without a low type and
+made the channel blind to everything but the evaluated spine. Both are hooked.
+
+**A type value is not read the way a kinded type looks.** Two encoding facts
+that only the compiler could settle, and that the first version of
+`shape::low_type_of` got wrong (all 24 compute tests answered `Unknown`):
+
+- an **atomic** type's shape slot *is* its marker — `int` is literally
+  `[int, K]` — while a **compound** type's marker lives in its kind. Reading
+  the kind's marker for both classifies every scalar as an unrecognised kind.
+- the parameter's type slot is not always a type value: the checker unifies an
+  *annotated* parameter's type cell with the annotation expression's own
+  `[value, type]` term pair, so the slot holds that pair, while an *inferred*
+  one is bound straight to a type value. `low_type_of_slot` peels that one
+  indirection, in the authority, so the caller reads no layout — which is the
+  coupling this design exists to remove.
+
+**Open, deliberately not started:**
+
+- **Rendering the diagnostic.** `Module::extension_diagnostics` is the general
+  channel (every other channel on a `Module` is a fact the VM itself can
+  describe, and a plugin refusing to lower a computation has no such home),
+  and `compute.jit` records into it instead of discarding the reason. Nothing
+  renders it yet: deciding which extension diagnostics are user-facing, and
+  attributing them to a source span, is a separate call.
+- **Attribution.** `ExtensionDiagnostic::node` is `None` for the JIT's records,
+  because `OperatorExt::run` is not handed the operator's node. Threading it
+  through would be a public-trait break for a field nothing reads yet.
+- **Per-call-site specialization** — the §3 future feature, still undecided.
+- **A backend that reads the body's low types.** v1 reads the parameter
+  domain; the pass computes every body node's low type and stores them, which
+  is what a follow-on emitter would read instead of walking operand chains.
