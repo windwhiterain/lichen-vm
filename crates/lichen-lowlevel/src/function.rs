@@ -97,12 +97,12 @@ impl<P: Program> Module<P> {
         cell: Option<NodeId>,
     ) -> P::Value {
         self.with_apply_frame(|module| {
-            let (r#return, parameter, asserts) = {
+            let (r#return, parameter, assert_count) = {
                 let function = &module.functions[function];
                 (
                     function.r#return,
                     function.parameter,
-                    function.asserts.clone(),
+                    function.asserts.len(),
                 )
             };
             debug_assert!(
@@ -148,7 +148,14 @@ impl<P: Program> Module<P> {
             // entry keeps the body condition as its template, which is all the
             // host needs to attribute a per-call failure (a user-facing flag, a
             // source position) through its own table.
-            for &condition in &asserts {
+            // Walked by index rather than over a clone of the list: the loop
+            // body needs `&mut module` to instantiate each condition, and the
+            // registry lives on `module` itself, so no borrow of it can be
+            // held across the call.  The list is only read here — the entries
+            // this loop adds go to `module.asserts`, the per-call registry,
+            // not to the function's own.
+            for index in 0..assert_count {
+                let condition = module.functions[function].asserts[index];
                 let instantiated = module.node_apply(condition, &mut ctx);
                 if instantiated != condition {
                     module.asserts.push(PendingAssert {

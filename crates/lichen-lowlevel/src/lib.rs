@@ -650,7 +650,11 @@ pub struct StaticNodeId {
     pub module: ModuleKey,
     pub index: LocalNodeId,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A node's index within its own static module — the module-local half of
+/// [`StaticNodeId`].  It carries `Ord` so a set of these can be grouped by a
+/// stable sort (see `apply::regroup_clones`); the order is the plain index
+/// order, not an opaque key encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalNodeId {
     pub index: usize,
 }

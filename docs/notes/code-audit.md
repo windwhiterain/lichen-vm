@@ -91,7 +91,7 @@ queue's order is deliberate.
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | blocked:D13 |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
-| P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | todo |
+| P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
 | P5-1 | low | language | `tests/scratch.rs` has no assertions | done |
 | P5-2 | low | docs | `docs/README.md` status disagrees with the note it indexes | done |
 | P5-3 | low | all | Stale or contradicted doc comments (list) | done |
@@ -3410,6 +3410,139 @@ the larger, so a chain is O(log n) deep, and adding compression needs `&mut`
 - `registry/codec.rs:42-45` writes a `u8` leaf-name length — truncates and
   desynchronises the stream past 255.
 
+**Outcome — two claims fixed, one refused by this batch's own constraints, one
+that is a redesign and needs a decision.**  The four claims got four verdicts,
+and the first one's *mechanism* was wrong while its defect was real.
+
+### Per-apply clones — the node-list clone is not per apply; two other clones are
+
+**Refuted as stated.**  `function.rs:100-106` clones **`asserts` only**
+(`function.asserts.clone()`); it never clones the template's node list.  The
+node-list clone the note points at is `function.rs:430-438`, the
+**nested-closure** branch, and it fires per *closure instantiation*, not per
+apply: on `fib(16)` the counters read `nodes_clones = 0` across 3 193 applies.
+`static_module.rs:125` is `set_node_shape` and `:327` is a match guard, neither
+a clone; the static apply's per-call clones are `asserts.clone()` (`:164`) and
+`HashMap::new()` (`:169`) plus `regroup_clones` (`:199`).
+
+**What was really there, and what it cost.**  Two clones on every apply, at
+both apply entry points:
+
+| site | what it was | cost |
+|---|---|---|
+| `function.rs:105`, `static_module.rs:164` | a `Vec` clone of the function's assert list, taken because the loop body needs `&mut module` | one clone per apply; an allocation only when the function carries asserts |
+| `apply.rs:178-191` `regroup_clones` | a `HashMap<K, Vec<NodeId>>` of the clones grouped by template representative | one hash-table allocation **plus one `Vec` per group**, per apply |
+
+*The fix.*  Both assert lists are now walked **by index** (`for index in
+0..assert_count`, reading `module.functions[function].asserts[index]` per
+iteration), which drops the clone without holding a borrow across the call: the
+list is only read, and the entries the loop adds go to `module.asserts`, the
+per-call registry, not to the function's own.  `regroup_clones` now returns one
+`Vec<(K, NodeId)>` sorted by representative, and `unify_clone_groups` reads it
+as runs; `LocalNodeId` gains `PartialOrd, Ord` (its own `usize` index, not an
+opaque key encoding) for the static path's key type.
+
+*Why the order is safe.*  A group's clones are paired `first` with each other
+clone in the order the walk inserted them — preserved, because the sort is
+stable and the within-group sequence comes from the same `remap` iteration the
+old code pushed in.  Only the **order the groups are visited in** changes, from
+the iteration order of a `HashMap<K, Vec<NodeId>>` to the representative's
+order.  That order was already arbitrary — `HashMap`'s hasher is seeded per
+process — so nothing could depend on it, and the groups are disjoint sets of
+freshly minted nodes, so unifying one cannot affect another.
+
+*Measured, before → after* (`fib(n)` built by the lowlevel harness, the
+definition pass driven first so the recursion really runs, then the call
+deep-evaluated; a temporary counting global allocator and site counters, all
+removed before commit):
+
+| input | allocations/apply | total allocations | assert-list clones/apply |
+|---|---|---|---|
+| `fib(10)` (177 applies) | 34.14 → **14.14** | 6 043 → 2 503 | 1 → 0 |
+| `fib(12)` (465) | 34.06 → **14.06** | 15 838 → 6 538 | 1 → 0 |
+| `fib(14)` (1 219) | 34.03 → **14.03** | 41 480 → 17 100 | 1 → 0 |
+| `fib(16)` (3 193) | 34.01 → **14.01** | 108 599 → **44 739** | 1 → 0 |
+
+Twenty allocations per apply removed, and `fib(16)`'s wall time fell from
+150.6 ms to 129.0 ms in the same session (the machine varies by up to 3× run to
+run; the allocation count is the deterministic measure).  The template's
+node-list clone was not touched — it is not on this path.
+
+### Repeated `as_enum` — held, extent corrected
+
+`value_is_parameterized` (`evaluation.rs:716-771`, not the note's `:588-634`,
+which is the cycle-cut region above it) took `value.as_enum()` **three** times,
+not four, and iterated `array.items()` twice and `table.items()` **twice**, not
+four times.  The view is now taken once into a local.  Measured: one
+`evaluate_node_deep` of a table-valued node goes from **9 to 3** `as_enum`
+calls (the table node and its two leaves, one view each), and over `fib(16)`
+from 71 832 to 23 944 (22.5 → 7.5 per apply).  The `items()` calls are pointer
+arithmetic and were left as they are.
+
+### Per-byte `mix` — real, and refused by this batch's constraints
+
+`table.rs:287-290` folds a string key one byte at a time through `mix` (three
+multiplies and two shifts per byte).  Measured with `build_table` over one
+string key (`test` profile): 1 KB → 0.0147 ms, 10 KB → 0.044 ms, 100 KB →
+0.418 ms, 1 MB → **4.29 ms** — linear in bytes at ~4.3 ns/byte.
+
+**Not fixed, and the reason is a constraint, not the cost:** that fold *is* the
+table-key content hash.  A word-at-a-time rewrite cannot preserve the value —
+each byte's `mix` depends on the previous one — so it would change every string
+key's hash, the payload sort order, and every hash stored in every existing
+artifact, and the batch's standing constraint is *"do not touch … the table
+hash"* (with the artifact container's version equally out of bounds).  Marked
+`wontfix:<constraint>`: a hash-preserving speed-up does not exist, and a
+hash-changing one is a format change with an owner elsewhere.
+
+### The intern leak — real, measured, and a redesign: `D14`
+
+Confirmed first-hand.  `Compiler::new()` is fresh per `compile_resolved`, so
+`op_names`/`str_names` dedupe only *within* one compile, and `Expr::Str`
+(`compile.rs:398-403`) leaks **every string literal unconditionally**, with no
+dedup at all.  Measured with a tracking global allocator, net live bytes after
+each block of compiles of the *same* source (nothing retains a `Report`, so
+every other allocation a compile makes nets to zero):
+
+| source | leaked per compile | after 1 000 compiles |
+|---|---|---|
+| `a = "hello world"` (an 11-byte literal) | **11 bytes** | 11 000 bytes |
+| a named-field read (`x.alpha`, a 5-byte name) | **5 bytes** | 5 000 bytes |
+| `a = 1; b = "x"; a + 1` (a 1-byte literal) | **1 byte** | 1 000 bytes |
+| an editor-like stream of changing sources | **31 bytes** | 31 000 bytes |
+
+Unbounded and linear in compiles; the editor case leaks on every keystroke,
+exactly as the note says.
+
+**Not fixed: this is the redesign the note warned about.**  The `&'static str`
+is load-bearing — `ExprKind` must stay `Copy` (`compile.rs:192-199`) and the
+literal rides in the highlevel's `HighProgramLiteral::StrLit(&'static str)` —
+so tying the lifetime means a lifetime parameter on the literal and on
+`ExprKind`, rippling through `IR`, the checker and `persist`.  A process-global
+intern table is the other candidate, and it is *not* a fix: it bounds growth to
+the number of *distinct* strings ever seen while still never reclaiming any,
+and it does nothing for the editor, where each keystroke is a new string.
+Choosing between "own the strings in the IR" and "keep a process-lifetime
+intern table" is a policy for how long interned data lives, so it is
+`D14` — see [Decisions](#decisions) — and nothing was changed for it here.
+The deserializer's `codec.rs:285` leak is the same shape and rides with it.
+
+### Found, not one of the four, and not fixed here
+
+- `apply.rs:116` (the note's `:114`) dedupes `apply_errors` with a linear
+  `iter().any(...)` over a list that is append-only and never cleared — the
+  same shape as `P4-4`'s parser dedup, on a different list.  `P4-4` is done and
+  its scope was the highlevel/render/parser; this site is unowned, so it is
+  reported rather than folded in.
+- `compute.rs:1968` (the note's `:1879`) leaks the 9-entry `NativeOps` slice
+  once per `compute_native_ops!` call — 144 bytes per
+  `PackageStore::register_compute`, which is once per store because the handle
+  is then served from `native`.  Bounded, and not this item's claim.
+- `registry/codec.rs:42-45` writes a `u8` leaf-name length, so a carry-variant
+  name past 255 bytes truncates and desynchronises the artifact stream.  That
+  is an artifact-codec correctness defect, not an optimization, and it belongs
+  to `P0-5`/`P0-7`'s container; reported here, not changed.
+
 ## P5 — hygiene and docs
 
 - **P5-1 `verified`** — `crates/lichen-language/tests/scratch.rs` is a 31-line
@@ -4145,6 +4278,27 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   editor's small-file case — which is `P1-17`'s case, and `P1-17` is where the
   per-keystroke path is being fixed. Decide with that in mind: it may be better
   resolved by `P1-17`'s caching than by a persistent worker.
+- **D14 — Where the IR's strings live. (open; blocks `P4-6`.)** `P4-6`'s intern
+  leak is real and measured: every compile permanently leaks every string
+  literal (`Expr::Str` has no dedup at all) and every distinct interned name, at
+  1–11 bytes per literal per compile and 31 bytes/compile on an editor-like
+  stream of changing sources. Nothing reclaims any of it.
+
+  The reason it is a decision: the leaked `&'static str` is **load-bearing**.
+  `ExprKind` must stay `Copy` (`compile.rs:192-199`), and a string literal rides
+  in the highlevel's `HighProgramLiteral::StrLit(&'static str)`, so the two
+  candidate fixes are both wider than the item:
+  - **own the strings in the IR** — a lifetime parameter on the literal and on
+    `ExprKind` (or an owning arena the IR borrows from), rippling through `IR`,
+    the checker, and `persist`'s codec. Reclaims correctly; the largest change.
+  - **a process-global intern table** — dedups identical strings across
+    compiles, but still never reclaims anything and does nothing for the editor,
+    where each keystroke's literal is a new distinct string. It bounds the
+    growth rate, not the growth.
+
+  Decide how long interned source text must live before either is written; do
+  not pick one silently. `lowlevel/codec.rs:285` (the deserializer's own
+  `Box::leak`) is the same shape and rides with whatever is decided.
 
 ## Checked and found clean
 

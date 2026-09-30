@@ -8,8 +8,6 @@
 //! Keeping those pieces here prevents the two apply paths from drifting
 //! apart.
 
-use std::collections::HashMap;
-
 use crate::{
     AnyFunctionId, ApplyError, BlockId, BudgetExhausted, LowValue, Module, NodeId, Program,
 };
@@ -175,35 +173,47 @@ impl<P: Program> Module<P> {
 /// dynamic template (`disjoint::find` on the live module) and a static
 /// template (`static_find` on the immutable solved module); caller supplies
 /// it.
-pub(super) fn regroup_clones<K, I>(
-    remap: I,
-    mut find: impl FnMut(K) -> K,
-) -> HashMap<K, Vec<NodeId>>
+///
+/// The answer is one `Vec` sorted by representative, which the caller reads as
+/// runs.  A `HashMap` of groups costs a table allocation plus one `Vec` per
+/// group on **every apply**, and the order it hands the groups back in is
+/// arbitrary, so nothing depends on it; the sort is stable, so a group's
+/// clones keep the walk's insertion order — the order the unification pairs
+/// them in.
+pub(super) fn regroup_clones<K, I>(remap: I, mut find: impl FnMut(K) -> K) -> Vec<(K, NodeId)>
 where
-    K: Copy + Eq + std::hash::Hash,
+    K: Copy + Ord,
     I: IntoIterator<Item = (K, NodeId)>,
 {
-    let mut groups: HashMap<K, Vec<NodeId>> = HashMap::new();
-    for (template, clone) in remap {
-        groups.entry(find(template)).or_default().push(clone);
-    }
-    groups
+    let mut grouped: Vec<(K, NodeId)> = remap
+        .into_iter()
+        .map(|(template, clone)| (find(template), clone))
+        .collect();
+    grouped.sort_by_key(|&(representative, _)| representative);
+    grouped
 }
 
 /// Re-establish one apply pass's template topology among its fresh clones:
-/// unify every group [`regroup_clones`] produced.  The grouping caller picks
+/// unify every run [`regroup_clones`] produced.  The grouping caller picks
 /// the representative; this half — the unification policy — is the same for
 /// the dynamic and the static apply path, so it is stated once.
-pub(super) fn unify_clone_groups<K>(
-    groups: HashMap<K, Vec<NodeId>>,
-    mut unify: impl FnMut(NodeId, NodeId),
-) where
-    K: Copy + Eq + std::hash::Hash,
+///
+/// The groups are disjoint sets of freshly minted nodes, so the order the
+/// runs are visited in cannot affect the result; only a run's own order can,
+/// and that is preserved.
+pub(super) fn unify_clone_groups<K>(groups: Vec<(K, NodeId)>, mut unify: impl FnMut(NodeId, NodeId))
+where
+    K: Copy + Eq,
 {
-    for clones in groups.values() {
-        let first = clones[0];
-        for &clone in &clones[1..] {
-            unify(first, clone);
+    let mut start = 0;
+    while start < groups.len() {
+        let representative = groups[start].0;
+        let first = groups[start].1;
+        let mut next = start + 1;
+        while next < groups.len() && groups[next].0 == representative {
+            unify(first, groups[next].1);
+            next += 1;
         }
+        start = next;
     }
 }

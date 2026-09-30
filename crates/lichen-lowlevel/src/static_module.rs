@@ -159,9 +159,9 @@ impl<P: Program> Module<P> {
     ) -> P::Value {
         self.with_apply_frame(|module| {
             let static_module = module.static_module(function.module);
-            let (r#return, parameter, asserts) = {
+            let (r#return, parameter, assert_count) = {
                 let f = &static_module.functions[function.index.0];
-                (f.r#return, f.parameter, f.asserts.clone())
+                (f.r#return, f.parameter, f.asserts.len())
             };
             let mut ctx = StaticApplyCtx {
                 target: block,
@@ -180,7 +180,11 @@ impl<P: Program> Module<P> {
             // condition instantiates through the shared remap.  A baked
             // condition is per-call invariant (decided at solve time) and is not
             // re-registered; a cloned one re-checks against the argument.
-            for &condition in &asserts {
+            // Walked by index rather than over a clone of the list, for the
+            // same reason as the dynamic path: instantiating a condition needs
+            // `&mut module` while the list lives on the ctx's module.
+            for index in 0..assert_count {
+                let condition = ctx.module.functions[function.index.0].asserts[index];
                 let baked = !ctx.module.nodes[condition.index].parameterized;
                 let instantiated = module.static_node_apply(condition, &mut ctx);
                 if !baked {

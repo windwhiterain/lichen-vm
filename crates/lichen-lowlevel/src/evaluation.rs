@@ -719,9 +719,13 @@ impl<P: Program> Module<P> {
         value: P::Value,
         node: NodeId,
     ) -> bool {
-        matches!(value.as_enum(), Some(LowValue::Parameterized))
+        // The value's extension view is taken once: every arm below tests the
+        // same value, and taking the view clones the extension leaf out of the
+        // composed union, so re-taking it per arm is work already done.
+        let view = value.as_enum();
+        matches!(view, Some(LowValue::Parameterized))
             || matches!(
-                value.as_enum(),
+                view,
                 Some(LowValue::Array(array))
                     // An array holding a shallow position can never be
                     // proven concrete — its marked subtree was deliberately
@@ -741,7 +745,7 @@ impl<P: Program> Module<P> {
                         })
             )
             || matches!(
-                value.as_enum(),
+                view,
                 Some(LowValue::Table(table))
                     // SAFETY: `table` is the payload of `value`, the value this
                     // module just evaluated for `node`, so its home block is
