@@ -73,12 +73,13 @@ queue's order is deliberate.
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
-| P2-6 | medium | language | README generator and `clap` live in the compiler library | done |
+| P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | todo |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | todo |
 | P2-8 | medium | highlevel | `missing_slots[order_index()]` guarded only by `debug_assert!` | done |
 | P2-9 | medium | highlevel | `no_attr_ext` panics on any annotated program | done |
 | P2-10 | medium | highlevel | `check_term` recursion is unbounded; `stacksafe` is an unused dep | done |
 | P2-11 | medium | all | God files with named seams | todo |
+| P2-12 | medium | language, package, ci | `clap` is linked by every consumer of the compiler library | todo |
 | P3-1 | medium | all | Duplication clusters | todo |
 | P3-2 | medium | all | Workspace manifest duplication | todo |
 | P3-3 | medium | ci | No test/clippy/fmt gate in CI | todo |
@@ -564,7 +565,9 @@ function — it cannot be applied"*). The `Apply` arm's catch-all is split: a
 scalar, a string, a table, or the unit value records `ApplyTarget` and yields
 `Void`; `Void` propagates silently (it is the residue of an already-recorded
 failure); everything else — the program's own value *and* a structural array —
-stays lazy (`Parameterized`). `Build::ok` already required
+stayed lazy (`Parameterized`) *at the time of this item*. `P1-21` later made that
+laziness conditional on the program's own dispatch; see its Outcome.
+`Build::ok` already required
 `module.eval_errors.is_empty()`, so recording the fact is what rejects the build.
 The diagnostic carries no caret when the callee's value node has no source edge,
 exactly as its `RuntimeIndexTarget` sibling. The sibling `checker.rs:576-580`
@@ -579,9 +582,10 @@ comment was left as it stands.
 runtime error. `tests/compute.rs`'s `jit_cross_kernel_call` and
 `jit_cross_kernel_subexpr` fail exactly there. The arm's laziness exists for that
 path, so only the leaf values the lowlevel can prove uncallable are refused.
-**Residual, deliberately left:** applying a *non-kernel* struct value through a
-deferred callee (`f = g => g 1` applied to a struct instance) is still silently
-accepted — the lowlevel cannot tell that array from a kernel's, and the kernel
+**Residual, deliberately left at the time — closed by `P1-21`.** applying a
+*non-kernel* struct value through a deferred callee (`f = g => g 1` applied to a
+struct instance) was still silently accepted, because the lowlevel cannot tell
+that array from a kernel's, and the kernel
 path is the one that must keep working. Closing it needs the checker to see the
 deferred callee's shape, which is `D3`'s other half.
 
@@ -1732,9 +1736,25 @@ it, so `lichen-language-server` links it for nothing; `logos` and `sha2` are
 `readme-sync` feature), move the CLI behind a feature or into `main.rs`, and drop
 the two unused deps.
 
-**Outcome.** The premise held, re-derived; the ownership move was **stopped**
-one step in, exactly as this item's instruction allows, and the two unused deps
-landed.
+**Outcome (partial — the item stays open).** The premise held, re-derived, and one
+half landed: `logos` and `sha2` were **unused** direct dependencies of
+`lichen-language` and are gone (`Cargo.toml`, lockfile), which is the whole of the
+second finding. The ownership move was **stopped** one step in, and a later reader
+should not read this item as closed:
+
+*Why the CLI cannot simply move into `main.rs`.* It is not only the binary's
+entry: `crates/lichen-package/src/plugin.rs` generates a plugin compiler's
+`main.rs` that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`,
+so `cli` is a **public library API** with an out-of-tree caller this repository
+itself generates. Moving it needs the generated manifest and the release
+workflows to move with it; that is `P2-12`, split out so this item's remaining
+half (the *repo tooling*) can be fixed on its own.
+
+*The remaining half is the one that matters.* `readme.rs` reaches two `..` hops
+out of `CARGO_MANIFEST_DIR`, executes every example, panics on a missing examples
+directory and follows symlinks with unbounded recursion — so under `cargo install`
+it panics, and it ships in a library any consumer links. That is a real defect
+independent of the `clap` question, and it is what this item still owes.
 
 *What is where.* `crates/lichen-language/Cargo.toml` carries one explicit
 `[[bin]] lichen-compiler` (`src/main.rs`) **plus** an auto-discovered
@@ -1972,6 +1992,28 @@ that side; after the fix it passes.
 | `language/src/package.rs` | 916 | load pipeline / native virtual-package registration (`compute.lichen` is hard-coded at `:230`) / vendored path resolution / 70 lines of inline tests |
 | `language/src/persist.rs` | 650 | codec traits + container / cache-root resolver / inline tests |
 | `language-parser/src/parse.rs` | 1584 | thread driver / token utils / statement grammar / precedence ladder / atoms+postfix / type constructors / AST walk / diagnostics |
+
+### P2-12 — `clap` is linked by every consumer of the compiler library `verified`
+
+Split out of `P2-6`, whose ownership move stopped here. `clap` is a hard
+dependency of `lichen-language` and the entire crate's use of it is `cli.rs`, so
+`lichen-language-server` — and every embedder — links a command-line parser it
+never calls.
+
+It is not a local move, which is why it is not folded back into `P2-6`:
+`crates/lichen-package/src/plugin.rs` generates a plugin compiler's `main.rs`
+that calls `lichen_language::cli::main_with_native_packages::<crate::LangProgram>(…)`,
+so `cli` is a **public library API with a caller this repository generates at
+build time**. Any answer has to move three things together: the generated plugin
+manifest (`core_dep_line` emits no features today), `[[bin]] required-features`
+for the compiler binary, and the release workflows that build it.
+
+**Open question, and the reason this item is not started:** whether the CLI should
+be a **feature** of `lichen-language` (additive, so the generated plugin must emit
+the feature and the workflows must pass it) or its own **crate** (a cleaner graph,
+but a new workspace member that the generated plugin depends on by path or
+version). Both are real; neither is obviously cheaper, and the choice is the
+superior's rather than an implementation detail. Do not pick one silently.
 
 ## P3 — refactor
 
@@ -2395,7 +2437,10 @@ scans the module's whole node table and is called **per emitted node**
   where `crate_ident` is `dep.package` with `-`→`_`.  `dep.package` is a
   multiline-capable string, so a `}` or a newline there is injected Rust source
   that `cargo build` then compiles.  That is a code-generation defect, not the
-  manifest one this item names, and it needs its own item.
+- **`src/main.rs` carries the same class** — `compose_source` writes the
+  dependency's `package` as **Rust source**, so a newline or a `}` injects code
+  the build then compiles. That is `P1-25`, and it is fixed there, not here: the
+  manifest is data and this document is code.
 - **P5-9 `reported`** — `language/src/package.rs:233, 241, 253, 261, 362, 603,
   631, 810, 829` and `cli.rs:235` report an `io::Error` as a *source* diagnostic
   with a fabricated `(0, 0)` span, which `render.rs:109-116` prints as a caret
