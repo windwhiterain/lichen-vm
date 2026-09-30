@@ -659,10 +659,10 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
-        if let Some(path) = param_path(module, slot.pair, node) {
-            if let Ok(offset) = flatten_offset(&slot.shape, &path) {
-                return Some((slot.base + offset) as u32);
-            }
+        if let Some(path) = param_path(module, slot.pair, node)
+            && let Ok(offset) = flatten_offset(&slot.shape, &path)
+        {
+            return Some((slot.base + offset) as u32);
         }
     }
     None
@@ -1050,13 +1050,13 @@ where
         if equality_rep(module, n) != root {
             continue;
         }
-        if let Some(op) = module.node_operation(n).as_ref() {
-            if !matches!(
+        if let Some(op) = module.node_operation(n).as_ref()
+            && !matches!(
                 AsEnum::<LowOperator>::as_enum(&op.operator),
                 Some(LowOperator::Index)
-            ) {
-                return Some(n);
-            }
+            )
+        {
+            return Some(n);
         }
     }
     None
@@ -1078,14 +1078,11 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        match AsEnum::<LowValue>::as_enum(&value) {
-            Some(LowValue::USize(n)) => {
-                body.push(KernelInstr::Const(n as i64));
-                return Ok(());
-            }
-            _ => {}
-        }
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
+        && let Some(LowValue::USize(n)) = AsEnum::<LowValue>::as_enum(&value)
+    {
+        body.push(KernelInstr::Const(n as i64));
+        return Ok(());
     }
     let Some(operation) = module.node_operation(node) else {
         // A bare value cell (no value specialization, no operator).  If it is
@@ -1132,10 +1129,10 @@ where
                 // `0` index and `pair` a `[value, type]` pair.  Emit the
                 // pair's value slot instead of treating the extraction as a
                 // real index.
-                if usize_value(module, index) == Some(0) {
-                    if let Some(value_node) = value_of_node(module, node) {
-                        return emit_node(module, params, value_node, body);
-                    }
+                if usize_value(module, index) == Some(0)
+                    && let Some(value_node) = value_of_node(module, node)
+                {
+                    return emit_node(module, params, value_node, body);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -1143,35 +1140,35 @@ where
                 // `x(0)/x(1)/x(2)`) leaves `Index(arg_array, k)` ops whose
                 // target is a materialized array value.  `value_of` above only
                 // peels index 0, so handle every constant `k` here.
-                if let Some(k) = usize_value(module, index) {
-                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        // SAFETY: `array_value` is a live node of `module`.
-                        if let Some(items) = unsafe { module.array_items(array_value) } {
-                            if let Some(item) = items.get(k) {
-                                return emit_node(module, params, dyn_node(item.node)?, body);
-                            }
-                        }
+                if let Some(k) = usize_value(module, index)
+                    && let Some(array_value) = value_of_node(module, target).or(Some(target))
+                {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    if let Some(items) = unsafe { module.array_items(array_value) }
+                        && let Some(item) = items.get(k)
+                    {
+                        return emit_node(module, params, dyn_node(item.node)?, body);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
                 // 2-element array value indexed by a *computed* (non-constant)
                 // selector, a wasm `select`.  The array may be reached through
                 // a value_of extraction; look through it.
-                if usize_value(module, index).is_none() {
-                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        // SAFETY: `array_value` is a live node of `module`.
-                        if let Some(items) = unsafe { module.array_items(array_value) } {
-                            if items.len() == 2 {
-                                let then_node = dyn_node(items[1].node)?;
-                                let else_node = dyn_node(items[0].node)?;
-                                emit_node(module, params, then_node, body)?;
-                                emit_node(module, params, else_node, body)?;
-                                emit_node(module, params, index, body)?;
-                                body.push(KernelInstr::I32WrapI64);
-                                body.push(KernelInstr::Select);
-                                return Ok(());
-                            }
-                        }
+                if usize_value(module, index).is_none()
+                    && let Some(array_value) = value_of_node(module, target).or(Some(target))
+                {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    if let Some(items) = unsafe { module.array_items(array_value) }
+                        && items.len() == 2
+                    {
+                        let then_node = dyn_node(items[1].node)?;
+                        let else_node = dyn_node(items[0].node)?;
+                        emit_node(module, params, then_node, body)?;
+                        emit_node(module, params, else_node, body)?;
+                        emit_node(module, params, index, body)?;
+                        body.push(KernelInstr::I32WrapI64);
+                        body.push(KernelInstr::Select);
+                        return Ok(());
                     }
                 }
                 return Err(
@@ -1494,15 +1491,15 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        if let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value) {
-            return Some(kid);
-        }
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
+        && let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value)
+    {
+        return Some(kid);
     }
-    if let Some(inner) = value_of_node(module, node) {
-        if let Some(kid) = kernel_id_of(module, inner) {
-            return Some(kid);
-        }
+    if let Some(inner) = value_of_node(module, node)
+        && let Some(kid) = kernel_id_of(module, inner)
+    {
+        return Some(kid);
     }
     // A kernel *struct value* `[native, sig]` reached by value (not through an
     // `Index` op): its element 0 is the bare `.native` kernel artifact.
@@ -1517,16 +1514,15 @@ where
     }
     // A kernel struct `.native` field read: `Index(struct, 0)`, where the
     // struct value's element 0 is the bare kernel artifact.
-    if let Some(operation) = module.node_operation(node) {
-        if let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
+    if let Some(operation) = module.node_operation(node)
+        && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
             && usize_value(module, index) == Some(0)
             // SAFETY: `target` is a live node of `module`.
             && let Some(items) = (unsafe { module.array_items(target) })
             && let Ok(first) = dyn_node(items.first()?.node)
-        {
-            return kernel_id_of(module, first);
-        }
+    {
+        return kernel_id_of(module, first);
     }
     None
 }
@@ -1794,7 +1790,7 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     let main = instance
         .get_func(&store, "main")
         .ok_or_else(|| "kernel has no export `main`".to_string())?;
-    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a as i64)).collect();
+    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
     let mut outputs = [wasmi::Val::I64(0)];
     main.call(&mut store, &inputs, &mut outputs)
         .map_err(|e| e.to_string())?;

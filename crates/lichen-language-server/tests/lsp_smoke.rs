@@ -56,7 +56,7 @@ fn send(stdin: &mut impl Write, json: &str) {
     stdin.flush().expect("flush");
 }
 
-fn wait_for<'a>(reader: &mut impl BufRead, needle: &str) -> String {
+fn wait_for(reader: &mut impl BufRead, needle: &str) -> String {
     for _ in 0..64 {
         let msg = read_frame(reader);
         if msg.contains(needle) {

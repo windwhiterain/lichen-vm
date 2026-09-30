@@ -359,11 +359,11 @@ impl<P: Program> Module<P> {
                         pure_cell: self.class_is_pure_cell(rb),
                     },
                 };
-                if let Some(verdict) = P::defer_pending(self, &sides) {
-                    if verdict == Deferral::Merge {
-                        self.add_equality(ra, rb);
-                        return true;
-                    }
+                if let Some(verdict) = P::defer_pending(self, &sides)
+                    && verdict == Deferral::Merge
+                {
+                    self.add_equality(ra, rb);
+                    return true;
                 }
                 // A pending *field/positional read* unified against another
                 // pending field read — both over (ultimately) unbound
@@ -748,10 +748,10 @@ impl<P: Program> Module<P> {
     fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         let mut member = rep;
         loop {
-            if let Some(value) = self.nodes[member].value {
-                if !is_unbound(Some(value)) {
-                    return Some(value);
-                }
+            if let Some(value) = self.nodes[member].value
+                && !is_unbound(Some(value))
+            {
+                return Some(value);
             }
             member = self.nodes[member].meta().next?;
         }

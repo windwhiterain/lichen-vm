@@ -492,7 +492,7 @@ fn finish_function(
     param: NodeId,
     func_node: NodeId,
 ) -> FunctionId {
-    let nodes: Vec<NodeId> = m.blocks[block].nodes.iter().copied().collect();
+    let nodes: Vec<NodeId> = m.blocks[block].nodes.to_vec();
     let function = m.functions.insert(Function {
         nodes: Vec::new(),
         r#return: ret,

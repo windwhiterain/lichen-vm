@@ -46,11 +46,19 @@ pub enum Directive {
     },
 }
 
+/// A parsed directive together with the byte offset, within the block
+/// interior, of its first token.
+pub type LocatedDirective = (Directive, u32);
+
+/// One parse failure: the byte offset, within the block interior, of the
+/// offending token, and the message saying what was expected instead.
+pub type ParseFailure = (u32, String);
+
 /// Parse a block-interior token stream.  Returns each directive with the
 /// byte offset (within the interior) of its first token, or the
 /// (byte-offset, message) for the first error (the block is small, so
 /// stopping at the first problem is acceptable).
-pub fn parse(tokens: &[Token]) -> Result<Vec<(Directive, u32)>, Vec<(u32, String)>> {
+pub fn parse(tokens: &[Token]) -> Result<Vec<LocatedDirective>, Vec<ParseFailure>> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < tokens.len() {
@@ -135,7 +143,7 @@ fn parse_depend(
     tokens: &[Token],
     i: &mut usize,
     name: String,
-) -> Result<Directive, Vec<(u32, String)>> {
+) -> Result<Directive, Vec<ParseFailure>> {
     let url = match tokens.get(*i).map(|t| &t.kind) {
         Some(TokenKind::String(u)) => u.clone(),
         k => {
@@ -210,7 +218,7 @@ fn parse_plugin(
     tokens: &[Token],
     i: &mut usize,
     name: String,
-) -> Result<Directive, Vec<(u32, String)>> {
+) -> Result<Directive, Vec<ParseFailure>> {
     let url = match tokens.get(*i).map(|t| &t.kind) {
         Some(TokenKind::String(u)) => u.clone(),
         k => {
@@ -279,7 +287,7 @@ fn expect_string_after_eq(
     tokens: &[Token],
     i: &mut usize,
     keyword: &str,
-) -> Result<String, Vec<(u32, String)>> {
+) -> Result<String, Vec<ParseFailure>> {
     if tokens.get(*i).map(|t| &t.kind) != Some(&TokenKind::Equals) {
         return Err(vec![err_at(
             tokens,

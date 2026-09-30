@@ -594,9 +594,7 @@ where
     // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`;
     // nothing in this crate calls `Module::drop_block`.
     let marker_items = unsafe { array_items(module, kind_items[KIND_MARKER_SLOT].node) }?;
-    let Some(names_item) = marker_items.get(STRUCT_MARKER_NAMES_SLOT) else {
-        return None;
-    };
+    let names_item = marker_items.get(STRUCT_MARKER_NAMES_SLOT)?;
     match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
         Some(LowValue::Table(table)) => Some(table),
         _ => None,

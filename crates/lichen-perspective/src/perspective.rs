@@ -9,7 +9,7 @@
 //! the registry to its checker; the codesign (grammar, IR schema tail, persist
 //! discriminator) stays in the host language layer.
 
-use lichen_highlevel::attr::{AttrExt, AttrSpec};
+use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
@@ -79,7 +79,11 @@ pub fn gcd(a: usize, b: usize) -> usize {
 /// - `sub > 0`: `sub | sup ⟺ sup % sub == 0`.  `sup = 0` (a uniform-over-all
 ///   value) satisfies any requirement, since `0 % sub == 0`.
 pub fn divides(sub: usize, sup: usize) -> bool {
-    if sub == 0 { sup == 0 } else { sup % sub == 0 }
+    if sub == 0 {
+        sup == 0
+    } else {
+        sup.is_multiple_of(sub)
+    }
 }
 
 /// The attribute-extension registry for a host program `P`: maps the
@@ -90,7 +94,7 @@ pub fn divides(sub: usize, sup: usize) -> bool {
 /// The closure returns the single [`Perspective`] marker coerced to a
 /// `&'static` extension — the checker sees a uniform attribute and never names
 /// a concrete lattice.
-pub fn persp_attr_ext<P>() -> Box<dyn Fn(&Perspective) -> &'static dyn AttrExt<P>>
+pub fn persp_attr_ext<P>() -> AttrExtRegistry<P, Perspective>
 where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,

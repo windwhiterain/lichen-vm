@@ -5,7 +5,7 @@
 //! an attribute set but does not pass the matching extension.
 
 use lichen_highlevel::NoAttr;
-use lichen_highlevel::attr::{AttrExt, AttrSet, AttrSpec};
+use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSet, AttrSpec};
 use lichen_highlevel::checker::Checker;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprKind, IR, Loc, Schema};
@@ -148,9 +148,13 @@ fn an_attribute_aware_build_lowers_the_annotation() {
     // lowers, the slot is the annotation value's pair, and nothing is
     // reported.
     let (_annotation, ir) = annotated_int();
+    // Single-threaded sharing: a filed value carries raw arena handles, so this
+    // `Arc` cannot cross a thread (see the `Registry` doc in `lichen-lowlevel`);
+    // `Rc` is not available — `AGENTS.md`'s code taste forbids it.  The `Arc`
+    // stays because `Checker::build_in_attr` takes it by value.
+    #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::<TaggedProgram>::new()));
-    let attr_ext: Box<dyn Fn(&Tag) -> &'static dyn AttrExt<TaggedProgram>> =
-        Box::new(|_marker: &Tag| &Tag);
+    let attr_ext: AttrExtRegistry<TaggedProgram, Tag> = Box::new(|_marker: &Tag| &Tag);
     let build = Checker::<TaggedProgram>::build_in_attr(ir, registry, attr_ext);
     assert!(
         build.ok,

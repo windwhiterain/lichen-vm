@@ -318,7 +318,7 @@ fn render_examples_in(dir: &Path) -> ReadmeResult<String> {
             render_program_body(&face)
         ));
     }
-    blocks.extend(render_dir(&root, "", 3, 0)?);
+    blocks.extend(render_dir(root, "", 3, 0)?);
     Ok(blocks.join("\n\n"))
 }
 

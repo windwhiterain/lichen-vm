@@ -490,7 +490,7 @@ pub fn lex_resume(
                         span: lc,
                         range: (start_abs, end_abs),
                     };
-                    if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                    if let Some(jj) = resync(prev, &mut j, &t, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
                     }
@@ -505,7 +505,7 @@ pub fn lex_resume(
                         span: lc,
                         range: (start_abs, start_abs),
                     };
-                    if let Some(jj) = resync(&prev, &mut j, &g, delta, b) {
+                    if let Some(jj) = resync(prev, &mut j, &g, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
                     }
@@ -518,7 +518,7 @@ pub fn lex_resume(
                             span: lc,
                             range: (start_abs, end_abs),
                         };
-                        if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                        if let Some(jj) = resync(prev, &mut j, &t, delta, b) {
                             resynced_at = Some(jj);
                             break 'lex;
                         }

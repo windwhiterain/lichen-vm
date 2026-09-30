@@ -127,9 +127,15 @@ fn ops(operator: &'static dyn NativeOp<ProbeProgram>) -> NativeOps<ProbeProgram>
 }
 
 fn build(operator: &'static dyn NativeOp<ProbeProgram>) -> Build<ProbeProgram> {
+    // Single-threaded sharing: a filed value carries raw arena handles, so this
+    // `Arc` cannot cross a thread (see the `Registry` doc in `lichen-lowlevel`);
+    // `Rc` is not available — `AGENTS.md`'s code taste forbids it.  The `Arc`
+    // stays because `Checker::build_in_attr_native` takes it by value.
+    #[allow(clippy::arc_with_non_send_sync)]
+    let registry = Arc::new(RwLock::new(Registry::new()));
     Checker::<ProbeProgram>::build_in_attr_native(
         probe_call(),
-        Arc::new(RwLock::new(Registry::new())),
+        registry,
         Box::new(|_: &NoAttr| -> &'static dyn AttrExt<ProbeProgram> { unreachable!() }),
         ops(operator),
     )

@@ -279,12 +279,10 @@ where
                 .node_value(item.key)
                 .and_then(|v| v.as_enum())
                 .is_some_and(|v| v == LowValue::Str(name))
-            {
-                if let Some(LowValue::USize(n)) =
+                && let Some(LowValue::USize(n)) =
                     self.module.node_value(item.value).and_then(|v| v.as_enum())
-                {
-                    return Some(n);
-                }
+            {
+                return Some(n);
             }
         }
         None
@@ -580,7 +578,7 @@ where
         // SAFETY: `type_pair` is a live node of this module; nothing in this
         // crate calls `Module::drop_block`.
         let def_len = unsafe { self.module.array_items(type_pair) }
-            .and_then(|items| items.get(0))
+            .and_then(|items| items.first())
             // SAFETY: the field item's node is a live node of this module;
             // nothing in this crate calls `Module::drop_block`.
             .and_then(|item| unsafe { shape::array_items(&self.module, item.node) })
@@ -655,8 +653,8 @@ where
             if assign.len() < def_len {
                 assign.resize(def_len, None);
             }
-            for pos in 0..def_len {
-                if assign[pos].is_none() {
+            for (pos, slot) in assign.iter().enumerate().take(def_len) {
+                if slot.is_none() {
                     let name = self.struct_field_name(type_pair, pos);
                     self.record_guard(
                         type_pair,
@@ -701,12 +699,10 @@ where
                 .node_value(item.value)
                 .and_then(|v| v.as_enum())
                 .is_some_and(|v| v == LowValue::USize(pos))
-            {
-                if let Some(LowValue::Str(name)) =
+                && let Some(LowValue::Str(name)) =
                     self.module.node_value(item.key).and_then(|v| v.as_enum())
-                {
-                    return Some(name);
-                }
+            {
+                return Some(name);
             }
         }
         None

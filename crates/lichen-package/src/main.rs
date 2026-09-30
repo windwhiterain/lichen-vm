@@ -407,10 +407,10 @@ fn cmd_path(tool: &str, repo: &str, project: Option<PathBuf>) -> ExitCode {
     // A plugin-set language server: when a project directory is given, gather its
     // native plugins and resolve the composed server for them.  The empty plugin
     // set falls through to the standard shipping resolution below.
-    if t == toolchain::Tool::LanguageServer {
-        if let Some(dir) = project {
-            return cmd_path_lsp_project(&dir, repo);
-        }
+    if t == toolchain::Tool::LanguageServer
+        && let Some(dir) = project
+    {
+        return cmd_path_lsp_project(&dir, repo);
     }
     resolve_and_print(t, repo)
 }
@@ -461,11 +461,11 @@ fn cmd_path_lsp_project(dir: &Path, repo: &str) -> ExitCode {
 /// Resolve `tool` (installing it into Lichen Home from the release at `repo` if
 /// absent) and print its path.
 fn resolve_and_print(t: toolchain::Tool, repo: &str) -> ExitCode {
-    if !toolchain::resolve(t).is_some() {
-        if let Err(e) = toolchain::install(t, repo) {
-            eprintln!("failed to install {}: {e}", t.bin_name());
-            return ExitCode::FAILURE;
-        }
+    if !toolchain::resolve(t).is_some()
+        && let Err(e) = toolchain::install(t, repo)
+    {
+        eprintln!("failed to install {}: {e}", t.bin_name());
+        return ExitCode::FAILURE;
     }
     match toolchain::resolve(t) {
         Some(path) => {

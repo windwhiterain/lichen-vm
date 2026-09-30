@@ -212,7 +212,7 @@ mod tests {
         // cannot lex as a string -- logos errors instead of matching it.
         let lexed = tokenize("title = \"has @ inside\"");
         assert_eq!(lexed.tokens.len(), 2, "string token is not produced");
-        assert!(lexed.errors.len() >= 1, "at least one error");
+        assert!(!lexed.errors.is_empty(), "at least one error");
     }
 
     #[test]

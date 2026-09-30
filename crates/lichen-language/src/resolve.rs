@@ -142,20 +142,20 @@ impl Resolver {
     fn resolve_scope(&mut self, refs: &mut [&mut Stmt]) {
         let mut frame = HashMap::new();
         for s in refs.iter_mut() {
-            if let Stmt::Binding(binding) = &mut **s {
-                if !binding.restrictive {
-                    let id = self.next_binder;
-                    self.next_binder += 1;
-                    binding.binder = Some(id);
-                    frame.insert(binding.name.clone(), id);
-                }
+            if let Stmt::Binding(binding) = &mut **s
+                && !binding.restrictive
+            {
+                let id = self.next_binder;
+                self.next_binder += 1;
+                binding.binder = Some(id);
+                frame.insert(binding.name.clone(), id);
             }
         }
         if !frame.is_empty() {
             self.scopes.push(frame);
         }
         for s in refs.iter_mut() {
-            self.resolve_stmt(&mut **s);
+            self.resolve_stmt(s);
         }
     }
 
@@ -183,13 +183,13 @@ impl Resolver {
     fn resolve_record_fields(&mut self, fields: &mut [RecordField]) {
         let mut frame = HashMap::new();
         for f in fields.iter_mut() {
-            if let Some(name) = &f.name {
-                if f.field {
-                    let id = self.next_binder;
-                    self.next_binder += 1;
-                    f.binder = Some(id);
-                    frame.insert(name.clone(), id);
-                }
+            if let Some(name) = &f.name
+                && f.field
+            {
+                let id = self.next_binder;
+                self.next_binder += 1;
+                f.binder = Some(id);
+                frame.insert(name.clone(), id);
             }
         }
         if !frame.is_empty() {

@@ -43,7 +43,7 @@ use lichen_lowlevel::{
 use lichen_utils::extend::AsEnum;
 use stacksafe::stacksafe;
 
-use crate::attr::{AttrExt, AttrSet};
+use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
@@ -156,7 +156,7 @@ where
     /// it, and a marker it cannot resolve is
     /// [`DiagKind::NoAttributeExtension`] rather than a panic (see
     /// [`Checker::no_attr_ext_guard`]).
-    attr_ext: Option<Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>>,
+    attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
     /// Whether [`Checker::no_attr_ext_guard`] has already reported this
     /// build's missing attribute extension.  "This build has no attribute
     /// extension" is one fact about the build, however many expressions read
@@ -315,7 +315,7 @@ where
     /// site.
     ///
     /// The attribute decides whether its own missing value may be shared — see
-    /// [`AttrExt::share_missing_slot`], which states the contract (the value
+    /// [`crate::attr::AttrExt::share_missing_slot`], which states the contract (the value
     /// must be concrete, because reconciliation writes an unbound side and a
     /// shared node would be written by whichever occurrence reconciled first).
     /// The checker holds the node, not the rule: a `None` entry here is the
@@ -499,7 +499,7 @@ where
     pub fn build_in_attr(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: AttrExtRegistry<P, P::Attr>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
         Self::build_with(
@@ -519,7 +519,7 @@ where
     pub fn build_in_attr_native(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: AttrExtRegistry<P, P::Attr>,
         native_ops: NativeOps<P>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
@@ -540,7 +540,7 @@ where
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
-        attr_ext: Option<Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>>,
+        attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
         native_ops: NativeOps<P>,
         work_budget: WorkBudget,
     ) -> Build<P> {
@@ -1134,7 +1134,7 @@ where
     /// The value currently held by `node`'s equality class — the
     /// representative's value — or `None` when the class is unbound.
     /// Read-only (a parent-pointer walk, no path compression).  An attribute's
-    /// [`AttrExt::is_subtype`] uses this to compare two slot values after a
+    /// [`crate::attr::AttrExt::is_subtype`] uses this to compare two slot values after a
     /// failed equality unify.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.module.class_value(node)

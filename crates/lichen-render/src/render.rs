@@ -1150,10 +1150,10 @@ where
                 LowValue::USize(n) => Some(n),
                 _ => None,
             });
-        if let (Some(name), Some(index)) = (name, index) {
-            if index < field_count {
-                out[index] = Some(name);
-            }
+        if let (Some(name), Some(index)) = (name, index)
+            && index < field_count
+        {
+            out[index] = Some(name);
         }
     }
     out
@@ -1217,7 +1217,7 @@ where
             LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         })?;
-    let id_item = marker_items.get(0)?;
+    let id_item = marker_items.first()?;
     module.node_value(id_item.node).and_then(|v| v.type_id())
 }
 

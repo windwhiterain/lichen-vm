@@ -361,10 +361,10 @@ pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
 /// binary the user's environment happens to carry in place of the pinned
 /// release.
 pub fn resolve(tool: Tool) -> Option<PathBuf> {
-    if let Ok(dest) = tool_dest_path(tool) {
-        if dest.is_file() {
-            return Some(dest);
-        }
+    if let Ok(dest) = tool_dest_path(tool)
+        && dest.is_file()
+    {
+        return Some(dest);
     }
     let found = find_on_path(tool.bin_name());
     if let Some(path) = &found {

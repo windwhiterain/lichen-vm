@@ -86,7 +86,7 @@ where
     }
     let line_starts = crate::lex::line_starts(source);
     let report = crate::compile_with_imports_at::<P>(
-        &preprocessed.code,
+        preprocessed.code,
         &preprocessed.imports,
         Some(store.registry()),
         preprocessed.code_base,

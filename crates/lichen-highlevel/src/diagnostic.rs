@@ -560,7 +560,7 @@ where
         let value_b = entry.map(|e| (e.a, e.b)).and(err.value_b);
         let loc = entry.map(|e| e.loc.clone());
         let kind = entry.map(|e| e.kind).unwrap_or(DiagKind::Runtime);
-        let field = entry.map(|e| e.field.clone()).flatten();
+        let field = entry.and_then(|e| e.field.clone());
         Diag {
             budget: None,
             loc,

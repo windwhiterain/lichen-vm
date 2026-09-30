@@ -1,0 +1,38 @@
+name: ci
+
+# The quality gate decided by `D12` in `docs/notes/code-audit.md`: the
+# workspace's clippy backlog is cleared, so every lint is an error here and
+# there is no baseline file to keep in sync.  `tree-sitter-lichen` is a
+# workspace of its own (`P5-12`), so the root commands never reach it and it is
+# checked through its own manifest.
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Lint
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --workspace
+      - name: Check the standalone grammar crate
+        run: |
+          cargo fmt --manifest-path tree-sitter-lichen/Cargo.toml --all -- --check
+          cargo clippy --manifest-path tree-sitter-lichen/Cargo.toml --workspace --all-targets -- -D warnings
+          cargo test --manifest-path tree-sitter-lichen/Cargo.toml --workspace

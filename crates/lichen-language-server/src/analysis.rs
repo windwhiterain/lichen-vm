@@ -694,15 +694,15 @@ where
     pub fn definition_at(&self, position: Position) -> Option<Range> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
-        if let TokenKind::Name(_) = &token.kind {
-            if let Some(idx) = self.resolve.get(&token.span) {
-                let def = &self.defs[*idx];
-                return Some(lsp::range_from_span(
-                    &self.source,
-                    &self.line_starts,
-                    def.span,
-                ));
-            }
+        if let TokenKind::Name(_) = &token.kind
+            && let Some(idx) = self.resolve.get(&token.span)
+        {
+            let def = &self.defs[*idx];
+            return Some(lsp::range_from_span(
+                &self.source,
+                &self.line_starts,
+                def.span,
+            ));
         }
         None
     }
@@ -1818,10 +1818,10 @@ impl<'a> ScopeCapture<'a> {
                 break;
             }
         }
-        if self.result.is_none() {
-            if let Some(e) = expr {
-                self.expr(e);
-            }
+        if self.result.is_none()
+            && let Some(e) = expr
+        {
+            self.expr(e);
         }
         self.scopes.truncate(base);
     }
@@ -2660,7 +2660,7 @@ mod tests {
                     line: line as u32,
                     character: 2,
                 })
-                .expect(&format!("hover on `{name}`"));
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
             assert!(
                 !msg.contains("unresolved"),
                 "`{name}` should resolve; got {msg}"

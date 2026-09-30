@@ -248,22 +248,21 @@ where
         // moved; the lowering and check are skipped entirely.
         if let Some(cache) = &self.cache
             && cache.key == key
+            && let Some(build) = &cache.build
         {
-            if let Some(build) = &cache.build {
-                let mut all = diagnostics;
-                all.extend(cache.check_diagnostics.iter().cloned());
-                self.last = Some(LastState {
-                    source: self.source.clone(),
-                    tokens,
-                    program,
-                });
-                return SessionReport {
-                    build: Some(Arc::clone(build)),
-                    diagnostics: all,
-                    key,
-                    reused: true,
-                };
-            }
+            let mut all = diagnostics;
+            all.extend(cache.check_diagnostics.iter().cloned());
+            self.last = Some(LastState {
+                source: self.source.clone(),
+                tokens,
+                program,
+            });
+            return SessionReport {
+                build: Some(Arc::clone(build)),
+                diagnostics: all,
+                key,
+                reused: true,
+            };
         }
 
         // Rebuild: lower the already-resolved program (total) and check.  The
@@ -390,11 +389,12 @@ fn splice_program(
     let mut lo = old_n;
     let mut hi = 0usize;
     for i in 0..old_n {
-        if let Some((sb, eb)) = byte_range(i) {
-            if eb > e_start && sb < e_end {
-                lo = lo.min(i);
-                hi = hi.max(i + 1);
-            }
+        if let Some((sb, eb)) = byte_range(i)
+            && eb > e_start
+            && sb < e_end
+        {
+            lo = lo.min(i);
+            hi = hi.max(i + 1);
         }
     }
     if lo > hi {
@@ -514,7 +514,6 @@ fn splice_program(
             (stmts, None)
         }
     };
-    let mut ranges = ranges;
     ranges.push(last_range);
     let mut program = Program {
         statements,

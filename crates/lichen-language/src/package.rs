@@ -237,10 +237,10 @@ where
         // that registered one (the package-manager plug: a plugin's embedded
         // source compiled against its private native registry) is served here
         // by its file name.
-        if let Some(file_name) = path.file_name() {
-            if let Some(handle) = self.native.get(Path::new(file_name)) {
-                return Ok(handle.clone());
-            }
+        if let Some(file_name) = path.file_name()
+            && let Some(handle) = self.native.get(Path::new(file_name))
+        {
+            return Ok(handle.clone());
         }
         // The `lichen-compute` native package: served from a registered
         // module, not a disk file.  It self-registers on first import.
@@ -311,9 +311,9 @@ where
                 .collect::<Vec<_>>()
                 .join("\n"));
         }
-        let line_starts = crate::lex::line_starts(&preprocessed.code);
+        let line_starts = crate::lex::line_starts(preprocessed.code);
         let report = crate::compile_with_imports_at::<P>(
-            &preprocessed.code,
+            preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
@@ -378,21 +378,20 @@ where
                 canonical.display()
             ))]
         })?;
-        if let Some(device) = &self.device {
-            if let Some(verified) = device.verify(&file_id, source.as_bytes()) {
-                if let Some(handle) = self.try_reuse(
-                    canonical,
-                    &file_id,
-                    verified.key,
-                    verified.hash,
-                    &verified.deps,
-                )? {
-                    return Ok(handle);
-                }
-                // The artifact file is missing or corrupt — fall through to
-                // a fresh compile (the pending allocation is reused).
-            }
+        if let Some(device) = &self.device
+            && let Some(verified) = device.verify(&file_id, source.as_bytes())
+            && let Some(handle) = self.try_reuse(
+                canonical,
+                &file_id,
+                verified.key,
+                verified.hash,
+                &verified.deps,
+            )?
+        {
+            return Ok(handle);
         }
+        // The artifact file is missing or corrupt — fall through to
+        // a fresh compile (the pending allocation is reused).
         self.build_package(canonical, source)
     }
 
@@ -518,7 +517,7 @@ where
         // into its freeze below.
         let line_starts = crate::lex::line_starts(&source);
         let report = crate::compile_with_imports_at::<P>(
-            &preprocessed.code,
+            preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
@@ -607,14 +606,14 @@ where
         // dependency's entry package; `alias/rest` resolves `rest` relative to
         // the vendored directory.  Only tried when the alias is registered and
         // is not a file-like path (a leading segment ending in `.lichen`).
-        if let Some((alias, rest)) = vendored_alias(import_path) {
-            if let Some(dir) = self.vendored.get(alias) {
-                let resolved = match rest {
-                    Some(rest) => dir.join(rest),
-                    None => vendored_entry_file::<P>(dir, alias)?,
-                };
-                return self.load_package(&resolved).map_err(first_diagnostic);
-            }
+        if let Some((alias, rest)) = vendored_alias(import_path)
+            && let Some(dir) = self.vendored.get(alias)
+        {
+            let resolved = match rest {
+                Some(rest) => dir.join(rest),
+                None => vendored_entry_file::<P>(dir, alias)?,
+            };
+            return self.load_package(&resolved).map_err(first_diagnostic);
         }
         let path = Path::new(import_path);
         let resolved = if path.is_absolute() {
