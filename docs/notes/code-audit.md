@@ -65,8 +65,8 @@ queue's order is deliberate.
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | todo |
 | P1-22 | high | language, language-server | The frontend's recursion overflows the caller's stack on a ~500-byte file | done |
-| P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | todo |
-| P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | todo |
+| P1-23 | high | language-parser | The parser's 16 MiB worker overflows at 175 nesting levels | wontfix:D9 |
+| P1-24 | high | language-parser | The AST's own recursive `Drop` overflows on a deep tree | wontfix:D9 |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
@@ -1362,6 +1362,8 @@ stack, lex + parse + drop does not); and whatever stack the caller gives the
 language server's blocking thread.  Whether the frontend needs a nesting-depth
 limit, and where its number should come from, is therefore still open — and the
 first number it must clear is the parser's **175 levels**, not the frontend's.
+**Resolved by `D9`: no limit, accepted risk** — `P1-23` and `P1-24` are closed
+`wontfix:D9`.
 
 ### P1-23 — The parser's 16 MiB worker overflows at 175 nesting levels `verified`
 
@@ -1391,6 +1393,10 @@ nesting-depth question rather than an independent fix.
 parses on every request, so this is the crash a user reaches first. `P4-3` names
 the walk duplication and the parser's cost; this is the crash.
 
+**Closed `wontfix:D9`** — accepted risk, not repaired. See `D9` for why a limit
+safe to enforce today would be dictated by this thread size, and for what
+revisiting it would take.
+
 ### P1-24 — The AST's own recursive `Drop` overflows on a deep tree `verified`
 
 Found while measuring `P1-22`. `#[stacksafe]` guards the walks, but the tree is
@@ -1408,6 +1414,10 @@ three to debug. The only fixes are an iterative `Drop` impl or a
 `ManuallyDrop`-based teardown for the expression type, which is a change to the
 AST's shape and not a local guard; it is therefore part of the same nesting-depth
 question as `P1-23`.
+
+**Closed `wontfix:D9`** — accepted risk, not repaired. The cost of leaving it is
+stated where it bites: the abort lands *after* a successful parse and check, so
+the only symptom is a process that dies having printed nothing wrong.
 
 ## P2 — architecture
 
@@ -2093,6 +2103,37 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   only lowered by tests, so the difference is observable only when a limit is
   actually tripped. Resolve it as one policy stated on both counters —
   `P1-2`'s panic fix is independent of the answer.
+- **D9 — Does the frontend need a nesting-depth limit? — DECIDED: no; accepted
+  risk.** The three surviving stack-exhaustion paths (`P1-22` is fixed; `P1-23`
+  the parser's worker and `P1-24` the AST's recursive `Drop` are not) are left as
+  they are, and both items are closed `wontfix:D9`.
+
+  The reasoning, recorded so it is not re-opened by accident: a source file that
+  aborts the command-line compiler is a denial of service against the user's own
+  machine, with no privilege boundary crossed — the compiler is not a service and
+  the file being compiled is the user's own input. On the editor side the same
+  input takes down the language server, which *is* user-visible, but the exposure
+  is the same shape: a file the user chose to open (§ "What this does not
+  cover", below).
+
+  *Rejected — a depth limit with a diagnostic:* it would have to be a documented
+  **language** limit, and the rejection is not about the work. `P1-23`'s number is
+  imposed by the parser's fixed 16 MiB worker (175 nested levels before it dies),
+  so any limit safe to enforce today is below that — i.e. the limit's value would
+  be dictated by an implementation constant that is itself arbitrary, and the
+  language would carry a restriction whose only justification is one crate's
+  thread size. Fixing *that* first (growing the parser's stack on demand) is the
+  other rejected option.
+  *Rejected — unbounded stack growth:* it trades a crash for input-proportional
+  memory, which is a worse failure for the language server, and it needs the same
+  invasive iterative `Drop` for `P1-24`.
+
+  **What this does not cover, so it is not mistaken for gone:** `P1-23` and
+  `P1-24` remain real. A 351-byte file still aborts the parser, and a tree deep
+  enough to be accepted still aborts while being freed. Revisit if the compiler
+  ever becomes a service, if the language server starts accepting files it was
+  not handed by the user, or if a legitimate program is found in the wild that
+  nests past 175 levels.
 
 ## Checked and found clean
 
