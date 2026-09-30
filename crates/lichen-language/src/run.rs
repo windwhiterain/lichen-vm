@@ -35,7 +35,7 @@ use lichen_utils::extend::AsEnum;
 /// into a `NonTerminating` diagnostic naming the budget and its limit.
 pub fn evaluate(source: &str) -> Result<String, Vec<Diag<LangProgram>>> {
     let report = compile(source);
-    if !report.diagnostics.is_empty() {
+    if !report.ok() {
         return Err(report.diagnostics);
     }
     let build = report.build.unwrap();
@@ -93,7 +93,7 @@ where
         &line_starts,
         lichen_highlevel::no_native_ops(),
     );
-    if !report.diagnostics.is_empty() {
+    if !report.ok() {
         return Err(report.diagnostics);
     }
     let build = report.build.unwrap();

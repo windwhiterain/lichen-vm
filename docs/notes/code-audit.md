@@ -56,7 +56,7 @@ queue's order is deliberate.
 | P1-11 | high | registry | `store_artifact`: fixed temp name, outside the lock | todo |
 | P1-12 | high | registry | Unparseable registry discards all state; keys are recycled | todo |
 | P1-13 | high | package | Compiler-cache key omits `core_repo`; wrong crate's version | todo |
-| P1-14 | high | language | `run.rs` never checks `Build::ok` | todo |
+| P1-14 | high | language | `run.rs` never checks `Build::ok` | done |
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | todo |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | todo |
 | P1-17 | high | language-server | Every request runs the whole frontend | todo |
