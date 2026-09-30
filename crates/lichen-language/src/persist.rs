@@ -54,9 +54,28 @@ pub use lichen_registry::{
 // The artifact format (`artifacts/<hash>.module`)
 //
 //   magic "LCHN" | version u32 | key u64 | hash 32B | max_align u64
-//   | export u64 | arena_len u64 | arena bytes
+//   | body_digest 32B
+//   | body
+//
+// The header ends at `body_digest`; the body is everything after it:
+//
+//   export u64 | arena_len u64 | arena bytes
 //   | node_count u64 | nodes...
 //   | function_count u64 | functions...
+//
+// `body_digest` is the SHA-256 of exactly the body bytes — the bytes after the
+// header, and nothing before them (the digest field itself is not covered, of
+// course).  The reader verifies it before it reads any body field, so a body
+// that was truncated, mis-copied or bit-rotted is a clean "recompile" answer
+// instead of a module that loads and is silently wrong.  Field validation
+// cannot replace it: a corrupted index can still land inside its declared
+// range.
+//
+// **What the digest is not.**  It is not authenticity: it is not a signature
+// and it does not restrain a deliberate writer, because whoever can write the
+// artifact file can recompute the digest.  The bound on a deliberate writer is
+// memory safety plus total field validation (`P0-1`, `P0-5`, `P0-2` in
+// `docs/notes/code-audit.md`), not this field.
 //
 // A function: parameter u64, return u64, assert_count u64, [asserts u64...],
 // node_count u64, [nodes u64...].  The node list is the function's template
@@ -76,6 +95,13 @@ pub use lichen_registry::{
 // rebuilt against the freshly laid-out arena with the same alignment
 // formula the freeze used ([`arena_base`]).
 // ---------------------------------------------------------------------------
+
+/// The container's format version — the header layout plus the body encoding.
+///
+/// The reader accepts only this value, so a change to either half bumps it and
+/// retires the artifacts written before the change: they fail the version
+/// check and recompile, which is the intended answer, not a compatibility path.
+const ARTIFACT_FORMAT_VERSION: u32 = 4;
 
 /// The vocabulary-specific half of the artifact format.
 ///
@@ -208,12 +234,9 @@ where
     P: Program,
     C: ArtifactCodec<P>,
 {
+    // The body is assembled first, because its digest goes in the header
+    // ahead of it — there is no seeking backwards in a `Writer`.
     let mut w = Writer::new();
-    w.bytes(b"LCHN");
-    w.u32(3); // format version
-    w.u64(module.key.as_raw());
-    w.bytes(&hash);
-    w.u64(arena_align::<P>() as u64);
     w.u64(export.index as u64);
     w.u64(module.arena.len() as u64);
     w.bytes(&module.arena);
@@ -278,6 +301,16 @@ where
             w.u64(node.index as u64);
         }
     }
+    let body = w.into_bytes();
+
+    let mut w = Writer::new();
+    w.bytes(b"LCHN");
+    w.u32(ARTIFACT_FORMAT_VERSION);
+    w.u64(module.key.as_raw());
+    w.bytes(&hash);
+    w.u64(arena_align::<P>() as u64);
+    w.bytes(&sha256(&body));
+    w.bytes(&body);
     w.into_bytes()
 }
 
@@ -417,8 +450,9 @@ fn read_node_id(r: &mut Reader<'_>, node_count: usize, what: &str) -> Result<Loc
 /// Deserialize an artifact.  `key` and `hash` are the expected identity of
 /// the file (verified against the header); `modules` supplies the arenas of
 /// the artifact's dependencies, which must already be registered — foreign
-/// refs resolve through their keys, absolute from birth.  Returns the
-/// module and the exported root's local index.
+/// refs resolve through their keys, absolute from birth.  The header's body
+/// digest is verified before any body field is read.  Returns the module and
+/// the exported root's local index.
 pub fn deserialize_artifact(
     bytes: &[u8],
     key: ModuleKey,
@@ -445,7 +479,7 @@ where
     if r.take(4)? != b"LCHN" {
         return Err("bad artifact magic".into());
     }
-    if r.u32()? != 3 {
+    if r.u32()? != ARTIFACT_FORMAT_VERSION {
         return Err("unknown artifact format version".into());
     }
     if ModuleKey::from_raw(r.u64()?) != key {
@@ -457,6 +491,14 @@ where
     let max_align = r.u64()? as usize;
     if max_align != arena_align::<P>() {
         return Err("artifact payload alignment mismatch".into());
+    }
+    let expected_digest: Hash = r.take(32)?.try_into().expect("32 bytes");
+    // The header ends here; the digest covers exactly the bytes after it.  It
+    // is checked before the first body field is read, so a corrupted body is
+    // rejected here rather than loaded and misinterpreted field by field.
+    let body_start = r.position();
+    if sha256(&bytes[body_start..]) != expected_digest {
+        return Err("artifact body digest does not match the file".into());
     }
     let export = LocalNodeId {
         index: r.u64()? as usize,

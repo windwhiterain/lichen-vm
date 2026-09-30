@@ -5,14 +5,18 @@
 //! compiled file keeps exactly one cache slot (keyed by its file ID), so
 //! recompiling a modified file overwrites it rather than accumulating.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use lichen_language::package::PackageStore;
-use lichen_language::persist::DeviceRegistry;
-use lichen_language::program::LangProgram;
+use lichen_language::persist::{
+    DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex,
+};
+use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::run::evaluate_raw;
+use lichen_lowlevel::LowValue;
 
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -186,6 +190,73 @@ fn identical_content_gets_separate_file_id_slots() {
         fs::read_dir(cache.join("artifacts")).unwrap().count(),
         2,
         "two slots, one per file ID"
+    );
+}
+
+#[test]
+fn a_corrupted_body_is_rejected_by_the_header_digest() {
+    // The header's body digest is verified before any body field is read, so a
+    // body corrupted in place is a clean miss (the store recompiles) rather
+    // than a module that loads and is silently wrong.  The flipped byte is a
+    // letter of a string literal: valid UTF-8, inside no length or index, so
+    // no field parser can reject it — only the digest can.
+    const MARKER: &str = "artifact-body-digest-marker";
+    let dir = temp_dir("bodydigest");
+    let path = write(&dir, "pkg.lichen", &format!("\"{MARKER}\"\n"));
+    let cache = dir.join("cache");
+    let mut store = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    let handle = store.load_package(&path).unwrap();
+
+    let source = fs::read_to_string(&path).unwrap();
+    let file_id = fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let bytes = fs::read(
+        cache
+            .join("artifacts")
+            .join(format!("{}.module", hex(&file_id_hash(&file_id)))),
+    )
+    .unwrap();
+    let hash = artifact_hash(source.as_bytes(), &[]);
+    let modules = HashMap::new();
+
+    // A valid artifact the writer produced still loads: a digest read or
+    // computed over the wrong bytes would break every cache load.
+    let (module, export) = deserialize_artifact(&bytes, handle.key, hash, &modules)
+        .expect("the artifact the writer produced must load");
+    assert!(export.index < module.nodes.len());
+    assert!(
+        module
+            .nodes
+            .iter()
+            .any(|node| node.value == Some(LangValue::LowValue(LowValue::Str(MARKER)))),
+        "the loaded module carries the program's string literal"
+    );
+
+    // The writer emits the string literal's bytes into the body exactly once,
+    // so the flip below lands in the body and changes no length or index.
+    let at = bytes
+        .windows(MARKER.len())
+        .position(|window| window == MARKER.as_bytes())
+        .expect("the string literal's bytes are in the artifact body");
+    assert_eq!(
+        bytes
+            .windows(MARKER.len())
+            .filter(|window| *window == MARKER.as_bytes())
+            .count(),
+        1,
+        "the marker occurs once, so the flip lands in the string literal"
+    );
+    let mut corrupt = bytes.clone();
+    corrupt[at] ^= 0x20;
+
+    let Err(error) = deserialize_artifact(&corrupt, handle.key, hash, &modules) else {
+        panic!("a corrupted body must not load");
+    };
+    assert!(
+        error.contains("digest"),
+        "the body digest rejects it, not a field parser: {error}"
     );
 }
 

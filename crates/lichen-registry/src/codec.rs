@@ -110,6 +110,16 @@ impl<'a> Reader<'a> {
     pub fn remaining(&self) -> usize {
         self.buf.len().saturating_sub(self.pos)
     }
+    /// How many bytes have been read so far — the read offset into the buffer.
+    ///
+    /// The artifact container uses this to find where its header ends: the body
+    /// digest covers exactly the bytes after the header, and a caller slices
+    /// them out of the original buffer from this offset onward, because
+    /// [`Reader::take`] hands back a borrow of the buffer rather than of the
+    /// reader.
+    pub fn position(&self) -> usize {
+        self.pos
+    }
     pub fn done(&self) -> bool {
         self.pos == self.buf.len()
     }
