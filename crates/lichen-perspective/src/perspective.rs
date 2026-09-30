@@ -175,6 +175,14 @@ where
         LowValue::USize(0)
     }
 
+    /// The absent form is the constant `0` — concrete, so reconciliation only
+    /// ever *reads* it and one node can serve every absent occurrence.  (A doc's
+    /// absent form is an unbound cell, which a unify binds, so it cannot say
+    /// this; see [`AttrExt::share_missing_slot`].)
+    fn share_missing_slot(&self) -> bool {
+        true
+    }
+
     /// Perspective combine: a single `Gcd` op node over the children's
     /// attribute slots (the n-ary gcd meet), wrapped as a `[value, type]`
     /// term pair — the uniform slot shape.  An absent child reads `[0, int]`

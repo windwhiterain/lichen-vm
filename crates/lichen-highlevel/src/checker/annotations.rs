@@ -131,12 +131,31 @@ where
         self.missing_slot_of(marker)
     }
 
-    /// The attribute's *missing* slot node — built fresh through the
+    /// The attribute's *missing* slot node — one shared node for the whole
+    /// build when the attribute opted in (see
+    /// [`AttrExt::share_missing_slot`]), otherwise built fresh through the
     /// extension's `AttrExt` (a perspective reads `[0, int]`).  Used where a
     /// slot is needed for an expression that does not carry the attribute, or
     /// where the *declared* side of a check is the absent value.
+    ///
+    /// The shared node is built on **first use**, not in the install pass, and
+    /// the measurement is why: this site is cold — a program that never has an
+    /// absent perspective never reaches it — so an eager install would spend two
+    /// nodes on every build to save them only on the few that ask.  The cost of
+    /// laziness is that a slot first needed *inside* a lambda is tagged into
+    /// that function's template and so is cloned per apply, which is exactly
+    /// what the per-occurrence form did; it is never worse, only sometimes no
+    /// better.
     pub(super) fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
-        (self.attr_ext)(marker).missing_slot(self)
+        let index = marker.order_index();
+        if let Some(shared) = self.missing_slots[index] {
+            return shared;
+        }
+        let slot = (self.attr_ext)(marker).missing_slot(self);
+        if (self.attr_ext)(marker).share_missing_slot() {
+            self.missing_slots[index] = Some(slot);
+        }
+        slot
     }
 
     pub(super) fn check_ann(&mut self, e: ExprId, value: ExprId, r#type: Option<ExprId>) -> NodeId {

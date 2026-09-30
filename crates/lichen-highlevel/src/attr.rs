@@ -132,6 +132,32 @@ where
         ctx.pair(value, ctx.int_type())
     }
 
+    /// Whether every occurrence of an absent attribute may read **one** shared
+    /// missing-slot node, installed once per build, instead of a fresh node per
+    /// site.  The attribute decides this about its own value; the checker only
+    /// asks and caches the answer.
+    ///
+    /// **The contract a shareable missing value must satisfy: it is concrete.**
+    /// Reconciling two slots is a real unification ([`Self::unify_slots`] goes
+    /// through `check_unify_relaxed`), and a unify *writes* whichever side is
+    /// unbound.  A concrete node is only ever read, so one node can serve every
+    /// occurrence; an unbound one would be written by whichever occurrence
+    /// unified first, and every later occurrence would read the bound value.
+    ///
+    /// That is the whole difference between the two attributes highlevel ships
+    /// against: a perspective's absent form is the constant `0` (the lattice's
+    /// meet identity), so it shares; a doc's absent form is an **unbound cell**,
+    /// which a unify binds on purpose so a doc passes from one side to the other
+    /// ([`lichen_doc`]), so it must be fresh per site — sharing it would let the
+    /// first bind poison every later read.
+    ///
+    /// Defaults to `false`: an attribute opts in by stating that its missing
+    /// value is concrete, and an attribute that says nothing behaves exactly as
+    /// before.
+    fn share_missing_slot(&self) -> bool {
+        false
+    }
+
     /// Combine the direct sub-expressions' attribute slots into one node
     /// (a perspective → the language's meet operator over the operand array, a
     /// lazy operand → `Parameterized`).  `children` are the already-compiled

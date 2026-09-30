@@ -756,7 +756,7 @@ the experiment.
     `if !ext.is_label()`.  A label never populates the slot a constraint is
     found through, so `Doc` can satisfy neither condition.
 
-  **So the interning question has a split verdict, and the measurement is what
+  **The interning question has a split verdict, and the measurement is what
   showed it.**  For `Doc` there is nothing to intern: the site is unreachable.
   For `Perspective` the site is hot in the test suite, its missing value
   (`USize(0)`) is immutable, and interning is defensible on the top-level
@@ -766,4 +766,34 @@ the experiment.
   size, and nothing has measured it as worth taking.  The honest disposition is
   therefore: **refused, and now for a reason that distinguishes the two
   attributes instead of lumping them together.**
+
+- **The attribute owns its missing value — LANDED, as a mechanism rather than
+  as a reason to stop.**  "The missing value is the attribute's to define" is
+  the design, and the first version of this work used it as a *reason not to
+  build anything* — which is not the same thing.  It is now the thing itself:
+  [`AttrExt::share_missing_slot`] lets an **attribute** say whether its own
+  missing slot may be one shared node for the whole build, and the checker only
+  asks and caches the answer.  The contract is stated as the fact it is — *a
+  shareable missing value must be **concrete*** — because reconciling two slots
+  is a real unification that writes whichever side is unbound; a concrete node
+  is only ever read, so one can serve every occurrence, while an unbound one
+  would be written by whichever occurrence reconciled first.  That single fact
+  is what separates the two attributes: a perspective's absent form is the
+  constant `0` and opts in; a doc's is an unbound cell that a unify binds on
+  purpose, and keeps the per-site form.  Default `false`, so an attribute that
+  says nothing behaves exactly as before.
+
+  The checker holds `Vec<Option<NodeId>>` indexed by `order_index()` and fills
+  it **on first use**, not in `install_constants`.  That ordering is the
+  measured part: an **eager** install costs one slot on *every* build, and
+  since this site is cold it spent 30 builds across the 23 examples and 34
+  across the perspective suite — a 6× regression on the suite and +24 on the
+  examples, to save them only on the few programs that ask.  Lazy, the cost is
+  zero on programs that never have an absent attribute.
+
+  **The honest size of the win, measured: 6 missing-slot builds across the
+  whole perspective suite become 5.**  One.  The mechanism is in place and the
+  decision is where it belongs, but the site is cold, and a reader should not
+  mistake this entry for a performance improvement.  What it buys is that the
+  next attribute whose missing value *is* hot has one line to write.
 

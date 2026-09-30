@@ -41,7 +41,7 @@ use lichen_lowlevel::{
     NodeId, Operation, Registry,
 };
 
-use crate::attr::AttrExt;
+use crate::attr::{AttrExt, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
@@ -299,6 +299,21 @@ where
     zero_value: NodeId,
     /// The shared `USize(1)` node — element 1 of an expression's pair.
     one_value: NodeId,
+    /// One shared absent-occurrence slot per attribute that opted in, indexed
+    /// by [`AttrSet::order_index`] and installed by `install_constants`; `None`
+    /// where the attribute builds a fresh one per site.
+    ///
+    /// The attribute decides whether its own missing value may be shared — see
+    /// [`AttrExt::share_missing_slot`], which states the contract (the value
+    /// must be concrete, because reconciliation writes an unbound side and a
+    /// shared node would be written by whichever occurrence reconciled first).
+    /// The checker holds the node, not the rule: a `None` entry here is the
+    /// attribute declining to share, and the extension builds it as before.
+    ///
+    /// Same invariant as the two index constants above: installed before any
+    /// function exists, so these belong to no template and the apply clone walk
+    /// references them in place rather than copying one per call.
+    missing_slots: Vec<Option<NodeId>>,
     /// The interned field-name nodes — one per unique field name, so every
     /// occurrence of `.a` reads the same key node (see
     /// [`Self::name_node`]).
@@ -444,7 +459,9 @@ where
     }
 
     /// The no-op registry of a program with no attribute extension: no schema
-    /// carries an attribute, so it is never consulted.
+    /// carries an attribute, so it is never consulted.  (Sharing is decided on
+    /// first use at the site that needs a slot, not in the install pass, so a
+    /// program that never has an absent attribute never asks even that.)
     fn no_attr_ext() -> Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>> {
         Box::new(|_attr: &P::Attr| -> &'static dyn AttrExt<P> {
             unreachable!("this program has no attribute extension")
@@ -516,6 +533,7 @@ where
             zero_value: NodeId::default(),
             one_value: NodeId::default(),
             name_nodes: HashMap::new(),
+            missing_slots: vec![None; P::Attr::ORDER.len()],
         };
         checker.install_constants();
         // Prove the canonical structures concrete before the definition
