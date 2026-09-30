@@ -145,12 +145,24 @@ impl Entry {
     }
 }
 
+/// The `output = "..."` metadata a program declares — what it says it prints.
+/// The counterpart of [`program_output`]: the two together are the example
+/// suite's behavioural guard, so a program's declared output and its actual
+/// output are both read through these and never through a second notion.
+pub fn declared_output(source: &str) -> Option<String> {
+    let (interior, _) = split_block(source);
+    crate::preprocess::block_metadata(interior?)
+        .into_iter()
+        .find(|(name, _)| name == "output")
+        .map(|(_, value)| value)
+}
+
 /// The program's actual output, or a panic naming the file and showing its
 /// diagnostics — the same rendering the CLI prints for a failing file.
 /// Programs run through a package store with their own path as the base, so
 /// `@import` lines resolve relative to the file (import-free programs are
 /// unaffected).
-fn program_output(file: &Path, source: &str) -> String {
+pub fn program_output(file: &Path, source: &str) -> String {
     let mut store = crate::package::PackageStore::<crate::program::LangProgram>::new();
     crate::run::evaluate_raw(source, Some(file), &mut store).unwrap_or_else(|diags| {
         panic!(
@@ -163,7 +175,7 @@ fn program_output(file: &Path, source: &str) -> String {
 
 /// One program's markdown body: the whole source file, `@{...@}` block
 /// included, shown as-is.  The block's `output = "..."` metadata is the
-/// file's actual output (kept current by [`sync_output_comments`]), so the
+/// file's actual output, checked against it by `tests/examples.rs`, so the
 /// README shows the file exactly as it is in the repo.
 fn render_program_body(path: &Path) -> String {
     let source = read_normalized(path);
@@ -274,6 +286,13 @@ fn render_examples_in(dir: &Path) -> String {
 /// replaced in place; a file without one gets it appended.  A multi-line
 /// output becomes a multi-line string.  Returns true when any file was
 /// rewritten.
+///
+/// **A maintenance operation, run by the `sync-readme` binary on demand — not
+/// by the test suite.**  The suite compares a program's declared output with
+/// its actual one and *fails* on a difference (see `tests/examples.rs`): an
+/// output that changed on its own is a behaviour change, and rewriting it away
+/// would absorb the regression into a passing test and a dirty tree.  Reaching
+/// for this to make a failing suite green is exactly the case it is not for.
 pub fn sync_output_comments() -> bool {
     let mut changed = false;
     for (_, file) in example_files() {

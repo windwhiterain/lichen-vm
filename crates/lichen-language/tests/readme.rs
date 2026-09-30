@@ -1,20 +1,22 @@
 //! The example programs in `examples/` are the living spec, and the
-//! top-level README embeds them.  This test keeps everything in sync
-//! automatically: each example's `output =` metadata entry is rewritten to its
-//! actual output (appended when missing), and when the README's embedded
-//! section drifts from the files it is rendered from, the README is rewritten
-//! in place (exactly what the `sync-readme` binary does), so the suite never
-//! fails on a stale README or stale output metadata — a changed example simply
-//! resyncs both on the next `cargo test`.
+//! top-level README embeds them.  This test keeps the README's embedded
+//! section in sync automatically: when the section drifts from the files it
+//! is rendered from, the README is rewritten in place (exactly what the
+//! `sync-readme` binary does), so the suite never fails on a stale README —
+//! a changed example simply resyncs it on the next `cargo test`.
+//!
+//! The README is *derived documentation*, and rewriting it is the right
+//! response to drift.  A program's own `output = "..."` metadata is not: it is
+//! a claim about observable behaviour, and drift there is a behaviour change,
+//! so `tests/examples.rs` asserts it rather than rewriting it.  That is why
+//! [`readme::sync_output_comments`] is deliberately **not** called here — see
+//! its documentation for when it is the right tool.
 
 use lichen_language::readme;
 use std::fs;
 
 #[test]
 fn readme_embeds_the_current_example_programs() {
-    if readme::sync_output_comments() {
-        eprintln!("example programs: output comments out of sync — rewrote them");
-    }
     let blob = readme::render_examples();
     let path = readme::readme_path();
     let content = readme::read_normalized(&path);

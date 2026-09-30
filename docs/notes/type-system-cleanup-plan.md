@@ -551,6 +551,34 @@ These change or bless semantics; each needs an explicit decision (§7):
   (`pipeline.rs` `a_bound_struct_type_is_reusable`, with
   `two_struct_type_occurrences_do_not_unify` as its negative control).
   (The codec round-trip property test arrived with Phase 1c.)
+
+- **The suite's own guard was self-healing, and that made it absent — LANDED.**
+  Every phase of this cleanup rests on one invariant: the 23 example programs
+  produce byte-identical output.  **Nothing in the repository enforced it.**
+  `every_example_runs` asserted only that each program compiled and ran, and
+  `readme_embeds_the_current_example_programs` went further than not checking —
+  it called `sync_output_comments`, which **rewrote** each file's
+  `output = "..."` metadata to whatever the compiler now printed, and passed.
+  So a refactor that silently changed any example's output would have been
+  absorbed into a green suite and a dirty tree, rather than caught.  (No drift
+  did occur: the manual hash comparison held on every phase, so the work was
+  sound — but sound by diligence, not by construction.)
+
+  The two things are now treated differently, on purpose: **the README's
+  embedded blob is derived documentation and still self-heals**, while **a
+  program's declared output is a claim about observable behaviour and is
+  asserted**.  `every_example_runs` became
+  `every_example_runs_and_prints_what_it_declares`, comparing
+  `readme::declared_output` against `readme::program_output` — the *same*
+  function the README's generator uses, so there is no second notion of "what
+  this program prints" — and reporting every drifted file at once rather than
+  stopping at the first.  A file with no `output =` declaration now fails too,
+  since the declaration is what makes the example a specification.
+
+  Verified by falsification, not by passing: deliberately corrupting one
+  declaration made the suite fail with the declared and actual values side by
+  side.  A passing assertion proves nothing on its own; this one was watched
+  to go red.
 - ~~Fix the vacuous `Int<_>` test (B3)~~ (done in Phase 0) and the
   contradictory test docs (tests/checker.rs:167-184, 1066-1070) — **the test
   docs are done** (Phase 4 documentation sync): the `is_int_type` helpers
