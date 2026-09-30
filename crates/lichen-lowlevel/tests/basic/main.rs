@@ -426,16 +426,16 @@ fn wrap_function_asserts(
     (func_node, func)
 }
 
-/// The manual-insert mirror of [`Module::add_function`]'s tagging: stamp
-/// `nodes` as owned by `function` and record them as its scope.  A function
-/// built by hand (the placeholder-value helpers below) must tag its body,
-/// or the apply clone walk's chain membership test reads the body as
-/// outside the template and references it in place.
+/// The manual-insert mirror of [`Module::add_function`]'s registration:
+/// register `nodes` in `function`'s body scope (owner tag plus
+/// `Function::nodes`).  A function built by hand (the placeholder-value
+/// helpers below) must register its body, or the apply clone walk's chain
+/// membership test reads the body as outside the template and references it
+/// in place.
 fn tag_scope(m: &mut Module<TestProgram>, function: FunctionId, nodes: Vec<NodeId>) {
-    for &node in &nodes {
-        m.nodes[node].function = Some(function);
+    for node in nodes {
+        m.register_in_function(function, node);
     }
-    m.functions[function].nodes = nodes;
 }
 
 /// Create a function value in a fresh body block: the return node at

@@ -72,7 +72,7 @@ queue's order is deliberate.
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | todo |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | todo |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | todo |
-| P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | todo |
+| P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | done |
 | P2-5 | medium | highlevel | `NativeApply` is an unvalidated escape hatch | done |
 | P2-6 | medium | language | Repo tooling (README generator, `sync-readme`) inside the compiler library | done |
 | P2-7 | medium | lowlevel | `visiting` is set by hand, bypassing the `Drop` guard | done |
@@ -1799,9 +1799,10 @@ this is a de-facto API.
 **Fix.** Privatise the invariant-bearing fields behind `&mut`-taking methods, as
 `value` already is.
 
-**Outcome — stopped without a fix: the stated mechanism is refuted, and what
-remains is a redesign.** Re-derived first-hand before any change; the row stays
-`todo`.
+**Outcome — done: all six fields are private, read through `Module` accessors,
+and the two that had no write path got one that establishes the invariant.**
+`D11` settled the scope after the refutation below was recorded; the refutation
+and the measured cost are re-derived first-hand here and both still stand.
 
 *What the choke-point is.* The crate documents exactly one write choke-point and
 it is scoped to the **value**: `Module::write_node_value` (`equality.rs:79-107`)
@@ -1832,8 +1833,10 @@ than through the choke-point.
 path covers those six fields: the crate writes them from ten of its own modules
 (`add_node`, `add_function`, `gc`'s compaction, `function.rs`'s apply clone,
 `static_module.rs`'s static apply, `evaluation.rs`'s mark and deep pass,
-`equality.rs`'s `force_pending`), so making "the write path" the only one means
-**inventing** a choke-point for node state — the one thing this item must not do.
+`equality.rs`'s `force_pending`), so making "the write path" the only one would
+mean **inventing** a choke-point for node state.  `D11` accepted exactly two
+invented write paths (`operation` and the function tag) rather than a general
+choke-point, and rejected leaving the fields public as they are.
 The call-site cost is not local either. A temporary privatisation of the six
 fields, run through `cargo check --workspace --all-targets`, produced **119**
 `Node`-field errors: 116 in the crate's own integration tree and 3 in
@@ -1861,11 +1864,130 @@ direction: it is **26** writes, plus ~90 reads. So the tests can construct and
 inspect the graph only by touching fields, and the tension is between the
 invariant and the *harness*, not between the invariant and the choke-point.
 
-**What a future pass owes.** A decision on the accessor surface — whether reading
-`evaluated_deep`, `visiting` and the disjoint `Meta` becomes public API, or the
-integration tree moves to a crate-internal harness — plus the cross-crate change
-in `compute` and `highlevel`. The ledger's one-line fix is under-specified for
-both.
+**What landed.** The six fields are private; every external reader goes through
+a `Module` accessor, and the missing write paths are supplied — two invented
+(`operation`, the function tag), one routed to the operation the union-find
+already exposes (`equality.parent`).  Behaviour is identical:
+the crate's own code still writes the fields directly (privacy is crate-wide),
+no public signature that existed before changed meaning, and no evaluation,
+checking or hashing result moved — the whole verification battery passes and
+`cargo clippy` reports the same warning locations as before the change (65
+distinct; `D12`'s 66 counts a duplicate target).
+
+*The read surface, field by field.*  Each accessor's doc states what the reader
+may rely on; that contract is what a public field cannot give.
+
+- `operation` → `Module::node_operation(node)` → `Option<Operation<P>>`.  The
+  operation is **defined once** — by `add_node`, or by `close_operation_cycle`
+  when the operand is only nameable after the node — and never replaced, so an
+  operand edge read once is the edge that computes the node.  `Some` does **not**
+  mean "unevaluated": an operation node caches its result, read
+  `node_value` for the current value.  The operand is a graph edge, so a walk
+  must keep a visited set, exactly as the deep pass does.
+- `function` → `Module::node_function(node)` → `Option<FunctionId>`.  The tag's
+  chain through `Function::parent` **is** the apply clone walk's membership test
+  (not a lookup in `Function::nodes`), so a wrongly tagged node is cloned or
+  referenced as a member of the wrong template.
+- `block` → `Module::node_block(node)` → `BlockId`.  The garbage-collection unit
+  whose lifetime bounds the node, and the arena its compound payloads live in;
+  exactly one live block per node.
+- `visiting` → `Module::node_visiting(node)` → `bool`.  A **liveness** mark, not
+  a "was visited" flag.  `P2-7`'s guard releases it on every exit — the cached
+  answer, the lazy answer and an unwinding panic alike — so `true` means an
+  active frame is computing the node *right now*; it never means "already
+  evaluated" (read `node_value`) and never means "known concrete" (read
+  `node_evaluated_deep`).  Because it is never sticky, `true` on a node with no
+  cached value is a genuine cyclic read.
+- `evaluated_deep` → `Module::node_evaluated_deep(node)` →
+  `Option<EvaluatedDeep>`.  `Some` means the deep pass ran on the node and
+  `parameterized` records whether any node in its reachable subtree is
+  `Parameterized` — the pass could **not** prove the subtree concrete.  `None`
+  means concreteness is **unknown** and must be read as parameterized, never as
+  proven concrete: a budget refusal and a node reached only as an operand both
+  leave `None`, and the apply clone walk and the operation postlude both read it
+  that way.
+- `equality` → `Module::node_equality(node)` → `disjoint::Meta<NodeId>`.
+  `parent` is the union-find link (`None` = this node is the class's root);
+  `next`/`tail`/`size` describe the member list and are meaningful only at the
+  representative.  A reader that needs the representative uses
+  `equality_representative`, which also compresses, never a hand parent walk.
+
+*The invented write paths — why neither is a bare setter.*
+
+- `operation`: `Module::close_operation_cycle(node, operation)` is the **late
+  half of a two-phase construction**, named for the cycle it closes: a recursive
+  value's operation names a node allocated after it, up to the self-referential
+  `node := op(node)`, so a constructor cannot express it in one call.  It
+  refuses a second definition (an operation is defined once — replacing it would
+  strand the previous operand edge), refuses a node that already holds a
+  concrete value (a decided node never runs its operation, so the edge would be
+  dead), and **clears the node's deep-pass verdict**, which predated the new
+  operand edge and no longer describes the graph.  On the freshly allocated node
+  every caller passes, that clearing is already a no-op — which is why the
+  repair is invisible in results while it closes the hole a plain field write
+  left open.
+- `function`: `Module::register_in_function(function, node)` writes the owner
+  tag **and** appends the node to `Function::nodes`, because the two halves must
+  agree and are read for different purposes: the clone walk follows the tag
+  chain, while garbage collection and a nested closure's clone walk start from
+  the scope list.  The function's own value node is the one node tagged without
+  joining the scope, and `add_function` does that in place.
+- `equality.parent`: **no new writer**.  Its legitimate writer is the union-find
+  itself, and the union-find's operation is already public — `add_equality`.  The
+  single external site that hand-built a parent chain is a test, and it now
+  builds the chain with `add_equality`; nothing else outside the crate wrote the
+  link.
+- `block`, `visiting`, `evaluated_deep`: no public writer at all.  Their only
+  legitimate writers are the crate's own garbage collection, evaluation mark and
+  deep pass, and those field writes stay inside the crate.
+
+*Reads through the module, not the slotmap.*  `Module::nodes` stays public: it is
+the node **table** — the slot allocation that names a node and owns its lifetime,
+walked by the artifact codec and by `disjoint::members` — but it can no longer
+reveal node **state**, because all six fields are private, so the accessors above
+are the only route.  No per-`Node` accessor was added; that would have been the
+second route the decision's scope note forbids.  Making the table itself private
+is a storage-API change (184 `.nodes` uses outside `lichen-lowlevel/src`, across
+five crates) and belongs to a different item.
+
+*Residual — a `lichen-utils` hole, not an absent `Node` accessor.*  Because
+`Module::nodes` is public, a caller can still obtain `&mut Node<P>`, and the
+crate's `impl disjoint::Node for Node<P>` exposes `meta_mut() -> &mut Meta<NodeId>`;
+`lichen-utils`' `Meta` has public fields, so an external crate can still write
+`equality.parent` with `m.nodes[id].meta_mut().parent = Some(p)`.  Closing that
+means making `Meta` opaque (with read accessors and a constructor for the frozen
+mirror `static_module.rs` builds) or making the node table private.  It is a
+container/`lichen-utils` API change outside `D11`'s six-field scope; it is
+reported here rather than taken.
+
+*The tests.*  Every direct write in the integration tree is expressed through the
+new surface.  Two tests needed more than a rename, and both preserve their
+meaning:
+
+- `root_node_compresses_deep_paths` built a four-deep parent chain by writing
+  `equality.parent` — a shape `union`'s size rule cannot produce.  It now builds
+  the deepest chain the union-find **can** produce at five nodes (one class root
+  attached under a larger class root, leaving a member two edges deep) through
+  `add_equality`, and asserts the same property: the whole path flattened onto
+  the representative.  The deep-chain compression case is still covered where it
+  belongs, in `lichen-utils`' own `disjoint` tests.
+- `cyclic_operations_panic_instead_of_looping` used to *replace* `a`'s operation
+  to close its cycle; the define-once contract refused that, and the test now
+  allocates `a` operation-free and closes the cycle once — the graph and the
+  expected panic are unchanged.
+
+*Cost, measured.*  The trial privatisation re-run on this checkout produced
+**115** `cargo check --workspace --all-targets` errors in `lichen-lowlevel`'s
+integration tree (116 when the previous attempt measured it) and 3 in
+`lichen-highlevel`'s library, and the compiler stopped before `lichen-compute`.
+Counted past the blocked targets, the error list is **132** sites: those 118,
+plus 12 in `lichen-compute`, 1 in `lichen-render` and 1 in `lichen-highlevel`'s
+own test.  The change rewrote **131** external sites — 114 in the lowlevel
+integration tree, 4 in `lichen-highlevel` (3 library, 1 test), 12 in
+`lichen-compute` and 1 in `lichen-render` — and one more inside the crate
+(`add_function` now registers through the API), 132 call sites in all.  The
+`compute`/`render` share is the promised "roughly a dozen more" the compiler
+never reached.
 
 ### P2-5 — `NativeApply` is an unvalidated escape hatch `reported`
 

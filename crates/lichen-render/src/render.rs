@@ -987,8 +987,8 @@ where
     // A parent chain visits each node at most once, so it cannot be longer
     // than the node table.
     for _ in 0..=module.nodes.len() {
-        let entry = module.nodes.get(n)?;
-        match entry.equality.parent {
+        module.nodes.get(n)?;
+        match module.node_equality(n).parent {
             Some(parent) => n = parent,
             None => return Some(n),
         }

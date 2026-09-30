@@ -194,14 +194,19 @@ fn applying_a_non_function_records_an_eval_error() {
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let a = op_node(&mut m, root, TestOperator::Id, None);
+    // Two-phase: `a`'s operation names `b`, which cannot exist when `a` is
+    // allocated, so `a` starts operation-free and the cycle is closed once
+    // `b` exists.  The evaluating state marks `b` as in-progress on re-entry
+    // and panics.
+    let a = m.add_node(root, None, None);
     let b = op_node(&mut m, root, TestOperator::Id, Some(a));
-    // Close the loop a -> b -> a through the public operation fields; the
-    // evaluating state marks b as in-progress on re-entry and panics.
-    m.nodes[a].operation = Some(Operation {
-        operator: TestOperator::Id,
-        operand: Some(b),
-    });
+    m.close_operation_cycle(
+        a,
+        Operation {
+            operator: TestOperator::Id,
+            operand: Some(b),
+        },
+    );
     m.evaluate_node_deep(b, None);
 }
 
@@ -230,7 +235,7 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
     let value = m.evaluate_node_deep(k, None);
 
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
-    assert!(m.nodes.values().all(|n| !n.visiting));
+    assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
 }
 #[test]
 fn visiting_markers_are_cleared_after_evaluation() {
@@ -243,7 +248,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
 
     m.evaluate_node_deep(add, None);
 
-    assert!(m.nodes.values().all(|n| !n.visiting));
+    assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
 }
 #[test]
 fn evaluated_deep_marks_subtrees_with_parameters() {
@@ -264,34 +269,34 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
     // The parameter node itself and everything reachable from it is flagged;
     // plain constants are not.
     assert_eq!(
-        m.nodes[p].evaluated_deep,
+        m.node_evaluated_deep(p),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[arr].evaluated_deep,
+        m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[id_arr].evaluated_deep,
+        m.node_evaluated_deep(id_arr),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[x].evaluated_deep,
+        m.node_evaluated_deep(x),
         Some(EvaluatedDeep {
             parameterized: false
         })
     );
-    assert_eq!(m.nodes[id_p].evaluated_deep, None); // not yet evaluated
+    assert_eq!(m.node_evaluated_deep(id_p), None); // not yet evaluated
 
     m.evaluate_node_deep(id_p, None);
     assert_eq!(
-        m.nodes[id_p].evaluated_deep,
+        m.node_evaluated_deep(id_p),
         Some(EvaluatedDeep {
             parameterized: true
         })
@@ -318,15 +323,15 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
         m.node_value(AnyNodeId::Dynamic(add)).is_none(),
         "shallow position stays lazy"
     );
-    assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
+    assert_eq!(m.node_evaluated_deep(add), None, "never walked");
     assert_eq!(
-        m.nodes[three].evaluated_deep,
+        m.node_evaluated_deep(three),
         Some(EvaluatedDeep {
             parameterized: false
         })
     );
     assert_eq!(
-        m.nodes[arr].evaluated_deep,
+        m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
             parameterized: true
         }),
@@ -394,7 +399,8 @@ fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
         TestValue::LowValue(LowValue::Parameterized)
     ));
     assert_eq!(
-        m.nodes[first].evaluated_deep, None,
+        m.node_evaluated_deep(first),
+        None,
         "the refused frame wrote no flag"
     );
 }

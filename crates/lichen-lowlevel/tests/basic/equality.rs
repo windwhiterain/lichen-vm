@@ -37,20 +37,27 @@ fn root_node_compresses_deep_paths() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let nodes: Vec<_> = (0..5).map(|i| u128_node(&mut m, root, i as u128)).collect();
-    // Build a deliberately deep parent chain 0 <- 1 <- 2 <- 3 <- 4 by hand
-    // (union by size would attach every new node directly under the root).
-    for pair in nodes.windows(2) {
-        m.nodes[pair[1]].equality.parent = Some(pair[0]);
-    }
+    // Build a parent chain through the union-find's own operation, so a
+    // class's root becomes a child of another class's root: merge the pair
+    // `1 <- 2`, grow the other class past it, then merge the two — `1`'s
+    // root is attached under `3` and leaves `2` two edges deep.  This is the
+    // deepest chain union-by-size produces at this size; a longer one would
+    // have to write `equality.parent` by hand, which is the bypass this API
+    // refuses.
+    m.add_equality(nodes[1], nodes[2]);
+    m.add_equality(nodes[3], nodes[4]);
+    m.add_equality(nodes[3], nodes[0]);
+    m.add_equality(nodes[1], nodes[3]);
 
-    let rep = m.equality_representative(nodes[4]);
+    let rep = m.equality_representative(nodes[2]);
 
-    assert_eq!(rep, nodes[0]);
+    // The larger class absorbed the smaller: `3` is the representative.
+    assert_eq!(rep, nodes[3]);
     // The whole path was flattened onto the representative.
     for &n in &nodes {
         assert_eq!(
-            m.nodes[n].equality.parent,
-            (n != nodes[0]).then_some(nodes[0])
+            m.node_equality(n).parent,
+            (n != nodes[3]).then_some(nodes[3])
         );
     }
 }
@@ -59,10 +66,13 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let (func_node, ret, _param) = function(&mut m, |m, ret, param| {
-        m.nodes[ret].operation = Some(Operation {
-            operator: TestOperator::Id,
-            operand: Some(param),
-        });
+        m.close_operation_cycle(
+            ret,
+            Operation {
+                operator: TestOperator::Id,
+                operand: Some(param),
+            },
+        );
     });
 
     let arg = u128_node(&mut m, root, 42);
@@ -77,12 +87,12 @@ fn cloned_function_nodes_start_in_their_own_equality_class() {
         .nodes
         .iter()
         .copied()
-        .filter(|&id| m.nodes[id].operation.is_some())
+        .filter(|&id| m.node_operation(id).is_some())
         .collect();
     let clone_ret = candidates
         .into_iter()
         .find(|&id| {
-            let operand = m.nodes[id].operation.unwrap().operand.unwrap();
+            let operand = m.node_operation(id).unwrap().operand.unwrap();
             m.equality_representative(operand) == m.equality_representative(arg)
         })
         .expect("the call clone of ret");

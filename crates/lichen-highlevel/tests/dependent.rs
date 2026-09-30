@@ -264,7 +264,7 @@ fn a_resolvable_index_read_pins_its_element() {
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert!(
-        m.nodes[read].operation.is_some(),
+        m.node_operation(read).is_some(),
         "the pinned read keeps its operation (the operand edge must survive)"
     );
 

@@ -329,7 +329,7 @@ where
         // level's type slot's own `[shape, kind]` pair.
         let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
         let mut current = self.term[e].unwrap();
-        if self.module.nodes[current].operation.is_some() {
+        if self.module.node_operation(current).is_some() {
             levels.push((self.value_of(e), self.ty[e].unwrap()));
         } else {
             while levels.len() < depth {

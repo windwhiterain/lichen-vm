@@ -544,7 +544,7 @@ fn a_function_key_survives_a_freeze_and_a_reload() {
     let mut m = Module::new();
     let root = m.add_block(None);
     let (function, body, _) = function(&mut m, |m, r#return, parameter| {
-        let block = m.nodes[r#return].block;
+        let block = m.node_block(r#return);
         let one = u128_node(m, block, 1);
         let two = u128_node(m, block, 2);
         let operands = array_node(m, block, &[one, two], None);

@@ -1025,7 +1025,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut root = node;
-    while let Some(parent) = module.nodes[root].equality.parent {
+    while let Some(parent) = module.node_equality(root).parent {
         root = parent;
     }
     root
@@ -1046,11 +1046,11 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let root = equality_rep(module, node);
-    for (n, nd) in &module.nodes {
+    for n in module.nodes.keys() {
         if equality_rep(module, n) != root {
             continue;
         }
-        if let Some(op) = nd.operation.as_ref() {
+        if let Some(op) = module.node_operation(n).as_ref() {
             if !matches!(
                 AsEnum::<LowOperator>::as_enum(&op.operator),
                 Some(LowOperator::Index)
@@ -1087,7 +1087,7 @@ where
             _ => {}
         }
     }
-    let Some(operation) = module.nodes[node].operation else {
+    let Some(operation) = module.node_operation(node) else {
         // A bare value cell (no value specialization, no operator).  If it is
         // in one of the enclosing parameters' equality classes, it is a
         // whole-parameter read: the deep pass's apply-clone *unifies* a
@@ -1257,7 +1257,7 @@ where
                 // `Index` emitter peels a constant array element.
                 let mut buf = buf;
                 for _ in 0..8 {
-                    let target_oi = match module.nodes[buf].operation.as_ref() {
+                    let target_oi = match module.node_operation(buf).as_ref() {
                         Some(op)
                             if matches!(
                                 AsEnum::<LowOperator>::as_enum(&op.operator),
@@ -1333,7 +1333,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let cfg_value = params.first()?.value;
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
@@ -1342,7 +1342,7 @@ where
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
     let k = usize_value(module, index)?;
-    let target_op = module.nodes[target].operation?;
+    let target_op = module.node_operation(target)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&target_op.operator),
         Some(LowOperator::Index)
@@ -1408,7 +1408,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(operation) = module.nodes[node].operation else {
+    let Some(operation) = module.node_operation(node) else {
         return false;
     };
     if !matches!(
@@ -1457,7 +1457,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
@@ -1477,7 +1477,7 @@ where
     // checker peels a call result (`value_of` over an `Apply` expression).  The
     // operator's result is the pair's value, so emit the operator directly; its
     // codegen produces the scalar (a cross-kernel call, an arithmetic op, ...).
-    if module.nodes[target].operation.is_some() {
+    if module.node_operation(target).is_some() {
         return Some(target);
     }
     None
@@ -1517,7 +1517,7 @@ where
     }
     // A kernel struct `.native` field read: `Index(struct, 0)`, where the
     // struct value's element 0 is the bare kernel artifact.
-    if let Some(operation) = module.nodes[node].operation {
+    if let Some(operation) = module.node_operation(node) {
         if let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
             && usize_value(module, index) == Some(0)
@@ -1548,7 +1548,7 @@ where
 {
     // The one operator that produces a `Kernel`; a value that is still lazy
     // here is a function the definition pass has not run yet.
-    if module.nodes[node].operation.is_some_and(|operation| {
+    if module.node_operation(node).is_some_and(|operation| {
         matches!(
             AsEnum::<ComputeOperator>::as_enum(&operation.operator),
             Some(ComputeOperator::Jit)
@@ -1602,7 +1602,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)

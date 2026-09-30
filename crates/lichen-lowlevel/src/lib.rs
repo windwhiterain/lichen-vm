@@ -770,27 +770,48 @@ pub struct Node<P: Program> {
     /// absent for any node the backend will not trace (type-check-only
     /// scaffolding, or a node materialized before the backend runs).
     low_shape: Option<LowShape>,
-    pub operation: Option<Operation<P>>,
+    /// The node's computation — the operator and its single operand edge, or
+    /// `None` for a node that carries a value instead.  **Private**: read
+    /// through [`Module::node_operation`], and defined once, either by
+    /// [`Module::add_node`] or by the cycle-closing late half
+    /// [`Module::close_operation_cycle`].  Replacing it in place would strand
+    /// the old operand edge and invalidate every cached value and deep-pass
+    /// verdict derived through it.
+    operation: Option<Operation<P>>,
     /// The function whose body owns this node — the template membership
     /// back-pointer ([`None`] for top-level and runtime-created nodes whose
     /// owner is not a template).  The apply clone walk tests membership by
     /// walking this chain through [`Function::parent`]; clones carry the
-    /// tag of the context that created them.
-    pub function: Option<FunctionId>,
-    /// Owner.
-    pub block: BlockId,
-    /// Detect circular recursion.
-    pub visiting: bool,
+    /// tag of the context that created them.  **Private**: read through
+    /// [`Module::node_function`]; a node joins a function's body through
+    /// [`Module::register_in_function`], and the clone walks re-stamp the tag
+    /// on the nodes they instantiate.
+    function: Option<FunctionId>,
+    /// Owner — the garbage-collection unit whose lifetime bounds this node.
+    /// **Private**: read through [`Module::node_block`]; only
+    /// [`Module::garbage_collect`] moves it.
+    block: BlockId,
+    /// Whether an evaluation attempt is computing this node *right now* —
+    /// the cycle mark, owned by a frame and released on every exit including
+    /// unwind (see [`Module::retain_node`]).  **Private**: read through
+    /// [`Module::node_visiting`], which states what the mark does and does
+    /// not mean.
+    visiting: bool,
     /// Whether the deep pass ([`Module::evaluate_node_deep`],
     /// [`Module::evaluate_node_forced`]) has run on this node, and what it
     /// proved.  [`Some`] means the deep pass ran and
     /// [`EvaluatedDeep::parameterized`] records whether any node in self's
     /// reachable subtree has a [`LowValue::Parameterized`].  [`None`] means
-    /// it never ran, so the node's concreteness is unknown.
-    pub evaluated_deep: Option<EvaluatedDeep>,
+    /// it never ran, so the node's concreteness is unknown.  **Private**:
+    /// read through [`Module::node_evaluated_deep`].
+    evaluated_deep: Option<EvaluatedDeep>,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
-    pub equality: disjoint::Meta<NodeId>,
+    /// **Private**: read through [`Module::node_equality`]; the only writer
+    /// is the union-find itself ([`Module::add_equality`],
+    /// [`Module::equality_representative`], garbage collection's class
+    /// splice).
+    equality: disjoint::Meta<NodeId>,
 }
 
 pub struct StaticNode<P: Program> {
@@ -838,6 +859,14 @@ pub struct Module<P: Program> {
     /// `Registry` doc for the thread rule).  All static refs resolve through
     /// it; the module itself is never shared (`Arc<Module>` does not exist).
     pub registry: Arc<RwLock<Registry<P>>>,
+    /// The node table — the slot allocation that **names** a node and owns
+    /// its lifetime.  Node *state* is not read here: every state field of
+    /// [`Node`] is private, so the only route to a node's block, operation,
+    /// owner, visit mark, deep verdict or equality class is the `node_*`
+    /// accessors on [`Module`] (see [`Self::node_block`] and friends).  The
+    /// table itself stays public because iteration and the union-find walk
+    /// it ([`lichen_utils::disjoint::members`]), and because a released
+    /// node's absence is itself a readable fact ([`Self::node_value`]).
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
@@ -1214,6 +1243,161 @@ impl<P: Program> Module<P> {
         node
     }
 
+    /// The block `node` is homed in — the garbage-collection unit
+    /// [`Self::garbage_collect`] moves the node out of when it is released,
+    /// and the arena its compound payloads live in.  A node is homed in
+    /// exactly one live block; a released block's nodes are removed with it.
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_block(&self, node: NodeId) -> BlockId {
+        self.nodes[node].block
+    }
+
+    /// The function whose template owns `node`, or [`None`] when the node
+    /// belongs to no template (a top-level node, or one created at runtime).
+    ///
+    /// A reader may rely on the tag naming the function that owns the node:
+    /// the apply clone walk's membership test is this tag's chain through
+    /// [`Function::parent`] reaching the applied function — *not* a lookup
+    /// in [`Function::nodes`] — so a wrongly tagged node is cloned or
+    /// referenced as a member of the wrong template.  A node joins a body
+    /// through [`Self::register_in_function`], which decides the tag and the
+    /// scope list together; the clone walks re-stamp the clones they
+    /// instantiate, and a function's own value node is tagged without
+    /// joining the scope ([`Self::add_function`]).
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_function(&self, node: NodeId) -> Option<FunctionId> {
+        self.nodes[node].function
+    }
+
+    /// The operation `node` computes — its operator and single operand edge
+    /// — or [`None`] for a node that carries a value instead.
+    ///
+    /// A reader may rely on the operation being **fixed once**: it comes
+    /// from [`Self::add_node`] or, when the operand is only nameable after
+    /// the node exists, from [`Self::close_operation_cycle`].  It is never
+    /// replaced, so an operand edge read once is the edge that computes the
+    /// node.  [`Some`] does not mean "unevaluated": an operation node caches
+    /// its result, and [`Self::node_value`] is the current value.
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_operation(&self, node: NodeId) -> Option<Operation<P>> {
+        self.nodes[node].operation
+    }
+
+    /// Whether an evaluation attempt — or a deep-pass descent cut against
+    /// it — is computing `node` **at this moment**.
+    ///
+    /// A reader may rely on the mark being a *liveness* flag, not a "was
+    /// visited" flag.  It is taken when a frame starts computing the node and
+    /// released when that frame exits, on the cached-answer, lazy-answer and
+    /// unwinding-panic paths alike (see the invariant on the module's
+    /// evaluation-attempt mark, `retain_node`), so `true` means an active
+    /// frame holds the node right now; it never means "already evaluated"
+    /// (read [`Self::node_value`]) and never means "known concrete" (read
+    /// [`Self::node_evaluated_deep`]).  Because the mark is never sticky,
+    /// `true` on a node with no cached value is a genuine cyclic read.
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_visiting(&self, node: NodeId) -> bool {
+        self.nodes[node].visiting
+    }
+
+    /// The deep pass's verdict for `node`, or [`None`] when it never ran
+    /// there.
+    ///
+    /// A reader may rely on [`Some`] meaning the deep pass
+    /// ([`Self::evaluate_node_deep`], [`Self::evaluate_node_forced`]) ran on
+    /// this node and [`EvaluatedDeep::parameterized`] recording whether any
+    /// node in its reachable subtree is [`LowValue::Parameterized`] — i.e.
+    /// whether the pass could **not** prove the subtree concrete.  [`None`]
+    /// means concreteness is *unknown*, which a reader must treat as
+    /// parameterized, never as proven concrete: the apply clone walk and the
+    /// operation postlude both do, and a budget refusal as well as a node
+    /// reached only as an operand leave [`None`].  The verdict covers the
+    /// node's graph at the time it was reached; it is cleared when a late
+    /// operation edge is added ([`Self::close_operation_cycle`]).
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_evaluated_deep(&self, node: NodeId) -> Option<EvaluatedDeep> {
+        self.nodes[node].evaluated_deep
+    }
+
+    /// The disjoint-set metadata of `node`'s equality class, as
+    /// [`Self::add_equality`] maintains it.
+    ///
+    /// A reader may rely on `parent` being the union-find link ([`None`]
+    /// meaning `node` is its own root) and on `next`, `tail` and `size`
+    /// describing the class's member list — which is meaningful only at the
+    /// representative.  A reader that needs the representative must not
+    /// follow `parent` by hand: use [`Self::equality_representative`], which
+    /// also compresses the path.  The metadata is written **only** by the
+    /// union-find (merge classes with [`Self::add_equality`]); writing a
+    /// parent link by hand would break the size bound and the member list at
+    /// once.
+    ///
+    /// Panics if `node` is not in [`Self::nodes`].
+    pub fn node_equality(&self, node: NodeId) -> disjoint::Meta<NodeId> {
+        self.nodes[node].equality
+    }
+
+    /// **Close an operation cycle** — define the operation of a node whose
+    /// operand is only nameable after the node itself exists.
+    ///
+    /// [`Self::add_node`] takes a node's operation at allocation, which is
+    /// enough for an acyclic graph: the operands are allocated first.  A
+    /// cycle is not — a recursive value's operation names a node allocated
+    /// after it, up to the self-referential `node := op(node)` — so it needs
+    /// this late half of a two-phase construction, which is the only way to
+    /// give an existing node an operation.
+    ///
+    /// Contract:
+    /// - `node` must be freshly allocated with **no** operation: an
+    ///   operation is defined once, never replaced (replacing it would
+    ///   strand the previous operand edge and contradict every cached value
+    ///   and deep verdict derived through it).
+    /// - `node` must not already hold a concrete value: a decided node is
+    ///   never evaluated again, so its operation would never run — the edge
+    ///   would be dead.
+    /// - The node's deep-pass verdict ([`Self::node_evaluated_deep`]) is
+    ///   cleared, because the proof predates this operand edge and no longer
+    ///   describes the node's graph.  On a freshly allocated node the
+    ///   verdict is already [`None`], so the clearing is a no-op there; it
+    ///   is what makes the contract hold for any other node.
+    pub fn close_operation_cycle(&mut self, node: NodeId, operation: Operation<P>) {
+        debug_assert!(
+            self.nodes[node].operation.is_none(),
+            "a node's operation is defined once: {node:?} already computes one"
+        );
+        debug_assert!(
+            is_unbound(self.nodes[node].value),
+            "an operation must not be defined on a node that already holds a concrete value: {node:?}"
+        );
+        self.nodes[node].operation = Some(operation);
+        self.nodes[node].evaluated_deep = None;
+    }
+
+    /// Register `node` in `function`'s body scope: tag the node as owned by
+    /// `function` ([`Self::node_function`]) **and** append it to
+    /// [`Function::nodes`].  Both halves are written together because they
+    /// are read for different purposes and must agree: the apply clone walk
+    /// follows the owner tag's chain, while garbage collection and a nested
+    /// closure's clone walk start from the scope list.
+    ///
+    /// Contract: `node` must have just been allocated for that function's
+    /// body.  The function's own value node is deliberately *not* registered
+    /// here — it is reached through the template's return subtree, so
+    /// [`Self::add_function`] tags it without listing it.
+    pub fn register_in_function(&mut self, function: FunctionId, node: NodeId) {
+        debug_assert!(
+            self.functions.contains_key(function),
+            "a node cannot be owned by a function that does not exist: {function:?}"
+        );
+        self.nodes[node].function = Some(function);
+        self.functions[function].nodes.push(node);
+    }
+
     /// Registers `condition` as an assert — an explicit constraint, not a
     /// unification, so an unbound condition is *not* bound to `1`, it stays
     /// untriggered until an apply binds it.  [`Self::check_asserts`]
@@ -1282,13 +1466,13 @@ impl<P: Program> Module<P> {
     ) -> NodeId {
         let nodes: Vec<NodeId> = nodes.into_iter().collect();
         let function = self.begin_function(block, None);
-        // The passed nodes are this function's template: tag each with its
-        // owner, so the apply clone walk's chain membership test recognizes
-        // them.  The function id must exist before the tags point at it.
+        // The passed nodes are this function's template body: register each
+        // with its owner, so the apply clone walk's chain membership test
+        // recognizes them and garbage collection keeps them with the
+        // function.  The function id must exist before the tags point at it.
         for &node in &nodes {
-            self.nodes[node].function = Some(function);
+            self.register_in_function(function, node);
         }
-        self.functions[function].nodes = nodes;
         self.functions[function].asserts = asserts.into_iter().collect();
         self.finish_function(function, ret, param);
         // The value node is the function's own too — tagged with it, so an

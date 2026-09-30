@@ -887,8 +887,7 @@ where
     ) -> NodeId {
         let node = self.module.add_node(block, operation, value);
         if let Some(function) = self.current_function() {
-            self.module.nodes[node].function = Some(function);
-            self.module.functions[function].nodes.push(node);
+            self.module.register_in_function(function, node);
         }
         node
     }
@@ -1469,8 +1468,8 @@ where
         };
         let contract_holds = pair_items.is_some_and(|items| {
             items.len() == 2
-                && self.module.nodes.get(built.node).map(|node| node.block)
-                    == Some(self.current_block)
+                && self.module.nodes.contains_key(built.node)
+                && self.module.node_block(built.node) == self.current_block
                 && items[1].node == AnyNodeId::Dynamic(built.ty)
                 && built
                     .val
