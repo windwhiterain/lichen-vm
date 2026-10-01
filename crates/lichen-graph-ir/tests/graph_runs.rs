@@ -7,7 +7,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use lichen_graph_ir::{Graph, GraphRefusal, KernelNode, NativeNode, Node, Policy, Runner, Value};
+use lichen_graph_ir::{
+    Count, Graph, GraphRefusal, KernelNode, NativeNode, Node, Policy, Runner, Value,
+};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ParallelBackend,
     Pending, ResidentId,
@@ -154,7 +156,7 @@ fn mixed_graph(count: usize) -> Graph {
             Node::Kernel(KernelNode {
                 fragment: fragment(),
                 inputs: vec![0],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )
@@ -174,7 +176,7 @@ fn mixed_graph(count: usize) -> Graph {
             Node::Kernel(KernelNode {
                 fragment: fragment(),
                 inputs: vec![host],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )
@@ -315,7 +317,7 @@ fn an_edge_to_a_value_that_does_not_exist_yet_is_refused_where_it_is_written() {
                 // Value 7 has not been produced, and no cycle can be written
                 // through this type — so this is the closest thing to one.
                 inputs: vec![7],
-                count: 4,
+                count: Count::Constant(4),
             }),
             1,
         )
@@ -442,5 +444,93 @@ fn a_return_naming_a_value_the_graph_does_not_have_is_refused() {
             node: usize::MAX,
             value: 99
         }
+    );
+}
+
+/// A graph whose extent is one of its arguments, which is the shape a count that
+/// depends on data has.
+fn counted_by_input() -> Graph {
+    let mut graph = Graph::with_inputs(2);
+    graph
+        .push(
+            Node::Kernel(KernelNode {
+                fragment: fragment(),
+                inputs: vec![0],
+                count: Count::Value(1),
+            }),
+            1,
+        )
+        .expect("a node whose declared outputs match its body");
+    graph
+}
+
+#[test]
+fn a_count_can_be_one_of_the_graphs_own_values() {
+    let stub = Stub::new();
+    let graph = counted_by_input();
+    // The count is an argument, so the same graph runs at a different extent
+    // without being rebuilt — which is the whole reason a count is a value.
+    for count in [1_i64, 3, 8] {
+        let input: Vec<i64> = (0..count).collect();
+        let out = Runner::new(&stub, Policy::Serial)
+            .run(&graph, vec![Value::host(input), Value::int(count)])
+            .unwrap_or_else(|refusal| panic!("a run over {count} element(s): {refusal}"));
+        let id = resident(&out[2]);
+        let computed = stub.fetch(id, count as usize).expect("a resident buffer");
+        assert_eq!(
+            computed,
+            (0..count).map(|x| 2 * x + 1).collect::<Vec<i64>>(),
+            "the dispatch covered [0, {count}) because the count was the graph's second argument"
+        );
+    }
+}
+
+#[test]
+fn a_count_read_from_data_and_a_buffer_given_a_number_are_two_different_refusals() {
+    // A count edge pointing at data. The node reads input 0, so that is the
+    // buffer slot and value 1 is what the count is read from.
+    let count_from_data = Runner::new(&Stub::new(), Policy::Serial)
+        .run(
+            &counted_by_input(),
+            vec![Value::host(vec![1, 2, 3, 4]), Value::host(vec![4])],
+        )
+        .map(|_| ())
+        .expect_err("a count read from data");
+    assert_eq!(
+        count_from_data,
+        GraphRefusal::CountNotANumber { found: "host data" },
+        "and the message says what the value was, so a caller can tell the edge \
+         is wrong from the builder having written a number into a data slot"
+    );
+
+    // The same graph with a number in the buffer slot.
+    let buffer_is_a_number = Runner::new(&Stub::new(), Policy::Serial)
+        .run(&counted_by_input(), vec![Value::int(4), Value::int(4)])
+        .map(|_| ())
+        .expect_err("a buffer slot holding a number");
+    assert_eq!(
+        buffer_is_a_number,
+        GraphRefusal::NotBufferData { found: "a number" },
+        "which is a different message and not the same one twice: a number is \
+         not a one-element buffer, and reading it as one would run the dispatch \
+         against data nobody wrote"
+    );
+}
+
+#[test]
+fn a_negative_count_is_refused_rather_than_wrapped_into_an_enormous_extent() {
+    let refusal = Runner::new(&Stub::new(), Policy::Serial)
+        .run(
+            &counted_by_input(),
+            vec![Value::host(vec![1, 2]), Value::int(-1)],
+        )
+        .map(|_| ())
+        .expect_err("a negative extent");
+    assert_eq!(refusal, GraphRefusal::CountNegative { number: -1 });
+    assert_eq!(
+        refusal.to_string(),
+        "a dispatch's count is -1, and a count cannot be negative.",
+        "and it says so in a `usize` world where -1 would have become a very \
+         large dispatch rather than a mistake"
     );
 }

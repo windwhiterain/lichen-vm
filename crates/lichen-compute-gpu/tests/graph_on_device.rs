@@ -14,7 +14,7 @@
 //! thing a graph has to get right.
 
 use lichen_compute_gpu::GpuContext;
-use lichen_graph_ir::{Graph, KernelNode, NativeNode, Node, Policy, Runner, Value};
+use lichen_graph_ir::{Count, Graph, KernelNode, NativeNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
 };
@@ -112,7 +112,7 @@ fn side_graph(count: usize) -> Graph {
             Node::Kernel(KernelNode {
                 fragment: adds(),
                 inputs: vec![0],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )
@@ -134,7 +134,7 @@ fn side_graph(count: usize) -> Graph {
             Node::Kernel(KernelNode {
                 fragment: sums(),
                 inputs: vec![first, host],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )
@@ -203,7 +203,7 @@ fn a_native_node_reading_a_dispatches_output_waits_for_it_rather_than_guessing()
             Node::Kernel(KernelNode {
                 fragment: adds(),
                 inputs: vec![0],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )
@@ -223,7 +223,7 @@ fn a_native_node_reading_a_dispatches_output_waits_for_it_rather_than_guessing()
             Node::Kernel(KernelNode {
                 fragment: adds(),
                 inputs: vec![2],
-                count,
+                count: Count::Constant(count),
             }),
             1,
         )

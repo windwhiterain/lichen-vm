@@ -2,7 +2,7 @@
 
 use lichen_kernel_ir::ParallelBackend;
 
-use crate::graph::{Graph, Node};
+use crate::graph::{Count, Graph, Node};
 use crate::refusal::GraphRefusal;
 use crate::value::Value;
 
@@ -145,12 +145,22 @@ impl<'backend> Runner<'backend> {
                             other,
                         });
                     }
+                    // The count is read **after** the buffers, and separately from
+                    // them, so a node that swapped the two is told which of the two
+                    // roles it got wrong rather than that a shape did not match.
+                    let count = match kernel.count {
+                        Count::Constant(count) => count,
+                        Count::Value(value) => values
+                            .get(value)
+                            .ok_or(GraphRefusal::UnknownValue { node: index, value })?
+                            .as_count()?,
+                    };
 
                     let produced = match self.policy {
                         Policy::Serial => self
                             .backend
-                            .run(&kernel.fragment, &slots, kernel.count)
-                            .map(|ids| Value::device_all(ids, kernel.count))
+                            .run(&kernel.fragment, &slots, count)
+                            .map(|ids| Value::device_all(ids, count))
                             .map_err(|reason| GraphRefusal::Backend {
                                 what: "dispatching a kernel node",
                                 reason,
@@ -158,13 +168,13 @@ impl<'backend> Runner<'backend> {
                         _ => {
                             let submission = self
                                 .backend
-                                .submit(&kernel.fragment, &slots, kernel.count)
+                                .submit(&kernel.fragment, &slots, count)
                                 .map_err(|reason| GraphRefusal::Backend {
-                                    what: "submitting a kernel node",
-                                    reason,
-                                })?;
+                                what: "submitting a kernel node",
+                                reason,
+                            })?;
                             let ids = submission.outputs().to_vec();
-                            Value::pending_all(submission, ids, kernel.count)
+                            Value::pending_all(submission, ids, count)
                         }
                     };
                     values.extend(produced);

@@ -47,6 +47,15 @@ type Shared<'backend> = Arc<Mutex<Option<Box<dyn Pending + 'backend>>>>;
 ///
 /// That asymmetry is not a rule the runner chooses to follow. It is what the
 /// match arms are.
+///
+/// # And a number is a fourth case, not a shorter buffer
+///
+/// [`Self::Int`] is here because a dispatch's extent is a number and a number is
+/// not `Vec<i64>`. It is **never pending**, because a device does not produce
+/// one, which is what lets a count edge be read without a wait and lets the two
+/// roles of a value — a count and a buffer — be asked separately and refused
+/// separately. Nothing produces one yet: a node that *computes* a number is a
+/// host call, and which of the three ways out of that is still open.
 pub enum Value<'backend> {
     /// Submitted, and the device may not be done with it.
     Pending {
@@ -58,6 +67,12 @@ pub enum Value<'backend> {
     Device { id: ResidentId, count: usize },
     /// Host data. What a native node produces, and what it can read.
     Host(Vec<i64>),
+    /// A number.
+    ///
+    /// **`i64` rather than `usize` because a graph is a program and a program's
+    /// count can be negative**, which is a mistake to be told about by name rather
+    /// than one to be wrapped around into an enormous unsigned number.
+    Int(i64),
 }
 
 impl fmt::Debug for Value<'_> {
@@ -74,6 +89,7 @@ impl fmt::Debug for Value<'_> {
                 write!(f, "Device(buffer {:?}, {count} element(s))", id.0)
             }
             Value::Host(host) => write!(f, "Host({} element(s))", host.len()),
+            Value::Int(number) => write!(f, "Int({number})"),
         }
     }
 }
@@ -88,6 +104,11 @@ impl<'backend> Value<'backend> {
     /// Host data the caller already holds.
     pub fn host(data: Vec<i64>) -> Self {
         Value::Host(data)
+    }
+
+    /// A number, for a count edge or a graph's own argument.
+    pub fn int(number: i64) -> Self {
+        Value::Int(number)
     }
 
     /// The outputs of one submission, none of them waited for.
@@ -119,18 +140,46 @@ impl<'backend> Value<'backend> {
     /// does not read the data, it names where the data will be, and the
     /// submission producing it was recorded first. Refusing a pending value here
     /// would rule out the one shape that pays.
+    ///
+    /// **A number is refused rather than borrowed.** The tempting repair is to
+    /// treat it as a one-element host vector, and that produces a run that
+    /// succeeds on a kernel nobody wrote: the count is not a buffer, so this is a
+    /// different mistake from a count that is data, and it gets its own message.
     pub fn slot(&self) -> Result<BufferSlot<'_>, GraphRefusal> {
         match self {
             Value::Host(host) => Ok(BufferSlot::Host(host)),
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(BufferSlot::Resident(*id)),
+            Value::Int(_) => Err(GraphRefusal::NotBufferData {
+                found: self.state(),
+            }),
         }
     }
 
-    /// How many elements this holds.
-    pub fn count(&self) -> usize {
+    /// This value as a count, for a dispatch's extent.
+    ///
+    /// The mirror of [`Self::slot`], and separate for the same reason: a value
+    /// asked for one role and refused is a different mistake from a value asked
+    /// for the other and refused, and a caller who is told only "wrong shape"
+    /// has to work out which of the two they hit.
+    pub fn as_count(&self) -> Result<usize, GraphRefusal> {
         match self {
-            Value::Host(host) => host.len(),
-            Value::Device { count, .. } | Value::Pending { count, .. } => *count,
+            Value::Int(number) => usize::try_from(*number)
+                .map_err(|_| GraphRefusal::CountNegative { number: *number }),
+            other => Err(GraphRefusal::CountNotANumber {
+                found: other.state(),
+            }),
+        }
+    }
+
+    /// How many elements this holds, or `None` for a number.
+    ///
+    /// `None` rather than `0` because a number has no length and reporting `0`
+    /// for it would be a length a caller could act on.
+    pub fn count(&self) -> Option<usize> {
+        match self {
+            Value::Host(host) => Some(host.len()),
+            Value::Device { count, .. } | Value::Pending { count, .. } => Some(*count),
+            Value::Int(_) => None,
         }
     }
 
@@ -207,6 +256,7 @@ impl<'backend> Value<'backend> {
             Value::Host(_) => "host data",
             Value::Device { .. } => "a device buffer that was waited for",
             Value::Pending { .. } => "a submission that has not been waited for",
+            Value::Int(_) => "a number",
         }
     }
 }
