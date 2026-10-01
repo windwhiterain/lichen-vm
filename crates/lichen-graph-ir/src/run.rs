@@ -102,8 +102,7 @@ impl<'backend> Runner<'backend> {
             return Err(refusal);
         }
         if inputs.len() != graph.input_count() {
-            return Err(GraphRefusal::InputArity {
-                node: usize::MAX,
+            return Err(GraphRefusal::RunArity {
                 wanted: graph.input_count(),
                 got: inputs.len(),
             });
@@ -113,12 +112,22 @@ impl<'backend> Runner<'backend> {
         for (index, node) in graph.nodes().iter().enumerate() {
             match node {
                 Node::Kernel(kernel) => {
-                    // A parallel fragment's parameters are its input slots
-                    // followed by the loop index, so its buffer arity is one less
-                    // than its shape. Checked here rather than left to the
+                    // How many buffers this node was given is checked against
+                    // how many its fragment **reads** — a count the emitter
+                    // derived from the read positions it emitted, so it cannot
+                    // disagree with the body.
+                    //
+                    // It is deliberately *not* read off `param_shape`. A parallel
+                    // fragment's shape is `(config, index)` however many buffers
+                    // it reads, because the buffers are bound rather than
+                    // passed; an earlier version of this check asked the shape
+                    // anyway and refused correct graphs whose kernels read no
+                    // buffer at all. Checked here rather than left to the
                     // backend, because the backend's refusal would be about a
-                    // run and this is about a graph.
-                    let wanted = kernel.fragment.param_shape.flat_arity().saturating_sub(1);
+                    // run and this is about a graph — and because a backend that
+                    // binds what it is handed would otherwise hand a shader a
+                    // binding its body never reads.
+                    let wanted = kernel.fragment.inputs;
                     if kernel.inputs.len() != wanted {
                         return Err(GraphRefusal::InputArity {
                             node: index,

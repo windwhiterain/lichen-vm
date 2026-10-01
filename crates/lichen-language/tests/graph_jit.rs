@@ -1,0 +1,369 @@
+//! A function that dispatches, recorded into a graph and run — against a stub.
+//!
+//! # What this file checks and what it deliberately does not
+//!
+//! The backend here is a **stub that computes `sum(inputs) + 1` whatever the
+//! fragment's body says**. That is on purpose, and it is a real limit: the
+//! arithmetic of a fragment belongs to
+//! [`graph_jit_device`](../lichen-compute-gpu)'s business on real hardware. What
+//! this file is about is the **plumbing** — that a body which dispatched nothing
+//! becomes a graph with no nodes, that a body which dispatched twice becomes a
+//! chain whose second node records against the first's output, and that a count
+//! read from the parameter is read at *run* time rather than frozen while the
+//! graph was built. A stub that ignores the body is exactly right for that: it
+//! makes the numbers a function of *which values reached which node*, so a graph
+//! that wired them wrongly answers with different numbers rather than the same
+//! ones by luck.
+//!
+//! # Why this is its own test binary
+//!
+//! The backend lives in a **process-wide slot**, so a test that installs one
+//! changes what every other test in the same binary sees. A second test that
+//! needed *no* backend, or a real device, would therefore race this one — and the
+//! failure would be a number rather than an error, which is the worst shape a
+//! test failure can have. Each of those lives in its own binary instead, and this
+//! one owns the stub outright.
+//!
+//! The tests here all want the *same* stub, so they share one instance and take
+//! a lock for their length — see [`stub`]. Sharing is what makes the dispatch
+//! log readable at all; the lock is what makes it a fact about one test rather
+//! than about which tests the scheduler ran first.
+
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+
+use lichen_kernel_ir::{
+    BufferSlot, KernelFragment, ParallelBackend, Pending, ResidentId, install_parallel_backend,
+};
+use lichen_language::package::PackageStore;
+use lichen_language::program::LangProgram;
+
+/// A backend that computes `sum(inputs)[i] + 1` and remembers what it saw.
+#[derive(Clone, Default)]
+struct Stub {
+    /// One column per resident id, indexed by `id.0 - 1`.
+    data: Arc<Mutex<Vec<Vec<i64>>>>,
+    /// What each call was handed, in order, so a test can say what reached where.
+    saw: Arc<Mutex<Vec<String>>>,
+}
+
+impl Stub {
+    /// What the stub was asked for, in order: one line per dispatch.
+    fn saw(&self) -> Vec<String> {
+        self.saw.lock().unwrap().clone()
+    }
+
+    /// Forget the log, so one test's dispatches are not read as another's.
+    fn forget(&self) {
+        self.saw.lock().unwrap().clear();
+    }
+
+    fn column(&self, slot: &BufferSlot<'_>) -> Vec<i64> {
+        match slot {
+            BufferSlot::Host(data) => data.to_vec(),
+            BufferSlot::Resident(id) => self.data.lock().unwrap()[id.0 as usize - 1].clone(),
+        }
+    }
+}
+
+impl ParallelBackend for Stub {
+    fn name(&self) -> &'static str {
+        "stub"
+    }
+
+    fn run(
+        &self,
+        fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Vec<ResidentId>, String> {
+        let submission = self.submit(fragment, inputs, count)?;
+        Ok(submission.outputs().to_vec())
+    }
+
+    fn submit<'backend>(
+        &'backend self,
+        _fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Box<dyn Pending + 'backend>, String> {
+        let columns: Vec<Vec<i64>> = inputs.iter().map(|slot| self.column(slot)).collect();
+        // The line records **which** values reached this node, so a chain that
+        // mis-wired itself is visible in the log and not only in the answer.
+        self.saw.lock().unwrap().push(format!(
+            "over [0, {count}) with {} input(s) of length {}",
+            columns.len(),
+            columns.first().map(Vec::len).unwrap_or(0)
+        ));
+        let out: Vec<i64> = (0..count)
+            .map(|i| columns.iter().map(|column| column[i]).sum::<i64>() + 1)
+            .collect();
+        let mut data = self.data.lock().unwrap();
+        data.push(out);
+        let id = ResidentId(data.len() as u64);
+        drop(data);
+        Ok(Box::new(StubPending { id }))
+    }
+
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+        Ok(self.data.lock().unwrap()[id.0 as usize - 1][..count].to_vec())
+    }
+
+    fn release(&self, _id: ResidentId) {}
+}
+
+struct StubPending {
+    id: ResidentId,
+}
+
+impl Pending for StubPending {
+    fn outputs(&self) -> &[ResidentId] {
+        std::slice::from_ref(&self.id)
+    }
+
+    fn wait(self: Box<Self>) -> Result<Vec<ResidentId>, String> {
+        Ok(vec![self.id])
+    }
+}
+
+/// Taken for the length of a test, so no two of them are inside the slot at once.
+static BACKEND: Mutex<()> = Mutex::new(());
+
+/// Install the stub **once for this binary**, and take the lock for the caller's
+/// test.
+///
+/// Two problems have the same cause and the same answer. The slot is
+/// process-wide, so a second stub would silently take every dispatch away from
+/// the first — which is why the tests here that need *no* backend, or a real
+/// device, live in their own binaries instead. And a log that outlives one test
+/// cannot be read back while another writes to it, so `saw()` would report a
+/// number that depended on which tests happened to run first.
+///
+/// Serializing costs a few microseconds and buys a number that is a fact about
+/// the program under test rather than about the scheduler.
+fn stub() -> (MutexGuard<'static, ()>, Stub) {
+    static STUB: OnceLock<Stub> = OnceLock::new();
+    let stub = STUB.get_or_init(|| {
+        let stub = Stub::default();
+        install_parallel_backend(Arc::new(stub.clone()));
+        stub
+    });
+    let guard = BACKEND
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    stub.forget();
+    (guard, stub.clone())
+}
+
+/// Compile and run `source`, returning the rendered output.
+fn run(source: &str) -> String {
+    let mut store = PackageStore::<LangProgram>::new();
+    lichen_language::run::evaluate_raw(source, None, &mut store)
+        .unwrap_or_else(|diags| panic!("expected the program to check and run, got: {diags:?}"))
+}
+
+/// Compile `source` and return the rendered diagnostics.
+fn fail(source: &str) -> Vec<String> {
+    let mut store = PackageStore::<LangProgram>::new();
+    lichen_language::run::evaluate_raw(source, None, &mut store)
+        .expect_err("expected this program to fail")
+        .into_iter()
+        .map(|diagnostic| diagnostic.message)
+        .collect()
+}
+
+/// Two kernels, one with no inputs and one with one, so **which node a value
+/// reached is visible in the numbers**: a chain that mis-wired itself would give
+/// the second kernel the first kernel's input instead of its output.
+const KERNELS: &str = r#"
+f1 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+k1 = compute.parallel f1 "gpu"
+f2 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a + a]
+}
+k2 = compute.parallel f2 "gpu"
+"#;
+
+/// A body that dispatches twice, the second over the first's output.
+const CHAIN: &str = r#"
+step = ins => {
+  first = compute.plrun k1 (ins(0),)
+  compute.plrun k2 (ins(0), (first,))
+}
+built = compute.graph step
+"#;
+
+#[test]
+fn a_recording_produces_the_same_numbers_as_running_the_dispatches() {
+    let (_guard, stub) = stub();
+    // The direct answer first, from the same kernels run one at a time.
+    let direct = run(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+first = compute.plrun k1 (3,)
+out = compute.plrun k2 (3, (first,))
+compute.collect out
+"#
+    ));
+    let through_a_graph = run(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+{CHAIN}
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    assert_eq!(
+        through_a_graph, direct,
+        "a recorded chain is the chain, and the graph's numbers are the same numbers"
+    );
+    assert_eq!(
+        stub.saw().len(),
+        4,
+        "two runs of two dispatches, and nothing was submitted that the body did not dispatch: \
+         {:?}",
+        stub.saw()
+    );
+}
+
+#[test]
+fn a_graph_runs_at_whichever_extent_its_argument_names() {
+    let (_guard, _stub) = stub();
+    // **The same graph, two extents.** The count reaches the graph as a value
+    // rather than as something the build decided, which is the whole reason a
+    // count is a value: a graph that could only be given a build-time count would
+    // have to be rebuilt per run, and rebuilding a graph per run is the same as
+    // not having one.
+    for count in [3, 5] {
+        let out = run(&format!(
+            r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+{CHAIN}
+compute.collect (compute.graphrun built ({count},))
+"#
+        ));
+        // **All twos, and only the length changes.** The stub sums the inputs and
+        // adds one, so `k1` — which reads no buffer at all — answers every index
+        // with `0 + 1`, and `k2`, reading that, answers `1 + 1`. So the values
+        // are a property of the *wiring* and the length is the property of the
+        // extent: a graph that reused a count from build time, or built a fresh
+        // graph per run, would answer a different length for the same program.
+        let expected = vec!["2"; count].join(", ");
+        assert!(
+            out.starts_with(&format!("[{expected}]")),
+            "at extent {count} the graph answered {out:?}, and {count} twos were expected"
+        );
+    }
+}
+
+#[test]
+fn a_buffer_the_body_closed_over_is_refused_by_the_capture() {
+    let (_guard, _stub) = stub();
+    // `held` is a live buffer the body reaches as a free variable, so recording
+    // it would mean the graph had to **hold** a node with a block's lifetime. The
+    // refusal names the capture, because "a graph cannot hold a buffer" is the
+    // reason, and a caller who does not hear it will try the next thing.
+    let messages = fail(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+held = compute.plrun k1 (3,)
+step = ins => {{
+  first = compute.plrun k1 (ins(0),)
+  compute.plrun k2 (ins(0), (held,))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let joined = messages.join(" | ");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("compute.graph")),
+        "the refusal is filed under the graph, not under the parallel launch: {joined}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("hold") && message.contains("parameter")),
+        "and it names the cause and the way out: {joined}"
+    );
+}
+
+#[test]
+fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
+    let (_guard, _stub) = stub();
+    // A graph is run by a runner against a backend, and a body that dispatches
+    // nothing names none. **Refused rather than defaulted**: there is no third
+    // backend to fall back to, and picking one would be the host overriding a
+    // program that did not say.
+    let messages = fail(
+        r#"@{
+  compute = import "compute.lichen"
+@}
+step = ins => ins(0)
+built = compute.graph step
+compute.graphrun built (3,)
+"#,
+    );
+    let joined = messages.join(" | ");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("names no backend")),
+        "and it says what is missing rather than picking a backend: {joined}"
+    );
+}
+
+#[test]
+fn one_backend_for_the_whole_graph_is_checked_while_it_is_built() {
+    let (_guard, _stub) = stub();
+    // Two dispatches, two backends, one graph. Resolved while the graph is built
+    // rather than at run time, where dropping one would silently change what the
+    // program asked for.
+    let messages = fail(
+        r#"@{
+  compute = import "compute.lichen"
+@}
+f1 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i]
+}
+k1 = compute.parallel f1 "gpu"
+f2 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a]
+}
+k2 = compute.parallel f2 "cpu"
+step = ins => {
+  first = compute.plrun k1 (ins(0),)
+  compute.plrun k2 (ins(0), (first,))
+}
+built = compute.graph step
+compute.graphrun built (3,)
+"#,
+    );
+    let joined = messages.join(" | ");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("one runner against one backend")),
+        "and it says why the second one cannot simply win: {joined}"
+    );
+}

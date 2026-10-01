@@ -49,6 +49,7 @@ edition = "2024"
 # into this workspace (see `exclude` above).
 [workspace.dependencies]
 lichen-kernel-ir = { path = "crates/lichen-kernel-ir" }
+lichen-graph-ir = { path = "crates/lichen-graph-ir" }
 lichen-compute-gpu = { path = "crates/lichen-compute-gpu" }
 lichen-span = { path = "crates/lichen-span" }
 lichen-utils = { path = "crates/lichen-utils" }

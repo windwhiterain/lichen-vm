@@ -1,4 +1,4 @@
-//! Why a graph could not be run, with each refusal naming its own cause.
+﻿//! Why a graph could not be run, with each refusal naming its own cause.
 
 use std::fmt;
 
@@ -48,11 +48,23 @@ pub enum GraphRefusal {
     /// `recorded` is how many values the first call recorded, because the number
     /// is usually what tells the two opinions apart.
     ReturnAlreadyRecorded { recorded: usize },
-    /// A node's inputs did not resolve to the number of buffers its fragment
-    /// declares.
+    /// The run was handed the wrong number of arguments for the graph.
     ///
-    /// The fragment says how many input slots it has, and a slot list of another
-    /// length is not a run with fewer arguments — it is a different program.
+    /// Distinct from [`Self::InputArity`], and it has no node because it is
+    /// about the *run* rather than about any one dispatch: a graph's inputs are
+    /// its first values, and handing it a different number names a different
+    /// graph. The two are separate refusals because a caller told only "wrong
+    /// number of arguments" has to work out which of the two counts they got
+    /// wrong, and the repair is different — this one is fixed at the call, that
+    /// one in the graph.
+    RunArity { wanted: usize, got: usize },
+    /// A node's inputs did not match the number of buffers its fragment reads.
+    ///
+    /// The fragment says how many buffers its body addresses, and a slot list of
+    /// another length is not a run with fewer arguments — it is a different
+    /// program. The count comes from [`KernelFragment::inputs`], not from
+    /// `param_shape`: a parallel fragment's shape is `(config, index)` however
+    /// many buffers it reads, because the buffers are bound rather than passed.
     InputArity {
         node: usize,
         wanted: usize,
@@ -69,18 +81,6 @@ pub enum GraphRefusal {
         first: usize,
         other: usize,
     },
-    /// Something wanted host data from a value that is not host data.
-    ///
-    /// Named with what the value *is*, because the two cases have different
-    /// fixes: a value still pending needs a wait, and one already waited for
-    /// needs a fetch, and telling a caller only that it is "not host data" hands
-    /// them the first when they needed the second.
-    ///
-    /// **This is the caller's refusal, not a node's.** A dispatch never reads a
-    /// value on the host, so nothing inside a run can ask for it; the only
-    /// reader is whoever takes a result home, and telling that reader "not host
-    /// data" is a genuine answer rather than a sign of a hole.
-    NotHostData { found: &'static str },
     /// A dispatch was given a number where it wanted a buffer.
     ///
     /// The mirror of [`Self::CountNotANumber`], and separate for the same
@@ -153,22 +153,22 @@ impl fmt::Display for GraphRefusal {
                  returns is one answer, so the two cannot be merged — and letting the second \
                  one win would be a wrong answer that still runs."
             ),
+            GraphRefusal::RunArity { wanted, got } => write!(
+                f,
+                "this graph takes {wanted} argument(s) and was run with {got}. A different \
+                 number of arguments is a different graph: its first {wanted} value(s) are \
+                 the ones the recorded dispatches read."
+            ),
             GraphRefusal::InputArity { node, wanted, got } => write!(
                 f,
-                "node {node}'s fragment declares {wanted} input buffer(s) but {got} value(s) \
-                 were given it, which is a different program rather than a run with fewer \
-                 arguments."
+                "node {node}'s fragment reads {wanted} input buffer(s) but {got} value(s) were \
+                 given it, which is a different program rather than a run with fewer arguments."
             ),
             GraphRefusal::RaggedInputs { node, first, other } => write!(
                 f,
                 "node {node}'s inputs are not all the same length: {first} and {other}. A \
                  dispatch over [0, count) reads every input to `count`, so a lane would read \
                  past the shorter one."
-            ),
-            GraphRefusal::NotHostData { found } => write!(
-                f,
-                "host data was asked of a value that is {found}: one that has not been waited \
-                 for needs a wait first, and one that has needs a fetch first."
             ),
             GraphRefusal::NotBufferData { found } => write!(
                 f,

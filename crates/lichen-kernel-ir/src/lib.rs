@@ -367,6 +367,22 @@ pub struct KernelFragment {
     pub param_shape: KernelShape,
     /// The lowered body, in emission order.
     pub body: Vec<KernelInstr>,
+    /// How many input buffers this fragment reads — `0` for a scalar fragment
+    /// and for a parallel fragment that reads none, otherwise one past the
+    /// highest position any `compute.read` names. The twin of [`Self::outputs`],
+    /// and for the same reason: a property of the *compiled* fragment, so a
+    /// caller knows how many buffers to hand over without running it.
+    ///
+    /// **This is not in `param_shape`, and cannot be.** A parallel fragment's
+    /// shape is `(config, index)` however many buffers it reads, because the
+    /// buffers are bound as storage buffers and reached through a read's
+    /// position rather than through a further parameter. So the two facts a
+    /// caller needs are separate: how many it is *given* is the dispatch's, read
+    /// at apply time from the call site's buffer tuple, and how many is *needed*
+    /// is this, counted as the read positions are emitted. Neither one can stand
+    /// in for the other, and a caller that supplied the wrong number would
+    /// otherwise have its shader read a binding that was never bound.
+    pub inputs: usize,
     /// How many output buffers this fragment writes — `0` for a scalar
     /// fragment, and for a parallel fragment the index function's codomain
     /// arity. A property of the *compiled* fragment, so a caller allocates
@@ -389,7 +405,10 @@ pub struct KernelFragment {
 /// one identity — and then a cache keyed on that identity serves one kernel's
 /// compiled form for another's, silently. `results` is the sharpest case: it
 /// types the emitted function's result list, so a fragment returning two values
-/// and one returning three must not collapse together.
+/// and one returning three must not collapse together. `inputs` is the same
+/// kind of case in the other direction: two bodies that differ only in how many
+/// buffers they read are different programs, and the one that reads more must
+/// not be served the other's identity.
 ///
 /// The `Debug` rendering is the canonical form because it is a total,
 /// deterministic function of each field, and this runs once per `jit` against a
@@ -399,6 +418,7 @@ pub fn fragment_digest(fragment: &KernelFragment) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}", fragment.param_shape).hash(&mut hasher);
     format!("{:?}", fragment.body).hash(&mut hasher);
+    fragment.inputs.hash(&mut hasher);
     fragment.outputs.hash(&mut hasher);
     fragment.results.hash(&mut hasher);
     format!("{:?}", fragment.int_width).hash(&mut hasher);

@@ -3,7 +3,7 @@
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use lichen_kernel_ir::{BufferSlot, ParallelBackend, Pending, ResidentId};
+use lichen_kernel_ir::{BufferSlot, Pending, ResidentId};
 
 use crate::GraphRefusal;
 
@@ -241,39 +241,6 @@ impl<'backend> Value<'backend> {
         }
         *self = Value::Device { id, count };
         Ok(())
-    }
-
-    /// Settle this value and, if it is on a device, bring it home.
-    ///
-    /// **A transfer as well as a wait, and no node in the graph does it.** A
-    /// dispatch never reads a value on the host, so nothing inside a run needs
-    /// this. It is for the *caller*, handing a result back as host data, and
-    /// that is the one place in a graph's life where a download is unavoidable
-    /// rather than a price of mixing host logic into a data path — which is the
-    /// price that is gone now that every node is a kernel.
-    pub fn to_host(&mut self, backend: &dyn ParallelBackend) -> Result<(), GraphRefusal> {
-        self.settle()?;
-        let Value::Device { id, count } = *self else {
-            return Ok(());
-        };
-        let fetched = backend
-            .fetch(id, count)
-            .map_err(|reason| GraphRefusal::Backend {
-                what: "fetching a value the caller asked to take home",
-                reason,
-            })?;
-        *self = Value::Host(fetched);
-        Ok(())
-    }
-
-    /// The host data, assuming [`Self::to_host`] has been called.
-    pub fn as_host(&self) -> Result<&[i64], GraphRefusal> {
-        match self {
-            Value::Host(host) => Ok(host),
-            _ => Err(GraphRefusal::NotHostData {
-                found: self.state(),
-            }),
-        }
     }
 
     /// What this value currently is, for a refusal that has to say.

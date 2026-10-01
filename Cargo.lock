@@ -666,6 +666,7 @@ dependencies = [
 name = "lichen-compute"
 version = "0.1.0"
 dependencies = [
+ "lichen-graph-ir",
  "lichen-highlevel",
  "lichen-kernel-ir",
  "lichen-lowlevel",
@@ -722,6 +723,7 @@ dependencies = [
  "lichen-compute-gpu",
  "lichen-doc",
  "lichen-highlevel",
+ "lichen-kernel-ir",
  "lichen-language-lex",
  "lichen-language-parser",
  "lichen-lowlevel",

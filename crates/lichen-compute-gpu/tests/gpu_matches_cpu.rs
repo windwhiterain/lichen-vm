@@ -14,10 +14,16 @@ use lichen_kernel_ir::{
 };
 
 /// A fragment over `(input, index)` — the shape a single-input parallel kernel has.
+///
+/// `inputs` is 1 because that is what every body built through here reads: each
+/// names position 0 and nothing above it. It is stated rather than derived
+/// because these are hand-written IR, and the count a hand-written body needs is
+/// the one a reader has to be able to check against the body by eye.
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
         body,
+        inputs: 1,
         outputs: 1,
         results: 1,
         int_width: IntWidth::I64,

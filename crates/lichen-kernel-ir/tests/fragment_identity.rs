@@ -11,6 +11,7 @@ fn fragment() -> KernelFragment {
     KernelFragment {
         param_shape: KernelShape::Scalar,
         body: vec![KernelInstr::Const(1), KernelInstr::LocalGet(0)],
+        inputs: 0,
         outputs: 0,
         results: 1,
         int_width: IntWidth::I64,
@@ -40,6 +41,13 @@ fn the_digest_separates_fragments_that_differ_in_any_field_it_hashes() {
             "body",
             KernelFragment {
                 body: vec![KernelInstr::Const(2), KernelInstr::LocalGet(0)],
+                ..base.clone()
+            },
+        ),
+        (
+            "inputs",
+            KernelFragment {
+                inputs: 1,
                 ..base.clone()
             },
         ),

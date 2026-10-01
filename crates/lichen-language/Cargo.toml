@@ -24,6 +24,9 @@ lichen-utils.workspace = true
 # so the two can be brought together in a test without this crate's library half
 # ever linking a GPU loader.
 lichen-compute-gpu.workspace = true
+# The graph tests install a ParallelBackend into the process-wide slot themselves,
+# so they need the contract as a test dependency as well as the gpu implementation.
+lichen-kernel-ir.workspace = true
 # Only `tests/persist.rs` uses this: the compiler-slot contract test compares
 # the slot this crate reads with the one the package manager installs into.
 lichen-package.workspace = true
