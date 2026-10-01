@@ -1,33 +1,20 @@
 # Incremental evaluation within one build: the settled cut
 
-> Status: **proposed, and in scope correction** — step 0 is measured (below); the
-> mechanism in §4.1 is not built yet, and §4.2/§4.3/§5/§7 are to be rewritten.
+> Status: **proposed** — step 0 is measured (§1.3); the `settled` cut of §4 is not
+> built.  This note is the **within-build** half of the incrementality question; the
+> cross-build half is [incremental-update](incremental-update.md).
 > The evaluation counterpart of
 > [incremental-parse-compile](incremental-parse-compile.md), whose `T1`–`T4`
 > cover `lex → parse → resolve → lower → check`; this note asks what the *same*
 > question costs one layer down, in the runtime.
 >
-> **The requirement this note must serve is *external mutation*:** a host may
-> write any node's value at any moment and expects the consequences to be
-> re-derived incrementally.  That does not retire §4.1's `settled` — a host cannot
-> interleave with a pass that holds `&mut Module`, so `settled` is still final
-> *within* a pass — but it does retire §4.2's judgement that the reverse index is
-> unnecessary: across calls, `Module::write_node_value` (`equality.rs:273`) is a
-> public write that is unconditional on the node it names (only the *replication
-> targets* are filtered by `is_unbound`), so an edit invalidates a settled verdict
-> and invalidation must be **tracked**, not excluded.  §1.3's measurement, §3's
-> mutation inventory and §3.3's three predicates stand as they are; the rewrite
-> depends on four decisions (edit semantics for already-materialized clones,
-> per-revision diagnostics, budget semantics, and cyclic fixpoints) that are
-> recorded in the session and not yet taken.
->
-> **Scope, decided by the superior: no cross-rebuild reuse.**  Nothing here keys a
-> sub-expression or reuses a solved unit in a later build; those questions (and the
-> fine-grained `StaticModule` machinery they needed) are withdrawn rather than
-> deferred, and there is no `T5`.  What is
-> left is the *within-build* half: one build makes many deep-pass entry points,
-> each re-descending subtrees its predecessors already decided (§1.3), and the
-> question is what such a pass may safely skip.
+> **Scope: one build's own redundancy.**  A build makes many deep-pass entry
+> points, each re-descending subtrees its predecessors already decided (§1.3), and
+> the question here is what such a pass may safely skip.  The cross-build question
+> — what a *later* build may reuse, and how an edit invalidates it — is not this
+> note's; §3's mutation inventory and §3.3's stability predicates are shared with
+> [incremental-update](incremental-update.md), which is where the cross-build
+> answers live.
 >
 > The frame is still **incremental computation with a `dirty` flag**, as the
 > superior framed it — but in this scope the flag turns out to be a *stability*
@@ -345,15 +332,20 @@ entry point, and that nothing further should be built.
 
 **Decided (the superior):**
 
-- **No cross-rebuild reuse.** Nothing persists a `Module` across an edit or keys a
-  sub-expression; the fine-grained `StaticModule` design (`M3`), the same-module
-  resume (`M2`), the value-digest memo (`M1`) and the `T3` resume are all
-  **withdrawn**, not deferred. Q2/Q3/Q4 and Q7 (what identifies a sub-expression
-  across a rebuild) go with them.
-- **The invalidation question is answered by the code, not by an index.**
-  "Dirty" is the *tracked* form of "may have changed"; §3.3 gives the *excluded*
-  form, and in this scope the excluded form is sufficient. So the reverse index
-  (Q1) is **withdrawn** with the propagation hooks.
+- **No cross-rebuild reuse *of this note's kind*.** The fine-grained `StaticModule`
+  design (`M3`), the same-module resume (`M2`), the value-digest memo (`M1`) and the
+  `T3` resume are **withdrawn**, not deferred, and Q2/Q3/Q4/Q7 (what identifies a
+  sub-expression across a rebuild) go with them — every one of them needed an
+  identity derived from content, which the cross-build requirement now forbids. The
+  cross-build half returned on different terms:
+  [incremental-update](incremental-update.md) identifies a retained unit by its
+  **occurrence path**, selected by the user's `cache` mark, never by a key.
+- **In this scope the invalidation question is answered by the code, not by an
+  index.** "Dirty" is the *tracked* form of "may have changed"; §3.3 gives the
+  *excluded* form, and within one pass the excluded form is sufficient. So the
+  reverse index (Q1) is **withdrawn here**. Across builds it is a real question, and
+  [incremental-update](incremental-update.md) §4 answers it with **path-valued
+  dependencies verified on demand** — neither a reverse index nor a key.
 - **The CLI build path is the measurement target** (Q5, unchanged): step 0 needs
   no editor, and `BufferSession` still has no production consumer (`P2-1`).
 
@@ -396,6 +388,13 @@ entry point, and that nothing further should be built.
   cross-build half and, with it, the *need* to propagate. What is left is §4: a
   cut that trusts a verdict only when nothing can write into it, which is cheaper
   than tracking what did.
+- Fourth (the superior's, and it re-split the note): the requirement is **external
+  mutation** — an agent edits the generator program *and* the graph between builds —
+  under **no keys**. That restores the cross-build half, but not on this note's
+  terms: identity is an allocated **occurrence path** (name-preferred steps),
+  resolved on demand rather than registered, and the retained units are the user's
+  `cache` marks. All of it is [incremental-update](incremental-update.md); this note
+  keeps the within-build cut.
 - `P1-31` (named in the previous revision of this note) landed: the verdict's
   `None` now means one thing, with the in-progress case named. Two sites an
   earlier draft had named as defects were **retracted** — the operand arm is a

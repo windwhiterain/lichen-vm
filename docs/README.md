@@ -55,7 +55,8 @@ Every note opens with a `> Status:` line:
 | [Record programs (modules)](notes/record-program.md) | `lichen-language-parser`, `lichen-language` (`compile`/`session`), `lichen-language-server` (`analysis`) | current |
 | [Separating lexer & parser from the language](notes/frontend-syntax-separation.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language`, `lichen-highlevel` | current |
 | [Incremental parse/compile](notes/incremental-parse-compile.md) | `lichen-language-lex`, `lichen-language-parser`, `lichen-language` (`resolve`/`compile`/`session`), `lichen-highlevel` (`checker`) | current (T3/T4 proposed; unwired, `P2-1`) |
-| [Incremental evaluation](notes/incremental-evaluation.md) | `lichen-lowlevel` (`evaluation`/`equality`/`function`/`gc`/`table`/`module`), `lichen-highlevel` (`checker`), `lichen-language` (`run`) | proposed (step 0 measured; the settled cut is not built) |
+| [Incremental evaluation](notes/incremental-evaluation.md) | `lichen-lowlevel` (`evaluation`/`equality`/`function`/`gc`/`table`/`module`), `lichen-highlevel` (`checker`), `lichen-language` (`run`) | proposed (the within-build half; step 0 measured, the settled cut is not built) |
+| [Incremental update: identity by path, retention by `cache`](notes/incremental-update.md) | `lichen-highlevel` (`ir`/`checker`), `lichen-language` (`resolve`/`session`), `lichen-registry` (the store) | proposed (the cross-build half; nothing is built) |
 | [Build performance](notes/build-performance.md) | `lichen-language-parser` | current |
 | [Language toolchain](notes/language-toolchain.md) | `lichen-language`, `lichen-language-server`, `lichen-language-zed` | current |
 | [Lichen Home for the LSP](notes/liche-lsp-home.md) | `lichen-language-server` (`home`), `lichen-language` (`package`/`persist`) | current |
