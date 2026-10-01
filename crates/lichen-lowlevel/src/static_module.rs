@@ -246,3 +246,59 @@ pub(crate) fn referenced_keys<P: Program>(module: &Module<P>) -> HashSet<ModuleK
     }
     keys
 }
+
+impl<P: Program> StaticModule<P> {
+    /// Every module key a static ref in the artifact's values names — its frozen
+    /// dependencies, in the form an artifact that is *already* static can answer.
+    /// The mirror of `referenced_keys(module)` above, and what a registry needs to
+    /// decide whether a key may be evicted: an artifact that another live artifact
+    /// still references cannot be freed, because that reference is a raw handle
+    /// into this artifact's arena.
+    ///
+    /// The artifact's **own** key appears when a value references a node of this
+    /// module (a self-referential value, which phase 3 rewrites to a ref into
+    /// `key`).  The caller decides what to do with that — the registry's eviction
+    /// check ignores a self-reference, or the artifact could never be evicted.
+    pub(crate) fn referenced_keys(&self) -> HashSet<ModuleKey> {
+        let mut keys = HashSet::new();
+        for node in &self.nodes {
+            let Some(value) = node.value else { continue };
+            match value.as_enum() {
+                Some(LowValue::Array(AnyHandle::Static(handle))) => {
+                    keys.insert(handle.module);
+                    // SAFETY: the payload lives in the dependency's shared arena,
+                    // which the registry keeps alive for as long as this artifact
+                    // is filed there — a dependency is registered before anything
+                    // that references it.
+                    for item in unsafe { &*handle.offset } {
+                        if let AnyNodeId::Static(sref) = item.node {
+                            keys.insert(sref.module);
+                        }
+                    }
+                }
+                Some(LowValue::Table(AnyHandle::Static(handle))) => {
+                    keys.insert(handle.module);
+                    // SAFETY: as in the array arm above.
+                    for item in unsafe { &*handle.offset } {
+                        if let AnyNodeId::Static(sref) = item.key {
+                            keys.insert(sref.module);
+                        }
+                        if let AnyNodeId::Static(sref) = item.value {
+                            keys.insert(sref.module);
+                        }
+                    }
+                }
+                Some(LowValue::Function(AnyFunctionId::Static(function))) => {
+                    keys.insert(function.module);
+                }
+                _ if value.is_handle() => {
+                    if let AnyHandle::Static(handle) = value.handle() {
+                        keys.insert(handle.module);
+                    }
+                }
+                _ => {}
+            }
+        }
+        keys
+    }
+}

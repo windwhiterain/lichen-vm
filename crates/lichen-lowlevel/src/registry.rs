@@ -55,12 +55,17 @@ impl<P: Program> Registry<P> {
             "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
         );
         let (static_module, node_map) = StaticModule::from_module_mapped(module, key);
+        // The artifact's own refs, read off the frozen values: exactly the keys a
+        // live ref into it could name (see `StaticModule::referenced_keys`), which
+        // is what `evict` checks.
+        let refs = static_module.referenced_keys();
         self.entries.insert(
             key,
             Package {
                 module: Arc::new(static_module),
                 meta: Default::default(),
                 hash,
+                refs,
             },
         );
         Freeze { key, node_map }
@@ -81,9 +86,10 @@ impl<P: Program> Registry<P> {
         roots: &[NodeId],
         hash: [u8; 32],
     ) -> Freeze {
-        for dep in crate::static_module::referenced_keys(module) {
+        let module_refs = crate::static_module::referenced_keys(module);
+        for dep in &module_refs {
             assert!(
-                self.entries.contains_key(&dep),
+                self.entries.contains_key(dep),
                 "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
             );
         }
@@ -92,12 +98,17 @@ impl<P: Program> Registry<P> {
             "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
         );
         let (static_module, node_map) = StaticModule::freeze_closure(module, key, roots);
+        // The **closure's** refs, not the whole module's: the module-level set is a
+        // superset, and a superset would refuse to evict an artifact nothing
+        // actually references — a leak in the name of safety.
+        let refs = static_module.referenced_keys();
         self.entries.insert(
             key,
             Package {
                 module: Arc::new(static_module),
                 meta: Default::default(),
                 hash,
+                refs,
             },
         );
         Freeze { key, node_map }
@@ -116,28 +127,50 @@ impl<P: Program> Registry<P> {
             !self.entries.contains_key(&key),
             "inserting a module under device key {key:?}, which is already registered — a loaded module is never shadowed"
         );
+        let refs = module.referenced_keys();
         self.entries.insert(
             key,
             Package {
                 module: Arc::new(module),
                 meta: Default::default(),
                 hash,
+                refs,
             },
         );
     }
 
     /// Evict a filed artifact: drop it, which frees its arena and runs the release
-    /// obligations it owns ([`Release`]).  Returns whether it was registered.
+    /// obligations it owns ([`Release`]).
     ///
-    /// **Precondition: nothing may still reference it.**  A static ref is a raw
-    /// handle into the artifact's arena, so a `StaticNodeId` naming an evicted key
-    /// is not a miss — [`Module::static_module`] panics on one, and a payload
-    /// already read through it dangles.  So eviction is the caller's decision, made
-    /// when the caller knows every module that could still hold such a ref is gone;
-    /// the registry cannot know that, which is why this is a separate call rather
-    /// than something a freeze or a release does on its own.
-    pub fn evict(&mut self, key: ModuleKey) -> bool {
-        self.entries.remove(&key).is_some()
+    /// **Two preconditions, and this call can only check one of them.**
+    ///
+    /// It checks that no **live registered artifact** references the key (the
+    /// `refs` recorded at freeze time): a static ref is a raw handle into the
+    /// artifact's arena, and a surviving artifact's value may hold one — a
+    /// retained cell whose value read another retained cell, for instance.  Such
+    /// an eviction is refused ([`Eviction::StillReferenced`]) and the caller may
+    /// retry once the referencing artifact is gone too.  Two artifacts that
+    /// reference each other can therefore never be evicted while both are filed;
+    /// that is the honest answer for a cycle.
+    ///
+    /// It cannot check the other one: a static ref may also live outside the
+    /// registry, in a [`Module`] the caller still holds (a `StaticNodeId` names a
+    /// key, and [`Module::static_module`] panics on an unregistered one).  So
+    /// eviction is the caller's decision, made when the caller knows every module
+    /// that could still hold such a ref is gone.
+    pub fn evict(&mut self, key: ModuleKey) -> Eviction {
+        if !self.entries.contains_key(&key) {
+            return Eviction::NotRegistered;
+        }
+        let referenced = self
+            .entries
+            .iter()
+            .any(|(&other, package)| other != key && package.refs.contains(&key));
+        if referenced {
+            return Eviction::StillReferenced;
+        }
+        self.entries.remove(&key);
+        Eviction::Freed
     }
 
     /// Set the opaque per-package metadata for an existing registered

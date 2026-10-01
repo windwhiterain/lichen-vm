@@ -24,9 +24,9 @@
 //! propagation reaches are dropped (`crate::dirty`).
 
 use std::collections::HashSet;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
-use lichen_lowlevel::{ModuleKey, Registry};
+use lichen_lowlevel::{Eviction, ModuleKey, Registry};
 
 use crate::LangProgramShape;
 use crate::ast::{BlockStmt, Program, Stmt};
@@ -185,19 +185,60 @@ where
         self.cells.len()
     }
 
-    /// Take the artifacts of the cells this session dropped, oldest first — what
-    /// just became unreachable.
+    /// How many artifacts the session dropped and has not managed to evict — its
+    /// outstanding debt to the registry ([`Self::evict_unreachable`]).
     ///
-    /// The session does **not** evict them, and cannot: a static ref is a raw
-    /// handle into an artifact's arena, and one survives in two places the
-    /// session does not own — the [`SessionReport`]s the caller still holds (a
-    /// `build` is an `Arc`, so the session never sees the last clone die), and
-    /// the artifacts of the cells that *did* survive (a marked binding reading
-    /// another marked binding freezes a ref into it, filed verbatim).  So
-    /// eviction is the caller's call, made when it can rule both out:
-    /// [`Registry::evict`] is that call, and this is the list it takes.
-    pub fn take_unreachable(&mut self) -> Vec<ModuleKey> {
-        std::mem::take(&mut self.unreachable)
+    /// A number that only grows is the leak §8 warns about: the caller is not
+    /// evicting, or is still holding a report that keeps a refusal in place.
+    pub fn pending_evictions(&self) -> usize {
+        self.unreachable.len()
+    }
+
+    /// Evict the artifacts of the cells this session dropped, and report how many
+    /// were freed.
+    ///
+    /// **The caller's precondition, and it cannot be checked here:** a static ref is
+    /// a raw handle into an artifact's arena, and one survives in every
+    /// [`SessionReport`] the caller still holds — a `build` is an `Arc`, so the
+    /// session never sees the last clone die.  Call this only once those are
+    /// dropped.  What *is* checked is the other half: an artifact that a surviving
+    /// cell's artifact still references is refused ([`Eviction::StillReferenced`])
+    /// and kept for a later call, so a cell that read another cell is not a dangle.
+    ///
+    /// Safe to call at any time and repeatedly; a refusal is retried on the next
+    /// call, once the artifact that referenced it is gone too.  Two artifacts that
+    /// reference each other are never freed — the honest answer for a cycle.
+    pub fn evict_unreachable(&mut self) -> usize {
+        let mut pending = std::mem::take(&mut self.unreachable);
+        let mut registry = self
+            .registry
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut freed = 0;
+        // Repeated passes, because a key that is still referenced may be free once
+        // the artifact referencing it is gone — and that artifact may be in this
+        // same list, later in it.  A pass that frees nothing has reached the fixed
+        // point: what is left is referenced by something still filed.
+        loop {
+            let before = pending.len();
+            let mut refused = Vec::new();
+            for key in pending.drain(..) {
+                match registry.evict(key) {
+                    Eviction::Freed => freed += 1,
+                    // Nothing filed under it: an earlier pass freed it, or it never
+                    // reached the registry.  Not a debt any more.
+                    Eviction::NotRegistered => {}
+                    Eviction::StillReferenced => refused.push(key),
+                }
+            }
+            let progressed = refused.len() < before;
+            pending = refused;
+            if !progressed {
+                break;
+            }
+        }
+        self.unreachable = pending;
+        freed
     }
 
     /// The current source.

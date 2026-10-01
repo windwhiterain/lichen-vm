@@ -1292,6 +1292,13 @@ pub struct Package<P: Program> {
     /// a key reinserted after reclamation is recognized as a different
     /// artifact (a loaded module is never silently shadowed).
     pub hash: [u8; 32],
+    /// Every module key this artifact's values reference — its frozen
+    /// dependencies, recorded at freeze time (the same set
+    /// [`Registry::freeze_mapped`] asserts is registered, so computing it is not
+    /// extra work).  [`Registry::evict`] reads it to refuse freeing an artifact
+    /// that a live one still references: that reference is a raw handle into this
+    /// artifact's arena.
+    pub refs: HashSet<ModuleKey>,
 }
 
 /// A fully-solved module frozen into an immutable, shareable form.  Every
@@ -1335,6 +1342,23 @@ pub struct Freeze {
     pub key: ModuleKey,
     /// Source `NodeId` → home-module local node index.
     pub node_map: HashMap<NodeId, LocalNodeId>,
+}
+
+/// What [`Registry::evict`] did.
+///
+/// Three outcomes rather than a `bool`, because "it was not there" and "it is
+/// still referenced" are different facts to the caller: the first means the key
+/// is gone (or was never filed), the second means *retry later*, once the
+/// artifact that references it is gone too.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Eviction {
+    /// The artifact was filed and is now freed.
+    Freed,
+    /// Nothing was filed under that key.
+    NotRegistered,
+    /// A live registered artifact references it, so freeing it would leave that
+    /// artifact's static ref dangling.
+    StillReferenced,
 }
 
 /// The device's module registry — the virtual file system of the device's
