@@ -548,3 +548,123 @@ compute.read [out, 2]
         "the refusal must name the count asked for and the limit: {message:?}"
     );
 }
+
+#[test]
+fn parallel_multi_output_writes_every_output_in_one_pass() {
+    // The index function's codomain is a **tuple of writes**, so one `plrun`
+    // produces two output buffers: write `k` of the body is output buffer `k`
+    // (`out(k)`), and both come out of the single pass over the indices.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i], compute.write [n, i, i + i])
+}
+k = compute.parallel f
+outs = compute.plrun k (3,)
+(compute.read [outs(0), 2], compute.read [outs(1), 2])
+"#);
+    assert_eq!(
+        out, "(2, 4): <Int, Int>",
+        "multi-output parallel map produced: {out:?}"
+    );
+}
+
+#[test]
+fn parallel_multi_output_collects_each_output() {
+    // Three outputs, one of which reads an input buffer: `collect` materialises
+    // one output buffer whole, which is the point of a multi-output kernel — a
+    // single pass emitting several result columns.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+f1 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+k1 = compute.parallel f1
+inbuf = compute.plrun k1 (3,)
+f2 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  (compute.write [n, i, a], compute.write [n, i, a + a], compute.write [n, i, i])
+}
+k2 = compute.parallel f2
+outs = compute.plrun k2 (3, (inbuf,))
+compute.collect outs(1)
+"#);
+    assert!(
+        out.starts_with("[20, 22, 24]:"),
+        "collecting the second output produced: {out:?}"
+    );
+}
+
+#[test]
+fn a_write_inside_a_conditional_is_refused() {
+    // The every-ordinal-written invariant: output ordinal `k` must be written
+    // on *every* index.  A write behind a condition would be written on only
+    // one path, so the index function is refused — never quietly reduced to the
+    // outputs it happens to write unconditionally.
+    //
+    // What refuses it here is the emitter's existing inline-call limit, one
+    // layer before the emitter's own conditional-write guard: a same-module
+    // call (`compute.write`) inside an `if` branch is not reduced, so the
+    // branch still holds an `Apply`.  The refusal therefore names *that* cause,
+    // and it is still a refusal — what this pins is that the program does not
+    // run and does not silently produce one output buffer.
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i], (if i <= 1 then compute.write [n, i, 1] else compute.write [n, i, 2]))
+}
+k = compute.parallel f
+outs = compute.plrun k (3,)
+compute.read [outs(0), 2]
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "a conditional write is one refusal: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("compute.parallel") && message.contains("not yet supported"),
+        "the refusal must name its own cause: {message:?}"
+    );
+}
+
+#[test]
+fn an_output_position_that_is_not_a_write_is_refused() {
+    // The output count comes from the codomain's arity, so every position must
+    // be a `compute.write`; a position that is a plain value is refused by its
+    // position, not by a generic "unsupported kernel" message.
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i], i)
+}
+k = compute.parallel f
+outs = compute.plrun k (3,)
+compute.read [outs(0), 2]
+"#,
+    );
+    assert_eq!(
+        messages.len(),
+        1,
+        "one bad position is one diagnostic: {messages:?}"
+    );
+    let message = &messages[0];
+    assert!(
+        message.contains("output 1") && message.contains("compute.write"),
+        "the refusal must name the position that is not a write: {message:?}"
+    );
+}

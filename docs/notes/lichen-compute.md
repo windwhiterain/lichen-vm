@@ -39,10 +39,11 @@ language's value/operator vocabularies with `lichen_utils::enum_ext!`:
   is a small host-owned scalar (`usize`) into the process kernel/buffer registry — never an
   arena payload, so GC / static-freeze / `ValueExt` are unchanged.
 - **`ComputeOperator`** = `Jit` (function → kernel) | `Launch` (`[native, arg]` → result) |
-  `Call` (a cross-kernel call on a bare native kernel) | `Parallel` (curried
-  `?a -> USize -> ?b` → parallel kernel) | `ParLaunch` (`[native, (cfg, count)]` → buffer) |
-  `BufferGet` (`[buffer, index]` → element) | `BufferCollect` (`[buffer]` → `[?b]`), whose
-  `OperatorExt::run` does the compile/execute.
+  `Call` (a cross-kernel call on a bare native kernel) | `Parallel` (a single-arg index
+  function `?cfg -> ?write` → parallel kernel) | `ParLaunch` (`[native, cfg]` → one output
+  buffer, or the tuple of them) | `Range` (the loop index) | `Read` (`[buffer, index]` →
+  element) | `Write` (`[n, index, value]`, a kernel-only side effect) | `BufferCollect`
+  (`[buffer]` → `[?b]`), whose `OperatorExt::run` does the compile/execute.
 
 ```
 LangValue    = LowValue + TypeValue + ComputeValue
@@ -75,10 +76,16 @@ not callee-type dispatch:
   call     = k => a => $call(k.native, a)
   parallel = f => (struct<.native _, .sig (type_of f)>)(.native $parallel(f), .sig _)
   plrun    = k => a => $plrun(k.native, k.sig, a)
-  pget     = b => i => $pget(b, i)
-  pcollect = b => $pcollect(b)
+  range    = x => $range(x)
+  read     = x => $read(x(0), x(1)) : Int
+  write    = x => $write(x(0), x(1), x(2))
+  collect  = b => $collect(b)
 }
 ```
+
+(The listing is `crates/lichen-compute/src/compute.lichen` verbatim.  `read`
+destructures its single array argument with positional slot reads, because the
+parser's `f [a, b]` is one array argument rather than a curried two-arg call.)
 
 `NativeOp::build` receives the **already-compiled** arguments (`NativeArg { expr, value,
 ty }`) and shapes the type through the curated `Ctx` (never raw lowlevel nodes): it
@@ -91,13 +98,21 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   wrapper then builds the kernel struct around it (`.native` = the artifact, typed `_`,
   `.sig` = `type_of f`).
 - **`LaunchOp::build`** (`$launch(native, sig, a)`) / **`ParLaunchOp::build`**
-  (`$plrun(native, sig, a)`) — gate the signature value (a function type, or a lifted
-  `?d0 -> (Int -> ?b)`), *reading* the domain/codomain (or config/element) **lazily** out of
-  the signature so the frozen wrapper template's generic `.sig` resolves the real cells once
-  a concrete kernel struct binds at apply time; unify the argument against the domain;
-  emit the operator over `[native, a]`; pair with the (lazy) codomain — so the result is
-  `Int` (or `[?b, [TypeBuffer, Type]]`). The domain/codomain reads ride along as inert
-  operand elements so they are reachable from the return graph and clone + resolve at apply.
+  (`$plrun(native, sig, a)`) — gate the signature value (a function type),
+  unify the argument against the domain, and emit the operator over
+  `[native, a]`.  `LaunchOp` pairs the result with the **lazy codomain**, so a
+  launch's result is the callee's own codomain (`Int` for a scalar kernel).
+  `ParLaunchOp` cannot: its result is a `Buffer` for a one-output index function
+  and a *tuple* of buffers for a several-output one, and the arity that decides
+  which is not knowable here — `build` runs once on the frozen wrapper template,
+  where `.sig` is still an unbound cell, and a tuple type is a value node with
+  one element per position.  So the result type is a **fresh cell**: `read` and
+  `collect` accept each buffer by ordinal.  That costs static precision, not
+  safety — a non-existent ordinal is still refused at check time with a span
+  (*"index 5 out of bounds (array length 2)"*).  The *shape* of the
+  codomain is checked by the emitter instead, which is where the writes are —
+  see [multi-output](#multi-output) and
+  [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
 - **`CallOp::build`** (`$call(k.native, a)`) — only gates the argument against a fresh
   domain cell and types the result as a fresh codomain cell (the callee signature is read at
   launch-time assembly by `kernel_id_of`).
@@ -117,11 +132,15 @@ arm:
 - **`Launch`** / **`Call`** — reads `[kernel, arg]`; flattens the argument to an `i64`
   vector (`collect_args`); `run_kernel` assembles and runs; returns the `USize` result. A
   non-scalar/non-literal argument stays lazy.
-- **`Parallel`** — `compile_parallel_fragment` lowers the curried `?a -> USize -> ?b` to a
-  flattened `(?a, USize) -> ?b` wasm function → `ParKernel(id)`.
-- **`ParLaunch`** — reads `[parallel_kernel, (cfg, count)]`; runs the kernel over the index
-  range `[0, count)` and collects the element results into a `Buffer(id)`.
-- **`BufferGet`** / **`BufferCollect`** — read one element / collect the whole buffer.
+- **`Parallel`** — `compile_parallel_fragment` lowers a single-arg index function
+  (`cfg = (n, (buffer…))`, the loop index from `compute.range`) to a
+  `(n, index) -> i64` wasm function, one `BufferWriteCall` per output, and
+  records the output count on the fragment → `ParKernel(id)`.
+- **`ParLaunch`** — reads `[parallel_kernel, cfg]`; runs the kernel over the
+  index range `[0, cfg(0))` and collects the results into one buffer **per
+  output** — a single output is a bare `Buffer(id)`, several are the tuple of
+  them (`Read`/`BufferCollect` then address each by ordinal).
+- **`Read`** / **`BufferCollect`** — read one element / collect the whole buffer.
 
 A kernel body that calls another kernel is a **cross-kernel call**: `kernel_id_of` walks a
 kernel *value* (or a `.native` field read) to its `KernelId`, and the body emitter lowers
@@ -133,10 +152,11 @@ cross-module-shared artifacts.
 
 ## 4. Codegen: bytecode fragments, not a module
 
-`jit` emits the function's **body** as a `KernelFragment { param_shape, body }` — a
-`Vec<KernelInstr>` of *abstract* instructions, not raw wasm. Splitting "emit bytecode"
-from "assemble a module" is what lets the launcher resolve cross-kernel call indices
-after the kernel's relative launch set is laid out.
+`jit` emits the function's **body** as a `KernelFragment { param_shape, body,
+outputs }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
+Splitting "emit bytecode" from "assemble a module" is what lets the launcher
+resolve cross-kernel call indices after the kernel's relative launch set is laid
+out.
 
 ```
 enum KernelInstr {
@@ -206,13 +226,18 @@ the class (`class_computation_node`) to emit the real expression.
 
 `tests/compute.rs` covers scalar/tuple domains, all the safe ops, conditionals, closure
 constants, cross-kernel calls (bare, sub-expression, and the wrapper form), inline lichen
-functions (nested), and the parallel `parallel`/`plrun`/`pget`/`pcollect` family — as
-`value: type` end-to-end runs. The cross-kernel group pins the multi-arity argument
+functions (nested), and the parallel `parallel`/`plrun`/`range`/`read`/`write`/`collect`
+family — as `value: type` end-to-end runs. The cross-kernel group pins the multi-arity argument
 mechanisms separately: a concrete tuple argument, a whole-parameter pass-through, a
 sub-tuple pass-through against a nested callee domain, and the same tuple argument through
 the wrapper `launch` (whose argument arrives as a `Parameterized` cell). The assertions pin
 the struct rendering (`struct<.native <_>, .sig Int -> Int>`) and the lazily-read codomain
 resolution (`6 : Int`, `12 : Int`).
+
+The **multi-output** group pins the tuple codomain: one `plrun` producing two buffers read
+by ordinal (`(2, 4): <Int, Int>`), three outputs with `collect` on a middle one, and the two
+refusals that keep the every-ordinal-written invariant — a `compute.write` inside a
+conditional, and a codomain position that is not a write (refused *by position*).
 
 ## 8. v1 scope
 
@@ -223,6 +248,25 @@ tuple value or passed through from the caller's own parameter (see
 [below](#multi-arity-cross-kernel-calls)). Beyond that: higher-order kernels, recursion
 inside the compiled region, and a `GlobalExt`-based compute global (the registries are
 currently process-global).
+
+### Multi-output
+
+A parallel kernel's codomain may be a **tuple of `Write`s**, so one `plrun` yields several
+output buffers from a single pass: the `k`-th `compute.write` is emitted with the
+compile-time constant `out_pos = k` (the same treatment `read`'s `cfg_pos` gets), the
+output count is the codomain's arity read at compile time and carried on the fragment as
+`KernelFragment::outputs`, and the launch allocates exactly that many buffers and returns
+them as a tuple. The **every-ordinal-written invariant** — ordinal `k` is written on every
+index — holds structurally: the lowered body is straight-line, and the subset's only
+conditional is a value `select`, which a write (a side effect with no value) cannot sit in.
+The emitter refuses the constructs that could break it, each naming its own cause: a write
+inside a conditional, and a codomain position that is not a write. See
+[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md).
+
+The one thing multi-output cannot have is a **check-time result type**: the arity is a
+run-time fact of the kernel, so `plrun`'s result is an unconstrained cell rather than an
+N-tuple of buffer types (see `ParLaunchOp::build` in §2). The cost is that a positional read
+of a `plrun` result is checked at run time rather than at check time.
 
 ### Multi-arity cross-kernel calls
 

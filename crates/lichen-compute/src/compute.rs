@@ -41,8 +41,10 @@
 //! - `parallel f` lifts a single-arg `?cfg -> Write` index function into a
 //!   parallel kernel struct (`cfg = (n, (buffer…))` — the count is `cfg(0)`,
 //!   the input buffers a tuple at `cfg(1)`); `plrun k cfg` runs it over
-//!   `[0, cfg(0))` into a `Buffer`, the index function reading inputs via
+//!   `[0, cfg(0))`, the index function reading inputs via
 //!   `compute.read [cfg(1)(k), i]` and writing via `compute.write [n, i, val]`.
+//!   A **tuple** codomain of `Write`s is the multi-output form: the `k`-th write
+//!   is output buffer `k`, and `plrun` returns the buffers as a tuple.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -160,10 +162,11 @@ fn intern_kernel(fragment: KernelFragment) -> KernelId {
     id
 }
 
-/// A fragment's content digest: the domain shape plus the lowered body.
+/// A fragment's content digest: the domain shape plus the lowered body plus the
+/// output count.
 ///
 /// The `Debug` rendering is the canonical form here because it is a total,
-/// deterministic function of both halves — the same reason the round-trip tests
+/// deterministic function of all three — the same reason the round-trip tests
 /// can print a value — and this runs once per `jit`, against a wasm compile it
 /// exists to avoid repeating.
 fn fragment_digest(fragment: &KernelFragment) -> u64 {
@@ -171,6 +174,7 @@ fn fragment_digest(fragment: &KernelFragment) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}", fragment.param_shape).hash(&mut hasher);
     format!("{:?}", fragment.body).hash(&mut hasher);
+    fragment.outputs.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -182,6 +186,7 @@ mod kernel_intern_tests {
         KernelFragment {
             param_shape: LowShape::USize,
             body,
+            outputs: 0,
         }
     }
 
@@ -270,7 +275,11 @@ enum KernelInstr {
     /// `[cfg_pos, idx]`.
     BufferReadCall,
     /// Call the host `write(out_pos, idx, val)` import — the stack holds
-    /// `[out_pos, idx, val]`.
+    /// `[out_pos, idx, val]`.  `out_pos` is a **compile-time constant** the
+    /// emitter writes just before the call: the write's *emission ordinal*
+    /// (see [`emit_node`]), which is the same fact as the index function's
+    /// codomain position.  Every emitted write is a straight-line statement,
+    /// so each ordinal `0 .. outputs` is written on **every** index.
     BufferWriteCall,
 }
 
@@ -299,6 +308,12 @@ struct KernelFragment {
     /// The lowered function body as abstract instructions.  The launcher
     /// lowers these to wasm with any cross-kernel call indices resolved.
     body: Vec<KernelInstr>,
+    /// How many output buffers this fragment writes — `0` for a scalar `jit`
+    /// fragment (which has no output buffer at all), and for a **parallel**
+    /// fragment the index function's codomain arity.  The count is a property
+    /// of the *compiled* fragment, so a `plrun` allocates exactly this many
+    /// buffers and never has to discover at run time which ones were written.
+    outputs: usize,
 }
 
 /// The compute value vocabulary — injected as a sibling leaf into a host's
@@ -441,11 +456,13 @@ pub enum ComputeOperator {
     /// `.native` extracted from a kernel struct) on `arg` → the result.
     Call,
     /// Compile a `?cfg -> ?write` index function to a parallel kernel
-    /// (the kernel body is lowered over the loop index) → a `ParKernel` value.
+    /// (the kernel body is lowered over the loop index; a tuple codomain of
+    /// `Write`s is the multi-output form) → a `ParKernel` value.
     Parallel,
     /// `[parallel_kernel, cfg]` operand — run the parallel kernel over the
-    /// index range `[0, cfg(0))` (the count is fixed at cfg position 0) →
-    /// a `Buffer` value.
+    /// index range `[0, cfg(0))` (the count is fixed at cfg position 0) → one
+    /// output buffer per output the kernel declares, as a bare `Buffer` value
+    /// for a single output and the **tuple** of them for several.
     ParLaunch,
     /// `[n]` operand — the loop index of the current parallel invocation,
     /// `i ∈ [0, n)`.  Kernel-only; the VM sees `Parameterized`.
@@ -797,11 +814,35 @@ where
                 }
                 match run_parallel_kernel(id, count, inputs) {
                     Ok(results) => {
-                        // The payload lands in the arena, so the buffer is owned
-                        // by this block and dies with it (`D15`) — the same
-                        // bump allocation every other payload uses.
-                        let payload = module.alloc_payload(&results, block);
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(payload))
+                        // Several outputs are the **tuple** of them, which
+                        // `compute.read`/`compute.collect` address by ordinal.
+                        // Each buffer value becomes a node of this block first,
+                        // the way a collected element does, so the tuple holds
+                        // live nodes rather than detached values.
+                        let buffer = |payload: BufferPayload| {
+                            <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(payload))
+                        };
+                        if results.len() != 1 {
+                            let items: Vec<ArrayItem> = results
+                                .iter()
+                                .map(|result| {
+                                    let node = module.add_node(
+                                        block,
+                                        None,
+                                        Some(buffer(module.alloc_payload(result, block))),
+                                    );
+                                    ArrayItem::new(AnyNodeId::Dynamic(node))
+                                })
+                                .collect();
+                            let handle = module.alloc_array(&items, block);
+                            return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                        }
+                        // A single output is a bare `Buffer` — the single-output
+                        // form, exactly what it was.  Each payload lands in the
+                        // arena, so the buffer is owned by this block and dies
+                        // with it (`D15`) — the same bump allocation every other
+                        // payload uses.
+                        buffer(module.alloc_payload(&results[0], block))
                     }
                     Err(err) => {
                         // The refusal is the reason this launch produced no
@@ -1062,9 +1103,16 @@ where
     }];
 
     let mut body: Vec<KernelInstr> = Vec::new();
-    emit_node(module, &params, ret_value, &mut body)?;
+    // A scalar kernel has no output buffer: `compute.write` is a parallel-only
+    // operator, so the ordinal counter below stays at 0 and `outputs` is 0.
+    let mut out = 0usize;
+    emit_node(module, &params, ret_value, &mut body, &mut out)?;
 
-    Ok(KernelFragment { param_shape, body })
+    Ok(KernelFragment {
+        param_shape,
+        body,
+        outputs: 0,
+    })
 }
 
 /// Lower a single-arg `?cfg -> ?write` index function into a **parallel
@@ -1072,12 +1120,25 @@ where
 /// count scalar from `cfg(0)`, then the loop index) and whose body is the
 /// index function's body traced with `range`/`read`/`write` host calls.
 ///
+/// The codomain is a `Write` or a **tuple of `Write`s** — one element per
+/// output buffer — and the fragment records the arity as its
+/// [`KernelFragment::outputs`], so a `plrun` allocates exactly that many
+/// buffers.
+///
 /// `parallel` is the data-parallel lift: running it over the index range
 /// `[0, cfg(0))` computes the index function once per index.  The `cfg` is
 /// `(n, (buffer…))` — `cfg(0)` is the count `n` (a wasm scalar param), and the
 /// buffer tuple at `cfg(1)` is host-side (each buffer read via a `read`
 /// import by its position inside the tuple).  The loop index comes from
 /// `compute.range n` (a kernel-only op yielding the index param).
+///
+/// **The every-ordinal-written invariant holds by construction.**  The lowered
+/// body is straight-line: the only conditional the kernel-safe subset has is
+/// the emitter's 2-element scalar `select`, which is a *value* select and can
+/// only skip a *value*, and a `compute.write` has none.  A write reached inside
+/// a `select` branch is therefore refused by name rather than emitted (see the
+/// `Select` arm of [`emit_node`]), so write `k` runs on every index and each
+/// ordinal `0 .. outputs` is always written.
 fn compile_parallel_fragment<P>(
     module: &mut Module<P>,
     function: AnyFunctionId,
@@ -1092,13 +1153,22 @@ where
     };
     let cfg_pair = module.functions[fid].parameter;
     let body = module.functions[fid].r#return;
-    // The kernel's result is the index function's body value (a `Write`, v1
-    // single output), through a `[value, type]` pair or a bare value node.
+    // The kernel's result is the index function's body value — a `Write`, or a
+    // **tuple of `Write`s** (one per output buffer) — through a `[value, type]`
+    // pair or a bare value node.
     // SAFETY: `body` is a live node of `module`.
     let ret_value = match unsafe { module.array_items(body) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
+    // The output count is the **codomain's arity**, read here as the body's own
+    // value: a bare value is one output, a materialized tuple value is one
+    // output per element.  It is a fact of the *function*, so it is fixed
+    // before any index runs — the count is never discovered from which slots
+    // happened to be written.  (The kernel struct's `.sig` names the same
+    // arity as a type; the body's value is the same fact read where the
+    // emitter can count it, without the type encoding.)
+    let outputs = parallel_output_nodes(module, ret_value);
     // `cfg = (n, (buffer…))`.  `cfg(0)` is the scalar count `n` — the only
     // scalar wasm param from cfg; the buffer tuple is host-side (read via the
     // `read` import by its position in `cfg(1)`).  Model the cfg's scalar part
@@ -1124,15 +1194,80 @@ where
         base: 0,
     }];
     let mut body_instr: Vec<KernelInstr> = Vec::new();
-    emit_node(module, &params, ret_value, &mut body_instr)?;
-    // The index function writes into the output buffer (side effects); leave a
+    // One `compute.write` per codomain position, in position order, so write `k`
+    // is emitted with `out_pos = k`.  A position is *required* to emit exactly
+    // one write: a position that emits none is named, and the total is checked
+    // afterwards so a write reached nested inside a position's value (which
+    // would consume an ordinal of its own) is caught too.  A conditional write
+    // is refused by the emitter, which knows the more specific cause.
+    let mut out = 0usize;
+    for (position, output) in outputs.iter().enumerate() {
+        let before = out;
+        emit_node(module, &params, *output, &mut body_instr, &mut out)?;
+        if out == before {
+            return Err(format!(
+                "output {position} of the parallel index function is not a `compute.write` \
+                 (an index function must write every output it declares)"
+            ));
+        }
+    }
+    if out != outputs.len() {
+        return Err(format!(
+            "a parallel index function emitted {out} write(s) but its codomain names {} \
+             output(s): every output must be exactly one `compute.write`",
+            outputs.len()
+        ));
+    }
+    // The index function writes into the output buffers (side effects); leave a
     // dummy scalar on the stack so the shared `assemble_module`'s `-> i64`
     // signature holds for the write-only kernel.
     body_instr.push(KernelInstr::Const(0));
     Ok(KernelFragment {
         param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
         body: body_instr,
+        outputs: outputs.len(),
     })
+}
+
+/// Resolve an index function's return value into its per-position output
+/// nodes — the codomain's arity, as a list.
+///
+/// The return value is the codomain's *value*: a bare value is the
+/// single-output form (one output) and a materialized tuple value is the
+/// multi-output one (one output per element, in position order).  The elements
+/// are handed to the emitter **unresolved**: what a position *is* — a
+/// `compute.write`, a conditional, anything else — is the emitter's to
+/// determine, which is what keeps the specific cause (a write behind a
+/// conditional) with the code that can name it.  A *nested* tuple is refused
+/// there as a position that is not a write; the outputs are flat, one buffer
+/// per position.
+fn parallel_output_nodes<P>(module: &Module<P>, ret_value: NodeId) -> Vec<NodeId>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // A `value_of` extraction (`Index(pair, 0)`) still carries the pair's
+    // value, so peel it the way the emitter's `Index` arm does before asking
+    // whether what remains is a tuple.
+    let value = value_of_node(module, ret_value).unwrap_or(ret_value);
+    // SAFETY: `value` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = match unsafe { module.array_items(value) } {
+        Some(items) if !items.is_empty() => items,
+        _ => return vec![ret_value],
+    };
+    let mut nodes = Vec::with_capacity(items.len());
+    for item in items {
+        match dyn_node(item.node) {
+            Ok(node) => nodes.push(node),
+            // A static (imported) element is not a kernel body the emitter can
+            // lower; keep it as the single output so the position is named by
+            // the emission rather than silently dropped here.
+            Err(_) => return vec![ret_value],
+        }
+    }
+    nodes
 }
 
 /// Assemble an ordered slice of kernel fragments into a single wasm module.
@@ -1395,16 +1530,31 @@ where
     None
 }
 
+/// A `compute.write` reached inside a conditional.  A write is a side effect
+/// with no value, so it cannot sit in a `select` branch (which must leave a
+/// value on the stack) — and it would be written on only one of the two paths,
+/// which is exactly what the every-ordinal-written invariant forbids.  The one
+/// construct that could skip a write is named here rather than emitted.
+const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not supported: that \
+     output ordinal would not be written on every index";
+
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
 /// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and parameter reads
 /// (`Index(param_pair, 0)` → `local.get k`).  `params` is the kernel's
 /// parameter-slot list (one for a scalar `jit` kernel, two — config then index
 /// — for a parallel kernel).
+///
+/// `out` is the emitter's **output-ordinal counter**: the `out_pos` the next
+/// `compute.write` is given, and the number of writes emitted so far once the
+/// walk returns.  The ordinal is the write's position in the index function's
+/// codomain (a compile-time constant, exactly as `read`'s `cfg_pos` is), so
+/// `plrun` can address the buffers without ever seeing which ones were written.
 fn emit_node<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
     body: &mut Vec<KernelInstr>,
+    out: &mut usize,
 ) -> Result<(), String>
 where
     P: Program,
@@ -1437,7 +1587,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, params, definer, body);
+            return emit_node(module, params, definer, body, out);
         }
         return Err(format!(
             "kernel body hits a node with neither value nor operation (node={node:?})"
@@ -1465,7 +1615,7 @@ where
                 if usize_value(module, index) == Some(0)
                     && let Some(value_node) = value_of_node(module, node)
                 {
-                    return emit_node(module, params, value_node, body);
+                    return emit_node(module, params, value_node, body, out);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -1480,7 +1630,7 @@ where
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && let Some(item) = items.get(k)
                     {
-                        return emit_node(module, params, dyn_node(item.node)?, body);
+                        return emit_node(module, params, dyn_node(item.node)?, body, out);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -1496,9 +1646,28 @@ where
                     {
                         let then_node = dyn_node(items[1].node)?;
                         let else_node = dyn_node(items[0].node)?;
-                        emit_node(module, params, then_node, body)?;
-                        emit_node(module, params, else_node, body)?;
-                        emit_node(module, params, index, body)?;
+                        // Each branch is emitted into its own vector so it can be
+                        // inspected before the three parts are concatenated: a
+                        // `compute.write` in a branch would be a *statement* in
+                        // a position that must hold a *value* (the branch leaves
+                        // nothing on the stack, and `select` would read whatever
+                        // the branch pushed), and it would run on only one of
+                        // the two paths — so that output ordinal would not be
+                        // written on every index.  Refuse it by name instead.
+                        let mut then_body = Vec::new();
+                        let mut else_body = Vec::new();
+                        let mut select_body = Vec::new();
+                        emit_node(module, params, then_node, &mut then_body, out)?;
+                        emit_node(module, params, else_node, &mut else_body, out)?;
+                        if then_body.contains(&KernelInstr::BufferWriteCall)
+                            || else_body.contains(&KernelInstr::BufferWriteCall)
+                        {
+                            return Err(CONDITIONAL_WRITE.into());
+                        }
+                        emit_node(module, params, index, &mut select_body, out)?;
+                        body.append(&mut then_body);
+                        body.append(&mut else_body);
+                        body.append(&mut select_body);
                         body.push(KernelInstr::I32WrapI64);
                         body.push(KernelInstr::Select);
                         return Ok(());
@@ -1517,7 +1686,7 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(module, params, callee, arg, body);
+                    return emit_cross_kernel_call(module, params, callee, arg, body, out);
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -1538,8 +1707,8 @@ where
         match ty_op {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 let (left, right) = operand_pair(module, operation.operand)?;
-                emit_node(module, params, left, body)?;
-                emit_node(module, params, right, body)?;
+                emit_node(module, params, left, body, out)?;
+                emit_node(module, params, right, body, out)?;
                 let bin = match ty_op {
                     TypeOperator::Add => KernelBin::Add,
                     TypeOperator::Sub => KernelBin::Sub,
@@ -1564,7 +1733,7 @@ where
         match compute_op {
             ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(module, params, kernel, arg, body);
+                return emit_cross_kernel_call(module, params, kernel, arg, body, out);
             }
             // The loop index of the current parallel invocation.  The index is
             // the wasm param immediately after the cfg scalar params.
@@ -1618,12 +1787,18 @@ where
                     "read's buffer argument is not a cfg buffer tuple slot (cfg(1)(k))".to_string()
                 })?;
                 body.push(KernelInstr::Const(pos as i64));
-                emit_node(module, params, idx, body)?;
+                emit_node(module, params, idx, body, out)?;
                 body.push(KernelInstr::BufferReadCall);
                 return Ok(());
             }
             // A pending write: `write [n, idx, val]` → the host
-            // `write(out_pos=0, idx, val)` import (v1 single output buffer).
+            // `write(out_pos, idx, val)` import, with `out_pos` this write's
+            // **emission ordinal** — its position in the index function's
+            // codomain, which is a compile-time constant exactly as `read`'s
+            // `cfg_pos` is.  The ordinal is taken (and the counter advanced)
+            // before the operands are emitted, so a write nested inside another
+            // write's value would still consume an ordinal of its own — which
+            // is what `compile_parallel_fragment`'s count check refuses.
             ComputeOperator::Write => {
                 let operand = operation
                     .operand
@@ -1631,9 +1806,11 @@ where
                 let items = operand_items(module, operand)?;
                 let idx = dyn_node(items[1].node)?;
                 let val = dyn_node(items[2].node)?;
-                body.push(KernelInstr::Const(0)); // out_pos
-                emit_node(module, params, idx, body)?;
-                emit_node(module, params, val, body)?;
+                let out_pos = *out;
+                *out += 1;
+                body.push(KernelInstr::Const(out_pos as i64));
+                emit_node(module, params, idx, body, out)?;
+                emit_node(module, params, val, body, out)?;
                 body.push(KernelInstr::BufferWriteCall);
                 return Ok(());
             }
@@ -1703,6 +1880,7 @@ fn emit_cross_kernel_call<P>(
     kernel: NodeId,
     arg: NodeId,
     body: &mut Vec<KernelInstr>,
+    out: &mut usize,
 ) -> Result<(), String>
 where
     P: Program,
@@ -1728,9 +1906,9 @@ where
         // (A *tuple* domain has to resolve its own encoding; see
         // `emit_callee_args`.)
         let arg = pair_value_node(module, arg).unwrap_or(arg);
-        emit_node(module, params, arg, body)?;
+        emit_node(module, params, arg, body, out)?;
     } else {
-        emit_callee_args(module, params, arg, &shape, body)?;
+        emit_callee_args(module, params, arg, &shape, body, out)?;
     }
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
@@ -1763,6 +1941,7 @@ fn emit_callee_args<P>(
     arg: NodeId,
     shape: &LowShape,
     body: &mut Vec<KernelInstr>,
+    out: &mut usize,
 ) -> Result<(), String>
 where
     P: Program,
@@ -1770,7 +1949,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let LowShape::Tuple(items) = shape else {
-        return emit_node(module, params, arg, body);
+        return emit_node(module, params, arg, body, out);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
     // cause worth reporting; one that simply is not a tuple only says the
@@ -1778,8 +1957,20 @@ where
     let mut cause: Option<String> = None;
     for candidate in callee_arg_encodings(module, arg) {
         let mut leaves: Vec<KernelInstr> = Vec::new();
-        match emit_tuple_leaves(module, params, candidate, items, &mut leaves) {
+        // Each candidate is emitted from the same `out` count, so a failed
+        // attempt cannot leave the ordinal counter advanced by instructions
+        // that are then thrown away.
+        let mut candidate_out = *out;
+        match emit_tuple_leaves(
+            module,
+            params,
+            candidate,
+            items,
+            &mut leaves,
+            &mut candidate_out,
+        ) {
             Ok(()) => {
+                *out = candidate_out;
                 body.extend(leaves);
                 return Ok(());
             }
@@ -1836,6 +2027,7 @@ fn emit_tuple_leaves<P>(
     node: NodeId,
     items: &[LowShape],
     out: &mut Vec<KernelInstr>,
+    writes: &mut usize,
 ) -> Result<(), String>
 where
     P: Program,
@@ -1869,8 +2061,10 @@ scalar(s)",
     }
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
-            LowShape::Tuple(nested) => emit_tuple_leaves(module, params, *element, nested, out)?,
-            _ => emit_node(module, params, *element, out)?,
+            LowShape::Tuple(nested) => {
+                emit_tuple_leaves(module, params, *element, nested, out, writes)?
+            }
+            _ => emit_node(module, params, *element, out, writes)?,
         }
     }
     Ok(())
@@ -2535,14 +2729,18 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
 }
 
 /// The execution state a parallel kernel's host imports read/write against:
-/// the input buffers (indexed by cfg position) and the single output buffer
-/// (indexed by element).  Carried as the wasmi [`wasmi::Store`] data, so the
-/// `read`/`write` imports reach it through `Caller::data`/`data_mut`.
+/// the input buffers (indexed by cfg position) and the output buffers (indexed
+/// by output ordinal, then by element).  Carried as the wasmi [`wasmi::Store`]
+/// data, so the `read`/`write` imports reach it through `Caller::data`/
+/// `data_mut`.
 struct ParallelState {
     /// The input buffers (the cfg buffer tuple), indexed by cfg position.
     inputs: Vec<Vec<i64>>,
-    /// The output buffer being written (v1: a single buffer, length `count`).
-    output: Vec<i64>,
+    /// The output buffers, indexed by the write's `out_pos` ordinal.  There is
+    /// one per output the index function declares — the count comes from the
+    /// compiled fragment ([`KernelFragment::outputs`]), never from which slots
+    /// happened to be written.
+    outputs: Vec<Vec<i64>>,
 }
 
 /// Assemble the wasm bytes of one **parallel** fragment — the degenerate
@@ -2575,18 +2773,25 @@ const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
 /// index function once per index with `cfg(0) = count` and the cfg input
-/// buffers fixed, and collecting the writes into the output buffer.
+/// buffers fixed, and collecting the writes into the output buffers.
 ///
 /// The kernel is a wasm function with two host imports — `read(cfg_pos, idx)`
 /// reads an input buffer element, `write(out_pos, idx, val)` writes an output
 /// buffer element — wired to the host-side input/output buffers through the
 /// [`ParallelState`] the store carries.  The kernel is called once per index;
-/// the writes accumulate into the output buffer (last write to a slot wins, a
-/// scatter).  v1 runs sequentially (the data-parallelism is logical); a worker
+/// the writes accumulate into the output buffers (last write to a slot wins, a
+/// scatter).  Runs sequentially (the data-parallelism is logical); a worker
 /// pool is future work.
 ///
+/// How many output buffers there are is the compiled fragment's
+/// [`KernelFragment::outputs`] — the index function's codomain arity, read when
+/// the kernel was compiled — so the allocation here is a static fact and never
+/// a discovery of which slots were written.  Every ordinal is written on every
+/// index (see [`compile_parallel_fragment`]), so each buffer is fully defined
+/// after the run.
+///
 /// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
-/// buffer is allocated.  The caller turns a refusal into the lazy
+/// buffers are allocated.  The caller turns a refusal into the lazy
 /// (`Parameterized`) marker — this plugin's channel for every runtime refusal,
 /// since `Module::eval_errors` is a closed enum of structural value facts and
 /// `BudgetExhausted` names the apply/depth budgets; a dedicated message would
@@ -2603,16 +2808,27 @@ fn run_parallel_kernel(
     id: KernelId,
     count: usize,
     inputs: Vec<Vec<i64>>,
-) -> Result<Vec<i64>, String> {
+) -> Result<Vec<Vec<i64>>, String> {
     if count > MAX_PARALLEL_ELEMENTS {
         return Err(format!(
             "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
         ));
     }
+    // The output count is a property of the *registered fragment*, so it is read
+    // here rather than carried in: a kernel id is content-addressed, so the
+    // fragment it names cannot be a different one.  The lock is released before
+    // any emission or assembly, which locks the same registry again.
+    let outputs = {
+        let fragments = kernels().lock().unwrap();
+        fragments
+            .get(&id)
+            .map(|fragment| fragment.outputs)
+            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
+    };
     let (engine, module) =
         cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
-    let output = vec![0i64; count];
-    let mut store = wasmi::Store::new(&engine, ParallelState { inputs, output });
+    let outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
+    let mut store = wasmi::Store::new(&engine, ParallelState { inputs, outputs });
     let mut linker = wasmi::Linker::new(&engine);
 
     let read_ty = wasmi::FuncType::new(
@@ -2657,9 +2873,15 @@ fn run_parallel_kernel(
             |mut caller: wasmi::Caller<'_, ParallelState>,
              params: &[wasmi::Val],
              _results: &mut [wasmi::Val]| {
+                let out_pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
                 let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
                 let value = params.get(2).and_then(|v| v.i64()).unwrap_or(0);
-                if let Some(slot) = caller.data_mut().output.get_mut(idx) {
+                if let Some(slot) = caller
+                    .data_mut()
+                    .outputs
+                    .get_mut(out_pos)
+                    .and_then(|buffer| buffer.get_mut(idx))
+                {
                     *slot = value;
                 }
                 Ok(())
@@ -2679,7 +2901,7 @@ fn run_parallel_kernel(
         main.call(&mut store, &args, &mut outputs)
             .map_err(|e| e.to_string())?;
     }
-    Ok(store.into_data().output)
+    Ok(store.into_data().outputs)
 }
 
 // --- Native-op registry: the plugin's native-operator registry --
@@ -2887,12 +3109,15 @@ where
 /// `$parallel(f)` — compile a single-arg `?cfg -> ?write` index function into a
 /// parallel kernel.  The function-ness gate verifies `f` is a function; the
 /// body is lowered over the loop index (from `compute.range n`) and the cfg
-/// buffers (read via `compute.read`).
+/// buffers (read via `compute.read`).  A **tuple** codomain of `Write`s is the
+/// multi-output form; which position a write is becomes its output ordinal at
+/// emission time, and the codomain's arity becomes the launch's output count.
 pub struct ParallelOp;
 
 /// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg(0))`
-/// with the input buffers from `cfg(1)` fixed, collecting the writes into a
-/// `Buffer`.  The count is `cfg(0)`.
+/// with the input buffers from `cfg(1)` fixed, collecting the writes into one
+/// `Buffer` per output (a bare `Buffer` for a single output, their tuple for
+/// several).  The count is `cfg(0)`.
 pub struct ParLaunchOp;
 
 /// `$range(n)` — the loop index `i ∈ [0, n)` of the current parallel
@@ -2904,7 +3129,9 @@ pub struct RangeOp;
 pub struct ReadOp;
 
 /// `$write(n, i, val)` — a pending parallel write into the output buffer at `i`
-/// (length `n`).  Kernel-only (lowers to the host `write` import).
+/// (length `n`).  Which output buffer is decided by the write's position in the
+/// index function's codomain, not here.  Kernel-only (lowers to the host
+/// `write` import).
 pub struct WriteOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
@@ -2942,63 +3169,66 @@ impl<P> NativeOp<P> for ParLaunchOp
 where
     P: HighProgram,
     P::Value: ValueType + From<ComputeValue>,
-    P::Operator: From<ComputeOperator> + From<LowOperator>,
+    P::Operator: From<ComputeOperator>,
 {
     /// `$plrun(native, sig, a)` — run parallel kernel `native` over `a` (the
     /// `cfg`).  The lichen wrapper extracts `.native`/`.sig` out of the kernel
-    /// struct; the native op gates the signature as `?cfg -> Write` and the
-    /// `cfg` argument against the domain, and types the result as a `Buffer`
-    /// whose element type is the `Write`'s element type.
+    /// struct; the native op gates the signature as a single-arg function and
+    /// the `cfg` argument against its domain.
+    ///
+    /// **The result type is a fresh cell**, and that is a deliberate limit, not
+    /// an oversight.  The signature's *arity* is what decides the result's
+    /// shape — a bare `Buffer` for a one-write index function, a tuple of
+    /// buffers for a several-write one — and the arity cannot be read here:
+    /// `build` runs once, on the frozen `plrun` template, where `.sig` is an
+    /// unbound cell that only resolves at run time.  A tuple type is a value
+    /// node with one element per position, so no check-time node can name a
+    /// tuple whose arity is not known until the run.  Naming it `[?b,
+    /// BufferKind]` instead (what the single-output form used to do) would be
+    /// check-time *decided*, and a decided non-positional type is exactly what
+    /// the checker's field-read guard refuses — a single output's `out(1)`
+    /// would not check at all, which would leave the one-output kernel unable
+    /// to be read positionally.
+    ///
+    /// What the fresh cell costs is **static precision, not safety**: the
+    /// element type is no longer named by the signature, so `read` on a `plrun`
+    /// result binds its own element cell and resolves it from the value the
+    /// run produces (always `Int`, since `WriteOp` pins the written value to
+    /// `Int`).  An ordinal that does not exist is still **refused, at check
+    /// time, with a span** — the checker's evaluation pass reconciles the
+    /// constant index against the tuple the launch produced and records an
+    /// out-of-bounds `Index` — so the two shapes stay distinguishable exactly
+    /// where it matters.
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let native = &args[0];
         let sig = &args[1];
         let a = &args[2];
-        // The signature is a single-arg function `?cfg -> Write`.  Read the
-        // signature *lazily* (like `LaunchOp`) so the frozen `$plrun` template's
-        // generic kernel resolves its codomain once a concrete kernel struct
-        // binds at apply time:
-        //   sig_shape = Index(sig.ty, 0)   → [?cfg, write_ty]
-        //   write_ty  = Index(sig_shape, 1) → the Write type
-        //   b         = Index(write_ty, 0)  → the output element type `?b`
-        let zero = ctx.value_node(<P::Value as From<LowValue>>::from(LowValue::USize(0)));
-        let one = ctx.value_node(<P::Value as From<LowValue>>::from(LowValue::USize(1)));
-        let sig_shape_ops = ctx.array_node(&[sig.ty, zero]);
-        let sig_shape = ctx.op_node(P::Operator::from(LowOperator::Index), Some(sig_shape_ops));
-        let write_ty_ops = ctx.array_node(&[sig_shape, one]);
-        let write_ty = ctx.op_node(P::Operator::from(LowOperator::Index), Some(write_ty_ops));
-        let b_ops = ctx.array_node(&[write_ty, zero]);
-        let b = ctx.op_node(P::Operator::from(LowOperator::Index), Some(b_ops));
-        // Gate the signature as `[?cfg, write_ty]` function type and the
-        // codomain as a `Write` type `[b, [TypeWrite, Type]]`, so `b` resolves
-        // to the actual output element type.
+        // The signature is a single-arg function `?cfg -> ?codomain`, where the
+        // codomain is a `Write` or a tuple of `Write`s.  Both halves are fresh
+        // cells: the frozen `$plrun` template's generic kernel binds them when
+        // a concrete kernel struct arrives at run time, and the *shape* of the
+        // codomain is the emitter's fact to check (it is the one that can count
+        // the writes), not this gate's.
         let d0 = ctx.fresh();
-        let sig_ty = ctx.arrow(d0, write_ty);
+        let c0 = ctx.fresh();
+        let sig_ty = ctx.arrow(d0, c0);
         ctx.check_unify(sig.ty, sig_ty, loc.clone(), DiagKind::Guard);
-        let write_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeWrite,
-        ));
-        let write_kind = ctx.kind_expr(write_marker);
-        let write_ty_pat = ctx.array_node(&[b, write_kind]);
-        ctx.check_unify(write_ty, write_ty_pat, loc.clone(), DiagKind::Guard);
         // The argument is the `cfg = (n, (buffer…))`; unify it against the
         // kernel's domain.
         ctx.check_unify(a.ty, d0, loc.clone(), DiagKind::Guard);
-        // Buffer result type: `[?b, [TypeBuffer, Type]]`.
-        let buf_marker = ctx.value_node(<P::Value as From<ComputeValue>>::from(
-            ComputeValue::TypeBuffer,
-        ));
-        let buf_kind = ctx.kind_expr(buf_marker);
-        let buf_ty = ctx.array_node(&[b, buf_kind]);
+        // The result — one `Buffer` or a tuple of them — is a fresh cell; see
+        // the note above on why the arity cannot be named here.
+        let out_ty = ctx.fresh();
         let operands = ctx.array_node(&[native.value, a.value]);
         let op = ctx.op_node(
             P::Operator::from(ComputeOperator::ParLaunch),
             Some(operands),
         );
-        let pair = ctx.array_node(&[op, buf_ty]);
+        let pair = ctx.array_node(&[op, out_ty]);
         NativeApply {
             node: pair,
             val: None,
-            ty: buf_ty,
+            ty: out_ty,
         }
     }
 }
