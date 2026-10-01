@@ -58,6 +58,19 @@ let parser = term4
 Both are pure type erasure — the parsed output (`Expr`) is unchanged, and all
 `cargo test -p lichen-language-parser` cases (39) pass.
 
+### The levels themselves are boxed too, once there are eight of them
+
+The two boxes above bound the chain's *ends*, which was enough while the chain was
+six levels deep. `* / %`, the bitwise trio and the comparison set (see
+[operators](operators.md)) took it to eight, and an unboxed level in the middle
+re-elaborates every level under it: the same crate went from ~2 s to **~15 min**
+of rustc frontend time, which is the symptom in §Symptoms arriving again from a
+different direction. So each level now ends in `.boxed()` as well, and the rule is
+the original one applied to the growth — **box where the type is threaded**, on
+both sides of every level that a new one is stacked on. Measured after the fix
+(`CARGO_INCREMENTAL=0`, warm deps): `cargo check` 0.5 s, `cargo build` 7.2 s —
+back inside the table below.
+
 ## Optimization boundary
 
 Measured in the worktree (`CARGO_INCREMENTAL=0`, warm deps):
@@ -80,7 +93,8 @@ The boundary is reached with the **two** boxes above.
 - After the two boxes the crate is no longer frontend-bound. The remaining ~6.5 s is
   mostly **codegen + debug info** (~4.4 s), not type-check (~2.1 s). `.boxed()` can
   only shrink the frontend, so it cannot reduce the crate below its codegen time —
-  that is the hard floor for this grammar.
+  that is the hard floor for this grammar. The per-level boxes above hold the same
+  boundary: their codegen is what is left, not their type-check.
 - To go lower you would have to cut codegen itself: a workspace profile with
   `debug = 0` / `debug = "line-tables-only"` (dev builds) — or, deeper, replace the
   chumsky combinator grammar with a hand-written recursive-descent parser (the

@@ -227,6 +227,37 @@ compute.launch k (5, 3)
 }
 
 #[test]
+fn jit_lowers_the_arithmetic_comparison_and_bitwise_operators() {
+    // The operators added for real algorithms, through the **wasm** backend —
+    // one kernel per operator, so each is on the lowering path rather than
+    // hidden behind another's result: a product, an unsigned division and
+    // remainder, both directions of the order comparison that were missing,
+    // inequality, and the bitwise pair that is how a `0`/`1` result is combined.
+    //
+    // `k1` is the whole arithmetic group in one body: ((4 * 3) % 7) + (4 / 2) +
+    // ((4 < 5) & (4 > 1)) = 5 + 2 + 1 = 8.
+    //
+    // The tuple is written on one line on purpose: a comma *and* a newline
+    // between two elements is **two** separators, which the tuple grammar does
+    // not tolerate (a pre-existing wart, unrelated to these operators — the
+    // same program fails on `dev`), so this test does not depend on it.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k1 = compute.jit (x => ((x * 3) % 7) + (x / 2) + ((x < 5) & (x > 1)))
+k2 = compute.jit (p : <Int, Int> => p(0) > p(1))
+k3 = compute.jit (p : <Int, Int> => p(0) >= p(1))
+k4 = compute.jit (p : <Int, Int> => p(0) != p(1))
+k5 = compute.jit (p : <Int, Int> => (p(0) < p(1)) | (p(0) == p(1)))
+k6 = compute.jit (p : <Int, Int> => (p(0) > p(1)) ^ (p(0) == p(1)))
+(compute.launch k1 4, compute.launch k2 (5, 3), compute.launch k3 (3, 3), compute.launch k4 (5, 3), compute.launch k5 (5, 5), compute.launch k6 (5, 5))
+"#);
+    assert_eq!(
+        out, "(8, 1, 1, 1, 1, 1): <Int, Int, Int, Int, Int, Int>",
+        "the new operators jitted produced: {out:?}"
+    );
+}
+
+#[test]
 fn jit_conditional_then() {
     // `if x <= 3 then 10 else 20` lowers to `[20, 10][x <= 3]` — a 2-element
     // array index the JIT lowers to a wasm `select`.

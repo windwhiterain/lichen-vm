@@ -472,14 +472,24 @@ pub enum TypeOperator {
     /// source occurrence and the cached value is reused wherever the struct
     /// type it tags is referenced.
     Fresh,
-    /// Binary operators over `[left, right]`.  `Add`/`Sub` compute on
-    /// `Int` operands; `Leq`/`Eq` compare and yield `USize(0/1)` — no
-    /// `Bool` value exists, the comparison result drives the lazy `Index`
-    /// branch of an `if` directly.  `Eq` is the generalized equality
-    /// (docs/language-spec.md): it compares any two *same-typed* values
-    /// whole (two `Int`s, or two type values — `S::a == Int` is `1`),
-    /// while a cross-type comparison is a check-time error (the checker
-    /// unifies the operand types; `+ - <=` pin both to `Int`).
+    /// Binary operators over `[left, right]`.
+    ///
+    /// `Add`/`Sub`/`Mul`/`Div`/`Rem` and `BitAnd`/`BitOr`/`BitXor` compute on
+    /// `Int` operands; the comparisons (`Lt`/`Gt`/`Leq`/`Geq`/`Eq`/`Neq`)
+    /// compare and yield `USize(0/1)` — no `Bool` value exists, the comparison
+    /// result drives the lazy `Index` branch of an `if` directly.
+    ///
+    /// **An `Int` is unsigned**, so `Div`/`Rem` are integer division and
+    /// remainder on the machine-sized unsigned value and the four order
+    /// comparisons are the unsigned ones; `Div`/`Rem` by zero have no value and
+    /// are the one case this operator refuses at run time (see
+    /// [`DIVIDE_BY_ZERO`]).  `Mul` and `Sub` wrap, exactly as `Add` does.
+    ///
+    /// `Eq`/`Neq` are the generalized equality (docs/language-spec.md): they
+    /// compare any two *same-typed* values whole (two `Int`s, or two type
+    /// values — `S::a == Int` is `1`), while a cross-type comparison is a
+    /// check-time error (the checker unifies the operand types; every other
+    /// operator pins both to `Int`).
     ///
     /// The lowlevel deep-evaluates the operand and gates on its
     /// parameterized subtree before calling `run`, so an unbound operand
@@ -487,9 +497,37 @@ pub enum TypeOperator {
     /// lazy marker, and `run` stays lazy on any unbound side.
     Add,
     Sub,
+    Mul,
+    Div,
+    Rem,
+    Lt,
+    Gt,
     Leq,
+    Geq,
     Eq,
+    Neq,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
+
+/// The category a `Div`/`Rem` by zero is recorded under.
+///
+/// **A run-time refusal, not a check error**, and recorded through the
+/// lowlevel's general extension channel because [`eval_errors`] is a closed
+/// enum of *structural* value facts (an out-of-bounds index, a table miss) —
+/// a divisor that evaluated to zero is neither.  The operator's answer is the
+/// lazy marker, which is what every other refused computation in this language
+/// answers, so the program reports the unbound result and this says why.
+///
+/// Only the interpreter refuses.  A JIT'd kernel has already left this crate:
+/// wasm's integer division traps and SPIR-V's is undefined, and a guard would
+/// need a branch, which the GPU backend's straight-line body (the thing that
+/// makes its uninitialised output buffers sound) does not allow.  See
+/// `docs/notes/operators.md`.
+///
+/// [`eval_errors`]: lichen_lowlevel::Module::eval_errors
+pub const DIVIDE_BY_ZERO: &str = "operator.divide_by_zero";
 
 // --- the highlevel leaves' per-leaf artifact codec --------------------------
 //
@@ -584,6 +622,16 @@ define_type_operator_codec! {
     Sub = 2;
     Leq = 3;
     Eq = 4;
+    Mul = 5;
+    Div = 6;
+    Rem = 7;
+    Lt = 8;
+    Gt = 9;
+    Geq = 10;
+    Neq = 11;
+    BitAnd = 12;
+    BitOr = 13;
+    BitXor = 14;
 }
 
 // The highlevel program's operator vocabulary: a flat union of the
@@ -651,8 +699,8 @@ where
 /// `LangProgram`, a plugin-built compiler's program, and the highlevel's own
 /// default `HighProgramOperator` program all share this one impl (they differ
 /// only in which union wraps the operator).  The semantics are the
-/// spec-documented ones: `==` is the generalized equality over any two
-/// same-typed values, `+ - <=` are Int-only.
+/// spec-documented ones: `==`/`!=` are the generalized equality over any two
+/// same-typed values, every other binary operator is Int-only and unsigned.
 impl<P> OperatorExt<P> for TypeOperator
 where
     P: Program,
@@ -665,7 +713,20 @@ where
                 let id = AsField::<HighGlobal>::get_mut(&mut module.global_ext).next_type_id();
                 P::Value::type_id_value(id)
             }
-            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
+            TypeOperator::Add
+            | TypeOperator::Sub
+            | TypeOperator::Mul
+            | TypeOperator::Div
+            | TypeOperator::Rem
+            | TypeOperator::Lt
+            | TypeOperator::Gt
+            | TypeOperator::Leq
+            | TypeOperator::Geq
+            | TypeOperator::Eq
+            | TypeOperator::Neq
+            | TypeOperator::BitAnd
+            | TypeOperator::BitOr
+            | TypeOperator::BitXor => {
                 // The VM already deep-evaluates the operand and gates on its
                 // parameterized subtree, so an unbound operand is the lazy
                 // marker (the definition pass flags the node).
@@ -695,7 +756,18 @@ where
                     // `Int`, so a wrong shape only arrives here through an
                     // argument unify that already failed (recording the
                     // diagnostic) — stay lazy instead of panicking.
-                    TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq => {
+                    TypeOperator::Add
+                    | TypeOperator::Sub
+                    | TypeOperator::Mul
+                    | TypeOperator::Div
+                    | TypeOperator::Rem
+                    | TypeOperator::Lt
+                    | TypeOperator::Gt
+                    | TypeOperator::Leq
+                    | TypeOperator::Geq
+                    | TypeOperator::BitAnd
+                    | TypeOperator::BitOr
+                    | TypeOperator::BitXor => {
                         let to_usize = |value: &P::Value| match value.as_enum() {
                             Some(LowValue::USize(n)) => Some(n),
                             _ => None,
@@ -703,24 +775,41 @@ where
                         let (Some(left), Some(right)) = (to_usize(&left), to_usize(&right)) else {
                             return P::Value::from(LowValue::Parameterized);
                         };
-                        match self {
-                            TypeOperator::Add => {
-                                P::Value::from(LowValue::USize(left.wrapping_add(right)))
-                            }
-                            TypeOperator::Sub => {
-                                P::Value::from(LowValue::USize(left.wrapping_sub(right)))
-                            }
-                            TypeOperator::Leq => {
-                                P::Value::from(LowValue::USize((left <= right) as usize))
-                            }
+                        // `Int` is a machine-sized **unsigned** integer, so the
+                        // divisor check is against zero and the four order
+                        // comparisons are the unsigned ones.  A zero divisor is
+                        // the one operand shape that has no value at all, and it
+                        // is recorded rather than panicked — the same lazy
+                        // answer every other refused computation gives.
+                        let value = match self {
+                            TypeOperator::Add => left.wrapping_add(right),
+                            TypeOperator::Sub => left.wrapping_sub(right),
+                            TypeOperator::Mul => left.wrapping_mul(right),
+                            TypeOperator::Div => match left.checked_div(right) {
+                                Some(n) => n,
+                                None => return divide_by_zero(module, false),
+                            },
+                            TypeOperator::Rem => match left.checked_rem(right) {
+                                Some(n) => n,
+                                None => return divide_by_zero(module, true),
+                            },
+                            TypeOperator::Lt => (left < right) as usize,
+                            TypeOperator::Gt => (left > right) as usize,
+                            TypeOperator::Leq => (left <= right) as usize,
+                            TypeOperator::Geq => (left >= right) as usize,
+                            TypeOperator::BitAnd => left & right,
+                            TypeOperator::BitOr => left | right,
+                            TypeOperator::BitXor => left ^ right,
                             _ => unreachable!("the Int operators are handled above"),
-                        }
+                        };
+                        P::Value::from(LowValue::USize(value))
                     }
-                    // `==` is the generalized equality: it compares the two
-                    // values whole (two `Int`s, or two type values).  The
+                    // `==`/`!=` are the generalized equality: they compare the
+                    // two values whole (two `Int`s, or two type values).  The
                     // checker unifies the operands' types, so a cross-type
                     // comparison is already a reported error before `run`.
                     TypeOperator::Eq => P::Value::from(LowValue::USize((left == right) as usize)),
+                    TypeOperator::Neq => P::Value::from(LowValue::USize((left != right) as usize)),
                     TypeOperator::Fresh => unreachable!("Fresh is handled above"),
                 }
             }
@@ -729,23 +818,54 @@ where
 
     /// The low-type transfer of the type-level operators.
     ///
-    /// `Add`/`Sub`/`Leq`/`Eq` all produce a `USize` — lichen has no `Bool`
-    /// value, so a comparison result *is* a machine scalar — whatever their
+    /// Every binary operator produces a `USize` — lichen has no `Bool`
+    /// value, so a comparison result *is* a machine scalar — whatever its
     /// operands are, which is what lets a pre-apply template decide a body's
     /// arithmetic before any argument exists.  `Fresh` produces a nominal type
     /// id, which the low type vocabulary has no shape for, so it declines.
     ///
-    /// The `==` result is the honest one here: the generalized equality
+    /// The `==`/`!=` result is the honest one here: the generalized equality
     /// compares any two *same-typed* values, so its result is a scalar even
     /// when its operands are not.
     fn low_type(&self, _arguments: &[Option<LowShape>]) -> Option<LowShape> {
         match self {
-            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
-                Some(LowShape::USize)
-            }
+            TypeOperator::Add
+            | TypeOperator::Sub
+            | TypeOperator::Mul
+            | TypeOperator::Div
+            | TypeOperator::Rem
+            | TypeOperator::Lt
+            | TypeOperator::Gt
+            | TypeOperator::Leq
+            | TypeOperator::Geq
+            | TypeOperator::Eq
+            | TypeOperator::Neq
+            | TypeOperator::BitAnd
+            | TypeOperator::BitOr
+            | TypeOperator::BitXor => Some(LowShape::USize),
             TypeOperator::Fresh => None,
         }
     }
+}
+
+/// A `Div`/`Rem` whose divisor evaluated to zero: record why and stay lazy.
+///
+/// `remainder` picks the wording (a remainder by zero is as undefined as a
+/// division, and saying which operator it was is the difference between a
+/// message a reader can act on and one they have to guess at).
+fn divide_by_zero<P>(module: &mut Module<P>, remainder: bool) -> P::Value
+where
+    P: Program,
+    P::Value: ValueType,
+    P::GlobalExt: AsField<HighGlobal>,
+{
+    let operation = if remainder { "remainder" } else { "division" };
+    module.record_extension_diagnostic(
+        DIVIDE_BY_ZERO,
+        None,
+        format!("the divisor of this {operation} evaluated to 0, and there is no value for a {operation} by zero"),
+    );
+    P::Value::from(LowValue::Parameterized)
 }
 
 /// The highlevel's associated-type collector: what the checker is generic

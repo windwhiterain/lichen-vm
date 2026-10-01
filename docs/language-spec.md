@@ -47,8 +47,12 @@ expr     := lambda
 lambda   := annotated ('=>' expr)?                  -- lambda; right-assoc; lhs is a (possibly annotated) name
 annotated:= arrow ((':' arrow) | ('#' arrow) | ('?' arrow))*   -- type (':'), perspective ('#'), and/or doc ('?') annotation, right-assoc
 arrow    := cmp ('->' cmp)*                         -- function type; right-assoc
-cmp      := arith (('<=' | '==') arith)*            -- comparison, left-assoc; yields 0/1
-arith    := prefix (('+' | '-') prefix)*            -- arithmetic, left-assoc
+cmp      := bits (('<' | '>' | '<=' | '>=' | '==' | '!=') bits)*   -- comparison, left-assoc; yields 0/1
+bits     := bitxor ('|' bitxor)*                    -- bitwise or
+bitxor   := bitand ('^' bitand)*                    -- bitwise exclusive or
+bitand   := sum ('&' sum)*                          -- bitwise and
+sum      := product (('+' | '-') product)*          -- arithmetic, left-assoc
+product  := prefix (('*' | '/' | '%') prefix)*      -- product, left-assoc; tighter than '+'/'-'
 prefix   := '!' apply | apply                       -- prefix assert: `!e` asserts `e`; tighter than binary ops
 apply    := atom atom*                              -- application; left-assoc, tightest
 atom     := primary postfix*                        -- a primary, then glued postfix forms
@@ -90,7 +94,7 @@ farg     := '.' name expr                         -- named instantiation argumen
   `else`, `return`, `pub`, `cache`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
   `~`, `!`, and the
-  operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
+  operators `+ - * / % < > <= >= == != & | ^` are punctuation.  A binding is **block-wide** by
   default (its name is in scope throughout the block, forward and backward, so
   it may reference and recurse with the block's other bindings) and gets the
   restrictive, sequential form with `let`.  A statement separator is any of
@@ -133,8 +137,9 @@ farg     := '.' name expr                         -- named instantiation argumen
   content is any character except `"`.  An unterminated string is a lex error.
   A string is the immutable builtin `string` value — atomic in this universe,
   exactly like an integer: there is no mutation, indexing, or concatenation.
-- **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` → `<=` / `==`
-  → `+` / `-` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
+- **Precedence** (loosest → tightest): `=>` → `:` / `#` / `?` → `->` →
+  `<=` / `==` / `!=` / `<` / `>` / `>=` → `|` → `^` → `&` → `+` / `-` →
+  `*` / `/` / `%` → `!` prefix → application → postfix (glued delimiters) → atoms.  `x => e : T`
   parses as `x => (e : T)` — lambda bodies extend through annotations, as do
   array lengths: `array<Int, x : T>` is the array type whose length is the annotated
   expression.  `#` and `?` bind at the same precedence as `:`, so
@@ -152,7 +157,9 @@ farg     := '.' name expr                         -- named instantiation argumen
   **only the slots it spells** and preserves the rest — `(x # 8 ? doc) # 4`
   re-checks the perspective and keeps the doc, `(x # 8 ? a) ? b` keeps the
   perspective and replaces the doc.  A comparison
-  (`<=` / `==`) yields `0` or `1`, driving an `if` branch.  `!`
+  yields `0` or `1`, driving an `if` branch; the bitwise operators nest C-style
+  (`&` in `^` in `|`) but bind **tighter** than a comparison, so `a & b == c` is
+  `(a & b) == c`.  `!`
   is a prefix assert: `!e` compiles to the highlevel `assert(e)` — a side
   constraint, not a unify.  The checker force-evaluates `e` after the
   definition pass (ignoring laziness) and requires `USize(1)`; a condition
@@ -236,6 +243,23 @@ delimiter is a fresh atom — an argument of an application:
   tuple in argument position is parenthesized: `f (<Int, Type>)`.  The array
   type is now **keyword-led** — `array<T, n>` (an `array` form in §2), never the
   postfix `<` form.
+- **`<` and `>` are also comparisons**, and what tells the two jobs apart is the
+  token's *shape*, not a mode or a spacing convention beyond the `Glue` rule
+  above: a **glued** `<` is the raw index; otherwise an *expression before* the
+  token makes it a comparison and an *expression after* it is that comparison's
+  right operand.  `a < b` and `2 > 1` compare; `struct<Int, Type>` and `X<a>` are
+  brackets.  Two consequences, both deliberate:
+  - **`>` compares only when an expression follows it unglued.**  A `>` followed
+    by something that cannot begin an expression (a separator, a closer, the end
+    of the program) closes the bracket it is in, and so does a `>` followed by a
+    *glued* delimiter — a glued `(` or `<` belongs to the angle form
+    (`struct<Int, Int>(1, 2)` instantiates, `struct<Int, string><0>` reads a
+    field of the type as a value).
+  - **Application wins over comparison for `<`.**  `f <Int, Type>` is still `f`
+    applied to the tuple type; `a < b` is the comparison only because `<b>` is
+    not a tuple type (one element), so the application is tried, fails, and the
+    comparison takes its place.  A comparison's `<` is therefore written with a
+    space before it, and `a<b>` (glued) stays the raw index.
 - `X::a` (glued `::`) is a **raw named read**: field `a` of a **TypeStruct value**,
   whose type must itself be a TypeStruct kind (the name table lies there, at
   `container_ty[0][1]`).  It reads the field's *type* as a value — `struct<.a
@@ -397,6 +421,21 @@ span back to the original file.
   [type-system-cleanup-plan](notes/type-system-cleanup-plan.md)), not a
   caveat: the flip side of `Type : Type`'s flexibility is that decidability
   of a lichen program is the embedding's responsibility.
+- **The computational operators.**  `+ - * / %` are arithmetic on `Int`; the
+  comparisons `< > <= >=` compare two `Int`s; `==` / `!=` are the
+  **generalized** equality over any two *same-typed* values (two `Int`s, or two
+  type values — `S::a == Int` is `1`); and `& | ^` are bitwise, which over two
+  comparison results are the language's `and` / `xor` / `or`.  Every operator
+  yields an `Int`: there is no `Bool`, so a comparison's `0`/`1` is what drives
+  an `if`.  An `Int` is a machine-sized **unsigned** integer, so `+ - *` wrap,
+  `/` and `%` are the unsigned division and remainder, the four order
+  comparisons are unsigned (`0 - 1 > 1` is `1`), and every implementation —
+  interpreter, CPU-JIT, GPU-JIT — reads them the same way.  A **zero divisor**
+  has no value: the interpreter records `operator.divide_by_zero` and answers
+  the lazy marker, as it does for every other refused computation, while inside
+  a jitted kernel it stays the author's responsibility (the CPU kernel's wasm
+  traps; a GPU kernel's is undefined, and a guard would cost a branch on the
+  device's hottest path).  See [operators](notes/operators.md).
 - **Indexing.**  `e[i]` reads the `i`-th element of an array, tuple, or
   struct instance (a struct instance's positional fields are its wrapped
   tuple's elements).  A
@@ -548,7 +587,7 @@ spans `(line, column)`, 1-based) filled as each IR node is created:
 | `x : T => e` | `Function { parameter, parameter_type: Some(compile(T)), parameter_attribute: None, return }` — the annotated parameter's type, compiled in body scope (the §4.2 desugar kept as an optimization) |
 | `x # n => e` | `Function { parameter, parameter_type: None, parameter_attribute: Some(compile(n)), return }` — the annotated parameter's perspective, also body-scope |
 | `e1 e2` | `Apply { function, argument }` |
-| `a op b` (`+`, `-`, `<=`, `==`) | `BinOp { operator, left, right }` |
+| `a op b` (`+`, `-`, `*`, `/`, `%`, `<`, `>`, `<=`, `>=`, `==`, `!=`, `&`, `\|`, `^`) | `BinOp { operator, left, right }` |
 | `!e` | `Assert { condition }` — a side constraint: the expression's pair is the condition's own; the condition's value node registers as an assert point the checker force-evaluates to `USize(1)` |
 | `type_of` | a generic `Function { parameter, … }` whose body is `TypeOf { value: parameter }` — element 1 of the argument's `[value, type]` pair, read lazily |
 | `if c then t else e` | `Index { array: [e, t], index: c }` — desugared to the lazy branch index; there is no `If` kind |

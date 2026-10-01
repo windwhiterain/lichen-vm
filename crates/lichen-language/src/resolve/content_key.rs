@@ -187,6 +187,16 @@ impl KeyWriter {
                     crate::ast::BinOp::Sub => 1,
                     crate::ast::BinOp::Leq => 2,
                     crate::ast::BinOp::Eq => 3,
+                    crate::ast::BinOp::Mul => 4,
+                    crate::ast::BinOp::Div => 5,
+                    crate::ast::BinOp::Rem => 6,
+                    crate::ast::BinOp::Lt => 7,
+                    crate::ast::BinOp::Gt => 8,
+                    crate::ast::BinOp::Geq => 9,
+                    crate::ast::BinOp::Neq => 10,
+                    crate::ast::BinOp::BitAnd => 11,
+                    crate::ast::BinOp::BitOr => 12,
+                    crate::ast::BinOp::BitXor => 13,
                 });
                 self.expr(left);
                 self.expr(right);

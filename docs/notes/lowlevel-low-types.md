@@ -89,7 +89,8 @@ And one computation route for what observation cannot reach:
     seeds the parameter class and runs the pass. The authority also resolves
     the type slot's one indirection (`low_type_of_slot`), so the caller still
     reads no layout at all (§6).
-  - **Transfers**: `Add`/`Sub`/`Leq`/`Eq → `USize`;
+  - **Transfers**: every binary operator (`Add`/`Sub`/`Mul`/`Div`/`Rem`, the
+    comparisons, the bitwise set) transfers to `USize`;
     `Index(Tuple(ts), k) → ts[k]`; `Apply(Function(d, c), _) → c`; the
     lowlevel owns the `LowOperator` transfers, extension operators go through
     an `OperatorExt` hook — the same `Program`-hook home as D1's deferral

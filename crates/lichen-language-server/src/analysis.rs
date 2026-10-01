@@ -1321,9 +1321,17 @@ fn classify_token_kind(
         | TokenKind::Dollar
         | TokenKind::Equals
         | TokenKind::Eq
+        | TokenKind::Neq
         | TokenKind::Leq
+        | TokenKind::Geq
         | TokenKind::Plus
         | TokenKind::Minus
+        | TokenKind::Star
+        | TokenKind::Slash
+        | TokenKind::Percent
+        | TokenKind::Amp
+        | TokenKind::Pipe
+        | TokenKind::Caret
         | TokenKind::Dot
         | TokenKind::Tilde(_) => Some((SemanticTokenType::OPERATOR, Vec::new())),
         // Delimiters, separators, Glue and Eof carry no semantic color.

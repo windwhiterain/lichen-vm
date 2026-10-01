@@ -43,20 +43,37 @@ impl<A> Default for Schema<A> {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SchemaId(pub u32);
 
-/// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`) yield
-/// their result; the comparisons (`Leq`, `Eq`) yield `USize(0/1)` so the
-/// result can drive the lazy `Index` branch of an `if` — there is no
-/// `Bool` value in the universe.
+/// A binary operation on integers.  The arithmetic ops (`Add`, `Sub`, `Mul`,
+/// `Div`, `Rem`) and the bitwise ops (`BitAnd`, `BitOr`, `BitXor`) yield their
+/// result; the comparisons (`Lt`, `Gt`, `Leq`, `Geq`, `Eq`, `Neq`) yield
+/// `USize(0/1)` so the result can drive the lazy `Index` branch of an `if` —
+/// there is no `Bool` value in the universe.
+///
+/// `Eq`/`Neq` are the **generalized** equality (see `docs/language-spec.md`):
+/// they compare any two same-typed values whole, so they are the only two whose
+/// operands the checker does not pin to `Int`.  Everything else is `Int`-only,
+/// and unsigned — an `Int` is a machine-sized unsigned integer, so `Div`/`Rem`
+/// are the unsigned division and remainder.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
     Sub,
+    Mul,
+    Div,
+    Rem,
+    Lt,
+    Gt,
     Leq,
+    Geq,
     Eq,
+    Neq,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 /// Every [`BinOp`] names the [`TypeOperator`] the checker runs: the two enums
-/// spell the same four operators, so the checker converts once here instead
+/// spell the same operators, so the checker converts once here instead
 /// of repeating the mapping at each site.  [`TypeOperator::Fresh`] is the
 /// other direction and has no [`BinOp`] spelling — it mints a nominal struct
 /// id, which no source operator does.
@@ -65,8 +82,18 @@ impl From<BinOp> for TypeOperator {
         match operator {
             BinOp::Add => TypeOperator::Add,
             BinOp::Sub => TypeOperator::Sub,
+            BinOp::Mul => TypeOperator::Mul,
+            BinOp::Div => TypeOperator::Div,
+            BinOp::Rem => TypeOperator::Rem,
+            BinOp::Lt => TypeOperator::Lt,
+            BinOp::Gt => TypeOperator::Gt,
             BinOp::Leq => TypeOperator::Leq,
+            BinOp::Geq => TypeOperator::Geq,
             BinOp::Eq => TypeOperator::Eq,
+            BinOp::Neq => TypeOperator::Neq,
+            BinOp::BitAnd => TypeOperator::BitAnd,
+            BinOp::BitOr => TypeOperator::BitOr,
+            BinOp::BitXor => TypeOperator::BitXor,
         }
     }
 }

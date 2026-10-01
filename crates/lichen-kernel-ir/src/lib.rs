@@ -314,12 +314,49 @@ impl KernelShape {
 }
 
 /// A binary arithmetic/comparison operator of the kernel-safe subset.
+///
+/// # Arithmetic is unsigned, because the language's `Int` is
+///
+/// An `Int` reaches the lowered graph as a machine-sized **unsigned** integer
+/// (`LowValue::USize`, and `Sub` wraps), so every arithmetic operator here means
+/// the unsigned one: `/` and `%` are `OpUDiv`/`OpUMod` and `<` `<=` `>` `>=` are
+/// the unsigned comparisons, not their signed siblings.  A backend that emitted
+/// the signed form would agree with the interpreter for every value below
+/// `2^63` and disagree above it, which is reachable (`0 - 1`) and silent — so
+/// the choice is stated here, once, rather than left to each emitter's default.
+///
+/// # A comparison yields a scalar, not a boolean
+///
+/// There is no `Bool` value in the language: a comparison yields `0`/`1`, which
+/// is what drives a lazy `Index` branch (the conditional form) and what a
+/// `Select` consumes.  A target whose comparisons yield a native boolean (SPIR-V)
+/// therefore *materialises* the scalar at the comparison; a target whose
+/// `select` takes a narrower condition (wasm's `i32`) narrows it there.  Both
+/// decisions are the backend's, which is why neither is an instruction here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelBin {
+    /// The two arithmetic families: `Add`/`Sub`/`Mul` and `Div`/`Rem`.  `Div`
+    /// and `Rem` are undefined on a zero divisor, which is the one thing the
+    /// kernel-safe subset does not turn into a diagnostic — see
+    /// `docs/notes/operators.md`.
     Add,
     Sub,
+    Mul,
+    Div,
+    Rem,
+    /// The comparisons, each yielding `0`/`1`.
+    Lt,
+    Gt,
     Leq,
+    Geq,
     Eq,
+    Neq,
+    /// The bitwise operators, which are also the language's boolean operators:
+    /// a comparison's result is `0`/`1`, so `and`/`or`/`xor` over those values
+    /// are `BitAnd`/`BitOr`/`BitXor`.
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 /// One abstract instruction in a lowered kernel body.
@@ -332,7 +369,7 @@ pub enum KernelBin {
 pub enum KernelInstr {
     /// Push a constant of the fragment's declared [`IntWidth`].
     Const(i64),
-    /// A binary `add/sub/leq/eq` over the top two stack values.
+    /// A binary [`KernelBin`] operator over the top two stack values.
     Bin(KernelBin),
     /// Read a parameter leaf, by its offset in the flattened domain.
     LocalGet(u32),

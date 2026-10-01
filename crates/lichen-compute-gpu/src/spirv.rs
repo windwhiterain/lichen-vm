@@ -2,12 +2,13 @@
 //!
 //! # Why this is hand-written
 //!
-//! The IR has five value-producing operations and two buffer operations, so the
-//! whole emitter is a small stack machine over [`KernelInstr`]. A builder crate
-//! would not remove the part that actually goes wrong: the **module contract** —
-//! the section order, which capabilities are declared, which variables carry
-//! which decorations, and what the entry point's interface lists. A builder
-//! spells opcodes for you and validates nothing about a module's shape.
+//! The IR has a handful of value-producing operations and two buffer
+//! operations, so the whole emitter is a small stack machine over
+//! [`KernelInstr`]. A builder crate would not remove the part that actually goes
+//! wrong: the **module contract** — the section order, which capabilities are
+//! declared, which variables carry which decorations, and what the entry point's
+//! interface lists. A builder spells opcodes for you and validates nothing about
+//! a module's shape.
 //!
 //! What removes that risk instead is offline validation: the emitted words can be
 //! run through `spirv-val` and disassembled with `spirv-dis` before they reach a
@@ -42,13 +43,23 @@
 //!
 //! # The one place this target disagrees with the wasm backend
 //!
-//! [`KernelInstr::I32WrapI64`] is a **no-op here**, and that is the clearest
-//! evidence the IR is target-neutral. The wasm MVP's `select` takes an `i32`
-//! condition, so a value comparison — an `i64` — must be narrowed first; that
-//! instruction exists solely for wasm. SPIR-V's comparison operations
-//! (`OpSLessThanEqual`, `OpIEqual`) already yield `OpTypeBool`, which is what
-//! `OpSelect` takes, so the narrowing has nowhere to go. Same instruction stream,
-//! one target needs it and the other does not.
+//! The IR says a comparison yields the `0`/`1` scalar, because lichen has no
+//! `Bool` value. `KernelInstr::I32WrapI64` exists because the wasm MVP's `select`
+//! takes an `i32` *condition*, so a comparison has to be narrowed to drive one;
+//! SPIR-V's comparison operations (`OpULessThanEqual`, `OpIEqual`) already yield
+//! `OpTypeBool`, which is what `OpSelect` takes. So for the shape the compiler
+//! actually emits for an `if` — a comparison, the narrowing, then a select — the
+//! narrowing has nowhere to go here, and **it is a no-op**: the same instruction
+//! stream, one target needing it (there, to build the condition) and the other
+//! not. That is the clearest evidence the IR is target-neutral.
+//!
+//! What neither backend can escape is the other direction: a comparison *used as
+//! a value* — a bitwise operand, a buffer element, a select arm, another
+//! comparison's operand — has to become the scalar the language says it is, and
+//! a scalar *condition* has to become a bool. Wasm gets both from the two
+//! integer instructions that surround a comparison; this target emits the same
+//! two conversions where the position demands them instead (see
+//! [`as_scalar`]/[`as_condition`]). Same IR, same semantics, two spellings.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -83,12 +94,21 @@ mod op {
     pub const LABEL: u16 = 248;
     pub const RETURN: u16 = 253;
     pub const U_CONVERT: u16 = 113;
-    pub const BITCAST: u16 = 124;
     pub const I_ADD: u16 = 128;
     pub const I_SUB: u16 = 130;
-    pub const I_EQUAL: u16 = 170;
+    pub const I_MUL: u16 = 132;
+    pub const U_DIV: u16 = 134;
+    pub const U_MOD: u16 = 137;
     pub const SELECT: u16 = 169;
-    pub const S_LESS_THAN_EQUAL: u16 = 179;
+    pub const I_EQUAL: u16 = 170;
+    pub const I_NOT_EQUAL: u16 = 171;
+    pub const U_GREATER_THAN: u16 = 172;
+    pub const U_GREATER_THAN_EQUAL: u16 = 174;
+    pub const U_LESS_THAN: u16 = 176;
+    pub const U_LESS_THAN_EQUAL: u16 = 178;
+    pub const BITWISE_OR: u16 = 197;
+    pub const BITWISE_XOR: u16 = 198;
+    pub const BITWISE_AND: u16 = 199;
 }
 
 /// `SpvCapabilityShader`, `SpvCapabilityInt64`.
@@ -259,15 +279,40 @@ impl Inst {
     }
 }
 
-/// A stack operand: the SSA id of a value, plus the constant it denotes when the
-/// instruction that produced it was a `Const`.
+/// A stack operand: the SSA id of a value, the constant it denotes when the
+/// instruction that produced it was a `Const`, and whether its type is this
+/// target's `bool` rather than the fragment's 64-bit integer.
 ///
 /// The constant is tracked beside the id because it serves a *different*
 /// purpose. A buffer operation's position selects **which** storage-buffer
 /// variable to reach — a compile-time choice, so it has to be read off the stack
 /// as a number. The element index is the other stack value and *is* dynamic, and
 /// goes to `OpAccessChain` as an id.
-type Slot = (u32, Option<i64>);
+///
+/// # Why the third field exists
+///
+/// **The IR is untyped and this target is not.** A comparison here yields
+/// `OpTypeBool` — the shape `OpSelect` wants, and the one place this backend
+/// differs from wasm's, whose comparisons yield a narrow integer instead. But
+/// the *language* says a comparison yields the `0`/`1` scalar, and a kernel may
+/// use it as one: a bitwise operand (`(a < b) & c`), a comparison's own operand
+/// (`(a < b) == c`), a stored element, a `Select` arm. In every one of those
+/// positions a bool is the wrong type, and a module that mixed them would be
+/// rejected by the driver rather than compute something else. So each slot
+/// records which of the two it holds, and the two coercions
+/// ([`as_scalar`]/[`as_condition`]) are emitted exactly where a position demands
+/// the other — which for the common case (`if` over a comparison) is nowhere.
+type Slot = (u32, Option<i64>, bool);
+
+/// A slot holding the fragment's 64-bit scalar.
+const fn scalar(id: u32) -> Slot {
+    (id, None, false)
+}
+
+/// A slot holding a comparison's `OpTypeBool`.
+const fn condition(id: u32) -> Slot {
+    (id, None, true)
+}
 
 /// Every module-scope id, allocated before anything is emitted.
 struct Ids {
@@ -275,11 +320,16 @@ struct Ids {
     label: u32,
     void: u32,
     boolean: u32,
+    /// The fragment's own integer type: **unsigned** 64-bit, because the
+    /// language's `Int` is a machine-sized unsigned integer.  It is what every
+    /// value in the body has, what a buffer element holds, and the type the
+    /// unsigned opcodes (`OpUDiv`, `OpUMod`, `OpULessThan`, …) require — SPIR-V
+    /// checks that operand, so declaring this signed would make a kernel that
+    /// divides, takes a remainder or compares *invalid* rather than wrong.
+    /// `spirv-val` rules on that offline; see the module docs.
     ulong: u32,
-    /// An unsigned 64-bit type, used only to widen the unsigned invocation id.
-    /// `OpUConvert`'s result must be unsigned, so the widening lands here and is
-    /// then reinterpreted as the signed value the body computes with.
-    u64: u32,
+    /// The 32-bit unsigned type of an invocation id's component, and of an
+    /// access chain's member indices.
     uint: u32,
     v3uint: u32,
     /// The single-member struct a storage buffer's element type must be.
@@ -296,9 +346,16 @@ struct Ids {
     buffer_struct: u32,
     ptr_in: u32,
     ptr_array: u32,
+    /// A pointer to one element of a storage buffer, in the storage buffer
+    /// storage class — what an access chain produces.
     ptr_ulong: u32,
     fn_ty: u32,
+    /// The 32-bit `0` an access chain's member indices are built from.
     zero: u32,
+    /// The 64-bit `1` and `0` a comparison is materialised into a scalar with —
+    /// the operands of the `OpSelect` [`as_scalar`] emits.
+    one_ulong: u32,
+    zero_ulong: u32,
     gid: u32,
     /// The first of `binding.total()` consecutive storage-buffer variables.
     buffers: u32,
@@ -351,19 +408,20 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         void: 3,
         boolean: 4,
         ulong: 5,
-        u64: 6,
-        uint: 7,
-        v3uint: 8,
-        elem: 9,
-        array: 10,
-        buffer_struct: 11,
-        ptr_in: 12,
-        ptr_array: 13,
-        ptr_ulong: 14,
-        fn_ty: 15,
-        zero: 16,
-        gid: 17,
-        buffers: 18,
+        uint: 6,
+        v3uint: 7,
+        elem: 8,
+        array: 9,
+        buffer_struct: 10,
+        ptr_in: 11,
+        ptr_array: 12,
+        ptr_ulong: 13,
+        fn_ty: 14,
+        zero: 15,
+        one_ulong: 16,
+        zero_ulong: 17,
+        gid: 18,
+        buffers: 19,
     };
     let mut next = ids.buffers + binding.total() as u32;
     let mut constants: HashMap<i64, u32> = HashMap::new();
@@ -374,8 +432,8 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
     let mut stack: Vec<Slot> = Vec::new();
 
     // The index value: the invocation id's x component, widened to the fragment's
-    // 64-bit integer. An index is never negative, so the zero extension and the
-    // CPU path's index parameter are the same value.
+    // 64-bit integer. An index is never negative, so the widening is exact and
+    // the CPU path's index parameter is the same value.
     let index_value = next;
     next += 1;
     {
@@ -383,20 +441,14 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
         next += 1;
         let component = next;
         next += 1;
-        let widened = next;
-        next += 1;
         code.push(Inst::new(op::LOAD, vec![ids.v3uint, loaded, ids.gid]));
         code.push(Inst::new(
             op::COMPOSITE_EXTRACT,
             vec![ids.uint, component, loaded, 0],
         ));
-        // Widen into the unsigned type, then reinterpret the same 64 bits as the
-        // signed integer the body computes with. `OpUConvert`'s result type must
-        // be unsigned, so the widening cannot land on the signed type directly.
-        code.push(Inst::new(op::U_CONVERT, vec![ids.u64, widened, component]));
         code.push(Inst::new(
-            op::BITCAST,
-            vec![ids.ulong, index_value, widened],
+            op::U_CONVERT,
+            vec![ids.ulong, index_value, component],
         ));
     }
 
@@ -417,48 +469,93 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     constants.insert(*value, id);
                     id
                 };
-                stack.push((id, Some(*value)));
+                stack.push((id, Some(*value), false));
             }
             KernelInstr::Bin(operator) => {
                 let rhs = pop(&mut stack, at)?;
                 let lhs = pop(&mut stack, at)?;
+                // A comparison is the one operator whose operands may not be
+                // scalars — `(a < b) == c` compares the *scalar* a comparison
+                // means — and the one whose result is not one.  Every other
+                // operator takes and produces the fragment's 64-bit integer.
+                let (lhs, rhs) = (
+                    as_scalar(lhs, &ids, &mut code, &mut next),
+                    as_scalar(rhs, &ids, &mut code, &mut next),
+                );
                 let result = next;
                 next += 1;
-                let (opcode, result_type) = match operator {
-                    KernelBin::Add => (op::I_ADD, ids.ulong),
-                    KernelBin::Sub => (op::I_SUB, ids.ulong),
+                let (opcode, result_type, result_is_condition) = match operator {
+                    KernelBin::Add => (op::I_ADD, ids.ulong, false),
+                    KernelBin::Sub => (op::I_SUB, ids.ulong, false),
+                    KernelBin::Mul => (op::I_MUL, ids.ulong, false),
+                    // An `Int` is unsigned: `OpSDiv`/`OpSRem` would agree below
+                    // 2^63 and differ above, silently.  `OpUMod` is the
+                    // remainder the language's `%` means (`OpSRem` rounds
+                    // toward zero, which is a different function altogether).
+                    KernelBin::Div => (op::U_DIV, ids.ulong, false),
+                    KernelBin::Rem => (op::U_MOD, ids.ulong, false),
                     // A comparison yields a bool on this target, which is exactly
-                    // what `Select` consumes — the wasm backend's narrowing step
-                    // has no counterpart here.
-                    KernelBin::Leq => (op::S_LESS_THAN_EQUAL, ids.boolean),
-                    KernelBin::Eq => (op::I_EQUAL, ids.boolean),
+                    // what `Select` consumes — the wasm backend's widening to a
+                    // scalar has no counterpart here, and no cost.
+                    KernelBin::Lt => (op::U_LESS_THAN, ids.boolean, true),
+                    KernelBin::Gt => (op::U_GREATER_THAN, ids.boolean, true),
+                    KernelBin::Leq => (op::U_LESS_THAN_EQUAL, ids.boolean, true),
+                    KernelBin::Geq => (op::U_GREATER_THAN_EQUAL, ids.boolean, true),
+                    KernelBin::Eq => (op::I_EQUAL, ids.boolean, true),
+                    KernelBin::Neq => (op::I_NOT_EQUAL, ids.boolean, true),
+                    // The bitwise operators, which over two comparison results
+                    // are the language's `and`/`xor`/`or` — the place a
+                    // comparison's scalar materialisation is actually paid for.
+                    KernelBin::BitAnd => (op::BITWISE_AND, ids.ulong, false),
+                    KernelBin::BitOr => (op::BITWISE_OR, ids.ulong, false),
+                    KernelBin::BitXor => (op::BITWISE_XOR, ids.ulong, false),
                 };
                 code.push(Inst::new(opcode, vec![result_type, result, lhs.0, rhs.0]));
-                stack.push((result, None));
+                stack.push(if result_is_condition {
+                    condition(result)
+                } else {
+                    scalar(result)
+                });
             }
             KernelInstr::LocalGet(local) => {
                 if *local != index {
                     return Err(SpirvRefusal::NonIndexParameter { local: *local, at });
                 }
-                stack.push((index_value, None));
+                stack.push(scalar(index_value));
             }
-            // No counterpart on this target; see the module docs.
-            KernelInstr::I32WrapI64 => {}
+            // The condition a `select` needs.  **Not a no-op here**: wasm's
+            // `i32.wrap_i64` narrows an `i64` condition to the `i32` its
+            // `select` takes, and this target's `select` takes a *bool*, so the
+            // same instruction is where an `i64` condition becomes one.  When
+            // the condition is already a comparison's bool — which is what the
+            // emitter in `lichen-compute` produces for an `if` — it is a no-op,
+            // and that is the case the module docs describe.
+            KernelInstr::I32WrapI64 => {
+                let popped = pop(&mut stack, at)?;
+                stack.push(as_condition(popped, &ids, &mut code, &mut next));
+            }
             KernelInstr::Select => {
-                let condition = pop(&mut stack, at)?;
+                let selector = pop(&mut stack, at)?;
                 let otherwise = pop(&mut stack, at)?;
                 let then = pop(&mut stack, at)?;
+                // The arms are the language's scalars (a `select`'s result type
+                // is its arms' type, and a scalar is what a lichen value is),
+                // and the selector is the bool `select` takes.
+                let then = as_scalar(then, &ids, &mut code, &mut next);
+                let otherwise = as_scalar(otherwise, &ids, &mut code, &mut next);
+                let selector = as_condition(selector, &ids, &mut code, &mut next);
                 let result = next;
                 next += 1;
                 code.push(Inst::new(
                     op::SELECT,
-                    vec![ids.ulong, result, condition.0, then.0, otherwise.0],
+                    vec![ids.ulong, result, selector.0, then.0, otherwise.0],
                 ));
-                stack.push((result, None));
+                stack.push(scalar(result));
             }
             KernelInstr::BufferReadCall => {
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
+                let element = as_scalar(element, &ids, &mut code, &mut next);
                 let slot = buffer_slot(position, at, 0, binding.inputs, "input")?;
                 let pointer = next;
                 next += 1;
@@ -478,12 +575,16 @@ pub fn compile(fragment: &KernelFragment, binding: Binding) -> Result<Vec<u32>, 
                     ],
                 ));
                 code.push(Inst::new(op::LOAD, vec![ids.ulong, loaded, pointer]));
-                stack.push((loaded, None));
+                stack.push(scalar(loaded));
             }
             KernelInstr::BufferWriteCall => {
                 let value = pop(&mut stack, at)?;
                 let element = pop(&mut stack, at)?;
                 let position = pop(&mut stack, at)?;
+                // A buffer element is a 64-bit scalar whatever the body computed
+                // it as, so a comparison stored into one is materialised here.
+                let value = as_scalar(value, &ids, &mut code, &mut next);
+                let element = as_scalar(element, &ids, &mut code, &mut next);
                 let slot = buffer_slot(position, at, binding.inputs, binding.outputs, "output")?;
                 let pointer = next;
                 next += 1;
@@ -617,8 +718,10 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
     let types = vec![
         Inst::new(op::TYPE_VOID, vec![ids.void]),
         Inst::new(op::TYPE_BOOL, vec![ids.boolean]),
-        Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 1]),
-        Inst::new(op::TYPE_INT, vec![ids.u64, 64, 0]),
+        // The fragment's own 64-bit integer is **unsigned** (signedness `0`):
+        // the language's `Int` is, and the unsigned opcodes a kernel divides,
+        // takes a remainder and compares with require it. See [`Ids::ulong`].
+        Inst::new(op::TYPE_INT, vec![ids.ulong, 64, 0]),
         Inst::new(op::TYPE_INT, vec![ids.uint, 32, 0]),
         Inst::new(op::TYPE_VECTOR, vec![ids.v3uint, ids.uint, 3]),
         Inst::new(op::TYPE_STRUCT, vec![ids.elem, ids.ulong]),
@@ -644,7 +747,15 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
     ];
     emit_all(&mut out, &types);
 
-    let mut constants = vec![Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0])];
+    let mut constants = vec![
+        Inst::new(op::CONSTANT, vec![ids.uint, ids.zero, 0]),
+        // The i64 `1` and `0` a comparison is materialised into a scalar with.
+        // Declared unconditionally with the other constants — `OpConstant` is
+        // module-scope, and an unused constant is legal — because which body
+        // needs them is known only after the walk above.
+        Inst::new(op::CONSTANT, vec![ids.ulong, ids.one_ulong, 1, 0]),
+        Inst::new(op::CONSTANT, vec![ids.ulong, ids.zero_ulong, 0, 0]),
+    ];
     constants.extend(literals.iter().map(|literal| Inst {
         opcode: literal.opcode,
         operands: literal.operands.clone(),
@@ -689,6 +800,50 @@ fn assemble(ids: &Ids, binding: Binding, literals: &[Inst], code: &[Inst], bound
 /// Pop one operand, or refuse.
 fn pop(stack: &mut Vec<Slot>, at: usize) -> Result<Slot, SpirvRefusal> {
     stack.pop().ok_or(SpirvRefusal::UnbalancedStack { at })
+}
+
+/// The fragment's 64-bit scalar for `slot`, materialising a comparison's bool.
+///
+/// The language says a comparison yields `0`/`1`, so a bool that reaches a
+/// scalar position has to become that scalar — `OpSelect` over the two i64
+/// constants is the conversion (there is no `OpConvertBoolToInt`; a bool's
+/// stored form is not defined).
+///
+/// **A bool already popped as a scalar is not the same thing as one that never
+/// was**, which is why the flag rides on the slot rather than being re-derived:
+/// the IR is untyped, so "was this a comparison" is knowledge only this walk
+/// has.
+fn as_scalar(slot: Slot, ids: &Ids, code: &mut Vec<Inst>, next: &mut u32) -> Slot {
+    let (id, constant, is_condition) = slot;
+    if !is_condition {
+        return slot;
+    }
+    let result = *next;
+    *next += 1;
+    code.push(Inst::new(
+        op::SELECT,
+        vec![ids.ulong, result, id, ids.one_ulong, ids.zero_ulong],
+    ));
+    (result, constant, false)
+}
+
+/// The `bool` a `select` takes for `slot`, converting a scalar.
+///
+/// **Non-zero is true**, which is what wasm's `select` means by its `i32`
+/// condition — the instruction this one stands in for (`I32WrapI64`) narrows
+/// there and converts here, so the two targets agree on what a condition is.
+fn as_condition(slot: Slot, ids: &Ids, code: &mut Vec<Inst>, next: &mut u32) -> Slot {
+    let (id, constant, is_condition) = slot;
+    if is_condition {
+        return slot;
+    }
+    let result = *next;
+    *next += 1;
+    code.push(Inst::new(
+        op::I_NOT_EQUAL,
+        vec![ids.boolean, result, id, ids.zero_ulong],
+    ));
+    (result, constant, true)
 }
 
 /// Resolve a buffer position into a slot in the module's buffer list.

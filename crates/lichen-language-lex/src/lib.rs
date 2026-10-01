@@ -125,12 +125,28 @@ pub enum TokenKind {
     Equals,
     /// '==' -- equality.
     Eq,
+    /// '!=' -- inequality (the same generalized equality as `==`, negated).
+    Neq,
     /// '<=' -- less-or-equal.
     Leq,
+    /// '>=' -- greater-or-equal.
+    Geq,
     /// '+' -- addition.
     Plus,
     /// '-' -- subtraction.
     Minus,
+    /// '*' -- multiplication.
+    Star,
+    /// '/' -- integer division.
+    Slash,
+    /// '%' -- remainder.
+    Percent,
+    /// '&' -- bitwise and; over two `0`/`1` comparison results it is `and`.
+    Amp,
+    /// '|' -- bitwise or; over two `0`/`1` comparison results it is `or`.
+    Pipe,
+    /// '^' -- bitwise exclusive or.
+    Caret,
     /// '.' -- a named field read `a.b`.
     Dot,
     /// '('.
@@ -145,9 +161,16 @@ pub enum TokenKind {
     LBrace,
     /// '}'.
     RBrace,
-    /// '<' -- exclusively type-level.
+    /// '<' -- exclusively type-level as a **delimiter**, and the less-than
+    /// comparison as an operator.  Which of the two is the parser's decision,
+    /// not the lexer's, and the rule it uses is the Glue marker: a `<` that is
+    /// *glued* to the previous token is the raw index `X<e>`, and a `<` with a
+    /// space before it is either a tuple type at an operand position or the
+    /// comparison — the comparison when an expression precedes it.
     LAngle,
-    /// '>' -- closes '<'.
+    /// '>' -- closes '<' as a delimiter, and is the greater-than comparison as
+    /// an operator.  A `>` followed by an expression is the comparison; a `>`
+    /// followed by anything else closes the angle bracket it is in.
     RAngle,
     /// A '~' shallow marker.
     Tilde(usize),
@@ -192,9 +215,17 @@ impl TokenKind {
             TokenKind::Dollar => "'$'".to_string(),
             TokenKind::Equals => "'='".to_string(),
             TokenKind::Eq => "'=='".to_string(),
+            TokenKind::Neq => "'!='".to_string(),
             TokenKind::Leq => "'<='".to_string(),
+            TokenKind::Geq => "'>='".to_string(),
             TokenKind::Plus => "'+'".to_string(),
             TokenKind::Minus => "'-'".to_string(),
+            TokenKind::Star => "'*'".to_string(),
+            TokenKind::Slash => "'/'".to_string(),
+            TokenKind::Percent => "'%'".to_string(),
+            TokenKind::Amp => "'&'".to_string(),
+            TokenKind::Pipe => "'|'".to_string(),
+            TokenKind::Caret => "'^'".to_string(),
             TokenKind::Dot => "'.'".to_string(),
             TokenKind::LParen => "'('".to_string(),
             TokenKind::RParen => "')'".to_string(),
@@ -301,12 +332,28 @@ enum RawToken {
     Equals,
     #[token("==")]
     Eq,
+    #[token("!=")]
+    Neq,
     #[token("<=")]
     Leq,
+    #[token(">=")]
+    Geq,
     #[token("+")]
     Plus,
     #[token("-")]
     Minus,
+    #[token("*")]
+    Star,
+    #[token("/")]
+    Slash,
+    #[token("%")]
+    Percent,
+    #[token("&")]
+    Amp,
+    #[token("|")]
+    Pipe,
+    #[token("^")]
+    Caret,
     #[token(".")]
     Dot,
     #[token("(")]
@@ -739,9 +786,17 @@ fn raw_to_kind(
         RawToken::Dollar => Some(TokenKind::Dollar),
         RawToken::Equals => Some(TokenKind::Equals),
         RawToken::Eq => Some(TokenKind::Eq),
+        RawToken::Neq => Some(TokenKind::Neq),
         RawToken::Leq => Some(TokenKind::Leq),
+        RawToken::Geq => Some(TokenKind::Geq),
         RawToken::Plus => Some(TokenKind::Plus),
         RawToken::Minus => Some(TokenKind::Minus),
+        RawToken::Star => Some(TokenKind::Star),
+        RawToken::Slash => Some(TokenKind::Slash),
+        RawToken::Percent => Some(TokenKind::Percent),
+        RawToken::Amp => Some(TokenKind::Amp),
+        RawToken::Pipe => Some(TokenKind::Pipe),
+        RawToken::Caret => Some(TokenKind::Caret),
         RawToken::Dot => Some(TokenKind::Dot),
         RawToken::LParen => Some(TokenKind::LParen),
         RawToken::RParen => Some(TokenKind::RParen),

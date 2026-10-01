@@ -451,6 +451,116 @@ fn binary_operators_check_and_evaluate() {
     assert_eq!(usize_of(&evaluate("1 == 2")), 0);
     // A comparison's result drives a condition — there is no `Bool` value.
     assert_eq!(usize_of(&evaluate("(1 == 1) + (2 == 3)")), 1);
+    // ...which is also what makes `& | ^` the language's `and`/`or`/`xor`.
+    assert_eq!(usize_of(&evaluate("(1 == 1) & (2 == 3)")), 0);
+    assert_eq!(usize_of(&evaluate("(1 == 1) | (2 == 3)")), 1);
+    assert_eq!(usize_of(&evaluate("(1 == 1) ^ (2 == 2)")), 0);
+}
+
+/// The operators added so a program can compute something: `* / %`, the rest of
+/// the comparisons, and the bitwise set.
+#[test]
+fn the_extended_operator_set_evaluates() {
+    assert_eq!(usize_of(&evaluate("3 * 4")), 12);
+    assert_eq!(usize_of(&evaluate("7 / 2")), 3);
+    assert_eq!(usize_of(&evaluate("7 % 2")), 1);
+    assert_eq!(usize_of(&evaluate("1 < 2")), 1);
+    assert_eq!(usize_of(&evaluate("2 < 1")), 0);
+    assert_eq!(usize_of(&evaluate("2 > 1")), 1);
+    assert_eq!(usize_of(&evaluate("2 >= 3")), 0);
+    assert_eq!(usize_of(&evaluate("1 != 2")), 1);
+    assert_eq!(usize_of(&evaluate("1 != 1")), 0);
+    assert_eq!(usize_of(&evaluate("6 & 3")), 2);
+    assert_eq!(usize_of(&evaluate("4 | 1")), 5);
+    assert_eq!(usize_of(&evaluate("5 ^ 1")), 4);
+    // `!=` is the generalized equality's other face, so it works on the values
+    // `==` does — two type values, not just two `Int`s.
+    assert_eq!(usize_of(&evaluate("Int != string")), 1);
+    assert_eq!(usize_of(&evaluate("Int != Int")), 0);
+}
+
+/// An `Int` is a machine-sized **unsigned** integer, so the operators that can
+/// tell the two readings apart are the unsigned ones.
+///
+/// This is the pin for a decision that is otherwise invisible: `0 - 1` wraps, and
+/// every value from `2^63` up is reachable that way. A signed `/` `%` `<` `<=`
+/// `>` `>=` — in the interpreter or in either JIT backend — would agree with
+/// this on every small program and disagree here.
+#[test]
+fn an_int_is_unsigned_where_the_two_readings_differ() {
+    assert_eq!(usize_of(&evaluate("0 - 1 > 1")), 1);
+    assert_eq!(usize_of(&evaluate("(0 - 1) / 2")), usize::MAX / 2);
+    assert_eq!(usize_of(&evaluate("(0 - 1) % 2")), 1);
+    assert_eq!(usize_of(&evaluate("(0 - 1) >= 0")), 1);
+}
+
+/// A division or remainder by zero has no value, and the operator says so —
+/// with the lazy marker, like every other refused computation, so the program
+/// reports an unbound result and the recorded reason explains it.
+///
+/// **Only the interpreter refuses.** A jitted kernel has left this crate: wasm's
+/// integer division traps and SPIR-V's is undefined, and a guard would cost a
+/// branch on the GPU path — see `docs/notes/operators.md`.
+#[test]
+fn a_zero_divisor_is_recorded_rather_than_answered() {
+    for source in ["1 / 0", "1 % 0", "f = x => x / 0; f 5"] {
+        let Err(diagnostics) = lichen_language::run::evaluate(source) else {
+            panic!("{source:?} has no value");
+        };
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diag| diag.message.contains("operator.divide_by_zero")),
+            "{source:?} should name its cause, got {diagnostics:?}"
+        );
+    }
+    // A divisor that is merely *able* to be zero is fine: nothing is refused
+    // until it is zero.
+    assert_eq!(usize_of(&evaluate("(x => 10 / x) 2")), 5);
+}
+
+/// Two tokens are both a bracket and a comparison, and the grammar's rule for
+/// telling them apart is a rule about the *shape* around them, not a mode.
+#[test]
+fn comparisons_share_their_tokens_with_the_angle_bracket_forms() {
+    // An expression before the token, and an expression after it: a comparison.
+    assert_eq!(usize_of(&evaluate("2 > 1")), 1);
+    assert_eq!(usize_of(&evaluate("2 >= 2")), 1);
+    assert_eq!(usize_of(&evaluate("1 < 2 > 0")), 1); // (1 < 2) > 0
+    // ...and an angle bracket whose content is a *tuple type* wins, because the
+    // application is the tighter reading: `f <Int, Type>` is `f` applied to the
+    // tuple type, exactly as before the comparison existed.
+    assert_eq!(
+        usize_of(&evaluate("f = x => x<1>; f <Int, string> == string")),
+        1
+    );
+    // A `>` with no expression after it closes the bracket it is in, so every
+    // angle-bracket form still parses — including ones followed by another
+    // form's glued delimiter.
+    assert_eq!(usize_of(&evaluate("<Int, string><1> == string")), 1);
+    assert_eq!(usize_of(&evaluate("struct<Int, string><0> == Int")), 1);
+    assert_eq!(usize_of(&evaluate("a = <Int, string>; a<0> == Int")), 1);
+    // …including one whose closing `>` is followed by the *glued* `(` of an
+    // instantiation: the glued delimiter belongs to the angle form, so the `>`
+    // is a closer.  (The field is read with the slot read `s(0)`; indexing an
+    // instance with `s[0]` is a separate, pre-existing refusal.)
+    assert_eq!(
+        usize_of(&evaluate("s = struct<Int, string>(1, \"a\"); s(0)")),
+        1
+    );
+    // An array type's `>` (the keyword-led form) closes as it always did, and
+    // the annotation still pins the literal's length.
+    assert_eq!(
+        lichen_language::run::evaluate("[1, 2] : array<Int, 2>").unwrap(),
+        "[1, 2]: array<Int, 2>"
+    );
+    // A `<` glued to the previous token is still the raw component read, so a
+    // comparison is written with a space before it — the Glue rule that was
+    // already there.
+    assert_eq!(
+        usize_of(&evaluate("f = x => x; f (<Int, string>)<0> == Int")),
+        1
+    );
 }
 
 #[test]
@@ -465,6 +575,15 @@ fn operator_precedence_and_associativity() {
         lichen_language::run::evaluate("x => x + 1").unwrap(),
         "Function: Int -> Int"
     );
+    // The new levels, each checked against the reading that would come out
+    // wrong if it were in the wrong place: `* / %` tighter than `+ -`, the
+    // bitwise trio nested `&` in `^` in `|`, and all of it tighter than a
+    // comparison.
+    assert_eq!(usize_of(&evaluate("1 + 2 * 3")), 7);
+    assert_eq!(usize_of(&evaluate("8 / 4 / 2")), 1);
+    assert_eq!(usize_of(&evaluate("1 | 2 ^ 3 & 1")), 3); // 1 | (2 ^ (3 & 1))
+    assert_eq!(usize_of(&evaluate("1 & 3 == 1")), 1); // (1 & 3) == 1
+    assert_eq!(usize_of(&evaluate("1 < 2 == 1")), 1); // (1 < 2) == 1
 }
 
 #[test]

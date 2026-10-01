@@ -535,13 +535,8 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
             })
             .boxed();
 
-        // `+` / `-`, left-associative.
-        let arith = choice((
-            token(TokenKind::Plus).to(BinOp::Add),
-            token(TokenKind::Minus).to(BinOp::Sub),
-        ));
-        // `! e` — a prefix assert.  It binds tighter than the binary
-        // operators but looser than application: `! f x` asserts `f x`,
+        // `! e` — a prefix assert.  It binds tighter than every binary
+        // operator but looser than application: `! f x` asserts `f x`,
         // `! (x <= 3)` the comparison.  Asserting a comparison under the
         // binary operators requires parens — `! x <= 3` is `(!x) <= 3`.
         let unary = token(TokenKind::Bang)
@@ -550,44 +545,125 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
                 value: Box::new(e),
                 span: span_at(tokens, me.span().start),
             })
-            .or(application.clone());
-        let term1 = unary.clone().foldl(
-            arith.then(operand(tokens, unary.clone())).repeated(),
-            |lhs, (op, rhs)| {
-                let span = lhs.span();
-                Expr::BinOp {
-                    operator: op,
-                    left: Box::new(lhs),
-                    right: Box::new(rhs),
-                    span,
-                }
-            },
-        );
+            .or(application.clone())
+            .boxed();
 
-        // `<=` / `==`, left-associative.
-        let cmp = choice((
-            token(TokenKind::Leq).to(BinOp::Leq),
-            token(TokenKind::Eq).to(BinOp::Eq),
+        // Each level below ends in `.boxed()`, and that is load-bearing for
+        // **build time**, not for behaviour: chumsky threads the whole
+        // combinator chain as one generic type, so an unboxed level
+        // re-elaborates every level under it (see
+        // `docs/notes/build-performance.md` — the same fix, applied to the
+        // levels this operator set added). The parsed output is unchanged.
+
+        // `*` / `/` / `%`, left-associative — the tightest binary level, so
+        // `a + b * c` is `a + (b * c)`.
+        let product_op = choice((
+            token(TokenKind::Star).to(BinOp::Mul),
+            token(TokenKind::Slash).to(BinOp::Div),
+            token(TokenKind::Percent).to(BinOp::Rem),
         ));
-        let term2 = term1.clone().foldl(
-            cmp.then(operand(tokens, term1.clone())).repeated(),
-            |lhs, (op, rhs)| {
-                let span = lhs.span();
-                Expr::BinOp {
-                    operator: op,
-                    left: Box::new(lhs),
-                    right: Box::new(rhs),
-                    span,
-                }
-            },
-        );
+        let product = unary
+            .clone()
+            .foldl(
+                product_op.then(operand(tokens, unary.clone())).repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
+
+        // `+` / `-`, left-associative.
+        let sum_op = choice((
+            token(TokenKind::Plus).to(BinOp::Add),
+            token(TokenKind::Minus).to(BinOp::Sub),
+        ));
+        let sum = product
+            .clone()
+            .foldl(
+                sum_op.then(operand(tokens, product.clone())).repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
+
+        // `&`, then `^`, then `|` — three levels, tightest first, so the
+        // bitwise operators nest the way every reader expects (`a | b & c` is
+        // `a | (b & c)`) and bind tighter than a comparison, so `a & b == c` is
+        // `(a & b) == c`.  Over two comparison results — which are `0`/`1` —
+        // they are the language's `and`/`xor`/`or`.
+        let bitand = sum
+            .clone()
+            .foldl(
+                token(TokenKind::Amp)
+                    .to(BinOp::BitAnd)
+                    .then(operand(tokens, sum.clone()))
+                    .repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
+        let bitxor = bitand
+            .clone()
+            .foldl(
+                token(TokenKind::Caret)
+                    .to(BinOp::BitXor)
+                    .then(operand(tokens, bitand.clone()))
+                    .repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
+        let bitor = bitxor
+            .clone()
+            .foldl(
+                token(TokenKind::Pipe)
+                    .to(BinOp::BitOr)
+                    .then(operand(tokens, bitxor.clone()))
+                    .repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
+
+        // The comparisons, left-associative, and the loosest binary level:
+        // `<` `>` `<=` `>=` `==` `!=`.
+        //
+        // **`>` is the one operator that is also a delimiter**, so whether it is
+        // the comparison at all is decided *before* it is consumed: it is the
+        // comparison when an expression follows it **unglued**, and it closes
+        // the angle bracket it is in otherwise.  That is the grammar's own rule
+        // read literally — an infix operator needs a right operand, and a
+        // *glued* delimiter is never the start of one: a glued `(` or `<`
+        // belongs to the angle form (`struct<…>(…)` instantiates, `X<e><0>`
+        // chains another raw read).  Without the test the operand of `>` would
+        // swallow both, and `struct<Int, Int>(1, 2)` would stop parsing.
+        //
+        // The test is a zero-width lookahead **at** the `>` rather than a peek
+        // after it, and that placement is what keeps the diagnostics: a peek
+        // past the `>` records its error one token further on, which wins
+        // chumsky's furthest-error rule and makes every malformed angle bracket
+        // (`<Int>`, `f <3>`) report "at the end of the program" instead of at
+        // the bracket it is in.
+        let comparison_loose = choice((
+            token(TokenKind::LAngle).to(BinOp::Lt),
+            token(TokenKind::Leq).to(BinOp::Leq),
+            token(TokenKind::Geq).to(BinOp::Geq),
+            token(TokenKind::Eq).to(BinOp::Eq),
+            token(TokenKind::Neq).to(BinOp::Neq),
+        ))
+        .then(operand(tokens, bitor.clone()));
+        let comparison_gt = a_comparison_follows(tokens)
+            .ignore_then(token(TokenKind::RAngle))
+            .to(BinOp::Gt)
+            .then(operand(tokens, bitor.clone()));
+        let comparison = bitor
+            .clone()
+            .foldl(
+                choice((comparison_loose, comparison_gt)).repeated(),
+                |lhs, (op, rhs)| bin_op(lhs, op, rhs),
+            )
+            .boxed();
 
         // `->`, right-associative.
-        let term3 = term2
+        let term3 = comparison
             .clone()
             .then(
                 token(TokenKind::Arrow)
-                    .ignore_then(operand(tokens, term2.clone()))
+                    .ignore_then(operand(tokens, comparison.clone()))
                     .repeated()
                     .collect::<Vec<_>>(),
             )
@@ -681,6 +757,20 @@ fn expression<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, Expr, E<'a>> +
     })
 }
 
+/// Fold a binary operator application into its [`Expr`] node, spanning from the
+/// left operand's start — the shape every precedence level shares, so the levels
+/// differ only in which operators they accept and what they accept as an
+/// operand.
+fn bin_op(left: Expr, operator: BinOp, right: Expr) -> Expr {
+    let span = left.span();
+    Expr::BinOp {
+        operator,
+        left: Box::new(left),
+        right: Box::new(right),
+        span,
+    }
+}
+
 /// Right-fold `first (op rhs)*` into `op(first, op(rhs₁, … op(rhsₙ₋₁, rhsₙ)))`.
 fn fold_right<F>(first: Expr, rest: Vec<Expr>, combine: F) -> Expr
 where
@@ -744,6 +834,62 @@ fn fold_annotations(first: Expr, rest: Vec<AnnPiece>) -> Expr {
 enum Pre {
     E(Expr),
     FatArrow(Box<Expr>, Box<Expr>),
+}
+
+/// Whether a token can begin an expression — the lookahead that tells a
+/// comparison's `>` from a `>` that closes an angle bracket.
+///
+/// **It mirrors [`atom_parser`]'s `primary` alternatives**, with one deliberate
+/// absence: `Glue`.  A glued delimiter is a *postfix* form's marker or the
+/// delimiter of the form that follows, never the start of a new operand — after
+/// a closing `>` a glued `(` is a struct instantiation and a glued `<` another
+/// raw read, which is exactly the shape this predicate must not steal.  Drift
+/// here is loud rather than silent: a primary kind left out makes `a > <that
+/// kind>` stop parsing (the `>` is taken as a closer), and a kind included that
+/// cannot begin an expression makes the reverse fail.  Both are parse errors at
+/// the token, not a misparse.
+fn starts_an_expression(kind: &TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::Int(_)
+            | TokenKind::Str(_)
+            | TokenKind::Name(_)
+            | TokenKind::Placeholder
+            | TokenKind::KwInt
+            | TokenKind::KwString
+            | TokenKind::KwType
+            | TokenKind::KwStruct
+            | TokenKind::KwTable
+            | TokenKind::KwIf
+            | TokenKind::KwTypeOf
+            | TokenKind::KwArray
+            | TokenKind::Bang
+            | TokenKind::Dollar
+            | TokenKind::LParen
+            | TokenKind::LBracket
+            | TokenKind::LBrace
+            | TokenKind::LAngle
+    )
+}
+
+/// The zero-width lookahead that decides whether the `>` at the cursor is the
+/// comparison: it succeeds when the token **after** the `>` can begin an
+/// expression, and consumes nothing either way.
+///
+/// The `>`'s own position decides where a failure is recorded — see the
+/// comparison level in [`expression`] for why that matters, and
+/// [`starts_an_expression`] for what counts as an expression's beginning.
+fn a_comparison_follows<'a>(tokens: &'a [Token]) -> impl Parser<'a, In<'a>, (), E<'a>> + Clone {
+    // The span of a zero-width match is the cursor's own token index, so the
+    // token after the `>` is `at + 1`.
+    empty::<In<'a>, E<'a>>()
+        .map_with(move |_, me| {
+            tokens
+                .get(me.span().start + 1)
+                .is_some_and(|token| starts_an_expression(&token.kind))
+        })
+        .filter(|follows: &bool| *follows)
+        .ignored()
 }
 
 /// The atoms, with their postfix forms: `e[i]` (array index), `a(k)` (the

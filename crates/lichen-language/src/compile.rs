@@ -713,8 +713,18 @@ impl Compiler {
                 let operator = match operator {
                     crate::ast::BinOp::Add => BinOp::Add,
                     crate::ast::BinOp::Sub => BinOp::Sub,
+                    crate::ast::BinOp::Mul => BinOp::Mul,
+                    crate::ast::BinOp::Div => BinOp::Div,
+                    crate::ast::BinOp::Rem => BinOp::Rem,
+                    crate::ast::BinOp::Lt => BinOp::Lt,
+                    crate::ast::BinOp::Gt => BinOp::Gt,
                     crate::ast::BinOp::Leq => BinOp::Leq,
+                    crate::ast::BinOp::Geq => BinOp::Geq,
                     crate::ast::BinOp::Eq => BinOp::Eq,
+                    crate::ast::BinOp::Neq => BinOp::Neq,
+                    crate::ast::BinOp::BitAnd => BinOp::BitAnd,
+                    crate::ast::BinOp::BitOr => BinOp::BitOr,
+                    crate::ast::BinOp::BitXor => BinOp::BitXor,
                 };
                 let left = self.compile_expr(left);
                 let right = self.compile_expr(right);

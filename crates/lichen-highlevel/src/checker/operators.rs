@@ -14,6 +14,10 @@ where
     /// and an unbound operand (a parameter) is *pinned* to `Int`, so a
     /// later apply at a non-`Int` argument is a runtime failure in the
     /// argument unify, not a panic inside the operator.
+    ///
+    /// `Eq`/`Neq` are the exception: they are the generalized equality over any
+    /// two *same-typed* values, so their operands are unified with **each
+    /// other** rather than with `Int`.
     pub(super) fn check_binop(
         &mut self,
         e: ExprId,
@@ -24,17 +28,17 @@ where
         self.check_expr(left);
         self.check_expr(right);
         match operator {
-            // `==` compares two *same-typed* values and yields 0/1: the Int
+            // `==`/`!=` compare two *same-typed* values and yield 0/1: the Int
             // equalities (`s.a == 1`, `x == y`) and the type-value equalities
             // (`S::a == Int`) — the operands' types must be equal, so a type
             // value (`: Type`) can be compared with a type constant.
-            BinOp::Eq => self.check_unify(
+            BinOp::Eq | BinOp::Neq => self.check_unify(
                 self.state[left].ty.unwrap(),
                 self.state[right].ty.unwrap(),
                 self.loc(left, 1),
                 DiagKind::BinOp,
             ),
-            BinOp::Add | BinOp::Sub | BinOp::Leq => {
+            _ => {
                 self.check_unify(
                     self.state[left].ty.unwrap(),
                     self.int_type,
