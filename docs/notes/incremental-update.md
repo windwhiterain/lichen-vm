@@ -268,7 +268,7 @@ Decided by the superior:
 | 3 | `lichen-lowlevel/src/static_module/freeze.rs` | **landed**: `freeze_closure` (the closure of a root set) and `freeze_set` (the shared phases); `from_module_mapped` is now "the closure of every node" |
 | 3 | `lichen-lowlevel/src/lib.rs` (`Release`, `Program::release_obligations`, `StaticModule::releases` + `Drop`) | **landed**: the general ownership transfer — an artifact owns its out-of-arena resources and releases them when it is dropped |
 | 3 | `lichen-language/src/cells.rs` (`CellStore`), `compile.rs`, `lib.rs` | **landed**: cells keyed by path, the lowering hook (a clean cell lowers to `ExprKind::Static`), the per-cell freeze after the build, and `compile_with_cells` |
-| 3 | the store's dirty input and eviction | **not built**: the caller declares dirtiness, and nothing evicts |
+| 3 | the store's dirty input and eviction | **landed**: `invalidate(source)` drops a source's cells and hands back the artifacts; `Registry::evict` frees one — the caller's call, because a static ref is a raw handle into the artifact's arena |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
 | 4 | the program's own graph data (the PCG graph a program builds) | node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
@@ -410,11 +410,18 @@ clean cell, with no new artifact filed — and read the frozen pair back as `USi
 Then `invalidate("a.lichen")` dropped **2** cells and the next build lowered **0**
 static nodes again (both bindings recompiled and re-recorded): the edit names the
 source, the store drops that source's cells, and nothing else had to detect anything.
+The dropped cells hand back their **artifact keys**, and the probe evicted both —
+`true` once each, `false` on a second try — which is the release path: eviction drops
+the artifact, so the obligations it owns run and its arena is freed.
 
-What remains on this step is **who computes the reverse import closure** — the caller
+What remains on this step is **who computes the reverse import closure** (the caller
 drops the cells of every file that imports the changed one, and that graph is the
-package store's, not the cell store's — and **eviction**, since a dropped cell's
-artifact stays in the registry (it is unreachable, not freed).
+package store's, not the cell store's), **who evicts and when** (`Registry::evict`
+refuses to guess: a static ref is a raw handle into the artifact's arena, so the
+caller evicts once the builds that could still hold one are gone), and — the largest
+piece — **wiring a consumer**: today the cell path is a public entry point
+(`compile_with_cells`) with no production caller, and the session's own reuse gate is
+still the whole-`Build` content key that §7's table demotes.
 
 **Measured · a temporary probe in the lowlevel's own test harness, since removed.**
 On a four-node module — an array of two constants, plus one node no root reaches —
