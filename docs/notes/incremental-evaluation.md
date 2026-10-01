@@ -1,15 +1,30 @@
 # Incremental evaluation within one build: the settled cut
 
-> Status: **proposed** — step 0 is measured (below); the mechanism in §4 is not
-> built yet.  The evaluation counterpart of
+> Status: **proposed, and in scope correction** — step 0 is measured (below); the
+> mechanism in §4.1 is not built yet, and §4.2/§4.3/§5/§7 are to be rewritten.
+> The evaluation counterpart of
 > [incremental-parse-compile](incremental-parse-compile.md), whose `T1`–`T4`
 > cover `lex → parse → resolve → lower → check`; this note asks what the *same*
 > question costs one layer down, in the runtime.
 >
-> **Scope, decided by the superior: no cross-rebuild reuse.**  Nothing here keeps
-> a `Module` across an edit, keys a sub-expression, or reuses a solved unit in a
-> later build; those questions (and the fine-grained `StaticModule` machinery
-> they needed) are withdrawn rather than deferred, and there is no `T5`.  What is
+> **The requirement this note must serve is *external mutation*:** a host may
+> write any node's value at any moment and expects the consequences to be
+> re-derived incrementally.  That does not retire §4.1's `settled` — a host cannot
+> interleave with a pass that holds `&mut Module`, so `settled` is still final
+> *within* a pass — but it does retire §4.2's judgement that the reverse index is
+> unnecessary: across calls, `Module::write_node_value` (`equality.rs:273`) is a
+> public write that is unconditional on the node it names (only the *replication
+> targets* are filtered by `is_unbound`), so an edit invalidates a settled verdict
+> and invalidation must be **tracked**, not excluded.  §1.3's measurement, §3's
+> mutation inventory and §3.3's three predicates stand as they are; the rewrite
+> depends on four decisions (edit semantics for already-materialized clones,
+> per-revision diagnostics, budget semantics, and cyclic fixpoints) that are
+> recorded in the session and not yet taken.
+>
+> **Scope, decided by the superior: no cross-rebuild reuse.**  Nothing here keys a
+> sub-expression or reuses a solved unit in a later build; those questions (and the
+> fine-grained `StaticModule` machinery they needed) are withdrawn rather than
+> deferred, and there is no `T5`.  What is
 > left is the *within-build* half: one build makes many deep-pass entry points,
 > each re-descending subtrees its predecessors already decided (§1.3), and the
 > question is what such a pass may safely skip.
