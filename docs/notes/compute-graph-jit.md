@@ -191,7 +191,15 @@ divisor: the floor came from `fixed_cost`, which times a dispatch reading a
 inside the same submission. A chain link after the first reads a **resident**
 buffer and pays neither, so dividing by the host-input floor credits the link
 with an upload it never did — at small counts, with more than the link costs.
-The two floors are 0.043 ms and 0.036 ms, so an upload is worth about 0.007 ms.
+
+**Neither floor is a constant, and the tables below were divided by one run's
+value.** The host-input floor has been measured between 0.043 and 0.045 ms and
+the resident-input one between 0.036 and 0.041 ms across runs of the same
+binary on the same machine, so an upload is worth roughly 0.007 ms and no more
+precisely than that. Every *per link*, *fusion share* and *overhead* figure
+below comes from the 0.036 ms run specifically; a run that measured 0.041 would
+report the same chain costs with about 12% less apparent overhead. The chain
+times themselves are what the tables are for, and those are stable.
 
 **The 10% was the worst row of the table, not its typical one.** Every estimate
 so far computed fusion's value at 1 048 576 elements, because that was the only
@@ -257,7 +265,7 @@ record-and-submit side and the wait side, and that is still unmeasured.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, eight commits, not pushed):
+**Built and committed** (`feature/graph-jit`, thirteen commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -267,14 +275,91 @@ record-and-submit side and the wait side, and that is still unmeasured.
 | `a2c661d` | this document, and the stale claims in the backend's |
 | `05b5402` | `record_and_submit` / `wait_on` split out of `record_and_wait` |
 | `6c5ac4d` | the two rules a fused submission depends on — see below |
+| `f2e429f` | the same two rules, recorded here; delete an N-fold claim |
 | `91a324c` | delete the single `detached` submit the new design made wrong |
+| `e552a36` | the segment must not cross a call boundary, because it cannot |
 | `b4d89c1` | the count sweep, and the wrong floor it was first divided by |
+| `65582db` | the sweep says build it, and says 10% was the worst row |
 | `519c9d1` | `run_chain` — a chain in one submission, verified and measured |
+| `751cd2b` | the fused chain is checked and faster everywhere |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-the pool of submission slots, and the submit/wait split.
+the **entry point that lets a caller submit without waiting**, and the
+submit/wait split. The pool of submission slots *is* built — see
+[The next step, in order](#the-next-step-in-order) — but nothing outside
+`dispatch.rs` can yet hold two of them in flight, so depth 2 is configured and
+round-robined over, and its one interesting path is not taken.
 
 **Measured:** the count sweep, and the fused chain it predicted.
+
+## The pool of submission slots
+
+`GpuConfig { slot_depth }`, default **2**, configurable only from Rust:
+`GpuContext::new()` takes the default and `GpuContext::with_config` takes the
+rest. A depth of zero is refused by name, for the same reason a zero-link chain
+is: it is not a smaller pool, it is none.
+
+**One slot is a command buffer, a fence, a staging buffer and a descriptor pool,
+and they live in one struct because they all die at the same moment.** That is
+the whole design. A command buffer cannot be recorded while a previous recording
+of it is running; a staging mapping cannot be written while a copy out of it is
+in flight; a descriptor pool cannot be reset while a dispatch bound to its sets
+is executing. Keeping them together makes recording one submission into another
+submission's command buffer unrepresentable rather than merely discouraged.
+
+So the three consequences that were listed as *what a pool would need* are now
+properties of the type rather than rules someone has to remember:
+
+- **Staging is per slot.** Not a convention — `Segment::reserve` and
+  `Segment::staging` reach only the slot the segment holds, and the segment holds
+  the pool lock. There is no API that names a staging buffer.
+- **The descriptor pool is per slot**, reset in `acquire` and nowhere else.
+  `acquire` is the only place that can safely do it, and it is safe there for a
+  reason it establishes itself: it has just waited the slot's fence, or the slot
+  was never claimed.
+- **`fetch` acquires a slot** like everything else, because it is a submission.
+
+**The claim is the lock.** `GpuContext::acquire` hands back a `Segment` carrying
+the pool's `MutexGuard` for its whole life, so "two threads never record into one
+command buffer" is something the borrow checker sees. Releasing the lock is what
+`Segment::drop` does, and only on a path that neither submitted nor waited: a
+segment that submitted leaves the slot claimed, and the next acquisition of that
+slot waits its fence. That is the entire mechanism by which a slot is never
+reused while the device still owns it.
+
+**`Segment` has three submit methods, and the difference between them is what
+they leave the caller holding.** `submit_and_wait` gives the slot back — that is
+`run` and `run_chain`, and it is literally `submit` then `sync`. `submit` hands
+back a [`Token`] and keeps the slot claimed, which is the only path that leaves
+the device behind the host. `submit_and_read_back` reads its own staging *inside*
+the claim, which is why it is not `submit` plus `sync`: `sync` gives the slot
+away, and the next acquisition would then be free to resize or rewrite the very
+mapping being copied out of. That returns the **wrong numbers** rather than
+failing, so it is structural rather than documented.
+
+**`Token` is consumed by the wait.** One submission is waited for exactly once,
+because by the time a second wait ran, the slot could be running someone else's
+submission and the wait would have proved the wrong thing. Taking it by value
+makes the second wait inexpressible.
+
+**What depth costs, and what it does not.** At depth 2 with callers that all wait
+before returning — which is every caller today — `acquire` never waits: each slot
+is released before the cursor comes back to it, so the round-robin costs one
+index add. What depth does cost is **VRAM and host RAM**: each slot carries its
+own staging buffer, so worst-case staging is `depth` times a run's uploads rather
+than once. The fused chain's numbers are unchanged by this — 0.119 ms against
+0.113 ms at 1 024 elements and 4.468 ms against 4.669 ms at a million, both inside
+the run-to-run spread the tables below already record.
+
+**The one thing this does not do is make overlap reachable.** `acquire`,
+`Segment` and `Token` are private to `dispatch.rs`, deliberately: a public
+`Segment::record` would take a `vk::Pipeline` and a `&[vk::DescriptorBufferInfo]`,
+and leaking Vulkan's representation into a public API is exactly what
+`lichen-kernel-ir` exists to prevent. The entry point that a host program can
+actually use has to be run-shaped, and run-shaped brings the next question —
+**when do the resident ids escape, before the wait or after it** — which is a
+design decision rather than a plumbing one, so it belongs with the measurement
+that will show what the overlap is worth.
 
 ## Two rules, settled before anything depended on them, and since executed (`6c5ac4d`, `519c9d1`)
 
@@ -320,18 +405,18 @@ carry that count, and it is the only part of this rule with no code behind it.
 
 ## The next step, in order
 
-1. **A configurable pool of submission slots — not a `Segment` object.** Depth 1
-   is already built and measured (`run_chain`), and it is the whole of the
-   **Batch** case: one submission, one wait, no cross-call state. What the pool
-   adds is **depth greater than one**, which only Async needs — several
-   submissions in flight at once so the host work between them overlaps the
-   device work. The earlier plan here said a segment must outlive the `GraphRun`
-   operator call, and everything downstream of it was built on that: a
-   `Box<dyn Segment>` on the trait, a token, a `Drop` that has to wait. **That
-   was wrong.** A graph is a value that can be run again, so running it is one
-   operator call that returns when the run is finished. There is no boundary
-   inside a run for "submitted but not yet waited for" to cross, so the state is
-   a local in the executor, and the "who waits" question does not arise.
+1. ~~**A configurable pool of submission slots — not a `Segment` object.**~~ **Done.**
+   Depth 1 was already built and measured (`run_chain`), and it is the whole of
+   the **Batch** case: one submission, one wait, no cross-call state. The pool
+   adds **depth greater than one**, which only Async needs — several submissions
+   in flight at once so the host work between them overlaps the device work. The
+   earlier plan here said a segment must outlive the `GraphRun` operator call, and
+   everything downstream of it was built on that: a `Box<dyn Segment>` on the
+   trait, a token, a `Drop` that has to wait. **That was wrong.** A graph is a
+   value that can be run again, so running it is one operator call that returns
+   when the run is finished. There is no boundary inside a run for "submitted but
+   not yet waited for" to cross, so the state is a local in the executor, and the
+   "who waits" question does not arise.
 
    The shape is two call-scoped methods beside the three that exist, in the same
    style as the three that exist: `submit`, which records a stretch of dispatches
@@ -344,6 +429,17 @@ carry that count, and it is the only part of this rule with no code behind it.
    than today. Whether more than 2 earns its keep depends on how much host work
    a closure does, which is unmeasured.
 
+   **What is left of it is the entry point, not the pool.** See
+   [The pool of submission slots](#the-pool-of-submission-slots) for the shape
+   and for why the public method has to be run-shaped: a `Segment` that a host
+   could record into would take `vk::Pipeline` and `vk::DescriptorBufferInfo`,
+   and putting those in a public signature hands the backend's representation to
+   every caller. The open question that raises is **when the resident ids
+   escape** — at submit, so the caller can chain them immediately, or at the sync,
+   so an id can never name a buffer the device has not written yet. Chaining
+   wants the first, and the second wants it, and a `fetch` on a pending id returns
+   **wrong numbers** rather than failing.
+
 2. **Overlap does not need language-level async, and that is worth writing
    down** because it looks like it does. The GPU being in flight is a driver
    property, and "submit, run the closures for the next stretch, submit again"
@@ -353,28 +449,34 @@ carry that count, and it is the only part of this rule with no code behind it.
    means the "who waits" question that the old shape made unanswerable simply
    does not arise.
 
-3. **Three things a pool needs that one command buffer did not.** All three are
-   settled, because each is a silent wrong answer rather than a slow one:
-   - **Staging cannot be shared between in-flight slots.** A host input is
-     `memcpy`'d into staging and read by the device later, so writing the next
-     slot's input over bytes an in-flight copy has not read yet hands that copy
-     the new data. Each slot carries its own staging.
-   - **The descriptor pool cannot be reset while anything is in flight.** A set
-     is read when the submission *executes*, so resetting under a running
+3. ~~**Three things a pool needs that one command buffer did not.**~~ **All three
+   are now properties of the type**, so this is a record of what the code
+   actually does rather than a plan. Each was a silent wrong answer rather than a
+   slow one:
+   - **Staging is per slot, and there is no way to name another slot's.** A host
+     input is `memcpy`'d into staging and read by the device later, so writing
+     the next slot's input over bytes an in-flight copy has not read yet hands
+     that copy the new data. `Segment::reserve` and `Segment::staging` reach only
+     the slot the segment holds, and the segment holds the pool lock.
+   - **The descriptor pool is per slot, reset in `acquire` and nowhere else.** A
+     set is read when the submission *executes*, so resetting under a running
      command buffer frees sets it is still bound to. The rule settled above —
      reset at a submission boundary — was true at depth 1 and stops being true
-     the moment a second submission is in flight. Each slot therefore carries
-     **its own** pool, reset at its own fence.
+     the moment a second submission is in flight. `acquire` is the only place
+     that can do it safely, and it is safe there because it has just waited the
+     slot's fence or found the slot never claimed.
    - **Bundling the pool into the slot is what makes that safe**, rather than
      one context-wide pool with a hand-maintained in-flight counter. Command
-     buffer, fence, staging and descriptor pool then share a single lifetime and
-     a single owner, so "which of these are mine" has one answer instead of
-     two, and there is no counter that can be wrong. The per-segment
+     buffer, fence, staging and descriptor pool share a single lifetime and a
+     single owner, so "which of these are mine" has one answer instead of two,
+     and there is no counter that can be wrong. The per-segment
      `vkFreeDescriptorSets` alternative was rejected because without the
      `FREE_DESCRIPTOR_SET` flag it exhausts the pool — and while that failure is
      loud, the one it is preferred to fails silently.
    - **`fetch` acquires a slot** like everything else; it is a record, submit
-     and immediate wait, and after pooling it no longer has a fixed target.
+     and immediate wait, and after pooling it no longer has a fixed target. Its
+     read of the staging happens *inside* the claim, which is the one thing
+     `submit` plus `sync` cannot express.
 
 4. **The submit/wait split**, the one measurement still missing. It decides how
    much of the 65–81% the **Async** schedule can reach, because Async keeps the
@@ -388,12 +490,14 @@ carry that count, and it is the only part of this rule with no code behind it.
 
 ## Landmines, each of which is a silent wrong answer
 
-- **A recorded-but-unsubmitted command buffer is clobbered by the next
-  `record_and_submit` into the same target**, and a command buffer whose
-  submission is still in flight cannot be recorded into at all. This is the
-  whole reason the pool exists and the reason a slot is not released until its
-  fence signals — the single `detached: Mutex<Submit>` that stood in for it
-  handles exactly one outstanding submission and is replaced by the pool.
+- **A recorded-but-unsubmitted command buffer is clobbered by the next recording
+  into it**, and a command buffer whose submission is still in flight cannot be
+  recorded into at all. This is the whole reason the pool exists and the reason a
+  slot is not released until its fence signals. The single `detached: Mutex<Submit>`
+  that stood in for it handled exactly one outstanding submission; it is now
+  `Mutex<Slots>`, where a slot's `claimed` flag is the one thing that answers
+  "is the device still using this", and the fence is the only thing that clears
+  it.
 - **A chain that reuses a buffer has a write-after-read hazard that the
   one-buffer-per-link version does not have.** `run_chain` ping-pongs two
   buffers, so link `i` reads what link `i + 2` writes; the trailing barrier

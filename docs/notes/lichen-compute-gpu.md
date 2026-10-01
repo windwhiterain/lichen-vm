@@ -292,7 +292,10 @@ machine, so read it as 0.04–0.05 ms rather than to three places.
 dispatch reading a **host** input is 0.043 ms; a dispatch reading a **resident**
 buffer — which is every link of a chain after the first — is **0.036 ms**. The
 difference is the upload: a `memcpy` into staging plus a device-side copy in the
-same submission, worth about 0.007 ms. The crossover example now measures both,
+same submission, worth about 0.007 ms. Neither figure is a constant: across runs
+of the same binary on this machine the host floor has read 0.043–0.045 ms and the
+resident one 0.036–0.041 ms, and the derived columns in the tables below come
+from the 0.036 ms run specifically. The crossover example now measures both,
 because dividing a chain's marginal link by the host-input floor credits the link
 with an upload it never does — and at small counts that credit exceeds the cost of
 the link, which is how a first run of the count sweep below reported links that
@@ -440,8 +443,10 @@ Named rather than implied, because each is a decision not a gap:
   at 1 024 elements, 3.0× at 65 536, 1.23× at a million. See
   [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
   mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
-  What is left is the **pool of submission slots** for depth greater than one,
-  which only the Async schedule needs, and the submit/wait split that says how
+  What is left is the **entry point that lets a caller submit without waiting** —
+  the pool of submission slots is built and configured (`GpuConfig { slot_depth }`,
+  default 2), but nothing outside `dispatch.rs` can yet hold two of them in
+  flight — and the submit/wait split that says how
   much of the above Async can reach — the numbers here are the Batch ceiling,
   where fifteen submits *and* fifteen waits disappear, while Async keeps the
   submits and removes only the waits. Its shape is a linear chain of one

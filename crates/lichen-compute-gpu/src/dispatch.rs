@@ -105,6 +105,16 @@ pub enum RunError {
     /// a dead one means the host lost track of its own buffers, which reporting
     /// `0`s would hide.
     UnknownResident { id: u64 },
+    /// A pool depth of zero, which is not a smaller pool.  There is nothing to
+    /// acquire and therefore no submission any shape can be recorded into, so it
+    /// is refused here rather than as an empty acquire later.
+    NoSlots { wanted: usize },
+    /// A token naming a slot this context does not have — issued by a different
+    /// context, or a number that was never a slot at all.  The same reasoning as
+    /// [`Self::UnknownResident`]: a handle that names nothing must say so, and
+    /// waiting on a slot this context does not own would block on someone else's
+    /// fence.
+    UnknownSlot { slot: u32 },
     /// A fetch asked for more elements than the buffer was allocated for. The
     /// buffer is sized to the run's padded count, so this means the host is
     /// asking for a run that did not produce this buffer.
@@ -158,6 +168,16 @@ impl fmt::Display for RunError {
                 "buffer {id} is not one this device is holding: it was never issued, or it has \
                  already been released."
             ),
+            RunError::NoSlots { wanted } => write!(
+                f,
+                "a pool depth of {wanted} was asked for, and no submission can be recorded \
+                 without a slot to record it into: this is not a smaller pool, it is none."
+            ),
+            RunError::UnknownSlot { slot } => write!(
+                f,
+                "submission slot {slot} is not one this device has: the token was issued by \
+                 another context, or was never a slot here."
+            ),
             RunError::FetchLongerThanBuffer { len, count } => write!(
                 f,
                 "asked for {count} element(s) of a buffer allocated for {len}, so the read would \
@@ -203,37 +223,17 @@ pub struct GpuContext {
     /// Hands out ids. Never reused: a stale id released twice must not name a
     /// live buffer, so ids only ever move forward.
     next_id: AtomicU64,
-    /// Mapped host memory the uploads and downloads are staged through. One per
-    /// context and reused, because a run's staging is dead the moment its fence
-    /// signals.
-    staging: Mutex<Staging>,
-    /// One command pool, one command buffer and one fence, reused for every
-    /// submission.
+    /// The submissions' own objects, one set per slot — see [`Slots`].
     ///
-    /// Reuse is safe because submissions are **already serialised**: `run` holds
-    /// the staging lock across its dispatch and `fetch` holds it across its copy,
-    /// so two submissions can never overlap. The mutex is belt to that braces —
-    /// it makes the exclusion local instead of resting on a reader having to
-    /// trace two methods to convince themselves the lock is the same one.
-    submit: Mutex<Submit>,
+    /// This is what makes more than one submission in flight possible at all. A
+    /// single command buffer cannot be recorded while a previous recording of it
+    /// is still running, so one command buffer means one submission at a time,
+    /// which is the batch strategy and not the overlapping one.
+    slots: Mutex<Slots>,
     /// The descriptor set layout and pipeline layout for a run with `n` buffers
     /// in total. They are a function of `n` alone — the same two objects the old
     /// per-run code built and dropped for every dispatch.
     layouts: Mutex<HashMap<usize, Layouts>>,
-    /// Descriptor sets for the dispatches of **one submission**, reset at the
-    /// start of a submission and at no point inside one.
-    ///
-    /// The rule is not a preference. A set is read when the submission
-    /// *executes*, so one set cannot serve two dispatches — rewriting it between
-    /// them changes what the first one sees. The pool cannot be reset between
-    /// them either: a reset frees every set, including ones an earlier dispatch
-    /// in the same command buffer is still bound to, and that is undefined
-    /// rather than slow.
-    ///
-    /// Resetting at a boundary is safe for the reason the boundary is: the
-    /// previous submission's fence has already signalled, so nothing is still
-    /// reading the sets the reset frees.
-    descriptor_pool: vk::DescriptorPool,
     /// Device buffers that have been given back, keyed by their element count.
     ///
     /// Reuse is safe **without clearing**, and that is worth spelling out because
@@ -249,18 +249,127 @@ pub struct GpuContext {
     recycled: Mutex<HashMap<usize, Vec<DeviceBuffer>>>,
 }
 
+/// How deep a pool is when nobody says otherwise.
+///
+/// Two, and not one, because one is not a pool: with a single slot a submission
+/// must finish before the next can be recorded, so the host's work and the
+/// device's work never overlap. Two is the smallest depth that lets one
+/// submission be recording while the one before it is still running, which is
+/// the whole difference between the batch strategy and the overlapping one.
+pub const DEFAULT_SLOT_DEPTH: usize = 2;
+
+/// What a caller may choose about a context.
+///
+/// Rust-side only, and deliberately so. A pool depth is a scheduling budget
+/// rather than a semantic choice: a program that computed different answers at
+/// depth 1 and depth 2 would make it part of the language, and the depth would
+/// then need a surface, a spelling and a compatibility promise. Keeping it here
+/// means it can move without any of that.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GpuConfig {
+    /// How many submissions may be in flight at once, each with a command
+    /// buffer, a fence, a staging buffer and a descriptor pool of its own.
+    ///
+    /// One means the device is never behind the host by more than one
+    /// submission. Larger values let the host record ahead of the device by that
+    /// many submissions, at the cost of that many command buffers, staging
+    /// buffers and descriptor pools resident in VRAM.
+    pub slot_depth: usize,
+}
+
+impl Default for GpuConfig {
+    fn default() -> Self {
+        GpuConfig {
+            slot_depth: DEFAULT_SLOT_DEPTH,
+        }
+    }
+}
+
+/// The objects one submission owns, and the claim on them.
+///
+/// **Everything a submission reads or rewrites lives here, together, for one
+/// reason: they all go invalid or get rewritten when the submission ends.** A
+/// command buffer cannot be recorded while a previous recording of it is
+/// running. A staging mapping cannot be written while a copy out of it is still
+/// in flight. A descriptor pool cannot be reset while a dispatch bound to its
+/// sets is still executing. Splitting them across a context and a "one at a
+/// time" lock is how a second in-flight submission gets recorded into the first
+/// one's command buffer; keeping them in one struct makes that mistake
+/// unrepresentable instead of merely discouraged.
+struct Slot {
+    /// Set from the moment this slot is acquired until a wait has confirmed its
+    /// fence. While it is set, the slot's objects belong to the device.
+    claimed: bool,
+    /// Retained so `Drop` can destroy it. It is not needed again while the slot
+    /// lives: a command buffer is freed by destroying the pool it came from, and
+    /// the pool has to outlive every buffer allocated from it.
+    command_pool: vk::CommandPool,
+    command: vk::CommandBuffer,
+    fence: vk::Fence,
+    /// Mapped host memory this slot's uploads and downloads are staged through.
+    /// Per slot rather than per context precisely so that staging one submission
+    /// cannot land under a copy the device has not made yet.
+    staging: Staging,
+    /// Descriptor sets for this slot's submission, reset when the slot is
+    /// acquired and at no point while it is held.
+    ///
+    /// The rule is not a preference. A set is read when the submission
+    /// *executes*, so one set cannot serve two dispatches — rewriting it between
+    /// them changes what the first one sees. The pool cannot be reset between
+    /// them either: a reset frees every set, including ones an earlier dispatch
+    /// in the same command buffer is still bound to, and that is undefined
+    /// rather than slow.
+    ///
+    /// **Per slot rather than one for the context** because "reset at the
+    /// submission boundary" stops being a boundary once there are two
+    /// submissions in flight: the next submission starts while this one is still
+    /// running, and a reset would free sets this submission's dispatches are
+    /// bound to. Each slot therefore has a pool nobody else can reach, and the
+    /// reset happens where a fence wait has just proved that slot is idle —
+    /// see [`GpuContext::acquire`].
+    descriptor_pool: vk::DescriptorPool,
+}
+
+/// The pool: the slots, and where the next acquisition looks.
+struct Slots {
+    entries: Vec<Slot>,
+    /// Where [`GpuContext::acquire`] looks next. Round-robin rather than "first
+    /// free", so a stream of acquisitions cannot keep returning to slot zero
+    /// while the rest go untouched: round-robin bounds how long any slot can be
+    /// left waiting behind the cursor.
+    cursor: usize,
+}
+
+impl Slots {
+    fn entry(&self, token: Token) -> Result<&Slot, RunError> {
+        self.entries
+            .get(token.0 as usize)
+            .ok_or(RunError::UnknownSlot { slot: token.0 })
+    }
+}
+
+/// A submitted-but-not-yet-waited-for slot.
+///
+/// [`GpuContext::acquire`] hands one out with a [`Segment`], and
+/// [`GpuContext::sync`] consumes it. It is `Copy` and carries nothing but the
+/// slot's number, which is the same bargain [`ResidentId`] makes and for the
+/// same reason: a token means nothing without the context that issued it, so it
+/// is never compared across contexts or persisted.
+///
+/// **It is consumed by the wait, not clonable into a second wait.** That is the
+/// point. Waiting the same submission twice would not be a no-op — by the time
+/// the second wait ran, the slot could be running *someone else's* submission,
+/// and the wait would return having proved the wrong thing. Taking the token by
+/// value makes the second wait inexpressible rather than merely wrong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Token(u32);
+
 /// How many freed buffers of one size are kept for reuse.
 ///
 /// Four is enough for a chain to ping-pong two buffers plus a host input and a
 /// host output without allocating, and small enough that idling here is not worth
 /// measuring against a device's whole memory.
 const RECYCLED_PER_SIZE: usize = 4;
-
-/// The reusable objects one submission needs.
-struct Submit {
-    command: vk::CommandBuffer,
-    fence: vk::Fence,
-}
 
 /// The two layouts a dispatch binds, which depend only on how many buffers the
 /// run has in total.
@@ -290,12 +399,27 @@ const MAX_DESCRIPTOR_BINDINGS: usize = 32;
 const MAX_DISPATCHES_PER_SUBMISSION: usize = 64;
 
 impl GpuContext {
-    /// Find a device and create a compute context on it.
+    /// Find a device and create a compute context on it, with the default pool.
     ///
     /// A **discrete** GPU is preferred over an integrated one, because a compute
     /// run is exactly the workload where that matters; among equals, the lowest
     /// index wins so the choice is deterministic.
     pub fn new() -> Result<Self, RunError> {
+        Self::with_config(GpuConfig::default())
+    }
+
+    /// [`Self::new`], with a chosen pool depth.
+    ///
+    /// Everything else about the context is the same either way: the device
+    /// choice, the pipeline cache, the buffer pool. The depth is the only knob,
+    /// and it is on this side of the boundary because it is a scheduling budget
+    /// rather than anything a program says — see [`GpuConfig`].
+    pub fn with_config(config: GpuConfig) -> Result<Self, RunError> {
+        if config.slot_depth == 0 {
+            return Err(RunError::NoSlots {
+                wanted: config.slot_depth,
+            });
+        }
         let entry = unsafe { ash::Entry::load() }.map_err(|detail| RunError::NoDevice {
             detail: detail.to_string(),
         })?;
@@ -370,22 +494,25 @@ impl GpuContext {
             )
         })?;
         let queue = unsafe { device.get_device_queue(family, 0) };
-        let descriptor_pool = check("descriptor pool", unsafe {
-            device.create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(MAX_DISPATCHES_PER_SUBMISSION as u32)
-                    .pool_sizes(&[vk::DescriptorPoolSize {
-                        ty: vk::DescriptorType::STORAGE_BUFFER,
-                        descriptor_count: (MAX_DISPATCHES_PER_SUBMISSION * MAX_DESCRIPTOR_BINDINGS)
-                            as u32,
-                    }]),
-                None,
-            )
-        })?;
 
-        // Built before the context exists, because it needs a borrow of the
-        // device that the struct literal below is about to move.
-        let submit = Submit::new(&device, family)?;
+        // One slot per permitted in-flight submission, all built before the
+        // context exists because they need a borrow of the device that the
+        // struct literal below is about to move.  A failure part-way leaves the
+        // slots already built alive, so they are destroyed rather than dropped:
+        // their command pools and descriptor pools are device objects, and the
+        // device outlives this function.
+        let mut built: Vec<Slot> = Vec::with_capacity(config.slot_depth);
+        for _ in 0..config.slot_depth {
+            match Slot::new(&device, family) {
+                Ok(slot) => built.push(slot),
+                Err(error) => {
+                    for mut slot in built {
+                        slot.destroy(&device);
+                    }
+                    return Err(error);
+                }
+            }
+        }
 
         Ok(GpuContext {
             entry,
@@ -397,10 +524,11 @@ impl GpuContext {
             pipelines: Mutex::new(HashMap::new()),
             resident: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
-            staging: Mutex::new(Staging::empty()),
-            submit: Mutex::new(submit),
+            slots: Mutex::new(Slots {
+                entries: built,
+                cursor: 0,
+            }),
             layouts: Mutex::new(HashMap::new()),
-            descriptor_pool,
             recycled: Mutex::new(HashMap::new()),
         })
     }
@@ -408,6 +536,76 @@ impl GpuContext {
     /// The device this context dispatches on.
     pub fn device_name(&self) -> &str {
         &self.name
+    }
+
+    /// How many submissions this context may have in flight at once.
+    pub fn slot_depth(&self) -> usize {
+        self.slots.lock().unwrap().entries.len()
+    }
+
+    /// Take a slot to record one submission into, and the token that will wait
+    /// for it.
+    ///
+    /// This is the whole scheduling surface. A caller that records, submits and
+    /// then drops the segment without submitting gets its slot straight back; a
+    /// caller that submits gets a [`Token`] and the slot stays claimed until
+    /// [`Self::sync`] has seen its fence. Between those two points the host is
+    /// free — that window is what the overlapping strategy is made of, and it
+    /// exists whether or not the host spends it.
+    ///
+    /// The lock is held for the segment's whole life, and that is what makes
+    /// "two threads never record into one command buffer" a borrow-checked fact
+    /// rather than a convention. The cost is that a second thread cannot acquire
+    /// while the first is *recording*, which is a few hundred microseconds of
+    /// host time; the win is that it also cannot acquire while the first is
+    /// **waiting**, which is the whole point.
+    fn acquire(&self) -> Result<Segment<'_>, RunError> {
+        let mut slots = self.slots.lock().unwrap();
+        let index = slots.cursor;
+        slots.cursor = (index + 1) % slots.entries.len();
+        if slots.entries[index].claimed {
+            // This is where a depth above one stops being bookkeeping.  The slot
+            // is running someone else's submission, so its command buffer cannot
+            // be reset, its staging cannot be written and its descriptor pool
+            // cannot be touched — and the only thing that makes it reusable is
+            // its fence, so that is what is waited on.
+            self.wait_on(&slots.entries[index])?;
+        }
+        // Safe exactly where it is, and only here: the fence above has either
+        // signalled or was never claimed, so nothing is reading the sets this
+        // frees.  See [`Slot::descriptor_pool`] for why there is no other place
+        // a reset could go.
+        check("descriptor pool reset", unsafe {
+            self.device.reset_descriptor_pool(
+                slots.entries[index].descriptor_pool,
+                vk::DescriptorPoolResetFlags::empty(),
+            )
+        })?;
+        slots.entries[index].claimed = true;
+        Ok(Segment {
+            context: self,
+            slots,
+            index,
+            in_flight: false,
+        })
+    }
+
+    /// Wait for a submitted slot, and release it for reuse.
+    ///
+    /// Consumes the token, so one submission is waited for exactly once. See
+    /// [`Token`] for why the second wait has to be inexpressible rather than
+    /// merely discouraged.
+    ///
+    /// This does not need to be called on the thread that submitted, and does
+    /// not need the [`Segment`] that submitted — the segment was consumed by
+    /// [`Segment::submit`] precisely so the host could go and do something else
+    /// in between.
+    fn sync(&self, token: Token) -> Result<(), RunError> {
+        let mut slots = self.slots.lock().unwrap();
+        let slot = slots.entry(token)?;
+        self.wait_on(slot)?;
+        slots.entries[token.0 as usize].claimed = false;
+        Ok(())
     }
 
     /// Run one fragment over the index range `[0, count)`.
@@ -455,10 +653,13 @@ impl GpuContext {
         let data_bytes = count as vk::DeviceSize * element;
         let padded_bytes = padded as vk::DeviceSize * element;
 
-        // Staging is held for the whole run: it carries the uploads out and the
-        // dispatch itself, and a run's staging is dead the moment its fence
-        // signals, so nothing else may write it in between.
-        let mut staging = self.staging.lock().unwrap();
+        // The slot is taken before anything is staged into it, and the order is
+        // the point: the staging a run writes is the *slot's* staging, so a run
+        // that staged first and acquired second would be writing into a mapping
+        // some other submission is still copying out of.  Acquiring first makes
+        // "this run's upload is somewhere the device is not reading" true by
+        // construction rather than by the caller remembering it.
+        let mut segment = self.acquire()?;
         let host_inputs: Vec<&[i64]> = inputs
             .iter()
             .filter_map(|slot| match slot {
@@ -466,7 +667,7 @@ impl GpuContext {
                 BufferSlot::Resident(_) => None,
             })
             .collect();
-        staging.reserve(self, host_inputs.len() as u64 * data_bytes)?;
+        segment.reserve(self, host_inputs.len() as u64 * data_bytes)?;
 
         let mut scratch = ScratchGuard {
             context: self,
@@ -482,13 +683,16 @@ impl GpuContext {
                 BufferSlot::Host(data) => {
                     let buffer = self.allocate(padded)?;
                     let offset = uploads.len() as u64 * data_bytes;
-                    // SAFETY: `reserve` sized staging for every host input's `count`
-                    // elements, and `offset` counts whole such blocks that come
-                    // before this one, so this block lies inside the mapping.
+                    // SAFETY: `reserve` sized the slot's staging for every host
+                    // input's `count` elements, and `offset` counts whole such
+                    // blocks that come before this one, so this block lies inside
+                    // the mapping. The device is not reading this mapping: the
+                    // slot was claimed above and nothing has been submitted on it
+                    // since.
                     unsafe {
                         std::ptr::copy_nonoverlapping(
                             data.as_ptr(),
-                            staging.at(offset) as *mut i64,
+                            segment.staging().at(offset) as *mut i64,
                             count,
                         );
                     }
@@ -524,34 +728,9 @@ impl GpuContext {
             scratch.buffers.push(buffer);
         }
 
-        let outcome = {
-            // The submit lock is taken here rather than inside `dispatch` so that
-            // the command buffer stays reserved for exactly as long as this
-            // submission is in flight, which is what makes a `wait: false`
-            // dispatch on the same target safe to hand back to a caller.
-            let submit = self.submit.lock().unwrap();
-            // The descriptor pool is reset here for the same reason the lock is
-            // taken here: this **is** the boundary between submissions, and the
-            // pool may only be reset at one — see the field's docs. A dispatch
-            // takes a set and leaves it alone for the rest of the submission.
-            check("descriptor pool reset", unsafe {
-                self.device.reset_descriptor_pool(
-                    self.descriptor_pool,
-                    vk::DescriptorPoolResetFlags::empty(),
-                )
-            })?;
-            self.dispatch(
-                &submit,
-                true,
-                pipeline,
-                &descriptors,
-                staging.handle,
-                &uploads,
-                count,
-            )
-        };
-        drop(staging);
-        outcome?;
+        segment.begin()?;
+        segment.record(pipeline, &descriptors, &uploads, count)?;
+        segment.submit_and_wait()?;
 
         // Success: the output buffers stop being scratch and become the ids the
         // caller is handed.  Nothing can fail from here, and the guard owns
@@ -636,12 +815,14 @@ impl GpuContext {
         let data_bytes = count as vk::DeviceSize * element;
         let padded_bytes = padded as vk::DeviceSize * element;
 
-        // Staging is held and sized for the **whole chain** up front. Growing it
-        // after recording has begun would be a use-after-write on the mapping:
-        // the device reads staging during the submission, and reallocating the
-        // buffer unmaps the memory a recorded copy still points at.
-        let mut staging = self.staging.lock().unwrap();
-        staging.reserve(self, data_bytes)?;
+        // One slot, and its staging is sized for the **whole chain** up front.
+        // Growing it after recording has begun would be a use-after-write on the
+        // mapping: the device reads staging during the submission, and
+        // reallocating the buffer unmaps the memory a recorded copy still points
+        // at.  Acquiring the slot first is what makes that the only thing that can
+        // happen — the slot is not released until the fence has signalled.
+        let mut segment = self.acquire()?;
+        segment.reserve(self, data_bytes)?;
 
         let mut scratch = ScratchGuard {
             context: self,
@@ -649,10 +830,15 @@ impl GpuContext {
         };
         let source = self.allocate(padded)?;
         scratch.buffers.push(source);
-        // SAFETY: `reserve` sized and mapped staging for `count` elements before
-        // anything was recorded, and the copy below writes exactly that many.
+        // SAFETY: `reserve` sized and mapped this slot's staging for `count`
+        // elements before anything was recorded, and the copy below writes
+        // exactly that many. Nothing is in flight on this slot.
         unsafe {
-            std::ptr::copy_nonoverlapping(input.as_ptr(), staging.at(0) as *mut i64, count);
+            std::ptr::copy_nonoverlapping(
+                input.as_ptr(),
+                segment.staging().at(0) as *mut i64,
+                count,
+            );
         }
         let upload = Transfer {
             src_offset: 0,
@@ -683,16 +869,12 @@ impl GpuContext {
         let first = self.allocate(padded)?;
         let second = self.allocate(padded)?;
 
-        let submit = self.submit.lock().unwrap();
-        // One reset for the whole submission and **none** inside it. A reset
-        // frees every set, including the ones an earlier dispatch in this same
-        // command buffer is still bound to, and those reads happen at execution
-        // time, long after the recording.
-        check("descriptor pool reset", unsafe {
-            self.device
-                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-        })?;
-        self.begin_recording(&submit)?;
+        // One reset for the whole submission and **none** inside it, and it
+        // happened in `acquire` rather than here: a reset frees every set,
+        // including the ones an earlier dispatch in this same command buffer is
+        // still bound to, and those reads happen at execution time, long after
+        // the recording.
+        segment.begin()?;
 
         let mut current = source;
         let (mut into, mut onto) = (first, second);
@@ -706,21 +888,12 @@ impl GpuContext {
             } else {
                 &[]
             };
-            self.record_dispatch(
-                &submit,
-                pipeline,
-                &descriptors,
-                staging.handle,
-                uploads,
-                count,
-            )?;
+            segment.record(pipeline, &descriptors, uploads, count)?;
             current = into;
             std::mem::swap(&mut into, &mut onto);
         }
 
-        self.end_and_submit(&submit)?;
-        self.wait_on(&submit)?;
-        drop(staging);
+        segment.submit_and_wait()?;
 
         // The last link's output is the answer and becomes resident; the uploaded
         // source is scratch and so is whichever ping-pong buffer the answer did
@@ -854,12 +1027,18 @@ impl GpuContext {
         let bytes = (count * std::mem::size_of::<i64>()) as vk::DeviceSize;
         let device = &self.device;
 
-        let mut staging = self.staging.lock().unwrap();
-        staging.reserve(self, bytes)?;
+        // A fetch takes a slot like anything else, and for the same reason: it is
+        // a submission, and a submission needs a command buffer, a fence and a
+        // staging buffer of its own.  Reading the staging back out is the part
+        // that constrains it — see `submit_and_read_back`.
+        let mut segment = self.acquire()?;
+        segment.reserve(self, bytes)?;
 
         let source = buffer.handle;
-        let target = staging.handle;
-        self.record_and_wait(|command| unsafe {
+        segment.begin()?;
+        let target = segment.staging().handle;
+        let command = segment.command();
+        unsafe {
             device.cmd_copy_buffer(
                 command,
                 source,
@@ -882,14 +1061,9 @@ impl GpuContext {
                 &[],
                 &[],
             );
-        })?;
+        }
 
-        // SAFETY: staging was reserved for at least `bytes` and mapped before the
-        // submit; the fence above waited for the copy that filled it, and the
-        // barrier made the write host-visible. `count` elements are read from a
-        // mapping that long.
-        let data = unsafe { std::slice::from_raw_parts(staging.at(0) as *const i64, count) };
-        Ok(data.to_vec())
+        segment.submit_and_read_back(count)
     }
 
     /// Give a resident buffer's device memory back.
@@ -904,127 +1078,62 @@ impl GpuContext {
         self.recycle(buffer);
     }
 
-    /// Record one command buffer, submit it, and wait for it to finish.
-    ///
-    /// The command buffer and fence belong to the context and are reset here, so
-    /// a dispatch pays two reset calls rather than three object create/destroy
-    /// pairs.  Every call is serialised by [`Self::submit`], so reusing both is
-    /// sound: there is never a second submission in flight to trample.
-    fn record_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), RunError> {
-        let submit = self.submit.lock().unwrap();
-        self.record_and_submit(&submit, record)?;
-        self.wait_on(&submit)
-    }
-
-    /// Reset `target`'s command buffer, record into it, and submit it — **without
-    /// waiting for the fence**.
-    ///
-    /// Split from [`Self::wait_on`] so a caller can hold the gap open: a dispatch
-    /// that is submitted and not waited for is *in flight*, and the host is free
-    /// for that whole window. Whether the host actually gets anything back from
-    /// that window is a property of the device, not of this function, which is why
-    /// it is the caller's measurement to make.
-    ///
-    /// The caller must hold whatever locks make the recorded commands valid until
-    /// the wait: the staging mapping the uploads read, and the command buffer
-    /// itself, which the next `record_and_submit` into the same target would
-    /// reset out from under this submission.
-    fn record_and_submit(
-        &self,
-        target: &Submit,
-        record: impl FnOnce(vk::CommandBuffer),
-    ) -> Result<(), RunError> {
-        self.begin_recording(target)?;
-        record(target.command);
-        self.end_and_submit(target)
-    }
-
-    /// Reset `target`'s command buffer and open it for recording.
+    /// Reset `slot`'s command buffer and open it for recording.
     ///
     /// Split from the close so one submission can record **more than one**
     /// dispatch: a command buffer is a single recording however many dispatches
-    /// go into it, and a chain is exactly that.
-    fn begin_recording(&self, target: &Submit) -> Result<(), RunError> {
+    /// go into it, and a chain is exactly that.  A chain is still **one**
+    /// submission and one fence: recording several dispatches here is not the
+    /// same as having several in flight, and only the second one needs a pool
+    /// deeper than one.
+    fn begin_recording(&self, slot: &Slot) -> Result<(), RunError> {
         let device = &self.device;
         check("command buffer reset", unsafe {
-            device.reset_command_buffer(target.command, vk::CommandBufferResetFlags::empty())
+            device.reset_command_buffer(slot.command, vk::CommandBufferResetFlags::empty())
         })
         .and_then(|()| {
             check("command recording", unsafe {
-                device.begin_command_buffer(target.command, &vk::CommandBufferBeginInfo::default())
+                device.begin_command_buffer(slot.command, &vk::CommandBufferBeginInfo::default())
             })
         })
     }
 
-    /// Close `target`'s recording and hand it to the queue, without waiting.
-    fn end_and_submit(&self, target: &Submit) -> Result<(), RunError> {
+    /// Close `slot`'s recording and hand it to the queue, without waiting.
+    fn end_and_submit(&self, slot: &Slot) -> Result<(), RunError> {
         let device = &self.device;
         check("command buffer end", unsafe {
-            device.end_command_buffer(target.command)
+            device.end_command_buffer(slot.command)
         })
         .and_then(|()| {
             // The fence is created unsignalled and left signalled by the wait,
-            // so it has to be reset or this would return immediately.
-            check("fence reset", unsafe {
-                device.reset_fences(&[target.fence])
-            })?;
+            // so it has to be reset or this would return immediately.  A fence
+            // with nobody waiting on it may still be signalled from a submission
+            // that has been waited for, so this reset is not optional.
+            check("fence reset", unsafe { device.reset_fences(&[slot.fence]) })?;
             check("queue submit", unsafe {
                 device.queue_submit(
                     self.queue,
-                    &[vk::SubmitInfo::default().command_buffers(&[target.command])],
-                    target.fence,
+                    &[vk::SubmitInfo::default().command_buffers(&[slot.command])],
+                    slot.fence,
                 )
             })
         })
     }
 
-    /// Block until `target`'s last submission has finished.
+    /// Block until `slot`'s last submission has finished.
     ///
     /// The thirty-second bound is a driver-error bound, not a timeout anyone
     /// chose: a fence that has not signalled that long is a device that has
     /// stopped making progress, and returning would hand back buffers the device
     /// is still writing.
-    fn wait_on(&self, target: &Submit) -> Result<(), RunError> {
+    fn wait_on(&self, slot: &Slot) -> Result<(), RunError> {
         check("fence wait", unsafe {
             self.device.wait_for_fences(
-                &[target.fence],
+                &[slot.fence],
                 true,
                 std::time::Duration::from_secs(30).as_nanos() as u64,
             )
         })
-    }
-
-    /// Record and submit one dispatch into `target`, waiting for it to finish
-    /// only when `wait` says so.
-    ///
-    /// `staging` is the caller's already-locked staging buffer: the uploads read
-    /// from it, so this cannot take the lock itself.  The same is true of
-    /// `target` — the caller holds it, so that a `wait: false` dispatch keeps its
-    /// command buffer reserved for as long as the submission is in flight.
-    ///
-    /// The descriptor pool is the third thing the caller has already arranged,
-    /// and it is the one this cannot check: it takes a set and does not reset the
-    /// pool, because a reset here would free the sets earlier dispatches in the
-    /// same submission are still bound to. The caller resets it once, at the
-    /// start of the submission — see [`GpuContext::descriptor_pool`].
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch(
-        &self,
-        target: &Submit,
-        wait: bool,
-        pipeline: vk::Pipeline,
-        descriptors: &[vk::DescriptorBufferInfo],
-        staging: vk::Buffer,
-        uploads: &[Transfer],
-        count: usize,
-    ) -> Result<(), RunError> {
-        self.begin_recording(target)?;
-        self.record_dispatch(target, pipeline, descriptors, staging, uploads, count)?;
-        self.end_and_submit(target)?;
-        if wait {
-            self.wait_on(target)?;
-        }
-        Ok(())
     }
 
     /// Record one dispatch into the command buffer that is **already open**.
@@ -1034,7 +1143,11 @@ impl GpuContext {
     /// dispatches into one submission. Each call still takes **its own**
     /// descriptor set, and that is not tidiness: a set is read when the
     /// submission executes, so one set rewritten between two dispatches would
-    /// change what the first one sees — see [`GpuContext::descriptor_pool`].
+    /// change what the first one sees — see [`Slot::descriptor_pool`].
+    ///
+    /// The uploads read out of `slot`'s own staging and nothing else, which is
+    /// why the staging handle is not a parameter: passing one separately would
+    /// be an invitation to record a copy out of a mapping the device is reading.
     ///
     /// The correctness of a chain rests on the trailing barrier below, whose
     /// destination scope names a shader as well as a transfer. Narrow it to the
@@ -1042,10 +1155,9 @@ impl GpuContext {
     /// data — not stale data, and not a crash.
     fn record_dispatch(
         &self,
-        target: &Submit,
+        slot: &Slot,
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
-        staging: vk::Buffer,
         uploads: &[Transfer],
         count: usize,
     ) -> Result<(), RunError> {
@@ -1057,6 +1169,7 @@ impl GpuContext {
             });
         }
         let device = &self.device;
+        let staging = slot.staging.handle;
 
         // The two layouts are a function of `total` alone, so they are built once
         // per shape rather than per run.  `pipeline` builds the *same* pair, so a
@@ -1071,7 +1184,7 @@ impl GpuContext {
                 // The count defaults to zero, and a zero-count request
                 // *succeeds* while allocating nothing — so it is stated.
                 descriptor_set_count: 1,
-                descriptor_pool: self.descriptor_pool,
+                descriptor_pool: slot.descriptor_pool,
                 p_set_layouts: std::ptr::addr_of!(set_layout),
                 ..Default::default()
             })
@@ -1096,7 +1209,7 @@ impl GpuContext {
             .collect();
         unsafe { device.update_descriptor_sets(&writes, &[]) };
 
-        let command = target.command;
+        let command = slot.command;
         unsafe {
             // These three only exist for the uploads. A later link of a chain
             // reads a buffer an earlier link's *shader* wrote, and the ordering
@@ -1337,21 +1450,32 @@ impl GpuContext {
 
 impl Drop for GpuContext {
     fn drop(&mut self) {
+        // Nothing may be in flight by the time a context is dropped, and that is
+        // an invariant of every path that submits rather than something checked
+        // here: `run`, `run_chain` and `fetch` all wait before they return, and
+        // the segments that do not are consumed by a wait of their own. Destroying
+        // a command buffer or unmapping a buffer under a running submission would
+        // be a use-after-free rather than a leak, so this is the one place in
+        // `Drop` that has to be believed rather than verified.
+        let device = &self.device;
+        for (_, pool) in self.recycled.lock().unwrap().drain() {
+            for buffer in pool {
+                buffer.destroy(device);
+            }
+        }
+        for (_, buffer) in self.resident.lock().unwrap().drain() {
+            buffer.destroy(device);
+        }
+        for slot in &mut self.slots.lock().unwrap().entries {
+            slot.destroy(device);
+        }
+        self.slots = Mutex::new(Slots {
+            entries: Vec::new(),
+            cursor: 0,
+        });
         for (_, pipeline) in self.pipelines.lock().unwrap().drain() {
             unsafe { self.device.destroy_pipeline(pipeline, None) };
         }
-        // Buffers the host never released: the context is going away, so the
-        // device memory goes with it.  Their ids die with the registry, which is
-        // why a stale id can never name them afterwards.
-        for (_, buffer) in self.resident.lock().unwrap().drain() {
-            buffer.destroy(&self.device);
-        }
-        for (_, pool) in self.recycled.lock().unwrap().drain() {
-            for buffer in pool {
-                buffer.destroy(&self.device);
-            }
-        }
-        self.staging.lock().unwrap().destroy(self);
         unsafe {
             self.device.destroy_device(None);
             self.instance.destroy_instance(None);
@@ -1499,9 +1623,12 @@ impl Drop for ScratchGuard<'_> {
 
 /// Mapped host memory every upload and download is staged through.
 ///
-/// One per context, reused and grown: a run's staging is dead the moment its
-/// fence signals, so a fresh mapping per run would put an allocation and a
-/// `map_memory` on the critical path of every dispatch.
+/// One per **slot**, reused and grown: a slot's staging is dead the moment its
+/// fence signals, so a fresh mapping per submission would put an allocation and
+/// a `map_memory` on the critical path of every dispatch. Per slot rather than
+/// per context because "dead the moment its fence signals" is no longer the
+/// whole rule — the device may be reading *another* slot's staging right now,
+/// and one shared mapping would put this submission's bytes underneath it.
 struct Staging {
     handle: vk::Buffer,
     memory: vk::DeviceMemory,
@@ -1512,14 +1639,14 @@ struct Staging {
 }
 
 // SAFETY: `Staging` is `Send` because every dereference of `mapped` happens
-// while the context's staging mutex is held — `run` and `fetch` each take it for
-// the whole span in which they read or write the mapping, so no two threads can
-// touch it at once.  The memory itself is host memory the device maps
-// coherently, and the pointer names a fixed offset into it, so moving the
-// pointer between threads changes nothing about what it addresses.  `Sync` is
-// deliberately not implemented: the pointer makes a shared `&Staging`
-// unsound on its own, and `Mutex<Staging>` is `Sync` from `Staging: Send`
-// alone, which is all the context needs.
+// while the pool's lock is held — a `Segment` carries that lock for its whole
+// life, and a slot is not reachable again until a fence wait has released it —
+// so no two threads can touch one mapping at once.  The memory itself is host
+// memory the device maps coherently, and the pointer names a fixed offset into
+// it, so moving the pointer between threads changes nothing about what it
+// addresses.  `Sync` is deliberately not implemented: the pointer makes a shared
+// `&Staging` unsound on its own, and `Mutex<Slots>` is `Sync` from
+// `Slot: Send` alone, which is all the context needs.
 unsafe impl Send for Staging {}
 
 impl Staging {
@@ -1648,11 +1775,169 @@ fn cached_memory_type(
     })
 }
 
-impl Submit {
-    /// A command buffer and a fence, both created unsignalled and reset before
-    /// every use, so a submission always waits on *this* submission.
+/// One submission's claim on a pool slot, and the recording going into it.
+///
+/// The claim is the pool's lock, held for as long as this value lives. That is
+/// what makes "two threads never record into one command buffer" a property the
+/// borrow checker sees rather than a property the comments promise: a second
+/// thread wanting the same slot cannot get past [`GpuContext::acquire`] until
+/// this one is gone.
+///
+/// The three submit methods are the same two-step decision spelled three ways,
+/// because the interesting difference is not what they record but **what they
+/// leave the caller holding**:
+///
+/// - [`Self::submit_and_wait`] records, submits, waits, and gives the slot back.
+///   This is a run and a `run_chain`: the device is the only thing that matters
+///   and the host wants its answer before it does anything else.
+/// - [`Self::submit`] records and submits, and **keeps the slot claimed** while
+///   handing back a [`Token`]. This is the only path that leaves the device
+///   behind the host, and the token is what says which submission is still out.
+/// - [`Self::submit_and_read_back`] does the download's own read of the staging
+///   while the claim is still held. It cannot be written as `submit` plus
+///   [`GpuContext::sync`] followed by a read, because `sync` gives the slot away
+///   and the next acquisition of it would be free to overwrite the very bytes
+///   being read.
+struct Segment<'a> {
+    context: &'a GpuContext,
+    /// The pool lock, held for this value's whole life.
+    slots: std::sync::MutexGuard<'a, Slots>,
+    index: usize,
+    /// Whether a submission on this slot may still be running.
+    ///
+    /// Set by [`Self::submit`] on the way out and cleared only by a wait that has
+    /// confirmed the fence, so "nothing is in flight" is a fact about the device
+    /// and never an assumption about the host.
+    in_flight: bool,
+}
+
+impl Segment<'_> {
+    fn slot(&self) -> &Slot {
+        &self.slots.entries[self.index]
+    }
+
+    /// The open command buffer, for recording a command that is not a dispatch.
+    fn command(&self) -> vk::CommandBuffer {
+        self.slot().command
+    }
+
+    /// This slot's staging: the only memory a submission of this segment may
+    /// stage its uploads through.
+    fn staging(&self) -> &Staging {
+        &self.slot().staging
+    }
+
+    /// Guarantee this slot has `bytes` of staging, reallocating only if smaller.
+    ///
+    /// Reallocation unmaps the old memory, so this is only safe while nothing is
+    /// reading it. The claim is what guarantees that: the slot was claimed in
+    /// `acquire`, which waited out any submission the previous holder left in
+    /// flight.
+    fn reserve(&mut self, context: &GpuContext, bytes: u64) -> Result<(), RunError> {
+        self.slots.entries[self.index]
+            .staging
+            .reserve(context, bytes)
+    }
+
+    fn begin(&mut self) -> Result<(), RunError> {
+        self.context.begin_recording(self.slot())
+    }
+
+    /// Record one dispatch into the already-open recording.
+    fn record(
+        &self,
+        pipeline: vk::Pipeline,
+        descriptors: &[vk::DescriptorBufferInfo],
+        uploads: &[Transfer],
+        count: usize,
+    ) -> Result<(), RunError> {
+        self.context
+            .record_dispatch(self.slot(), pipeline, descriptors, uploads, count)
+    }
+
+    /// Close the recording and hand it to the queue, without waiting.
+    ///
+    /// Takes `&mut self` rather than consuming the segment, so a caller that
+    /// still needs the slot afterwards — to wait on it, or to read the staging it
+    /// just filled — can have both. What it cannot do is promise the device is
+    /// done; that is [`GpuContext::wait_on`] and nothing else.
+    fn hand_to_queue(&mut self) -> Result<(), RunError> {
+        self.context.end_and_submit(self.slot())?;
+        self.in_flight = true;
+        Ok(())
+    }
+
+    /// Close the recording, hand it to the queue, and **do not wait**.
+    ///
+    /// The slot stays claimed, so a second acquisition takes a different one and
+    /// the host is free for as long as the device takes.  Waiting is
+    /// [`GpuContext::sync`]'s job, and it is a separate call on purpose: the gap
+    /// between the two is the entire opportunity the overlapping strategy has,
+    /// and an `if wait` parameter would be a way to forget it exists.
+    fn submit(mut self) -> Result<Token, RunError> {
+        self.hand_to_queue()?;
+        Ok(Token(self.index as u32))
+    }
+
+    /// Record, submit, wait, and release the slot.
+    ///
+    /// Literally [`Self::submit`] then [`GpuContext::sync`], which is the shape
+    /// every non-overlapping path has: one submission, waited for before the
+    /// call returns.
+    fn submit_and_wait(self) -> Result<(), RunError> {
+        // Read before the move: `submit` consumes the segment, and the context
+        // reference is what `sync` needs afterwards.
+        let context = self.context;
+        let token = self.submit()?;
+        context.sync(token)
+    }
+
+    /// Submit, wait, and take `count` elements of this slot's staging with us.
+    ///
+    /// The read is inside the claim on purpose. This cannot be written as
+    /// `submit` then [`GpuContext::sync`] followed by a read, because `sync` gives
+    /// the slot away and the next acquisition of it would be free to resize or
+    /// rewrite the very mapping being copied out of — which returns the *wrong
+    /// numbers* rather than failing, so it has to be structurally impossible
+    /// rather than merely discouraged.
+    fn submit_and_read_back(mut self, count: usize) -> Result<Vec<i64>, RunError> {
+        self.hand_to_queue()?;
+        self.context.wait_on(self.slot())?;
+        // The fence has signalled, so nothing is in flight and the claim can go
+        // back when this value drops. It is deliberately **not** released here:
+        // the read below still reads this slot's memory.
+        self.in_flight = false;
+        // SAFETY: the slot was reserved for at least this many bytes and mapped
+        // before the submit, the wait above is the one that proves the copy
+        // filling it has finished, and the copy's own barrier made the write
+        // host-visible. The claim is still held, so no other thread can be
+        // writing this mapping.
+        let data = unsafe { std::slice::from_raw_parts(self.staging().at(0) as *const i64, count) };
+        Ok(data.to_vec())
+    }
+}
+
+impl Drop for Segment<'_> {
+    fn drop(&mut self) {
+        // Only a path that neither submitted nor waited gives the slot back here.
+        // A segment that submitted leaves the claim alone: the submission may
+        // still be running, and the next acquisition of this slot waits its
+        // fence — which is exactly what `GpuContext::acquire` is for.
+        if !self.in_flight {
+            self.slots.entries[self.index].claimed = false;
+        }
+    }
+}
+
+impl Slot {
+    /// A command buffer, a fence, a descriptor pool and an unmapped staging
+    /// buffer, all of them this submission's own.
+    ///
+    /// The fence is created unsignalled and reset before every use, so a wait
+    /// always waits on *this* slot's last submission and never on a previous
+    /// one's.
     fn new(device: &ash::Device, family: u32) -> Result<Self, RunError> {
-        let pool = check("command pool", unsafe {
+        let command_pool = check("command pool", unsafe {
             device.create_command_pool(
                 &vk::CommandPoolCreateInfo::default().queue_family_index(family),
                 None,
@@ -1664,7 +1949,7 @@ impl Submit {
                 // Stated for the same reason as the descriptor set count: a
                 // zero-count request succeeds while allocating nothing.
                 command_buffer_count: 1,
-                command_pool: pool,
+                command_pool,
                 ..Default::default()
             })
         })
@@ -1676,15 +1961,72 @@ impl Submit {
             Ok(())
         });
         if let Err(error) = allocated {
-            unsafe { device.destroy_command_pool(pool, None) };
+            unsafe { device.destroy_command_pool(command_pool, None) };
             return Err(error);
         }
-        // The pool is kept alive by the command buffer's allocation, which is
-        // freed with the device; the handle is not needed again.
         let fence = check("fence", unsafe {
             device.create_fence(&vk::FenceCreateInfo::default(), None)
         })?;
-        Ok(Submit { command, fence })
+        let descriptor_pool = match check("descriptor pool", unsafe {
+            device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(MAX_DISPATCHES_PER_SUBMISSION as u32)
+                    .pool_sizes(&[vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::STORAGE_BUFFER,
+                        descriptor_count: (MAX_DISPATCHES_PER_SUBMISSION * MAX_DESCRIPTOR_BINDINGS)
+                            as u32,
+                    }]),
+                None,
+            )
+        }) {
+            Ok(pool) => pool,
+            Err(error) => {
+                unsafe {
+                    device.destroy_fence(fence, None);
+                    // Destroying the pool frees the command buffer allocated from
+                    // it, so there is nothing else to destroy.
+                    device.destroy_command_pool(command_pool, None);
+                }
+                return Err(error);
+            }
+        };
+        Ok(Slot {
+            claimed: false,
+            command_pool,
+            command,
+            fence,
+            staging: Staging::empty(),
+            descriptor_pool,
+        })
+    }
+
+    /// Release every device object this slot owns.
+    ///
+    /// **Only safe when nothing is in flight on it.** A command buffer, a fence
+    /// and a mapped buffer all destroyed under a running submission is a
+    /// use-after-free, and `GpuContext::drop` relies on the invariant that every
+    /// path that submits also waits before returning.
+    fn destroy(&mut self, device: &ash::Device) {
+        // The staging needs the context, not the device, to unmap; when it has
+        // never been reserved it holds nothing and there is nothing to unmap, so
+        // the null memory is skipped rather than passed to `unmap_memory`.
+        if self.staging.capacity > 0 {
+            unsafe {
+                device.unmap_memory(self.staging.memory);
+                device.destroy_buffer(self.staging.handle, None);
+                device.free_memory(self.staging.memory, None);
+            }
+            self.staging = Staging::empty();
+        }
+        unsafe {
+            device.destroy_descriptor_pool(self.descriptor_pool, None);
+            device.destroy_fence(self.fence, None);
+            device.destroy_command_pool(self.command_pool, None);
+        }
+        self.command = vk::CommandBuffer::null();
+        self.fence = vk::Fence::null();
+        self.command_pool = vk::CommandPool::null();
+        self.descriptor_pool = vk::DescriptorPool::null();
     }
 }
 
