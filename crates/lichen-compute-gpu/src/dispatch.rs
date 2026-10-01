@@ -83,6 +83,10 @@ pub enum RunError {
     /// zero-sized allocation, which Vulkan does not have; refused here so the
     /// reason is the program's rather than the driver's.
     EmptyRun,
+    /// A run binds more storage buffers than the descriptor pool is sized for.
+    /// The pool is allocated once, so this is a limit of the backend rather than
+    /// of the device — refused by name instead of surfacing as pool exhaustion.
+    TooManyBindings { total: usize, max: usize },
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -113,6 +117,12 @@ impl fmt::Display for RunError {
                 f,
                 "the run covers no indices, so there is no buffer for it to write: an empty \
                  dispatch is a program with nothing to do, not a smaller run."
+            ),
+            RunError::TooManyBindings { total, max } => write!(
+                f,
+                "the run binds {total} storage buffer(s) and this backend's descriptor pool is \
+                 sized for {max}, so it is refused here rather than left to fail as pool \
+                 exhaustion on the device"
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
             RunError::InputShorterThanCount { buffer, len, count } => write!(
@@ -156,7 +166,6 @@ pub struct GpuContext {
     instance: ash::Instance,
     device: ash::Device,
     queue: vk::Queue,
-    family: u32,
     /// Retained so memory-type queries can be answered; those live on the
     /// instance, not the device, so the device alone is not enough.
     physical: vk::PhysicalDevice,
@@ -175,7 +184,46 @@ pub struct GpuContext {
     /// context and reused, because a run's staging is dead the moment its fence
     /// signals.
     staging: Mutex<Staging>,
+    /// One command pool, one command buffer and one fence, reused for every
+    /// submission.
+    ///
+    /// Reuse is safe because submissions are **already serialised**: `run` holds
+    /// the staging lock across its dispatch and `fetch` holds it across its copy,
+    /// so two submissions can never overlap. The mutex is belt to that braces —
+    /// it makes the exclusion local instead of resting on a reader having to
+    /// trace two methods to convince themselves the lock is the same one.
+    submit: Mutex<Submit>,
+    /// The descriptor set layout and pipeline layout for a run with `n` buffers
+    /// in total. They are a function of `n` alone — the same two objects the old
+    /// per-run code built and dropped for every dispatch.
+    layouts: Mutex<HashMap<usize, Layouts>>,
+    /// Sized once for [`MAX_DESCRIPTOR_BINDINGS`] and **reset before each run**,
+    /// which is what makes one set per dispatch safe without a free: the reset
+    /// invalidates the previous run's set, and that run's fence has already
+    /// signalled.
+    descriptor_pool: vk::DescriptorPool,
 }
+
+/// The reusable objects one submission needs.
+struct Submit {
+    command: vk::CommandBuffer,
+    fence: vk::Fence,
+}
+
+/// The two layouts a dispatch binds, which depend only on how many buffers the
+/// run has in total.
+#[derive(Clone, Copy)]
+struct Layouts {
+    set: vk::DescriptorSetLayout,
+    pipeline: vk::PipelineLayout,
+}
+
+/// The most storage-buffer bindings one run may declare.
+///
+/// The descriptor pool is sized once for this, so a run that binds more is
+/// **refused by name** rather than left to fail as a driver-side pool exhaustion
+/// that would read like a device problem.
+const MAX_DESCRIPTOR_BINDINGS: usize = 32;
 
 impl GpuContext {
     /// Find a device and create a compute context on it.
@@ -258,19 +306,36 @@ impl GpuContext {
             )
         })?;
         let queue = unsafe { device.get_device_queue(family, 0) };
+        let descriptor_pool = check("descriptor pool", unsafe {
+            device.create_descriptor_pool(
+                &vk::DescriptorPoolCreateInfo::default()
+                    .max_sets(1)
+                    .pool_sizes(&[vk::DescriptorPoolSize {
+                        ty: vk::DescriptorType::STORAGE_BUFFER,
+                        descriptor_count: MAX_DESCRIPTOR_BINDINGS as u32,
+                    }]),
+                None,
+            )
+        })?;
+
+        // Built before the context exists, because it needs a borrow of the
+        // device that the struct literal below is about to move.
+        let submit = Submit::new(&device, family)?;
 
         Ok(GpuContext {
             entry,
             instance,
             device,
             queue,
-            family,
             physical,
             name,
             pipelines: Mutex::new(HashMap::new()),
             resident: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             staging: Mutex::new(Staging::empty()),
+            submit: Mutex::new(submit),
+            layouts: Mutex::new(HashMap::new()),
+            descriptor_pool,
         })
     }
 
@@ -309,8 +374,7 @@ impl GpuContext {
                 });
             }
         }
-        let words = spirv::compile(fragment, binding).map_err(RunError::Emit)?;
-        let pipeline = self.pipeline(fragment, binding, &words)?;
+        let pipeline = self.pipeline(fragment, binding)?;
 
         // Round up so the last workgroup's surplus lanes address padding rather
         // than memory past the end; see the module docs.
@@ -560,75 +624,48 @@ impl GpuContext {
 
     /// Record one command buffer, submit it, and wait for it to finish.
     ///
-    /// The command pool is per-call. That is a fixed cost on every dispatch and
-    /// the first thing to hoist onto the context once the residency work lands;
-    /// it is kept per-call here so this method has one job.
+    /// The command buffer and fence belong to the context and are reset here, so
+    /// a dispatch pays two reset calls rather than three object create/destroy
+    /// pairs.  Every call is serialised by [`Self::submit`], so reusing both is
+    /// sound: there is never a second submission in flight to trample.
     fn record_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), RunError> {
         let device = &self.device;
-        let pool = check("command pool", unsafe {
-            device.create_command_pool(
-                &vk::CommandPoolCreateInfo::default().queue_family_index(self.family),
-                None,
-            )
-        })?;
-        let mut command = vk::CommandBuffer::null();
-        let prepared = check("command buffer allocation", unsafe {
-            device.allocate_command_buffers(&vk::CommandBufferAllocateInfo {
-                // Stated for the same reason as the descriptor set count: a
-                // zero-count request succeeds while allocating nothing.
-                command_buffer_count: 1,
-                command_pool: pool,
-                ..Default::default()
-            })
-        })
-        .and_then(|buffers| {
-            command = *buffers.first().ok_or(RunError::Vulkan {
-                stage: "command buffer allocation",
-                detail: "Vulkan reported success but returned no command buffer".into(),
-            })?;
-            Ok(())
+        let submit = self.submit.lock().unwrap();
+        let command = submit.command;
+        let fence = submit.fence;
+        check("command buffer reset", unsafe {
+            device.reset_command_buffer(command, vk::CommandBufferResetFlags::empty())
         })
         .and_then(|()| {
             check("command recording", unsafe {
                 device.begin_command_buffer(command, &vk::CommandBufferBeginInfo::default())
             })
-        });
-        if let Err(error) = prepared {
-            unsafe { device.destroy_command_pool(pool, None) };
-            return Err(error);
-        }
+        })?;
 
         record(command);
 
-        let outcome = check("command buffer end", unsafe {
+        check("command buffer end", unsafe {
             device.end_command_buffer(command)
         })
         .and_then(|()| {
-            let fence = check("fence", unsafe {
-                device.create_fence(&vk::FenceCreateInfo::default(), None)
-            })?;
-            let waited = check("queue submit", unsafe {
+            // The fence is created unsignalled and left signalled by the wait
+            // below, so it has to be reset or this would return immediately.
+            check("fence reset", unsafe { device.reset_fences(&[fence]) })?;
+            check("queue submit", unsafe {
                 device.queue_submit(
                     self.queue,
                     &[vk::SubmitInfo::default().command_buffers(&[command])],
                     fence,
                 )
+            })?;
+            check("fence wait", unsafe {
+                device.wait_for_fences(
+                    &[fence],
+                    true,
+                    std::time::Duration::from_secs(30).as_nanos() as u64,
+                )
             })
-            .and_then(|()| {
-                check("fence wait", unsafe {
-                    device.wait_for_fences(
-                        &[fence],
-                        true,
-                        std::time::Duration::from_secs(30).as_nanos() as u64,
-                    )
-                })
-            });
-            // Torn down either way: a failed submit leaks nothing either.
-            unsafe { device.destroy_fence(fence, None) };
-            waited
-        });
-        unsafe { device.destroy_command_pool(pool, None) };
-        outcome
+        })
     }
 
     /// Record and submit one dispatch, waiting for it to finish.
@@ -645,50 +682,35 @@ impl GpuContext {
         count: usize,
     ) -> Result<(), RunError> {
         let total = descriptors.len();
+        if total > MAX_DESCRIPTOR_BINDINGS {
+            return Err(RunError::TooManyBindings {
+                total,
+                max: MAX_DESCRIPTOR_BINDINGS,
+            });
+        }
         let device = &self.device;
 
-        let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..total)
-            .map(|slot| vk::DescriptorSetLayoutBinding {
-                binding: slot as u32,
-                descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-                descriptor_count: 1,
-                stage_flags: vk::ShaderStageFlags::COMPUTE,
-                ..Default::default()
-            })
-            .collect();
-        let set_layout = check("descriptor set layout", unsafe {
-            device.create_descriptor_set_layout(
-                &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
-                None,
-            )
-        })?;
-        let layout = check("pipeline layout", unsafe {
-            device.create_pipeline_layout(
-                &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&[set_layout])
-                    .push_constant_ranges(&[]),
-                None,
-            )
-        })?;
+        // The two layouts are a function of `total` alone, so they are built once
+        // per shape rather than per run.  `pipeline` builds the *same* pair, so a
+        // pipeline and the sets that bind against it always agree — which is the
+        // invariant the old per-run code got for free by building both every time.
+        let layouts = self.layouts(total)?;
 
-        let pool = check("descriptor pool", unsafe {
-            device.create_descriptor_pool(
-                &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(1)
-                    .pool_sizes(&[vk::DescriptorPoolSize {
-                        ty: vk::DescriptorType::STORAGE_BUFFER,
-                        descriptor_count: total as u32,
-                    }]),
-                None,
-            )
+        // The pool is reset rather than recreated: it only ever holds the one set
+        // of the run in flight, and that run's set is dead the moment its fence
+        // signalled.
+        check("descriptor pool reset", unsafe {
+            device
+                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
         })?;
+        let set_layout = layouts.set;
         let mut set = vk::DescriptorSet::null();
         check("descriptor set allocation", unsafe {
             device.allocate_descriptor_sets(&vk::DescriptorSetAllocateInfo {
                 // The count defaults to zero, and a zero-count request
                 // *succeeds* while allocating nothing — so it is stated.
                 descriptor_set_count: 1,
-                descriptor_pool: pool,
+                descriptor_pool: self.descriptor_pool,
                 p_set_layouts: std::ptr::addr_of!(set_layout),
                 ..Default::default()
             })
@@ -713,33 +735,7 @@ impl GpuContext {
             .collect();
         unsafe { device.update_descriptor_sets(&writes, &[]) };
 
-        let pool_info = check("command pool", unsafe {
-            device.create_command_pool(
-                &vk::CommandPoolCreateInfo::default().queue_family_index(self.family),
-                None,
-            )
-        })?;
-        let mut command = vk::CommandBuffer::null();
-        check("command buffer allocation", unsafe {
-            device.allocate_command_buffers(&vk::CommandBufferAllocateInfo {
-                // Stated for the same reason as the descriptor set count.
-                command_buffer_count: 1,
-                command_pool: pool_info,
-                ..Default::default()
-            })
-        })
-        .and_then(|buffers| {
-            command = *buffers.first().ok_or(RunError::Vulkan {
-                stage: "command buffer allocation",
-                detail: "Vulkan reported success but returned no command buffer".into(),
-            })?;
-            Ok(())
-        })?;
-        check("command recording", unsafe {
-            device.begin_command_buffer(command, &vk::CommandBufferBeginInfo::default())
-        })?;
-
-        unsafe {
+        self.record_and_wait(|command| unsafe {
             // The host wrote staging before this submit, so the copies below are
             // the first reader of it: make that write visible to them.
             device.cmd_pipeline_barrier(
@@ -789,7 +785,7 @@ impl GpuContext {
             device.cmd_bind_descriptor_sets(
                 command,
                 vk::PipelineBindPoint::COMPUTE,
-                layout,
+                layouts.pipeline,
                 0,
                 &[set],
                 &[],
@@ -797,7 +793,7 @@ impl GpuContext {
             device.cmd_dispatch(command, count.div_ceil(LOCAL_SIZE_X as usize) as u32, 1, 1);
             // The results stay on the device, so this does not hand them to the
             // host — it makes them visible to the `fetch` that may read them
-            // later, which is a separate submit and a separate command buffer.
+            // later, which is a separate submission.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -809,60 +805,17 @@ impl GpuContext {
                 &[],
                 &[],
             );
-        }
-        check("command submission", unsafe {
-            device.end_command_buffer(command)
-        })?;
-
-        let fence = check("fence", unsafe {
-            device.create_fence(&vk::FenceCreateInfo::default(), None)
-        })?;
-        let outcome = check("queue submit", unsafe {
-            device.queue_submit(
-                self.queue,
-                &[vk::SubmitInfo::default().command_buffers(&[command])],
-                fence,
-            )
         })
-        .and_then(|()| {
-            check("fence wait", unsafe {
-                device.wait_for_fences(
-                    &[fence],
-                    true,
-                    std::time::Duration::from_secs(30).as_nanos() as u64,
-                )
-            })
-        });
-        // Tear down in both cases; a failed run leaks nothing either way.
-        unsafe {
-            device.destroy_fence(fence, None);
-            device.destroy_command_pool(pool_info, None);
-            device.destroy_descriptor_pool(pool, None);
-            device.destroy_pipeline_layout(layout, None);
-            device.destroy_descriptor_set_layout(set_layout, None);
-        }
-        outcome
     }
 
-    /// The pipeline for a fragment, built once per content digest.
-    fn pipeline(
-        &self,
-        fragment: &KernelFragment,
-        binding: Binding,
-        words: &[u32],
-    ) -> Result<vk::Pipeline, RunError> {
-        let key = (fragment_digest(fragment), binding.inputs, binding.outputs);
-        if let Some(pipeline) = self.pipelines.lock().unwrap().get(&key) {
-            return Ok(*pipeline);
+    /// The descriptor set layout and pipeline layout for a run binding `total`
+    /// storage buffers, built on first use and reused after that.
+    fn layouts(&self, total: usize) -> Result<Layouts, RunError> {
+        if let Some(layouts) = self.layouts.lock().unwrap().get(&total) {
+            return Ok(*layouts);
         }
-        let module = check("shader module", unsafe {
-            // `code` takes the words, not bytes: no repacking needed.
-            self.device
-                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(words), None)
-        })?;
-        // The descriptor set layout is the same one `dispatch` builds, so the
-        // pipeline is created against an identical one.
-        let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..binding.total())
+        let device = &self.device;
+        let bindings: Vec<vk::DescriptorSetLayoutBinding> = (0..total)
             .map(|slot| vk::DescriptorSetLayoutBinding {
                 binding: slot as u32,
                 descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
@@ -871,20 +824,62 @@ impl GpuContext {
                 ..Default::default()
             })
             .collect();
-        let set_layout = check("pipeline descriptor set layout", unsafe {
-            self.device.create_descriptor_set_layout(
+        let set = check("descriptor set layout", unsafe {
+            device.create_descriptor_set_layout(
                 &vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings),
                 None,
             )
         })?;
-        let layout = check("pipeline layout", unsafe {
-            self.device.create_pipeline_layout(
+        let pipeline = match check("pipeline layout", unsafe {
+            device.create_pipeline_layout(
                 &vk::PipelineLayoutCreateInfo::default()
-                    .set_layouts(&[set_layout])
+                    .set_layouts(&[set])
                     .push_constant_ranges(&[]),
                 None,
             )
+        }) {
+            Ok(layout) => layout,
+            Err(error) => {
+                unsafe { device.destroy_descriptor_set_layout(set, None) };
+                return Err(error);
+            }
+        };
+        let layouts = Layouts { set, pipeline };
+        self.layouts.lock().unwrap().insert(total, layouts);
+        Ok(layouts)
+    }
+
+    /// The pipeline for a fragment, built once per content digest.
+    ///
+    /// The SPIR-V is emitted **only on a cache miss**.  It used to be emitted on
+    /// every run, which put a whole-module emission on the critical path of a
+    /// dispatch whose pipeline was already built and waiting — pure repeated work
+    /// that a cache hit was supposed to have removed.
+    fn pipeline(
+        &self,
+        fragment: &KernelFragment,
+        binding: Binding,
+    ) -> Result<vk::Pipeline, RunError> {
+        let key = (fragment_digest(fragment), binding.inputs, binding.outputs);
+        if let Some(pipeline) = self.pipelines.lock().unwrap().get(&key) {
+            return Ok(*pipeline);
+        }
+        let words = spirv::compile(fragment, binding).map_err(RunError::Emit)?;
+        let module = check("shader module", unsafe {
+            // `code` takes the words, not bytes: no repacking needed.
+            self.device
+                .create_shader_module(&vk::ShaderModuleCreateInfo::default().code(&words), None)
         })?;
+        // The same cached pair `dispatch` binds against, so a pipeline and the
+        // descriptor sets that use it cannot disagree.
+        let layouts = match self.layouts(binding.total()) {
+            Ok(layouts) => layouts,
+            Err(error) => {
+                unsafe { self.device.destroy_shader_module(module, None) };
+                return Err(error);
+            }
+        };
+        let layout = layouts.pipeline;
         // `create_compute_pipelines` reports differently from every other call:
         // on failure it hands back the pipelines that *did* build alongside the
         // code, so a caller can tell "one of three failed" from "none built".
@@ -907,11 +902,9 @@ impl GpuContext {
                 .pop()
                 .expect("one pipeline was requested and one was returned"),
             Err((_, code)) => {
-                unsafe {
-                    self.device.destroy_shader_module(module, None);
-                    self.device.destroy_pipeline_layout(layout, None);
-                    self.device.destroy_descriptor_set_layout(set_layout, None);
-                }
+                // Only the module is this call's to destroy; the layouts are
+                // cached and shared with every later run of this shape.
+                unsafe { self.device.destroy_shader_module(module, None) };
                 return Err(RunError::Vulkan {
                     stage: "compute pipeline",
                     detail: format!("{code:?}"),
@@ -919,11 +912,10 @@ impl GpuContext {
             }
         };
 
-        unsafe {
-            self.device.destroy_shader_module(module, None);
-            self.device.destroy_pipeline_layout(layout, None);
-            self.device.destroy_descriptor_set_layout(set_layout, None);
-        }
+        // The module goes here because the pipeline has copied what it needs from
+        // it.  The layouts stay: they are cached, and destroying them would leave
+        // the cache pointing at freed objects.
+        unsafe { self.device.destroy_shader_module(module, None) };
         self.pipelines.lock().unwrap().insert(key, pipeline);
         Ok(pipeline)
     }
@@ -1228,6 +1220,46 @@ fn cached_memory_type(
                  the module docs"
             .into(),
     })
+}
+
+impl Submit {
+    /// A command buffer and a fence, both created unsignalled and reset before
+    /// every use, so a submission always waits on *this* submission.
+    fn new(device: &ash::Device, family: u32) -> Result<Self, RunError> {
+        let pool = check("command pool", unsafe {
+            device.create_command_pool(
+                &vk::CommandPoolCreateInfo::default().queue_family_index(family),
+                None,
+            )
+        })?;
+        let mut command = vk::CommandBuffer::null();
+        let allocated = check("command buffer allocation", unsafe {
+            device.allocate_command_buffers(&vk::CommandBufferAllocateInfo {
+                // Stated for the same reason as the descriptor set count: a
+                // zero-count request succeeds while allocating nothing.
+                command_buffer_count: 1,
+                command_pool: pool,
+                ..Default::default()
+            })
+        })
+        .and_then(|buffers| {
+            command = *buffers.first().ok_or(RunError::Vulkan {
+                stage: "command buffer allocation",
+                detail: "Vulkan reported success but returned no command buffer".into(),
+            })?;
+            Ok(())
+        });
+        if let Err(error) = allocated {
+            unsafe { device.destroy_command_pool(pool, None) };
+            return Err(error);
+        }
+        // The pool is kept alive by the command buffer's allocation, which is
+        // freed with the device; the handle is not needed again.
+        let fence = check("fence", unsafe {
+            device.create_fence(&vk::FenceCreateInfo::default(), None)
+        })?;
+        Ok(Submit { command, fence })
+    }
 }
 
 /// The device name a `PhysicalDeviceProperties` carries, as UTF-8 where possible.

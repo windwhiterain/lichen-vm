@@ -54,13 +54,51 @@ fn sequential(input: &[i64], output: &mut [i64]) {
     }
 }
 
+/// The fixed cost of a dispatch, with the answer stated as a distribution.
+///
+/// A single sample of this is worth very little: on a machine that is not
+/// otherwise idle the same binary measures an empty dispatch anywhere from
+/// 0.3 ms to 0.9 ms, which is a 3x spread and wide enough to hide the effect of
+/// removing object churn. The **minimum** is the estimator that answers "what
+/// does this cost when nothing else is interfering", and the median is printed
+/// beside it so the spread stays visible rather than being quietly optimised away
+/// by the choice of statistic.
+fn fixed_cost(context: &GpuContext) -> (f64, f64) {
+    const REPEATS: usize = 200;
+    let count = 64usize;
+    let input: Vec<i64> = (0..count as i64).collect();
+    let warm = context
+        .run(&fragment(), &[BufferSlot::Host(&input)], count)
+        .expect("the warm-up run completes");
+    for id in &warm {
+        context.release(*id);
+    }
+
+    let mut samples = Vec::with_capacity(REPEATS);
+    for _ in 0..REPEATS {
+        let started = Instant::now();
+        let resident = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .expect("a probe run completes");
+        let elapsed = started.elapsed().as_secs_f64() * 1e3;
+        for id in &resident {
+            context.release(*id);
+        }
+        samples.push(elapsed);
+    }
+    samples.sort_by(|a, b| a.partial_cmp(b).expect("the samples are all finite"));
+    (samples[0], samples[REPEATS / 2])
+}
+
 fn main() {
     let Ok(context) = GpuContext::new() else {
         eprintln!("no usable Vulkan device; nothing to compare against");
         std::process::exit(1);
     };
     println!("device: {}", context.device_name());
-    println!("workgroup: {LOCAL_SIZE_X} invocations\n");
+    println!("workgroup: {LOCAL_SIZE_X} invocations");
+    let (best, median) = fixed_cost(&context);
+    println!("empty dispatch over 200 runs: best {best:.3} ms, median {median:.3} ms\n");
     println!(
         "{:>10}  {:>12}  {:>12}  {:>12}  {:>8}",
         "count", "gpu (ms)", "dispatch", "fetch", "ratio"

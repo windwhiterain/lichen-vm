@@ -265,13 +265,13 @@ device-local memory. Two things moved it:
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
 **The honest framing is that the GPU does not win here, even chained, and the
-reason is measured rather than inferred.** From the single-dispatch table, a run
-of **64** elements — which is an empty dispatch with the object churn and nothing
-else — costs **0.46 ms**. That is the per-dispatch fixed cost, and it is already
-half of what the CPU spends on a *complete* million-element loop (1.0 ms). A
-chained run adds about 1.07 ms per link on the GPU and about 1.0 ms per link on
-the CPU, so the two are within noise of each other and the GPU pays two transfers
-on top:
+reason is measured rather than inferred.** An **empty** dispatch — one workgroup,
+so nothing but the dispatch itself — costs **0.20 ms at best and 0.29 ms at the
+median** over 200 runs. That is the per-dispatch fixed cost, and it is already
+about a fifth of what the CPU spends on a *complete* million-element loop. A
+chained run adds roughly a millisecond per link on the GPU and about a millisecond
+per link on the CPU, so the two are within noise of each other and the GPU pays
+two transfers on top:
 
 | count | chain | GPU | sequential | ratio |
 |---|---|---|---|---|
@@ -281,13 +281,30 @@ on top:
 | 1 048 576 | 8 | 12.97 ms | 6.92 ms | 0.53× |
 | 1 048 576 | 16 | 21.49 ms | 16.25 ms | **0.76×** |
 
-The ratio is climbing toward 1 and would cross it somewhere past 16 links, so the
-shape is right — but the fixed cost is the reason it does not cross yet, and that
-is the number to attack. Where the 0.46 ms goes is countable: each dispatch
-creates and destroys a descriptor set layout, a pipeline layout, a descriptor
-pool, a descriptor set, a command pool, a command buffer and a fence, and
-`run` re-runs `spirv::compile` even when the pipeline cache hits. Reusing the
-pools, the fence and the compiled words is the whole of the remaining gap.
+The ratio is climbing toward 1 and would cross somewhere past 16 links, so the
+shape is right — but the fixed cost is the reason it does not cross yet.
+
+**Two things about that fixed cost, one of them a correction.** First, the
+estimate is a **distribution, not a number**: the same binary measures an empty
+dispatch anywhere from 0.33 ms to 0.93 ms on a single sample depending on what
+else the machine is doing, which is a 3× spread. The example therefore runs 200
+of them and reports the best and the median, because a single sample of this is
+worth very little and an earlier version of this note quoted one. Second — and
+this is the part worth knowing — **removing the per-run object churn barely
+moved it.** The command pool, command buffer, fence, descriptor pool and both
+layouts are now created once per context, and `spirv::compile` runs only on a
+pipeline-cache miss. That is a strict reduction in work per dispatch and it
+measured **0.222 ms → 0.200 ms best, 0.305 ms → 0.29 ms median**: about 10%,
+against an expectation of most of the cost. The fixed cost is therefore
+overwhelmingly the submit-and-wait round trip, not the bookkeeping around it.
+
+That points at where the real win is, and it is not a per-run optimisation. A
+chain of N dispatches does N submits and N fence waits, even though the links are
+device-sequential and the host has no reason to look at the intermediate results
+— residency is exactly the property that says the host is not needed between
+links. Collapsing a chain into one submit is a **launch-graph** optimisation, not
+a `plrun` one: a single `plrun` cannot know that another link is coming. See
+[Not yet](#not-yet).
 
 **The CPU side of the chain measurement swaps two buffers per link** rather than
 allocating a fresh one, because an allocation per link is the allocator being
@@ -327,7 +344,14 @@ Named rather than implied, because each is a decision not a gap:
   backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
   a refused allocation once the device is full, which names itself. A program
   that runs many large kernels in one process will hit that backstop.
-- **The per-dispatch fixed cost.** 0.46 ms, and the whole remaining gap to a
-  crossover. See the performance section: pools, the fence and the compiled
-  words are all rebuilt per dispatch, and `spirv::compile` runs even on a
-  pipeline-cache hit.
+- **The per-dispatch submit-and-wait round trip.** 0.20 ms best / 0.29 ms median
+  on an empty dispatch, and the whole remaining gap to a crossover. Note what
+  this is **not**: removing the per-run object churn measured about 10%, so the
+  cost is the round trip and not the bookkeeping. Collapsing a chain into one
+  submit is a launch-graph optimisation and lives there, not here.
+- **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
+  into a graph IR — a DAG of kernels and the dataflow between them, which is the
+  IR's natural shape rather than a special case — and optimises on that. A
+  single `plrun` cannot see the link after it, so a chain cannot be collapsed
+  into one submit without it. The `ResidentId` split is the prerequisite and is
+  done.
