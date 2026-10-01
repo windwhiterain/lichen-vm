@@ -73,7 +73,7 @@ queue's order is deliberate.
 | P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | done |
 | P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
 | P1-30 | low | compute | A refused `plrun` count is silent | done |
-| P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | todo |
+| P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | done |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (doc); wiring is D6(b) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2283,7 +2283,7 @@ compute.rs`, which asserts one diagnostic naming both the count asked for and th
 limit; with the reporting disabled it fails with the old symptom, `expected this
 program to fail: "parameterized: Int"`.
 
-### P1-31 — The deep-pass verdict conflates "never ran" with "in progress" `verified`
+### P1-31 — The deep-pass verdict conflates "never ran" with "in progress" `done`
 
 `Node::evaluated_deep: Option<EvaluatedDeep>` is documented as a two-state fact:
 `None` means the deep pass never ran on the node, and a reader "must treat [it] as
@@ -2310,43 +2310,75 @@ canonical one" — a path-guard conflict on the `Type : Type` spine. So *"in
 progress, assumed concrete"* is a real state, and it is deliberately read as
 concrete.
 
-The defect is that the same `None` also means *"never ran"*, where nothing
-justifies that read, and two sites take it:
+The defect is that the same `None` also meant *"never ran"*, and the fix is to
+**name the third state** rather than to flip a read.
 
-- `value_is_parameterized`'s **operand arm** (`evaluation.rs:766-774`). The deep
-  pass descends value-reachable edges only, and only `evaluate_node_forced` walks
-  an operand edge (`:633-639`), so a core operator's operand routinely has no
-  verdict. The arm's own comment calls the operand "a graph edge", i.e. part of
-  the subtree the verdict claims to describe — yet a `None` there contributes
-  nothing, so a node is certified concrete while its operand's subtree is
-  unproven. That is also inconsistent with the *same* postlude reading a `None`
-  operand conservatively at `:285-287`.
-- `Module::key_state` (`table.rs:217-222`): a key the forced pass refused on
-  budget is read as decided and hashed, where the module doc says such a key must
-  record `EvalError::TableKeyUnbound` and drop the entry (`table.rs:63-68`).
+**Fix (landed).** `Node` gains a private `assumed_concrete` flag: set where the
+structural-cycle cut returns (`evaluate_node_deep_inner`), cleared where the real
+verdict is written and where a late operand edge invalidates one
+(`Module::close_operation_cycle`). Every verdict read inside the verdict
+computation now goes through one helper, `ref_is_parameterized`, whose rule is
+**the assumption fills a missing verdict and never overrides one**:
 
-**Fix.** Split the state rather than flip a read. Give the field a third value —
-"assumed concrete, in progress" — set at the cycle cut (`:593-597`) and read as
-today by the array and table arms; leave `None` to mean strictly "never ran"
-everywhere, and let the operand and table-key arms read
-`is_none_or(|e| e.parameterized)` like `:285-287` does. Behaviour on the universe
-is unchanged (the in-progress read keeps assuming concrete); what changes is that
-the fact is named, the operand edge stops being silently exempt, and the verdict
-becomes a function of the graph rather than of where the walk started. A
-follow-on note records why that matters:
-`docs/notes/incremental-evaluation.md` §4.4 needs the verdict to be maintainable
-by dirty-flag propagation, and it cannot be while a `None` means two things.
+```rust
+match entry.evaluated_deep {
+    Some(deep) => deep.parameterized,
+    None => !entry.assumed_concrete,
+}
+```
 
-**Open — whether the exempt operand is *harmful*, not just undocumented.**
-Reading `None` as concrete lets the apply clone walk bake a node
-(`function.rs:325`, `proven_concrete`) whose operand's subtree was never proven.
-An analytic attempt to make that observable — a template whose operand is an array
-holding one parameter read that the operator never reads — suggests the baked
-node's cached value is still call-independent and that nothing re-reads the
-operand afterwards, so it may well be unobservable. That half is `needs-test`: the
-proof is a regression test pinning a template of that shape and checking the
-second apply's result, and this project does not write tests without permission
-(`D3`). The split is worth doing either way; the test decides its severity.
+`None` therefore means exactly "the pass never ran here", and a position no frame
+is computing reads unproven. Behaviour is unchanged for the coinductive cases (a
+direct self-reference and a longer cycle stay concrete) and changes in exactly one
+direction: a subtree the pass **refused on** — a depth refusal returns before it
+writes (`evaluation.rs:599-625`) — no longer certifies its parent.
+
+**Verified, with the pins.** `crates/lichen-lowlevel/tests/basic/verdict.rs`:
+`a_refused_subtree_leaves_its_parent_unproven` fails on the old read
+(`parameterized: false` where the fix gives `true`), and
+`a_cyclic_value_is_proven_concrete` pins the coinductive case the change must
+preserve. The lowlevel suite (139 + 3) and `lichen-highlevel`, `lichen-language`
+and `lichen-compute` all pass.
+
+**Two sites an earlier draft of this item named are *not* defects — retracted,
+with the reason each.**
+
+- **The operand arm** (`value_is_parameterized`) is a deliberate exemption, and
+  flipping it is not a local fix. A core operator's operand is the argument array
+  a layer above synthesized, and the deep pass descends value-reachable edges
+  only, so "this operand was never walked" is the *normal* case; reading it as
+  unproven would turn every pair read (`Index(pair, 0)`) in a template unproven
+  and clone all of them per apply. The reason is now stated at the site, and
+  `an_operand_the_pass_never_walked_certifies_the_node` pins both the exemption
+  and the harm question below.
+- **`Module::key_state`** is correct as it stands, for a reason the draft missed:
+  the content unfolding is **total** — it cuts at `UNFOLD_DEPTH` and reports its
+  own failure as `TableKeyUnbound` (`table.rs:1-70`) — so a key with no verdict is
+  still hashable, and gating it is *too* conservative. Three cyclic-key tests
+  (`table::cyclic_keys_hash_and_compare_equal`,
+  `coinductively_equal_cyclic_keys_hash_equal_across_depth`,
+  `table::a_cyclic_key_is_found_across_the_static_boundary`) fail if that read is
+  gated, which is how the retraction was found; `table.rs` keeps the read with a
+  comment saying why.
+
+**The harm half, answered for the shape that could show it.** The approved
+regression test builds the body `p => [1, p](0)` — a pair whose element 1 depends
+on the parameter and whose element 0 is the literal the indexed read takes — and
+asserts that the read is certified concrete although its operand was never walked,
+*and* that two calls with different arguments both yield `1`. So the exemption
+does not corrupt the second call in the shape that exercises it: the baked node's
+cached value is call-independent and nothing re-reads the parameter-dependent
+sibling. That is a pin, not a proof that no shape is harmed.
+
+**Why this mattered beyond the contract.** `docs/notes/incremental-evaluation.md`
+needs `parameterized` to be a function of the graph rather than of where a walk
+started — a dirty-flag recomputation restarts elsewhere — and it needs the deep
+pass's redundancy to be worth removing. That note's step 0 measured the redundancy
+at 1.7–8.2 node-evaluations per decided node over six shapes, worst on the
+canonical cyclic ones; the counters it uses (`lichen_lowlevel::deep_pass_stats`,
+`reset_deep_pass_stats`) and the harness
+(`cargo run -p lichen-language --example deep_pass_stats`) landed with this item.
+The pass's share of a build's wall-clock is still unmeasured.
 
 ## P2 — architecture
 

@@ -1,4 +1,5 @@
 use stacksafe::stacksafe;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
@@ -481,6 +482,7 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+        DEEP_PASS_WALKS.fetch_add(1, Ordering::Relaxed);
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
     }
@@ -500,6 +502,7 @@ impl<P: Program> Module<P> {
     /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
+        DEEP_PASS_WALKS.fetch_add(1, Ordering::Relaxed);
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
     }
@@ -569,11 +572,16 @@ impl<P: Program> Module<P> {
         force_operand: bool,
         cache: &mut StaticModuleCache<P>,
     ) -> P::Value {
+        // Counted on entry, before the static-leaf and cycle-cut early returns:
+        // those returns are exactly the redundant work the counter exists to
+        // measure.
+        DEEP_PASS_VISITS.fetch_add(1, Ordering::Relaxed);
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
         // Even a forced pass gains nothing from a solved subtree (residuals
         // never re-run), so the leaf rule is unconditional.
         if let AnyNodeId::Static(sref) = node {
+            DEEP_PASS_CHEAP_RETURNS.fetch_add(1, Ordering::Relaxed);
             return cache.read(self, sref);
         }
         let node = match node {
@@ -593,6 +601,14 @@ impl<P: Program> Module<P> {
         if self.nodes[node].visiting
             && let Some(value) = self.nodes[node].value
         {
+            // The cut **assumes this node concrete** for the readers that reach
+            // it while its own frame is still computing it — the coinductive
+            // step a cyclic value needs.  It is a fact about the node rather
+            // than about the reader, so a one-level self-reference (the
+            // universe's `[Type, ↺]`) and a longer cycle read alike, and it is
+            // cleared where the real verdict is written below.
+            self.nodes[node].assumed_concrete = true;
+            DEEP_PASS_CHEAP_RETURNS.fetch_add(1, Ordering::Relaxed);
             return value;
         }
         self.deep_depth += 1;
@@ -703,8 +719,44 @@ impl<P: Program> Module<P> {
         // was already decided by the deep pass that solved the module.
         let parameterized = self.value_is_parameterized(cache, value, node);
         self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
+        // The real verdict supersedes any cycle-cut assumption: the node is no
+        // longer in progress, so the mark must not outlive the frame.
+        self.nodes[node].assumed_concrete = false;
         self.deep_depth -= 1;
         value
+    }
+
+    /// The concreteness of one **ref** inside the verdict computation: the
+    /// three-state read of [`Module::node_evaluated_deep`].
+    ///
+    /// A verdict is written only when the pass *finishes* a node, so a node a
+    /// cycle cut re-entered while its own frame is still computing it has no
+    /// verdict yet at the moment an enclosing frame decides its parent's.  Such
+    /// a node is assumed **concrete** — that coinductive step is what lets a
+    /// cyclic value be proven at all, and the canonical universe `[Type, ↺]` is
+    /// the case that needs it (its own descent re-enters it, and the checker's
+    /// note records that cloning the universe per apply is a unification
+    /// conflict, not a slowdown).
+    ///
+    /// A node the pass **never ran on** is a different fact, and the contract on
+    /// `node_evaluated_deep` fixes its reading: for a node no frame is
+    /// computing, `None` must never mean "proven concrete", so it reads
+    /// parameterized.  Conflating the two was the defect `P1-31`.
+    ///
+    /// The assumption **fills a missing verdict; it never overrides one** — a
+    /// node that already wrote its answer keeps it, even if a later re-entrant
+    /// pass cuts on it again.
+    fn ref_is_parameterized(&self, cache: &mut StaticModuleCache<P>, id: AnyNodeId) -> bool {
+        match id {
+            Dyn(node) => {
+                let entry = &self.nodes[node];
+                match entry.evaluated_deep {
+                    Some(deep) => deep.parameterized,
+                    None => !entry.assumed_concrete,
+                }
+            }
+            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
+        }
     }
 
     /// Whether `value` — the value this module just evaluated for `node` — is
@@ -713,6 +765,11 @@ impl<P: Program> Module<P> {
     /// parameterized.  `cache` is the walk's static-module resolution cache,
     /// so a static element's solved flag costs one lookup per module for the
     /// whole walk rather than one per element.
+    ///
+    /// Every position's own verdict is read through
+    /// [`Self::ref_is_parameterized`], so an **in-progress** position is
+    /// assumed concrete (the coinductive step) while one the pass never ran on
+    /// is not.
     fn value_is_parameterized(
         &self,
         cache: &mut StaticModuleCache<P>,
@@ -737,12 +794,9 @@ impl<P: Program> Module<P> {
                     // alive.  The note covers the two `items()` calls in this
                     // arm.
                     if unsafe { array.items() }.iter().any(|item| item.shallow)
-                        || unsafe { array.items() }.iter().any(|item| match item.node {
-                            Dyn(node) => self.nodes[node]
-                                .evaluated_deep
-                                .is_some_and(|e| e.parameterized),
-                            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
-                        })
+                        || unsafe { array.items() }
+                            .iter()
+                            .any(|item| self.ref_is_parameterized(cache, item.node))
             )
             || matches!(
                 view,
@@ -751,22 +805,31 @@ impl<P: Program> Module<P> {
                     // module just evaluated for `node`, so its home block is
                     // alive.  The note covers the two `items()` calls in this
                     // arm.
-                    if unsafe { table.items() }.iter().any(|item| match item.key {
-                        Dyn(node) => self.nodes[node]
-                            .evaluated_deep
-                            .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
-                    }) || unsafe { table.items() }.iter().any(|item| match item.value {
-                        Dyn(node) => self.nodes[node]
-                            .evaluated_deep
-                            .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
-                    })
+                    if unsafe { table.items() }
+                        .iter()
+                        .any(|item| self.ref_is_parameterized(cache, item.key))
+                        || unsafe { table.items() }
+                            .iter()
+                            .any(|item| self.ref_is_parameterized(cache, item.value))
             )
             || self.nodes[node].operation.is_some_and(|op| {
                 op.operand.is_some_and(|operand| {
-                    // Operands are static graph edges, not value-reachable, so a
-                    // nested block release may have dropped the node by now.
+                    // Deliberately **not** read through `ref_is_parameterized`.
+                    // A core operator's operand is the argument array a layer
+                    // above synthesized for it, and the deep pass descends
+                    // value-reachable edges only, so "this operand was never
+                    // walked" is the normal case rather than an anomaly —
+                    // reading it as unproven would flip every pair read
+                    // (`Index(pair, 0)`) in a template and clone it per apply.
+                    // The operand's effect on the node's *value* is already
+                    // decided where the value is: the value arm above for a
+                    // structural operator (a read of an unbound element yields
+                    // the marker), and the `Parameterized` gate the operation
+                    // postlude applies to an extension operator's operand
+                    // (`Self::evaluate_node_operation`'s `None` arm) for the
+                    // rest.  Operands are static graph edges, not
+                    // value-reachable, so a nested block release may have
+                    // dropped the node by now.
                     self.nodes
                         .get(operand)
                         .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
@@ -786,4 +849,61 @@ impl<P: Program> Module<P> {
         // refusal rather than reporting it a second time.
         self.garbage_collect(root).unwrap_or(value)
     }
+}
+
+/// The deep pass's **entry points**: one per [`Module::evaluate_node_deep`] /
+/// [`Module::evaluate_node_forced`] call.  See [`deep_pass_stats`].
+static DEEP_PASS_WALKS: AtomicUsize = AtomicUsize::new(0);
+
+/// The deep pass's **work**: one per `evaluate_node_deep_inner` entry, so a node
+/// reached from several entry points is counted once per entry that reached it.
+/// See [`deep_pass_stats`].
+static DEEP_PASS_VISITS: AtomicUsize = AtomicUsize::new(0);
+
+/// The subset of [`DEEP_PASS_VISITS`] that returned without doing a node's work:
+/// a static ref (a decided leaf, one cached read) and a structural-cycle cut
+/// (an ancestor an outer frame already computed).  Both are `O(1)`, so the
+/// visits that actually evaluate and stamp a node are `visits - cheap_returns`.
+static DEEP_PASS_CHEAP_RETURNS: AtomicUsize = AtomicUsize::new(0);
+
+/// What the deep pass has done since the counters were last reset — a
+/// **measurement channel, not behaviour**: nothing in the VM reads it, and every
+/// value, verdict and diagnostic is identical whether it is observed or not.
+///
+/// The two numbers answer "how redundant is the deep pass".  It memoizes no
+/// subtree across entry points (see `incremental-evaluation` in `docs/notes`),
+/// so a shared subtree is walked once per entry point that reaches it; the
+/// number of nodes one pass *stamped* is separately readable as
+/// `Module::node_evaluated_deep(node) != None` over the node table.  A
+/// process-global counter is the shape the compute plugin already uses for the
+/// same purpose (`MODULE_CACHE_MISSES`), and it is why a measurement must come
+/// from a harness that runs alone — an integration test in its own file rather
+/// than beside parallel tests in one binary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct DeepPassStats {
+    /// [`Module::evaluate_node_deep`] and [`Module::evaluate_node_forced`]
+    /// calls, nested walks included.
+    pub walks: usize,
+    /// `evaluate_node_deep_inner` entries.
+    pub visits: usize,
+    /// The `visits` that returned without evaluating a node — a static leaf or
+    /// a cycle cut.  The visits that did a node's work are
+    /// `visits - cheap_returns`.
+    pub cheap_returns: usize,
+}
+
+/// The counters behind [`DeepPassStats`].
+pub fn deep_pass_stats() -> DeepPassStats {
+    DeepPassStats {
+        walks: DEEP_PASS_WALKS.load(Ordering::Relaxed),
+        visits: DEEP_PASS_VISITS.load(Ordering::Relaxed),
+        cheap_returns: DEEP_PASS_CHEAP_RETURNS.load(Ordering::Relaxed),
+    }
+}
+
+/// Zero the counters behind [`DeepPassStats`].
+pub fn reset_deep_pass_stats() {
+    DEEP_PASS_WALKS.store(0, Ordering::Relaxed);
+    DEEP_PASS_VISITS.store(0, Ordering::Relaxed);
+    DEEP_PASS_CHEAP_RETURNS.store(0, Ordering::Relaxed);
 }

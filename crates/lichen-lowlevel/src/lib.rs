@@ -11,7 +11,7 @@ use lichen_utils::extend::AsEnum;
 
 pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
-pub use crate::evaluation::EvalError;
+pub use crate::evaluation::{DeepPassStats, EvalError, deep_pass_stats, reset_deep_pass_stats};
 pub use crate::function::ApplyError;
 pub(crate) use crate::static_module::StaticModuleCache;
 
@@ -886,7 +886,21 @@ pub struct Node<P: Program> {
     /// reachable subtree has a [`LowValue::Parameterized`].  [`None`] means
     /// it never ran, so the node's concreteness is unknown.  **Private**:
     /// read through [`Module::node_evaluated_deep`].
+    ///
+    /// A node a cycle cut re-entered has no verdict yet; the verdict
+    /// computation assumes such a node concrete (the coinductive step a
+    /// self-referential value needs) and tells it apart by [`Self::assumed_concrete`],
+    /// not by this field.  See `P1-31` in `docs/notes/code-audit.md`.
     evaluated_deep: Option<EvaluatedDeep>,
+    /// Whether a **cycle cut** assumed this node concrete while its own frame
+    /// was still computing it — see `evaluate_node_deep_inner`'s structural
+    /// cycle cut.  The verdict computation reads it for a position whose frame
+    /// has not written [`Self::evaluated_deep`] yet, which is what tells "in
+    /// progress, assumed concrete" apart from "the pass never ran here": the
+    /// conflation `P1-31` fixed.  Set at the cut, cleared where the real
+    /// verdict is written and where a late operand edge invalidates one.
+    /// **Private**.
+    assumed_concrete: bool,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
     /// **Private**: read through [`Module::node_equality`]; the only writer

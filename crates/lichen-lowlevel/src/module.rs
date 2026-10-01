@@ -122,6 +122,7 @@ impl<P: Program> Module<P> {
             block,
             visiting: false,
             evaluated_deep: None,
+            assumed_concrete: false,
             equality: disjoint::Meta::default(),
         });
         disjoint::make_set(&mut self.nodes, node);
@@ -212,6 +213,16 @@ impl<P: Program> Module<P> {
     /// node's graph at the time it was reached; it is cleared when a late
     /// operation edge is added ([`Self::close_operation_cycle`]).
     ///
+    /// **One case has no verdict yet.**  A node a **cycle cut** re-entered — the
+    /// structural cycle cut in `evaluate_node_deep_inner` — is reached by a
+    /// parent's verdict computation before its own frame writes, so this field
+    /// still reads [`None`] there.  The verdict computation assumes such a node
+    /// **concrete**: that is the coinductive step which lets a self-referential
+    /// value be proven at all (the canonical universe `[Type, ↺]` is reached
+    /// from inside its own descent).  The two `None` cases are told apart by the
+    /// cut's own mark on the node, never by this field alone; the defect of
+    /// conflating them was `P1-31` in `docs/notes/code-audit.md`.
+    ///
     /// Panics if `node` is not in [`Self::nodes`].
     pub fn node_evaluated_deep(&self, node: NodeId) -> Option<EvaluatedDeep> {
         self.nodes[node].evaluated_deep
@@ -269,6 +280,10 @@ impl<P: Program> Module<P> {
         );
         self.nodes[node].operation = Some(operation);
         self.nodes[node].evaluated_deep = None;
+        // The cycle-cut assumption (if any) predates this edge too, and no frame
+        // is computing the node here, so clearing the verdict without it would
+        // leave a live "assumed concrete".
+        self.nodes[node].assumed_concrete = false;
     }
 
     /// Register `node` in `function`'s body scope: tag the node as owned by

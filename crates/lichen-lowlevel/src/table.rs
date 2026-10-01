@@ -214,6 +214,13 @@ impl<P: Program> Module<P> {
         match key {
             Dyn(node) => {
                 self.evaluate_node_forced(node, None);
+                // Deliberately only `Some(parameterized)`: a key with **no**
+                // verdict is not gated here, because the content unfolding is
+                // total — it cuts at `UNFOLD_DEPTH` and reports its own failure
+                // (`TableKeyUnbound`) — so a deep or never-walked key is still
+                // hashable, and the cyclic-key tests depend on exactly that.
+                // `P1-31` records why this read is not the same defect as the
+                // truthiness the verdict's own arms had.
                 if self.nodes[node]
                     .evaluated_deep
                     .is_some_and(|e| e.parameterized)

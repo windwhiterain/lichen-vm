@@ -9,6 +9,7 @@
 //! - `equality` — `unify` and the DSU equivalence classes it binds through
 //! - `assert` — assert points, forced evaluation, clone-on-apply
 //! - `table` — constant table values, deep-content keys, `TableGet` reads
+//! - `verdict` — the deep pass's concreteness verdict and its two `None` cases
 //!
 //! The shared harness (the test `Program`/`Value`/`Operator` and the node
 //! and function builders) lives here; each category module pulls it in with
@@ -22,6 +23,7 @@ mod function;
 mod recursion;
 mod static_module;
 mod table;
+mod verdict;
 
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,

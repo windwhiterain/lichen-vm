@@ -12,10 +12,10 @@
 > mutation should mark its consumers dirty, and a `dirty` bit should let the
 > incremental pass skip what a full pass would recompute.  The obstruction is
 > that **the graph's topology changes while it is being computed** (§3), and —
-> the deeper obstruction — that the deep-pass verdict conflates "never ran" with
+> the deeper obstruction — that the deep-pass verdict conflated "never ran" with
 > "in progress", which is what made it a function of traversal order (§4.4,
-> **H1**, investigated and filed as `code-audit.md` `P1-31`).  §4 is the design;
-> §9 is the decisions taken and the two obligations they create.
+> **H1**; investigated and **fixed** as `code-audit.md` `P1-31`).  §4 is the
+> design; §9 is the decisions taken and the two obligations they create.
 >
 > Points at: `crates/lichen-lowlevel/src/{evaluation,equality,function,gc,table,module,lib,utils,apply}.rs`,
 > `crates/lichen-lowlevel/src/static_module/{freeze,apply}.rs`,
@@ -93,6 +93,28 @@ Two consequences:
 
 This is a *within-build* incrementality that needs no new identity scheme and no
 cross-build state — which is why §7 puts it first.
+
+**Measured (step 0 · `cargo run -p lichen-language --example deep_pass_stats`).**
+The counters are `lichen_lowlevel::deep_pass_stats()`; *stamped* is the nodes the
+build left a verdict on, *cheap* is the visits that returned without evaluating a
+node (a static leaf or a cycle cut), so `real = visits − cheap` is the visits that
+did a node's work:
+
+| program | walks | visits | cheap | nodes | stamped | real / stamped |
+|---|---|---|---|---|---|---|
+| `struct_recursion` | 8 | 326 | 57 | 56 | 33 | **8.15** |
+| `closure (nested)` | 10 | 126 | 18 | 118 | 37 | **2.92** |
+| `assert` | 7 | 45 | 7 | 28 | 17 | **2.24** |
+| `let_polymorphism` | 7 | 59 | 8 | 51 | 25 | **2.04** |
+| `recursion (fib 10)` | 991 | 3 721 | 9 | 6 103 | 1 886 | **1.97** |
+| `table (deep keys)` | 9 | 81 | 10 | 92 | 43 | **1.65** |
+
+So the redundancy is **real work, not cheap returns**: the pass evaluates a node
+1.7–8.2 times per node it decides, and the worst case is the canonical cyclic
+shapes — `struct_recursion` walks a 56-node module 326 times, because each of its
+8 entry points re-descends the same universe-shaped structures. What this does
+*not* say is the pass's share of a build's **wall-clock**; that still needs a probe
+around `compile()`, and it is what §7 step 0's second half still owes.
 
 ## 2. The state that would have to be reused, and why a `NodeId` is not an identity
 
@@ -316,24 +338,33 @@ then reads that `None`. The array arm reads it as concrete, which is what lets a
 cyclic value be proven at all; read conservatively, `checker.rs:627-632` states
 the consequence — the universe would be cloned per apply and create "a fresh
 self-loop that unification cannot equate with the canonical one", breaking the
-`Type : Type` spine. So the non-conservative read at the array/table arms is
-**load-bearing and deliberate**. What is wrong is that the same `None` also
-carries "never ran", and *that* is what the operand arm (`evaluation.rs:766-774`)
-and `table.rs:217-222` read non-conservatively, with no cycle in sight.
+`Type : Type` spine. So the non-conservative read is **load-bearing and
+deliberate** — and the fix is to *name* the third state, not to flip a read.
 
-Two consequences, and Q6 is thereby settled as a fix rather than a choice:
+**Done, and the two mis-attributions are retracted.** `code-audit.md` `P1-31`
+landed: `Node::assumed_concrete` is set at the cycle cut and cleared where the real
+verdict is written, and every verdict read inside the computation goes through one
+helper whose rule is *the assumption fills a missing verdict and never overrides
+one* (`Some(deep) => deep.parameterized, None => !assumed_concrete`). `None` now
+means exactly "the pass never ran here". Two sites this note had named as defects
+were not:
 
-- The verdict's documented meaning ("any node in its reachable subtree is
-  `Parameterized`") is false at the operand and table-key reads: the operand edge
-  is part of the graph by the code's own account (`evaluation.rs:766-769`), and a
-  `None` there contributes nothing.
-- The verdict is a function of where the walk started, so a recomputation in a
-  different order can disagree with a full walk. The fix is to **split the
-  state**, not to flip a read: a third value meaning "assumed concrete, in
-  progress", set at the cycle cut and read exactly as today by the array/table
-  arms, leaves `None` to mean strictly "never ran" everywhere — after which the
-  operand and table-key arms can read `is_none_or` like `evaluation.rs:285-287`
-  does, and step 3 of §7 has its oracle.
+- the **operand arm** is a deliberate exemption — a core operator's operand is the
+  argument array a layer above synthesized, so "never walked" is the normal case,
+  and reading it as unproven would flip every pair read (`Index(pair, 0)`) in a
+  template and clone them all per apply;
+- **`Module::key_state`** is correct as it stands, because the content unfolding is
+  total (it cuts at `UNFOLD_DEPTH` and reports its own failure), so a key with no
+  verdict is still hashable and gating it is *too* conservative. Three cyclic-key
+  tests fail if it is gated, which is how the retraction was found.
+
+The one behaviour change is in the direction this note wants: a subtree the pass
+**refused on** (a depth refusal returns before it writes) no longer certifies its
+parent. That is pinned by
+`crates/lichen-lowlevel/tests/basic/verdict.rs::a_refused_subtree_leaves_its_parent_unproven`,
+which fails on the old read. What remains open for the design is the *residual*
+order dependence (H1's coinductive step is still DFS-scoped), which §7 step 3's
+differential harness is what would detect.
 
 **H2 — the apply clone walk is a materializing consumer, not a dataflow node.**
 `function.rs:318-338` reads `proven_concrete` and then *builds new topology*: it
@@ -533,17 +564,24 @@ already the answer. Listed because the note has no measurement, and because
 
 ## 7. Recommendation and staged roadmap
 
-0. **Measure first — no design without it.** Instrument the deep pass: entry
-   points per build, nodes visited per entry point, distinct nodes reached, and
-   the share of the keystroke budget that is (deep pass) vs (check) vs
-   (lex+parse). `code-audit.md:3966-3970` shows the project's own probe style (a
-   temporary counter, removed after). §1.3 is a *reading of the code*.
-1. **Fix the verdict's state split first (`P1-31`, §4.4 H1).** Q6 is settled by
-   investigation: the fix is a third value meaning "assumed concrete, in
-   progress", leaving `None` to mean strictly "never ran", after which the
-   operand and table-key arms read conservatively. This is a code fix, not a
-   design choice, it is independent of everything below, and without it
-   "incremental == full" is not provable (step 3 has no oracle).
+0. **Measure first — no design without it.** *Half done.* The redundancy is
+   measured (§1.3) with the counters this note's step 1 landed
+   (`lichen_lowlevel::deep_pass_stats`) and the harness
+   `cargo run -p lichen-language --example deep_pass_stats`. Still owed: the
+   pass's share of a build's wall-clock, i.e. a probe around `compile()` that
+   separates (deep pass) from (check) from (lex+parse) — the counters do not do
+   that, and until they are split, "the redundancy is 1.7-8.2×" does not say how
+   much of a build that is.
+1. **The verdict's state split (`P1-31`) — landed.** Q6 was settled by
+   investigation: the fix is a third state meaning "assumed concrete, in
+   progress", leaving `None` to mean strictly "never ran". `Node::assumed_concrete`
+   is set at the cycle cut and cleared where the real verdict is written, and every
+   read inside the verdict computation goes through `ref_is_parameterized`. What it
+   buys: `None` means one thing, a refused subtree no longer certifies its parent
+   (pinned by a regression test), and the operand/table-key reads are *documented*
+   exemptions rather than side effects. What it does **not** buy: the residual
+   DFS-scoped coinductive step (§4.4 H1), which is why step 3 is a differential
+   harness rather than a proof.
 2. **The reverse index and the two hooks** (§4.1-4.2): `dirty` + `dependents`,
    `link` at `add_node` and at each payload allocation, propagation in
    `close_operation_cycle` and `write_node_value`, cleanup in `drop_block`.
@@ -608,10 +646,12 @@ not wasted if T4 is ever taken.
   alone.
 - **Q5 — the CLI build path first.** Step 0 measures there; the editor path is
   deferred rather than wired into a `BufferSession` nothing consumes yet (`P2-1`).
-- **Q6 — settled by investigation, and it is a code defect.** The verdict
-  conflates "never ran" with "in progress", and the fix is to split the state.
-  The evidence and the prescribed fix are `code-audit.md` `P1-31`; §4.4 H1 states
-  the design consequence. The gate is therefore a fix rather than a decision.
+- **Q6 — settled and *done*.** The verdict conflates "never ran" with "in
+  progress"; the split landed as `code-audit.md` `P1-31` (`Node::assumed_concrete`
+  + `ref_is_parameterized`), with the two mis-attributed sites retracted and the
+  one behaviour change pinned by a regression test. §4.4 H1 states what remains:
+  the coinductive step is still DFS-scoped, so step 3's differential harness is
+  the oracle, not a proof.
 
 **Open — created by the answers above:**
 
@@ -639,8 +679,9 @@ not wasted if T4 is ever taken.
 
 | Step | File / function | Change |
 |---|---|---|
-| 0 | `crates/lichen-lowlevel/src/evaluation.rs`, a temporary probe | count entry points, visits, distinct nodes; removed after measurement |
-| 1 | `lib.rs` `EvaluatedDeep`, `evaluation.rs` `evaluate_node_deep_inner` + `value_is_parameterized` | the third "in progress" state; conservative reads at the operand and table-key arms (`P1-31`) |
+| 0 | `evaluation.rs` `DEEP_PASS_*`, `DeepPassStats`; `crates/lichen-language/examples/deep_pass_stats.rs` | **landed**: walks / visits / cheap-return counters, and the harness that reports them; the wall-clock split is still owed |
+| 1 | `lib.rs` `Node`, `evaluation.rs` `evaluate_node_deep_inner` + `ref_is_parameterized`, `module.rs` `close_operation_cycle` | **landed** (`P1-31`): the `assumed_concrete` third state; the operand and table-key reads stay as documented exemptions |
+| 1 | `crates/lichen-lowlevel/tests/basic/verdict.rs` (new) | **landed**: the cyclic value's concreteness, the refused subtree, the operand exemption + harm pin |
 | 2 | `lib.rs` `Node`, `module.rs` `add_node`/`drop_block`, `equality.rs` `write_node_value`, `utils.rs` `alloc_*` | `dirty` + `dependents`; `link`/`unlink`/`dirty` |
 | 2 | `module.rs` `close_operation_cycle` | the one late edge: reverse link + propagate to dependents |
 | 3 | `evaluation.rs` `evaluate_node_deep_inner` | consult `dirty` instead of unconditional descent |
@@ -688,3 +729,11 @@ not wasted if T4 is ever taken.
   and **Q4 closes M1** outright — a dirty flag driven by the mutation action has
   no use for a content digest, and a mutation that changed nothing still counts as
   dirty.
+- Then two steps **landed** rather than staying design: step 0's redundancy half
+  (the counters and the harness, §1.3) and step 1 (`P1-31`). Two things this
+  note's first pass got wrong, which the implementation corrected: the operand arm
+  is a *deliberate* exemption (a core operator's operand is a synthesized argument
+  array, so "never walked" is the normal case), and `Module::key_state` is not a
+  defect at all (the content unfolding is total and reports its own failure). Both
+  are recorded as retractions in `P1-31` rather than quietly dropped, because the
+  first pass had argued for flipping them.
