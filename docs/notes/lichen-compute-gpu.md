@@ -145,6 +145,95 @@ runs, 4 refusals. The refusal tests need no device, deliberately: a refusal that
 only appeared once a GPU was present would be untestable on a machine without
 one.
 
+## The language selects the backend, on `parallel` only
+
+`compute.parallel` takes the backend as a second argument, and there is **no
+default and no `auto`**:
+
+```
+k = compute.parallel f "cpu"
+out = compute.plrun k (4,)
+
+k2 = compute.parallel g "gpu"
+```
+
+Two decisions carry most of the weight here.
+
+**Only `parallel` takes one.** A `jit` kernel is launched a single invocation at
+a time, and a device is for the thousands a dispatch runs at once, so there is
+nothing for a backend to choose between. `ComputeValue::Kernel` therefore has no
+backend field at all, and `launch` is untouched.
+
+**No "try either" value.** A named backend that declines is a *named* failure.
+There is no third value to fall back to, because overriding the author's choice
+is the one place the language's explicit dataflow would quietly stop being
+explicit. A program that said `"gpu"` and silently ran on the CPU would be a
+program whose timing means nothing. The refusals, all by name:
+
+| refusal | when |
+|---|---|
+| `…is not a compute backend; name one of "cpu" or "gpu"` | a name that is neither |
+| `a compute backend must be the string "cpu" or "gpu", not …` | a non-string — caught statically, as a check error |
+| `this parallel kernel was compiled for the "gpu" backend, but no compute backend is installed…` | `"gpu"` with no backend installed |
+| `the "stub" backend declined this run: <its reason>` | a backend that declines |
+
+The name lives on the **value**, not on the fragment, so it is *not* hashed by
+`fragment_digest`. Two programs that compile the same body for different backends
+share one fragment id, and the choice can never make a cache serve one backend's
+module for another's.
+
+A host program installs the backend with `lichen_compute_gpu::install_default()`.
+That is the composition step, and it is the only place the two crates meet —
+`lichen-compute` still does not name the GPU crate.
+
+### Where a run is *not* wired yet
+
+The chain from source to a device is proved in two halves, on purpose:
+
+- `lichen-compute`'s tests install a **stub** backend and pin the routing — that
+  a `"gpu"` kernel reaches the installed backend, that its answer is the answer,
+  and that a decline is reported rather than swallowed. No device needed, so a
+  routing regression cannot be mistaken for a hardware question.
+- `lichen-compute-gpu`'s tests run a real [`KernelFragment`] on the device and
+  check it against a hand-written expectation.
+
+The seam between the two — a real installed backend serving a real lichen program
+— is not covered by a single test, because doing so needs a crate that depends on
+both, and the only such crate would be a test-only dependency cycle. That is the
+next thing to close.
+
+## The GPU backend is currently a *pessimisation*, and the language says so
+
+Measured on the target (`cargo run --release --example crossover`), against a
+plain sequential scalar loop standing in for the CPU thread pool's single-worker
+path — a deliberately **conservative** comparison:
+
+| count | GPU | sequential | ratio |
+|---|---|---|---|
+| 1 024 | 0.63 ms | 0.003 ms | 0.02× |
+| 65 536 | 4.32 ms | 0.086 ms | 0.02× |
+| 1 048 576 | 59.9 ms | 3.98 ms | **0.07×** |
+
+The GPU does not win anywhere in that range, and at a million elements it is
+about **15× slower**. The fixed cost is ~0.5 ms, and it is *per-run object churn*:
+every run builds and destroys its buffers, a descriptor pool, a command pool and
+a fence, and the buffers are host-visible, so every element crosses the bus.
+
+So `"cpu"` is what programs should write today, and the honest framing is that
+this backend is a **correct reference implementation, not a fast one**. What
+would change that, in the order it pays:
+
+1. Reuse the command pool, descriptor pool and buffers across runs instead of
+   rebuilding them per dispatch. This is most of the 0.5 ms.
+2. Device-local buffers with a staging upload/download, so the transfer is one
+   contiguous copy per run instead of per element.
+3. Then, and only then, a crossover worth a threshold constant.
+
+There is deliberately **no** minimum-count gate today, because the measurement
+says no honest gate exists yet: the GPU loses at every count tested. Adding a
+threshold that "protects" small runs would be a number invented to look
+careful.
+
 ## Not yet
 
 Named rather than implied, because each is a decision not a gap:
@@ -157,11 +246,11 @@ Named rather than implied, because each is a decision not a gap:
   (`ResultArity`).
 - **A non-index parameter read.** A buffer is *bound*, not passed, so there is no
   value for it to hold (`NonIndexParameter`).
-- **Wiring into `compute.plrun`.** Nothing calls this yet. The seam is a real
-  design question — the GPU path owns its buffers, while the CPU path borrows
-  `Vec<Vec<i64>>` and partitions it across workers, and the two do not share a
-  shape. Extracting a trait around the CPU shape would be extracted around the
-  wrong abstraction.
+- **Wiring into `compute.plrun`.** Done, and narrowly: `parallel` names a
+  backend and `plrun` dispatches to it, with the refusals above. What is *not*
+  wired is a single end-to-end test across both crates (see
+  [Where a run is *not* wired yet](#where-a-run-is-not-wired-yet)), and the
+  performance work that would make `"gpu"` worth writing.
 - **Device-local memory and staging.** Buffers are host-visible and host-coherent,
   which is correct and simple, and is the right choice for a kernel whose working
   set is its input and output. Memory ordering is explicit: coherence is not

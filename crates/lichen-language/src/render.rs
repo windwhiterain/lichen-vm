@@ -53,7 +53,10 @@ where
 {
     match value.as_enum() {
         Some(ComputeValue::Kernel(_)) => Some("Kernel".to_string()),
-        Some(ComputeValue::ParKernel(_)) => Some("ParKernel".to_string()),
+        // The backend is not rendered: a value's *name* is its kind, and which
+        // backend a run is dispatched to is a property of the program rather
+        // than something a reader of one value needs.
+        Some(ComputeValue::ParKernel(..)) => Some("ParKernel".to_string()),
         Some(ComputeValue::Buffer(_)) | Some(ComputeValue::TypeBuffer) => {
             Some("Buffer".to_string())
         }

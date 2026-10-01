@@ -132,7 +132,16 @@ arm:
 - **`Jit`** — `compile_fragment` lowers the function's body to a `KernelFragment`, stores
   it in the process-global `KERNELS` registry under a fresh `KernelId`, returns
   `Kernel(id)`. A non-function target or a body outside the kernel-safe subset stays
-  lazy (`Parameterized`) — those are *reported* type errors, not panics.
+  lazy (`Parameterized`) — those are *reported* type errors, not panics. A `jit` kernel
+  carries **no backend**: it is launched one invocation at a time, and a device is for the
+  thousands a dispatch runs at once.
+- **`Parallel`** — like `Jit` for the curried index function, but it takes a **second
+  argument, the backend** (`"cpu"` or `"gpu"`), and the kernel value records it
+  (`ParKernel(id, backend)`). There is no default and no `auto`: a program says where its
+  parallel runs go, and a named backend that cannot be used is a *named* refusal rather
+  than a silent fall back — see [lichen-compute-gpu](lichen-compute-gpu.md#the-language-selects-the-backend-on-parallel-only).
+  The name rides on the **value**, not the fragment, so it is not hashed by
+  `fragment_digest` and the same body compiled for two backends shares one id.
 - **`Launch`** / **`Call`** — reads `[kernel, arg]`; flattens the argument to an `i64`
   vector (`collect_args`); `run_kernel` assembles and runs; returns the `USize` result. A
   non-scalar/non-literal argument stays lazy. Every way that can happen records why, under

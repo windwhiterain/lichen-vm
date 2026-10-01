@@ -34,5 +34,5 @@
 pub mod dispatch;
 pub mod spirv;
 
-pub use dispatch::{GpuContext, RunError};
+pub use dispatch::{GpuContext, RunError, install, install_default, installed_backend_name};
 pub use spirv::{Binding, LOCAL_SIZE_X, SpirvRefusal};

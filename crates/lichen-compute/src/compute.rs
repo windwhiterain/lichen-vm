@@ -256,17 +256,117 @@ const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
 /// needing to know which arm produced it.
 const KERNEL_LAUNCH_DIAGNOSTIC: &str = "compute.kernel_launch";
 
+/// Where a parallel kernel's runs are dispatched.
+///
+/// A **named, required** choice rather than a default: `parallel` takes the
+/// backend as an argument, so a program always says where its parallel kernels
+/// run and there is no ambient setting to be surprised by.  There is deliberately
+/// no "try either" value — a backend that declines is a *named* failure, because
+/// a program that silently ran somewhere other than where it asked is a program
+/// whose timing means nothing.
+///
+/// Only `parallel` takes one.  A `jit` kernel is launched a single invocation at
+/// a time, and a device is for the thousands a dispatch runs at once, so there is
+/// nothing there for a backend to choose between.
+///
+/// The IR is unaffected: a fragment does not record a backend, so the choice
+/// rides on the **value** rather than on the compiled kernel — which is why it
+/// is a field of [`ComputeValue::ParKernel`] and not something the digest hashes.
+/// Two programs that compile the same function for different backends therefore
+/// share one fragment id, and the choice cannot make a cache serve one backend's
+/// module for another's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// This crate's wasm backend: one interpreter per worker thread.
+    Cpu,
+    /// A compute shader on a device, through an installed
+    /// [`lichen_kernel_ir::ParallelBackend`].
+    Gpu,
+}
+
+impl Backend {
+    /// The name this backend is spelled with in source.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Backend::Cpu => "cpu",
+            Backend::Gpu => "gpu",
+        }
+    }
+}
+
+/// A backend name that is neither `cpu` nor `gpu`.
+///
+/// The message quotes what was written and what is accepted, because a string
+/// parameter with no enum to check it against is exactly the case where a typo
+/// must be reported rather than defaulted.  The language has no enum type yet,
+/// which is why this is a string at all — and why the parse has to be strict.
+fn unknown_backend(written: &str) -> String {
+    format!("{written:?} is not a compute backend; name one of \"cpu\" or \"gpu\"")
+}
+
+/// The backend a `"cpu"` / `"gpu"` argument names.
+fn parse_backend(written: &str) -> Result<Backend, String> {
+    match written {
+        "cpu" => Ok(Backend::Cpu),
+        "gpu" => Ok(Backend::Gpu),
+        other => Err(unknown_backend(other)),
+    }
+}
+
+/// The backend named by an operand, recording a refusal by name.
+///
+/// A backend argument that is not a string at all is as much a refusal as one
+/// that is the wrong string, and it is reported the same way — a `Str` parameter
+/// has no type to lean on, so both are the programmer's to fix.
+fn backend_argument<P>(
+    module: &mut Module<P>,
+    node: Option<NodeId>,
+    category: &'static str,
+) -> Option<Backend>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some(node) = node else {
+        return None;
+    };
+    let written = module
+        .node_value(AnyNodeId::Dynamic(node))
+        .and_then(|value| AsEnum::<LowValue>::as_enum(&value));
+    let parsed = match written {
+        Some(LowValue::Str(text)) => parse_backend(text),
+        _ => Err(format!(
+            "a compute backend must be the string \"cpu\" or \"gpu\", not {written:?}"
+        )),
+    };
+    match parsed {
+        Ok(backend) => Some(backend),
+        Err(reason) => {
+            module.record_extension_diagnostic(category, None, reason);
+            None
+        }
+    }
+}
+
 /// The compute value vocabulary — injected as a sibling leaf into a host's
 /// value union (see a host `program` module).  A plain enum of exactly this
 /// extension's variants, composed with [`lichen_utils::enum_ext!`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ComputeValue {
     /// A compiled, runnable kernel artifact.
+    ///
+    /// **No backend, deliberately.** A `jit` kernel is launched one invocation
+    /// at a time, and a device is for the thousands a dispatch runs at once, so
+    /// there is nothing for a backend to choose between. The choice belongs to
+    /// [`Self::ParKernel`], which is the only variant a run is dispatched from.
     Kernel(KernelId),
-    /// A compiled **parallel** kernel artifact: a curried `?a -> USize -> ?b`
-    /// function flattened to a `(?a, USize) -> ?b` wasm function (the config
-    /// is the first group of parameters, the *index* the last scalar).
-    ParKernel(KernelId),
+    /// A compiled **parallel** kernel artifact, and where its runs are dispatched.
+    ///
+    /// A curried `?a -> USize -> ?b` function flattened to a `(?a, USize) -> ?b`
+    /// wasm function (the config is the first group of parameters, the *index*
+    /// the last scalar).
+    ParKernel(KernelId, Backend),
     /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
     /// index range `[0, n)` and collected the `n` `?b` results here.
     ///
@@ -451,7 +551,7 @@ impl ValueCodec for ComputeValue {
                         .into(),
                 );
             }
-            ComputeValue::ParKernel(_) => {
+            ComputeValue::ParKernel(..) => {
                 return Err(
                     "this package is not cached: it holds a jit'd parallel kernel at its top \
                      level, and a kernel is a runtime value with no on-disk form"
@@ -709,7 +809,22 @@ where
                 ) {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 }
-                let Some(LowValue::Function(function)) = AsEnum::<LowValue>::as_enum(&operand)
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    unreachable!("Parallel expects an operand array of [function, backend]")
+                };
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the run.
+                let operands = unsafe { operands.items() };
+                let Some(backend) = backend_argument(
+                    module,
+                    operands.get(1).and_then(|o| dyn_node(o.node).ok()),
+                    PARALLEL_DIAGNOSTIC,
+                ) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let Some(LowValue::Function(function)) = module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
                 else {
                     // A non-function parallel target is the checker's
                     // function-ness gate; stay lazy rather than panicking.
@@ -720,9 +835,11 @@ where
                         // Content-addressed like `jit`'s, and for the same
                         // reason: the parallel launch path keys the module cache
                         // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
-                        // per compile is a re-assembly per compile.
+                        // per compile is a re-assembly per compile.  The backend
+                        // is *not* part of the fragment, so the same body
+                        // compiled for either backend shares this one id.
                         let id = intern_kernel(fragment);
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id))
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id, backend))
                     }
                     Err(err) => {
                         module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
@@ -744,7 +861,7 @@ where
                 // for this operation; the note covers this arm's `items()`
                 // calls, all of live nodes of `module`.
                 let operands = unsafe { operands.items() };
-                let Some(ComputeValue::ParKernel(id)) = module
+                let Some(ComputeValue::ParKernel(id, backend)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 else {
@@ -798,7 +915,7 @@ where
                         }
                     }
                 }
-                match run_parallel_kernel(id, count, inputs) {
+                match run_parallel_kernel(id, backend, count, inputs) {
                     Ok(results) => {
                         // Several outputs are the **tuple** of them, which
                         // `compute.read`/`compute.collect` address by ordinal.
@@ -3016,6 +3133,52 @@ struct ParallelState<'a> {
     base: usize,
 }
 
+/// Hand a run to the installed [`lichen_kernel_ir::ParallelBackend`].
+///
+/// **A missing backend is a refusal, not a fallback.** `parallel` names its
+/// backend explicitly and there is no "try either" value, so a program that said
+/// `"gpu"` and silently ran on the CPU would be a program whose timing means
+/// nothing. There is no third value to fall back *to* either: the choice is the
+/// author's, and overriding it here would be the one place the language's
+/// explicit dataflow quietly stopped being explicit.
+///
+/// The fragment is cloned out of the registry and the lock released before the
+/// call, because a backend that emitted a cross-kernel call would reach the
+/// registry again — the lock is not reentrant.
+fn run_on_installed_backend(
+    id: KernelId,
+    count: usize,
+    inputs: Vec<Vec<i64>>,
+    outputs: usize,
+) -> Result<Vec<Vec<i64>>, String> {
+    let Some(backend) = lichen_kernel_ir::parallel_backend() else {
+        return Err(format!(
+            "this parallel kernel was compiled for the \"gpu\" backend, but no compute backend is \
+             installed: a host program has to install one before a run can be dispatched to a \
+             device"
+        ));
+    };
+    let fragment = {
+        let fragments = kernels().lock().unwrap();
+        fragments
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
+    };
+    if fragment.outputs != outputs {
+        return Err(format!(
+            "parallel kernel {id} declares {} output(s) here and {} in the fragment it names",
+            outputs, fragment.outputs
+        ));
+    }
+    backend.run(&fragment, &inputs, count).map_err(|reason| {
+        format!(
+            "the {:?} backend declined this run: {reason}",
+            backend.name()
+        )
+    })
+}
+
 /// Assemble the wasm bytes of one **parallel** fragment — the degenerate
 /// single-fragment link (`assemble_module`, which `run_kernel` uses for a whole
 /// relative launch set).  Like [`assemble_launch_set`] this is a function of
@@ -3154,6 +3317,7 @@ pub fn parallel_launch_workers() -> usize {
 /// true by construction, and its cost is the two fixed registrations below.
 fn run_parallel_kernel(
     id: KernelId,
+    backend: Backend,
     count: usize,
     inputs: Vec<Vec<i64>>,
 ) -> Result<Vec<Vec<i64>>, String> {
@@ -3173,6 +3337,9 @@ fn run_parallel_kernel(
             .map(|fragment| fragment.outputs)
             .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
     };
+    if let Backend::Gpu = backend {
+        return run_on_installed_backend(id, count, inputs, outputs);
+    }
     let (engine, module) =
         cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
     let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
@@ -3454,6 +3621,122 @@ mod parallel_launch_tests {
         }
     }
 
+    /// The compute backend slot is **process-global**, so tests that install or
+    /// clear one have to be serialized against each other: cargo runs a test
+    /// binary's tests on parallel threads, and two of them installing different
+    /// backends would make each other's assertion a race. This is not a test
+    /// harness artefact — the same global is what a host program configures once.
+    static BACKEND_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// A parallel kernel compiled for the `"gpu"` backend goes to the installed
+    /// backend, not to this crate's thread pool.  A stub stands in for a device
+    /// here: what is under test is the **routing**, and the real backend's
+    /// execution is proved by `lichen-compute-gpu`'s own tests.
+    ///
+    /// The two are deliberately tested apart. A test that drove a real device
+    /// would prove the routing and the device at once, and would then fail on a
+    /// machine with no GPU — turning a routing regression into a hardware
+    /// question.
+    #[test]
+    fn a_gpu_kernel_is_routed_to_the_installed_backend() {
+        let _serialized = BACKEND_SLOT.lock().unwrap();
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Stub {
+            seen: AtomicUsize,
+        }
+        impl lichen_kernel_ir::ParallelBackend for Stub {
+            fn name(&self) -> &'static str {
+                "stub"
+            }
+            fn run(
+                &self,
+                _fragment: &KernelFragment,
+                _inputs: &[Vec<i64>],
+                count: usize,
+            ) -> Result<Vec<Vec<i64>>, String> {
+                self.seen.fetch_add(1, Ordering::SeqCst);
+                Ok(vec![vec![7; count]])
+            }
+        }
+
+        lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub {
+            seen: AtomicUsize::new(0),
+        }));
+        let id = intern_kernel(two_outputs());
+        let outputs =
+            run_parallel_kernel(id, Backend::Gpu, 8, vec![]).expect("the installed backend runs");
+        lichen_kernel_ir::clear_parallel_backend();
+
+        assert_eq!(
+            outputs,
+            vec![vec![7; 8]],
+            "the answer is the backend's, and there is one buffer per declared output"
+        );
+    }
+
+    /// A `"gpu"` run with **no** backend installed is refused by name. There is
+    /// no third value to fall back to: the choice is the author's, and quietly
+    /// running on the CPU would make the program's timing meaningless.
+    #[test]
+    fn a_gpu_run_without_an_installed_backend_is_refused_by_name() {
+        let _serialized = BACKEND_SLOT.lock().unwrap();
+        lichen_kernel_ir::clear_parallel_backend();
+        let id = intern_kernel(two_outputs());
+        let refusal = run_parallel_kernel(id, Backend::Gpu, 8, vec![])
+            .expect_err("there is nothing to dispatch to");
+        assert!(
+            refusal.contains("gpu") && refusal.contains("installed"),
+            "the refusal names the backend asked for and what is missing: {refusal}"
+        );
+    }
+
+    /// A backend that declines is reported, not swallowed: the CPU path is not a
+    /// fallback here, so the reason has to reach the diagnostic.
+    #[test]
+    fn a_declining_backend_is_reported_with_its_reason() {
+        let _serialized = BACKEND_SLOT.lock().unwrap();
+        struct Stub;
+        impl lichen_kernel_ir::ParallelBackend for Stub {
+            fn name(&self) -> &'static str {
+                "stub"
+            }
+            fn run(
+                &self,
+                _fragment: &KernelFragment,
+                _inputs: &[Vec<i64>],
+                _count: usize,
+            ) -> Result<Vec<Vec<i64>>, String> {
+                Err("this device has no compute queue".to_string())
+            }
+        }
+        lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub));
+        let id = intern_kernel(two_outputs());
+        let refusal =
+            run_parallel_kernel(id, Backend::Gpu, 8, vec![]).expect_err("the backend declined");
+        lichen_kernel_ir::clear_parallel_backend();
+        assert!(
+            refusal.contains("stub") && refusal.contains("no compute queue"),
+            "the refusal names the backend and passes its reason through: {refusal}"
+        );
+    }
+
+    /// The backend names a string parameter can be checked against, and the
+    /// language has no enum type to lean on, so the parse is strict: a typo is
+    /// reported with both what was written and what is accepted.
+    #[test]
+    fn an_unknown_backend_name_is_refused_with_both_the_value_and_the_choices() {
+        assert_eq!(parse_backend("cpu"), Ok(Backend::Cpu));
+        assert_eq!(parse_backend("gpu"), Ok(Backend::Gpu));
+        let refusal = parse_backend("Gpu").expect_err("the name is case-sensitive");
+        assert!(
+            refusal.contains("\"Gpu\"")
+                && refusal.contains("\"cpu\"")
+                && refusal.contains("\"gpu\""),
+            "the refusal quotes the value and the accepted names: {refusal}"
+        );
+    }
+
     /// The threshold is a **count** boundary and nothing else: a run below it
     /// must not spawn, which is what keeps a handful of indices from getting
     /// slower than the single-store run it replaced.
@@ -3555,7 +3838,8 @@ mod parallel_launch_tests {
     fn a_run_over_the_threshold_fans_out_and_covers_every_index() {
         let id = intern_kernel(two_outputs());
         let count = SEQUENTIAL_PARALLEL_ELEMENTS;
-        let outputs = run_parallel_kernel(id, count, vec![]).expect("the run must succeed");
+        let outputs =
+            run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed");
         assert_eq!(outputs.len(), 2, "one buffer per declared output");
         // The machine must have the processors to fan out at all; on a
         // single-processor run the worker count is 1 and the run is the
@@ -3580,7 +3864,8 @@ mod parallel_launch_tests {
     fn a_run_below_the_threshold_is_sequential_and_writes_every_index() {
         let id = intern_kernel(two_outputs());
         let count = SEQUENTIAL_PARALLEL_ELEMENTS - 1;
-        let outputs = run_parallel_kernel(id, count, vec![]).expect("the run must succeed");
+        let outputs =
+            run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed");
         assert_eq!(parallel_launch_workers(), 1, "no spawn below the threshold");
         for index in [0, count / 2, count - 1] {
             assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");
@@ -3791,12 +4076,13 @@ where
     }
 }
 
-/// `$parallel(f)` — compile a single-arg `?cfg -> ?write` index function into a
-/// parallel kernel.  The function-ness gate verifies `f` is a function; the
-/// body is lowered over the loop index (from `compute.range n`) and the cfg
-/// buffers (read via `compute.read`).  A **tuple** codomain of `Write`s is the
-/// multi-output form; which position a write is becomes its output ordinal at
-/// emission time, and the codomain's arity becomes the launch's output count.
+/// `$parallel(f, backend)` — compile a single-arg `?cfg -> ?write` index function
+/// into a parallel kernel, and record the backend its runs are dispatched to.
+/// The function-ness gate verifies `f` is a function; the body is lowered over the
+/// loop index (from `compute.range n`) and the cfg buffers (read via
+/// `compute.read`).  A **tuple** codomain of `Write`s is the multi-output form;
+/// which position a write is becomes its output ordinal at emission time, and the
+/// codomain's arity becomes the launch's output count.
 pub struct ParallelOp;
 
 /// `$plrun(pk, cfg)` — run a parallel kernel over the index range `[0, cfg(0))`
@@ -3830,6 +4116,7 @@ where
 {
     fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
         let f = &args[0];
+        let backend = &args[1];
         // Function-ness gate: `f : ?cfg -> ?write` (a single-arg index function;
         // the loop index comes from `compute.range n` inside the body, not a
         // second function parameter).
@@ -3837,9 +4124,16 @@ where
         let c0 = ctx.fresh();
         let fn_ty = ctx.arrow(d0, c0);
         ctx.check_unify(f.ty, fn_ty, loc.clone(), DiagKind::Guard);
+        // The backend is gated as a **string** here, and that is all this gate
+        // can be: the language has no enum type yet, so which strings are
+        // backends is the runtime parse's authority. Naming the shape here still
+        // moves a wrong-shaped argument from a run-time refusal to a check
+        // error, and an unknown *name* is reported by that parse, by name.
+        ctx.check_unify(backend.ty, ctx.string_type(), loc, DiagKind::Guard);
         // The bare native parallel kernel artifact — the lichen wrapper wraps
         // this value into a `kernel` struct (`.native`).  Opaque: typed `_`.
-        let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(f.value));
+        let operands = ctx.array_node(&[f.value, backend.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Parallel), Some(operands));
         let par_ty = ctx.fresh();
         let pair = ctx.array_node(&[op, par_ty]);
         NativeApply {

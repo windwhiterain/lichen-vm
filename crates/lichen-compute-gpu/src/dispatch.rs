@@ -539,6 +539,54 @@ impl Drop for GpuContext {
     }
 }
 
+impl lichen_kernel_ir::ParallelBackend for GpuContext {
+    fn name(&self) -> &'static str {
+        "gpu"
+    }
+
+    /// Delegates to the inherent [`GpuContext::run`], turning a refusal into the
+    /// string the trait carries. The inherent method is the same code either way —
+    /// this impl exists so the *host program* can install a backend, not so a
+    /// second path can run a kernel.
+    fn run(
+        &self,
+        fragment: &KernelFragment,
+        inputs: &[Vec<i64>],
+        count: usize,
+    ) -> Result<Vec<Vec<i64>>, String> {
+        GpuContext::run(self, fragment, inputs, count).map_err(|error| error.to_string())
+    }
+}
+
+/// Install a device as the process's compute backend, replacing any previous one.
+///
+/// This is what a **host program** calls — the composition that links both
+/// backends together. `lichen-compute` never names this crate, so without this
+/// call a program that asked for `"gpu"` is refused by name, which is the honest
+/// outcome rather than a silent run on the CPU.
+pub fn install(context: GpuContext) {
+    lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(context));
+}
+
+/// Open a device and install it, or say why no backend could be installed.
+///
+/// Device creation is eager on purpose: a program that cannot dispatch at all
+/// should learn that when it is wired up, not on its first hot loop. The
+/// context itself is not handed back — the registry keeps it alive for as long as
+/// it is installed, and a second handle would only be a second way to be stale.
+pub fn install_default() -> Result<(), String> {
+    let context = GpuContext::new().map_err(|error| error.to_string())?;
+    install(context);
+    Ok(())
+}
+
+/// Whether a backend is installed, and which.
+///
+/// A host program can print this to report what a run will actually use, rather
+/// than leaving it to be inferred from a program's source.
+pub fn installed_backend_name() -> Option<&'static str> {
+    lichen_kernel_ir::parallel_backend().map(|backend| backend.name())
+}
 /// A host-visible, host-coherent staging buffer.
 struct HostBuffer {
     /// Kept so `Drop` can unmap: mapping is a device operation, and the buffer

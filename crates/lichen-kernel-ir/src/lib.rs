@@ -31,6 +31,80 @@
 //! See `docs/notes/compute-jit-low-types.md` for how the domain half of a
 //! fragment is decided, and `docs/notes/lichen-compute.md` for the wasm backend
 //! that consumes it.
+//!
+//! # The backend contract
+//!
+//! The data above is what a compiler hands a backend. [`ParallelBackend`] is what
+//! the two sides *agree on*, and the process-global slot below is where a host
+//! program installs the one it wants. Both live here because this is the only
+//! crate both can depend on without either pulling in the other's runtime: a
+//! backend contract that lived in a backend's crate would make every other
+//! backend depend on that backend.
+
+use std::sync::{Arc, Mutex, OnceLock};
+
+/// A backend that can run a parallel fragment over an index range.
+///
+/// This is deliberately *not* the shape of a compiled module, a memory pool or a
+/// device queue. It is the smallest thing a host program has to hand over, and
+/// the smallest thing a backend has to promise: given a fragment, its input
+/// buffers and a count, produce one output buffer per declared output.
+///
+/// A refusal is a `String` naming its own cause, and a host is expected to
+/// **fall back** rather than fail: a backend is never more capable than the one
+/// built into the language, so a refusal means "not here", not "impossible".
+pub trait ParallelBackend: Send + Sync {
+    /// A short name for this backend, recorded in whatever diagnostic a refusal
+    /// produces, so a reader can tell *which* backend declined.
+    fn name(&self) -> &'static str;
+
+    /// Run `fragment` over the index range `[0, count)`.
+    ///
+    /// `inputs` holds one buffer per read position, each at least `count` long.
+    /// The result is one buffer per [`KernelFragment::outputs`], each exactly
+    /// `count` long.
+    fn run(
+        &self,
+        fragment: &KernelFragment,
+        inputs: &[Vec<i64>],
+        count: usize,
+    ) -> Result<Vec<Vec<i64>>, String>;
+}
+
+/// The installed backend, if a host program installed one.
+///
+/// **Process-global, like the rest of compute's registries, and for the same
+/// reason:** the fragment registry and the module cache are already process-wide,
+/// so a backend that could differ per module would be the odd one out. Installing
+/// twice replaces the first, which is what a host that composes plugins wants.
+static BACKEND: OnceLock<Mutex<Option<Arc<dyn ParallelBackend>>>> = OnceLock::new();
+
+fn slot() -> &'static Mutex<Option<Arc<dyn ParallelBackend>>> {
+    BACKEND.get_or_init(Default::default)
+}
+
+/// Install the backend a host program wants [`parallel_backend`] to hand back.
+///
+/// Installing a second backend **replaces** the first, and the replaced one is
+/// dropped — so a host that installs a stub in one test and a real backend in the
+/// next does not accumulate them.
+pub fn install_parallel_backend(backend: Arc<dyn ParallelBackend>) {
+    *slot().lock().unwrap() = Some(backend);
+}
+
+/// Remove any installed backend, returning to the built-in one.
+pub fn clear_parallel_backend() {
+    *slot().lock().unwrap() = None;
+}
+
+/// The installed backend, or `None` when the host installed none.
+///
+/// `None` is not a refusal: it means no backend was ever in the picture, so a
+/// caller falls back without recording a diagnostic. A backend that *declines* is
+/// the case worth recording.
+pub fn parallel_backend() -> Option<Arc<dyn ParallelBackend>> {
+    slot().lock().unwrap().clone()
+}
 
 /// A kernel's identity in the compiler's registry: the key a fragment is
 /// interned under, and what a cross-kernel call names.

@@ -23,6 +23,61 @@ fn fail(source: &str) -> Vec<String> {
 }
 
 #[test]
+fn parallel_rejects_an_unknown_backend_name() {
+    // The language has no enum type yet, so the backend is a string and the
+    // parse is strict: a typo is reported with what was written and what is
+    // accepted, rather than defaulted to a backend the author did not name.
+    let diags = fail(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + i]
+}
+k = compute.parallel f "Gpu"
+out = compute.plrun k (4,)
+compute.read [out, 0]
+"#,
+    );
+    let all: Vec<&str> = diags.iter().map(String::as_str).collect();
+    let joined = all.join(" | ");
+    assert!(
+        all.iter().any(|message| message.contains("\"Gpu\""))
+            && all.iter().any(|message| message.contains("\"cpu\""))
+            && all.iter().any(|message| message.contains("\"gpu\"")),
+        "the refusal quotes the value and the accepted backends: {joined}"
+    );
+}
+
+#[test]
+fn parallel_rejects_a_non_string_backend() {
+    // The static gate catches the *shape*; which strings are backends is the
+    // runtime parse's authority. A number is not a backend name.
+    let diags = fail(
+        r#"
+@{
+  compute = import "compute.lichen"
+@}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + i]
+}
+k = compute.parallel f 4
+out = compute.plrun k (4,)
+compute.read [out, 0]
+"#,
+    );
+    assert!(
+        !diags.is_empty(),
+        "a non-string backend is refused: {diags:?}"
+    );
+}
+
+#[test]
 fn jit_then_launch_scalar() {
     // `compute.jit` is `jit` — compiles the lambda to a wasm kernel; `launch k 5`
     // runs it and yields `6`, typed `Int`.
@@ -570,7 +625,7 @@ f = cfg => {
   i = compute.range n
   compute.write [n, i, i + i]
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 out = compute.plrun k (4,)
 compute.read [out, 2]
 "#);
@@ -591,7 +646,7 @@ f1 = cfg => {
   i = compute.range n
   compute.write [n, i, i + 10]
 }
-k1 = compute.parallel f1
+k1 = compute.parallel f1 "cpu"
 inbuf = compute.plrun k1 (3,)
 f2 = cfg => {
   n = cfg(0)
@@ -599,7 +654,7 @@ f2 = cfg => {
   a = compute.read [cfg(1)(0), i]
   compute.write [n, i, a + a]
 }
-k2 = compute.parallel f2
+k2 = compute.parallel f2 "cpu"
 out = compute.plrun k2 (3, (inbuf,))
 compute.read [out, 1]
 "#);
@@ -621,7 +676,7 @@ f = cfg => {
   i = compute.range n
   compute.write [n, i, i + 1]
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 out = compute.plrun k (3,)
 compute.collect out
 "#);
@@ -649,7 +704,7 @@ f = cfg => {
   i = compute.range n
   compute.write [n, i, i + i]
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 out = compute.plrun k (2000000,)
 compute.read [out, 2]
 "#,
@@ -768,7 +823,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i], compute.write [n, i, i + i])
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
 (compute.read [outs(0), 2], compute.read [outs(1), 2])
 "#);
@@ -790,7 +845,7 @@ f1 = cfg => {
   i = compute.range n
   compute.write [n, i, i + 10]
 }
-k1 = compute.parallel f1
+k1 = compute.parallel f1 "cpu"
 inbuf = compute.plrun k1 (3,)
 f2 = cfg => {
   n = cfg(0)
@@ -798,7 +853,7 @@ f2 = cfg => {
   a = compute.read [cfg(1)(0), i]
   (compute.write [n, i, a], compute.write [n, i, a + a], compute.write [n, i, i])
 }
-k2 = compute.parallel f2
+k2 = compute.parallel f2 "cpu"
 outs = compute.plrun k2 (3, (inbuf,))
 compute.collect outs(1)
 "#);
@@ -832,7 +887,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i + 3], compute.write [n, i, i + i])
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (4,)
 (compute.collect outs(0), compute.collect outs(1))
 "#);
@@ -847,7 +902,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i + 3], compute.write [n, i, i + i])
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
 (compute.collect outs(0), compute.collect outs(1))
 "#);
@@ -876,7 +931,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i + 3], compute.write [n, i, i + i])
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (4096,)
 (compute.read [outs(0), 0], compute.read [outs(0), 2048], compute.read [outs(0), 4095], compute.read [outs(1), 0], compute.read [outs(1), 2048], compute.read [outs(1), 4095])
 "#);
@@ -907,7 +962,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i], (if i <= 1 then compute.write [n, i, 1] else compute.write [n, i, 2]))
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
 compute.read [outs(0), 2]
 "#,
@@ -937,7 +992,7 @@ f = cfg => {
   i = compute.range n
   (compute.write [n, i, i], i)
 }
-k = compute.parallel f
+k = compute.parallel f "cpu"
 outs = compute.plrun k (3,)
 compute.read [outs(0), 2]
 "#,
