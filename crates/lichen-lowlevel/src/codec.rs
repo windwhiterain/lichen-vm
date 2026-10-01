@@ -296,6 +296,13 @@ impl ValueCodec for LowValue {
                 // The value is `Copy` and must outlive the artifact buffer, so
                 // the loaded bytes are leaked to a `&'static str` (like a
                 // source-built literal).  The content is UTF-8 by construction.
+                //
+                // The leak is deliberate and measured, not overlooked: it is
+                // `D14` in `docs/notes/code-audit.md`, the same decision the
+                // frontend's interning takes at 1–11 bytes per literal per
+                // compile.  Reclaiming it means owning the strings in the IR —
+                // the largest change in that ledger — and the measured rate does
+                // not justify it yet.
                 let s = std::str::from_utf8(bytes).map_err(|_| "string literal is not UTF-8")?;
                 LowValue::Str(Box::leak(s.to_string().into_boxed_str()))
             }

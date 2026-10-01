@@ -361,6 +361,17 @@ impl Compiler {
 
     /// Intern a native-operator name to a `&'static str` (leaked once per
     /// unique name), so an [`ExprKind::NativeCall`]'s `op` stays `Copy`.
+    ///
+    /// **The leak is deliberate and measured** (`D14` in
+    /// `docs/notes/code-audit.md`): this map lives for one compile, so the
+    /// dedup it provides is *within* a compile, and the bytes never come back.
+    /// Measured at 5 bytes per distinct name per compile and 31 bytes/compile
+    /// on an editor-like stream of changing sources — about 3 MB per 100k
+    /// keystrokes.  It is kept because the `&'static str` is load-bearing
+    /// (`ExprKind` must stay `Copy`) and reclaiming it means owning the strings
+    /// in the IR, which is a lifetime parameter rippling through `IR`, the
+    /// checker and `persist`.  Re-measure before reconsidering: if the rate
+    /// ever justifies that, `D14` is the decision to revisit, not this comment.
     fn intern_op(&mut self, name: &str) -> &'static str {
         if let Some(&s) = self.op_names.get(name) {
             return s;
@@ -373,6 +384,8 @@ impl Compiler {
     /// Intern an arbitrary source string to a `&'static str` (leaked once per
     /// unique string), so an [`ExprKind::NamedField`]'s field name stays
     /// `Copy`, and struct field names can be stored in the IR's name arena.
+    /// Leaks the same way [`Self::intern_op`] does; see it for the measured
+    /// rate and the decision (`D14`).
     fn intern_str(&mut self, s: &str) -> &'static str {
         if let Some(&leaked) = self.str_names.get(s) {
             return leaked;
@@ -397,7 +410,10 @@ impl Compiler {
             ),
             // A string literal: the content is leaked once to a `&'static str`
             // (the value node holds a `Copy` `LowValue::Str`), exactly as the
-            // native-operator names are interned.  The type is the shared
+            // native-operator names are interned — and, unlike those, with no
+            // dedup at all, so every occurrence leaks again.  Measured and
+            // deliberate: 1–11 bytes per literal per compile, `D14` in
+            // `docs/notes/code-audit.md`.  The type is the shared
             // `[string, Type]` expression the literal builds.
             Expr::Str(s, span) => self.alloc(
                 ExprKind::Literal(HighProgramLiteral::from(StrLit(Box::leak(

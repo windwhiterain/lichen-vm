@@ -95,7 +95,7 @@ queue's order is deliberate.
 | P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | done |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
-| P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
+| P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | done |
 | P4-7 | low | lowlevel | `apply_errors` is deduped with a linear scan | done |
 | P4-8 | low | render | Two more ancestor guards scan the path they guard | done |
 | P4-9 | low | compute | A `NativeOps` slice is leaked per registration | done |
@@ -4497,7 +4497,8 @@ every other allocation a compile makes nets to zero):
 Unbounded and linear in compiles; the editor case leaks on every keystroke,
 exactly as the note says.
 
-**Not fixed: this is the redesign the note warned about.**  The `&'static str`
+**Not fixed: this is the redesign the note warned about, and `D14` decided to
+keep it.**  The `&'static str`
 is load-bearing — `ExprKind` must stay `Copy` (`compile.rs:192-199`) and the
 literal rides in the highlevel's `HighProgramLiteral::StrLit(&'static str)` —
 so tying the lifetime means a lifetime parameter on the literal and on
@@ -4506,9 +4507,12 @@ intern table is the other candidate, and it is *not* a fix: it bounds growth to
 the number of *distinct* strings ever seen while still never reclaiming any,
 and it does nothing for the editor, where each keystroke is a new string.
 Choosing between "own the strings in the IR" and "keep a process-lifetime
-intern table" is a policy for how long interned data lives, so it is
+intern table" is a policy for how long interned data lives, so it became
 `D14` — see [Decisions](#decisions) — and nothing was changed for it here.
-The deserializer's `codec.rs:285` leak is the same shape and rides with it.
+**`D14` then decided to keep the leak** (the rate is ~3 MB per 100 000
+keystrokes) and to state it at the leak sites, so the two candidates above are
+recorded as *rejected for now* rather than unimplemented.
+The deserializer's `codec.rs` leak is the same shape and carries the same note.
 
 ### Found, not one of the four, and not fixed here
 
@@ -5592,27 +5596,40 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   removed, the first parse's panic kills the worker and the **next** parse fails
   with "the parse worker is gone", which is what a long-lived host would see and
   a single-shot test never would.
-- **D14 — Where the IR's strings live. (open; blocks `P4-6`.)** `P4-6`'s intern
+- **D14 — Where the IR's strings live. — DECIDED: (c), keep the leak and
+  document the rate; re-measure before revisiting.** `P4-6`'s intern
   leak is real and measured: every compile permanently leaks every string
   literal (`Expr::Str` has no dedup at all) and every distinct interned name, at
   1–11 bytes per literal per compile and 31 bytes/compile on an editor-like
   stream of changing sources. Nothing reclaims any of it.
 
-  The reason it is a decision: the leaked `&'static str` is **load-bearing**.
-  `ExprKind` must stay `Copy` (`compile.rs:192-199`), and a string literal rides
-  in the highlevel's `HighProgramLiteral::StrLit(&'static str)`, so the two
-  candidate fixes are both wider than the item:
+  *Chosen — neither fix, because the note never priced the leak in absolute
+  terms and the absolute terms are small.*  31 bytes per compile is **about 3 MB
+  per 100 000 keystrokes**; a heavy editing day is 10 000–50 000 edits, so under
+  1.6 MB.  That is an unbounded growth, and unbounded is what the item is about —
+  but it is unbounded at a rate that does not justify either candidate:
   - **own the strings in the IR** — a lifetime parameter on the literal and on
     `ExprKind` (or an owning arena the IR borrows from), rippling through `IR`,
-    the checker, and `persist`'s codec. Reclaims correctly; the largest change.
+    the checker, and `persist`'s codec.  This is the only *real* fix (it
+    reclaims), and it is the largest change in the ledger, to be paid against
+    bytes per keystroke.
   - **a process-global intern table** — dedups identical strings across
     compiles, but still never reclaims anything and does nothing for the editor,
-    where each keystroke's literal is a new distinct string. It bounds the
+    where each keystroke's literal is a new distinct string.  It bounds the
     growth rate, not the growth.
 
-  Decide how long interned source text must live before either is written; do
-  not pick one silently. `lowlevel/codec.rs:285` (the deserializer's own
-  `Box::leak`) is the same shape and rides with whatever is decided.
+  The decision is therefore recorded **at the leak sites themselves**
+  (`compile.rs`'s `intern_op` / `intern_str` and the `Expr::Str` arm), not only
+  here, because the failure mode this guards against is a reader concluding the
+  leak was overlooked: the sites now state the measured rate, why the
+  `&'static str` is load-bearing, and that `D14` is the decision to revisit
+  rather than the comment to delete.  `lowlevel/codec.rs`'s deserializer leak is
+  the same shape and carries the same note.
+
+  *What would revisit it:* the rate changing by orders of magnitude (a host that
+  compiles far more often than a keystroke stream), or `ExprKind`'s `Copy`
+  ceasing to be a requirement for another reason — at which point (a) costs only
+  the ripple and buys the whole leak back.
 - **D15 — Who owns a compiled kernel or buffer? (open; blocks `P1-18`'s
   registry half.)** `KERNELS`/`BUFFERS` (`compute.rs:91`, `:106`) grow without
   bound: one fragment per `$jit`/`$parallel` evaluation and one `count`-element
