@@ -1,17 +1,19 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **the mechanism is complete and measured (§7.1–§7.5); the consumer is
-> not.** Path identity, the `cache` syntax, the per-cell closure freeze, the general
-> release obligations, the cell store, **dirty propagation** and **eviction** all
-> exist, and `BufferSession` now lowers through the store — an edit reuses every
-> marked binding it did not reach, and the artifacts it drops are freed. A file-diff
-> caller works and is **fast**: on the §7.5 program (600 bindings, 60 marks) a first
-> build is 2.1× a plain compile and every edit is 0.29–0.42× — three times faster than
-> compiling the file from scratch — with one cell re-frozen. What is missing is a
-> **production caller**: `BufferSession` itself has none (`P2-1`), and the LSP's
-> analysis path passes no cells. **§12 is the handoff**: what exists, in what order to
-> continue, the landmines, and how to verify. Read that first if you are picking this
-> up cold.
+> Status: **the mechanism is complete, measured, and now has a production caller
+> (§7.1–§7.6).** Path identity, the `cache` syntax, the per-cell closure freeze, the
+> general release obligations, the cell store, **dirty propagation**, **eviction** and
+> the **language server** all exist: the server drives one `BufferSession` per open
+> document on a dedicated thread, so an edit reuses every marked binding it did not
+> reach, the artifacts it drops are freed, and the client is told what each compile did.
+> On the §7.5 program (600 bindings, 60 marks) a first build is 2.1× a plain compile and
+> every edit is 0.29–0.42× — three times faster than compiling the file from scratch —
+> with one cell re-frozen; through the server (§7.6) an edit is 0.15–0.2× the path it
+> replaced. What is left is the **artifact's size** (a scalar cell's closure is ~611
+> nodes, which is what a first analysis pays per mark) and the fine cuts: the reverse
+> import closure, the eviction timing, backdating. **§12 is the handoff**: what exists,
+> in what order to continue, the landmines, and how to verify. Read that first if you
+> are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
 > withdrawn cross-build halves of [incremental-evaluation](incremental-evaluation.md),
@@ -29,12 +31,15 @@
 >
 > Points at: `crates/lichen-language-parser/src/path.rs`,
 > `crates/lichen-language/src/{cells,compile,dirty,lib,session,run}.rs`,
+> `crates/lichen-language-lex/src/lib.rs` (`lex_resume`),
 > `crates/lichen-lowlevel/src/{lib,registry}.rs` +
 > `static_module/{freeze,apply}.rs`, `crates/lichen-compute/src/compute.rs`,
 > `crates/lichen-language/src/program.rs` (the composition macro),
+> `crates/lichen-language-server/src/{server,analysis}.rs` (the caller),
 > and the notes [incremental-parse-compile](incremental-parse-compile.md),
 > [artifact-cache](artifact-cache.md), [static-modules](static-modules.md),
-> [attributes](attributes.md), `compute-graph-jit`.
+> [attributes](attributes.md), [liche-lsp-home](liche-lsp-home.md),
+> `compute-graph-jit`.
 
 ## 1. The principle: identity is allocated, not derived
 
@@ -683,6 +688,110 @@ error's byte range) through `offset_of_span`/`line_col`, which is exact rather t
 approximate. Checked shape by shape: **16 expression shapes**, each with a failing
 expression in the cloned suffix, all matching a fresh compile's diagnostic span.
 
+### 7.6 The language server as the first real caller
+
+`BufferSession` had no production consumer (`P2-1`); the LSP compiled each document
+text one-shot through `frontend_at` + `build_report`, with a fresh `PackageStore` (and
+so a fresh registry) per request inside `spawn_blocking`, and cached the resulting
+`DocIndex` by the text's hash plus the hashes of every file it imported. That path is
+now the **fallback**, and the primary path is a session per open document.
+
+**Why a thread, and not a field.** `BufferSession<P>` is `!Send` — it holds the
+checker's `Build<P>`, whose arena handles are raw pointers, exactly as `Doc` does (a
+compile-time `assert_send` probe confirmed it) — and unlike `Doc` it must *outlive* the
+request that used it. `tokio::task::spawn_blocking` may run its closure on any pool
+thread, so a session parked in a `Mutex` would be touched from whichever thread took
+it. The boundary is therefore a **dedicated thread** (`server::Worker`): the package
+store, one shared registry, and one session per open document live on it, a job goes in
+(a `Url`, the text, a reply channel) and a `Send` index comes back. One thread costs
+nothing: the transport already serializes requests (`concurrency_level(1)`), and a
+session is a single-threaded object by construction — its value *is* the state the last
+compile left behind.
+
+**The caller's view.** The LSP must run the preprocessor itself (it owns the store and
+the `@{…@}` block's directive spans), so it hands the session the *code after the block*
+rather than a whole file: `BufferSession::set_view(code, base, line_starts, imports)`.
+Two things fell out of that:
+
+- `lex_resume` was slicing the code it was handed at a byte offset it read out of an
+  **absolute** token range — the same thing only while `base` is 0. It takes the base
+  now, and the diff and the window splice pass absolute positions.
+- a view whose mapping moved (an edited block) drops the incremental snapshot, because
+  every token range and span in it is in the old coordinates. The cells are untouched:
+  a cell's identity is a path, not a position.
+
+**One registry, for cells and imports and every open document.** A cell's artifact is a
+*frozen closure*, and a closure whose value read an import names that import's module
+key; `Registry::freeze_closure_mapped` asserts every key the module references is
+registered **in the registry the artifact is filed in**, so a cell and the imports it
+read must share one registry. That has three consequences:
+
+- the **cell key counter moved to the registry** (`Registry::allocate_cell_key`), in a
+  key space of its own (the top bit). A counter per store and a counter per session
+  would each collide, and the registry is what a key has to be unique *in*.
+- a **recompiled package replaces its slot** (`Registry::freeze_mapped_replacing`). The
+  store builds a fresh `PackageStore` per run (so its `packages` map is exactly that
+  document's import closure, which is what the analysis records as dependencies), but
+  the *registry* is long-lived — so the previous run's artifact for that file is still
+  resident, and `freeze_mapped`'s "not already registered" assertion is exactly what a
+  recompile violates. The other half of the contract is the caller's, and it is the
+  same shape as eviction's: every live artifact that referenced the replaced one is
+  gone, or is being replaced in the same operation (a recompile walks the import closure
+  and rebuilds every dependent whose identity moved, because a dependent's identity
+  folds its dependencies'). Dropping the old artifact runs its release obligations, and
+  those own host resources rather than reading other arenas, so the replacement order is
+  the caller's business only for the reads it plans to do.
+- **an import edit is the coarse cut.** A cell is a *value* computed from the bytes of
+  the files that were loaded then, and the document's own content key — which is over
+  its resolved structure — says nothing about them. So the worker keeps a per-document
+  record of the files the last analysis read, and drops the session when it cannot prove
+  them unchanged (`None` from a file that cannot be read back counts as unprovable).
+  This is §12.3 item 4's coarse form: the fine one names the cells that read the changed
+  file.
+
+**The report carries what the editor reads.** `SessionReport` gained the token stream,
+the resolved AST and the build's `ExprId → span` index, because a caller that had to
+re-lex or re-parse to get them would not be incremental at all — and the *old* LSP path
+parsed every analysis **twice** (once for the index, once inside `frontend_at`). The
+span index is retained across a reuse, and moved through the edit: a rendered diagnostic
+is a `(line, col)` pair and the content key is span-free, so an edit that moves text
+without changing the resolved structure would otherwise leave the cached spans
+describing the old file. A position the edit replaced outright — a check diagnostic
+pointing into the text it rewrote — has no honest mapping, so the session re-lowers and
+re-checks instead of pointing it at the replacement.
+
+**Telemetry, because silence is the failure mode.** The session's `CellEvents` exists
+because a caller cannot otherwise tell a rebuild that reused nine cells from one that
+reused none; the server is now that caller, so it pushes what each compile did as a
+`lichen/analysis` notification. The end-to-end test reads it, which is what makes "the
+LSP is a real caller" an assertion rather than a wiring claim.
+
+**A compile that panics does not take the worker with it.** A panic inside a job is
+caught, the session that did it is dropped (its state is not trusted again), and the
+request is answered by the one-shot path — the degradation this mechanism exists to
+avoid, not a failure. Without it the first bad input would kill the thread and every
+later request with it, which is worse than the `spawn_blocking` behaviour it replaced
+(there, the closure's panic cost one request).
+
+**Measurements · a temporary probe (`--example lsp_path_probe`), since removed.** The
+program is 75 chains of 8 bindings (600 bindings, ~10.5 kB), the edit is a literal in
+the last chain's last statement, and every row is `--release`. "One-shot" is
+`Doc::new_with_store` — the path the server ran before this change, and still runs as
+the fallback.
+
+| document | one-shot (old path) | session first: compile + index | session edit |
+|---|---|---|---|
+| 75 cells (one per chain) | 24–28 ms | 30–32 ms + ~0.6 ms | 3.5–5.4 ms |
+| 600 cells (every binding) | 24–28 ms | 154–159 ms + ~0.55 ms | 3.6–4.5 ms |
+
+The reading: the **first** analysis pays ~0.3 ms per `cache` mark, which is §12.3
+item 1's artifact size — a scalar cell's closure is ~611 nodes, so a document that marks
+every binding pays for 600 of them. At a realistic mark density that makes the first
+analysis ~1.2× the old path (it wins back the second lex+parse, and loses the freezes),
+and every later analysis is **0.15–0.2×**. The index build is ~0.6 ms and is not a cost.
+The 600-cell row is the pathological end and it is linear in marks: that is item 1's
+bill, and it is the reason item 1 stays first on the list.
+
 ## 8. Costs and failure modes
 
 - **Path churn is the whole risk.** If an agent's edits keep moving nodes, paths keep
@@ -794,17 +903,22 @@ expression in the cloned suffix, all matching a fresh compile's diagnostic span.
   file identity is path-derived (`is_lichen_file_id` / `file_id_hash(file_id: &str)`,
   `lichen-registry/src/device.rs:57,85`), which is a name, not a content hash, and must
   stay that way.
-- **Who evicts, and when.** *Answered for the mechanism, open for the policy.* The
-  session evicts what it dropped when the caller says so (`evict_unreachable`), and the
-  registry refuses what it must; what is not decided is the *timing* — evict after every
-  compile, on a memory budget, or on an explicit call. The caller owns it because only
-  the caller knows when the last `SessionReport` clone died, which is the half of the
-  precondition the registry cannot check (§7.4).
+- **Who evicts, and when.** *Answered for the mechanism and for one production caller,
+  open for the general policy.* The session evicts what it dropped when the caller says
+  so (`evict_unreachable`), and the registry refuses what it must; the server calls it at
+  a document close and at a session drop, because that is where it can promise no report
+  is still held. What is not decided is whether a *long-lived* document should pay
+  earlier — after a compile that dropped cells, on a memory budget, or on an explicit
+  call. The caller owns it because only the caller knows when the last `SessionReport`
+  clone died, which is the half of the precondition the registry cannot check (§7.4).
 - **The reverse import closure.** The cell store drops what it is told; the graph of who
   imports whom is the package store's. Dirty propagation today covers one file's own
   statements — an *imported* file's edit needs the coarse cut (§7.1) plus that closure.
-  This is also where the eviction refusal stops being unreachable-by-accident and starts
-  being the thing that keeps a cross-file reference from dangling.
+  The server takes the coarse form (a per-document record of the files its last analysis
+  read; the session is dropped when they cannot be proven unchanged, §7.6), which is
+  sound but throws away cells an import edit did not affect. This is also where the
+  eviction refusal stops being unreachable-by-accident and starts being the thing that
+  keeps a cross-file reference from dangling.
 - **The graph-side descriptor's shape**, and whether a graph node's path is expressed
   in the same step vocabulary as a source node's.
 - **Backdating** (§4.4): comparing a recomputed value with the retained one so a
@@ -842,25 +956,35 @@ expression in the cloned suffix, all matching a fresh compile's diagnostic span.
 | `6e3c269` | the note records the eviction landing |
 | `af54f86` | `set_source` (the file entry point), and §7.5's two costs |
 | `35fac3e` | the fixes: a class expanded once, the boundary window, a cloned suffix's spans |
+| `9039f90` | the note records the three costs and their fixes |
+| `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
+| `dev` + this | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
 
 ### 12.2 The entry points
 
 - `lichen_language::session::BufferSession` — the consumer. `with_source_id(source,
-  source_id)`, `compile() -> SessionReport` (carrying `CellEvents`), `retained_cells()`,
-  `pending_evictions()`, `evict_unreachable()`. `new(source)` is the unnamed-buffer
-  shorthand.
+  source_id)`, `with_registry(source, source_id, registry)` (a session whose cells share
+  the registry its imports live in — what a caller with imports must use),
+  `set_view(code, base, line_starts, imports)` (the preprocessed view), `set_source` (the
+  whole-file entry point), `compile() -> SessionReport` (carrying `CellEvents`, the token
+  stream, the resolved AST and the span index), `retained_cells()`, `pending_evictions()`,
+  `evict_unreachable()`. `new(source)` is the unnamed-buffer shorthand.
 - `lichen_language::compile_with_cells(source_id, source, cells, registry) -> Report<LangProgram>`
   — the whole cell path, without a session. `compile`, `compile_with_imports*`,
   `frontend*` and `build_report` all delegate with no cells, so nothing else changed.
 - `lichen_language::cells::CellStore` — `reference`, `record`, `invalidate_source`,
-  `invalidate_paths`, `retain_marked`, `allocate_key`, `len`.
+  `invalidate_paths`, `retain_marked`, `len`. It no longer allocates keys: the registry
+  does (`Registry::allocate_cell_key`).
 - `lichen_language::dirty` (crate-private) — `dirty_marked_paths(previous, current,
   previous_window, current_window)`; the statement graph, the fixpoint and the
   exhaustive `walk` are inside.
 - `lichen_language::spans` (crate-private) — `shift_expr`/`shift_stmt`/`shift_field`: the
-  span shift a spliced-in *clone* needs (`offset_of_span` → `+ delta` → `line_col`).
+  span shift a spliced-in *clone* needs (`offset_of_span` → `+ delta` → `line_col`), and
+  `moved_offset`: the same move for a *retained* position, with `None` for one the edit
+  replaced.
 - `lichen_lowlevel::Registry` — `freeze_closure_mapped(module, key, roots, hash)`,
-  `evict(key) -> Eviction`; `lichen_lowlevel::Eviction`.
+  `freeze_mapped_replacing(module, key, hash)` (a recompile overwrites its slot),
+  `allocate_cell_key()`, `evict(key) -> Eviction`; `lichen_lowlevel::Eviction`.
 - `lichen_lowlevel::Package` — `refs`, the keys the artifact references (read off the
   frozen values, so it is the closure's set); `StaticModule::referenced_keys` is the
   reader.
@@ -868,50 +992,84 @@ expression in the cloned suffix, all matching a fresh compile's diagnostic span.
   `Drop`.
 - `lichen_lowlevel::ValueExt` — `traced`, `release_obligations`;
   `lichen_lowlevel::Release`.
+- `lichen_language_lex::lex_resume(prev, old, new, line_starts, base, a, b)` — the
+  incremental re-lex, with `a`/`b` and the token ranges **absolute** in the file the code
+  is a region of.
 - `lichen_language_parser::path` — `Step`, `Path`, `children`, `root_children`,
   `resolve`, `for_each`, `Node`.
+- `lichen_language_server::analysis::{Artifacts, index}` — the editor index over the
+  frontend artifacts, shared by the one-shot path (`analyze`, crate-private) and the
+  compile worker, so the incremental path and the one-shot path cannot drift.
+- `lichen_language_server::server::{Worker, WorkerState}` (crate-private) — the thread
+  the sessions live on; `Analysis` is what crosses back.
 
 ### 12.3 What to do next, in order
 
-1. **The artifact's *size*** (§7.5, the one cost the file-diff experiment left). The
-   closure walk is fixed, so freezing is no longer the bottleneck — but a *scalar*
-   cell's artifact still carries ~611 nodes, because a decided node's equality class is
-   a unification structure and a shared type puts every binding in one class. That is
-   what the 2.1× first build is. The options are to **narrow** the edge for a decided
-   node (freeze `Meta::new(None, None, None, size)`, or drop its operation) or to
-   **share** the class once per registry instead of copying it per artifact. Either
-   changes what an artifact contains, so it must keep `freeze_set`'s totality
-   (`node_map[&parent]` and friends panic otherwise) and re-check `apply.rs`'s
+1. **The artifact's *size*** (§7.5, §7.6 — the one cost left, and now the LSP's first
+   analysis is billed for it: ~0.3 ms per `cache` mark). The closure walk is fixed, so
+   freezing is no longer the bottleneck — but a *scalar* cell's artifact still carries
+   ~611 nodes, because a decided node's equality class is a unification structure and a
+   shared type puts every binding in one class. The options are to **narrow** the edge
+   for a decided node (freeze `Meta::new(None, None, None, size)`, or drop its
+   operation) or to **share** the class once per registry instead of copying it per
+   artifact. Either changes what an artifact contains, so it must keep `freeze_set`'s
+   totality (`node_map[&parent]` and friends panic otherwise) and re-check `apply.rs`'s
    `static_function_captures` and `equality.rs`'s decided-leaf test.
-2. **Run the session somewhere real** (`P2-1`). The session is cell-aware, its edits are
-   3× faster than a from-scratch compile (§7.5), and `set_source` is the file entry
-   point — so this is no longer "wire the mechanism" but "give it a caller":
-   `BufferSession` has none, and the LSP's analysis path (`analysis.rs:323`) compiles
-   one-shot through `frontend_at`, passing no cells. Whoever takes this must decide
-   *what a source edit is* in that caller — the session's dirty propagation needs the
-   edit as a *source replacement* (it diffs `LastState::source`), so an incremental
-   caller feeds it whole buffers, not ranges.
-3. **Decide the eviction *timing*** (§11) and call `evict_unreachable` on that schedule.
-   The mechanism and its refusal are landed (§7.4); what is open is when the caller can
-   promise that every `SessionReport` it kept is dropped. A session that never calls it
-   leaks, and the number to watch is `pending_evictions`.
-4. **The reverse import closure**: drop the cells of every file that imports the changed
-   one, transitively (`CellStore::invalidate_source` plus the package store's
-   `ResolvedImport` graph, `package.rs`). This is also what makes the eviction refusal
-   load-bearing rather than unreachable-by-accident (§11).
-5. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
+2. **The eviction *timing*** (§11). The mechanism and its refusal are landed (§7.4) and
+   the server now has the caller's two moments: a document **close** (the session, and
+   the artifacts it retained, are dropped — nothing outside the worker ever holds a
+   report) and a **session drop** (the import record's coarse cut). What is open is
+   whether a long-lived document should pay earlier, e.g. after a compile whose
+   `dropped` is non-zero — and `pending_evictions` is still the number to watch.
+3. **The reverse import closure** (§7.6, item 4's fine form): drop the *cells* of every
+   file that imports the changed one, transitively (`CellStore::invalidate_source` plus
+   the package store's `ResolvedImport` graph, `package.rs`), instead of the whole
+   session. This is also what makes the eviction refusal load-bearing rather than
+   unreachable-by-accident (§11).
+4. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
    dirtying consumers. A recompute-heap change, not a filter.
-6. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
+5. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
    change to `lichen-graph-ir`.
 
 ### 12.4 Landmines, each of which is a silent wrong answer or a leak
 
+- **A session is `!Send`, and that is not a detail.** It holds `Build<P>` (raw arena
+  handles), so it can live in neither the async server's state nor a `spawn_blocking`
+  closure — the thread is the boundary (§7.6). A `Mutex<HashMap<Url, BufferSession>>` in
+  `Inner` would compile only if the session were `Send`, which it is not; the failure
+  mode if someone forces it (`unsafe impl Send`) is a checker reading another thread's
+  arena.
+- **A cell and its imports must share one registry.** `freeze_closure_mapped` asserts
+  every key the module references is registered where the artifact is filed, so a session
+  with imports and a *private* registry panics on the first freeze (a `cache`d binding
+  whose value read the import). `BufferSession::with_registry` is the entry point, and
+  the two key allocators must not meet: the device's is a dense counter, the cell's is
+  the top bit of the key.
+- **A recompiled package must replace its slot, not assert it empty.** With a long-lived
+  registry the previous run's artifact for the same file is resident, and a file whose
+  source or a dependency moved is recompiled into its own device key
+  (`freeze_mapped_replacing`). The assertion `freeze_mapped` makes is the *other* case
+  (the same content twice). The caller's half is that every artifact that referenced the
+  replaced one is gone or is replaced in the same run — which a recompile satisfies,
+  because a dependent's identity folds its dependencies'.
+- **A retained cell is a value, not a program.** Nothing in the document's text records
+  which files its cells were computed from, so an edited import must invalidate the
+  session by a record the *caller* keeps (the worker does), not by the content key. The
+  coarse form is "drop the session"; the fine one is §12.3 item 3.
+- **A reuse must move its retained positions.** A rendered diagnostic is a `(line, col)`
+  pair and the content key is span-free, so an edit that moves text without changing the
+  resolved structure (a consistent rename, a leading newline, an extended unresolved
+  name) leaves the cached spans describing the old file. A position the edit replaced
+  outright has no honest mapping — the session re-lowers and re-checks rather than point
+  it at the replacement. The moved index is checked against a fresh build's (§7.6).
 - **Evicting a live artifact dangles.** A static ref is a raw handle into the
   artifact's arena: `Module::static_module` panics on an unregistered key, and a
   payload already read through it dangles. `Registry::evict` now refuses the half it can
   see (a live registered artifact's `refs`, §7.4); the other half — a `StaticNodeId` in a
   `Module` the caller still holds — is the caller's, and calling `evict_unreachable`
-  while still holding a `SessionReport` is how it is violated.
+  while still holding a `SessionReport` is how it is violated. The server's rule is that
+  a report never leaves the worker thread: only the `Send` `DocIndex` crosses, and the
+  index holds no static ref.
 - **A shared payload is what makes one artifact reference another**, and a scalar is
   not. `cache b = a + 4` leaves `b`'s artifact free of `a`'s; `cache b = a` with `a` an
   array, in a build where `a`'s cell was clean, does not. So a test that evicts a
@@ -1009,21 +1167,26 @@ cargo check --workspace --all-targets
 cargo test -p lichen-lowlevel -p lichen-highlevel -p lichen-language -p lichen-language-server -p lichen-compute
 ```
 
-The influenced set is those five crates. The temporary probes are gone; to re-take a
-reading, write one as an `examples/` binary and delete it after. The numbers to expect:
+The influenced set is those five crates (plus the lexer, which `lex_resume`'s base
+touches). The temporary probes are gone; to re-take a reading, write one as an
+`examples/` binary and delete it after. The numbers to expect:
 §7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches; every path unique;
 3-of-4 nodes; 1 obligation released once), §7.2 (the `CellEvents` per edit, the two
 propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check),
 §7.4 (2/1/0/2 freed, and the shared-array case's 1 then 0 with `pending` stuck at 1 until
-`b` is recompiled) and §7.5 (a first build at 2.1× a plain compile; every edit at
-0.29–0.42× with one cell re-frozen).
+`b` is recompiled), §7.5 (a first build at 2.1× a plain compile; every edit at
+0.29–0.42× with one cell re-frozen) and §7.6 (a first analysis at 1.2× the old one-shot
+path for 75 cells, 0.15–0.2× per edit, and `(2, 1, 1)` cells for an edit in the third of
+three marked statements, end to end through the real server binary).
 
 Two of those probes are worth re-creating first, because they are the oracles:
 the **differential** one (§7.3 — every prefix of an edit sequence against a fresh
 compile, comparing value *and* diagnostics) and a **span** one (§7.5 — a failing
 expression in the cloned suffix, comparing the session's diagnostic span against a
 fresh compile's, shape by shape). The first found the window-projection bug, the second
-the stale-span bug; a count-only or value-only reading misses both.
+the stale-span bug; a count-only or value-only reading misses both. §7.6's end-to-end
+test is the third: it is the only thing that fails if the server stops driving the
+session, because the diagnostics stay correct either way.
 
 **Write the differential probe first** (§7.3) — it is the cheapest oracle for the whole
 mechanism, it compares diagnostics as well as values, and it is what found the last

@@ -568,11 +568,16 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
+        // The freeze **replaces** the slot: a file ID is compiled once and
+        // overwritten, so recompiling a changed file reuses the same key — and
+        // the store's registry is the caller's (a session's cells are filed in it,
+        // because their imports must resolve there), so the previous compile's
+        // artifact for this file is still resident when this one runs.
         let freeze = self
             .registry
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .freeze_mapped(&module, key, hash);
+            .freeze_mapped_replacing(&module, key, hash);
         let export = StaticNodeId {
             module: freeze.key,
             index: freeze.node_map[&build.root_term],

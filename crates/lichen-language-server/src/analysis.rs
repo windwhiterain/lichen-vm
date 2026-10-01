@@ -10,8 +10,13 @@
 //! The artifacts and the index are [`DocIndex`], a `Send` value; the [`Doc`]
 //! handle adds the checker diagnostics, whose structured facts carry raw arena
 //! pointers and make the handle `!Send`.  A long-lived host (the language
-//! server) caches a [`DocIndex`] per document and re-runs the frontend only for
-//! a source the cache does not hold.
+//! server) caches a [`DocIndex`] per document and compiles again only for a
+//! source the cache does not hold — and the compile it runs there is the
+//! **incremental** one: a `BufferSession` per document, on the server's compile
+//! worker (`server.rs`, `docs/notes/incremental-update.md` §7.6), whose
+//! frontend artifacts this module's [`index`] is built from.  [`Doc`] itself is
+//! the one-shot path: the tests, the `new*` entry points, and the worker's
+//! fallback for a compile the session could not do.
 //!
 //! Why the resolution is re-derived here: `compile` resolves names at lowering
 //! but collapses a name *use* onto the binder's `ExprId`, so the IR never
@@ -132,10 +137,12 @@ pub struct DocIndex {
     /// leading `@{…@}` preprocessor block (0 when there is no block).  Everything
     /// before it is the preprocessor/metadata block.
     pub code_base: u32,
-    /// The token stream (with byte ranges) — the frontend's lexer output.
-    pub tokens: Vec<Token>,
-    /// The parsed AST — the frontend's parser output.
-    pub program: Program,
+    /// The token stream (with byte ranges) — the frontend's lexer output,
+    /// shared with whatever produced it (the incremental session keeps the same
+    /// stream, so an analysis never re-lexes to hand it over).
+    pub tokens: Arc<Vec<Token>>,
+    /// The parsed AST — the frontend's parser output, shared for the same reason.
+    pub program: Arc<Program>,
     /// Every definition site, in declaration order.
     pub defs: Vec<Definition>,
     /// The full diagnostic set (lex + parse + resolve + check), rendered for
@@ -283,10 +290,40 @@ where
     }
 }
 
+/// The frontend artifacts an editor index is built from — the shared output of
+/// whichever frontend produced them.
+///
+/// There are two producers and they must not fork the index: the one-shot
+/// frontend ([`frontend_at`] + [`build_report`], what [`Doc::new`] runs) and the
+/// incremental [`BufferSession`](lichen_language::session::BufferSession), which
+/// hands back the same artifacts from its own lex, parse, resolve, lower and
+/// check.  Both end in [`index`], so an editor sees one analysis whatever drove
+/// it.
+pub struct Artifacts<P: LangProgramShape>
+where
+    P::Value: ValueType,
+{
+    /// The token stream, in absolute source positions.
+    pub tokens: Arc<Vec<Token>>,
+    /// The resolved AST, in absolute source positions.
+    pub program: Arc<Program>,
+    /// The build's `ExprId → span` index, when a build ran.
+    pub span_index: Option<Arc<Vec<Option<Span>>>>,
+    /// The checked build, when the frontend resolved one.
+    pub build: Option<Arc<lichen_highlevel::checker::Build<P>>>,
+    /// Every diagnostic the producing pipeline reported (preprocess ones are the
+    /// caller's to add: they come from the stage *before* the frontend).
+    pub diagnostics: Vec<Diag<P>>,
+}
+
 /// One full frontend run: preprocess → lex → parse → resolve → check, then the
 /// editor index extracted from it (see [`DocIndex`]) and the checker's own
 /// diagnostics (see [`Doc`]).
-fn analyze<P>(
+///
+/// This is the **one-shot** path — [`Doc::new`] and the compile worker's
+/// fallback — as opposed to [`index`], which is the shared tail both it and the
+/// incremental session end in.
+pub(crate) fn analyze<P>(
     source: impl Into<String>,
     base: Option<&Path>,
     store: &mut PackageStore<P>,
@@ -322,7 +359,7 @@ where
     // re-type them onto the caller's program marker before the report.
     let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
     diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
-    let report = build_report::<P>(
+    let mut report = build_report::<P>(
         frontend.ir,
         Some(frontend.span_index),
         diagnostics,
@@ -332,9 +369,43 @@ where
         Vec::new(),
         "",
     );
-    let diagnostics = report.diagnostics;
-    // The frontend's `ExprId → span` index (highlevel is span-free).
-    let span_index = report.span_index;
+    let span_index = report.span_index.take().map(Arc::new);
+    let build = report.build.take().map(Arc::new);
+    let artifacts = Artifacts {
+        tokens: Arc::new(tokens),
+        program: Arc::new(program),
+        span_index,
+        build,
+        diagnostics: report.diagnostics,
+    };
+    index::<P>(&source, line_starts, &pre, artifacts)
+}
+
+/// The editor index over frontend artifacts, plus the pipeline diagnostics.
+///
+/// This is the shared tail: [`analyze`] calls it after running the frontend, and
+/// the language server's compile worker calls it with the artifacts its
+/// [`BufferSession`](lichen_language::session::BufferSession) produced — the one
+/// place the editor's view of a program is derived, so the incremental path and
+/// the one-shot path cannot drift apart.
+pub fn index<P>(
+    source: &str,
+    line_starts: Vec<usize>,
+    pre: &preprocess::Preprocessed<'_>,
+    artifacts: Artifacts<P>,
+) -> (DocIndex, Vec<Diag<P>>)
+where
+    P: LangProgramShape,
+    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+{
+    let Artifacts {
+        tokens,
+        program,
+        span_index,
+        build,
+        diagnostics,
+    } = artifacts;
 
     // The imported module's checked type, per `@import` directive span: the
     // compiler allocates a `Static` node at the directive's span, so we
@@ -345,7 +416,7 @@ where
     // `math.…` field completion).  Read from the import `Static` node's
     // struct type, so a module's *own* fields are offered.
     let mut module_fields: HashMap<String, Vec<String>> = HashMap::new();
-    if let Some(build) = &report.build {
+    if let Some(build) = &build {
         for imp in &pre.imports {
             let eid = span_index.as_ref().and_then(|s| {
                 s.iter().enumerate().find_map(|(i, sp)| {
@@ -385,7 +456,7 @@ where
     // once, by reading the built module's cached values — never by
     // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
     let (statements, stmt_starts, field_types, module_field_types, struct_fields_by_stmt) =
-        match report.build {
+        match &build {
             Some(build) => {
                 let mut statements = Vec::new();
                 let mut starts = Vec::new();
@@ -406,10 +477,20 @@ where
                             let s = e.span();
                             (s, lsp::offset_of_span(&line_starts, s))
                         }
+                        // The tail expression (a statement the AST lists
+                        // nowhere): its own span is the AST's, so read it there
+                        // rather than from the build's index — which a reused
+                        // build carries from an earlier text.
                         None => {
-                            let s = span_index
+                            let s = program
+                                .expr
                                 .as_ref()
-                                .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
+                                .map(|e| e.span())
+                                .or_else(|| {
+                                    span_index
+                                        .as_ref()
+                                        .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
+                                })
                                 .unwrap_or((0, 0));
                             (s, lsp::offset_of_span(&line_starts, s))
                         }
@@ -566,7 +647,7 @@ where
             ),
         };
 
-    let (defs, resolve, def_index) = index(&program, &pre.imports);
+    let (defs, resolve, def_index) = index_names(&program, &pre.imports);
     // Map each statement's span (a binding's name span, or an
     // expression's start span) to its statement index, so a name
     // (resolved to a binding) can reach the binding's value/type.
@@ -596,17 +677,13 @@ where
         .enumerate()
         .map(|(i, b)| (b.span, i))
         .collect();
-    // `pre.code` borrows `source`, so copy the offset out before moving
-    // `source` into the result.
-    let code_base = pre.code_base;
-
-    let lsp_diagnostics = render_diagnostics(&diagnostics, &source, &line_starts);
+    let lsp_diagnostics = render_diagnostics(&diagnostics, source, &line_starts);
 
     (
         DocIndex {
-            source,
+            source: source.to_string(),
             line_starts,
-            code_base,
+            code_base: pre.code_base,
             tokens,
             program,
             defs,
@@ -1123,7 +1200,7 @@ impl DocIndex {
 
         // Walk the token stream; tokens are already in document order.
         let mut prev_was_dot = false;
-        for t in &self.tokens {
+        for t in self.tokens.iter() {
             let ty_kind = classify_token_kind(&t.kind);
             let (token_type, modifiers) = match &t.kind {
                 TokenKind::Name(_) if prev_was_dot => {
@@ -1549,7 +1626,7 @@ impl<'a> NameClass<'a> {
 // value (a fresh frame); a lambda enters its parameter for the body; a block
 // pushes/pops its own frame.
 
-fn index(
+fn index_names(
     program: &Program,
     imports: &[ResolvedImport],
 ) -> (Vec<Definition>, HashMap<Span, usize>, HashMap<Span, usize>) {

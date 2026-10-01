@@ -56,6 +56,22 @@ fn send(stdin: &mut impl Write, json: &str) {
     stdin.flush().expect("flush");
 }
 
+/// Read the next **response**, skipping the server's notifications.
+///
+/// A real client matches a response to its request by id and drops everything
+/// else; the server sends notifications of its own (`publishDiagnostics`, and
+/// the `lichen/analysis` telemetry a compile emits), so reading one frame and
+/// calling it the response is only correct while nothing else is in flight.
+fn read_response(reader: &mut impl BufRead) -> String {
+    for _ in 0..64 {
+        let msg = read_frame(reader);
+        if msg.contains("\"id\":") {
+            return msg;
+        }
+    }
+    panic!("never observed a response frame");
+}
+
 fn wait_for(reader: &mut impl BufRead, needle: &str) -> String {
     for _ in 0..64 {
         let msg = read_frame(reader);
@@ -82,7 +98,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
-    let init = read_frame(&mut stdout);
+    let init = read_response(&mut stdout);
     assert!(init.contains("\"id\":1"), "initialize resp = {init}");
     assert!(
         init.contains("\"capabilities\""),
@@ -115,7 +131,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
     );
-    let hover = read_frame(&mut stdout);
+    let hover = read_response(&mut stdout);
     assert!(hover.contains("\"id\":2"), "hover resp = {hover}");
     assert!(hover.contains("1 : Int"), "hover resp = {hover}");
 
@@ -124,7 +140,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":3,"method":"textDocument/definition","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":2,"character":0}}}"#,
     );
-    let definition = read_frame(&mut stdout);
+    let definition = read_response(&mut stdout);
     assert!(
         definition.contains("\"id\":3"),
         "definition resp = {definition}"
@@ -140,7 +156,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///test.lichen"},"position":{"line":1,"character":4}}}"#,
     );
-    let completion = read_frame(&mut stdout);
+    let completion = read_response(&mut stdout);
     assert!(
         completion.contains("\"id\":4"),
         "completion resp = {completion}"
@@ -155,7 +171,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":5,"method":"textDocument/semanticTokens/full","params":{"textDocument":{"uri":"file:///test.lichen"}}}"#,
     );
-    let tokens = read_frame(&mut stdout);
+    let tokens = read_response(&mut stdout);
     assert!(
         tokens.contains("\"id\":5"),
         "semanticTokens resp = {tokens}"
@@ -170,7 +186,7 @@ fn handshake_and_features() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":6,"method":"shutdown","params":null}"#,
     );
-    let shutdown = read_frame(&mut stdout);
+    let shutdown = read_response(&mut stdout);
     assert!(shutdown.contains("\"id\":6"), "shutdown resp = {shutdown}");
     send(
         &mut stdin,
@@ -198,7 +214,7 @@ fn field_completion_after_a_dot() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
-    let _init = read_frame(&mut stdout);
+    let _init = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
@@ -213,7 +229,7 @@ fn field_completion_after_a_dot() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///field.lichen"},"position":{"line":1,"character":7}}}"#,
     );
-    let completion = read_frame(&mut stdout);
+    let completion = read_response(&mut stdout);
     assert!(
         completion.contains("\"id\":2"),
         "completion resp = {completion}"
@@ -227,7 +243,7 @@ fn field_completion_after_a_dot() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":3,"method":"shutdown","params":null}"#,
     );
-    let _shutdown = read_frame(&mut stdout);
+    let _shutdown = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":4,"method":"exit","params":null}"#,
@@ -282,7 +298,7 @@ fn relative_imports_resolve_via_the_document_uri() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
-    let _init = read_frame(&mut stdout);
+    let _init = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
@@ -306,7 +322,7 @@ fn relative_imports_resolve_via_the_document_uri() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#,
     );
-    let _shutdown = read_frame(&mut stdout);
+    let _shutdown = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
@@ -339,7 +355,7 @@ fn the_repo_import_example_loads() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}}"#,
     );
-    let _init = read_frame(&mut stdout);
+    let _init = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
@@ -363,7 +379,7 @@ fn the_repo_import_example_loads() {
         &mut stdin,
         r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#,
     );
-    let _shutdown = read_frame(&mut stdout);
+    let _shutdown = read_response(&mut stdout);
     send(
         &mut stdin,
         r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
