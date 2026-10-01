@@ -55,8 +55,9 @@ use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module,
-    ModuleKey, NodeId, OperatorExt, Program, StaticModule,
+    AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Handle, LowOperator, LowShape,
+    LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, StaticHandle, StaticModule,
+    ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
@@ -86,10 +87,15 @@ use lichen_utils::extend::AsEnum;
 /// re-homing or static freeze.
 pub type KernelId = usize;
 
-/// A runtime parallel-buffer artifact's identity — a compact index into the
-/// process buffer registry (the `n` collected element results).  Like
-/// [`KernelId`], it is a `Copy` host-owned scalar, never an arena payload.
-pub type BufferId = usize;
+/// A runtime parallel-buffer artifact's payload: the `n` collected element
+/// results, held **in the block arena** as an `i64` slice rather than in a
+/// process registry (`D15`) — see [`ComputeValue::Buffer`].
+///
+/// The value is a `Copy` handle, exactly like the lowlevel's own array/table
+/// payloads, so the buffer dies with its block and the crate's copy path
+/// relocates it like any other payload.  There is no id, no registry and no
+/// eviction: the arena's block lifetime *is* the ownership.
+pub type BufferPayload = AnyHandle<[i64]>;
 
 /// The process kernel registry: compiled kernel **fragments** (bytecode units),
 /// keyed by [`KernelId`].  Kernels are immutable artifacts shared across
@@ -99,31 +105,120 @@ static KERNELS: OnceLock<Mutex<HashMap<KernelId, KernelFragment>>> = OnceLock::n
 fn kernels() -> &'static Mutex<HashMap<KernelId, KernelFragment>> {
     KERNELS.get_or_init(Default::default)
 }
-/// The next kernel id — process-global, so ids never collide across modules.
+/// The next kernel id — a **fallback** allocator, used only when a content
+/// digest is already taken by a *different* fragment (see [`intern_kernel`]).
+/// Monotone, so an id minted here never aliases another entry.
 static NEXT_KERNEL_ID: AtomicUsize = AtomicUsize::new(0);
 fn alloc_kernel_id() -> KernelId {
     NEXT_KERNEL_ID.fetch_add(1, Ordering::Relaxed)
 }
 
-/// The process buffer registry: the element results a `plrun` collected,
-/// keyed by [`BufferId`].  A buffer is an immutable, host-owned vector of
-/// scalar `i64` results (the `?b` values of a `?a -> USize -> ?b` kernel).
-/// It lives process-global like the kernel registry, so a `Buffer` value is a
-/// small `Copy` scalar and reads/collects stay arena-free.
-static BUFFERS: OnceLock<Mutex<HashMap<BufferId, Vec<i64>>>> = OnceLock::new();
-fn buffers() -> &'static Mutex<HashMap<BufferId, Vec<i64>>> {
-    BUFFERS.get_or_init(Default::default)
-}
-/// The next buffer id — process-global, so ids never collide across modules.
-static NEXT_BUFFER_ID: AtomicUsize = AtomicUsize::new(0);
-fn alloc_buffer_id() -> BufferId {
-    NEXT_BUFFER_ID.fetch_add(1, Ordering::Relaxed)
+/// The content index: a fragment's digest → the id it is registered under.
+///
+/// **Kernel ids are content-addressed** (`D15`).  A compiled fragment is a pure
+/// function of the function it came from, so the same source recompiled — which
+/// an editor does on every keystroke — must produce the *same* id, or nothing
+/// downstream can be reused: the derived-module cache is keyed on
+/// `(LaunchMode, KernelId)`, so a fresh id per compile means it can never hit
+/// and every keystroke re-assembles and re-runs `wasmi::Module::new`.
+///
+/// A digest is not an identity, so the index is an **intern table and nothing
+/// more**: [`intern_kernel`] verifies the fragment it finds, and a genuine
+/// collision falls back to a unique id.  The loser of a collision simply stops
+/// being interned — the cost is a recompile, never a wrong fragment.
+static KERNEL_INDEX: OnceLock<Mutex<HashMap<u64, KernelId>>> = OnceLock::new();
+fn kernel_index() -> &'static Mutex<HashMap<u64, KernelId>> {
+    KERNEL_INDEX.get_or_init(Default::default)
 }
 
-/// The element results of a buffer — a cloned snapshot, so the caller does not
-/// hold the buffer registry lock while materializing nodes.
-fn buffer_results(id: BufferId) -> Option<Vec<i64>> {
-    buffers().lock().unwrap().get(&id).cloned()
+/// Register `fragment` and return its id — the existing id when an identical
+/// fragment is already registered.
+fn intern_kernel(fragment: KernelFragment) -> KernelId {
+    let digest = fragment_digest(&fragment);
+    // The index read and the registry read are one decision, so take the index
+    // first and re-check under the registry's lock below.
+    let candidate = kernel_index().lock().unwrap().get(&digest).copied();
+    if let Some(id) = candidate
+        && kernels().lock().unwrap().get(&id) == Some(&fragment)
+    {
+        return id;
+    }
+    let id = alloc_kernel_id();
+    kernels().lock().unwrap().insert(id, fragment);
+    kernel_index().lock().unwrap().insert(digest, id);
+    id
+}
+
+/// A fragment's content digest: the domain shape plus the lowered body.
+///
+/// The `Debug` rendering is the canonical form here because it is a total,
+/// deterministic function of both halves — the same reason the round-trip tests
+/// can print a value — and this runs once per `jit`, against a wasm compile it
+/// exists to avoid repeating.
+fn fragment_digest(fragment: &KernelFragment) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", fragment.param_shape).hash(&mut hasher);
+    format!("{:?}", fragment.body).hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod kernel_intern_tests {
+    use super::*;
+
+    fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
+        KernelFragment {
+            param_shape: LowShape::USize,
+            body,
+        }
+    }
+
+    /// The point of content addressing: the same function compiled twice — which
+    /// an editor does on every keystroke — must intern to **one** id, because
+    /// everything downstream is keyed on it (the derived-module cache on
+    /// `(LaunchMode, KernelId)`).  A fresh id per compile is what made that
+    /// cache unable to hit.
+    #[test]
+    fn the_same_fragment_interns_to_one_id() {
+        let first = intern_kernel(fragment(vec![KernelInstr::LocalGet(0)]));
+        let second = intern_kernel(fragment(vec![KernelInstr::LocalGet(0)]));
+        assert_eq!(
+            first, second,
+            "a recompiled identical fragment must reuse its id"
+        );
+    }
+
+    /// ...and different fragments must not collide onto one id, or the cache
+    /// would serve one kernel's module for another's.
+    #[test]
+    fn a_different_fragment_gets_a_different_id() {
+        let a = intern_kernel(fragment(vec![KernelInstr::LocalGet(0)]));
+        let b = intern_kernel(fragment(vec![KernelInstr::LocalGet(1)]));
+        assert_ne!(a, b, "different content must not share an id");
+        // Both stay registered under their own ids.
+        let registry = kernels().lock().unwrap();
+        assert!(registry.contains_key(&a) && registry.contains_key(&b));
+    }
+}
+
+/// The element results of a buffer payload — a borrowed view into the block
+/// arena the value lives in.
+///
+/// # Safety
+///
+/// The caller must hold the value the handle came from on a borrow of its
+/// module, so the payload's home block is alive — the same obligation every
+/// reader of an arena payload carries (`lichen_lowlevel::Handle::from_raw`).
+fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
+    match payload {
+        // SAFETY: the caller holds the value on a module borrow, so the
+        // payload's home block — and therefore this slice — is alive.
+        AnyHandle::Dynamic(handle) => Some(unsafe { &*handle.as_ptr() }),
+        // A static payload would be a *frozen* buffer, which `P1-29` refuses to
+        // serialize and so cannot exist: a buffer is runtime-only.
+        AnyHandle::Static(_) => None,
+    }
 }
 
 /// A binary arithmetic/comparison operator of the kernel-safe subset.
@@ -143,7 +238,7 @@ enum KernelBin {
 /// style-2 `k x` calls need).  Style-1 inline lichen-function calls and the
 /// scalar-arithmetic subset lower directly; a later variant carries a
 /// cross-kernel call by callee [`KernelId`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum KernelInstr {
     /// Push an `i64` constant.
     Const(i64),
@@ -185,7 +280,7 @@ const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
 /// it.  Splitting "emit bytecode" from "assemble a module" is what lets a
 /// later step link many fragments together (helper sharing, recursion) and
 /// emit cross-module imports for callees compiled elsewhere.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 struct KernelFragment {
     /// The parameter domain shape — the wasm parameter types and the layout
     /// the body emitter used for parameter reads.
@@ -207,16 +302,119 @@ pub enum ComputeValue {
     /// is the first group of parameters, the *index* the last scalar).
     ParKernel(KernelId),
     /// A runtime results **buffer**: `plrun` ran the parallel kernel over the
-    /// index range `[0, n)` and collected the `n` `?b` results here, host-owned
-    /// (a `Copy` scalar into the process buffer registry, exactly like
-    /// [`Kernel`]'s [`KernelId`]).
-    Buffer(BufferId),
+    /// index range `[0, n)` and collected the `n` `?b` results here.
+    ///
+    /// The payload is an `i64` slice **in the block arena** — a `Copy` handle,
+    /// like the lowlevel's own array/table payloads — so a buffer is owned by
+    /// the block it was created in and dies with it rather than living in a
+    /// process registry that nothing can bound (`D15`, and see
+    /// [`Self::is_handle`]).  `reads`/`collect`s therefore dereference the
+    /// arena, and the crate's copy path relocates the payload when the value is
+    /// copied into another block.
+    Buffer(BufferPayload),
     /// The kind marker of buffer types — a buffer's type is
     /// `[element_type, [TypeBuffer, Type]]`.
     TypeBuffer,
     /// The kind marker of write types — a `Write`'s type is
     /// `[element_type, [TypeWrite, Type]]`.
     TypeWrite,
+}
+
+/// The compute leaf's payload contract: only [`ComputeValue::Buffer`] carries
+/// arena data, and this is what makes the crate's copy path relocate it.
+///
+/// The lowlevel routes a **program-specific** value to `copy_ext`, which
+/// consults `is_handle` on the composed value; a leaf that owns a payload and
+/// does not answer `true` here would be copied by reference, leaving a handle
+/// pointing into a block that may be released.  `Kernel`/`ParKernel` name
+/// process-registry *code*, not arena data, and the markers carry none.
+impl ValueExt for ComputeValue {
+    fn is_handle(&self) -> bool {
+        matches!(self, ComputeValue::Buffer(_))
+    }
+
+    /// The buffer's payload viewed as bytes — `i64` elements, so eight bytes
+    /// each, which is how the crate's copy path and the codec move it.
+    fn handle(&self) -> AnyHandle<[u8]> {
+        match self {
+            ComputeValue::Buffer(AnyHandle::Dynamic(handle)) => {
+                // SAFETY: `handle` points at a live `[i64]` payload (the value's
+                // handle), and re-viewing those bytes as `u8` neither moves nor
+                // invalidates anything.
+                AnyHandle::Dynamic(unsafe {
+                    Handle::from_raw(std::ptr::slice_from_raw_parts(
+                        handle.as_ptr() as *const u8,
+                        buffer_byte_len(handle),
+                    ))
+                })
+            }
+            ComputeValue::Buffer(AnyHandle::Static(handle)) => {
+                // SAFETY: as above, for a payload in a static module's arena.
+                AnyHandle::Static(unsafe {
+                    StaticHandle::from_raw(
+                        handle.module,
+                        std::ptr::slice_from_raw_parts(
+                            handle.as_ptr() as *const u8,
+                            static_buffer_byte_len(handle),
+                        ),
+                    )
+                })
+            }
+            _ => unreachable!("only Buffer carries a payload"),
+        }
+    }
+
+    fn set_handle(&mut self, payload: AnyHandle<[u8]>) {
+        match self {
+            ComputeValue::Buffer(slot) => {
+                *slot = match payload {
+                    // The payload is the same allocation, re-viewed as `i64`
+                    // elements: the copy path allocated `len` bytes for this
+                    // value's payload, so the element count is that over eight.
+                    AnyHandle::Dynamic(handle) => {
+                        let elements = handle.as_ptr().len() / std::mem::size_of::<i64>();
+                        AnyHandle::Dynamic(unsafe {
+                            Handle::from_raw(std::ptr::slice_from_raw_parts(
+                                handle.as_ptr() as *const i64,
+                                elements,
+                            ))
+                        })
+                    }
+                    AnyHandle::Static(handle) => {
+                        let elements = handle.as_ptr().len() / std::mem::size_of::<i64>();
+                        AnyHandle::Static(unsafe {
+                            StaticHandle::from_raw(
+                                handle.module,
+                                std::ptr::slice_from_raw_parts(
+                                    handle.as_ptr() as *const i64,
+                                    elements,
+                                ),
+                            )
+                        })
+                    }
+                };
+            }
+            _ => unreachable!("only Buffer carries a payload"),
+        }
+    }
+
+    /// `i64` elements need 8-byte alignment.  The composition takes the
+    /// strictest alignment over its leaves, so this raises the vocabulary's
+    /// payload alignment and the freeze layout follows it.
+    fn alignment() -> usize {
+        std::mem::align_of::<i64>()
+    }
+}
+
+/// The byte length of a dynamic `[i64]` payload, read from the fat pointer's
+/// metadata without forming a reference.
+fn buffer_byte_len(handle: &Handle<[i64]>) -> usize {
+    handle.as_ptr().len() * std::mem::size_of::<i64>()
+}
+
+/// The byte length of a static `[i64]` payload.
+fn static_buffer_byte_len(handle: &StaticHandle<[i64]>) -> usize {
+    handle.as_ptr().len() * std::mem::size_of::<i64>()
 }
 
 /// The compute operator vocabulary — the `Jit`/`Launch` operations dispatched
@@ -390,8 +588,10 @@ where
                 };
                 match compile_fragment(module, function) {
                     Ok(fragment) => {
-                        let id = alloc_kernel_id();
-                        kernels().lock().unwrap().insert(id, fragment);
+                        // Content-addressed, so recompiling the same function —
+                        // which is what a keystroke does — keeps one id and
+                        // lets the derived-module cache hit (`D15`).
+                        let id = intern_kernel(fragment);
                         <P::Value as From<ComputeValue>>::from(ComputeValue::Kernel(id))
                     }
                     Err(err) => {
@@ -503,8 +703,11 @@ where
                 };
                 match compile_parallel_fragment(module, function) {
                     Ok(fragment) => {
-                        let id = alloc_kernel_id();
-                        kernels().lock().unwrap().insert(id, fragment);
+                        // Content-addressed like `jit`'s, and for the same
+                        // reason: the parallel launch path keys the module cache
+                        // on `(LaunchMode::Parallel, KernelId)`, so a fresh id
+                        // per compile is a re-assembly per compile.
+                        let id = intern_kernel(fragment);
                         <P::Value as From<ComputeValue>>::from(ComputeValue::ParKernel(id))
                     }
                     Err(err) => {
@@ -563,9 +766,12 @@ where
                             .node_value(item.node)
                             .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                         {
-                            Some(ComputeValue::Buffer(bid)) => {
-                                if let Some(data) = buffer_results(bid) {
-                                    inputs.push(data);
+                            Some(ComputeValue::Buffer(payload)) => {
+                                // SAFETY: the buffer value is read out of
+                                // `module` on this borrow, so the payload's home
+                                // block is alive for the walk below.
+                                if let Some(data) = buffer_items(&payload) {
+                                    inputs.push(data.to_vec());
                                 } else {
                                     return <P::Value as From<LowValue>>::from(
                                         LowValue::Parameterized,
@@ -580,9 +786,11 @@ where
                 }
                 match run_parallel_kernel(id, count, inputs) {
                     Ok(results) => {
-                        let bid = alloc_buffer_id();
-                        buffers().lock().unwrap().insert(bid, results);
-                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(bid))
+                        // The payload lands in the arena, so the buffer is owned
+                        // by this block and dies with it (`D15`) — the same
+                        // bump allocation every other payload uses.
+                        let payload = module.alloc_payload(&results, block);
+                        <P::Value as From<ComputeValue>>::from(ComputeValue::Buffer(payload))
                     }
                     Err(err) => {
                         // The refusal is the reason this launch produced no
@@ -612,7 +820,7 @@ where
                 // for this operation; its home block is alive for the duration
                 // of the run.
                 let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Buffer(id)) = module
+                let Some(ComputeValue::Buffer(payload)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 else {
@@ -625,8 +833,9 @@ where
                     Some(LowValue::USize(n)) => n,
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
-                let results = buffers().lock().unwrap();
-                match results.get(&id).and_then(|v| v.get(index)) {
+                // SAFETY: the buffer value was just read out of `module`, so its
+                // payload's home block is alive for this read.
+                match buffer_items(&payload).and_then(|items| items.get(index)) {
                     Some(&value) => {
                         <P::Value as From<LowValue>>::from(LowValue::USize(value as usize))
                     }
@@ -653,14 +862,16 @@ where
                 // for this operation; its home block is alive for the duration
                 // of the run.
                 let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Buffer(id)) = module
+                let Some(ComputeValue::Buffer(payload)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
                 else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let results = buffer_results(id);
-                let Some(results) = results else {
+                // SAFETY: the buffer value was just read out of `module`, so its
+                // payload's home block is alive while the elements are
+                // materialized below.
+                let Some(results) = buffer_items(&payload) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
                 // Materialize each element as a fresh scalar node and build a
@@ -1885,6 +2096,20 @@ fn modules() -> &'static Mutex<ModuleCache> {
 /// this only trades recompiles against memory; it is a bound, not a policy.
 const MAX_CACHED_MODULES: usize = 64;
 
+/// Compiled modules this process built rather than served from [`MODULES`].
+///
+/// Test- and measurement-visible on purpose, in the same spirit as the package
+/// store's `compiled`/`loaded_from_cache`: the value of content-addressed
+/// kernel ids (`D15`) is precisely that this stops growing when the same
+/// function is compiled again, and a counter is the only way to see that
+/// without timing a wasm compile.
+static MODULE_CACHE_MISSES: AtomicUsize = AtomicUsize::new(0);
+
+/// See [`MODULE_CACHE_MISSES`].
+pub fn module_cache_misses() -> usize {
+    MODULE_CACHE_MISSES.load(Ordering::Relaxed)
+}
+
 /// Which launch assembled a cached module.  The fragment set is the mode's, so
 /// the mode is part of the cache key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1964,6 +2189,7 @@ fn cached_module(
     if let Some(cached) = modules().lock().unwrap().get(key) {
         return Ok(cached);
     }
+    MODULE_CACHE_MISSES.fetch_add(1, Ordering::Relaxed);
     let bytes = assemble()?;
     let engine = wasmi::Engine::default();
     let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;

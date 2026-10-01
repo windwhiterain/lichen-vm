@@ -297,11 +297,62 @@ macro_rules! lang_compose_vocabulary {
         //    union and the operator dispatch on the operator union.  These are
         //    what make a plugin-built compiler's vocabulary executable.
 
-        // The composed values are structurally inert (handle payloads are the
-        // lowlevel's own), so `is_handle` is always false.
+        // A composed value's payload belongs to whichever leaf carries it, so
+        // the four payload methods **dispatch** to the leaves rather than
+        // declaring the union inert.  That matters because the lowlevel's copy
+        // path ([`copy_ext`](::lichen_lowlevel)) routes a program-specific value
+        // here: a leaf that owns an arena payload and is not relocated would
+        // leave a handle pointing into a block that may be released.
+        //
+        // The carries that carry nothing structural are the lowlevel's own
+        // (`LowValue`'s array/table payloads are relocated by *variant* in those
+        // copy paths, not through this trait) and the type markers, both of
+        // which answer `false`; `compute`'s `Buffer` is the live example of a
+        // leaf that answers `true`.
         impl ::lichen_lowlevel::ValueExt for LangValue {
             fn is_handle(&self) -> bool {
-                false
+                match self {
+                    $(
+                        Self::$extra_v_name(value) => {
+                            <$extra_v as ::lichen_lowlevel::ValueExt>::is_handle(value)
+                        }
+                    )*
+                    _ => false,
+                }
+            }
+
+            fn handle(&self) -> ::lichen_lowlevel::AnyHandle<[u8]> {
+                match self {
+                    $(
+                        Self::$extra_v_name(value) => {
+                            <$extra_v as ::lichen_lowlevel::ValueExt>::handle(value)
+                        }
+                    )*
+                    _ => unreachable!(
+                        "only a value whose ValueExt::is_handle is true carries a payload"
+                    ),
+                }
+            }
+
+            fn set_handle(&mut self, payload: ::lichen_lowlevel::AnyHandle<[u8]>) {
+                match self {
+                    $(
+                        Self::$extra_v_name(value) => {
+                            <$extra_v as ::lichen_lowlevel::ValueExt>::set_handle(value, payload)
+                        }
+                    )*
+                    _ => unreachable!(
+                        "only a value whose ValueExt::is_handle is true carries a payload"
+                    ),
+                }
+            }
+
+            fn alignment() -> usize {
+                // The strictest leaf alignment: the freeze layout and the copy
+                // path derive one alignment for the whole vocabulary
+                // (`codec::arena_align`), so a leaf needing more than another
+                // must raise it for all.
+                1 $( .max(<$extra_v as ::lichen_lowlevel::ValueExt>::alignment()) )*
             }
         }
 

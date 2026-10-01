@@ -60,7 +60,7 @@ queue's order is deliberate.
 | P1-15 | high | language | `Err(vec![])` — an error carrying no diagnostic | done |
 | P1-16 | high | language, language-server | `stage_depends` wired on one of two store entry points | done |
 | P1-17 | high | language-server | Every request runs the whole frontend | done (Outcome below; (b) still open) |
-| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | blocked:D15 |
+| P1-18 | high | compute | Unbounded global registries; per-launch wasm rebuild; unbounded `plrun` | done |
 | P1-19 | medium | lowlevel | `evaluate_block` expects a return the budget may refuse | done |
 | P1-20 | low | package | `download` uses a predictable shared temp name and skips `fsync` | done |
 | P1-21 | medium | lowlevel, highlevel | A struct value applied through a deferred callee is still silent | done |
@@ -1443,8 +1443,13 @@ turns a later `launch`/`read` into the lazy marker — a **silent wrong answer**
 worse than the leak. A bound that *refuses* new entries instead never drops a
 live one, but it permanently bricks a long-lived host at N programs and turns a
 working program's answer into the lazy marker, which is a functional
-regression rather than a memory bound. The answer needs an owner; it is
-`D15`, and the item's row is `blocked:D15`.
+regression rather than a memory bound. The answer needed an owner, and `D15`
+found it: buffers moved into the **block arena** (a `Copy` handle, owned by the
+block, with no registry and no id at all) and kernels stayed process-global with
+**content-addressed** ids. See the `D15` entry for the measurements, including
+the one that killed the `Arc`-in-the-value shape — 70 errors across 13 lowlevel
+files, because `Copy` is a vocabulary-wide trait bound and not a per-variant
+property.
 
 **Claim 2 — the per-launch rebuild: verified, fixed, and much smaller than the
 note says.** `run_kernel` and `run_parallel_kernel` each built
@@ -1455,13 +1460,21 @@ oldest-first eviction.
 
 *The key is everything the module depends on.* The mode owns the fragment set
 (the root's relative launch set vs one parallel fragment), and the root id is
-sufficient because a registered fragment is immutable and an id is never
-reused, so a key's assembly is fixed for the process's life. The id is also
-process-unique, so **two programs can never share an entry** — only a repeat
-launch of one kernel hits. Eviction is sound only because the entry is
+sufficient because a registered fragment is immutable, so a key's assembly is
+fixed for the process's life. Eviction is sound only because the entry is
 *derived*: it can always be rebuilt from the fragment, so dropping it cannot
 lose anything a value refers to (exactly what is not true of claim 1's
 entries).
+
+*What that key did not do, until `D15`.* The id was process-unique and minted per
+compile, so **two compiles could never share an entry** — a repeat *launch* of
+one kernel hit, but an unchanged program recompiled (every keystroke) missed, and
+the bounded cache spent its 64 entries on garbage. Kernel ids are
+content-addressed now, so the entry is per *distinct kernel* rather than per
+compile; measured on the same `jit`+`launch` program compiled three times in one
+process, module-cache misses went from `+1/+1/+1` to `+1/+0/+0`. The paragraph
+above used to end "so two programs can never share an entry" and call that a
+property; it was the defect.
 
 *The `Engine` is cached with its module, deliberately.* wasmi's default
 `CompilationMode::LazyTranslation` validates eagerly and translates each
@@ -1520,20 +1533,24 @@ synchronous, caller-blocking call, so the choice is refuse or run. The refusal
 returns `Err` and the caller's existing arm turns it into the lazy marker.
 
 *Measured.* Count `2^24` (16,777,216) was **accepted in 2790.9 ms** and left a
-128 MiB vector in `BUFFERS` before; after, the same program is **refused in
-2.7 ms** and allocates nothing (`buffers` unchanged). At the bound 1,048,576 is
-accepted (`0: Int`, 193.7 ms) and one past it (1,048,577) is refused in
+128 MiB vector in the then-current buffer registry before; after, the same
+program is **refused in 2.7 ms** and allocates nothing. At the bound 1,048,576
+is accepted (`0: Int`, 193.7 ms) and one past it (1,048,577) is refused in
 2.74 ms. `count = 4` is unchanged (`0: Int`), as are the 24 `compute` tests and
-the `compute_jit.lichen` example.
+the `compute_jit.lichen` example. (That registry is gone — `D15` moved buffers
+into the block arena — so "the registry is unchanged" is no longer a thing this
+can be checked against; the refusal, the bound and the timings are what the
+measurement established.)
 
-*Residual, and it is the honest half of "refuse with a diagnostic".* The
-refusal has **no message**: the observable answer is `parameterized: Int`, this
-plugin's channel for every runtime refusal (a kernel that fails to compile, an
-unregistered kernel). A dedicated diagnostic needs a variant in another crate —
-`Module::eval_errors` is a closed enum of structural value facts, and every
-`BudgetExhausted` variant renders *"this binding never terminates"*, which would
-be false here — so it was not invented locally. Recorded so the next sweep does
-not re-derive it; no queue item owns it.
+*Residual — taken up and fixed by `P1-30`.* The refusal had **no message**: the
+observable answer was `parameterized: Int`, this plugin's channel for every
+runtime refusal. The note below correctly declined to invent a variant locally
+(`Module::eval_errors` is a closed enum of structural value facts, and every
+`BudgetExhausted` variant renders *"this binding never terminates"*, which is
+false for a buffer size the user chose). `P1-30` then found the channel that
+already existed for it — `Module::extension_diagnostics`, which this plugin was
+*already* recording `$jit`'s refusals on, with no reader anywhere — and gave it
+one; a refused `plrun` now names both the count and the limit.
 
 **Also in this item's body, and deliberately not changed.** The fourth
 paragraph (module docs and operator names advertising a data-parallel `plrun`)
@@ -5630,17 +5647,17 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   compiles far more often than a keystroke stream), or `ExprKind`'s `Copy`
   ceasing to be a requirement for another reason — at which point (a) costs only
   the ripple and buys the whole leak back.
-- **D15 — Who owns a compiled kernel or buffer? (open; blocks `P1-18`'s
-  registry half.)** `KERNELS`/`BUFFERS` (`compute.rs:91`, `:106`) grow without
-  bound: one fragment per `$jit`/`$parallel` evaluation and one `count`-element
-  vector per `plrun`, and nothing is ever removed. Measured: one distinct
-  program evaluation adds exactly one of each; 60 evaluations took the
-  registries from 179 to 239 kernels and 2 to 62 buffers, monotonically.
-  (`P1-18`'s other two claims are fixed — the derived-module cache and
-  `plrun`'s element bound — and its row is `blocked:D15`.)
+- **D15 — Who owns a compiled kernel or buffer? — DECIDED and landed: the
+  arena owns buffers, the process owns kernels (content-addressed).** The
+  original finding stands: `KERNELS`/`BUFFERS` grew without
+  bound — one fragment per `$jit`/`$parallel` evaluation and one `count`-element
+  vector per `plrun`, nothing ever removed; measured, one distinct program
+  evaluation adds exactly one of each (60 evaluations took the registries from
+  179 to 239 kernels and 2 to 62 buffers).  (`P1-18`'s other two claims are fixed
+  — the derived-module cache and `plrun`'s element bound.)
 
-  The reason this is a decision: the registry cannot tell when an entry is
-  unreachable. `KernelId`/`BufferId` are `pub type … = usize`, so the id is
+  The reason it was a decision: the registry cannot tell when an entry is
+  unreachable. `KernelId`/`BufferId` were `pub type … = usize`, so the id is
   `Copy` and is copied into node value caches, equality classes, apply clones
   and static modules; nothing observes the last copy dying, and the arena has
   no per-value `Drop` to hang a release on. Eviction would have to guess, and
@@ -5648,53 +5665,71 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   marker — a silent wrong answer, worse than the leak. A bound that *refuses*
   new entries instead never drops a live one, but it permanently bricks a
   long-lived host at N programs and changes a working program's answer, which
-  is a functional regression rather than a memory bound. The answer needs an
-  **owner**, not a number.
+  is a functional regression rather than a memory bound.
 
-  The three shapes, and what each costs:
-  - **an owning handle in the value** — `ComputeValue::Kernel(Arc<…>)`. The
-    composed value enum is `#[derive(Debug, Clone, Copy, PartialEq)]`
-    (`language/src/program.rs:153`) and `LowValue` is `Copy` as well
-    (`lowlevel/lib.rs:155`), so `Copy` has to leave the whole vocabulary; every
-    `Copy` site, `enum_ext!` leaf and codec path follows.
-  - **a per-module registry** — the id names its module. Cross-module kernel
-    sharing (a documented property: kernels "are immutable artifacts shared
-    across modules in the process") goes away, and
-    `KernelInstr::CallKernel(KernelId)` plus the launch-set assembly change
-    with it.
-  - **a host-driven generation/release** — an explicit "this program's kernels
-    are done" call. The host must state the lifetime *and* guarantee that no
-    live `Build` holds a kernel value; the command line could (one program per
-    process), the language server cannot (it holds a `Build` across requests),
-    and a wrong guarantee is the silent-wrong-answer failure again.
+  **The `Arc`-in-the-value shape is priced, and it is the whole lowlevel.**  The
+  `Copy` requirement is not per-variant: `P::Value`'s contract is
+  `ValueExt: Debug + Copy + PartialEq` (`lowlevel/lib.rs:416`), so one non-`Copy`
+  variant forces the bound off the *entire* vocabulary.  Dropping `Copy` from
+  `ComputeValue`, `LangValue` and that bound turns the workspace into **70 errors
+  across 13 files in `lichen-lowlevel`** — every site that copies a node value,
+  in a VM whose value read and write paths are hot.  That kills the option, and
+  with it the whole "owner in the value" family.
 
-  **Measured while taking this decision, and it changes the shape of the
-  choice.**  The `Copy` requirement is **not per-variant**, so there is no
-  cheaper "owning handle for buffers only" — the price is a trait bound and it
-  is paid once for any variant.  `P::Value`'s contract is
-  `ValueExt: Debug + Copy + PartialEq` (`lowlevel/lib.rs:416`), and dropping
-  `Copy` from `ComputeValue`, `LangValue` and that bound turns the workspace
-  into **70 errors across 13 files in `lichen-lowlevel`** — every site that
-  copies a node value, in a VM whose value-write and value-read paths are hot.
-  So (a) is one indivisible change, and its cost is the whole lowlevel's
-  value-handling contract, not a plugin's data structure.
+  **Buffers: the block arena, as `AnyHandle<[i64]>`.**  The mechanism the note
+  never considered is the one the codebase already uses for compound data: a
+  `LowValue::Array` is a `Copy` handle into a block's bump arena, and
+  `AnyHandle<T>` is `Copy` for any `T` (`lowlevel/lib.rs:601`).  `ValueExt`
+  defines the **ext-handle payload** contract for a vocabulary's own payload
+  (`is_handle`/`handle`/`set_handle`/`alignment`), and the lowlevel's copy path
+  routes a *program-specific* value to `copy_ext`, which consults it — so a
+  buffer payload is relocated like any other and **dies with its block**.  No
+  registry, no id, no eviction, no aliasing, and `Copy` is untouched: the value
+  stays a handle.
 
-  That leaves (b) and (c) as the shapes that do not pay it, and both need the
-  module-lifetime question answered first.  One hazard in (b) that the shape list
-  does not name: per-module tables all start at id 0, so a buffer value that
-  crosses modules resolves against the *receiving* module's table — the wrong
-  buffer, silently, which is the failure this decision exists to avoid.  A
-  module-tagged id (`{ module, index }`) removes it by making a foreign id a
-  *miss*, which degrades to the lazy marker exactly as every other missing
-  buffer does — at the cost of a module identity the lowlevel does not carry
-  today.
+  What was actually missing was smaller than "unexercised": the composed
+  `LangValue` hard-coded `is_handle() -> false` ("the composed values are
+  structurally inert"), so **no plugin leaf could own a payload at all**.  The
+  composition now dispatches `is_handle`/`handle`/`set_handle`/`alignment` to
+  its leaves, which is what makes the `None => copy_ext` arm in the lowlevel's
+  copy paths reach a plugin rather than silently skipping it.  Measured caveat,
+  recorded rather than hidden: a `Bump` never reclaims per-object, so repeated
+  `plrun`s inside one *live* module accumulate in that block until GC drops it —
+  the editor's case is exact (P1-17 drops the `Build` per analysis, so buffer
+  memory is bounded by open documents), and a long-lived single module leans on
+  `garbage_collect`.
 
-  Decide the owner before either the bound or the eviction is written. One
-  coupling to record with the decision: the module cache added by `P1-18` is
-  keyed on `(LaunchMode, KernelId)` and is sound only while a fragment is
-  immutable and an id is never reused, so a registry that starts removing or
-  replacing entries must clear that cache (or key it on the fragments) in the
-  same change.
+  **Kernels: the process, content-addressed.**  A fragment is not a leaf payload:
+  `KernelInstr::CallKernel(KernelId)` makes it reference *other* fragments, and
+  assembly resolves those through the registry, so "immutable artifacts shared
+  across modules" is load-bearing for the call graph and not merely a cache.
+  They stay process-global, but ids become a **content digest** with an intern
+  index and a unique-id fallback on a genuine collision (so an id can never alias
+  a different fragment — the failure mode is a recompile, never a wrong kernel).
+
+  Content addressing is not a tidiness change; it is what makes the derived
+  module cache work at all.  That cache is keyed on `(LaunchMode, KernelId)`, so
+  a fresh id per compile meant it **could never hit**, and every keystroke
+  re-assembled and re-ran `wasmi::Module::new`.  Measured on the same
+  `jit`+`launch` program compiled three times in one process, counting module
+  cache misses:
+
+  | | round 0 | round 1 | round 2 |
+  |---|---|---|---|
+  | a fresh id per compile | +1 | +1 | +1 |
+  | content-addressed | +1 | **+0** | **+0** |
+
+  The counter is `compute::module_cache_misses`, visible for tests and
+  measurement for the same reason the package store's `compiled`/
+  `loaded_from_cache` are.
+
+  Pinned by `lichen-language/tests/buffer_payload.rs` (a pointer comparison, not
+  a content read — a dangling bump payload frequently still *reads* correctly,
+  so a content-only test would pass on a broken relocation) and by the two
+  `kernel_intern_tests` in `compute.rs`.  All three were watched to go red: with
+  the leaf answering `is_handle = false` the relocation test fails at the
+  dispatch, with `set_handle` a no-op it fails at the address, and the intern
+  tests fail if the id is per-compile again.
 
 ## Checked and found clean
 

@@ -51,6 +51,22 @@ impl<P: Program> Module<P> {
         )))
     }
 
+    /// Copy `items` into `block.arena` and return the handle pointing at the
+    /// copy — the payload a **program-specific** (ext) value carries.
+    ///
+    /// The two allocators above are the structural payloads the lowlevel itself
+    /// defines.  This is the same bump allocation for a vocabulary's own
+    /// payload type: a value that answers [`ValueExt::is_handle`] stores its
+    /// data here, and the crate's copy path relocates it like any other payload
+    /// ([`Self::copy_ext`]), so the lifetime is the block's, not a registry's.
+    pub fn alloc_payload<T: Copy>(&self, items: &[T], block: BlockId) -> AnyHandle<[T]> {
+        let slice = self.blocks[block].arena.alloc_slice_copy(items);
+        AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
+            slice.as_ptr(),
+            slice.len(),
+        )))
+    }
+
     /// Copy `value` into `block.arena` and return the new `value`.  Only a
     /// handle-carrying program-specific value relocates; everything else is
     /// returned untouched.

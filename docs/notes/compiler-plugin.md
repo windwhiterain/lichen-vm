@@ -141,7 +141,38 @@ parameter domain is not decided yet records a refusal that a later attempt super
 Recording is idempotent for an identical `(category, node, message)` — a node is deep-
 evaluated several times, and refusing twice is not two findings.
 
-## Extension point 5: global extension state (`GlobalExt`)
+## Extension point 5: owning a payload (`ValueExt`'s ext-handle contract)
+
+A plugin value that carries **data** — as opposed to naming code or a marker — can
+own it in the **block arena** rather than in a process registry, which is what
+`lichen-compute`'s buffers do since `D15`:
+
+```rust
+impl ValueExt for ComputeValue {
+    fn is_handle(&self) -> bool { matches!(self, ComputeValue::Buffer(_)) }
+    fn handle(&self) -> AnyHandle<[u8]> { /* the `[i64]` payload as bytes */ }
+    fn set_handle(&mut self, payload: AnyHandle<[u8]>) { /* re-view it */ }
+    fn alignment() -> usize { std::mem::align_of::<i64>() }
+}
+```
+
+The payload is allocated with `Module::alloc_payload` (the generic sibling of
+`alloc_array`/`alloc_table`), so it lives in a block's bump arena and dies with
+that block. The crate's copy path relocates it: a program-specific value is
+routed to `copy_ext`, which consults `is_handle` — so **a leaf that owns a
+payload must answer `true`**, or the handle survives the copy pointing into a
+block that is about to be released. The composition does the dispatch, so a
+composed vocabulary inherits this for free, and `alignment()` must report the
+strictest alignment among the leaves because the freeze layout derives one
+alignment for the whole vocabulary.
+
+The value stays `Copy` — an `AnyHandle<T>` is `Copy` for any `T` — which is what
+makes this cheaper than any owner carried in the value: `Copy` is a
+vocabulary-wide trait bound (`ValueExt: Debug + Copy + PartialEq`), so a single
+non-`Copy` variant would cost the whole lowlevel's value handling (`D15` measured
+it at 70 sites).
+
+## Extension point 6: global extension state (`GlobalExt`)
 
 A plugin can carry per-module, program-global state in the module's `global_ext` slot.
 `GlobalExt` is a marker over a host struct whose components are composed with
@@ -171,7 +202,7 @@ Then a host composes it: `lichen-language`'s `program.rs` composes
 plugin's private `NativeOps<LangProgram>` registry over `JitOp`/`LaunchOp` and registers the
 `compute.lichen` import.
 
-## Extension point 6: a compile-time attribute
+## Extension point 7: a compile-time attribute
 
 A plugin can contribute an *attribute* — a marker (`AttrSpec`) plus its lowering
 behaviour (`AttrExt<P>`: missing value, combine, unify, subtype, label, render),

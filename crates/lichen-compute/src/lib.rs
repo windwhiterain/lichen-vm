@@ -25,8 +25,9 @@ pub mod compute;
 pub use lichen_highlevel::native::{NativeOp, NativeOps};
 
 pub use compute::{
-    BufferCollectOp, BufferId, CallOp, ComputeOperator, ComputePlugin, ComputeValue, JitOp,
+    BufferCollectOp, BufferPayload, CallOp, ComputeOperator, ComputePlugin, ComputeValue, JitOp,
     KernelId, LaunchOp, ParLaunchOp, ParallelOp, RangeOp, ReadOp, WRAPPER_SOURCE, WriteOp,
+    module_cache_misses,
 };
 
 /// Contribute this plugin's vocabulary leaves into a
