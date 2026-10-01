@@ -1049,6 +1049,16 @@ pub fn install_default() -> Result<(), String> {
 pub fn installed_backend_name() -> Option<&'static str> {
     lichen_kernel_ir::parallel_backend().map(|backend| backend.name())
 }
+
+/// Remove the installed backend, if any.
+///
+/// The counterpart to [`install`], and not merely a convenience: uninstalling
+/// **drops the context**, so every device buffer it was holding is released at the
+/// same moment.  A test that installs a device and leaves it installed would hand
+/// that device — and the memory on it — to whatever ran next.
+pub fn uninstall() {
+    lichen_kernel_ir::clear_parallel_backend();
+}
 /// One staging-to-device copy recorded into a dispatch.
 struct Transfer {
     /// Where the run's staged bytes sit in the staging buffer.

@@ -197,10 +197,27 @@ The chain from source to a device is proved in two halves, on purpose:
 - `lichen-compute-gpu`'s tests run a real [`KernelFragment`] on the device and
   check it against a hand-written expectation.
 
-The seam between the two — a real installed backend serving a real lichen program
-— is not covered by a single test, because doing so needs a crate that depends on
-both, and the only such crate would be a test-only dependency cycle. That is the
-next thing to close.
+The seam between the two **is** covered now. `lichen-language`'s test suite
+already ran real lichen programs against the CPU backend, so the seam test lives
+there and is the `"gpu"` twin of an existing chained program: a first kernel
+writes `[10, 11, 12]`, a second reads that buffer and doubles it, and the whole
+thing is checked against the rendered output. It runs on a real device, through
+`install_default`.
+
+It needed `lichen-compute-gpu` as a **dev-dependency** of `lichen-language`,
+which is worth stating because an earlier version of this note claimed such a
+thing would be a dependency cycle and therefore not possible. It is not:
+`lichen-compute` does not depend on this crate and this crate does not depend on
+`lichen-compute`, so bringing them together in a test is a plain
+dev-dependency, and the library half of `lichen-language` still never links a GPU
+loader.
+
+What this closes, and what it does not: it proves a kernel compiled from a lichen
+**function**, named `"gpu"`, reaches a device and comes back correct. It does not
+prove the chain avoided the host — the values would be the same either way, since
+a `plrun` that quietly fell back to the CPU would produce the same numbers. That
+is what the routing tests in `lichen-compute` are for, and they are separate on
+purpose.
 
 ## Staging must be cached, or the run is refused
 
@@ -334,9 +351,8 @@ Named rather than implied, because each is a decision not a gap:
 - **A non-index parameter read.** A buffer is *bound*, not passed, so there is no
   value for it to hold (`NonIndexParameter`).
 - **Wiring into `compute.plrun`.** Done, and narrowly: `parallel` names a
-  backend and `plrun` dispatches to it, with the refusals above. What is *not*
-  wired is a single end-to-end test across both crates (see
-  [Where a run is *not* wired yet](#where-a-run-is-not-wired-yet)).
+  backend and `plrun` dispatches to it, with the refusals above. The seam test
+  covers the whole path from a lichen function to a real device.
 - **Holding a resident buffer across kernels.** **Done.** A `"gpu"` run produces
   a `DeviceBuffer` value rather than host data, `plrun` hands one straight to the
   next run as the id it already is, and `compute.collect` / `compute.read` are

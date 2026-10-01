@@ -1008,3 +1008,74 @@ compute.read [outs(0), 2]
         "the refusal must name the position that is not a write: {message:?}"
     );
 }
+
+/// The seam: a real lichen program, dispatching to a real device.
+///
+/// Everything below this line is tested somewhere else and none of it together.
+/// `compute.rs` proves the language side against the CPU backend; the GPU crate's
+/// own tests prove a [`KernelFragment`] runs correctly on a device; the routing
+/// test proves a `"gpu"` run reaches an installed backend. What none of them
+/// touch is the seam itself — a kernel compiled from a lichen **function**, named
+/// `"gpu"`, dispatched, and read back — and a break anywhere along it would leave
+/// every other test green.
+///
+/// The program is a chain, deliberately. `k1` writes `[10, 11, 12]`, `k2` reads
+/// that buffer and doubles it, so the second `plrun` consumes the first one's
+/// result — which on a `"gpu"` run means the intermediate is handed to the next
+/// kernel as a device id rather than being brought home in between. The CPU twin
+/// of this program is `parallel_read_input_buffer` above; the two must agree, and
+/// the value is chosen so that a `plrun` which silently fell back to the CPU
+/// would still produce the right answer — what differs is *which* backend ran it,
+/// so the backend's own name is reported alongside the value.
+#[test]
+fn a_gpu_program_chains_two_kernels_on_a_device() {
+    // The installed-backend slot is process-global, so this test owns it for its
+    // whole body: a parallel test in this binary must not observe a device that
+    // another test has just uninstalled.
+    let _installed = GPU_SLOT
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Err(reason) = lichen_compute_gpu::install_default() {
+        eprintln!("no device to run on, so the seam is not covered here: {reason}");
+        return;
+    }
+
+    let source = r#"
+@{ compute = import "compute.lichen" @}
+f1 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 10]
+}
+k1 = compute.parallel f1 "gpu"
+inbuf = compute.plrun k1 (3,)
+f2 = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  a = compute.read [cfg(1)(0), i]
+  compute.write [n, i, a + a]
+}
+k2 = compute.parallel f2 "gpu"
+out = compute.plrun k2 (3, (inbuf,))
+(compute.read [out, 0], compute.read [out, 1], compute.read [out, 2], compute.collect out)
+"#;
+    let out = run(source);
+    // Uninstalling drops the context, so every device buffer it was holding goes
+    // back at the same moment — which is the point of doing it here rather than
+    // leaving it to process exit.
+    lichen_compute_gpu::uninstall();
+
+    assert_eq!(
+        out, "(20, 22, 24, [20, 22, 24]): <Int, Int, Int, array<?a, ?b>>",
+        "a two-kernel \"gpu\" chain produced"
+    );
+    assert_eq!(
+        lichen_compute_gpu::installed_backend_name(),
+        None,
+        "the backend was uninstalled, so a later test cannot inherit a device"
+    );
+}
+
+/// Serialises the tests that install a backend, because the slot is
+/// process-global and this binary runs its tests in parallel.
+static GPU_SLOT: std::sync::Mutex<()> = std::sync::Mutex::new(());

@@ -711,6 +711,7 @@ name = "lichen-language"
 version = "0.1.0"
 dependencies = [
  "lichen-compute",
+ "lichen-compute-gpu",
  "lichen-doc",
  "lichen-highlevel",
  "lichen-language-lex",

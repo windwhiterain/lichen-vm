@@ -18,6 +18,12 @@ lichen-render.workspace = true
 lichen-utils.workspace = true
 
 [dev-dependencies]
+# The seam test: a real lichen program dispatching to a real device.  This is a
+# **dev**-dependency on purpose and not a cycle — `lichen-compute` does not depend
+# on `lichen-compute-gpu` and the GPU crate does not depend on `lichen-compute`,
+# so the two can be brought together in a test without this crate's library half
+# ever linking a GPU loader.
+lichen-compute-gpu.workspace = true
 # Only `tests/persist.rs` uses this: the compiler-slot contract test compares
 # the slot this crate reads with the one the package manager installs into.
 lichen-package.workspace = true
