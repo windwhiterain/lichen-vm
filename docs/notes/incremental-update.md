@@ -267,7 +267,8 @@ Decided by the superior:
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-lowlevel/src/static_module/freeze.rs` | **landed**: `freeze_closure` (the closure of a root set) and `freeze_set` (the shared phases); `from_module_mapped` is now "the closure of every node" |
 | 3 | `lichen-lowlevel/src/lib.rs` (`Release`, `Program::release_obligations`, `StaticModule::releases` + `Drop`) | **landed**: the general ownership transfer — an artifact owns its out-of-arena resources and releases them when it is dropped |
-| 3 | `lichen-registry` (the store) | **not built**: cells keyed by path; freeze/read in place; the four events reported |
+| 3 | `lichen-language/src/cells.rs` (`CellStore`), `compile.rs`, `lib.rs` | **landed**: cells keyed by path, the lowering hook (a clean cell lowers to `ExprKind::Static`), the per-cell freeze after the build, and `compile_with_cells` |
+| 3 | the store's dirty input and eviction | **not built**: the caller declares dirtiness, and nothing evicts |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
 | 4 | the program's own graph data (the PCG graph a program builds) | node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
@@ -387,6 +388,28 @@ Two things the store's landing needs, read off the code rather than assumed:
   though a cell's reuse is decided by its **path**. That hash is a documented
   placeholder on the cell path, which is the same demotion §7's table records for
   `content_key`: the moment a hash decides reuse, the requirement is broken.
+
+**Landed.** `CellStore` (`cells.rs`) keys a cell by its path and holds only the frozen
+reference — the artifact lives in the caller's registry, exactly as an import's does —
+and `compile_with_cells` is the entry point. One `path::for_each` pass collects the
+marked bindings' paths before lowering; a marked binding whose cell is clean lowers to
+`ExprKind::Static` (its body is never lowered, checked or evaluated), and a marked
+binding that *was* compiled is frozen per cell once the build is solved and recorded
+under its path.
+
+Two limitations, recorded rather than hidden: a marked binding whose value spells an
+**annotation** is not eligible (a static read materializes a two-wide pair, and an
+annotation makes the source's pair wider, so it would be read back at the wrong
+arity), and a **`Parameterized`** cell is not retained (it has no answer to keep, so
+the cell is simply left out and the next build compiles it again).
+
+**Measured · a temporary probe, since removed.** A two-cell program
+(`cache terrain = 5`, `cache layer = terrain + 1`): the first build lowered **0**
+static nodes and recorded **2** cells; the second lowered **2** static nodes — one per
+clean cell, with no new artifact filed — and read the frozen pair back as `USize(5)`.
+The dirty input is still the caller's, so this second build is the "nothing changed"
+case: the mechanism is proven, and what remains is the edit-side wiring (the named
+file plus its reverse import closure, §7.1 above).
 
 **Measured · a temporary probe in the lowlevel's own test harness, since removed.**
 On a four-node module — an array of two constants, plus one node no root reaches —
