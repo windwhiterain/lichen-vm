@@ -1038,7 +1038,7 @@ influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-
 | `9039f90` | the note records the three costs and their fixes |
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
 | `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
-| `9844332` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
+| `c0b5f56` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
 
 ### 12.2 The entry points
 
