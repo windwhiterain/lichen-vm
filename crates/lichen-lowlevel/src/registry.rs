@@ -139,6 +139,36 @@ impl<P: Program> Registry<P> {
         Freeze { key, node_map }
     }
 
+    /// [`Self::freeze_mapped`] for a **recompile**: the key is the file's own,
+    /// and a file whose source or dependency moved is rebuilt into its own slot
+    /// (`PackageStore`'s `build_package`).
+    ///
+    /// What [`Self::freeze_mapped`] asserts — that nothing is filed under the key
+    /// — is exactly what a recompile does, so the caller states the other half of
+    /// the contract instead, and it cannot be checked here: **every live artifact
+    /// that referenced the replaced one is gone, or is being replaced in this
+    /// same operation.**  A recompile walks the import closure and rebuilds every
+    /// dependent whose identity moved (a dependent's identity folds its
+    /// dependencies', so it moved with them), and a session that read the old
+    /// artifact is dropped before its next compile
+    /// (`docs/notes/incremental-update.md` §8) — a static ref that survives into
+    /// the replaced key names the *new* arena, which is the wrong value rather
+    /// than a crash.
+    ///
+    /// Dropping the old artifact runs its release obligations, and those do not
+    /// read the arenas its values referenced ([`Release`] owns host resources,
+    /// not other artifacts), so the replacement order is the caller's business
+    /// only for the reads it plans to do.
+    pub fn freeze_mapped_replacing(
+        &mut self,
+        module: &Module<P>,
+        key: ModuleKey,
+        hash: [u8; 32],
+    ) -> Freeze {
+        self.entries.remove(&key);
+        self.freeze_mapped(module, key, hash)
+    }
+
     /// File an already-built artifact (a module loaded from the device's
     /// persistent store) under its device `key` — the load-time mirror of
     /// [`Self::freeze_mapped`]: the artifact's refs are already baked with

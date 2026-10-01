@@ -74,7 +74,7 @@ queue's order is deliberate.
 | P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
 | P1-30 | low | compute | A refused `plrun` count is silent | done |
 | P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | done |
-| P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (doc); wiring is D6(b) |
+| P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (wired: the server's compile worker, `incremental-update.md` §7.6) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
 | P2-4 | medium | lowlevel | `Node`'s `pub` fields break the documented write choke-point | done |
@@ -2384,7 +2384,7 @@ still unmeasured.
 
 ## P2 — architecture
 
-### P2-1 — `BufferSession` is built but unwired `done (doc); D6(b) (wiring)`
+### P2-1 — `BufferSession` is built but unwired `done`
 
 ~1100 lines of incremental machinery (`language/src/session.rs`,
 `resolve.rs:385-706` `content_key`, `lex::lex_resume`,
@@ -2425,6 +2425,22 @@ case `BufferSession`'s splice addresses by resuming the lex and the
 statement-region parse. So (b) is no longer "worth doing for the keystroke path
 and not a substitute for (a)"; it is the only remaining win on that path, and T3
 (the memoized check) is still what would keep the check from dominating it.
+
+**Wired.** (b) landed: the server drives one `BufferSession` per open document
+through a dedicated compile worker thread (the session is `!Send` and must
+outlive its request, so neither `Backend` nor a `spawn_blocking` closure can hold
+it), the session takes the caller's preprocessed view (code region, base, line
+starts, imports) so spans stay absolute in the file the user edits, and the
+`DocIndex` is built from the session's own frontend artifacts — the one-shot
+`frontend_at` + `build_report` path is now the fallback for a compile that
+panics. Measured end to end (600 bindings, 75 marks, `--release`): the first
+analysis is 30–32 ms against the old path's 24–28 ms, and every edit is
+3.5–5.4 ms (0.15–0.2×) with only the cells the edit reached re-derived. The
+first-analysis surcharge is the per-cell artifact size, which is the one cost
+left open (`incremental-update.md` §12.3 item 1). The `T3` caveat above is
+answered for the key-unchanged case only: a session whose *resolved content* is
+unchanged reuses the established `Build` and skips the check entirely, which is
+the typing path — an edit that changes the content still re-checks.
 
 ### P2-2 — Five hand-written AST traversals `verified`
 

@@ -149,6 +149,31 @@ impl Server {
         }
     }
 
+    /// The next `lichen/analysis` notification, as
+    /// `(reused, frozen, dropped, reused_build)` — what the server says its last
+    /// compile did to the document's retained cells.
+    fn next_analysis(&mut self) -> (u64, u64, u64, bool) {
+        loop {
+            let msg = self
+                .messages
+                .recv_timeout(Duration::from_secs(60))
+                .unwrap_or_else(|_| panic!("no analysis telemetry was sent"));
+            if !msg.contains("lichen/analysis") {
+                continue;
+            }
+            let stats: serde_json::Value =
+                serde_json::from_str(&msg).expect("an analysis notification is JSON");
+            let stats = &stats["params"];
+            let number = |field: &str| stats[field].as_u64().expect(field);
+            return (
+                number("reused_cells"),
+                number("frozen_cells"),
+                number("dropped_cells"),
+                stats["reused_build"].as_bool().expect("reused_build"),
+            );
+        }
+    }
+
     /// Every `publishDiagnostics` that arrives until the server has been quiet
     /// for `quiet`.  The quiet period is what turns "no more" into an
     /// assertion rather than a hope.
@@ -314,6 +339,46 @@ fn a_closed_document_publishes_nothing_further() {
             "only the close's empty set may be published, got {publish}"
         );
     }
+    server.shutdown();
+}
+
+/// The compile is **incremental**: a document's `cache`d bindings are retained
+/// across an edit, and only the cells the edit reached are dropped.
+///
+/// This is the end-to-end form of the whole mechanism — the server drives a
+/// `BufferSession` per open document (`docs/notes/incremental-update.md`) — and
+/// it is asserted through the telemetry the server sends, because a client
+/// otherwise cannot tell an incremental analysis from a full one.  A regression
+/// that quietly compiled each text from scratch would leave the diagnostics
+/// correct and this the only thing that failed.
+#[test]
+fn an_edit_reuses_the_documents_retained_cells() {
+    let mut server = Server::start();
+    let uri = "file:///cells.lichen";
+    server.send(&did_open(
+        uri,
+        "cache a = 1\ncache b = a + 1\ncache c = b + 1\nc\n",
+    ));
+    let (reused, frozen, dropped, reused_build) = server.next_analysis();
+    assert_eq!(
+        (reused, frozen, dropped, reused_build),
+        (0, 3, 0, false),
+        "the first compile freezes the three cells and reuses nothing"
+    );
+
+    // An edit inside the last statement: `a` and `b` are untouched, so their
+    // artifacts are read back and only `c`'s is dropped and re-frozen.
+    server.send(&did_change(
+        uri,
+        2,
+        "cache a = 1\ncache b = a + 1\ncache c = b + 2\nc\n",
+    ));
+    let (reused, frozen, dropped, _) = server.next_analysis();
+    assert_eq!(
+        (reused, frozen, dropped),
+        (2, 1, 1),
+        "an edit in `c`'s statement must keep `a`'s and `b`'s cells and re-derive `c`'s"
+    );
     server.shutdown();
 }
 

@@ -37,10 +37,10 @@ artifacts exactly as the CLI does.
 ## The change
 
 Route the LSP's *settled imported packages* through the persistent device store
-at Lichen Home. The open buffer's own text stays in-process — re-analyzed by the
-server's own `DocIndex` cache (`P1-17`), not by `BufferSession`, which remains
-unwired (`P2-1`); only the settled imported `.lichen` packages are cached on disk
-and shared cross-process.
+at Lichen Home. The open buffer's own text stays in-process — re-analyzed
+incrementally by a per-document `BufferSession` on the server's compile worker
+(`incremental-update.md` §7.6, which is where `P2-1` landed); only the settled
+imported `.lichen` packages are cached on disk and shared cross-process.
 
 ### 1. `home.rs` — `LichenHome` (new)
 
@@ -78,15 +78,20 @@ The store is persistent only when a cache root is supplied **and** the program's
 artifact codec can serialize; otherwise it is in-memory. `new_with_base` (tests,
 `NoPersist` embeddings) stays in-memory by passing `None`.
 
-### 3. `server.rs` — `Backend` owns the home
+### 3. `server.rs` — the compile worker owns the store
 
-`Backend` gains `home: Arc<LichenHome>` (initialized in `new`, which takes the
-vocabulary's cache root, calls `at(cache_root)` + `ensure()` — the slot is
-(re)created lazily at LSP start, i.e. when a lichen buffer is opened). Every
-request switches its `Doc` to
-`new_with_cache(text, base, Some(self.home.cache_root()))`. `Backend<P>` remains
-`Send + Sync` (`Arc<LichenHome>` is `Send + Sync` because `LichenHome` is a
-`PathBuf`; `sources` is `Mutex<HashMap>`).
+`Backend::new` takes the vocabulary's cache root, calls `LichenHome::at(root)` +
+`ensure()` — the slot is (re)created lazily at LSP start, i.e. when a lichen
+buffer is opened — and hands `cache_root()` to a dedicated **compile worker
+thread**. The worker keeps the `DeviceRegistry` handle open across requests and
+builds one `PackageStore` per analysis over it, so the imported packages are
+resolved through the same device store the `lichen` compiler uses.
+
+The worker is not an optimization: a `BufferSession` is `!Send` (it holds the
+checker's `Build`), and it must outlive the request that built it, so neither
+`Backend` nor a `spawn_blocking` closure can hold it. The thread owns the store,
+one shared registry, and one session per open document; only the `Send`
+`DocIndex` crosses back. See `incremental-update.md` §7.6.
 
 ### 4. Store root is per plugin set (consistency with the compiler)
 
@@ -133,16 +138,22 @@ already covers, plus the LSP supplying a root at all:
 - **No opportunistic GC / compile daemon.** Cache growth is bounded by
   `lichen clean`; a cross-process compile daemon is already noted as out of
   scope in `artifact-cache.md`.
-- **No in-memory registry held across requests,** which would reintroduce the
-  `!Send` problem for plugin-composed servers. Persistence is the disk store.
+- **No in-memory registry held across requests *in `Backend`*.** It is held across
+  requests *on the compile worker thread*, which is where the `!Send` problem is
+  solved rather than reintroduced: the registry never crosses a thread boundary, and
+  the async half of the server keeps only `Send` values. Persistence is still the disk
+  store; the resident registry is what lets a session's cells and the imports they read
+  share one place (`incremental-update.md` §7.6).
 
 ## Files changed
 
 - `crates/lichen-language-server/src/home.rs` (new) — `LichenHome`.
 - `crates/lichen-language-server/src/analysis.rs` — `Doc::new_with_cache`;
-  `new_with_base` delegates to it.
-- `crates/lichen-language-server/src/server.rs` — `Backend` holds
-  `Arc<LichenHome>`; every request threads `cache_root()`.
+  `new_with_base` delegates to it; `index` is the shared tail the compile worker
+  also ends in.
+- `crates/lichen-language-server/src/server.rs` — `Backend::new` creates the home
+  and spawns the compile worker with `cache_root()`; the worker owns the device
+  handle, the registry and one `BufferSession` per open document.
 - `crates/lichen-language-server/src/lib.rs` — `pub mod home;`.
 
 ## Verification
@@ -154,4 +165,7 @@ New tests (following `crates/lichen-language/tests/persist.rs`, but through
 `Doc::new_with_cache`) cover: a package compiled into a temp cache is reused by a
 second `Doc` on the same cache; a missing home is created; a corrupt `registry`
 is tolerated (still produces diagnostics). A composed server's `Backend<P>` is
-still `Send + Sync` (the `Arc<LichenHome>` addition keeps that invariant).
+still `Send + Sync` (the worker holds only a `Send` job sender). And
+`tests/lsp_incremental.rs` drives the real binary end to end: the per-document
+cells are retained across an edit (through the `lichen/analysis` telemetry), and an
+edit to an imported file refreshes the answer.
