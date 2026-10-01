@@ -40,6 +40,7 @@ pub mod render;
 pub mod resolve;
 pub mod run;
 pub mod session;
+mod spans;
 pub mod suggest;
 
 use std::sync::{Arc, PoisonError, RwLock};

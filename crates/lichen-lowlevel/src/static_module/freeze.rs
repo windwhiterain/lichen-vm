@@ -396,7 +396,10 @@ fn rewrite_value<P: Program>(
 ///   unlike the GC's walk, which deliberately does not follow a cached value's
 ///   operand, this one must;
 /// - the **whole equality class** — `parent`/`next`/`tail` all go through
-///   `node_map`, and half a class is a broken class;
+///   `node_map`, and half a class is a broken class.  A class is expanded **once**
+///   however many of its members the walk reaches: a shared type node puts every
+///   binding of a program in one class, and expanding it per visited member was
+///   the walk's entire cost;
 /// - the **whole function template** — `StaticFunction.nodes` is the template's
 ///   member list, and a missing member is a broken template.
 ///
@@ -410,6 +413,13 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
+    // The classes whose members have already been pulled in.  A class is expanded
+    // **once**, not once per member the walk visits: `class_members` is a walk of
+    // its own, and a *shared* type node puts every binding of the program in one
+    // class — so re-expanding it for each visited node was the whole cost of this
+    // walk (measured: 363,627 visits for a 611-node closure, 7 ms; a class is
+    // expanded once now).  The set of nodes the closure ends up with is unchanged.
+    let mut expanded: HashSet<NodeId> = HashSet::new();
     while let Some(node) = work.pop() {
         if !nodes.insert(node) {
             continue;
@@ -419,8 +429,11 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
         let Some(entry) = module.nodes.get(node) else {
             continue;
         };
-        for member in class_members(module, node) {
-            work.push(member);
+        let class = class_root(module, node);
+        if expanded.insert(class) {
+            for member in class_members(module, class) {
+                work.push(member);
+            }
         }
         if let Some(operand) = entry.operation.and_then(|operation| operation.operand) {
             work.push(operand);
@@ -481,14 +494,21 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
     (node_ids, function_ids)
 }
 
-/// Every member of `node`'s equality class, read-only: up through `parent` to
-/// the representative, then across `next` — the list `write_node_value`
-/// replicates over.  No path compression, so a read never mutates the tree.
-fn class_members<P: Program>(module: &Module<P>, node: NodeId) -> Vec<NodeId> {
+/// The representative of `node`'s equality class — up through `parent`, with no
+/// path compression, so a read never mutates the tree.
+fn class_root<P: Program>(module: &Module<P>, node: NodeId) -> NodeId {
     let mut root = node;
     while let Some(parent) = module.nodes[root].equality.parent() {
         root = parent;
     }
+    root
+}
+
+/// Every member of `node`'s equality class, read-only: the representative and then
+/// across `next` — the list `write_node_value` replicates over.  No path
+/// compression, so a read never mutates the tree.
+fn class_members<P: Program>(module: &Module<P>, node: NodeId) -> Vec<NodeId> {
+    let root = class_root(module, node);
     let mut members = vec![root];
     let mut current = root;
     while let Some(next) = module.nodes[current].equality.next() {
