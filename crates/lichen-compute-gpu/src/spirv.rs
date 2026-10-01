@@ -26,6 +26,20 @@
 //! section order. Emitting in one pass would mean either forward-referencing the
 //! entry point or emitting it twice.
 //!
+//! # An invariant the caller relies on: the body is straight-line
+//!
+//! The entry function carries exactly one `OpLabel` and the emitter emits **no
+//! branch and no phi** — a `Select` is compiled to a branchless choice, not to a
+//! jump. So every invocation of a dispatch reaches every instruction in the body,
+//! including its `BufferWriteCall`.
+//!
+//! `dispatch` depends on this: it allocates output buffers and **does not
+//! initialise them**, because a dispatch covers `[0, padded)` and every one of
+//! those elements is stored by the lane that owns it. A conditional write would
+//! leave the skipped elements as whatever a fresh allocation held, and the host
+//! would read them back believing they were results. **If a branch is ever
+//! introduced here, output buffers have to start being cleared again.**
+//!
 //! # The one place this target disagrees with the wasm backend
 //!
 //! [`KernelInstr::I32WrapI64`] is a **no-op here**, and that is the clearest

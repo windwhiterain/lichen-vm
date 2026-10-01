@@ -213,6 +213,52 @@ fn a_conditional_write_matches_the_cpu_bit_for_bit() {
     println!("ran on {device}");
 }
 
+/// Two runs in a row over data that never leaves the device.
+///
+/// This is the test the whole residency split exists for, and it checks the
+/// thing a value-comparison cannot: the second run is handed the **id**, not the
+/// data. If the chain fell back to host data, the values would still be right and
+/// the test would still pass — so it also pins that a fetch of the intermediate
+/// is never what made it correct.
+#[test]
+fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
+    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let count = 100;
+    let input: Vec<i64> = (0..count as i64).collect();
+
+    // out = in + in + 1, then out = in + in + 1 again: composed, the answer is
+    // known without consulting the device, so a wrong chain cannot pass.
+    let first = context
+        .run(&adds(), &[BufferSlot::Host(&input)], count)
+        .expect("the first run completes");
+    let second = context
+        .run(&adds(), &[BufferSlot::Resident(first[0])], count)
+        .expect("the second run consumes the first run's id");
+    let result = context
+        .fetch(second[0], count)
+        .expect("the chained result comes back");
+
+    let expected: Vec<i64> = input
+        .iter()
+        .map(|value| (value + value + 1) + (value + value + 1) + 1)
+        .collect();
+    assert_eq!(result, expected, "the chain composes correctly");
+
+    // The intermediate is still on the device and still readable, which is what
+    // "never came home" means: one download, of the last link only.
+    let intermediate = context
+        .fetch(first[0], count)
+        .expect("the intermediate is still resident after being consumed");
+    assert_eq!(
+        intermediate,
+        reference(&adds(), &input, count),
+        "and it is right"
+    );
+
+    context.release(first[0]);
+    context.release(second[0]);
+}
+
 /// A count that is an exact multiple of the workgroup, so the padding path is
 /// *not* exercised — the complement of the tests above, which pin both ends.
 #[test]

@@ -7,10 +7,21 @@
 //! bounds test**, deliberately: a bounds test would be a branch every lane takes,
 //! on the hottest path, to guard indices the host already knows about.
 //!
-//! Instead every buffer is allocated rounded up to a whole number of workgroups
-//! and the padding is zeroed — inputs so the surplus lanes' *reads* are in bounds
-//! and return `0`, outputs so their *writes* land in padding rather than past the
-//! end. Only the first `count` elements are read back. That keeps the shader
+//! Instead every buffer is allocated rounded up to a whole number of workgroups,
+//! and the padding is handled by allocation rather than by data:
+//!
+//! - **Inputs** have their padding zeroed **on the device**, by a
+//!   `cmdFillBuffer` recorded next to the upload. Only the `count` real elements
+//!   cross the bus; the tail is cleared where it already lives rather than
+//!   uploaded as zeroes the host had copies of anyway. The surplus lanes'
+//!   *reads* are therefore in bounds and return `0`.
+//! - **Outputs** are not initialised at all. The emitter produces straight-line
+//!   code — one `OpLabel`, no branches — so every invocation reaches its write
+//!   and the dispatch covers `[0, padded)` in full. A zero-fill would be a second
+//!   pass over memory the shader is about to overwrite completely. The surplus
+//!   lanes' *writes* land in the padding rather than past the end of it.
+//!
+//! Only the first `count` elements are ever read back. This keeps the shader
 //! branch-free and makes out-of-range access impossible by construction rather
 //! than by a runtime test.
 //!
@@ -68,6 +79,10 @@ pub enum RunError {
         len: usize,
         count: usize,
     },
+    /// A run over no indices at all.  The buffer such a run would need is a
+    /// zero-sized allocation, which Vulkan does not have; refused here so the
+    /// reason is the program's rather than the driver's.
+    EmptyRun,
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
     /// a dead one means the host lost track of its own buffers, which reporting
@@ -93,6 +108,11 @@ impl fmt::Display for RunError {
                 "the device {device:?} does not support 64-bit integers in shaders, and the \
                  fragment was lowered to mean 64-bit ones. Narrowing the values would change \
                  what the program computes, so this is refused rather than converted."
+            ),
+            RunError::EmptyRun => write!(
+                f,
+                "the run covers no indices, so there is no buffer for it to write: an empty \
+                 dispatch is a program with nothing to do, not a smaller run."
             ),
             RunError::Emit(refusal) => write!(f, "{refusal}"),
             RunError::InputShorterThanCount { buffer, len, count } => write!(
@@ -295,7 +315,15 @@ impl GpuContext {
         // Round up so the last workgroup's surplus lanes address padding rather
         // than memory past the end; see the module docs.
         let padded = count.div_ceil(LOCAL_SIZE_X as usize) * LOCAL_SIZE_X as usize;
-        let padded_bytes = (padded * std::mem::size_of::<i64>()) as vk::DeviceSize;
+        if padded == 0 {
+            // A zero-element run would ask Vulkan for a zero-sized buffer, which
+            // is not a buffer.  Refused by name: "no indices" is a program that
+            // has nothing to dispatch, and saying so beats a driver error.
+            return Err(RunError::EmptyRun);
+        }
+        let element = std::mem::size_of::<i64>() as vk::DeviceSize;
+        let data_bytes = count as vk::DeviceSize * element;
+        let padded_bytes = padded as vk::DeviceSize * element;
 
         // Staging is held for the whole run: it carries the uploads out and the
         // dispatch itself, and a run's staging is dead the moment its fence
@@ -308,7 +336,7 @@ impl GpuContext {
                 BufferSlot::Resident(_) => None,
             })
             .collect();
-        staging.reserve(self, host_inputs.len() as u64 * padded_bytes)?;
+        staging.reserve(self, host_inputs.len() as u64 * data_bytes)?;
 
         let mut scratch = ScratchGuard {
             device: &self.device,
@@ -324,21 +352,22 @@ impl GpuContext {
                 BufferSlot::Resident(id) => self.resident_buffer(*id)?,
                 BufferSlot::Host(data) => {
                     let buffer = self.allocate(padded)?;
-                    let offset = uploads.len() as u64 * padded_bytes;
-                    // SAFETY: `reserve` sized staging for every host input's full
-                    // padded length, and `offset` counts whole padded blocks that
-                    // come before this one, so this block lies inside the mapping.
+                    let offset = uploads.len() as u64 * data_bytes;
+                    // SAFETY: `reserve` sized staging for every host input's `count`
+                    // elements, and `offset` counts whole such blocks that come
+                    // before this one, so this block lies inside the mapping.
                     unsafe {
-                        let base = staging.at(offset) as *mut i64;
-                        std::ptr::copy_nonoverlapping(data.as_ptr(), base, count);
-                        // The surplus lanes' reads must be in bounds and defined;
-                        // the module docs say why there are surplus lanes at all.
-                        std::ptr::write_bytes(base.add(count), 0, padded - count);
+                        std::ptr::copy_nonoverlapping(
+                            data.as_ptr(),
+                            staging.at(offset) as *mut i64,
+                            count,
+                        );
                     }
                     uploads.push(Transfer {
                         src_offset: offset,
                         dst: buffer.handle,
-                        bytes: padded_bytes,
+                        bytes: data_bytes,
+                        tail: padded_bytes - data_bytes,
                     });
                     // A host upload is a scratch target: nothing refers to it once
                     // the run is over, so it does not become resident.
@@ -353,27 +382,20 @@ impl GpuContext {
         // become resident.  They go into the same descriptor list: the binding
         // layout is inputs-then-outputs in one set, so a run's outputs occupy the
         // slots after its inputs rather than a second set.
-        let mut fills: Vec<vk::Buffer> = Vec::with_capacity(binding.outputs);
+        //
+        // **Nothing is written into them here.**  The emitter produces
+        // straight-line code — one `OpLabel`, no branches — so every invocation
+        // reaches its `BufferWriteCall` and stores, and the dispatch covers
+        // `[0, padded)`.  A zero-fill would be a second pass over memory the
+        // shader is about to overwrite in full; `spirv`'s module docs carry this
+        // invariant, and a branch in the emitted body would break it.
         for _ in 0..binding.outputs {
             let buffer = self.allocate(padded)?;
-            // Fresh device memory is undefined.  The shader writes every element
-            // the dispatch covers, so the host's view of `[..count)` is defined
-            // either way — but "defined" should not depend on that reasoning
-            // surviving a change to the body, so the buffer is filled first.
-            fills.push(buffer.handle);
             descriptors.push(buffer.descriptor());
             scratch.buffers.push(buffer);
         }
 
-        let outcome = self.dispatch(
-            pipeline,
-            &descriptors,
-            staging.handle,
-            &uploads,
-            &fills,
-            padded_bytes,
-            count,
-        );
+        let outcome = self.dispatch(pipeline, &descriptors, staging.handle, &uploads, count);
         drop(staging);
         outcome?;
 
@@ -612,8 +634,7 @@ impl GpuContext {
     /// Record and submit one dispatch, waiting for it to finish.
     ///
     /// `staging` is the caller's already-locked staging buffer: the uploads read
-    /// from it, so this cannot take the lock itself.  `fills` are output buffers
-    /// to zero before the shader writes them.
+    /// from it, so this cannot take the lock itself.
     #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
@@ -621,8 +642,6 @@ impl GpuContext {
         descriptors: &[vk::DescriptorBufferInfo],
         staging: vk::Buffer,
         uploads: &[Transfer],
-        fills: &[vk::Buffer],
-        padded_bytes: vk::DeviceSize,
         count: usize,
     ) -> Result<(), RunError> {
         let total = descriptors.len();
@@ -745,13 +764,15 @@ impl GpuContext {
                         size: transfer.bytes,
                     }],
                 );
+                // The surplus lanes read past `count`, and that read has to land
+                // on a defined value — so the tail is cleared here, on the
+                // device, rather than uploaded as zeroes the host already had
+                // copies of.
+                if transfer.tail > 0 {
+                    device.cmd_fill_buffer(command, transfer.dst, transfer.bytes, transfer.tail, 0);
+                }
             }
-            for buffer in fills {
-                // The fill value is the element pattern: `0` is eight zero bytes,
-                // which is what zeroing an `i64` buffer means.
-                device.cmd_fill_buffer(command, *buffer, 0, padded_bytes, 0);
-            }
-            // Both the uploads and the fills land in the buffers the shader is
+            // Both the uploads and the tail fills land in buffers the shader is
             // about to read, so one barrier after them covers both.
             device.cmd_pipeline_barrier(
                 command,
@@ -991,7 +1012,13 @@ struct Transfer {
     src_offset: vk::DeviceSize,
     /// The device-local buffer they are going to.
     dst: vk::Buffer,
+    /// The `count` elements the host actually holds.
     bytes: vk::DeviceSize,
+    /// The allocation past [`Self::bytes`], which the surplus lanes read.  It is
+    /// zeroed **on the device** rather than uploaded, so a run costs `count`
+    /// elements of bus traffic and not `padded` — and the surplus lanes still read
+    /// a defined `0` rather than whatever was in the allocation.
+    tail: vk::DeviceSize,
 }
 
 /// A device-local buffer of `i64` elements.

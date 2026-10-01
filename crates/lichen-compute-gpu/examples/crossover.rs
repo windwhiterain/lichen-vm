@@ -118,4 +118,65 @@ fn main() {
             cpu.as_secs_f64() / gpu.as_secs_f64().max(f64::MIN_POSITIVE),
         );
     }
+
+    // The number that decides whether this backend is worth anything: a *chain* of
+    // dispatches over one resident buffer, against the same chain run as scalar
+    // passes. The first dispatch uploads and the last fetch downloads; everything
+    // between them is resident, so a chain of N costs two transfers and N runs
+    // rather than 2N.
+    println!("\nresident chain — one upload, N dispatches, one download");
+    println!(
+        "{:>10}  {:>8}  {:>12}  {:>12}  {:>8}",
+        "count", "chain", "gpu (ms)", "cpu (ms)", "ratio"
+    );
+
+    for count in [65_536usize, 262_144, 1_048_576] {
+        let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let warm = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .expect("the warm-up run completes");
+        for id in &warm {
+            context.release(*id);
+        }
+
+        for links in [1usize, 2, 4, 8, 16] {
+            let started = Instant::now();
+            let mut current = context
+                .run(&fragment(), &[BufferSlot::Host(&input)], count)
+                .expect("the chain's first link uploads");
+            for _ in 1..links {
+                // Each link is handed the previous one's id and never sees its data.
+                let next = context
+                    .run(&fragment(), &[BufferSlot::Resident(current[0])], count)
+                    .expect("a link consumes the previous link's id");
+                context.release(current[0]);
+                current = next;
+            }
+            let _last = context
+                .fetch(current[0], count)
+                .expect("the last link comes home");
+            let gpu = started.elapsed();
+            context.release(current[0]);
+
+            // Two buffers swapped per link, so the CPU side is not paying for a
+            // fresh multi-megabyte allocation per link — that would be measuring
+            // the allocator rather than the loop, and it shows up as an outlier
+            // big enough to invent a crossover that is not there.
+            let mut front = input.clone();
+            let mut back = vec![0i64; count];
+            let started = Instant::now();
+            for _ in 0..links {
+                sequential(&front, &mut back);
+                std::mem::swap(&mut front, &mut back);
+            }
+            let cpu = started.elapsed();
+
+            println!(
+                "{count:>10}  {links:>8}  {:>12.3}  {:>12.3}  {:>7.2}x",
+                gpu.as_secs_f64() * 1e3,
+                cpu.as_secs_f64() * 1e3,
+                cpu.as_secs_f64() / gpu.as_secs_f64().max(f64::MIN_POSITIVE),
+            );
+        }
+    }
 }

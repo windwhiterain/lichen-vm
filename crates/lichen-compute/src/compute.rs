@@ -60,7 +60,8 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
-    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, fragment_digest,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ResidentId,
+    fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -378,12 +379,62 @@ pub enum ComputeValue {
     /// arena, and the crate's copy path relocates the payload when the value is
     /// copied into another block.
     Buffer(BufferPayload),
+    /// A run's results, still **on the device**.
+    ///
+    /// A `"gpu"` `plrun` produces one of these per declared output rather than a
+    /// [`Self::Buffer`], so nothing crosses the bus until something asks for the
+    /// values as host data.  `compute.collect` and `compute.read` are what ask.
+    ///
+    /// **Not a handle, and that is the point:** the id is plain data, so the copy
+    /// path copies it rather than relocating a pointer into a block arena.  That
+    /// is also why there is no per-value release — the id names device memory
+    /// that is reclaimed when the backend is dropped, or when an allocation is
+    /// refused because the device is full.  The discipline is deliberately the
+    /// same as [`Self::Buffer`], which likewise has no individual free.
+    DeviceBuffer(ResidentBuffer),
     /// The kind marker of buffer types — a buffer's type is
     /// `[element_type, [TypeBuffer, Type]]`.
     TypeBuffer,
     /// The kind marker of write types — a `Write`'s type is
     /// `[element_type, [TypeWrite, Type]]`.
     TypeWrite,
+}
+
+/// A run's results as the language holds them while they are still on a device.
+///
+/// The id alone would not be enough to use: fetching needs to know how many
+/// elements to ask for, and the device allocation is padded up to a whole
+/// workgroup, so the allocation's size is not the answer. The count travels with
+/// the value rather than in a side table so that an id cannot outlive the length
+/// it was issued with, and so two backends' ids can never be confused for one
+/// another's by a lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResidentBuffer {
+    /// The backend's own name for the buffer. Meaningless outside its issuer,
+    /// which is why it is not comparable and not persistent.
+    pub id: ResidentId,
+    /// How many elements the run produced — the count, not the padded length.
+    pub count: usize,
+}
+
+/// What one parallel run produced: host data, or results left on the device.
+///
+/// A `"cpu"` run always produces the first and a `"gpu"` run the second.  The
+/// distinction is the whole point: a run that produced host data would have paid
+/// a download whether or not anyone ever looked at the result.
+#[derive(Debug, PartialEq, Eq)]
+enum RunOutcome {
+    Host(Vec<Vec<i64>>),
+    Resident(Vec<ResidentBuffer>),
+}
+
+/// One input to a run, as the language holds it.
+#[derive(Debug)]
+enum RunInput {
+    /// Data the host already has.
+    Host(Vec<i64>),
+    /// Results a previous run left on the device.
+    Resident(ResidentBuffer),
 }
 
 /// The compute leaf's payload contract: only [`ComputeValue::Buffer`] carries
@@ -562,6 +613,14 @@ impl ValueCodec for ComputeValue {
                 return Err(
                     "this package is not cached: it holds a live buffer at its top level, \
                      and a buffer is a runtime value with no on-disk form"
+                        .into(),
+                );
+            }
+            ComputeValue::DeviceBuffer(_) => {
+                return Err(
+                    "this package is not cached: it holds a buffer that is still on a device \
+                     at its top level, and a device buffer is a runtime value with no on-disk \
+                     form — the id would mean nothing without the device that issued it"
                         .into(),
                 );
             }
@@ -886,7 +945,7 @@ where
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
                 // input buffers = cfg(1), a tuple of `Buffer` values.
-                let mut inputs: Vec<Vec<i64>> = Vec::new();
+                let mut inputs: Vec<RunInput> = Vec::new();
                 if let Some(buf_tuple) = cfg_items.get(1)
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
                     // SAFETY: `buf_tuple_node` names a live node of `module`.
@@ -902,12 +961,19 @@ where
                                 // `module` on this borrow, so the payload's home
                                 // block is alive for the walk below.
                                 if let Some(data) = buffer_items(&payload) {
-                                    inputs.push(data.to_vec());
+                                    inputs.push(RunInput::Host(data.to_vec()));
                                 } else {
                                     return <P::Value as From<LowValue>>::from(
                                         LowValue::Parameterized,
                                     );
                                 }
+                            }
+                            Some(ComputeValue::DeviceBuffer(resident)) => {
+                                // Handed to the run as the id it already is.  This
+                                // is the whole point: an intermediate result of a
+                                // "gpu" chain never comes home in order to be sent
+                                // straight back out.
+                                inputs.push(RunInput::Resident(resident));
                             }
                             _ => {
                                 return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
@@ -916,7 +982,7 @@ where
                     }
                 }
                 match run_parallel_kernel(id, backend, count, inputs) {
-                    Ok(results) => {
+                    Ok(RunOutcome::Host(results)) => {
                         // Several outputs are the **tuple** of them, which
                         // `compute.read`/`compute.collect` address by ordinal.
                         // Each buffer value becomes a node of this block first,
@@ -947,6 +1013,29 @@ where
                         // payload uses.
                         buffer(module.alloc_payload(&results[0], block))
                     }
+                    Ok(RunOutcome::Resident(results)) => {
+                        // The same single-or-tuple shape, with the results left
+                        // where the shader wrote them.  A resident buffer is plain
+                        // data rather than an arena pointer, so a node holding one
+                        // needs no payload and the copy path leaves it alone.
+                        let value = |resident: ResidentBuffer| {
+                            <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(
+                                resident,
+                            ))
+                        };
+                        if results.len() != 1 {
+                            let items: Vec<ArrayItem> = results
+                                .iter()
+                                .map(|resident| {
+                                    let node = module.add_node(block, None, Some(value(*resident)));
+                                    ArrayItem::new(AnyNodeId::Dynamic(node))
+                                })
+                                .collect();
+                            let handle = module.alloc_array(&items, block);
+                            return <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+                        }
+                        value(results[0])
+                    }
                     Err(err) => {
                         // The refusal is the reason this launch produced no
                         // value, so it is recorded rather than discarded: the
@@ -975,12 +1064,6 @@ where
                 // for this operation; its home block is alive for the duration
                 // of the run.
                 let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Buffer(payload)) = module
-                    .node_value(operands[0].node)
-                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
                 let index = match module
                     .node_value(operands[1].node)
                     .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
@@ -988,13 +1071,50 @@ where
                     Some(LowValue::USize(n)) => n,
                     _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
-                // SAFETY: the buffer value was just read out of `module`, so its
-                // payload's home block is alive for this read.
-                match buffer_items(&payload).and_then(|items| items.get(index)) {
-                    Some(&value) => {
-                        <P::Value as From<LowValue>>::from(LowValue::USize(value as usize))
+                match module
+                    .node_value(operands[0].node)
+                    .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
+                {
+                    Some(ComputeValue::Buffer(payload)) => {
+                        // SAFETY: the buffer value was just read out of `module`, so its
+                        // payload's home block is alive for this read.
+                        match buffer_items(&payload).and_then(|items| items.get(index)) {
+                            Some(&value) => {
+                                <P::Value as From<LowValue>>::from(LowValue::USize(value as usize))
+                            }
+                            None => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                        }
                     }
-                    None => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
+                    Some(ComputeValue::DeviceBuffer(resident)) => {
+                        // This is where a resident buffer stops being on the
+                        // device: a read asks for one number, so it is the point
+                        // at which the program has said it wants host data.
+                        if index >= resident.count {
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        }
+                        // The fetch brings back everything *up to* the index,
+                        // not one element, because the trait hands over owned
+                        // data rather than a view into a mapping.  Naming that
+                        // cost is better than a `fetch_range` nothing else needs
+                        // yet — and a read near the end of a large buffer is
+                        // therefore a whole-buffer transfer.
+                        match fetch_resident(
+                            ResidentBuffer {
+                                id: resident.id,
+                                count: index + 1,
+                            },
+                            0,
+                        ) {
+                            Ok(data) => <P::Value as From<LowValue>>::from(LowValue::USize(
+                                data[index] as usize,
+                            )),
+                            Err(err) => {
+                                module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                                <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+                            }
+                        }
+                    }
+                    _ => <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 }
             }
             ComputeOperator::Range | ComputeOperator::Write => {
@@ -1017,17 +1137,32 @@ where
                 // for this operation; its home block is alive for the duration
                 // of the run.
                 let operands = unsafe { operands.items() };
-                let Some(ComputeValue::Buffer(payload)) = module
+                // A resident buffer is fetched here, in full: `collect` is the
+                // operation that says "give me these as host values", so this is
+                // the one point at which a `"gpu"` chain's results cross the bus.
+                let results: Vec<i64> = match module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
-                else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
-                };
-                // SAFETY: the buffer value was just read out of `module`, so its
-                // payload's home block is alive while the elements are
-                // materialized below.
-                let Some(results) = buffer_items(&payload) else {
-                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                {
+                    Some(ComputeValue::Buffer(payload)) => {
+                        // SAFETY: the buffer value was just read out of `module`, so its
+                        // payload's home block is alive while the elements are
+                        // materialized below.
+                        let Some(items) = buffer_items(&payload) else {
+                            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                        };
+                        items.to_vec()
+                    }
+                    Some(ComputeValue::DeviceBuffer(resident)) => {
+                        match fetch_resident(resident, 0) {
+                            Ok(data) => data,
+                            Err(err) => {
+                                module.record_extension_diagnostic(PARALLEL_DIAGNOSTIC, None, err);
+                                return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                            }
+                        }
+                    }
+                    _ => return <P::Value as From<LowValue>>::from(LowValue::Parameterized),
                 };
                 // Materialize each element as a fresh scalar node and build a
                 // real lichen array value over them, so `collect` yields an
@@ -3148,9 +3283,9 @@ struct ParallelState<'a> {
 fn run_on_installed_backend(
     id: KernelId,
     count: usize,
-    inputs: Vec<Vec<i64>>,
+    inputs: &[RunInput],
     outputs: usize,
-) -> Result<Vec<Vec<i64>>, String> {
+) -> Result<RunOutcome, String> {
     let Some(backend) = lichen_kernel_ir::parallel_backend() else {
         return Err(format!(
             "this parallel kernel was compiled for the \"gpu\" backend, but no compute backend is \
@@ -3171,11 +3306,17 @@ fn run_on_installed_backend(
             outputs, fragment.outputs
         ));
     }
-    // Every input is host data at this point: nothing in the language's value set
-    // can hold a resident id yet, so this call site is the one that pays the
-    // fetch.  It is the only place a round trip is forced from the language side,
-    // and it is forced by the value vocabulary rather than by the backend.
-    let slots: Vec<BufferSlot> = inputs.iter().map(|data| BufferSlot::Host(data)).collect();
+    // The one place a run can be wired to leave its inputs where they are: an
+    // input a previous run left on the device is handed back as the id it already
+    // has, so a chain of kernels pays one upload for the whole chain rather than
+    // one per link.
+    let slots: Vec<BufferSlot> = inputs
+        .iter()
+        .map(|input| match input {
+            RunInput::Host(data) => BufferSlot::Host(data),
+            RunInput::Resident(resident) => BufferSlot::Resident(resident.id),
+        })
+        .collect();
     let resident = backend.run(&fragment, &slots, count).map_err(|reason| {
         format!(
             "the {:?} backend declined this run: {reason}",
@@ -3183,25 +3324,17 @@ fn run_on_installed_backend(
         )
     })?;
 
-    // Fetched and released whatever happens, because an id the host drops is a
-    // leak rather than a cleanup the backend could do later: the backend has no
-    // way to know the run is over.
-    let fetched = resident
-        .iter()
-        .map(|id| {
-            backend.fetch(*id, count).map_err(|reason| {
-                format!(
-                    "the {:?} backend declined to return buffer {}: {reason}",
-                    backend.name(),
-                    id.0
-                )
-            })
-        })
-        .collect::<Result<Vec<_>, _>>();
-    for id in &resident {
-        backend.release(*id);
-    }
-    fetched
+    // Nothing is fetched and nothing is released.  Fetching here would put the
+    // download back on the path of every run, which is the cost the id exists to
+    // remove; releasing here would free buffers the caller is about to hand to the
+    // next kernel.  Both happen at the point the language actually wants host
+    // data — `collect` and `read` — and the ids live as long as the values do.
+    Ok(RunOutcome::Resident(
+        resident
+            .into_iter()
+            .map(|id| ResidentBuffer { id, count })
+            .collect(),
+    ))
 }
 
 /// Assemble the wasm bytes of one **parallel** fragment — the degenerate
@@ -3344,8 +3477,8 @@ fn run_parallel_kernel(
     id: KernelId,
     backend: Backend,
     count: usize,
-    inputs: Vec<Vec<i64>>,
-) -> Result<Vec<Vec<i64>>, String> {
+    inputs: Vec<RunInput>,
+) -> Result<RunOutcome, String> {
     if count > MAX_PARALLEL_ELEMENTS {
         return Err(format!(
             "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
@@ -3363,8 +3496,24 @@ fn run_parallel_kernel(
             .ok_or_else(|| format!("parallel kernel {id} is not registered"))?
     };
     if let Backend::Gpu = backend {
-        return run_on_installed_backend(id, count, inputs, outputs);
+        return run_on_installed_backend(id, count, &inputs, outputs);
     }
+    // A `"cpu"` run has no device, so an input a `"gpu"` run left there is
+    // brought home before the run starts.  This is the one place the two
+    // backends meet, and it is a *fetch* rather than a silent refusal: the
+    // program's data is on the device and the CPU has no way to reach it, so
+    // moving it is what running on the CPU means — not a change in what is
+    // computed.
+    let mut host_inputs: Vec<Vec<i64>> = Vec::with_capacity(inputs.len());
+    for (position, input) in inputs.into_iter().enumerate() {
+        match input {
+            RunInput::Host(data) => host_inputs.push(data),
+            RunInput::Resident(resident) => {
+                host_inputs.push(fetch_resident(resident, position)?);
+            }
+        }
+    }
+    let inputs = host_inputs;
     let (engine, module) =
         cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
     let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
@@ -3433,7 +3582,29 @@ fn run_parallel_kernel(
             }
         }
     }
-    Ok(outputs)
+    Ok(RunOutcome::Host(outputs))
+}
+
+/// Bring one resident buffer home, naming the position it was read at.
+///
+/// The count the buffer holds travels with the value, so a fetch asks for what
+/// the run actually produced rather than for the device's padded allocation.
+fn fetch_resident(resident: ResidentBuffer, position: usize) -> Result<Vec<i64>, String> {
+    let Some(backend) = lichen_kernel_ir::parallel_backend() else {
+        return Err(format!(
+            "input buffer {position} of this run is still on a device, but no compute backend \
+             is installed any more, so there is nothing left that can bring it back"
+        ));
+    };
+    backend
+        .fetch(resident.id, resident.count)
+        .map_err(|reason| {
+            format!(
+                "the {:?} backend declined to return input buffer {position} (buffer {}): {reason}",
+                backend.name(),
+                resident.id.0
+            )
+        })
 }
 
 /// The chunk end of each of `workers` contiguous chunks of `count` indices, so
@@ -3670,6 +3841,7 @@ mod parallel_launch_tests {
 
         struct Stub {
             seen: AtomicUsize,
+            fetched: AtomicUsize,
             released: Mutex<Vec<u64>>,
         }
         impl lichen_kernel_ir::ParallelBackend for Stub {
@@ -3686,6 +3858,7 @@ mod parallel_launch_tests {
                 Ok(vec![ResidentId(41)])
             }
             fn fetch(&self, _id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+                self.fetched.fetch_add(1, Ordering::SeqCst);
                 Ok(vec![7; count])
             }
             fn release(&self, id: ResidentId) {
@@ -3695,6 +3868,7 @@ mod parallel_launch_tests {
 
         let stub = std::sync::Arc::new(Stub {
             seen: AtomicUsize::new(0),
+            fetched: AtomicUsize::new(0),
             released: Mutex::new(Vec::new()),
         });
         lichen_kernel_ir::install_parallel_backend(stub.clone());
@@ -3705,14 +3879,153 @@ mod parallel_launch_tests {
 
         assert_eq!(
             outputs,
-            vec![vec![7; 8]],
-            "the answer is the backend's, and there is one buffer per declared output"
+            RunOutcome::Resident(vec![ResidentBuffer {
+                id: ResidentId(41),
+                count: 8,
+            }]),
+            "a \"gpu\" run hands back a resident id per output, and the count travels with it \
+             so a later fetch knows what to ask for"
+        );
+        assert_eq!(
+            stub.fetched.load(Ordering::SeqCst),
+            0,
+            "the run itself fetches nothing — a run whose results are never read must not pay \
+             for them, and a fetch here is what put the download back on every dispatch's path"
         );
         assert_eq!(
             *stub.released.lock().unwrap(),
-            vec![41],
-            "the host releases every id it was handed — a dropped id is a leak, and nothing \
-             else can reclaim it"
+            Vec::<u64>::new(),
+            "nor does it release: the id is the caller's now, and freeing it here would hand \
+             the next kernel a buffer that is gone"
+        );
+    }
+
+    /// A stub that records what each run was handed, one entry per run.
+    ///
+    /// A real device cannot report this, and it is the thing worth pinning: if the
+    /// chain fell back to host data the *values* would still be right, so a
+    /// value-comparison cannot tell the difference between "the intermediate
+    /// stayed on the device" and "the intermediate came home and went back out".
+    struct ChainRecorder {
+        seen: Mutex<Vec<Vec<Slot>>>,
+        fetched: AtomicUsize,
+    }
+
+    /// What one input slot was, as the backend was handed it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum Slot {
+        Host(usize),
+        Resident(u64),
+    }
+
+    impl lichen_kernel_ir::ParallelBackend for ChainRecorder {
+        fn name(&self) -> &'static str {
+            "stub"
+        }
+        fn run(
+            &self,
+            _fragment: &KernelFragment,
+            inputs: &[BufferSlot],
+            _count: usize,
+        ) -> Result<Vec<ResidentId>, String> {
+            self.seen.lock().unwrap().push(
+                inputs
+                    .iter()
+                    .map(|slot| match slot {
+                        BufferSlot::Host(data) => Slot::Host(data.len()),
+                        BufferSlot::Resident(id) => Slot::Resident(id.0),
+                    })
+                    .collect(),
+            );
+            Ok(vec![ResidentId(41)])
+        }
+        fn fetch(&self, _id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+            self.fetched.fetch_add(1, Ordering::SeqCst);
+            Ok(vec![0; count])
+        }
+        fn release(&self, _id: ResidentId) {}
+    }
+
+    fn chain_recorder() -> std::sync::Arc<ChainRecorder> {
+        std::sync::Arc::new(ChainRecorder {
+            seen: Mutex::new(Vec::new()),
+            fetched: AtomicUsize::new(0),
+        })
+    }
+
+    /// The chain, at the boundary the language controls.
+    #[test]
+    fn a_gpu_chain_hands_the_next_run_an_id_rather_than_the_data() {
+        let _serialized = BACKEND_SLOT.lock().unwrap();
+        let stub = chain_recorder();
+        lichen_kernel_ir::install_parallel_backend(stub.clone());
+        let id = intern_kernel(two_outputs());
+        let count = 8;
+
+        let first = run_parallel_kernel(
+            id,
+            Backend::Gpu,
+            count,
+            vec![RunInput::Host((0..count as i64).collect())],
+        )
+        .expect("the first run completes");
+        let RunOutcome::Resident(resident) = first else {
+            panic!("a \"gpu\" run leaves its results on the device");
+        };
+        let second = run_parallel_kernel(
+            id,
+            Backend::Gpu,
+            count,
+            vec![RunInput::Resident(resident[0])],
+        )
+        .expect("the second run consumes the id");
+        lichen_kernel_ir::clear_parallel_backend();
+
+        assert!(
+            matches!(second, RunOutcome::Resident(_)),
+            "and it leaves its own result there too, so a chain of any length pays one upload"
+        );
+        assert_eq!(
+            *stub.seen.lock().unwrap(),
+            vec![vec![Slot::Host(count)], vec![Slot::Resident(41)]],
+            "the second run is handed the id the first one issued; a host buffer in that slot \
+             would mean the intermediate had come home only to be sent straight back out"
+        );
+        assert_eq!(
+            stub.fetched.load(Ordering::SeqCst),
+            0,
+            "neither run fetched: a chain nobody reads costs no transfer at all"
+        );
+    }
+
+    /// A `"cpu"` run has no device to read from, so an input a `"gpu"` run left
+    /// there is brought home before the run starts.  This is a *fetch* rather
+    /// than a refusal: the program's data is on the device, and moving it is
+    /// what running on the CPU means — not a change in what gets computed.
+    #[test]
+    fn a_cpu_run_brings_home_an_input_a_gpu_run_left_on_the_device() {
+        let _serialized = BACKEND_SLOT.lock().unwrap();
+        let stub = chain_recorder();
+        lichen_kernel_ir::install_parallel_backend(stub.clone());
+        let id = intern_kernel(two_outputs());
+        let count = 8;
+        run_parallel_kernel(
+            id,
+            Backend::Cpu,
+            count,
+            vec![RunInput::Resident(ResidentBuffer {
+                id: ResidentId(41),
+                count,
+            })],
+        )
+        .expect("the run succeeds — the input is on the device, not lost");
+        lichen_kernel_ir::clear_parallel_backend();
+
+        assert_eq!(
+            stub.fetched.load(Ordering::SeqCst),
+            1,
+            "exactly one fetch, before the run: the boundary between the two backends is where \
+             data moves, and it is a move rather than a refusal"
         );
     }
 
@@ -3879,6 +4192,16 @@ mod parallel_launch_tests {
         }
     }
 
+    /// The host buffers of a `"cpu"` run.  A CPU run has no device to leave
+    /// anything on, so a resident outcome here would be a routing bug rather
+    /// than a shape to allow.
+    fn host_outputs(id: KernelId, count: usize) -> Vec<Vec<i64>> {
+        match run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed") {
+            RunOutcome::Host(outputs) => outputs,
+            RunOutcome::Resident(_) => panic!("a \"cpu\" run must produce host buffers"),
+        }
+    }
+
     /// The fan-out itself.  A parallel result is bit-identical to a sequential
     /// one, so no value can distinguish a working fan-out from a dead code
     /// path — [`PARALLEL_LAUNCH_WORKERS`] is what a test can see, and this
@@ -3887,8 +4210,7 @@ mod parallel_launch_tests {
     fn a_run_over_the_threshold_fans_out_and_covers_every_index() {
         let id = intern_kernel(two_outputs());
         let count = SEQUENTIAL_PARALLEL_ELEMENTS;
-        let outputs =
-            run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed");
+        let outputs = host_outputs(id, count);
         assert_eq!(outputs.len(), 2, "one buffer per declared output");
         // The machine must have the processors to fan out at all; on a
         // single-processor run the worker count is 1 and the run is the
@@ -3913,8 +4235,7 @@ mod parallel_launch_tests {
     fn a_run_below_the_threshold_is_sequential_and_writes_every_index() {
         let id = intern_kernel(two_outputs());
         let count = SEQUENTIAL_PARALLEL_ELEMENTS - 1;
-        let outputs =
-            run_parallel_kernel(id, Backend::Cpu, count, vec![]).expect("the run must succeed");
+        let outputs = host_outputs(id, count);
         assert_eq!(parallel_launch_workers(), 1, "no spawn below the threshold");
         for index in [0, count / 2, count - 1] {
             assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");

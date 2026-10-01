@@ -264,17 +264,39 @@ device-local memory. Two things moved it:
 2. **Staging is reused.** One mapping per context rather than per run, which is
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
-**The honest framing is that a single cold dispatch still cannot win**, and that
-is not a bug: the first upload is 8 MB across PCIe, which is about the cost of
-the scalar loop it is competing with. The GPU wins where a scalar loop cannot —
-several kernels over data that is already resident. So the number worth
-measuring is no longer "at what count does the GPU win" but **"over how many
-chained dispatches does the fixed cost amortise"**, and that is a property of
-`plrun` chains rather than of this example.
+**The honest framing is that the GPU does not win here, even chained, and the
+reason is measured rather than inferred.** From the single-dispatch table, a run
+of **64** elements — which is an empty dispatch with the object churn and nothing
+else — costs **0.46 ms**. That is the per-dispatch fixed cost, and it is already
+half of what the CPU spends on a *complete* million-element loop (1.0 ms). A
+chained run adds about 1.07 ms per link on the GPU and about 1.0 ms per link on
+the CPU, so the two are within noise of each other and the GPU pays two transfers
+on top:
+
+| count | chain | GPU | sequential | ratio |
+|---|---|---|---|---|
+| 65 536 | 16 | 9.88 ms | 0.22 ms | 0.02× |
+| 262 144 | 16 | 11.81 ms | 2.47 ms | 0.21× |
+| 1 048 576 | 4 | 8.74 ms | 4.17 ms | 0.48× |
+| 1 048 576 | 8 | 12.97 ms | 6.92 ms | 0.53× |
+| 1 048 576 | 16 | 21.49 ms | 16.25 ms | **0.76×** |
+
+The ratio is climbing toward 1 and would cross it somewhere past 16 links, so the
+shape is right — but the fixed cost is the reason it does not cross yet, and that
+is the number to attack. Where the 0.46 ms goes is countable: each dispatch
+creates and destroys a descriptor set layout, a pipeline layout, a descriptor
+pool, a descriptor set, a command pool, a command buffer and a fence, and
+`run` re-runs `spirv::compile` even when the pipeline cache hits. Reusing the
+pools, the fence and the compiled words is the whole of the remaining gap.
+
+**The CPU side of the chain measurement swaps two buffers per link** rather than
+allocating a fresh one, because an allocation per link is the allocator being
+measured instead of the loop. Getting that wrong reported a crossover at four
+links that does not exist.
 
 There is deliberately **no** minimum-count gate. A threshold would be a number
-invented to look careful: the measurement says the answer depends on how much of
-the data stays on the device, not on `count`.
+invented to look careful: the measurement says the answer depends on the fixed
+cost per dispatch, not on `count`.
 
 ## Not yet
 
@@ -292,8 +314,20 @@ Named rather than implied, because each is a decision not a gap:
   backend and `plrun` dispatches to it, with the refusals above. What is *not*
   wired is a single end-to-end test across both crates (see
   [Where a run is *not* wired yet](#where-a-run-is-not-wired-yet)).
-- **Holding a resident buffer across kernels.** The backend hands back a
-  [`ResidentId`] and the language's value set still cannot hold one, so
-  `plrun` fetches immediately. This is the one that matters: until the value
-  vocabulary can carry an id, a chain of `"gpu"` kernels pays a fetch per link
-  and the reuse the table above is shaped for never happens.
+- **Holding a resident buffer across kernels.** **Done.** A `"gpu"` run produces
+  a `DeviceBuffer` value rather than host data, `plrun` hands one straight to the
+  next run as the id it already is, and `compute.collect` / `compute.read` are
+  the only things that bring data back. A `"cpu"` run handed a resident input
+  fetches it first, because it has no device to read from.
+- **Freeing a resident buffer from the language.** There is **no per-value
+  release**, and this is deliberate rather than an oversight: the value set has no
+  per-value destructor, and a `Buffer`'s arena payload has no individual free
+  either — so a device buffer is scoped exactly like a host one. The cost is real
+  and worth stating plainly: **resident buffers accumulate for the life of the
+  backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
+  a refused allocation once the device is full, which names itself. A program
+  that runs many large kernels in one process will hit that backstop.
+- **The per-dispatch fixed cost.** 0.46 ms, and the whole remaining gap to a
+  crossover. See the performance section: pools, the fence and the compiled
+  words are all rebuilt per dispatch, and `spirv::compile` runs even on a
+  pipeline-cache hit.
