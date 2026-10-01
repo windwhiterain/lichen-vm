@@ -975,6 +975,98 @@ specified without knowing what a node is, and that it produces the repeatable
 object the feature was decided around. **It is a shape step, and the ordering in
 the list below predates the measurement that says so.**
 
+## Three things a recording found, each of them a bug the walk had to have
+
+These are the findings of building the recording half, and all three were live bugs
+rather than design questions. They are grouped because they share a cause: **a
+recording numbers things in its own space and a graph numbers them in another, and
+every one of these is a place where the two were confused.**
+
+### How many buffers a fragment reads is not in its shape, and the check that asked was wrong
+
+`Runner::run` checked `kernel.inputs.len() == fragment.param_shape.flat_arity() - 1`,
+on the reading that a parallel fragment's parameters are its input slots followed by
+the loop index. **That reading is false, and the tree already said so.**
+`crates/lichen-compute-gpu/tests/refusals.rs` states that `param_shape` is
+`(config, index)` — two leaves — *however many inputs there are*, because a buffer is
+bound as a storage buffer and reached through a read's position rather than through a
+further parameter. `compute.rs`'s real launch agrees: it reads the buffer count from
+the call site's cfg tuple and never looks at the shape.
+
+The check was not merely useless, it was **rejecting correct graphs**. A kernel that
+reads no buffer declares a two-leaf shape, so a node with no inputs was told it was
+missing one. It happened to pass for a two-input kernel, whose shape is a three-leaf
+tuple, so the coincidence read as agreement.
+
+The fix is `KernelFragment::inputs`, the missing twin of the `outputs` that was
+already there. Two counts, both facts of the *compiled* fragment, and the reason they
+cannot be one is that they answer different questions:
+
+- **How many was it given** is the dispatch's, read at apply time from the cfg tuple.
+- **How many does it need** is the fragment's, and it is a *max*, not a tally: the
+  read positions are a sparse space, so a body reading only `cfg(1)(1)` still needs
+  two buffers bound or the one it read was never bound.
+
+`inputs` is counted by the emitter as it emits the `Const` positions, so it cannot
+disagree with the body, and it is hashed by `fragment_digest` for the same reason
+`results` is: two bodies differing only in how many buffers they read are different
+programs. The same argument is why the check now reads `kernel.fragment.inputs` — and
+why the **non-graph path needed it too**, since it had no check at all and would have
+handed a shader a binding its body never reads.
+
+### A recorded count and a recorded edge land in different value spaces
+
+`Recording` numbers its produced values from zero, because the input count is not known
+until the walk ends; `finish()` puts that count in front of them. An `Input` edge is
+already final — it is the number its slot was allocated.
+
+The first cut stored the count as a resolved `ValueId` and shifted it in `finish()`
+like everything else. For a count read from a **parameter** that is already final, so
+the shift moved it onto the node's own output: a count of `0` became `1`, which is a
+value that exists, so the graph ran and dispatched over a buffer's length. The
+symptom was a refusal about a value that did not exist, which pointed at the edge
+table rather than at the arithmetic.
+
+`Edge` already documented why the two kinds must stay apart. The count now carries an
+`Edge` too, and `finish()` has **one** `resolve` for edges, counts and the return
+alike. One resolution point is the whole fix; a second one is where the two id spaces
+get confused again.
+
+### A block's value is wider than what the function returns
+
+A block's value is the tuple of its statements' values, and the tuple is **wider than
+the one value the function returns** — the tail of it is machinery, not results. The
+recording read the whole tuple as the return, which asked the graph to return every
+statement's value.
+
+This crate already had the answer twice, in `compile_fragment` and
+`parallel_output_nodes`, which both resolve a function's return by reading
+`array_items(body)[0]`. The recording was the third reader and the only one that
+guessed. It reads `items[0]` now, for the same reason those two do.
+
+### An unreadable return is a refusal, not an unrecorded one
+
+A return that could not be read was left unrecorded, on the reasoning that a graph with
+no recorded return takes every value it has — a permissive answer. It is not
+permissive, it is **wrong**: the table holds the count and the buffers, so the graph
+answered `"[3, <buffer>]"` to a program that asked for one of them. And the way this
+surfaced was the sharpest version of the failure: a *refused* dispatch inside the body
+left the block's result cells empty, so the return became unreadable, so the graph was
+built anyway and returned a value nobody asked for.
+
+So the language path refuses by name when it cannot read what the function returns.
+The permissive reading of an unrecorded return still belongs to a graph nobody
+recorded — `Graph::returns()` is `None` for a hand-built graph, and *that* is the
+contract the tests in `graph_runs.rs` pin. It just is not a contract the recording
+gets to lean on after it has failed to read the answer.
+
+One thing this forced into the open: **a function is allowed to return its own
+extent.** A returned count is an *input* value, in the table like any other, so the
+return has to be able to say which of the two placeholder kinds it is — the same
+`Placed` an edge carries. And having made it say so, `RunResult` grew a `Count` arm,
+because a graph that returns a number has to be able to hand it back. Refusing there
+would have made the permissive answer unreachable for exactly the graphs that need it.
+
 ### The contradiction: a graph cannot hold the closures its native nodes call
 
 Both seam doc comments promised that a compiled graph would hold *the closures it

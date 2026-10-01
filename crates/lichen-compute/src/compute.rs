@@ -54,6 +54,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use lichen_graph_ir::Policy;
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
@@ -66,11 +67,43 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Handle, LowOperator, LowShape,
-    LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, Release, StaticHandle, StaticModule,
-    ValueExt,
+    LowValue, Module, ModuleKey, NodeId, Operation, OperatorExt, Program, Release, StaticHandle,
+    StaticModule, ValueExt,
 };
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
+
+pub mod graph;
+
+use graph::{Extent, Placed, RunArgument, RunResult};
+
+pub use graph::GraphId;
+
+/// The diagnostic a graph's own refusals are recorded under.
+///
+/// **Separate from the parallel one on purpose.** Every refusal this module emits
+/// for a graph is about the *graph* — what it captured, which backend it named,
+/// what it returned — and none of them is about a run. Filing them under
+/// `compute.parallel` would attribute a mistake in the recording to the launch
+/// the author did not write.
+pub const GRAPH_DIAGNOSTIC: &str = "compute.graph";
+
+/// The schedule a graph run uses.
+///
+/// **Rust-side only, and deliberately not in the language.** A graph says what has
+/// to happen before what; it must never say when the host is allowed to notice
+/// something finished, because a graph that could name its own synchronisation
+/// would be a graph whose correctness depended on where somebody put a keyword —
+/// and the builder and the runner would then disagree about the same graph.
+/// [`Policy::Async`] is the default because it costs nothing over `Serial` and
+/// everything under `Batch` depends on a host that asks for it explicitly.
+pub fn set_graph_policy(policy: Policy) {
+    GRAPH_POLICY.with(|current| current.set(policy));
+}
+
+thread_local! {
+    static GRAPH_POLICY: Cell<Policy> = const { Cell::new(Policy::Async) };
+}
 
 /// The program-generic bounds the kernel-safe JIT requires.
 ///
@@ -182,6 +215,7 @@ mod kernel_intern_tests {
         KernelFragment {
             param_shape: KernelShape::Scalar,
             body,
+            inputs: 0,
             outputs: 0,
             results: 1,
             int_width: IntWidth::I64,
@@ -350,6 +384,13 @@ where
     }
 }
 
+/// One value of a graph's value table.
+///
+/// A `usize`, and stable for the life of the graph: a node's outputs are
+/// consecutive from the first, so three outputs yield `first`, `first + 1`,
+/// `first + 2` and nothing has to be looked up to know which is which.
+pub type GraphValueId = usize;
+
 /// The compute value vocabulary — injected as a sibling leaf into a host's
 /// value union (see a host `program` module).  A plain enum of exactly this
 /// extension's variants, composed with [`lichen_utils::enum_ext!`].
@@ -398,6 +439,37 @@ pub enum ComputeValue {
     /// The kind marker of write types — a `Write`'s type is
     /// `[element_type, [TypeWrite, Type]]`.
     TypeWrite,
+    /// A built graph, as its registry slot.
+    ///
+    /// **A `usize` and nothing else.** A graph is kernel ids, edge numbers and
+    /// counts, all plain data with no block, no arena and no device lifetime in
+    /// them, so a graph value needs no tracing, states no host obligation and
+    /// costs no copy to move. What the registry holds is the *program's* data,
+    /// not the graph's, and nothing in the graph points at it.
+    ///
+    /// Not a handle, for the same reason a [`Self::ParKernel`] is not: the copy
+    /// path relocates arena payloads and this is a slot number.
+    Graph(GraphId),
+    /// A placeholder for a graph's own `slot`-th input.
+    ///
+    /// **The slot is the number**, so `ins(i)` binds to the `i`-th argument and
+    /// no ordering has to be guessed. Inert: it is a `usize` and no operation
+    /// turns one into device memory, so a value holding it cannot read a buffer
+    /// — which is what makes a closure that captured one harmless rather than a
+    /// capture that reaches inside the graph.
+    ///
+    /// **Invisible to the checker, and that is what makes it usable here.** The
+    /// type at a `cfg` position is fixed by `check_unify` at compile time;
+    /// nothing re-derives a type from a runtime value, so a new variant is not a
+    /// type error anywhere.
+    GraphInput(usize),
+    /// A placeholder for a value this recording has already produced.
+    ///
+    /// **Carrying the value number is the whole design.** The placeholder sits in
+    /// the node the next dispatch reads, so the edge follows the operand without a
+    /// side table saying which node produced which value — a second copy of a
+    /// fact that could disagree with the first.
+    GraphValue(GraphValueId),
 }
 
 /// A run's results as the language holds them while they are still on a device.
@@ -601,6 +673,18 @@ pub enum ComputeOperator {
     Write,
     /// `[buffer]` operand — collect the whole buffer into a lichen array `[?b]`.
     BufferCollect,
+    /// `[function]` operand — **record** the dispatches that function performs,
+    /// rather than run them, and hand back a `Graph`.
+    ///
+    /// The operand is deliberately **not** evaluated before this operator runs:
+    /// the function's body is what has to be walked, and a deep pass has already
+    /// erased the shape that says which of its nodes are the body's own. So this
+    /// is the one operator that overrides
+    /// [`OperatorExt::run_deferred`] and builds its own `Apply`.
+    Graph,
+    /// `[graph, arguments]` operand — run a graph over the values its source
+    /// function took, and hand back what that function returned.
+    GraphRun,
 }
 
 // --- the compute leaves' per-leaf artifact codec ----------------------------
@@ -658,6 +742,28 @@ impl ValueCodec for ComputeValue {
                         .into(),
                 );
             }
+            ComputeValue::Graph(_) => {
+                return Err(
+                    "this package is not cached: it holds a built graph at its top level, and a \
+                     graph is a runtime value with no on-disk form — the id names a process \
+                     registry entry, which is empty in another process"
+                        .into(),
+                );
+            }
+            // **The two placeholders are refused here rather than encoded**, and
+            // the reason is sharper than "runtime only": a placeholder's whole
+            // meaning is a position in *this* recording's value table, so a number
+            // on disk would not name the same value in a rebuilt package. Writing
+            // one as a plain integer would be a graph that loads and computes the
+            // wrong thing.
+            ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_) => {
+                return Err(
+                    "this package is not cached: it holds a graph's own placeholder at its top \
+                     level, and a placeholder means nothing outside the recording that made it — \
+                     the number is a position in that recording's value table and nothing else"
+                        .into(),
+                );
+            }
         }
         Ok(())
     }
@@ -692,6 +798,8 @@ impl OperatorCodec for ComputeOperator {
             | ComputeOperator::Range
             | ComputeOperator::Read
             | ComputeOperator::Write
+            | ComputeOperator::Graph
+            | ComputeOperator::GraphRun
             | ComputeOperator::BufferCollect => Err(
                 "this package is not cached: it holds a compute operation, and a compute \
                  operation is a runtime form with no on-disk representation"
@@ -946,6 +1054,14 @@ where
                     Some(LowValue::Parameterized)
                 ) {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                }
+                // **A recording intercepts here, before anything is parsed.** A
+                // recorded dispatch has no buffers to look at and no count to
+                // read: its arguments are placeholders, which is the whole reason
+                // the body can be walked at all. So the interception is first and
+                // the real launch is the rest of the arm.
+                if graph::is_recording() {
+                    return record_launch::<P>(module, block, operand);
                 }
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
@@ -1217,6 +1333,42 @@ where
                 let handle = module.alloc_array(&items, block);
                 <P::Value as From<LowValue>>::from(LowValue::Array(handle))
             }
+            ComputeOperator::Graph => {
+                // The operand has already been evaluated by the time `run` sees
+                // it, so the only way to reach the function is the deep value.
+                // That is enough here: a graph is a bare function, and the shape
+                // that `run_deferred` needed to preserve is the shape of the
+                // *body*, which the apply below walks itself.
+                //
+                // **A missing operand stays lazy rather than panicking**, and the
+                // other arms' `unreachable!` does not apply: a deep pass over an
+                // operand array holding a deferred function can come back holding
+                // something other than an array, and a panic in a recording would
+                // take down a program that has a perfectly good answer — that its
+                // function is not decided yet.
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the run.
+                let operands = unsafe { operands.items() };
+                let Some(function) = operands.first().map(|item| item.node) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                build_graph::<P>(module, block, function)
+            }
+            ComputeOperator::GraphRun => {
+                let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                // SAFETY: as above — a live node of `module`.
+                let operands = unsafe { operands.items() };
+                let Some(graph_node) = operands.first().map(|item| item.node) else {
+                    return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+                };
+                let arguments = operands.get(1).map(|item| item.node);
+                run_graph::<P>(module, block, graph_node, arguments)
+            }
         }
     }
 
@@ -1244,6 +1396,12 @@ where
             | ComputeOperator::Parallel
             | ComputeOperator::ParLaunch
             | ComputeOperator::Write
+            // `Graph` is a host-owned artifact (a registry slot) and `GraphRun`'s
+            // result is a value of a length the graph's own return decides, so
+            // both decline — the same two reasons `Jit` and `BufferCollect` do,
+            // and for the same reason they do rather than by symmetry.
+            | ComputeOperator::Graph
+            | ComputeOperator::GraphRun
             | ComputeOperator::BufferCollect => None,
         }
     }
@@ -1375,9 +1533,12 @@ where
     }];
 
     let mut body: Vec<KernelInstr> = Vec::new();
-    // A scalar kernel has no output buffer: `compute.write` is a parallel-only
-    // operator, so the ordinal counter below stays at 0 and `outputs` is 0.
-    let mut out = 0usize;
+    // A scalar kernel has no buffers in either space: `compute.write` and a
+    // buffer `compute.read` are both parallel-only operators, so both counters
+    // below stay at 0 and the fragment declares `inputs: 0, outputs: 0`. They
+    // are read off the tally rather than written as literals so that a body
+    // which ever did reach one of them would be counted instead of mis-declared.
+    let mut tally = Positions::default();
     // The body is emitted **leaf by leaf**: a scalar codomain is the one leaf,
     // a tuple codomain one leaf per element, each becoming its own stack slot.
     // The count of what the walk returns is the fragment's result arity, so the
@@ -1385,13 +1546,14 @@ where
     // of the body's own value rather than of a hardcoded one.
     let leaves = codomain_leaves(module, ret_value)?;
     for leaf in &leaves {
-        emit_node(module, &params, *leaf, &mut body, &mut out)?;
+        emit_node(module, &params, *leaf, &mut body, &mut tally)?;
     }
 
     Ok(KernelFragment {
         param_shape: kernel_shape(&param_shape),
         body,
-        outputs: 0,
+        inputs: tally.reads,
+        outputs: tally.writes,
         results: leaves.len(),
         int_width: IntWidth::I64,
     })
@@ -1540,21 +1702,22 @@ where
     // afterwards so a write reached nested inside a position's value (which
     // would consume an ordinal of its own) is caught too.  A conditional write
     // is refused by the emitter, which knows the more specific cause.
-    let mut out = 0usize;
+    let mut tally = Positions::default();
     for (position, output) in outputs.iter().enumerate() {
-        let before = out;
-        emit_node(module, &params, *output, &mut body_instr, &mut out)?;
-        if out == before {
+        let before = tally.writes;
+        emit_node(module, &params, *output, &mut body_instr, &mut tally)?;
+        if tally.writes == before {
             return Err(format!(
                 "output {position} of the parallel index function is not a `compute.write` \
                  (an index function must write every output it declares)"
             ));
         }
     }
-    if out != outputs.len() {
+    if tally.writes != outputs.len() {
         return Err(format!(
-            "a parallel index function emitted {out} write(s) but its codomain names {} \
+            "a parallel index function emitted {} write(s) but its codomain names {} \
              output(s): every output must be exactly one `compute.write`",
+            tally.writes,
             outputs.len()
         ));
     }
@@ -1566,9 +1729,13 @@ where
     // of the buffers the `write` import filled.
     body_instr.push(KernelInstr::Const(0));
     Ok(KernelFragment {
+        // `(config, index)` however many buffers the body reads: the buffers are
+        // bound rather than passed, so this shape is the parallel signature and
+        // says nothing about them. `tally.reads` is what says that.
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
         body: body_instr,
-        outputs: outputs.len(),
+        inputs: tally.reads,
+        outputs: tally.writes,
         results: 1,
         int_width: IntWidth::I64,
     })
@@ -1922,23 +2089,45 @@ where
 const CONDITIONAL_WRITE: &str = "a `compute.write` inside a conditional is not supported: that \
      output ordinal would not be written on every index";
 
+/// The buffer positions one kernel body addresses, counted as it is emitted.
+///
+/// **Two counters, one per buffer space, and they are the two halves of one
+/// fact.** A body says which of the buffers it was handed it reads, and which of
+/// the buffers it was given to fill it writes; those positions are compile-time
+/// constants (`parallel_buffer_pos` refuses anything else by name), and the
+/// fragment carries the totals as [`KernelFragment::inputs`] and
+/// [`KernelFragment::outputs`]. Counting them here rather than letting a caller
+/// discover them is what makes the two numbers impossible to disagree with the
+/// body: a caller that is handed the wrong number is refused rather than given a
+/// shader that reads a binding nobody bound.
+#[derive(Debug, Default, Clone, Copy)]
+struct Positions {
+    /// The `out_pos` the next `compute.write` is given, and the number of
+    /// writes emitted so far once the walk returns — the write's position in
+    /// the index function's codomain.
+    writes: usize,
+    /// One past the highest input position any `compute.read` named, so `0` for
+    /// a body that reads no buffer. The max rather than a count, because the
+    /// read positions are a sparse space: a body reading only `cfg(1)(1)` still
+    /// needs two buffers, or the one at position 1 was never bound.
+    reads: usize,
+}
+
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
 /// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and parameter reads
 /// (`Index(param_pair, 0)` → `local.get k`).  `params` is the kernel's
 /// parameter-slot list (one for a scalar `jit` kernel, two — config then index
 /// — for a parallel kernel).
 ///
-/// `out` is the emitter's **output-ordinal counter**: the `out_pos` the next
-/// `compute.write` is given, and the number of writes emitted so far once the
-/// walk returns.  The ordinal is the write's position in the index function's
-/// codomain (a compile-time constant, exactly as `read`'s `cfg_pos` is), so
-/// `plrun` can address the buffers without ever seeing which ones were written.
+/// `tally` is the emitter's [`Positions`] counter, threaded through the walk so
+/// that the two buffer spaces' totals come out of the emission that produced the
+/// positions rather than out of a separate reading of the body.
 fn emit_node<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
     body: &mut Vec<KernelInstr>,
-    out: &mut usize,
+    tally: &mut Positions,
 ) -> Result<(), String>
 where
     P: Program,
@@ -1971,7 +2160,7 @@ where
         // parameterized: `launch` is two-step, assemble then call, so the
         // argument is only concrete at run time).  Emit the defining member.
         if let Some(definer) = class_computation_node(module, node) {
-            return emit_node(module, params, definer, body, out);
+            return emit_node(module, params, definer, body, tally);
         }
         return Err(format!(
             "kernel body hits a node with neither value nor operation (node={node:?})"
@@ -1999,7 +2188,7 @@ where
                 if usize_value(module, index) == Some(0)
                     && let Some(value_node) = value_of_node(module, node)
                 {
-                    return emit_node(module, params, value_node, body, out);
+                    return emit_node(module, params, value_node, body, tally);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -2014,7 +2203,7 @@ where
                     if let Some(items) = unsafe { module.array_items(array_value) }
                         && let Some(item) = items.get(k)
                     {
-                        return emit_node(module, params, dyn_node(item.node)?, body, out);
+                        return emit_node(module, params, dyn_node(item.node)?, body, tally);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
@@ -2041,14 +2230,14 @@ where
                         let mut then_body = Vec::new();
                         let mut else_body = Vec::new();
                         let mut select_body = Vec::new();
-                        emit_node(module, params, then_node, &mut then_body, out)?;
-                        emit_node(module, params, else_node, &mut else_body, out)?;
+                        emit_node(module, params, then_node, &mut then_body, tally)?;
+                        emit_node(module, params, else_node, &mut else_body, tally)?;
                         if then_body.contains(&KernelInstr::BufferWriteCall)
                             || else_body.contains(&KernelInstr::BufferWriteCall)
                         {
                             return Err(CONDITIONAL_WRITE.into());
                         }
-                        emit_node(module, params, index, &mut select_body, out)?;
+                        emit_node(module, params, index, &mut select_body, tally)?;
                         body.append(&mut then_body);
                         body.append(&mut else_body);
                         body.append(&mut select_body);
@@ -2070,7 +2259,7 @@ where
                 // the callee's function index once the kernel's relative launch
                 // set is laid out.
                 if kernel_id_of(module, callee).is_some() {
-                    return emit_cross_kernel_call(module, params, callee, arg, body, out);
+                    return emit_cross_kernel_call(module, params, callee, arg, body, tally);
                 }
                 // Style 1: a full lichen-function call (inline its body) —
                 // deferred.
@@ -2091,8 +2280,8 @@ where
         match ty_op {
             TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
                 let (left, right) = operand_pair(module, operation.operand)?;
-                emit_node(module, params, left, body, out)?;
-                emit_node(module, params, right, body, out)?;
+                emit_node(module, params, left, body, tally)?;
+                emit_node(module, params, right, body, tally)?;
                 let bin = match ty_op {
                     TypeOperator::Add => KernelBin::Add,
                     TypeOperator::Sub => KernelBin::Sub,
@@ -2117,7 +2306,7 @@ where
         match compute_op {
             ComputeOperator::Launch | ComputeOperator::Call => {
                 let (kernel, arg) = apply_pair(module, operation.operand)?;
-                return emit_cross_kernel_call(module, params, kernel, arg, body, out);
+                return emit_cross_kernel_call(module, params, kernel, arg, body, tally);
             }
             // The loop index of the current parallel invocation.  The index is
             // the wasm param immediately after the cfg scalar params.
@@ -2170,8 +2359,12 @@ where
                 let pos = parallel_buffer_pos(module, params, buf).ok_or_else(|| {
                     "read's buffer argument is not a cfg buffer tuple slot (cfg(1)(k))".to_string()
                 })?;
+                // The input count is a **max**, not a tally: the read positions are
+                // a sparse space, and a body that reads only `cfg(1)(1)` still
+                // needs two buffers bound or the one it read was never bound.
+                tally.reads = tally.reads.max(pos + 1);
                 body.push(KernelInstr::Const(pos as i64));
-                emit_node(module, params, idx, body, out)?;
+                emit_node(module, params, idx, body, tally)?;
                 body.push(KernelInstr::BufferReadCall);
                 return Ok(());
             }
@@ -2190,11 +2383,11 @@ where
                 let items = operand_items(module, operand)?;
                 let idx = dyn_node(items[1].node)?;
                 let val = dyn_node(items[2].node)?;
-                let out_pos = *out;
-                *out += 1;
+                let out_pos = tally.writes;
+                tally.writes += 1;
                 body.push(KernelInstr::Const(out_pos as i64));
-                emit_node(module, params, idx, body, out)?;
-                emit_node(module, params, val, body, out)?;
+                emit_node(module, params, idx, body, tally)?;
+                emit_node(module, params, val, body, tally)?;
                 body.push(KernelInstr::BufferWriteCall);
                 return Ok(());
             }
@@ -2286,7 +2479,7 @@ fn emit_cross_kernel_call<P>(
     kernel: NodeId,
     arg: NodeId,
     body: &mut Vec<KernelInstr>,
-    out: &mut usize,
+    tally: &mut Positions,
 ) -> Result<(), String>
 where
     P: Program,
@@ -2318,9 +2511,9 @@ where
         // (A *tuple* domain has to resolve its own encoding; see
         // `emit_callee_args`.)
         let arg = pair_value_node(module, arg).unwrap_or(arg);
-        emit_node(module, params, arg, body, out)?;
+        emit_node(module, params, arg, body, tally)?;
     } else {
-        emit_callee_args(module, params, arg, &shape, body, out)?;
+        emit_callee_args(module, params, arg, &shape, body, tally)?;
     }
     body.push(KernelInstr::CallKernel(kid));
     Ok(())
@@ -2353,7 +2546,7 @@ fn emit_callee_args<P>(
     arg: NodeId,
     shape: &KernelShape,
     body: &mut Vec<KernelInstr>,
-    out: &mut usize,
+    tally: &mut Positions,
 ) -> Result<(), String>
 where
     P: Program,
@@ -2361,7 +2554,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let KernelShape::Tuple(items) = shape else {
-        return emit_node(module, params, arg, body, out);
+        return emit_node(module, params, arg, body, tally);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
     // cause worth reporting; one that simply is not a tuple only says the
@@ -2369,20 +2562,20 @@ where
     let mut cause: Option<String> = None;
     for candidate in callee_arg_encodings(module, arg) {
         let mut leaves: Vec<KernelInstr> = Vec::new();
-        // Each candidate is emitted from the same `out` count, so a failed
-        // attempt cannot leave the ordinal counter advanced by instructions
+        // Each candidate is emitted from the same `tally` counts, so a failed
+        // attempt cannot leave the position counters advanced by instructions
         // that are then thrown away.
-        let mut candidate_out = *out;
+        let mut candidate_tally = *tally;
         match emit_tuple_leaves(
             module,
             params,
             candidate,
             items,
             &mut leaves,
-            &mut candidate_out,
+            &mut candidate_tally,
         ) {
             Ok(()) => {
-                *out = candidate_out;
+                *tally = candidate_tally;
                 body.extend(leaves);
                 return Ok(());
             }
@@ -2439,7 +2632,7 @@ fn emit_tuple_leaves<P>(
     node: NodeId,
     items: &[KernelShape],
     out: &mut Vec<KernelInstr>,
-    writes: &mut usize,
+    tally: &mut Positions,
 ) -> Result<(), String>
 where
     P: Program,
@@ -2474,9 +2667,9 @@ scalar(s)",
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
             KernelShape::Tuple(nested) => {
-                emit_tuple_leaves(module, params, *element, nested, out, writes)?
+                emit_tuple_leaves(module, params, *element, nested, out, tally)?
             }
-            KernelShape::Scalar => emit_node(module, params, *element, out, writes)?,
+            KernelShape::Scalar => emit_node(module, params, *element, out, tally)?,
         }
     }
     Ok(())
@@ -3000,6 +3193,568 @@ where
         return Err("Apply operand array must have at least two elements".into());
     }
     Ok((dyn_node(items[0].node)?, dyn_node(items[1].node)?))
+}
+
+/// Record one dispatch into the graph being built, in place of running it.
+///
+/// **The cfg is read for its placeholders, not for its data.** `cfg(0)` is the
+/// extent and `cfg(1)` the buffer tuple, the same positions a real launch reads,
+/// so the body is walked by exactly the path a run would take and the only thing
+/// that differs is what comes back. A value that is neither a placeholder nor an
+/// input the parameter supplied is refused here by name rather than coerced: this
+/// is the filter, and it is where a jit'd function's arbitrary values are sorted
+/// into the two roles a graph's value table has.
+fn record_launch<P>(module: &mut Module<P>, block: BlockId, operand: P::Value) -> P::Value
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let refuse = |module: &mut Module<P>, reason: String| {
+        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+    };
+    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
+        unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
+    };
+    // SAFETY: `operands` is the operand array the VM just evaluated for this
+    // operation, and every walk below stays inside this borrow of `module`.
+    let operands = unsafe { operands.items() };
+    if operands.len() < 2 {
+        return refuse(
+            module,
+            "a parallel launch's operand array is [kernel, cfg]".into(),
+        );
+    }
+    let Some(ComputeValue::ParKernel(id, backend)) = module
+        .node_value(operands[0].node)
+        .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+    else {
+        return refuse(
+            module,
+            "a recorded dispatch has to name a parallel kernel, and this one does not".into(),
+        );
+    };
+    let fragment = {
+        let kernels = kernels().lock().unwrap();
+        match kernels.get(&id) {
+            Some(fragment) => fragment.clone(),
+            None => {
+                return refuse(
+                    module,
+                    format!(
+                        "parallel kernel {id} is not registered, so there is no fragment to record"
+                    ),
+                );
+            }
+        }
+    };
+    let Ok(cfg) = dyn_node(operands[1].node) else {
+        return refuse(module, "a recorded dispatch's cfg is not a node".into());
+    };
+    // SAFETY: `cfg` names a live node of `module`, and the items are read only.
+    let Some(cfg_items) = (unsafe { module.array_items(cfg) }) else {
+        return refuse(module, "a recorded dispatch's cfg is not a tuple".into());
+    };
+    // The extent, read on its own: a count is a different role from a buffer, and
+    // a caller who swapped the two deserves to be told which was wrong rather
+    // than that a shape did not match.
+    let extent = match cfg_items.first() {
+        Some(item) => {
+            let literal = module
+                .node_value(item.node)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+                .and_then(|value| match value {
+                    // A literal the build already had. Collapsing it into a value
+                    // would mean inventing a node that produces a number for
+                    // free, doing no work.
+                    LowValue::USize(count) => Some(Extent::Constant(count)),
+                    _ => None,
+                });
+            match literal {
+                Some(extent) => extent,
+                None => match module
+                    .node_value(item.node)
+                    .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+                    .and_then(|value| match value {
+                        ComputeValue::GraphInput(slot) => Some(Extent::Value(Placed::Input(slot))),
+                        ComputeValue::GraphValue(id) => Some(Extent::Value(Placed::Value(id))),
+                        _ => None,
+                    }) {
+                    Some(extent) => extent,
+                    None => {
+                        let found = module
+                            .node_value(item.node)
+                            .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+                            .map(|value| format!("{value:?}"))
+                            .unwrap_or_else(|| {
+                                module
+                                    .node_value(item.node)
+                                    .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+                                    .map(|value| graph::describe(&value).to_string())
+                                    .unwrap_or_else(|| "not a value at all".to_string())
+                            });
+                        return refuse(
+                            module,
+                            format!(
+                                "a dispatch's count is {found}, and a count has to be a literal or \
+                                 one of this function's arguments: a graph's extent is either known \
+                                 while it is built or read from its own value table at run time"
+                            ),
+                        );
+                    }
+                },
+            }
+        }
+        None => {
+            return refuse(
+                module,
+                "a recorded dispatch's cfg has no count at position 0".into(),
+            );
+        }
+    };
+    let mut inputs: Vec<Placed> = Vec::new();
+    if let Some(tuple) = cfg_items.get(1)
+        && let Ok(tuple_node) = dyn_node(tuple.node)
+        // SAFETY: `tuple_node` names a live node of `module`.
+        && let Some(items) = (unsafe { module.array_items(tuple_node) })
+    {
+        for (position, item) in items.iter().enumerate() {
+            let Some(value) = module
+                .node_value(item.node)
+                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+            else {
+                return refuse(
+                    module,
+                    format!("argument {position} of this dispatch is not a compute value at all"),
+                );
+            };
+            match graph::place(&value, position) {
+                Ok(placed) => inputs.push(placed),
+                Err(reason) => return refuse(module, reason),
+            }
+        }
+    }
+    let placed = match graph::record_dispatch(fragment, backend, extent, &inputs) {
+        Ok(placed) => placed,
+        Err(reason) => return refuse(module, reason),
+    };
+    // **The same shape a real launch produces**: a bare value for one output, the
+    // tuple of them for several. Each placeholder becomes a node of this block
+    // first, so the tuple holds live nodes rather than detached values, and the
+    // body downstream reads a result exactly as it reads a run's.
+    let placeholder =
+        |id: usize| <P::Value as From<ComputeValue>>::from(ComputeValue::GraphValue(id));
+    if placed.len() == 1 {
+        return placeholder(placed[0].edge());
+    }
+    let items: Vec<ArrayItem> = placed
+        .iter()
+        .map(|placed| {
+            let node = module.add_node(block, None, Some(placeholder(placed.edge())));
+            ArrayItem::new(AnyNodeId::Dynamic(node))
+        })
+        .collect();
+    let handle = module.alloc_array(&items, block);
+    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+}
+
+/// Build a graph by applying a function to placeholders and recording what it
+/// dispatches.
+///
+/// **The apply is the VM's own.** No lowlevel seam grows for this: a plain
+/// `Apply` node is built over the function and a placeholder tuple, and the
+/// module's `evaluate_node` runs it, so the clone pass, the parameter unify and
+/// the pattern walk are the ones every other call gets. A lowering that hand-rolled
+/// those would be a second apply with its own bugs, and the bugs would be in the
+/// part nobody tests.
+fn build_graph<P>(module: &mut Module<P>, block: BlockId, function_node: AnyNodeId) -> P::Value
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator> + From<LowOperator>,
+{
+    let refuse = |module: &mut Module<P>, reason: String| {
+        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+    };
+    // A **check, not a resolution.** The apply below consumes the operand *node*,
+    // because a function id and a node id are different id spaces and `Apply`
+    // addresses its callee as a node. So this only has to answer "is this
+    // operand a function at all" — and it answers it by reading the node's own
+    // value, which is the same read the apply's callee extraction will do.
+    let is_function = matches!(
+        module.evaluate_node(function_node, Some(block)).as_enum(),
+        Some(LowValue::Function(_))
+    );
+    if !is_function {
+        return refuse(
+            module,
+            "a graph is recorded from a function, and this operand is not one".into(),
+        );
+    }
+    // **The arity is the parameter tuple's length, read without evaluating
+    // anything.** A read of `ins(i)` compiles to a bare cell with no operation
+    // and no subscript, so the body's read positions are not visible before the
+    // apply and cannot be used to size the placeholder tuple. The parameter *is*
+    // a tuple with one cell per read, though, and its length is the answer.
+    // **The arity is not knowable here, and that is the finding.** A read of
+    // `ins(i)` compiles to a bare cell with no operation and no subscript, so
+    // the unapplied body contains nothing that says which slot a read wants; and
+    // the parameter's own value node cannot answer it either, because in a
+    // template that value is an undecided cell rather than a tuple — so there is
+    // no length to read anywhere before the apply. The tuple is therefore built
+    // at a ceiling and the graph is trimmed to the slots the body actually read.
+    let arity = graph::MAX_GRAPH_INPUTS;
+    // One placeholder per slot, **and the slot is the number**, so the apply's
+    // tuple walk binds the `k`-th argument to the `k`-th cell and `ins(k)` is the
+    // `k`-th argument with no ordering to guess.
+    let cells: Vec<ArrayItem> = (0..arity)
+        .map(|slot| {
+            let value = <P::Value as From<ComputeValue>>::from(ComputeValue::GraphInput(slot));
+            let node = module.add_node(block, None, Some(value));
+            ArrayItem::new(AnyNodeId::Dynamic(node))
+        })
+        .collect();
+    let placeholders = array_node::<P>(module, block, &cells);
+    // The argument is a **pair**, because a parameter is one: the value side is
+    // the placeholder tuple and the type side is left undecided. The type side
+    // has to stay undecided rather than be invented, because a parameter's type
+    // is what says which role each argument has — and that is precisely the
+    // question this recording is going to answer by looking at the values.
+    let undecided = module.add_node(
+        block,
+        None,
+        Some(<P::Value as From<LowValue>>::from(LowValue::Parameterized)),
+    );
+    let argument = array_node::<P>(
+        module,
+        block,
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(placeholders)),
+            ArrayItem::new(AnyNodeId::Dynamic(undecided)),
+        ],
+    );
+    let operands: Vec<ArrayItem> = [
+        ArrayItem::new(AnyNodeId::Dynamic(module.as_dynamic(function_node, block))),
+        ArrayItem::new(AnyNodeId::Dynamic(argument)),
+    ]
+    .to_vec();
+    let operand = array_node::<P>(module, block, &operands);
+    let apply = module.add_node(
+        block,
+        Some(Operation {
+            operator: <P::Operator as From<LowOperator>>::from(LowOperator::Apply),
+            operand: Some(operand),
+        }),
+        None,
+    );
+    // Started **before** the apply and finished after it, so a dispatch the body
+    // performs is inside the window. A recording started after would miss the
+    // body's own work and build an empty graph that still looked like a graph.
+    graph::begin();
+    // **Deep, not shallow, and that is the whole difference between recording a
+    // body and applying one.** A block's value is the tuple of its statements'
+    // values, so a shallow evaluation of the body produces that tuple and stops —
+    // the statements inside it have not run, and a recording taken there is an
+    // empty graph that still looks like a graph. The deep pass is what *demands*
+    // the tuple, and demanding it is what performs the dispatches.
+    let result = module.evaluate_node_deep(apply, Some(block));
+    if matches!(
+        AsEnum::<LowValue>::as_enum(&result),
+        Some(LowValue::Parameterized)
+    ) {
+        return refuse(
+            module,
+            format!(
+                "applying this function to its own input placeholders stayed undecided, so \
+                 nothing was recorded. A function whose parameter is not a plain tuple of cells \
+                 cannot be recorded this way, and the parameter here has {} cell(s)",
+                arity
+            ),
+        );
+    }
+    let recorded = returned_value_ids::<P>(module, &result);
+    // **An unreadable return is a refusal, not an unrecorded one.** A graph with
+    // no recorded return answers with its whole value table, so treating "I
+    // could not read what this function returns" as "it returns everything" hands
+    // the caller an extent and a buffer nobody asked to have returned — a wrong
+    // answer that runs. The permissive reading of an unrecorded return belongs to
+    // a graph nobody recorded, and the language path has just recorded one.
+    let Some(values) = recorded else {
+        return refuse(
+            module,
+            "this function's return is not a value a graph can hand back, so there is no \
+             graph to record: a graph's value table holds what its dispatches produced and the \
+             arguments it was run with, and this body's own value is not one of those"
+                .into(),
+        );
+    };
+    if let Err(reason) = graph::record_return(values) {
+        return refuse(module, reason);
+    }
+    match graph::finish() {
+        Ok(built) => {
+            let id = graph::intern(built);
+            <P::Value as From<ComputeValue>>::from(ComputeValue::Graph(id))
+        }
+        Err(reason) => {
+            // **An empty recording with a decided result is a different mistake
+            // from an empty one with no result**, and only this one says the body
+            // *ran* — so the two refusals have to name different causes or a
+            // caller will go looking in the wrong place.
+            let reason = if matches!(
+                AsEnum::<LowValue>::as_enum(&result),
+                Some(LowValue::Parameterized)
+            ) {
+                reason
+            } else {
+                format!(
+                    "{reason} (the body's own value came back as a decided value, not a lazy one)"
+                )
+            };
+            refuse(module, reason)
+        }
+    }
+}
+
+/// A lichen tuple as a **node**, which is what an operand or a result has to be.
+///
+/// An array value is a handle into `block`'s arena and an operand slot wants a
+/// node, so the value is allocated and then given a node of its own. Every item
+/// is already a node, so the tuple holds live nodes rather than detached values —
+/// the same discipline every other multi-value result in this file follows.
+fn array_node<P>(module: &mut Module<P>, block: BlockId, items: &[ArrayItem]) -> NodeId
+where
+    P: Program,
+    P::Value: From<LowValue>,
+{
+    let handle = module.alloc_array(items, block);
+    let value = <P::Value as From<LowValue>>::from(LowValue::Array(handle));
+    module.add_node(block, None, Some(value))
+}
+
+/// The value references a recorded body's result names, if it is a placeholder or
+/// a tuple of them.
+///
+/// **A block's value is taken from its first item, and that is this crate's
+/// existing convention rather than a new one:** [`compile_fragment`] and
+/// [`parallel_output_nodes`] both resolve a function's return by reading
+/// `array_items(body)[0]`, because a block's tuple is wider than the one value
+/// the function returns. Reading the whole tuple instead would ask the graph to
+/// return every statement's value, which is a different function's answer.
+///
+/// **Both placeholder kinds are accepted, and an extent is the reason.** A
+/// function that returns its own argument is returning an *input* value, which
+/// is in the table like any other; refusing it would leave the return
+/// unrecorded, and a graph with no recorded return answers with its whole value
+/// table — which is a number and a buffer nobody asked to have returned.
+///
+/// `None` rather than a refusal, because a body may return something a graph's
+/// value table cannot name at all — a kernel, say. The graph's return is then
+/// unrecorded, and the caller reads that as "take everything", which is
+/// permissive rather than broken.
+fn returned_value_ids<P>(module: &Module<P>, value: &P::Value) -> Option<Vec<Placed>>
+where
+    P: Program,
+    P::Value: AsEnum<ComputeValue> + AsEnum<LowValue>,
+{
+    // The items of a result are **nodes**, not values, so each one is read back
+    // through the module rather than matched in place. That is the same reason a
+    // multi-output launch gives every buffer a node of its own before wrapping
+    // them in a tuple.
+    let place_of = |node: AnyNodeId| {
+        module
+            .node_value(node)
+            .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+            .and_then(|value| match value {
+                ComputeValue::GraphValue(id) => Some(Placed::Value(id)),
+                ComputeValue::GraphInput(slot) => Some(Placed::Input(slot)),
+                _ => None,
+            })
+    };
+    // One lichen value read as the references it names: a bare placeholder is
+    // one, and a **materialized tuple** is one per element — the multi-value
+    // form, a function that genuinely returns `(a, b)`. Anything else is not
+    // something a graph's value table can name, which is the `None` this whole
+    // function reports.
+    let placed_of = |value: &P::Value| -> Option<Vec<Placed>> {
+        if let Some(ComputeValue::GraphValue(id)) = AsEnum::<ComputeValue>::as_enum(value) {
+            return Some(vec![Placed::Value(id)]);
+        }
+        if let Some(ComputeValue::GraphInput(slot)) = AsEnum::<ComputeValue>::as_enum(value) {
+            return Some(vec![Placed::Input(slot)]);
+        }
+        let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value) else {
+            return None;
+        };
+        // SAFETY: `array` is a value of the apply's own result, so its home
+        // block is alive for this walk.
+        let items = unsafe { array.items() };
+        items.iter().map(|item| place_of(item.node)).collect()
+    };
+    // A body that is **not** a block is already the returned value.
+    let Some(LowValue::Array(array)) = AsEnum::<LowValue>::as_enum(value) else {
+        return placed_of(value);
+    };
+    // SAFETY: as above.
+    let items = unsafe { array.items() };
+    let first = items.first()?;
+    let node = dyn_node(first.node).ok()?;
+    let inner = module.node_value(AnyNodeId::Dynamic(node))?;
+    placed_of(&inner)
+}
+
+/// Run a graph over the values its source function took.
+///
+/// **The arguments are sorted into roles here rather than by the operator's
+/// caller**, and that is the whole contract of a value table: a buffer becomes
+/// the slot a dispatch records against, a number becomes the extent a dispatch
+/// runs over, and anything else is refused by name. A jit'd function may take
+/// arbitrary lichen values, and this is where they are asked what role they
+/// have.
+fn run_graph<P>(
+    module: &mut Module<P>,
+    block: BlockId,
+    graph_node: AnyNodeId,
+    arguments: Option<AnyNodeId>,
+) -> P::Value
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + From<LowValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let refuse = |module: &mut Module<P>, reason: String| {
+        module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+        <P::Value as From<LowValue>>::from(LowValue::Parameterized)
+    };
+    let id = match module
+        .node_value(graph_node)
+        .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+    {
+        Some(ComputeValue::Graph(id)) => id,
+        _ => {
+            return refuse(
+                module,
+                "a graph run has to be given a graph, and this is not one".into(),
+            );
+        }
+    };
+    // SAFETY: a live node of `module`, read only.
+    let argument_items = match arguments.map(|node| dyn_node(node)).transpose() {
+        Ok(Some(node)) => match unsafe { module.array_items(node) } {
+            Some(items) => items.to_vec(),
+            None => {
+                return refuse(
+                    module,
+                    "a graph's arguments have to be a tuple, because the function that recorded \
+                     the graph took one parameter"
+                        .into(),
+                );
+            }
+        },
+        Ok(None) => Vec::new(),
+        Err(reason) => return refuse(module, reason),
+    };
+    let mut run_arguments: Vec<RunArgument> = Vec::new();
+    for (position, item) in argument_items.iter().enumerate() {
+        let Some(value) = module
+            .node_value(item.node)
+            .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value))
+        else {
+            // Not a compute value at all, so it is a number — the only other role
+            // a dispatch can read. Asked on its own terms rather than through the
+            // compute vocabulary, because a count is a lichen `Int` and not a
+            // compute leaf.
+            match module
+                .node_value(item.node)
+                .and_then(|value| AsEnum::<LowValue>::as_enum(&value))
+            {
+                Some(LowValue::USize(count)) => {
+                    run_arguments.push(RunArgument::Count(count as i64));
+                    continue;
+                }
+                _ => {
+                    return refuse(
+                        module,
+                        format!(
+                            "argument {position} is {}, and a graph run reads a buffer or a number \
+                             — the two roles a dispatch has",
+                            graph::describe(&ComputeValue::TypeWrite)
+                        ),
+                    );
+                }
+            }
+        };
+        run_arguments.push(match value {
+            ComputeValue::Buffer(payload) => {
+                // SAFETY: read out of `module` on this borrow, so the payload's
+                // home block is alive while the data is copied out.
+                match buffer_items(&payload) {
+                    Some(data) => RunArgument::Buffer(data.to_vec()),
+                    None => {
+                        return refuse(
+                            module,
+                            format!("argument {position} is a buffer this process cannot read"),
+                        );
+                    }
+                }
+            }
+            ComputeValue::DeviceBuffer(resident) => RunArgument::Resident(resident),
+            other => {
+                return refuse(
+                    module,
+                    format!(
+                        "argument {position} is {}, and a graph run reads a buffer or a number — \
+                         the two roles a dispatch has",
+                        graph::describe(&other)
+                    ),
+                );
+            }
+        });
+    }
+    let values = match graph::run(id, run_arguments, GRAPH_POLICY.with(|policy| policy.get())) {
+        Ok(values) => values,
+        Err(reason) => return refuse(module, reason),
+    };
+    let produced = values;
+    // **Left where they are.** A value the device wrote stays a resident id and
+    // crosses the bus when the language asks for host data, which is the same
+    // discipline a single launch follows; a run that fetched everything on the
+    // way out would put a download on the path of every result.
+    if produced.len() == 1 {
+        return match &produced[0] {
+            RunResult::Buffer(data) => <P::Value as From<ComputeValue>>::from(
+                ComputeValue::Buffer(module.alloc_payload(data, block)),
+            ),
+            RunResult::Resident(resident) => {
+                <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
+            }
+            RunResult::Count(number) => {
+                <P::Value as From<LowValue>>::from(LowValue::USize(*number as usize))
+            }
+        };
+    }
+    let items: Vec<ArrayItem> = produced
+        .iter()
+        .map(|result| {
+            let value = match result {
+                RunResult::Buffer(data) => <P::Value as From<ComputeValue>>::from(
+                    ComputeValue::Buffer(module.alloc_payload(data, block)),
+                ),
+                RunResult::Resident(resident) => {
+                    <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
+                }
+                RunResult::Count(number) => {
+                    <P::Value as From<LowValue>>::from(LowValue::USize(*number as usize))
+                }
+            };
+            let node = module.add_node(block, None, Some(value));
+            ArrayItem::new(AnyNodeId::Dynamic(node))
+        })
+        .collect();
+    let handle = module.alloc_array(&items, block);
+    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
 }
 
 fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
@@ -3846,6 +4601,7 @@ mod parallel_launch_tests {
                 KernelInstr::BufferWriteCall,
                 KernelInstr::Const(0),
             ],
+            inputs: 0,
             outputs: 2,
             results: 1,
             int_width: IntWidth::I64,
@@ -4331,6 +5087,8 @@ macro_rules! compute_native_ops {
         static READ: $crate::ReadOp = $crate::ReadOp;
         static WRITE: $crate::WriteOp = $crate::WriteOp;
         static COLLECT: $crate::BufferCollectOp = $crate::BufferCollectOp;
+        static GRAPH: $crate::GraphOp = $crate::GraphOp;
+        static GRAPHRUN: $crate::GraphRunOp = $crate::GraphRunOp;
         let ops: Vec<(&'static str, &'static dyn $crate::NativeOp<$program>)> = vec![
             ("jit", &JIT as &dyn $crate::NativeOp<$program>),
             ("launch", &LAUNCH as &dyn $crate::NativeOp<$program>),
@@ -4341,6 +5099,8 @@ macro_rules! compute_native_ops {
             ("read", &READ as &dyn $crate::NativeOp<$program>),
             ("write", &WRITE as &dyn $crate::NativeOp<$program>),
             ("collect", &COLLECT as &dyn $crate::NativeOp<$program>),
+            ("graph", &GRAPH as &dyn $crate::NativeOp<$program>),
+            ("graphrun", &GRAPHRUN as &dyn $crate::NativeOp<$program>),
         ];
         Box::leak(ops.into_boxed_slice()) as $crate::NativeOps<$program>
     }};
@@ -4511,6 +5271,24 @@ pub struct WriteOp;
 
 /// `$collect(buf)` — collect a whole buffer into a lichen array `[?b]`.
 pub struct BufferCollectOp;
+
+/// `$graph(f)` — record `f`'s dispatches into a graph instead of running them.
+///
+/// The function-ness gate is the same arrow the apply will check, so a
+/// non-function is a check error here rather than a refusal at run time.
+pub struct GraphOp;
+
+/// `$graphrun(g, a)` — run a graph over the values its source function took.
+///
+/// **Both types are fresh cells, and both are deliberate.** A graph's type is
+/// host-owned and opaque — typed `_`, like a kernel's `.native` — because what a
+/// graph may be applied to is a question about the function it was recorded from,
+/// and the recording is not available to the checker. The arguments therefore
+/// unify against a fresh cell too, which is what lets a graph take values whose
+/// types only the run knows. The cost is static precision, not safety: a
+/// `graphrun` result is a fresh cell and an out-of-range ordinal on it is still
+/// refused at check time with a span, exactly as it is for a `plrun` result.
+pub struct GraphRunOp;
 
 impl<P> NativeOp<P> for ParallelOp
 where
@@ -4741,6 +5519,72 @@ where
             node: pair,
             val: None,
             ty: arr_ty,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for GraphOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$graph(f)` — record `f`, don't run it.
+    ///
+    /// The gate is only a function-ness gate. **The arity is deliberately not
+    /// checked here**: it is the length of `f`'s parameter tuple, which is a
+    /// *runtime* fact of a value the checker has not cloned yet, and a gate that
+    /// named an arity it cannot read would refuse programs the recording accepts.
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let f = &args[0];
+        let domain = ctx.fresh();
+        let codomain = ctx.fresh();
+        let fn_ty = ctx.arrow(domain, codomain);
+        ctx.check_unify(f.ty, fn_ty, loc, DiagKind::Guard);
+        // The graph itself is host-owned and opaque: what a graph may be run over
+        // is a question about the function it was recorded from, and that
+        // function is not available to the checker — a run is what finds out.
+        let graph_ty = ctx.fresh();
+        let operands = ctx.array_node(&[f.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::Graph), Some(operands));
+        let pair = ctx.array_node(&[op, graph_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: graph_ty,
+        }
+    }
+}
+
+impl<P> NativeOp<P> for GraphRunOp
+where
+    P: HighProgram,
+    P::Value: ValueType + From<ComputeValue>,
+    P::Operator: From<ComputeOperator>,
+{
+    /// `$graphrun(g, a)` — run a graph over the values its source function took.
+    ///
+    /// **The arguments unify against a fresh cell, and that is what makes a graph
+    /// reusable across runs.** A graph's parameter tuple is a *runtime* shape —
+    /// how many arguments it takes is the length of the tuple the recording read
+    /// off a function value — so a fixed domain type would name an arity the
+    /// checker cannot know, and would refuse exactly the programs a recording
+    /// accepts. The result is a fresh cell for the same reason `plrun`'s is.
+    fn build(&self, ctx: &mut dyn Ctx<P>, _e: ExprId, args: &[NativeArg], loc: Loc) -> NativeApply {
+        let g = &args[0];
+        let a = &args[1];
+        let graph_ty = ctx.fresh();
+        ctx.check_unify(g.ty, graph_ty, loc.clone(), DiagKind::Guard);
+        let arguments_ty = ctx.fresh();
+        ctx.check_unify(a.ty, arguments_ty, loc, DiagKind::Guard);
+        let out_ty = ctx.fresh();
+        let operands = ctx.array_node(&[g.value, a.value]);
+        let op = ctx.op_node(P::Operator::from(ComputeOperator::GraphRun), Some(operands));
+        let pair = ctx.array_node(&[op, out_ty]);
+        NativeApply {
+            node: pair,
+            val: None,
+            ty: out_ty,
         }
     }
 }

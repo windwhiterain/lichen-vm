@@ -18,11 +18,19 @@ fn main() {
     // `out[i] = in[i] + 1` over `count` indices, the shape a single-input
     // parallel kernel has: the body's last value is the dummy a compute shader
     // does not need, so the write is the whole effect.
+    //
+    // The read is three instructions, not two: a `BufferReadCall` takes
+    // `[cfg_pos, idx]` off the stack, so the position and the index both have to
+    // be pushed before it. A body that pushed only the index compiled and ran,
+    // and computed `1 + i` instead of `in[i] + 1` — a wrong answer with nothing
+    // refused anywhere.
     let count_prologue = vec![
-        KernelInstr::Const(0),    // buffer position
-        KernelInstr::LocalGet(1), // the index
+        KernelInstr::Const(0),       // buffer position, in the *output* space
+        KernelInstr::LocalGet(1),    // the index
+        KernelInstr::Const(0),       // cfg_pos, in the *input* space
+        KernelInstr::LocalGet(1),    // the index
+        KernelInstr::BufferReadCall, // in[i]
         KernelInstr::Const(1),
-        KernelInstr::LocalGet(1),
         KernelInstr::Bin(KernelBin::Add), // in[i] + 1
         KernelInstr::BufferWriteCall,
         KernelInstr::Const(0),
@@ -31,6 +39,7 @@ fn main() {
     let fragment = KernelFragment {
         param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
         body: count_prologue,
+        inputs: 1,
         outputs: 1,
         results: 1,
         int_width: IntWidth::I64,

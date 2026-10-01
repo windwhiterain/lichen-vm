@@ -41,6 +41,7 @@ fn fragment() -> KernelFragment {
             KernelInstr::BufferWriteCall,
             KernelInstr::Const(0),
         ],
+        inputs: 1,
         outputs: 1,
         results: 1,
         int_width: IntWidth::I64,

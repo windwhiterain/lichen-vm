@@ -10,6 +10,11 @@ wasmi = "2.0.0"
 # encoder must not be a newer generation than the parser that checks its output.
 wasm-encoder = "0.228.0"
 lichen-kernel-ir.workspace = true
+# The recording builds real graph IR nodes, so this is the crate that owns the
+# value table, the edge rules and the named refusals — not a parallel copy of
+# them. It depends on `lichen-kernel-ir` alone, so this edge adds nothing to the
+# graph-ir side and keeps `lichen-compute` free of any device dependency.
+lichen-graph-ir.workspace = true
 lichen-highlevel.workspace = true
 lichen-lowlevel.workspace = true
 lichen-utils.workspace = true
