@@ -1,15 +1,15 @@
-//! A graph with both kinds of node in it, run on a backend that is not a device.
+//! A graph of kernel nodes, run on a backend that is not a device.
 //!
 //! The stub computes on the host, so what is checked here is the **scheduling**
-//! and not the arithmetic: that a native node is waited for before it reads, that
-//! a kernel node is not, and that the value table stays aligned through both. The
-//! arithmetic on a real device is `lichen-compute-gpu`'s business.
+//! and not the arithmetic. With one kind of node there is no mid-graph demand
+//! point at all — nothing in a run reads a value on the host — so the schedule
+//! this file pins down is the one that follows from that: a run submits each
+//! node in turn and waits exactly once, at the end. The arithmetic on a real
+//! device is `lichen-compute-gpu`'s business.
 
 use std::sync::{Arc, Mutex};
 
-use lichen_graph_ir::{
-    Count, Graph, GraphRefusal, KernelNode, NativeNode, Node, Policy, Runner, Value,
-};
+use lichen_graph_ir::{Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value};
 use lichen_kernel_ir::{
     BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, ParallelBackend,
     Pending, ResidentId,
@@ -38,11 +38,6 @@ fn fragment() -> KernelFragment {
         results: 1,
         int_width: IntWidth::I64,
     }
-}
-
-/// A host call: `out[i] = in[i] * 10`.
-fn times_ten(inputs: &[&[i64]]) -> Vec<Vec<i64>> {
-    vec![inputs[0].iter().map(|value| value * 10).collect()]
 }
 
 /// A backend that keeps its buffers in host memory, and records **what the host
@@ -143,13 +138,14 @@ impl ParallelBackend for Stub {
     fn release(&self, _id: ResidentId) {}
 }
 
-/// One dispatch, one host call over its result, one more dispatch.
+/// One dispatch, then a second over its output.
 ///
-/// Node 1 is the whole point: it reads a value the device may not have written,
-/// so it is a demand point and forces the wait. Node 2 does not read anything —
-/// it records against node 1's *output*, which is host data by then — so it
-/// costs nothing to wait for.
-fn mixed_graph(count: usize) -> Graph {
+/// **The second node is what makes this a graph rather than a loop.** It records
+/// against a value the device may not have written, which is only sound because
+/// the recording happened first and the submission behind it was recorded first
+/// too — so the chain is the shape the whole feature exists for, and it is worth
+/// pinning even though it is two lines.
+fn chain(count: usize) -> Graph {
     let mut graph = Graph::with_inputs(1);
     let first = graph
         .push(
@@ -161,21 +157,11 @@ fn mixed_graph(count: usize) -> Graph {
             1,
         )
         .expect("a node whose declared outputs match its body");
-    let host = graph
-        .push(
-            Node::Native(NativeNode {
-                call: times_ten,
-                inputs: vec![first],
-                outputs: 1,
-            }),
-            1,
-        )
-        .expect("a node whose declared outputs match its body");
     graph
         .push(
             Node::Kernel(KernelNode {
                 fragment: fragment(),
-                inputs: vec![host],
+                inputs: vec![first],
                 count: Count::Constant(count),
             }),
             1,
@@ -184,9 +170,9 @@ fn mixed_graph(count: usize) -> Graph {
     graph
 }
 
-/// The result of `mixed_graph` at index `x`: adds, then ten times, then adds.
+/// The result of [`chain`] at index `x`: adds, then adds again.
 fn expected(count: usize) -> Vec<i64> {
-    (0..count as i64).map(|x| 20 * (2 * x + 1) + 1).collect()
+    (0..count as i64).map(|x| 4 * x + 3).collect()
 }
 
 /// The resident id a run handed back, read through the only accessor that does
@@ -199,20 +185,20 @@ fn resident(value: &Value<'_>) -> ResidentId {
 }
 
 #[test]
-fn a_graph_of_both_node_kinds_computes_the_same_thing_under_both_policies() {
+fn a_chain_computes_the_same_thing_under_both_policies() {
     let count = 8;
     let input: Vec<i64> = (0..count as i64).collect();
 
     for policy in [Policy::Serial, Policy::Async] {
         let stub = Stub::new();
-        let graph = mixed_graph(count);
+        let graph = chain(count);
         let out = Runner::new(&stub, policy)
             .run(&graph, vec![Value::host(input.clone())])
             .unwrap_or_else(|refusal| panic!("{policy:?} runs: {refusal}"));
 
         assert_eq!(
             out.len(),
-            4,
+            3,
             "{policy:?}: the input plus one value per node. The runner hands back every value the \
              graph has rather than picking one, because what a function returns is the function's \
              business and it is recorded in the graph, not chosen here"
@@ -226,41 +212,45 @@ fn a_graph_of_both_node_kinds_computes_the_same_thing_under_both_policies() {
         assert_eq!(
             stub.fetch(id, count).expect("the answer comes back"),
             expected(count),
-            "{policy:?}: adds, then ten times, then adds"
+            "{policy:?}: adds, then adds"
         );
     }
 }
 
 #[test]
-fn an_async_graph_waits_exactly_where_something_needs_the_data() {
+fn an_async_graph_of_kernels_waits_once_and_only_at_the_end() {
     let count = 8;
     let input: Vec<i64> = (0..count as i64).collect();
 
     let stub = Stub::new();
-    let graph = mixed_graph(count);
     Runner::new(&stub, Policy::Async)
-        .run(&graph, vec![Value::host(input)])
+        .run(&chain(count), vec![Value::host(input)])
         .expect("the graph runs");
 
     // The whole schedule, asserted as a sequence rather than as counts, because
-    // *where* the waits are is the claim and a count cannot say it.
+    // *where* the waits are the claim and a count cannot say it.
     //
-    //   submit         the first dispatch goes to the queue
-    //   wait, fetch    the native node needs that dispatch's data, so it is a
-    //                  demand point: the wait and the download are both forced
-    //   submit         the second dispatch records against host data, so it
-    //                  costs nothing to get here and **nothing waited for it**
-    //   wait           the run hands back an id, and an id has to name a buffer
-    //                  the device has written
+    //   submit   the first dispatch goes to the queue
+    //   submit   the second records against a value the device may not have
+    //            written yet, which is sound precisely because it does not read
+    //   wait     the first submission is waited for
+    //   wait     the second is
     //
-    // Three waits would be a scheduler that waited for everything, which is
-    // serial with more steps. One wait would be a scheduler that let the native
-    // node read a buffer the device had not written — a wrong answer rather than
-    // a slow one, and the reason the pending state is in the value type at all.
+    // **Both waits are at the end, and neither is before a dispatch, and that is
+    // the whole measurement.** The host work between the two submissions is the
+    // submission itself, so `hidden = min(host, device)` is `min(nothing,
+    // device) = 0` and Async earns no milliseconds on a chain of pure kernels.
+    // A wait in the middle would be the graph reaching for the one thing that
+    // would make the overlap real, and there is nothing in a graph of kernels
+    // that reaches.
+    //
+    // Two waits rather than one is not two rounds of synchronisation: a run that
+    // has to hand back an id has to have *every* submission the device finished,
+    // and two nodes submitted two things.
     assert_eq!(
         stub.asked(),
-        vec!["submit", "wait", "fetch", "submit", "wait"],
-        "two waits, at the two demand points, and none of them before a dispatch \
+        vec!["submit", "submit", "wait", "wait"],
+        "every submission waited for exactly once, and none of them before a dispatch \
          that did not need one"
     );
 }
@@ -271,9 +261,8 @@ fn a_serial_graph_never_submits_without_waiting() {
     let input: Vec<i64> = (0..count as i64).collect();
 
     let stub = Stub::new();
-    let graph = mixed_graph(count);
     Runner::new(&stub, Policy::Serial)
-        .run(&graph, vec![Value::host(input)])
+        .run(&chain(count), vec![Value::host(input)])
         .expect("the graph runs");
 
     assert!(
@@ -286,9 +275,8 @@ fn a_serial_graph_never_submits_without_waiting() {
 #[test]
 fn a_batch_policy_is_refused_by_name_rather_than_run_as_something_else() {
     let stub = Stub::new();
-    let graph = mixed_graph(4);
     let refusal = Runner::new(&stub, Policy::Batch)
-        .run(&graph, vec![Value::host(vec![0; 4])])
+        .run(&chain(4), vec![Value::host(vec![0; 4])])
         .expect_err("batch is not something this contract can do");
     assert!(
         matches!(
@@ -337,14 +325,14 @@ fn an_output_count_the_body_disagrees_with_is_refused_rather_than_misaligning_th
     let mut graph = Graph::with_inputs(1);
     let refusal = graph
         .push(
-            Node::Native(NativeNode {
-                call: times_ten,
+            Node::Kernel(KernelNode {
+                fragment: fragment(),
                 inputs: vec![0],
-                outputs: 1,
+                count: Count::Constant(4),
             }),
             2,
         )
-        .expect_err("two claimed outputs for a call that produces one");
+        .expect_err("two claimed outputs for a fragment that writes one");
     assert_eq!(
         refusal,
         GraphRefusal::OutputCount {
@@ -355,14 +343,14 @@ fn an_output_count_the_body_disagrees_with_is_refused_rather_than_misaligning_th
     );
 }
 
-/// `mixed_graph` with the source function's return recorded as its **first**
-/// node's output, so the last two nodes are a dead tail.
+/// [`chain`] with the source function's return recorded as its **first** node's
+/// output, so the last node is a dead tail.
 ///
 /// This is the case the record exists for. "The tail" would answer this graph
 /// with the wrong value, and a runner that picked the last node could not
 /// express this function's return at all.
 fn graph_with_a_dead_tail(count: usize) -> Graph {
-    let mut graph = mixed_graph(count);
+    let mut graph = chain(count);
     // Value 0 is the input, so the first node's output is value 1.
     graph.returning(vec![1]).expect("a value the graph defines");
     graph
@@ -390,17 +378,16 @@ fn a_dead_tail_still_returns_whatever_the_source_function_returned() {
     // than read off the end.
     assert_eq!(
         stub.asked(),
-        vec!["submit", "wait", "fetch", "submit", "wait"],
+        vec!["submit", "submit", "wait", "wait"],
         "the same schedule as without a dead tail: the tail is not skipped, and the return does \
          not change what runs"
     );
-    // The native node read value 1, so the runner brought it home in place and
-    // the returned value is host data — the fetched answer, not an id.
-    let Value::Host(first) = &out[returned[0]] else {
-        panic!("the returned value was read by a native node, so it came home")
-    };
+    // The returned value is still a resident id, because nothing in the run ever
+    // needed it on the host. Taking it home is the caller's choice, not the
+    // runner's — which is the other half of why the return is recorded.
     assert_eq!(
-        *first,
+        stub.fetch(resident(&out[returned[0]]), count)
+            .expect("the returned value comes back"),
         (0..count as i64).map(|x| 2 * x + 1).collect::<Vec<i64>>(),
         "which is the first node's answer and not the tail's"
     );
@@ -408,9 +395,8 @@ fn a_dead_tail_still_returns_whatever_the_source_function_returned() {
 
 #[test]
 fn a_graph_that_has_not_been_told_its_return_reports_none_rather_than_nothing() {
-    let graph = mixed_graph(4);
     assert_eq!(
-        graph.returns(),
+        chain(4).returns(),
         None,
         "None and an empty list are different answers: None means nobody has said, and a caller \
          reading it takes every value — while an empty list is a function that returns a unit"
@@ -419,7 +405,7 @@ fn a_graph_that_has_not_been_told_its_return_reports_none_rather_than_nothing() 
 
 #[test]
 fn a_return_recorded_twice_is_refused_rather_than_the_second_one_winning() {
-    let mut graph = mixed_graph(4);
+    let mut graph = chain(4);
     graph.returning(vec![1, 2]).expect("the first answer");
     let refusal = graph
         .returning(vec![3])
@@ -434,7 +420,7 @@ fn a_return_recorded_twice_is_refused_rather_than_the_second_one_winning() {
 
 #[test]
 fn a_return_naming_a_value_the_graph_does_not_have_is_refused() {
-    let mut graph = mixed_graph(4);
+    let mut graph = chain(4);
     let refusal = graph
         .returning(vec![99])
         .expect_err("a value past the end of the table");
@@ -536,59 +522,19 @@ fn a_negative_count_is_refused_rather_than_wrapped_into_an_enormous_extent() {
 }
 
 #[test]
-fn a_native_value_names_its_kind_in_every_refusal_that_reads_one() {
-    // The second inhabitant of `Native`, and the one the value table exists for:
-    // a pointer to a value the host owns. Nothing produces one yet, so this is
-    // only ever an argument — but both roles have to answer for it, and they have
-    // to answer differently, because the two repairs are different.
-    let pointer = || Value::native_pointer(7);
-    let stub = Stub::new();
-
-    // Asked for a count: the role was right and the value was not.
-    let as_count = Runner::new(&stub, Policy::Serial)
-        .run(
-            &counted_by_input(),
-            vec![Value::host(vec![1, 2, 3, 4]), pointer()],
-        )
-        .map(|_| ())
-        .expect_err("a count read from a host-owned value");
-    assert_eq!(
-        as_count,
-        GraphRefusal::CountNotANumber {
-            found: "a value the host owns"
-        }
-    );
-
-    // Asked for a buffer: the other role, refused by the other message.
-    let as_buffer = Runner::new(&stub, Policy::Serial)
-        .run(&counted_by_input(), vec![pointer(), Value::int(4)])
-        .map(|_| ())
-        .expect_err("a buffer slot holding a host-owned value");
-    assert_eq!(
-        as_buffer,
-        GraphRefusal::NotBufferData {
-            found: "a value the host owns"
-        }
-    );
-
-    // And it is not the number's message either, which is the point of the kind:
-    // both native values have no extent, but a caller who passed one knows which.
-    let number_as_buffer = Runner::new(&Stub::new(), Policy::Serial)
-        .run(&counted_by_input(), vec![Value::int(4), Value::int(4)])
-        .map(|_| ())
-        .expect_err("a buffer slot holding a number");
-    assert_ne!(
-        as_buffer, number_as_buffer,
-        "a number and a host-owned value are the same category and different \
-         mistakes, so they must not be reported as the same one"
-    );
-
-    // Ready, and without an extent. A native value is never pending because the
-    // host made it, and a count of zero would be a length somebody could act on.
-    let value = pointer();
+fn a_number_is_ready_and_has_no_extent_because_it_is_neither() {
+    // The two properties `Int` is refused for are also the two it is safe by, and
+    // they are not the same fact. A number is never pending because a device
+    // does not produce one, so there is no wait owed against it; and it has no
+    // length, so a reported `0` would be a number a caller could dispatch over.
+    let value = Value::int(4);
     assert!(
         value.is_ready(),
-        "the host made it, so there is no wait owed"
+        "a device never produces one, so there is no submission behind it to wait for"
     );
-    assert_eq!(value.count(), None, "and it has no extent to report");
+    assert_eq!(
+        value.count(),
+        None,
+        "and a number has no length, so reporting `0` would be one a caller could act on"
+    );
 }

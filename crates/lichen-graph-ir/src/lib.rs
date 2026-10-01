@@ -32,7 +32,7 @@ pub mod run;
 /// and one that is not.
 pub mod value;
 
-pub use graph::{Count, Graph, KernelNode, NativeCall, NativeNode, Node, ValueId};
+pub use graph::{Count, Graph, KernelNode, Node, ValueId};
 pub use refusal::GraphRefusal;
 pub use run::{Policy, Runner};
-pub use value::{Native, NativeValueId, Value};
+pub use value::Value;
