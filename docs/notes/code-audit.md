@@ -73,6 +73,7 @@ queue's order is deliberate.
 | P1-28 | medium | language-parser, language | One AST walk is unguarded, and a caller runs it on the caller's stack | done |
 | P1-29 | medium | compute, registry | A compute value reaching the artifact codec panics | done |
 | P1-30 | low | compute | A refused `plrun` count is silent | done |
+| P1-31 | medium | lowlevel | The deep-pass verdict conflates "never ran" with "in progress" | todo |
 | P2-1 | medium | language, language-server | `BufferSession` is built but unwired; rustdoc claims otherwise | done (doc); wiring is D6(b) |
 | P2-2 | medium | highlevel, language, language-server | Five hand-written AST traversals; one with a wildcard arm | done |
 | P2-3 | medium | highlevel | `Build` is a god-DTO with four parallel vectors | done |
@@ -2281,6 +2282,71 @@ Pinned by `a_refused_plrun_count_says_why` in `crates/lichen-language/tests/
 compute.rs`, which asserts one diagnostic naming both the count asked for and the
 limit; with the reporting disabled it fails with the old symptom, `expected this
 program to fail: "parameterized: Int"`.
+
+### P1-31 — The deep-pass verdict conflates "never ran" with "in progress" `verified`
+
+`Node::evaluated_deep: Option<EvaluatedDeep>` is documented as a two-state fact:
+`None` means the deep pass never ran on the node, and a reader "must treat [it] as
+parameterized, **never** as proven concrete" (`module.rs:200-213`,
+`lib.rs:882-889`). Two reads honour that (`evaluation.rs:285-287`,
+`is_none_or`, and `freeze.rs:71-73`), and `function.rs:325` is conservative by a
+different route (`is_some_and(|e| !e.parameterized)`, where `None` means *not
+proven*, so the node is cloned). **Three do not**: the verdict's own array arm
+(`evaluation.rs:739-745`), table arm (`:754-764`) and operand arm (`:766-774`) all
+use `is_some_and(|e| e.parameterized)`, so `None` reads as *not* parameterized;
+`Module::key_state` does the same after forcing the key
+(`table.rs:217-222`).
+
+The two arms reached by the **value descent** are non-conservative on purpose, and
+the reason is a third state `Option` cannot express. The canonical universe is a
+self-referential array — `write_node_value(universe, Array([type_marker, universe]))`
+(`checker.rs:844-854`) — so the descent reaches `universe` while its own frame
+holds the `visiting` mark, the structural-cycle cut returns **without writing a
+verdict** (`evaluation.rs:593-597`), and the verdict computation then reads that
+`None`. Read conservatively, the universe would be flagged parameterized, and
+`checker.rs:627-632` states the consequence: the apply clone machinery would clone
+it, "creat[ing] a fresh self-loop that unification cannot equate with the
+canonical one" — a path-guard conflict on the `Type : Type` spine. So *"in
+progress, assumed concrete"* is a real state, and it is deliberately read as
+concrete.
+
+The defect is that the same `None` also means *"never ran"*, where nothing
+justifies that read, and two sites take it:
+
+- `value_is_parameterized`'s **operand arm** (`evaluation.rs:766-774`). The deep
+  pass descends value-reachable edges only, and only `evaluate_node_forced` walks
+  an operand edge (`:633-639`), so a core operator's operand routinely has no
+  verdict. The arm's own comment calls the operand "a graph edge", i.e. part of
+  the subtree the verdict claims to describe — yet a `None` there contributes
+  nothing, so a node is certified concrete while its operand's subtree is
+  unproven. That is also inconsistent with the *same* postlude reading a `None`
+  operand conservatively at `:285-287`.
+- `Module::key_state` (`table.rs:217-222`): a key the forced pass refused on
+  budget is read as decided and hashed, where the module doc says such a key must
+  record `EvalError::TableKeyUnbound` and drop the entry (`table.rs:63-68`).
+
+**Fix.** Split the state rather than flip a read. Give the field a third value —
+"assumed concrete, in progress" — set at the cycle cut (`:593-597`) and read as
+today by the array and table arms; leave `None` to mean strictly "never ran"
+everywhere, and let the operand and table-key arms read
+`is_none_or(|e| e.parameterized)` like `:285-287` does. Behaviour on the universe
+is unchanged (the in-progress read keeps assuming concrete); what changes is that
+the fact is named, the operand edge stops being silently exempt, and the verdict
+becomes a function of the graph rather than of where the walk started. A
+follow-on note records why that matters:
+`docs/notes/incremental-evaluation.md` §4.4 needs the verdict to be maintainable
+by dirty-flag propagation, and it cannot be while a `None` means two things.
+
+**Open — whether the exempt operand is *harmful*, not just undocumented.**
+Reading `None` as concrete lets the apply clone walk bake a node
+(`function.rs:325`, `proven_concrete`) whose operand's subtree was never proven.
+An analytic attempt to make that observable — a template whose operand is an array
+holding one parameter read that the operator never reads — suggests the baked
+node's cached value is still call-independent and that nothing re-reads the
+operand afterwards, so it may well be unobservable. That half is `needs-test`: the
+proof is a regression test pinning a template of that shape and checking the
+second apply's result, and this project does not write tests without permission
+(`D3`). The split is worth doing either way; the test decides its severity.
 
 ## P2 — architecture
 

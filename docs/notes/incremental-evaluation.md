@@ -12,9 +12,10 @@
 > mutation should mark its consumers dirty, and a `dirty` bit should let the
 > incremental pass skip what a full pass would recompute.  The obstruction is
 > that **the graph's topology changes while it is being computed** (§3), and —
-> the deeper obstruction — that one of the two computed values is a fixpoint
-> whose current answer depends on traversal order (§4.4, **H1**).  §4 is the
-> design; §9 is the list of things only the superior can decide.
+> the deeper obstruction — that the deep-pass verdict conflates "never ran" with
+> "in progress", which is what made it a function of traversal order (§4.4,
+> **H1**, investigated and filed as `code-audit.md` `P1-31`).  §4 is the design;
+> §9 is the decisions taken and the two obligations they create.
 >
 > Points at: `crates/lichen-lowlevel/src/{evaluation,equality,function,gc,table,module,lib,utils,apply}.rs`,
 > `crates/lichen-lowlevel/src/static_module/{freeze,apply}.rs`,
@@ -286,8 +287,9 @@ existing code already handles it at the one place that matters.
 
 ### 4.4 The three things that are actually hard
 
-**H1 — the verdict is a fixpoint whose current answer depends on traversal
-order.** `Option<EvaluatedDeep>` is read three different ways in the crate:
+**H1 — the verdict conflates "never ran" with "in progress", and that is a code
+defect rather than a preference.** `Option<EvaluatedDeep>` is read three different
+ways in the crate:
 
 | read | `None` means | sites |
 |---|---|---|
@@ -303,20 +305,35 @@ opposite. During a normal walk the descent precedes the verdict
 (`evaluation.rs:641-670` before `:704`), so a non-shallow dynamic item *does*
 have a verdict — **except** when the child returned early at the structural-cycle
 cut (`:593-597`) or the walk refused on budget before writing (`:599-625`).
-Reading `None` as concrete at those positions is what lets a cyclic value be
-proven concrete at all (the coinductive "assume concrete until disproven" step);
-reading it as parameterized there would make every cycle unprovable. The code
-compensates elsewhere by proving the canonical cycles first, in a fixed order
-(`checker.rs:633-635`) and by sorting the definition pass by `ExprId`
-(`:685-690`, documented as user-visible order).
 
-For the design this is not a detail, it is the precondition: **if the verdict is
-a function of where the walk started, then a dirty-flag recomputation — which
-restarts somewhere else — can disagree with a full walk.** Either the verdict
-becomes an explicit greatest fixpoint over each strongly-connected component
-(recompute a whole SCC atomically, in a fixed order), or the DFS order is
-declared part of the contract and the incremental pass must reproduce it. **Q6**
-is this decision; §8 lists it as the first falsifier.
+**Investigated (Q6), and the answer is that `Option` is one state short.** The
+full evidence and the prescribed fix are `code-audit.md` `P1-31`; the decisive
+fact is the canonical universe. It is a self-referential array —
+`write_node_value(universe, Array([type_marker, universe]))`, `checker.rs:844-854`
+— so the descent reaches `universe` while its own frame holds the `visiting` mark,
+the cycle cut returns **without writing a verdict**, and the verdict computation
+then reads that `None`. The array arm reads it as concrete, which is what lets a
+cyclic value be proven at all; read conservatively, `checker.rs:627-632` states
+the consequence — the universe would be cloned per apply and create "a fresh
+self-loop that unification cannot equate with the canonical one", breaking the
+`Type : Type` spine. So the non-conservative read at the array/table arms is
+**load-bearing and deliberate**. What is wrong is that the same `None` also
+carries "never ran", and *that* is what the operand arm (`evaluation.rs:766-774`)
+and `table.rs:217-222` read non-conservatively, with no cycle in sight.
+
+Two consequences, and Q6 is thereby settled as a fix rather than a choice:
+
+- The verdict's documented meaning ("any node in its reachable subtree is
+  `Parameterized`") is false at the operand and table-key reads: the operand edge
+  is part of the graph by the code's own account (`evaluation.rs:766-769`), and a
+  `None` there contributes nothing.
+- The verdict is a function of where the walk started, so a recomputation in a
+  different order can disagree with a full walk. The fix is to **split the
+  state**, not to flip a read: a third value meaning "assumed concrete, in
+  progress", set at the cycle cut and read exactly as today by the array/table
+  arms, leaves `None` to mean strictly "never ran" everywhere — after which the
+  operand and table-key arms can read `is_none_or` like `evaluation.rs:285-287`
+  does, and step 3 of §7 has its oracle.
 
 **H2 — the apply clone walk is a materializing consumer, not a dataflow node.**
 `function.rs:318-338` reads `proven_concrete` and then *builds new topology*: it
@@ -400,6 +417,12 @@ key on below a whole function.
 
 ### 6.1 M1 — a content-keyed value memo ("salsa at the IR level")
 
+**Closed by decision (Q4): no content key at all.** Dirty comes from the *mutation
+action*, not from a digest — a mutation that changed nothing still marks its
+consumers dirty. So the cross-build half reuses only what the edit provably left
+alone, and there is nothing for a value digest to decide. The rest of this section
+is kept as the record of why a key cannot simply be borrowed, not as a plan.
+
 Key each allocation by a serialization of its inputs (§3.1's edge set is the
 input set), and on a rebuild look the key up in a cache of previous
 `(value, verdict, class, low_shape)`.
@@ -428,7 +451,7 @@ The obstruction is R2 at value granularity:
   `UNFOLD_DEPTH`. A cache key must be authoritative: serving the wrong value on a
   collision is a wrong answer, not a lost candidate. So M1 needs `key_eq` on every
   hit (a full comparison, giving back much of the win) or a *new* injective
-  value-digest contract (**Q4**).
+  value-digest contract — and Q4 rejected both, which is what closes M1 (§9).
 
 M1 also does not escape R3: a memoized value holds `Dynamic` refs into the old
 module, so either the old module stays alive (an arena pinning scheme the runtime
@@ -491,8 +514,9 @@ Costs, stated:
   space.
 - **Class sharing is lost across the boundary.** A static leaf unifies by
   materializing into a fresh dynamic leaf (`static_module.rs:142-153`) — exactly
-  how imports already behave. Whether that is observable for a *top-level binding
-  of the edited file* (a polymorphic one) is **Q2**.
+  how imports already behave. Q2 accepted that reuse carries the import semantics
+  even for a top-level polymorphic binding of the edited file; §8 keeps the
+  falsifier if a real case disagrees.
 - **M3 does not remove the need for `T3`.** To *skip* re-lowering an unchanged
   unit the checker must resume from a scope whose entries are static refs. M3
   supplies the representation; the resume is `T3`'s work. **Incremental
@@ -514,10 +538,12 @@ already the answer. Listed because the note has no measurement, and because
    the share of the keystroke budget that is (deep pass) vs (check) vs
    (lex+parse). `code-audit.md:3966-3970` shows the project's own probe style (a
    temporary counter, removed after). §1.3 is a *reading of the code*.
-1. **Settle the verdict's contract (H1 / Q6) before touching the pass.** Make
-   `parameterized` an explicit function of the graph — an SCC-atomic greatest
-   fixpoint — or declare the DFS order part of the contract. Without this,
-   "incremental == full" is not provable and step 3 has no oracle.
+1. **Fix the verdict's state split first (`P1-31`, §4.4 H1).** Q6 is settled by
+   investigation: the fix is a third value meaning "assumed concrete, in
+   progress", leaving `None` to mean strictly "never ran", after which the
+   operand and table-key arms read conservatively. This is a code fix, not a
+   design choice, it is independent of everything below, and without it
+   "incremental == full" is not provable (step 3 has no oracle).
 2. **The reverse index and the two hooks** (§4.1-4.2): `dirty` + `dependents`,
    `link` at `add_node` and at each payload allocation, propagation in
    `close_operation_cycle` and `write_node_value`, cleanup in `drop_block`.
@@ -525,11 +551,13 @@ already the answer. Listed because the note has no measurement, and because
    harness**: run the incremental and the full pass over the same corpus and
    compare every verdict, every value, and every diagnostic (H3). The existing
    test suites are the corpus; the only new test is the comparison.
-4. **Then the cross-build half** — M3 at the granularity Q3 selects, plus `T3`
-   resume.
-5. **Then, optionally, M1's value memo** — only if step 0 shows re-lowering (not
-   re-evaluating) dominates after steps 1-4, and only once Q4's authoritative
-   digest exists.
+4. **Then the cross-build half** — M3 (accepted by Q2) at the sub-expression
+   granularity Q3 selected, plus `T3` resume. Q3's answer and Q4's "no key"
+   together create the identity obligation in **Q7**; Q4's "dirty from the action"
+   creates the pinpointing obligation in **Q8**. Settle those two before building
+   this step — they are the whole design of it.
+5. *(removed)* **M1's value memo** — closed by Q4 (no key), so step 5's row in §10
+   is a deletion rather than a change.
 
 `T4` (same-module resume with unification rollback, §6.2) stays the boundary:
 the only route that avoids freezing, at the cost of the union-find's contract
@@ -539,70 +567,88 @@ not wasted if T4 is ever taken.
 
 ## 8. What would falsify the plan
 
-- **H1 cannot be settled.** If the verdict stays a function of traversal order,
-  incremental and full walks can legitimately disagree, step 3 has no oracle, and
-  only the cross-build half (§7 step 4) survives.
+- **The `P1-31` split moves a result.** It should not — the split only *names* a
+  fact the array/table arms already assume — but if introducing the third state
+  changes any value or diagnostic, the verdict stays order-dependent and step 3
+  has no oracle.
 - **Step 0 shows the deep pass is negligible.** Then §6.4 is the whole finding
   and the note reduces to a documentation change: `T3` is the evaluation
   incrementality item.
 - **The `dependents` graph costs more than the re-walk it saves** (§4.5) on a
-  real program's edge count. Then the region-repair variant, or nothing.
-- **Q2 shows a static leaf changes observable behaviour for a polymorphic
-  binding.** Then M3 needs a class-sharing story (i.e. M2), and the cheap
-  cross-build mechanism is gone.
+  real program's edge count. Q1 accepted the per-node lists; if they dominate a
+  real module's memory, the fallback is the region-repair variant.
+- **A reused polymorphic binding turns out to be observable.** Q2 accepted the
+  import semantics; if a case shows a *top-level polymorphic binding of the edited
+  file* behaving differently under static-leaf reuse, M3 needs a class-sharing
+  story (i.e. M2) and the cheap cross-build mechanism is gone.
+- **Q7 or Q8 has no answer.** Sub-expression units with no content key require a
+  stable sub-expression identity and a span → dirtied-subtree map; if the IR
+  cannot supply either without re-lowering, the unit granularity falls back to the
+  statement window and §6.3's win shrinks.
 - **Freeze cost exceeds the re-evaluation it saves.** Then unit granularity must
-  be coarser than a binding, and §6.3's win shrinks toward M4.
+  be coarser than a sub-expression, and §6.3's win shrinks toward M4.
 
-## 9. Open questions for the superior
+## 9. Decisions and open questions
 
-- **Q6 — What is the verdict's contract? (new, and the precondition for
-  everything else.)** `Option<EvaluatedDeep>` is read three ways (§4.4 H1); the
-  documented contract is "`None` ⇒ parameterized, never proven concrete"
-  (`module.rs:200-213`), while the verdict's own array/table/operand arms read
-  `None` as concrete (`evaluation.rs:742`, `:756`, `:761`, `:772`,
-  `table.rs:219`). Is that the deliberate coinductive step that makes cyclic
-  values provable (so the *documentation* is what needs fixing), or a
-  conservatism hole (so the *reader* is)? Either answer is actionable — but the
-  design in §4 needs to know whether `parameterized` is a function of the graph
-  or of the walk before it can be maintained incrementally.
-- **Q1 — Is the reverse index acceptable at `O(E)` memory?** §4.5's cheapest
-  sound shape stores a `dependents` list per node, in a runtime whose open
-  performance items are about removing per-visit work (`P4-2`, `P4-6`). The
-  alternative (no lists, rebuild a region's reverse edges when it is first
-  dirtied) trades memory for a scan; which does the project prefer?
-- **Q2 — Does a reused binding as a static leaf preserve semantics?** A static
-  leaf materializes into a fresh dynamic leaf and shares no class with the new
-  build (`static_module.rs:142-153`). Imports live with this today. Does a
-  *top-level binding of the edited file* — in particular a polymorphic one —
-  survive it, or must reuse keep the class alive (i.e. M2)?
-- **Q3 — Which unit granularity?** Top-level binding / statement, a lambda body,
-  or an arbitrary sub-expression. This decides whether `BlockId` (one per lambda
-  today) can carry R1 or a new per-unit id is needed.
-- **Q4 — Is an authoritative value digest needed, and may it be a new
-  contract?** The existing canonical unfolding is documented as a pre-filter
-  (`table.rs:9-14`, `:51-61`). Either M1 verifies every hit with `key_eq`, or the
-  project takes on a second, injective digest with its own format-version
-  discipline like `content_key`'s. Which?
-- **Q5 — Which consumer is the target?** The CLI pays one build per file; the
-  editor pays per keystroke but currently has *no* consumer for `BufferSession`
-  (`P2-1`), so an incremental evaluator wired to a session nothing runs would
-  repeat that. If the editor is the target, §7 steps 4-5 are `D6`'s `(b)`
-  restated with evaluation included, and should be sequenced there.
+**Decided (the superior, this session):**
+
+- **Q1 — the reverse index shape: per-node `dependents` lists.** Accepted at
+  `O(E)` extra memory (§4.5). The region-rebuild variant is not taken; it stays
+  the fallback if the lists dominate a real module's memory.
+- **Q2 — a static leaf's semantics: accepted.** Reuse at the import semantics is
+  acceptable, including for a polymorphic top-level binding of the edited file.
+  M3 is therefore viable and M2 is not needed for the cross-build half.
+- **Q3 — the unit granularity: an arbitrary sub-expression.** The finest of the
+  three. It makes identity and pinpointing the two new obligations Q7 and Q8, and
+  it means the unit is not `BlockId`-shaped (§5(f)).
+- **Q4 — no content key at all.** Dirty comes from the *mutation action*, not from
+  a digest: a mutation that changed nothing still marks its consumers dirty. That
+  is conservative, needs no `key_eq` verification and no second digest contract,
+  and it closes M1 (§6.1) — the cross-build half reuses only what the edit left
+  alone.
+- **Q5 — the CLI build path first.** Step 0 measures there; the editor path is
+  deferred rather than wired into a `BufferSession` nothing consumes yet (`P2-1`).
+- **Q6 — settled by investigation, and it is a code defect.** The verdict
+  conflates "never ran" with "in progress", and the fix is to split the state.
+  The evidence and the prescribed fix are `code-audit.md` `P1-31`; §4.4 H1 states
+  the design consequence. The gate is therefore a fix rather than a decision.
+
+**Open — created by the answers above:**
+
+- **Q7 — what identifies a sub-expression across a rebuild?** Q3 chose
+  sub-expression units and Q4 forbids a content key, so nothing may be *computed*
+  to recognise an unchanged unit. The IR is an append-stable arena, but its ids
+  renumber when an edit re-lowers a changed prefix, so either the frontend must
+  preserve `ExprId`s for untouched subtrees, or a unit needs a derivation-path
+  name (a path from the root through the shared binder nodes). Which — and does
+  the existing splice (`session.rs:353-531`) already give enough for subtrees
+  *inside* an untouched statement?
+- **Q8 — what names the sub-expressions an edit dirtied?** With no key, the edit
+  *is* the invalidation. Today `BufferSession` maps a byte span to a touched
+  *statement window*; sub-expression granularity needs that mapping one level
+  down — byte span → the IR subtrees it can affect, plus their transitive
+  dependents over §4's index. Is the frontend's span index
+  (`compile::SpanIndex`) enough to derive it, or must the frontend record a span
+  per subtree?
+- **Q9 — does `P1-31`'s harm half matter?** Whether reading a never-ran `None`
+  as concrete is *observable* is `needs-test` (`P1-31`'s last paragraph has the
+  candidate case), and the project does not write tests without permission
+  (`D3`). The split is worth doing either way; the answer decides its severity.
 
 ## 10. Where the changes would land (if the plan is taken)
 
 | Step | File / function | Change |
 |---|---|---|
 | 0 | `crates/lichen-lowlevel/src/evaluation.rs`, a temporary probe | count entry points, visits, distinct nodes; removed after measurement |
-| 1 | `evaluation.rs` `value_is_parameterized` (+ the §4.4 H1 readers) | an SCC-atomic or order-documented verdict function |
+| 1 | `lib.rs` `EvaluatedDeep`, `evaluation.rs` `evaluate_node_deep_inner` + `value_is_parameterized` | the third "in progress" state; conservative reads at the operand and table-key arms (`P1-31`) |
 | 2 | `lib.rs` `Node`, `module.rs` `add_node`/`drop_block`, `equality.rs` `write_node_value`, `utils.rs` `alloc_*` | `dirty` + `dependents`; `link`/`unlink`/`dirty` |
 | 2 | `module.rs` `close_operation_cycle` | the one late edge: reverse link + propagate to dependents |
 | 3 | `evaluation.rs` `evaluate_node_deep_inner` | consult `dirty` instead of unconditional descent |
 | 3 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness (incremental vs full: verdicts, values, diagnostics) |
 | 4 | `static_module/freeze.rs` | a sub-graph freeze entry point (or a per-unit `Module` driven from the checker) |
 | 4 | `crates/lichen-highlevel/src/checker.rs` | resume from a scope whose entries are static refs for reused binders |
-| 4 | `crates/lichen-language/src/session.rs` + `crates/lichen-registry` | the reuse gate per unit instead of per whole `Build`; identity/slot discipline for many small units |
-| 5 | `crates/lichen-lowlevel/src/table.rs` | an authoritative digest, or a `key_eq`-verified memo |
+| 4 | `crates/lichen-language/src/{session,compile}.rs` + `crates/lichen-registry` | Q7/Q8: a stable sub-expression identity and a span → dirtied-subtree map; the reuse gate per unit instead of per whole `Build`; slot discipline for many small units |
+| (removed) | — | step 5: Q4 rejected a content key, so there is no digest and no memo to build |
 
 ## 11. Recorded discussion
 
@@ -629,5 +675,16 @@ not wasted if T4 is ever taken.
 - Selected: **dirty-flag propagation over the maintained dependency index** for
   the within-build half, behind a measurement and behind Q6; **fine-grained
   frozen units** for the cross-build half, behind `T3`'s resume.
-- Left open, and flagged as the subtlest point: **H1** — the verdict's three
-  readings of `None` and the traversal-order dependence they create.
+- Investigated and **resolved as a defect**: the verdict's three readings of
+  `None` are one `Option` doing two jobs — "never ran" and "in progress, assumed
+  concrete at the cycle cut". The array/table arms' non-conservative read is
+  load-bearing (§4.4 H1 proves it from the canonical universe), so the fix is the
+  state split, filed as `code-audit.md` `P1-31`. Recorded because the first pass
+  at this note framed it as a choice between "fix the docs" and "fix the reader",
+  and neither is right.
+- The superior's answers settled Q1-Q5 as §9 records, and two of them changed the
+  plan rather than filling it in: **Q3's sub-expression granularity plus Q4's "no
+  key"** turn the cross-build half into an identity/pinpointing problem (Q7, Q8),
+  and **Q4 closes M1** outright — a dirty flag driven by the mutation action has
+  no use for a content digest, and a mutation that changed nothing still counts as
+  dirty.
