@@ -1,7 +1,7 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
-use crate::ValueExt as _;
+use crate::Release;
 impl<P: Program> StaticModule<P> {
     /// The node's solved value — `Parameterized` when the node is a
     /// residual computation with no cached answer.
@@ -127,6 +127,14 @@ impl<P: Program> StaticModule<P> {
             });
         }
 
+        // The ownership transfer: every frozen value is asked what it owns
+        // outside the arena, and the artifact carries the obligations until it is
+        // dropped — which is its eviction (see `Program::release_obligations`).
+        let mut releases: Vec<Box<dyn Release>> = Vec::new();
+        for value in values.iter().flatten() {
+            P::release_obligations(*value, &mut releases);
+        }
+
         // Phase 2: collect, dedupe, and lay out the payload regions.  Only
         // dynamic payloads are laid out; a static payload (an array, function
         // value, or ext handle from a frozen dependency) already lives in its
@@ -217,6 +225,7 @@ impl<P: Program> StaticModule<P> {
                 nodes,
                 functions,
                 arena,
+                releases,
             },
             node_map,
         )

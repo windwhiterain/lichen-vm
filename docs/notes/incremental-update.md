@@ -266,6 +266,7 @@ Decided by the superior:
 | 2 | `lichen-language-lex` / `-parser` / `ast.rs` | **landed**: the `cache` keyword and `Binding.cached` — parsed and carried, consumed by nothing |
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-lowlevel/src/static_module/freeze.rs` | **landed**: `freeze_closure` (the closure of a root set) and `freeze_set` (the shared phases); `from_module_mapped` is now "the closure of every node" |
+| 3 | `lichen-lowlevel/src/lib.rs` (`Release`, `Program::release_obligations`, `StaticModule::releases` + `Drop`) | **landed**: the general ownership transfer — an artifact owns its out-of-arena resources and releases them when it is dropped |
 | 3 | `lichen-registry` (the store) | **not built**: cells keyed by path; freeze/read in place; the four events reported |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
 | 4 | the program's own graph data (the PCG graph a program builds) | node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
@@ -331,6 +332,13 @@ correction, and the reason this is not merely a smaller `from_module`:
   unification policy is the precedent.  A program that owns nothing takes the default
   and pays nothing.
 
+  **Landed** in `lichen-lowlevel`: the `Release` trait, the `Program` hook,
+  `StaticModule::releases`, and the artifact's `Drop`, which the freeze fills once per
+  frozen value.  An artifact loaded from the device's store owns none
+  (`persist/container.rs`), because a resource handle is process-local and cannot be
+  in the bytes — the store's own eviction is the only path that has an obligation to
+  run.
+
   This composes with the existing rule rather than fighting it: a value dropped by
   `drop_block` **still does not release** (the deliberate no-per-value-release
   decision), the context still owns the memory until it drops, and the artifact's
@@ -352,6 +360,11 @@ the closure of the array root filed **3 nodes of 4**, the unreachable node was n
 pulled in, and the frozen artifact read both items (10 and 20) back through its own
 arena; adding that node as a second root grew the closure to all 4. That is the
 per-cell claim in its smallest form: the artifact is as big as the value it keeps.
+
+A second reading, from the same harness: a value that **reports a node through
+`traced`** and owns one obligation produced a closure of **2 nodes** — the value and
+the node it reports, which is that edge doing its job — and an artifact carrying
+**1 obligation**, which ran **exactly once** when the artifact was dropped.
 
 The dirty input for this landing is the caller's, and it is the granularity the
 superior chose for source edits: the edit declares which file changed, and every file

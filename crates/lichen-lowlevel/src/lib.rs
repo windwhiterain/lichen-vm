@@ -82,6 +82,28 @@ pub trait Program: Sized + Copy + Debug + PartialEq {
         let _ = (module, sides);
         None
     }
+
+    /// Hand a freeze the **release obligations** of one of the values it is
+    /// filing — the ownership half of freezing a sub-graph.
+    ///
+    /// A frozen artifact owns everything its values need: a handle payload is
+    /// copied into the artifact's arena, and everything else a value owns
+    /// *outside* the arena is transferred by obligation.  The artifact runs the
+    /// obligations when it is dropped, which is its eviction, so an artifact that
+    /// is thrown away releases its resources then rather than at the owner's own
+    /// drop.  The default owns nothing, so a program whose values hold no
+    /// out-of-arena resource pays nothing.
+    ///
+    /// The hook is here rather than on [`ValueExt`] because only the program can
+    /// reach an issuer: a device buffer names memory by an id that is meaningless
+    /// outside the backend that issued it, and [`ValueExt`] deliberately carries
+    /// no program parameter (see its doc).  Called once per frozen value, in the
+    /// artifact's node order; the value's own copy is untouched, and because a
+    /// value dropped by `drop_block` does not release, taking an obligation
+    /// cannot double-release.
+    fn release_obligations(value: Self::Value, out: &mut Vec<Box<dyn Release>>) {
+        let _ = (value, out);
+    }
 }
 
 /// What a [`Program::defer_pending`] policy decided about a stalled
@@ -453,6 +475,18 @@ impl<P: Program> TraceContext for Module<P> {
             .get(function)
             .map(|function| function.nodes.as_slice())
     }
+}
+
+/// A resource a frozen [`StaticModule`] owns outside its arena.
+///
+/// Built by the program at freeze time ([`Program::release_obligations`]) and
+/// run exactly once, when the owning artifact is dropped.  It exists so that the
+/// ownership transfer a sub-graph freeze performs is **general**: the lowlevel
+/// never names a device, a file or any other outside resource — it carries an
+/// obligation the program knows how to discharge.
+pub trait Release {
+    /// Release the resource.  Called exactly once, on the artifact's drop.
+    fn release(self: Box<Self>);
 }
 
 pub trait ValueExt: Debug + Copy + PartialEq {
@@ -1277,6 +1311,20 @@ pub struct StaticModule<P: Program> {
     /// `StaticModule::from_module`; never mutated afterwards, and shared by
     /// every importer — values are used in place, never copied out.
     pub arena: Vec<u8>,
+    /// The out-of-arena resources the artifact owns, released when it is dropped
+    /// — its eviction (see [`Release`] and [`Program::release_obligations`]).
+    /// Empty for an artifact loaded from the device's store: bytes cannot carry
+    /// a resource handle, so a loaded artifact owns none, and the store's own
+    /// eviction is the only path that has one to run.
+    pub releases: Vec<Box<dyn Release>>,
+}
+
+impl<P: Program> Drop for StaticModule<P> {
+    fn drop(&mut self) {
+        for release in self.releases.drain(..) {
+            release.release();
+        }
+    }
 }
 
 /// The result of freezing a dynamic module into the registry: the allocated
