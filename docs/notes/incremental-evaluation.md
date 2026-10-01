@@ -1,201 +1,151 @@
-# Incremental evaluation: dirty-flag propagation over the VM's mutating graph
+# Incremental evaluation within one build: the settled cut
 
-> Status: **proposed** — nothing described here is implemented, and no
-> measurement backs the cost claim in §1.3 (step 0 of §7 is the measurement).
-> The evaluation counterpart of
+> Status: **proposed** — step 0 is measured (below); the mechanism in §4 is not
+> built yet.  The evaluation counterpart of
 > [incremental-parse-compile](incremental-parse-compile.md), whose `T1`–`T4`
 > cover `lex → parse → resolve → lower → check`; this note asks what the *same*
 > question costs one layer down, in the runtime.
 >
-> The frame is **incremental computation**: the checker's `Module` is a graph
-> whose per-node answers (`value`, `evaluated_deep`) are computed values, a
-> mutation should mark its consumers dirty, and a `dirty` bit should let the
-> incremental pass skip what a full pass would recompute.  The obstruction is
-> that **the graph's topology changes while it is being computed** (§3), and —
-> the deeper obstruction — that the deep-pass verdict conflated "never ran" with
-> "in progress", which is what made it a function of traversal order (§4.4,
-> **H1**; investigated and **fixed** as `code-audit.md` `P1-31`).  §4 is the
-> design; §9 is the decisions taken and the two obligations they create.
+> **Scope, decided by the superior: no cross-rebuild reuse.**  Nothing here keeps
+> a `Module` across an edit, keys a sub-expression, or reuses a solved unit in a
+> later build; those questions (and the fine-grained `StaticModule` machinery
+> they needed) are withdrawn rather than deferred, and there is no `T5`.  What is
+> left is the *within-build* half: one build makes many deep-pass entry points,
+> each re-descending subtrees its predecessors already decided (§1.3), and the
+> question is what such a pass may safely skip.
+>
+> The frame is still **incremental computation with a `dirty` flag**, as the
+> superior framed it — but in this scope the flag turns out to be a *stability*
+> property rather than a tracked invalidation (§4.2): a verdict that cannot be
+> written into needs no reverse index to protect it, and the writes that could
+> invalidate one are exactly the ones such a subtree cannot contain.
 >
 > Points at: `crates/lichen-lowlevel/src/{evaluation,equality,function,gc,table,module,lib,utils,apply}.rs`,
-> `crates/lichen-lowlevel/src/static_module/{freeze,apply}.rs`,
 > `crates/lichen-highlevel/src/checker.rs` + `checker/lambda.rs`,
-> `crates/lichen-language/src/{session,run}.rs`,
-> `crates/lichen-registry` (the device store),
-> and the notes [static-modules](static-modules.md), [artifact-cache](artifact-cache.md),
-> [lowlevel-vm](lowlevel-vm.md), [code-audit](code-audit.md).
+> `crates/lichen-language/src/run.rs`, `crates/lichen-language/examples/deep_pass_stats.rs`,
+> and the notes [lowlevel-vm](lowlevel-vm.md), [static-modules](static-modules.md),
+> [code-audit](code-audit.md) (`P1-31`, done).
 
 ## 1. What is being asked, and what it costs today
 
 ### 1.1 There is no separate "evaluation" stage to make incremental
 
-The request "let the evaluation system also rebuild incrementally" presumes an
-evaluation stage that could be told apart from the compile. In this codebase
-there is none, and that is the first thing the design has to absorb:
+The request presumes an evaluation stage that could be told apart from the
+compile. In this codebase there is none:
 
 - **Checking is evaluation.** `Checker::build_with` builds the lowlevel `Module`
   and, in the same pass, deep-evaluates the canonical structures
   (`checker.rs:633-635`), every lambda's value node (`:657-659`), every
-  function's return and asserts (`:703`, `:709-711`), every top-level
-  statement (`:724`), and the root (`:741`), then drains the assert worklist
+  function's return and asserts (`:703`, `:709-711`), every top-level statement
+  (`:724`), and the root (`:741`), then drains the assert worklist
   (`:764-766`). The "definition pass" *is* the program running.
-- **The run adds two more walks.** `render_build` deep-evaluates `root_val` and
-  `root_ty` on the same module (`run.rs:59-60`).
+- **The run adds two more walks** on the same module (`run.rs:59-60`).
 - **`evaluate_node_deep` is also invoked from inside evaluation itself**
   (`evaluation.rs:279`, the operation postlude's parameterized gate).
 
-So "incremental evaluation" is not a new stage bolted on after the checker: it
-is the same problem as incremental checking, plus a question about what a reused
-answer is allowed to be. §5 makes that precise.
+So the object is the `Module` the checker builds and evaluates, and the passes it
+runs over it.
 
-### 1.2 What the existing incremental machinery already reuses
+### 1.2 What is already reused
 
-| Boundary | Unit | Mechanism | Reuses evaluation? |
-|---|---|---|---|
-| one buffer, unchanged resolved content | whole `Build` | `session.rs:249-266` (equal `content_key`) | yes, wholesale |
-| one file across edits | whole artifact | `DeviceRegistry::verify` + `artifact_hash` ([artifact-cache](artifact-cache.md)) | yes, cross-process |
-| one file ← its imports | imported package | `ExprKind::Static` → `Registry` + `StaticModule` ([static-modules](static-modules.md)) | yes, in place |
+| Boundary | Unit | Mechanism |
+|---|---|---|
+| one buffer, unchanged resolved content | whole `Build` | `session.rs:249-266` (equal `content_key`) |
+| one file across edits | whole artifact | `DeviceRegistry::verify` + `artifact_hash` ([artifact-cache](artifact-cache.md)) |
+| one file ← its imports | imported package | `ExprKind::Static` → `Registry` + `StaticModule` ([static-modules](static-modules.md)) |
 
-The first row is all-or-nothing: `BufferSession` reuses the established `Build`
-**iff** the resolved content key is byte-identical, and otherwise re-lowers,
-re-checks *and* re-evaluates everything. The other two are whole-file. So
-sub-file, sub-`Build` reuse is exactly the gap, and it is the same gap `T3`
-(memoized check) names — which is why this note ends up claiming the two are one
-feature, not two (§6.3).
+All three are whole-`Build` or whole-file. The rows are listed only to fix the
+scope: they stay as they are, and this note does not touch them.
 
-### 1.3 The cost that is not reused even *within* one build
+### 1.3 The cost inside one build: the deep pass memoizes nothing across entry points
 
-`Node::value` is memoized per node, and the innermost layer of `evaluate_node`
-returns it early (`evaluation.rs:142-144`), so an operation is not recomputed.
-But `evaluate_node_deep_inner` has exactly two cuts:
+`Node::value` is memoized per node (`evaluation.rs:142-144`), so an operation is
+not recomputed. But `evaluate_node_deep_inner` has exactly two cuts — a static
+ref is a decided leaf (`:576-578`), and `visiting && value.is_some()` cuts a
+structural cycle an outer frame is currently computing (`:593-597`) — and
+`evaluated_deep`, which it *writes* at `:705`, is never read back as a reason to
+skip. Every entry point therefore re-descends the whole value-reachable graph it
+covers, arrays and tables included (`:641-670`, `:674-699`).
 
-- a static ref is a decided leaf (`evaluation.rs:576-578`);
-- `visiting && value.is_some()` cuts a structural cycle an outer frame is
-  currently computing (`:593-597`).
-
-`evaluated_deep` — the per-node verdict the pass *writes* at `:705` — is never
-read back as a reason to skip. Its readers (§3.1) use it as a fact about a node
-they are already visiting. So every entry point of §1.1 re-descends the whole
-value-reachable graph it covers — arrays and tables included (`:641-670`,
-`:674-699`) — however much of it a previous entry point already walked.
-
-Two consequences:
-
-- **Entry-point count, not graph size, multiplies the work.** A build makes
-  `3 + |lambdas| + |functions| + |asserts| + |statements| + 1` deep-pass calls
-  (§1.1), and a run makes 2 more. A statement's term, a lambda's value node and
-  that lambda's return all reach some of the same graph.
-- **The walk is path-bounded, not node-bounded, on a shared graph.** Nodes are
-  shared (`lowlevel-vm.md`), and nothing in the walk remembers a subtree it has
-  already completed, so a diamond is walked once per path. The `visiting` mark
-  only cuts cycles *during* a frame; by its own contract it is a liveness flag,
-  not a "was visited" flag (`module.rs:182-198`).
-
-This is a *within-build* incrementality that needs no new identity scheme and no
-cross-build state — which is why §7 puts it first.
-
-**Measured (step 0 · `cargo run -p lichen-language --example deep_pass_stats`).**
-The counters are `lichen_lowlevel::deep_pass_stats()`; *stamped* is the nodes the
+**Measured · `cargo run -p lichen-language --example deep_pass_stats`.**  The
+counters are `lichen_lowlevel::deep_pass_stats()`: *stamped* is the nodes one
 build left a verdict on, *cheap* is the visits that returned without evaluating a
-node (a static leaf or a cycle cut), so `real = visits − cheap` is the visits that
-did a node's work:
+node (a static leaf or a cycle cut), and *revisit* is the visits that reached a
+node **already carrying a verdict** — the headroom any cut has:
 
-| program | walks | visits | cheap | nodes | stamped | real / stamped |
-|---|---|---|---|---|---|---|
-| `struct_recursion` | 8 | 326 | 57 | 56 | 33 | **8.15** |
-| `closure (nested)` | 10 | 126 | 18 | 118 | 37 | **2.92** |
-| `assert` | 7 | 45 | 7 | 28 | 17 | **2.24** |
-| `let_polymorphism` | 7 | 59 | 8 | 51 | 25 | **2.04** |
-| `recursion (fib 10)` | 991 | 3 721 | 9 | 6 103 | 1 886 | **1.97** |
-| `table (deep keys)` | 9 | 81 | 10 | 92 | 43 | **1.65** |
+| program | walks | visits | cheap | revisit | nodes | stamped | real / stamped |
+|---|---|---|---|---|---|---|---|
+| `struct_recursion` | 8 | 326 | 57 | **236 (72.4%)** | 56 | 33 | **8.15** |
+| `closure (nested)` | 10 | 126 | 18 | **71 (56.3%)** | 118 | 37 | **2.92** |
+| `assert` | 7 | 45 | 7 | 21 (46.7%) | 28 | 17 | **2.24** |
+| `let_polymorphism` | 7 | 59 | 8 | 26 (44.1%) | 51 | 25 | **2.04** |
+| `recursion (fib 10)` | 991 | 3 721 | 9 | 1 826 (49.1%) | 6 103 | 1 886 | **1.97** |
+| `table (deep keys)` | 9 | 81 | 10 | 28 (34.6%) | 92 | 43 | **1.65** |
 
-So the redundancy is **real work, not cheap returns**: the pass evaluates a node
-1.7–8.2 times per node it decides, and the worst case is the canonical cyclic
-shapes — `struct_recursion` walks a 56-node module 326 times, because each of its
-8 entry points re-descends the same universe-shaped structures. What this does
-*not* say is the pass's share of a build's **wall-clock**; that still needs a probe
-around `compile()`, and it is what §7 step 0's second half still owes.
+Two readings:
 
-## 2. The state that would have to be reused, and why a `NodeId` is not an identity
+- The redundancy is **real work, not early exits**: the cheap returns are 2–18%
+  of visits, and roughly *half* of all visits land on a node that already has a
+  verdict.
+- The worst case is the canonical cyclic shapes. A 56-node module is walked 326
+  times because each of its 8 entry points re-descends the same universe-shaped
+  structures — and §4.3 says those are exactly what a cut *cannot* take.
+
+What is still unmeasured: the pass's share of a build's **wall-clock**. These are
+counters, not a profile, and §5 step 0 keeps that open.
+
+## 2. Why the module stays in memory (and a `NodeId` is not an identity)
 
 Four kinds of state live in a `Module` (`lib.rs:939-1029`):
 
 1. **Values** — `Node::value` (`lib.rs:845`), private, written only through
-   `write_node_value` (`equality.rs:273-297`). A compound value's payload lives
-   in a **block `Bump` arena** and its items are `Dynamic(NodeId)` refs.
+   `write_node_value` (`equality.rs:273-297`). A compound value's payload lives in
+   a block `Bump` arena and its items are `Dynamic(NodeId)` refs.
 2. **Concreteness verdicts** — `Node::evaluated_deep: Option<EvaluatedDeep>`
-   (`lib.rs:889`): a proof about the node's **whole reachable subtree**.
+   (`lib.rs:889`): a proof about the node's whole reachable subtree, with the
+   in-progress case named separately since `P1-31`.
 3. **Structure** — `blocks` (the GC unit and the arena owner), `functions`
-   (templates), the union-find `equality` classes, and the per-class `low_shape`.
-4. **Diagnostic and budget state** — `unify_errors` / `eval_errors` /
-   `apply_errors` / `asserts` / `assert_errors`, all append-only and never
-   cleared (`lib.rs:984-1013`), plus `budget_exhausted` (`lib.rs:978-983`).
+   (templates), the union-find `equality` classes, the per-class `low_shape`.
+4. **Diagnostic and budget state** — the append-only error vecs
+   (`lib.rs:984-1013`) and the sticky `budget_exhausted` (`lib.rs:978-983`).
 
-A rebuild today starts from `Module::new()` (`checker.rs:518`) and re-derives all
-four. Reusing any of them across an edit runs into four structural facts:
+Two facts make the in-memory scope the cheap one:
 
-**(a) `NodeId` is a versioned slot key, not a name.** `nodes` is a
-`SlotMap<NodeId, Node>` (`lib.rs:952`) whose keys are allocated in insertion
-order and whose slots are reused with a bumped version after a release. Editing
-an IR prefix shifts every later `check_expr` allocation, so the same source
-expression gets a different `NodeId` in the next build. (The *IR* is
-append-stable — `incremental-parse-compile.md` §3 item 2 — but the `Module` is
-allocated by the checker's walk, and nothing ties its ids to `ExprId`.)
+- **A value's payload holds `Dynamic(NodeId)` refs**, which are module-local —
+  there is no cross-module dynamic ref anywhere in the design. Anything that
+  outlives its module must be *frozen* to `StaticNodeId`s first, which is what
+  §1.2's whole-file rows do and what this note now declines to do per
+  sub-expression.
+- **The value memo is the class, not the node** (`class_value` reads through the
+  union-find representative, `equality.rs:81-87`; `write_node_value` replicates
+  to the class's unbound pure cells). A reused answer would have to carry its
+  class, which is exactly what an in-memory scope gets for free.
 
-**(b) The value memo is the class, not the node.** `class_value` reads through
-the union-find representative (`equality.rs:81-87`), and `write_node_value`
-replicates a concrete value to every unbound pure-cell member of the class
-(`equality.rs:273-297`). A value transplanted without its class is unsound, and
-a class transplanted without its members is unsound.
-
-**(c) Only one of the two ref forms travels.** A value's payload holds
-`AnyNodeId = Dynamic(NodeId) | Static(StaticNodeId)`. `Dynamic` is module-local
-— there is no cross-module dynamic ref anywhere in the design — while `Static`
-is keyed and absolute from birth (`static-modules.md`). So a value that must
-outlive its module has exactly one legal representation: **frozen**.
-
-**(d) A verdict is a semantic input, not an optimization hint.** The apply clone
-walk decides bake-vs-clone from `proven_concrete` (`function.rs:318-338`): a node
-the deep pass proved concrete is *referenced in place*, and a node flagged
-parameterized or never walked is *cloned fresh*. Baking a node that should have
-been cloned per call breaks recursion — `checker.rs:649-656` records that this
-was an observed failure mode. So a reused verdict must be **true of the current
-graph**, which is exactly the obligation §4 has to discharge.
+And one fact is a semantic input rather than a hint: the apply clone walk decides
+bake-vs-clone from `proven_concrete` (`function.rs:318-338`), and baking a node
+that should have been cloned per call breaks recursion (`checker.rs:649-656`
+records that as an observed failure). A reused verdict must be true of the
+current graph — §4 is about when it provably is.
 
 ## 3. The graph-mutation inventory
 
-An incremental scheme needs to know what can change under it. This section is the
-complete set of mutation sites, with each classified by what it costs a
-dependency (`dependents`) index. It is the evidence §4 argues from.
+The evidence §4 argues from: every site that changes topology or a computed
+value, classified by what it costs an incremental scheme.
 
 ### 3.1 The two computed values and the edges they read
 
-**The value** (`value_is_parameterized`'s sibling: `evaluate_node_operation`,
-`evaluation.rs:162-479`) is a function of the node's operator and:
-
-- its **operand**'s value (`:174`, `:279`, `:309`, `:396`), when the value is not
-  already cached (`:142-144`);
-- the operand's payload where the operator reads one (an `Index` reads the
-  operand array and then the element, `:176-230`; a `TableGet` reads the table and
-  hashes the key, `:405-446`);
-- the **class** it belongs to — `write_node_value`'s replication is what makes a
-  later `bind` see a member's value (`equality.rs:273-297`).
+**The value** (`evaluate_node_operation`, `evaluation.rs:162-479`) is a function
+of the node's operator and its **operand**'s value (`:174`, `:279`, `:309`,
+`:396`) when the value is not cached, the operand's payload where the operator
+reads one (`Index` `:176-230`, `TableGet` `:405-446`), and the **class** it
+belongs to (`equality.rs:273-297`).
 
 **The verdict** (`value_is_parameterized`, `evaluation.rs:716-775`) is a function
-of:
+of the node's own `value` variant, every array item's verdict and `shallow` flag
+(`:739-745`), every table entry's key and value verdict (`:754-764`), and the
+operand's verdict (`:766-774`).
 
-- **E-self** the node's own `value` variant (`:726`, `:727-746`, `:747-765`);
-- **E-item** for an array value, every item's verdict and `shallow` flag
-  (`:739-745`);
-- **E-entry** for a table value, every entry's key and value verdict
-  (`:754-764`);
-- **E-operand** the operation's operand's verdict (`:766-774`).
-
-So the verdict's dependency set is small, syntactic, and — as §3.2 shows —
-almost entirely append-only. That is the good news the rest of the note is built
-on.
-
-### 3.2 Every site that changes topology or a computed value
+### 3.2 Every mutation site
 
 | # | Site | What changes | Class |
 |---|---|---|---|
@@ -203,537 +153,241 @@ on.
 | 2 | `module.rs:261-272` `close_operation_cycle` | **E-operand added after the node exists**, and the verdict is **cleared** | **late** |
 | 3 | `utils.rs:36-52` `alloc_array` / `alloc_table` | payload vertex + its item/entry refs, copied into the block arena | append |
 | 4 | `checker.rs:942-954` `array_node`; `function.rs:406`; `static_module/apply.rs:209`; `table.rs:186` | the callers that mint payloads (the E-item/E-entry creation sites) | append |
-| 5 | `equality.rs:60-71` `add_equality`, called at `:522,:555,:569,:599,:622,:637,:654,:909` | **class merge** — two subgraphs become one dependency set | **retroactive** |
+| 5 | `equality.rs:60-71` `add_equality`, called at `:522,:555,:569,:599,:622,:637,:654,:909` | **class merge** — two subgraphs become one dependency set | retroactive |
 | 6 | `equality.rs:273-297` `write_node_value` | `value` write **and** replication to every unbound pure-cell class member | append + retroactive |
 | 7 | `gc.rs:154-165` `flatten_class` + `disjoint::rebuild` | class member list rebuilt, **representative re-elected** | destructive |
-| 8 | `gc.rs:177-223` `drop_block` | **vertex deletion**, class splice, assert-worklist prune (`:220-221`) | destructive |
+| 8 | `gc.rs:177-223` `drop_block` | **vertex deletion**, class splice, assert-worklist prune | destructive |
 | 9 | `gc.rs:12-20`, `gc.rs:32-36` `garbage_collect_node` | `block` moves; payload re-alloc'd into the target arena | destructive (not a dataflow edge) |
 | 10 | `module.rs:285-292` `register_in_function`; `:381-388` `finish_function`; `:390-422` `add_function` | ownership tag, `Function::nodes` / `parent` / `parameter` / `r#return` / `asserts` | append |
-| 11 | `function.rs:339-357`, `:400-431` the apply clone walk | **new vertices**, payloads, and ownership re-stamping per apply | append (**unbounded at run time**) |
+| 11 | `function.rs:339-357`, `:400-431` the apply clone walk | **new vertices**, payloads, ownership re-stamping per apply | append (**unbounded at run time**) |
 | 12 | `function.rs:158-161`, `:499`; `module.rs:340-346` `add_assert` | assert worklist entries, re-registered per apply | append |
 | 13 | `static_module.rs:142-153` `materialize_leaf` / `as_dynamic` | new vertex holding a static value | append |
-| 14 | `evaluation.rs:705` / `module.rs:271` | verdict write / verdict clear | append |
+| 14 | `evaluation.rs` verdict write / `module.rs:271` verdict clear | the verdict, and (since `P1-31`) the in-progress mark | append |
 | 15 | `equality.rs:123-185` `seed`/`refine`/`observe_class_low_type`; `static_module.rs:132-136` `set_node_shape` | the per-class `low_shape` lattice | monotone refinements |
 
 Two answers this inventory settles:
 
 - **Payload edges are immutable once allocated.** `alloc_array` / `alloc_table`
   take `&[T]` and copy into the block's `Bump`; `items()` returns
-  `&'static [ArrayItem]` / `&'static [TableItem]` (`lib.rs:331`, `:353`) and
-  there is **no `&mut` accessor anywhere** in the crate. GC copies a whole
-  payload verbatim into the target arena (`gc.rs:73-75`, `:105-107`); it edits
-  neither the item list nor the flags. So E-item/E-entry are created exactly once
-  and never change — reverse edges for them can be built at allocation and never
-  maintained.
-- **The only late edge is E-operand.** Row 2 is the one place a node's dependency
-  set grows after the node was created, and it is already coupled to an explicit
-  invalidation (`evaluated_deep = None`, `module.rs:271`). It is the hook the
-  design needs, already written.
-
-### 3.3 What each mutation class costs a dependency index
-
-- **append** (rows 1, 3, 4, 10, 11, 12, 13, 14) — free. A new vertex starts dirty
-  (its verdict is `None`, which every reader already handles); a new edge's
-  reverse entry is written where the edge is.
-- **late** (row 2) — one line: record the reverse edge and dirty the node **and
-  its dependents**. This is the only site that needs to walk *upwards*, so it is
-  the only site that needs the index to exist.
-- **retroactive** (rows 5, 6) — a class merge makes two subgraphs affect each
-  other. §4.3 shows this needs **no index at all**.
-- **destructive** (rows 7, 8, 9) — `drop_block`'s own contract is that no live
-  node outside the block references one inside it (`gc.rs:170-171`), so nothing
-  outside can be dirty because of the removal: the index needs *cleanup*, not
-  propagation. Row 7 constrains the design rather than costing it: the index must
-  be keyed on **nodes**, never on representatives, or every class rebuild would
-  have to re-key it.
-
-## 4. Incremental computation over the DAG
-
-### 4.1 The mechanism
-
-Add two things to `Node`:
-
-- `dirty: bool` — "the cached verdict may not describe the current graph";
-- `dependents: Vec<NodeId>` — the reverse of E-item, E-entry and E-operand.
-
-and one rule to the pass: given a verdict that is not dirty, do not descend.
-`visiting` keeps its contract untouched (`module.rs:182-198`) — a dirty bit is
-not a liveness mark, and the two must not be conflated, exactly as the audit
-already separates them (`code-audit.md:2602-2608`).
-
-The propagation primitives are then three, and each has a place to live:
-
-1. `dirty(node)` — set `dirty` and enqueue; the *transitive* upward walk over
-   `dependents` happens on the reverse edges.
-2. `link(parent, child)` — record the reverse edge; called at `add_node` (row 1),
-   at each payload allocation (rows 3-4, one `link` per item), and at
-   `close_operation_cycle` (row 2, which also dirties its dependents).
-3. `unlink(node)` — called from `drop_block` (row 8) for the removed nodes.
-
-### 4.2 The hooks are two, and one of them already exists
-
-- `close_operation_cycle` (`module.rs:261-272`) already clears the verdict for
-  exactly the reason this design needs ("the proof predates this operand edge and
-  no longer describes the node's graph", `:256-260`). It gains `dirty` +
-  propagation to `dependents` + the reverse edge.
-- `write_node_value` (`equality.rs:273-297`) is where a value change propagates.
-  It **already walks the class member list** (`:286-294`), so "mark each member's
-  dependents dirty" is a flag set inside an existing loop, not a new traversal.
-
-Everything else is either free (append) or cleanup (destructive), per §3.3.
-
-### 4.3 The class hyperedge needs no index — the key simplification
-
-A class merge looked like the killer: `add_equality` splices two member lists,
-so a write to a node can affect members that were strangers a moment ago, and the
-class is an unbounded-arity hyperedge that is rebuilt at GC with a re-elected
-representative.
-
-It costs nothing here, for a structural reason:
-
-- **The dependency set of a value write is already materialized.** It is the
-  class member list, and `write_node_value` walks all of it. So propagation does
-  not need a reverse *class* edge — it needs the members, which the walk is
-  already visiting.
-- **A merge changes no `value` and no verdict by itself.** `add_equality` moves
-  links and joins the two classes' `low_shape` (`equality.rs:60-71`, row 15's
-  separate monotone channel); it writes no `value` and no `evaluated_deep`, so
-  nothing becomes stale at merge time. The staleness appears at the *next* write,
-  and that write's walk covers both former classes.
-- **The index is node-keyed**, so the GC class rebuild (`gc.rs:154-165`,
-  `flatten_class` + `disjoint::rebuild`) does not touch it. Had the index been
-  keyed on the representative, every rebuild would need a re-key pass.
-
-So the "retroactive" class is retroactive for the *existing* code too, and the
-existing code already handles it at the one place that matters.
-
-### 4.4 The three things that are actually hard
-
-**H1 — the verdict conflates "never ran" with "in progress", and that is a code
-defect rather than a preference.** `Option<EvaluatedDeep>` is read three different
-ways in the crate:
-
-| read | `None` means | sites |
-|---|---|---|
-| `is_none_or(\|e\| e.parameterized)` | parameterized | `evaluation.rs:286`, `freeze.rs:73` |
-| `is_some_and(\|e\| e.parameterized)` | **not** parameterized (i.e. concrete) | `evaluation.rs:742`, `:756`, `:761`, `:772`, `table.rs:219` |
-| `is_some_and(\|e\| !e.parameterized)` | not proven concrete | `function.rs:325` |
-
-The documented contract is the first row: "`None` means concreteness is
-*unknown*, which a reader must treat as parameterized, **never** as proven
-concrete" (`module.rs:200-213`, `lib.rs:882-889`). The second row is the
-array/table/operand arm of the verdict's own definition, and it reads the
-opposite. During a normal walk the descent precedes the verdict
-(`evaluation.rs:641-670` before `:704`), so a non-shallow dynamic item *does*
-have a verdict — **except** when the child returned early at the structural-cycle
-cut (`:593-597`) or the walk refused on budget before writing (`:599-625`).
-
-**Investigated (Q6), and the answer is that `Option` is one state short.** The
-full evidence and the prescribed fix are `code-audit.md` `P1-31`; the decisive
-fact is the canonical universe. It is a self-referential array —
-`write_node_value(universe, Array([type_marker, universe]))`, `checker.rs:844-854`
-— so the descent reaches `universe` while its own frame holds the `visiting` mark,
-the cycle cut returns **without writing a verdict**, and the verdict computation
-then reads that `None`. The array arm reads it as concrete, which is what lets a
-cyclic value be proven at all; read conservatively, `checker.rs:627-632` states
-the consequence — the universe would be cloned per apply and create "a fresh
-self-loop that unification cannot equate with the canonical one", breaking the
-`Type : Type` spine. So the non-conservative read is **load-bearing and
-deliberate** — and the fix is to *name* the third state, not to flip a read.
-
-**Done, and the two mis-attributions are retracted.** `code-audit.md` `P1-31`
-landed: `Node::assumed_concrete` is set at the cycle cut and cleared where the real
-verdict is written, and every verdict read inside the computation goes through one
-helper whose rule is *the assumption fills a missing verdict and never overrides
-one* (`Some(deep) => deep.parameterized, None => !assumed_concrete`). `None` now
-means exactly "the pass never ran here". Two sites this note had named as defects
-were not:
-
-- the **operand arm** is a deliberate exemption — a core operator's operand is the
-  argument array a layer above synthesized, so "never walked" is the normal case,
-  and reading it as unproven would flip every pair read (`Index(pair, 0)`) in a
-  template and clone them all per apply;
-- **`Module::key_state`** is correct as it stands, because the content unfolding is
-  total (it cuts at `UNFOLD_DEPTH` and reports its own failure), so a key with no
-  verdict is still hashable and gating it is *too* conservative. Three cyclic-key
-  tests fail if it is gated, which is how the retraction was found.
-
-The one behaviour change is in the direction this note wants: a subtree the pass
-**refused on** (a depth refusal returns before it writes) no longer certifies its
-parent. That is pinned by
-`crates/lichen-lowlevel/tests/basic/verdict.rs::a_refused_subtree_leaves_its_parent_unproven`,
-which fails on the old read. What remains open for the design is the *residual*
-order dependence (H1's coinductive step is still DFS-scoped), which §7 step 3's
-differential harness is what would detect.
-
-**H2 — the apply clone walk is a materializing consumer, not a dataflow node.**
-`function.rs:318-338` reads `proven_concrete` and then *builds new topology*: it
-bakes the proven node in place or clones it into a fresh node. That decision
-cannot be un-done by a later dirty flag — the clones exist. Today the ordering
-avoids the hazard: lambda value nodes are proven at `checker.rs:657-659`, before
-the definition pass runs applies at `:691-712`. An incremental scheme must either
-keep that ordering guarantee (verdicts of the template's members are settled
-before any apply consumes them) or treat "the clone set of one apply" as an
-atomic unit that is recomputed wholesale when any source verdict inside its
-template is dirtied. This is the one place where "the graph is incrementally
-updated" is false, and it is a *consumer* fact, not an edge fact — the inventory
-of §3 cannot see it, because §3 lists what changes and this is about who reads.
-
-**H3 — recomputation is observable, not merely cheaper.** `budget_exhausted` is
-sticky per run "because it is *the* record of why the last walk stopped"
-(`lib.rs:978-983`), `apply_total` is cumulative (`apply.rs:31-32`), and
-`checker.rs:718-751` turns a refusal into a `NonTerminating` diagnostic. Skipping
-a recomputation a full walk would have performed changes **whether the budget is
-exhausted**, hence the diagnostics. A differential harness (§7 step 3) has to
-compare diagnostics, not only values. `record_extension_diagnostic`'s dedup
-(`module.rs:311-330`) already assumes a node is deep-evaluated several times —
-fewer passes is fine there, but each append-only vec has to be audited for the
-same "recorded per attempt" character.
-
-### 4.5 Push or pull, and what it costs
-
-**Pull, with a dirty bit and a lazily consumed dirty set** — the recommendation.
-A verdict is recomputed only when the pass actually reaches the node, which keeps
-the laziness, the budget accounting (the walk still does the work a full walk
-would, minus clean subtrees) and the `visiting` cycle cut intact. A mutation
-marks; the pass discovers.
-
-Rejected: a **global revision counter alone** (any write invalidates every
-verdict, so within a build it degrades to today's behaviour); **eager push in
-topological order** (needs an SCC-ordered worklist, contradicts the lazy
-structure and the budget guards, and cannot be reconciled with `visiting`'s
-frame-scoped lifetime); **no reverse index, relying on dirty-up during the pass**
-(a node cannot name its parents, which is precisely what the index is for).
-
-Cost: `dependents` is `O(E)` memory over the payload and operand edges — the same
-order as the module's own node/payload storage, but a second graph, in a runtime
-whose performance items (`P4-2`, `P4-6`) are about removing per-visit work. A
-cheaper shape exists if it proves too heavy: store no lists and rebuild the
-reverse edges for a *region* when that region is first dirtied (a repair pass),
-trading memory for a scan. That is a measurement, not a design, decision.
-
-### 4.6 Relationship to the earlier "cut" framing
-
-The previous framing asked whether `evaluated_deep` can be used as a *cut*
-("stop descending when a subtree is already proven"). Dirty propagation
-**subsumes** it: the cut is the degenerate case `dirty == false`, and the
-question it failed to ask is the load-bearing one — *what invalidates a verdict*.
-With §3's inventory and §4.3's simplification that question has an answer; with
-H1 it also has a precondition.
-
-## 5. The three reuse requirements
-
-For the cross-build half (§6) the same three obligations apply, and stating them
-once is what keeps the design space from looking like four unrelated ideas:
-
-- **R1 — identity.** A name for an evaluation unit that is *position-independent*
-  and *stable across a rebuild*. `NodeId` fails §2(a); `BlockId` fails (f) below;
-  `ExprId` is append-stable in the IR but names an *expression*, not an
-  evaluation unit (a pair is several nodes plus shared markers plus operand
-  arrays).
-- **R2 — invalidation.** A reverse dependency relation (§3, §4) or a content key
-  over the unit's inputs. The lowlevel has neither today: `node_edges`
-  (`checker.rs:250`) maps a node to a `Loc` for *diagnostics*, and there is no
-  dependents relation anywhere in the crate.
-- **R3 — representation.** How a reused answer crosses a boundary, given §2(c):
-  either the module is kept alive and resumed (no boundary), or the answer is
-  frozen to a `StaticNodeId` and read in place.
-
-**(f) `BlockId`s are not per-statement.** The checker creates one root block
-(`checker.rs:593`) and one block per lambda (`checker/lambda.rs:31`) — nothing per
-top-level statement. So "the unit to drop and redo" has no existing boundary to
-key on below a whole function.
-
-## 6. The cross-build design space
-
-### 6.1 M1 — a content-keyed value memo ("salsa at the IR level")
-
-**Closed by decision (Q4): no content key at all.** Dirty comes from the *mutation
-action*, not from a digest — a mutation that changed nothing still marks its
-consumers dirty. So the cross-build half reuses only what the edit provably left
-alone, and there is nothing for a value digest to decide. The rest of this section
-is kept as the record of why a key cannot simply be borrowed, not as a plan.
-
-Key each allocation by a serialization of its inputs (§3.1's edge set is the
-input set), and on a rebuild look the key up in a cache of previous
-`(value, verdict, class, low_shape)`.
-
-The identity half already exists: `resolve/content_key.rs` is an exact,
-digest-free, injective serialization of the *lowering-visible* resolved content
-(names by `BinderId`, error blocks opaque, spans dropped, version-stamped at
-`content_key.rs:13`). It is the right model for R1, and it is already the
-`BufferSession` reuse key.
-
-The obstruction is R2 at value granularity:
-
-- **A syntax key is not sufficient.** A value is a function of the unification
-  history, not of syntax alone. The code claims this is *order*-independent
-  ("reads alias their target cells … so bindings propagate class-wise however
-  they happen", `checker.rs:665-667`), so `value = f(syntax, values of the
-  binders reached)` may well hold — but H1 shows the *verdict* is not
-  order-independent, and a `Parameterized` value is deliberately left uncached so
-  a later pass decides it (`evaluation.rs:463-467`).
-- **The canonical value hash that exists is deliberately non-injective.** The
-  table key machinery (`table.rs:1-70`) is a canonical content unfolding that
-  survives a freeze and mixes in no address or node identity — the right shape for
-  a value memo. But its own doc states it is a **pre-filter** whose authority is
-  `key_eq` (`table.rs:9-14`) and enumerates what it cannot tell apart
-  (`:51-61`), including *which operator sits at a position* and anything below
-  `UNFOLD_DEPTH`. A cache key must be authoritative: serving the wrong value on a
-  collision is a wrong answer, not a lost candidate. So M1 needs `key_eq` on every
-  hit (a full comparison, giving back much of the win) or a *new* injective
-  value-digest contract — and Q4 rejected both, which is what closes M1 (§9).
-
-M1 also does not escape R3: a memoized value holds `Dynamic` refs into the old
-module, so either the old module stays alive (an arena pinning scheme the runtime
-does not have) or the memo stores frozen state — which is M3.
-
-### 6.2 M2 — same-module resume across edits
-
-Keep the `Module` across edits: re-lower only the changed unit, invalidate its
-dependents (the §4 index is exactly this), keep everything else. This is the only
-route that answers R3 with "no boundary" — the state never leaves the module, so
-`Dynamic` refs stay valid and no payload is copied.
-
-It pays with state the module cannot currently undo:
-
-- **Rollback.** `add_equality` merges destructively (`equality.rs:60-71`),
-  `write_node_value` replicates destructively, `close_operation_cycle` defines an
-  operation once. Removing a unit means removing every write it caused —
-  including writes into *other units' classes*. `T4` ("unification-state
-  checkpoint/rollback", `incremental-parse-compile.md` §5) is exactly this.
-- **Append-only side tables.** The four diagnostic vecs are never-cleared and
-  some keep a companion set that must not drift (`lib.rs:984-1013`); a resume
-  needs a per-unit extent for each.
-- **Budgets.** A resumed module must decide what a "run" is now
-  (`reset_apply_budget`, `module.rs:90-95`) — see H3.
-- **No unit boundary to key on** (§5(f)).
-
-### 6.3 M3 — fine-grained frozen units (recommended for the cross-build half)
-
-The one mechanism whose R3 answer is already built and in production for the
-cross-file case: freeze solved state into a `StaticModule` and read it in place.
-
-`StaticModule` is precisely "an evaluation unit's reusable result":
-
-- `Module::static_read` returns the solved value verbatim, no copy
-  (`static_module.rs:96-102`);
-- `StaticNode` carries the solved verdict (`parameterized`, `lib.rs:913`, copied
-  at `freeze.rs:71-73`), so §2(d)'s bake-vs-clone decision is preserved;
-- refs are absolute from birth, so §2(c) is answered;
-- GC keeps static handles verbatim (`static-modules.md`), and the deep pass
-  treats a static ref as a decided leaf (`evaluation.rs:576-578`) — so a reused
-  unit costs **no re-walk and no re-evaluation**, and its verdict is trivially
-  clean under §4 (an immutable module cannot be dirtied, which is the cleanest
-  statement of why freezing is the right boundary);
-- identity is content-addressed and transitive (`artifact_hash`, three agreeing
-  sites in [artifact-cache](artifact-cache.md)), so R2's "propagate a change"
-  becomes "the key changed".
-
-Costs, stated:
-
-- **Freeze is whole-module.** `from_module_mapped` freezes the *entire* module
-  and returns a `NodeId → LocalNodeId` map (`freeze.rs:40-75`). Sub-file
-  granularity means either a **partial freeze** (a new entry point into an
-  existing walk) or making each unit **its own `Module`** — the shape the package
-  store already uses per file, applied within a file.
-- **The source must be fully solved** (`freeze.rs:23-24`): every node holds its
-  final answer or a residual `Parameterized`. So freeze points must be chosen
-  after the definition pass — which is *inside* the checker.
-- **Payload copy.** Phase 2 dedupes and lays payloads into a flat arena
-  (`freeze.rs:92-150`); more, smaller units means more copies and a larger key
-  space.
-- **Class sharing is lost across the boundary.** A static leaf unifies by
-  materializing into a fresh dynamic leaf (`static_module.rs:142-153`) — exactly
-  how imports already behave. Q2 accepted that reuse carries the import semantics
-  even for a top-level polymorphic binding of the edited file; §8 keeps the
-  falsifier if a real case disagrees.
-- **M3 does not remove the need for `T3`.** To *skip* re-lowering an unchanged
-  unit the checker must resume from a scope whose entries are static refs. M3
-  supplies the representation; the resume is `T3`'s work. **Incremental
-  evaluation is incremental checking plus a representation choice, not a second
-  feature.**
-
-### 6.4 M4 — do nothing below the file
-
-The artifact store already rebuilds only the changed chain, and the LSP already
-routes settled imports through it ([liche-lsp-home](liche-lsp-home.md)). If
-measurement (§7 step 0) shows the deep pass is not where the budget goes, M4 is
-already the answer. Listed because the note has no measurement, and because
-`code-audit.md`'s `D6` shows the project's habit of letting a measurement decide.
-
-## 7. Recommendation and staged roadmap
-
-0. **Measure first — no design without it.** *Half done.* The redundancy is
-   measured (§1.3) with the counters this note's step 1 landed
-   (`lichen_lowlevel::deep_pass_stats`) and the harness
-   `cargo run -p lichen-language --example deep_pass_stats`. Still owed: the
-   pass's share of a build's wall-clock, i.e. a probe around `compile()` that
-   separates (deep pass) from (check) from (lex+parse) — the counters do not do
-   that, and until they are split, "the redundancy is 1.7-8.2×" does not say how
-   much of a build that is.
-1. **The verdict's state split (`P1-31`) — landed.** Q6 was settled by
-   investigation: the fix is a third state meaning "assumed concrete, in
-   progress", leaving `None` to mean strictly "never ran". `Node::assumed_concrete`
-   is set at the cycle cut and cleared where the real verdict is written, and every
-   read inside the verdict computation goes through `ref_is_parameterized`. What it
-   buys: `None` means one thing, a refused subtree no longer certifies its parent
-   (pinned by a regression test), and the operand/table-key reads are *documented*
-   exemptions rather than side effects. What it does **not** buy: the residual
-   DFS-scoped coinductive step (§4.4 H1), which is why step 3 is a differential
-   harness rather than a proof.
-2. **The reverse index and the two hooks** (§4.1-4.2): `dirty` + `dependents`,
-   `link` at `add_node` and at each payload allocation, propagation in
-   `close_operation_cycle` and `write_node_value`, cleanup in `drop_block`.
-3. **Make the pass consult `dirty`**, and prove it with a **differential
-   harness**: run the incremental and the full pass over the same corpus and
-   compare every verdict, every value, and every diagnostic (H3). The existing
-   test suites are the corpus; the only new test is the comparison.
-4. **Then the cross-build half** — M3 (accepted by Q2) at the sub-expression
-   granularity Q3 selected, plus `T3` resume. Q3's answer and Q4's "no key"
-   together create the identity obligation in **Q7**; Q4's "dirty from the action"
-   creates the pinpointing obligation in **Q8**. Settle those two before building
-   this step — they are the whole design of it.
-5. *(removed)* **M1's value memo** — closed by Q4 (no key), so step 5's row in §10
-   is a deletion rather than a change.
-
-`T4` (same-module resume with unification rollback, §6.2) stays the boundary:
-the only route that avoids freezing, at the cost of the union-find's contract
-plus the module's side tables. Nothing here needs it — note that step 2's index
-is the *within-build* dependency relation, which T4 would also need, so step 2 is
-not wasted if T4 is ever taken.
-
-## 8. What would falsify the plan
-
-- **The `P1-31` split moves a result.** It should not — the split only *names* a
-  fact the array/table arms already assume — but if introducing the third state
-  changes any value or diagnostic, the verdict stays order-dependent and step 3
-  has no oracle.
-- **Step 0 shows the deep pass is negligible.** Then §6.4 is the whole finding
-  and the note reduces to a documentation change: `T3` is the evaluation
-  incrementality item.
-- **The `dependents` graph costs more than the re-walk it saves** (§4.5) on a
-  real program's edge count. Q1 accepted the per-node lists; if they dominate a
-  real module's memory, the fallback is the region-repair variant.
-- **A reused polymorphic binding turns out to be observable.** Q2 accepted the
-  import semantics; if a case shows a *top-level polymorphic binding of the edited
-  file* behaving differently under static-leaf reuse, M3 needs a class-sharing
-  story (i.e. M2) and the cheap cross-build mechanism is gone.
-- **Q7 or Q8 has no answer.** Sub-expression units with no content key require a
-  stable sub-expression identity and a span → dirtied-subtree map; if the IR
-  cannot supply either without re-lowering, the unit granularity falls back to the
-  statement window and §6.3's win shrinks.
-- **Freeze cost exceeds the re-evaluation it saves.** Then unit granularity must
-  be coarser than a sub-expression, and §6.3's win shrinks toward M4.
-
-## 9. Decisions and open questions
-
-**Decided (the superior, this session):**
-
-- **Q1 — the reverse index shape: per-node `dependents` lists.** Accepted at
-  `O(E)` extra memory (§4.5). The region-rebuild variant is not taken; it stays
-  the fallback if the lists dominate a real module's memory.
-- **Q2 — a static leaf's semantics: accepted.** Reuse at the import semantics is
-  acceptable, including for a polymorphic top-level binding of the edited file.
-  M3 is therefore viable and M2 is not needed for the cross-build half.
-- **Q3 — the unit granularity: an arbitrary sub-expression.** The finest of the
-  three. It makes identity and pinpointing the two new obligations Q7 and Q8, and
-  it means the unit is not `BlockId`-shaped (§5(f)).
-- **Q4 — no content key at all.** Dirty comes from the *mutation action*, not from
-  a digest: a mutation that changed nothing still marks its consumers dirty. That
-  is conservative, needs no `key_eq` verification and no second digest contract,
-  and it closes M1 (§6.1) — the cross-build half reuses only what the edit left
-  alone.
-- **Q5 — the CLI build path first.** Step 0 measures there; the editor path is
-  deferred rather than wired into a `BufferSession` nothing consumes yet (`P2-1`).
-- **Q6 — settled and *done*.** The verdict conflates "never ran" with "in
-  progress"; the split landed as `code-audit.md` `P1-31` (`Node::assumed_concrete`
-  + `ref_is_parameterized`), with the two mis-attributed sites retracted and the
-  one behaviour change pinned by a regression test. §4.4 H1 states what remains:
-  the coinductive step is still DFS-scoped, so step 3's differential harness is
-  the oracle, not a proof.
-
-**Open — created by the answers above:**
-
-- **Q7 — what identifies a sub-expression across a rebuild?** Q3 chose
-  sub-expression units and Q4 forbids a content key, so nothing may be *computed*
-  to recognise an unchanged unit. The IR is an append-stable arena, but its ids
-  renumber when an edit re-lowers a changed prefix, so either the frontend must
-  preserve `ExprId`s for untouched subtrees, or a unit needs a derivation-path
-  name (a path from the root through the shared binder nodes). Which — and does
-  the existing splice (`session.rs:353-531`) already give enough for subtrees
-  *inside* an untouched statement?
-- **Q8 — what names the sub-expressions an edit dirtied?** With no key, the edit
-  *is* the invalidation. Today `BufferSession` maps a byte span to a touched
-  *statement window*; sub-expression granularity needs that mapping one level
-  down — byte span → the IR subtrees it can affect, plus their transitive
-  dependents over §4's index. Is the frontend's span index
-  (`compile::SpanIndex`) enough to derive it, or must the frontend record a span
-  per subtree?
-- **Q9 — does `P1-31`'s harm half matter?** Whether reading a never-ran `None`
-  as concrete is *observable* is `needs-test` (`P1-31`'s last paragraph has the
-  candidate case), and the project does not write tests without permission
-  (`D3`). The split is worth doing either way; the answer decides its severity.
-
-## 10. Where the changes would land (if the plan is taken)
+  `&'static [ArrayItem]` / `&'static [TableItem]` (`lib.rs:331`, `:353`) and there
+  is **no `&mut` accessor anywhere** in the crate. GC copies a whole payload
+  verbatim into the target arena (`gc.rs:73-75`, `:105-107`) and edits neither the
+  item list nor the flags. E-item/E-entry are created exactly once.
+- **The only late edge is E-operand** (row 2), and it already clears the verdict
+  when it appears.
+
+### 3.3 The three code facts that make a stability property checkable
+
+`is_unbound(value)` is `None` or `Parameterized` (`lib.rs:550`); everything else
+is a concrete value. Three predicates then say who can write what:
+
+- **A concrete value is not overwritten.** `bind` takes
+  `concrete = if is_unbound(va) { vb } else { va }` (`equality.rs:653`) and
+  replicates only `!is_unbound` values (`:661`); `write_node_value`'s replication
+  targets only `is_unbound(value)` members (`:289`).
+- **A node with a cached value is not pending.** `pending_op`
+  (`equality.rs:853-856`) and `class_has_pending_op` (`:669-672`) select members
+  with `operation.is_some() && is_unbound(value)`, which is exactly what
+  `force_pending` (`:963-966`) re-runs — so a node holding a concrete value is
+  never re-derived by unification.
+- **A node with a value cannot gain an operand edge.** `close_operation_cycle`
+  asserts the node is unbound and never evaluated (`module.rs:261-272`).
+
+## 4. The design: a settled cut, with no index and no dirty tracking
+
+### 4.1 The property
+
+Give the verdict a second bit. `EvaluatedDeep { parameterized, settled }` where
+**`settled` means: this node's value is concrete, no position it read was
+in-progress (the `P1-31` assumption), every value-reachable item's verdict is
+itself settled, and its operand — if the node has an operation — is absent, has
+been dropped, or has a settled verdict.**
+
+Two consequences fall out of the definition:
+
+- **`settled` implies `!parameterized`**: a settled node's own value is concrete
+  and every item is settled (hence non-parameterized), which is exactly what
+  `value_is_parameterized` tests for. So the bit is not a second opinion about
+  concreteness; it is the *proof that concreteness is final*.
+- **`settled` is monotone and needs no invalidation.** By §3.3 nothing can write
+  into a settled subtree, the operand edge cannot appear under it, and the
+  payload edges cannot change. So `settled` never goes back to false, and it is
+  not a `dirty` flag at all — it is the *complement*: a node is either still
+  under construction or finished for good.
+
+### 4.2 Why the reverse index and dirty propagation are not needed here
+
+The earlier design for this note built a `dependents` list per node and had every
+mutation mark its consumers dirty. That is the right shape when a *change* must
+be propagated — but in a within-build scope the only mutations that can invalidate
+a verdict are value writes and a late operand edge, and §3.3 says a **settled**
+subtree admits neither. So invalidation never has to be *tracked*: it is excluded
+by the property. What is dropped along with it:
+
+- the `O(E)` `dependents` graph and its `link`/`unlink` maintenance,
+- the hook in `write_node_value` (whose class walk would otherwise have carried
+  the dirty propagation),
+- the upward propagation from `close_operation_cycle` (which keeps doing the one
+  thing it already does: clear the verdict, now also clearing `settled`),
+- the cleanup in `drop_block` (nothing points at a dropped node from outside it,
+  by that function's own contract, `gc.rs:170-171`).
+
+What remains is one bit to compute and one early return to add.
+
+### 4.3 What the cut cannot cover, stated up front
+
+- **Cyclic regions can never be settled.** The canonical universe `[Type, ↺]` is
+  reached from inside its own descent, so its verdict is computed under the
+  in-progress assumption (`P1-31`) and `settled` is false there — by definition,
+  not by oversight. That is also where §1.3's worst redundancy sits
+  (`struct_recursion`: 8.15 real/stamped, 72.4% revisits), so **the measured
+  headroom is an upper bound, not a forecast**.
+- **A node whose operand was never walked cannot be settled** unless the operand's
+  verdict is settled. For a *core* operator the operand is the argument array a
+  layer above synthesized, and the deep pass descends value-reachable edges only,
+  so "operand has no verdict" is the normal case. Cutting there would be unsound:
+  a later `evaluate_node_forced` *does* walk operand edges (`evaluation.rs:633-639`),
+  and if it certified such an operand parameterized the parent's `false` would be
+  stale. The saving grace is that the missed cuts are cheap ones — a core
+  operator's own value is usually a scalar, so there is little subtree behind it —
+  while the expensive re-descents are at operation-free array and table values,
+  which have no operand at all and *are* settlable.
+- **It cannot cut across the apply clone walk's decisions.** `function.rs:318-338`
+  materializes bake-vs-clone into new topology; that is a consumer that freezes
+  its inputs, and today's ordering (lambda value nodes proven at
+  `checker.rs:657-659` before the definition pass runs applies at `:691-712`) is
+  what keeps it coherent. A cut only removes redundant descents; it must not
+  reorder those proofs, and the differential harness (§5 step 3) is what checks
+  that it has not.
+- **Recomputation is observable.** `budget_exhausted` is sticky per run
+  (`lib.rs:978-983`), `apply_total` is cumulative (`apply.rs:31-32`), and a
+  refusal becomes a `NonTerminating` diagnostic (`checker.rs:718-751`). Skipping a
+  descent a full pass would have made changes *whether the budget is exhausted*,
+  so the harness must compare diagnostics, not only values. This is also the one
+  place where the cut could change behaviour for the worse: a cut node is not
+  re-evaluated, so it cannot contribute the refusal a re-walk would have.
+
+### 4.4 What the flag costs
+
+Computing `settled` needs no new traversal: `value_is_parameterized` already walks
+the same positions, so the flag is a second accumulator over that walk (an item
+counts as settled iff its verdict is `Some(settled)`). The cut is one early return
+in `evaluate_node_deep_inner`, after the static-leaf and cycle-cut cases and
+before `deep_depth` is charged. The one subtlety is that the assumption must be
+recorded as *not settled* rather than as settled — which is why `P1-31`'s split
+came first: without a named in-progress state there is no way to tell a
+deliberately assumed position from a decided one.
+
+### 4.5 The expected take
+
+The headroom is 34.6–72.4% of visits. Two forces pull the take below it: the
+cyclic regions (uncuttable by definition, and the headroom's largest
+contributor), and the core-operator nodes whose operand was never walked
+(uncuttable for soundness). The acyclic, operation-free array and table values —
+the closure, table, assert and polymorphism shapes — are where the cut should
+collect, and their headroom is 34.6–56.3%.
+
+**So the honest step is to build it and re-measure, not to forecast.** The delta
+on the same six shapes is the answer, and if it is small, the correct conclusion
+is that the remaining redundancy is *inherent* to re-deriving cyclic verdicts per
+entry point, and that nothing further should be built.
+
+## 5. Recommendation and staged roadmap
+
+0. **Measure first.** *Half done*: the redundancy and revisit shares are measured
+   (§1.3) with the counters and the harness that landed with `P1-31`. Still owed:
+   the pass's share of a build's **wall-clock** — the counters do not separate
+   (deep pass) from (check) from (lex+parse), and without that split "1.65–8.15×
+   redundant" does not say how much of a build it is.
+1. **The settled bit and the cut** (§4): `EvaluatedDeep::settled`, computed inside
+   the existing verdict walk, plus one early return. No reverse index, no dirty
+   propagation, no hooks beyond clearing the bit where the verdict is cleared.
+2. **The differential harness** — required, not optional. Run the pass with and
+   without the cut over the existing test corpus and compare every value, every
+   verdict and **every diagnostic**. It is the only oracle for §4.3's two
+   obligations (the apply ordering, the budget observability), and it is also how
+   the "settled implies not-parameterized" claim is checked rather than argued.
+3. **Re-measure** the six shapes and decide. If the delta is small, stop: the
+   residual redundancy is the cost of re-deriving cyclic verdicts, and an
+   SCC-atomic recomputation would be the only remaining lever — a change to the
+   pass's traversal contract that this scope does not obviously justify.
+
+## 6. What would falsify the plan
+
+- **`is_unbound`-based stability has a hole.** §3.3 names three predicates; if a
+  fourth write path can land in a concrete subtree, a cut verdict can go stale and
+  step 2's harness would show it as a value or diagnostic divergence. That is the
+  first thing the harness is for.
+- **The measured delta is small** (see §4.5). Then the redundancy is inherent to
+  cyclic re-derivation, nothing further is built, and the note's finding reduces
+  to the measurement plus `P1-31`.
+- **The ordering guarantee breaks.** If a cut lets an apply consume an unsettled
+  template member, the recursion tests should fail; they are the canary.
+- **The wall-clock share is negligible.** Then even a working cut is not worth
+  its complexity, and the answer is to leave the pass as it is.
+
+## 7. Decisions and open questions
+
+**Decided (the superior):**
+
+- **No cross-rebuild reuse.** Nothing persists a `Module` across an edit or keys a
+  sub-expression; the fine-grained `StaticModule` design (`M3`), the same-module
+  resume (`M2`), the value-digest memo (`M1`) and the `T3` resume are all
+  **withdrawn**, not deferred. Q2/Q3/Q4 and Q7 (what identifies a sub-expression
+  across a rebuild) go with them.
+- **The invalidation question is answered by the code, not by an index.**
+  "Dirty" is the *tracked* form of "may have changed"; §3.3 gives the *excluded*
+  form, and in this scope the excluded form is sufficient. So the reverse index
+  (Q1) is **withdrawn** with the propagation hooks.
+- **The CLI build path is the measurement target** (Q5, unchanged): step 0 needs
+  no editor, and `BufferSession` still has no production consumer (`P2-1`).
+
+**Done:**
+
+- **Q6 / `P1-31`** — the verdict's `None` conflated "never ran" with "in
+  progress"; the split landed (`code-audit.md` `P1-31`), and §4.4 depends on it.
+
+**Open:**
+
+- **Q8 (re-posed, and this note's judgement) — what may a within-build cut
+  trust?** *Judgement: a stability property, not a dependency index* — `settled`
+  as §4.1 defines it. The obligation that remains is the differential harness,
+  not another design question. What is genuinely not known is the *take*
+  (§4.5), which is a measurement, not a decision.
+- **Q9 — the wall-clock split.** The counters measure redundancy, not cost. A
+  probe that separates the deep pass from the checker and the frontend is what
+  would say whether any of this matters; it is the one thing step 0 still owes.
+
+## 8. Where the changes would land
 
 | Step | File / function | Change |
 |---|---|---|
-| 0 | `evaluation.rs` `DEEP_PASS_*`, `DeepPassStats`; `crates/lichen-language/examples/deep_pass_stats.rs` | **landed**: walks / visits / cheap-return counters, and the harness that reports them; the wall-clock split is still owed |
-| 1 | `lib.rs` `Node`, `evaluation.rs` `evaluate_node_deep_inner` + `ref_is_parameterized`, `module.rs` `close_operation_cycle` | **landed** (`P1-31`): the `assumed_concrete` third state; the operand and table-key reads stay as documented exemptions |
-| 1 | `crates/lichen-lowlevel/tests/basic/verdict.rs` (new) | **landed**: the cyclic value's concreteness, the refused subtree, the operand exemption + harm pin |
-| 2 | `lib.rs` `Node`, `module.rs` `add_node`/`drop_block`, `equality.rs` `write_node_value`, `utils.rs` `alloc_*` | `dirty` + `dependents`; `link`/`unlink`/`dirty` |
-| 2 | `module.rs` `close_operation_cycle` | the one late edge: reverse link + propagate to dependents |
-| 3 | `evaluation.rs` `evaluate_node_deep_inner` | consult `dirty` instead of unconditional descent |
-| 3 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness (incremental vs full: verdicts, values, diagnostics) |
-| 4 | `static_module/freeze.rs` | a sub-graph freeze entry point (or a per-unit `Module` driven from the checker) |
-| 4 | `crates/lichen-highlevel/src/checker.rs` | resume from a scope whose entries are static refs for reused binders |
-| 4 | `crates/lichen-language/src/{session,compile}.rs` + `crates/lichen-registry` | Q7/Q8: a stable sub-expression identity and a span → dirtied-subtree map; the reuse gate per unit instead of per whole `Build`; slot discipline for many small units |
-| (removed) | — | step 5: Q4 rejected a content key, so there is no digest and no memo to build |
+| 0 | `evaluation.rs` `DEEP_PASS_*` / `DeepPassStats`; `crates/lichen-language/examples/deep_pass_stats.rs` | **landed**: walks / visits / cheap / revisit counters and the harness; the wall-clock split is still owed |
+| 1 | `lib.rs` `EvaluatedDeep`; `evaluation.rs` `value_is_parameterized` + `evaluate_node_deep_inner` | the `settled` bit and the early return |
+| 1 | `module.rs` `close_operation_cycle` | clear `settled` with the verdict it invalidates |
+| 2 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness: with and without the cut, over the existing corpus |
+| 3 | `crates/lichen-language/examples/deep_pass_stats.rs` | re-run; the delta is the decision |
 
-## 11. Recorded discussion
+## 9. Recorded discussion
 
 - The request was "make the evaluation system also able to rebuild
-  incrementally". The first reframing: there is no separable evaluation stage
-  (§1.1), so the object is the `Module` the checker builds and evaluates, and the
-  sub-`Build` granularity it lacks is the one `T3` names.
-- The second reframing — the superior's, and it changed the mechanism: this is
-  **not** a "can we cut on the cached verdict" question but an
-  **incremental-computation** question, "a DAG that keeps being incrementally
-  updated, with dirty-flag propagation — the problem being that the topology
-  changes". Accepted. Under it, §3's inventory replaces "can we cut" and §4.3
-  answers the mutation class that looked fatal.
-- Rejected as the primary within-build mechanism: **cut-on-verdict** — subsumed
-  by dirty propagation (§4.6), and it never asked what invalidates a verdict.
-- Rejected as the primary cross-build mechanism: **a syntax-keyed value memo
-  alone** — a value is a function of the unification history, not of syntax
-  (§6.1), and the only canonical value hash in the tree is documented
-  non-injective.
-- Rejected as the primary cross-build mechanism: **same-module resume** — sound
-  in principle and the only route that avoids freezing, but it is `T4`'s
-  unification rollback plus a new per-unit boundary plus the append-only side
-  tables (§6.2). Kept as the documented boundary; its dependency index is step 2.
-- Selected: **dirty-flag propagation over the maintained dependency index** for
-  the within-build half, behind a measurement and behind Q6; **fine-grained
-  frozen units** for the cross-build half, behind `T3`'s resume.
-- Investigated and **resolved as a defect**: the verdict's three readings of
-  `None` are one `Option` doing two jobs — "never ran" and "in progress, assumed
-  concrete at the cycle cut". The array/table arms' non-conservative read is
-  load-bearing (§4.4 H1 proves it from the canonical universe), so the fix is the
-  state split, filed as `code-audit.md` `P1-31`. Recorded because the first pass
-  at this note framed it as a choice between "fix the docs" and "fix the reader",
-  and neither is right.
-- The superior's answers settled Q1-Q5 as §9 records, and two of them changed the
-  plan rather than filling it in: **Q3's sub-expression granularity plus Q4's "no
-  key"** turn the cross-build half into an identity/pinpointing problem (Q7, Q8),
-  and **Q4 closes M1** outright — a dirty flag driven by the mutation action has
-  no use for a content digest, and a mutation that changed nothing still counts as
-  dirty.
-- Then two steps **landed** rather than staying design: step 0's redundancy half
-  (the counters and the harness, §1.3) and step 1 (`P1-31`). Two things this
-  note's first pass got wrong, which the implementation corrected: the operand arm
-  is a *deliberate* exemption (a core operator's operand is a synthesized argument
-  array, so "never walked" is the normal case), and `Module::key_state` is not a
-  defect at all (the content unfolding is total and reports its own failure). Both
-  are recorded as retractions in `P1-31` rather than quietly dropped, because the
-  first pass had argued for flipping them.
+  incrementally". First reframing: there is no separable evaluation stage
+  (§1.1), so the object is the `Module` the checker builds and evaluates.
+- Second reframing (the superior's, and it changed the mechanism): this is
+  **incremental computation over a DAG that keeps being updated, with dirty-flag
+  propagation — the topology being the problem**. Accepted, and §3's inventory is
+  the result.
+- Third: **no cross-rebuild reuse** (the superior's), which deleted the whole
+  cross-build half and, with it, the *need* to propagate. What is left is §4: a
+  cut that trusts a verdict only when nothing can write into it, which is cheaper
+  than tracking what did.
+- `P1-31` (named in the previous revision of this note) landed: the verdict's
+  `None` now means one thing, with the in-progress case named. Two sites an
+  earlier draft had named as defects were **retracted** — the operand arm is a
+  deliberate exemption, and `Module::key_state` is correct because the content
+  unfolding is total and self-reporting. Both retractions are recorded in
+  `P1-31` rather than dropped.
+- What this note deliberately does **not** claim: that the cut is worth building.
+  §4.3 lists two reasons its reach is limited and §4.5 says the take is a
+  measurement. The note's durable results are the measurement, the mutation
+  inventory, the three stability predicates, and `P1-31`.
