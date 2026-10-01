@@ -92,7 +92,7 @@ queue's order is deliberate.
 | P3-4 | medium | span, language, language-server | Four byte↔line/col implementations with divergent edge behaviour | done |
 | P4-1 | medium | lowlevel | Registry read lock + `Arc` clone per array element | done |
 | P4-2 | medium | lowlevel | `write_node_value` is O(class size); seven sibling full-list walks | done |
-| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | blocked:D13 |
+| P4-3 | medium | language-parser | A 16 MiB thread and a rebuilt combinator graph per parse | done |
 | P4-4 | medium | highlevel, language | O(E×D) diagnostics; O(diags×lines) rendering | done |
 | P4-5 | low | lowlevel, compute | `path.contains` as a cycle guard; O(n²) kernel codegen | done |
 | P4-6 | low | lowlevel, language, compute | Per-apply clones, repeated `as_enum`, per-byte `mix`, intern leak | blocked:D14 |
@@ -4148,6 +4148,16 @@ not done. The cost is real — **47% of a 551-byte parse is the worker's spawn**
 which is exactly the language server's per-keystroke case — and the fix needs a
 decision, which is `D13`.
 
+**Outcome — decided, landed, and measured at −37% on the case that motivated it.**
+`D13` chose the process-lived worker (one `OnceLock`'d `ParseWorker`, 16 MiB
+stack, a job per parse owning its tokens); the decision entry records the choice
+against the two alternatives and the re-measurement. On this input the parse is
+now **164–203 µs** where it was **260–296 µs** (minima, same session, alternating
+rounds), and the 85 KiB input is unchanged inside 2% — the direction and
+magnitude the decomposition called for. The refuted half stands as refuted: the
+combinator graph is still rebuilt per parse, because it cannot be hoisted, and
+that rebuild is 19–47 µs against a worker share that was 289 µs.
+
 ### P4-4 — Quadratic diagnostics `reported`
 
 `highlevel/src/diagnostic.rs:424-428` `orphan_unify_errors` is O(E × D);
@@ -5524,7 +5534,8 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   **Order matters and is part of the decision:** the backlog clearing and the gate
   are one item's work, and the gate must not land before the backlog is gone, or
   CI is red from its first run.
-- **D13 — The parser's per-parse worker. (open; blocks `P4-3`.)** Measured: a
+- **D13 — The parser's per-parse worker. — DECIDED: (a), a process-lived worker
+  fed a per-parse copy of the tokens. Landed.** Measured: a
   fresh thread is **47%** of a 551-byte parse (289 µs of 608 µs, release) and
   **1.2%** of an 85 KiB one, and the cost is the **spawn**, not the 16 MiB stack
   (1/16/64 MiB spawns measure the same). The other half of `P4-3`'s finding is
@@ -5532,22 +5543,55 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
   closures capture the token slice, and storing it behind a `'static` bound fails
   to compile (`E0597`, "`tokens` does not live long enough").
 
-  A **process-lived worker** would remove the spawn and keep the stack warm
-  without changing the overflow behaviour `D9` accepted. The three ways to feed it
-  are all unpalatable, which is why this is a decision and not a task:
-  - a **per-parse copy of the token stream** — 592 µs on the large input, where
-    the worker's whole share is only ~1.4 ms, so the copy could eat the win;
-  - a **lifetime-erased borrow** of the caller's tokens sent to a `'static`
-    worker (`unsafe`, with the caller blocking until the reply so the borrow
-    cannot outlive the tokens);
-  - an **`Arc<[Token]>`** lexer/parser API, which crosses three crates.
+  *Chosen — (a), the copy.*  The three ways to feed a process-lived worker were
+  all unpalatable on paper; the tie-break is that they differ by **three orders
+  of magnitude on the input the item exists for**. The token copy is 1.6 µs on
+  the editor's 551-byte file, where the spawn it removes is 289 µs; on the 85 KiB
+  one it is 592 µs against a 1.4 ms spawn share, so it eats less than half the
+  win there and leaves that input ahead. That makes (a) the *safe* choice and
+  the *fast* one at once, where (b) is `unsafe` for no measured gain and (c)
+  crosses three crates' APIs for none. `ParseWorker` is therefore one
+  `OnceLock`'d thread with the 16 MiB stack, each parse a job that owns its
+  tokens and answers on a channel.
 
-  All three would also **serialize concurrent parses**, which one worker per parse
-  does not. Against that: the parse itself is 53% (small input) to 98.8% (large
-  input) of the total and is untouched by any of them, so this only pays for the
-  editor's small-file case — which is `P1-17`'s case, and `P1-17` is where the
-  per-keystroke path is being fixed. Decide with that in mind: it may be better
-  resolved by `P1-17`'s caching than by a persistent worker.
+  *Rejected — the serialization objection, on the facts.*  One worker does
+  serialise concurrent parses where per-parse threads did not, which is a real
+  change in shape.  It is accepted because nothing that parses concurrently is
+  on a hot path: the language server serialises requests anyway
+  (`concurrency_level(1)`) and the CLI parses one file.  A pool would need reply
+  routing for no measured win, so the shape is recorded rather than abstracted
+  away.
+
+  *Rejected — leaving it to `P1-17`'s cache.*  The cache removes a repeat request
+  for one text and does nothing when the text changes, which is every keystroke.
+  That is exactly the input (a) is measured on.
+
+  **Re-measured on landing, same session, alternating rounds, release** (input A
+  = `examples/struct_generic.lichen`, 539 bytes / 38 tokens; input B = the
+  generated 81 560-byte / 24 001-token file, as `P4-3` describes):
+
+  | | before | after |
+  |---|---|---|
+  | A, min | 259.6–296.1 µs | **164.3–203 µs** |
+  | A, median | 354.7–422.1 µs | **177.6–271.9 µs** |
+  | B, min | 102.9–105.5 ms | 101.1–103.8 ms |
+
+  Best-against-best on the minimum — the statistic that survived the noise — A
+  goes **259.6 → 164.3 µs, −37%**, and B is inside 2%, which is what the
+  decomposition predicted (a 1.2% spawn share against a 0.6% copy).  Absolute
+  figures are *not* comparable to the ones `P4-3` recorded: that session's
+  baseline was ~608 µs for the same input where this one measures ~270 µs, which
+  is why the comparison above was re-derived by building both sides in one
+  sitting rather than against the note.
+
+  Pinned by `parses_share_one_worker_thread` (both parses on one thread, and not
+  the caller's) and `a_panicking_parse_leaves_the_worker_alive`.  The second
+  guards the hazard the reuse *introduces*: a per-parse thread contained a panic
+  to its own parse for free, and a shared one does not unless the panic is caught
+  on the worker and resumed on the caller.  Watched to go red — with the catch
+  removed, the first parse's panic kills the worker and the **next** parse fails
+  with "the parse worker is gone", which is what a long-lived host would see and
+  a single-shot test never would.
 - **D14 — Where the IR's strings live. (open; blocks `P4-6`.)** `P4-6`'s intern
   leak is real and measured: every compile permanently leaks every string
   literal (`Expr::Str` has no dedup at all) and every distinct interned name, at

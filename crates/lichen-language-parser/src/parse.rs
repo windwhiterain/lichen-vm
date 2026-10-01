@@ -99,20 +99,98 @@ pub struct Parsed {
     pub errors: Vec<ParseDiag>,
 }
 
+/// The stack the parse runs on.  The parser's construction and run recurse
+/// deeply (a fixed depth, driven by the size of the combinator grammar) and
+/// comfortably exceed the main thread's stack, so the work happens off the
+/// caller's thread — see [`ParseWorker`].
+const WORKER_STACK: usize = 16 * 1024 * 1024;
+
+/// The process-lived worker every parse runs on.
+///
+/// The parse needs a large stack, so it cannot run on the caller's, and
+/// **creating that thread per parse is the cost** `D13` measured: 289 µs of a
+/// 551-byte parse — 47% of it — on the editor's small-file path, and it is
+/// `std::thread`'s creation rather than the 16 MiB reservation (1/16/64 MiB
+/// spawns measure the same).  One worker is therefore created on first use and
+/// reused: a parse is a job sent to it, run on its warm stack, answered on a
+/// channel.
+///
+/// A job owns what it needs, because the worker is `'static` and a borrow of
+/// the caller's token slice cannot cross.  That is the per-parse token copy
+/// `D13` accepted: 1.6 µs on the small input against the 289 µs it removes, and
+/// 592 µs on an 85 KiB one whose parse is 115 ms — the same trade the
+/// measurement was made to decide.
+///
+/// **One worker serialises parses.**  Per-parse threads did not, so this is a
+/// real change in shape; it is accepted because the callers that parse
+/// concurrently are not on a hot path (the language server serialises its
+/// requests via `concurrency_level(1)` and the CLI parses one file), and
+/// because the alternative — a pool — would have to hand a job to *whichever*
+/// worker is free, which needs a reply routing layer for no measured win.
+struct ParseWorker {
+    jobs: std::sync::Mutex<std::sync::mpsc::Sender<Job>>,
+}
+
+/// One unit of work for the worker: a closure that runs on the worker's stack.
+type Job = Box<dyn FnOnce() + Send>;
+
+impl ParseWorker {
+    fn global() -> &'static ParseWorker {
+        static WORKER: std::sync::OnceLock<ParseWorker> = std::sync::OnceLock::new();
+        WORKER.get_or_init(|| {
+            let (jobs, receiver) = std::sync::mpsc::channel::<Job>();
+            std::thread::Builder::new()
+                .stack_size(WORKER_STACK)
+                .spawn(move || {
+                    // A send error means every caller's receiver is gone, which
+                    // means the process is shutting down: nothing left to serve.
+                    while let Ok(job) = receiver.recv() {
+                        job();
+                    }
+                })
+                .expect("spawn the parse worker");
+            ParseWorker {
+                jobs: std::sync::Mutex::new(jobs),
+            }
+        })
+    }
+
+    /// Run `f` on the worker and return its result, blocking until it answers.
+    ///
+    /// A panic is caught on the worker and **resumed here**, so it reaches the
+    /// caller with its own payload and backtrace — the same observable
+    /// behaviour as the `join()` this replaces — and, just as importantly, it
+    /// does not take the worker down with it: the next parse still has one.
+    fn run<T: Send + 'static>(&self, f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let job: Job = Box::new(move || {
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            let _ = tx.send(outcome);
+        });
+        self.jobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .send(job)
+            .expect("the parse worker is gone");
+        match rx.recv() {
+            Ok(Ok(value)) => value,
+            Ok(Err(payload)) => std::panic::resume_unwind(payload),
+            Err(_) => panic!("the parse worker died before it answered"),
+        }
+    }
+}
+
 /// Parse a token stream.  See the module docs for the recovery behavior.
 ///
 /// The parser's construction and run recurse deeply (a fixed depth, driven
 /// by the size of the combinator grammar) and comfortably exceed the main
-/// thread's stack, so the parse runs on a worker thread with a large stack.
+/// thread's stack, so the parse runs on the process-lived [`ParseWorker`].
 pub fn parse(tokens: &[Token]) -> Parsed {
-    std::thread::scope(|scope| {
-        let worker = std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn_scoped(scope, || parse_inner(tokens))
-            .expect("spawn the parse worker");
-        let (program, errors) = worker.join().expect("the parse worker panicked");
-        Parsed { program, errors }
-    })
+    // Owned, because the worker is `'static`: see `ParseWorker` for why the
+    // copy is the accepted half of `D13`.
+    let owned: Vec<Token> = tokens.to_vec();
+    let (program, errors) = ParseWorker::global().run(move || parse_inner(&owned));
+    Parsed { program, errors }
 }
 
 /// The worker's result: the program plus its diagnostics.  [`ParseDiag`] is
@@ -205,14 +283,9 @@ pub fn parse_statement_region_traced(
     start: usize,
     end: usize,
 ) -> (Vec<BlockStmt>, Vec<(usize, usize)>, Vec<ParseDiag>) {
-    let (statements, ranges, errors) = std::thread::scope(|scope| {
-        let worker = std::thread::Builder::new()
-            .stack_size(16 * 1024 * 1024)
-            .spawn_scoped(scope, || region_inner(tokens, start, end))
-            .expect("spawn the region parse worker");
-        worker.join().expect("the region parse worker panicked")
-    });
-    (statements, ranges, errors)
+    // Owned for the same reason [`parse`] copies: the worker outlives the call.
+    let owned: Vec<Token> = tokens.to_vec();
+    ParseWorker::global().run(move || region_inner(&owned, start, end))
 }
 
 /// The worker's result for a region: the statements, their absolute

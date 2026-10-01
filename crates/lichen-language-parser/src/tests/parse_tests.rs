@@ -931,3 +931,42 @@ fn dangling_operators_are_recovered() {
         assert!(recovered, "{source}: recovered shape: {:?}", binding.value);
     }
 }
+
+/// The parse worker is process-lived, so a panic inside one parse must not take
+/// it down: per-parse threads contained a panic to its own parse for free, and
+/// reusing one thread gives that up unless the panic is caught and resumed on
+/// the caller.  If this ever regresses, the *first* panicking parse is fine and
+/// every later parse in the process fails instead — a failure a long-lived host
+/// would see and a single-shot test never would.
+#[test]
+fn a_panicking_parse_leaves_the_worker_alive() {
+    let worker = ParseWorker::global();
+    let caught = std::panic::catch_unwind(|| worker.run(|| panic!("deliberate: a parse panicked")));
+    assert!(caught.is_err(), "the panic must reach the caller");
+
+    // The worker still answers, and a real parse after it is unaffected.
+    let tokens = lex("a = 1\na\n").tokens;
+    let Parsed { program, errors } = parse(&tokens);
+    assert!(errors.is_empty(), "unexpected parse errors: {errors:?}");
+    assert!(
+        program.expr.is_some(),
+        "the parse after a panic is complete"
+    );
+}
+
+/// The worker is created once and reused, which is the whole point of `D13`: a
+/// fresh thread per parse was 47% of a small parse.  Both parses must therefore
+/// run on the *same* thread, and that thread must not be the caller's — the
+/// stack the parser needs is why it runs off the caller at all.
+#[test]
+fn parses_share_one_worker_thread() {
+    let here = std::thread::current().id();
+    let worker = ParseWorker::global();
+    let first = worker.run(|| std::thread::current().id());
+    let second = worker.run(|| std::thread::current().id());
+    assert_eq!(first, second, "the worker is reused rather than respawned");
+    assert_ne!(first, here, "the parse runs off the caller's stack");
+
+    let tokens = lex("a = 1\na\n").tokens;
+    assert!(parse(&tokens).errors.is_empty());
+}
