@@ -90,6 +90,68 @@ fn fixed_cost(context: &GpuContext) -> (f64, f64) {
     (samples[0], samples[REPEATS / 2])
 }
 
+/// The fixed cost of a dispatch that consumes a **resident** buffer, which is
+/// what every link of a chain after the first one is.
+///
+/// This is a different number from [`fixed_cost`] and the difference is the
+/// point. A host input is `memcpy`'d into staging and copied by the device
+/// inside the same submission; a chain link pays neither. Dividing a chain's
+/// marginal link by the host-input floor therefore credits the link with an
+/// upload it never did, and at small counts that credit comes to more than the
+/// link costs — which is how the first run of this table reported a link that
+/// was 108% overhead, which is not a number any fraction can be.
+fn resident_cost(context: &GpuContext) -> (f64, f64) {
+    const REPEATS: usize = 200;
+    let count = 64usize;
+    let input: Vec<i64> = (0..count as i64).collect();
+    let seed = context
+        .run(&fragment(), &[BufferSlot::Host(&input)], count)
+        .expect("the seeding run completes");
+
+    let mut samples = Vec::with_capacity(REPEATS);
+    for _ in 0..REPEATS {
+        let started = Instant::now();
+        let resident = context
+            .run(&fragment(), &[BufferSlot::Resident(seed[0])], count)
+            .expect("a probe run completes");
+        let elapsed = started.elapsed().as_secs_f64() * 1e3;
+        for id in &resident {
+            context.release(*id);
+        }
+        samples.push(elapsed);
+    }
+    context.release(seed[0]);
+    samples.sort_by(|a, b| a.partial_cmp(b).expect("the samples are all finite"));
+    (samples[0], samples[REPEATS / 2])
+}
+
+/// One chain of `links` dispatches over a single uploaded buffer, in
+/// milliseconds, with the trailing readback counted.
+///
+/// The readback is counted deliberately: a chain a program actually runs ends in
+/// a value somebody wanted, so leaving it out would flatter every number
+/// derived from this.
+fn time_chain(context: &GpuContext, input: &[i64], count: usize, links: usize) -> f64 {
+    let started = Instant::now();
+    let mut current = context
+        .run(&fragment(), &[BufferSlot::Host(input)], count)
+        .expect("the chain's first link uploads");
+    for _ in 1..links {
+        // Each link is handed the previous one's id and never sees its data.
+        let next = context
+            .run(&fragment(), &[BufferSlot::Resident(current[0])], count)
+            .expect("a link consumes the previous link's id");
+        context.release(current[0]);
+        current = next;
+    }
+    let _answer = context
+        .fetch(current[0], count)
+        .expect("the last link comes home");
+    let elapsed = started.elapsed().as_secs_f64() * 1e3;
+    context.release(current[0]);
+    elapsed
+}
+
 fn main() {
     let Ok(context) = GpuContext::new() else {
         eprintln!("no usable Vulkan device; nothing to compare against");
@@ -99,6 +161,10 @@ fn main() {
     println!("workgroup: {LOCAL_SIZE_X} invocations");
     let (best, median) = fixed_cost(&context);
     println!("empty dispatch over 200 runs: best {best:.3} ms, median {median:.3} ms\n");
+    let (link_floor, link_median) = resident_cost(&context);
+    println!(
+        "resident-input dispatch over 200 runs: best {link_floor:.3} ms, median {link_median:.3} ms\n"
+    );
     println!(
         "{:>10}  {:>12}  {:>12}  {:>12}  {:>8}",
         "count", "gpu (ms)", "dispatch", "fetch", "ratio"
@@ -217,4 +283,81 @@ fn main() {
             );
         }
     }
+
+    // The question the table above cannot answer: how much of a chain is the
+    // per-dispatch overhead rather than the kernel. It decides whether a graph
+    // is worth building at all, so it is worth a table of its own.
+    //
+    // It has to be a **difference of two chain lengths**, not one chain minus a
+    // constant. The upload and the download cost the same at both lengths, so
+    // subtracting cancels them and what survives is the marginal cost of a
+    // link. Subtracting the floor from a single chain would leave the transfers
+    // in the answer, and a graph cannot remove a transfer.
+    //
+    // Best of several runs for the reason `fixed_cost` is a best: a single
+    // sample of a chain on a machine that is not otherwise idle lands over a
+    // millisecond apart, which is wider than the effect being measured.
+    const REPEATS: usize = 20;
+    const LINKS: usize = 16;
+
+    println!("\nper-dispatch overhead against kernel size — {LINKS} links, best of {REPEATS}");
+    println!(
+        "{:>10}  {:>10}  {:>10}  {:>12}  {:>14}  {:>11}",
+        "count", "1 link", "16 links", "per link", "fusion share", "overhead"
+    );
+
+    for count in [1_024usize, 4_096, 16_384, 65_536, 262_144, 1_048_576] {
+        let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let warm = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .expect("the warm-up run completes");
+        for id in &warm {
+            context.release(*id);
+        }
+
+        let mut single = f64::MAX;
+        let mut chained = f64::MAX;
+        for _ in 0..REPEATS {
+            single = single.min(time_chain(&context, &input, count, 1));
+            chained = chained.min(time_chain(&context, &input, count, LINKS));
+        }
+
+        // A per-link cost at or below zero would mean the long chain beat the
+        // short one, which is noise rather than a result, and dividing by it
+        // would invert every column to its right. Clamped, so that case reads
+        // as "no signal here" instead of as a spectacular win.
+        let per_link = ((chained - single) / (LINKS - 1) as f64).max(f64::MIN_POSITIVE);
+        let saved = (LINKS - 1) as f64 * link_floor;
+        println!(
+            "{count:>10}  {single:>10.3}  {chained:>10.3}  {per_link:>12.3}  {:>13.1}%  {:>10.1}%",
+            saved / chained * 100.0,
+            link_floor / per_link * 100.0,
+        );
+    }
+
+    // The last two columns answer different questions and both are needed.
+    //
+    // **fusion share** is `15 x link floor / 16 links`: the speed-up a program
+    // running a 16-link chain would get from having those fifteen submissions
+    // removed. It is a *ceiling* — it assumes every submit and every wait but
+    // the last disappears, which is the Batch schedule. Async keeps the submits
+    // and removes only the waits, so it collects part of this and not all of it;
+    // how much is the submit/wait split below, and that is not measured yet.
+    //
+    // **overhead** is `link floor / per link`: what fraction of one marginal
+    // link is spent not doing the work. This is the diagnostic, and it is the
+    // column that moves with count. The two differ because the first divides by
+    // a total that includes the upload and the download, and the second does
+    // not.
+    //
+    // Both divide by `per link`, which is a difference of two chain lengths. A
+    // negative one would mean the long chain beat the short one, which is noise
+    // rather than a result, so it is clamped above and that case reads as no
+    // signal rather than as a spectacular win.
+    println!(
+        "\nthe floor used above is {link_floor:.3} ms — a dispatch that reads a resident\n\
+         buffer, not the {best:.3} ms host-input one, because a chain link after the first\n\
+         uploads nothing. It is still an upper bound: an empty dispatch's fence wait has no\n\
+         device work to hide behind, so a link that does work waits for less."
+    );
 }
