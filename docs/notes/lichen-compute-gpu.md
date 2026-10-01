@@ -1,9 +1,10 @@
 # The GPU backend for the lowered-kernel IR
 
-> Status: **implemented, first slice** (`feature/compute-gpu-backend`, not yet
-> merged). One output space and the arithmetic/select subset run on a real
-> device; a cross-kernel call is refused by name. What is *not* here is listed
-> under [Not yet](#not-yet) rather than left implied.
+> Status: **implemented and merged** to `dev`. One output space and the
+> arithmetic/select subset run on a real device; a cross-kernel call is refused
+> by name. What is *not* here is listed under [Not yet](#not-yet) rather than
+> left implied. Work on launching a chain as one submission is designed and
+> tracked in [compute-graph-jit.md](compute-graph-jit.md).
 
 This is the second consumer of the IR that
 [lichen-compute.md §4](lichen-compute.md#4-codegen-bytecode-fragments-not-a-module)
@@ -342,6 +343,13 @@ about a quantity that is not the one that decides it.
 
 Named rather than implied, because each is a decision not a gap:
 
+- **Launching a chain as one submission.** **Designed, not built** — see
+  [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
+  mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
+  What is left is the `Segment` primitive, the scheduling, and the measurement
+  that decides whether it is worth having: on these numbers submit fusion is
+  worth at most 8.9% of a 16-link chain at 1 048 576 elements, and what actually
+  decides it is kernel size rather than chain length.
 - **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
   functions in one module and a call graph; the refusal names the callee and the
   instruction position.
