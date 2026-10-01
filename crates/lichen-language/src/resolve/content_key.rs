@@ -10,13 +10,15 @@ use super::*;
 /// bump invalidates every cached key, so every [`crate::session::BufferSession`]
 /// rebuilds on its next compile.  That is the intended answer — a stale key
 /// must never be silently reusable.
-const KEY_FORMAT_VERSION: u64 = 1;
+const KEY_FORMAT_VERSION: u64 = 2;
 
 /// The **resolved content key** of a resolved program: an exact, digest-free
 /// serialization of the name-resolved, beyond-error structure that the lowering
 /// consumes — names encoded by their [`BinderId`] (never their spelling), error
 /// blocks opaque, spans dropped, literals and field/operator names kept (they
-/// become IR nodes), `pub`/field identity kept for record programs.  Two
+/// become IR nodes), `pub`/field identity kept for record programs, and the
+/// `cache` mark kept (the lowering consumes it too: a marked binding is the one
+/// the cell store may lower to a static read instead of its body).  Two
 /// programs with equal keys have literally identical lowering-visible content:
 /// every [`Expr`] variant writes its own tag and every list writes its length,
 /// so the serialization is injective, not merely self-delimiting.  The
@@ -80,6 +82,7 @@ impl KeyWriter {
             Stmt::Binding(b) => {
                 self.u(0);
                 self.b(b.restrictive);
+                self.b(b.cached);
                 self.opt_binder(&b.binder);
                 self.expr(&b.value);
             }
@@ -106,6 +109,7 @@ impl KeyWriter {
         }
         match &bs.stmt {
             Stmt::Binding(b) => {
+                self.b(b.cached);
                 self.opt_binder(&b.binder);
                 self.expr(&b.value);
             }
@@ -351,6 +355,7 @@ impl KeyWriter {
                     self.b(f.name.is_some());
                     self.b(f.field);
                     self.b(f.public);
+                    self.b(f.cached);
                     if let Some(name) = &f.name {
                         self.str(name);
                     }

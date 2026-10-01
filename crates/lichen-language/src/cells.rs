@@ -12,7 +12,7 @@
 //! an artifact owns is the artifact's own `Drop` (see
 //! `lichen_lowlevel::Release`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use lichen_language_parser::path::Path;
 use lichen_lowlevel::{ModuleKey, StaticNodeId};
@@ -67,21 +67,64 @@ impl CellStore {
     /// Drop every cell that came from `source`, returning the artifacts they
     /// named.
     ///
-    /// This is the **dirty input**, and it is deliberately the caller's: an edit
-    /// names the file it changed, so the store never has to detect anything — and
-    /// the caller drops the cells of every file that *imports* the changed one too
-    /// (the reverse import closure), which is the file granularity the design chose
-    /// for source edits.  A dropped cell is not consulted again, so its binding is
-    /// compiled and re-frozen on the next build.
+    /// This is the **coarse** dirty input, and it is deliberately the caller's:
+    /// an edit names the file it changed, so the store never has to detect
+    /// anything — and the caller drops the cells of every file that *imports* the
+    /// changed one too (the reverse import closure), which is the file
+    /// granularity the design chose for source edits.  A dropped cell is not
+    /// consulted again, so its binding is compiled and re-frozen on the next
+    /// build.
+    ///
+    /// [`Self::invalidate_paths`] is the fine cut under it: an edit to a file
+    /// this store *does* hold cells for need not drop them all — dirty
+    /// propagation names the positions it reached (`crate::dirty`).
     ///
     /// The returned keys are the artifacts that just became unreachable.  The store
     /// does **not** evict them: a static ref is a raw handle into the artifact's
     /// arena, so eviction is sound only once every module that could still hold one
     /// is gone ([`Registry::evict`]'s precondition), and only the caller knows that.
-    pub fn invalidate(&mut self, source: &str) -> Vec<ModuleKey> {
+    pub fn invalidate_source(&mut self, source: &str) -> Vec<ModuleKey> {
         let mut dropped = Vec::new();
         self.cells.retain(|_, cell| {
             let keep = cell.source != source;
+            if !keep {
+                dropped.push(cell.reference.module);
+            }
+            keep
+        });
+        dropped
+    }
+
+    /// Drop the cells at `paths` — the positions an edit dirtied.
+    ///
+    /// The **fine cut**: a cell is dropped because dirty propagation reached its
+    /// identity, not because its file was touched, so an edit that leaves a
+    /// marked binding's inputs alone keeps its artifact.  The returned keys are
+    /// what became unreachable, and the store still does not evict them.
+    pub fn invalidate_paths(&mut self, paths: &HashSet<Path>) -> Vec<ModuleKey> {
+        let mut dropped = Vec::new();
+        self.cells.retain(|path, cell| {
+            let keep = !paths.contains(path);
+            if !keep {
+                dropped.push(cell.reference.module);
+            }
+            keep
+        });
+        dropped
+    }
+
+    /// Drop every cell whose path is not in `marked` — the positions the program
+    /// about to be built marks.
+    ///
+    /// A cell outliving its mark would be read for a binding that no longer asks
+    /// to be retained, and would never be compiled again: the mark is the whole
+    /// of a cell's promise, so it is also the whole of its warrant.  A position
+    /// that moved (a rename) falls out here too, which is what keeps a store
+    /// keyed by identity from accumulating paths nothing resolves.
+    pub fn retain_marked(&mut self, marked: &HashSet<Path>) -> Vec<ModuleKey> {
+        let mut dropped = Vec::new();
+        self.cells.retain(|path, cell| {
+            let keep = marked.contains(path);
             if !keep {
                 dropped.push(cell.reference.module);
             }

@@ -1,5 +1,6 @@
 //! The incremental [`BufferSession`]: an editable source buffer whose compile
-//! reuses the established AST→IR→check when only a frontend *error* changed.
+//! reuses the established AST→IR→check when only a frontend *error* changed,
+//! and whose `cache`d bindings are **retained cells** across a rebuild.
 //!
 //! The frontend absorbs every error at its own layer — a recovered parse error
 //! and an *unresolved name* both lower to the **same** inert [`ExprKind::ErrorBlock`]
@@ -17,15 +18,23 @@
 //! The reuse is key-addressed (a `content-key → build` cache), so it is sound
 //! for an arbitrary edit that leaves the resolved structure alone — not just an
 //! append.  A general edit that changes the resolved structure falls back to a
-//! full re-lower + re-check.
+//! full re-lower + re-check; the cells are the **finer cut** under that
+//! fallback: a marked binding the edit did not reach is lowered to a read of its
+//! frozen artifact instead of being compiled, and only the cells dirty
+//! propagation reaches are dropped (`crate::dirty`).
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, RwLock};
+
+use lichen_lowlevel::{ModuleKey, Registry};
 
 use crate::LangProgramShape;
 use crate::ast::{BlockStmt, Program, Stmt};
+use crate::cells::{CellStore, SourceId};
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
+use crate::path::Path;
 use crate::persist::ProgramCodecOf;
 use crate::program::GcdOp;
 use crate::{ParseDiag, Report, build_report};
@@ -56,6 +65,26 @@ where
     /// Whether the established build was reused because the resolved content key
     /// was unchanged (`true`) rather than freshly re-lowered and re-checked.
     pub reused: bool,
+    /// What this compile did to the retained cells.  Zero on the reuse path:
+    /// nothing was lowered at all, so no cell was read or frozen.
+    pub cells: CellEvents,
+}
+
+/// What one compile did to the retained cells — the session's event surface.
+///
+/// Without it a caller cannot tell a rebuild that reused nine cells from one
+/// that reused none, and the mechanism would be silent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CellEvents {
+    /// Marked bindings read from a retained artifact instead of being compiled.
+    pub reused: usize,
+    /// Cells this compile froze into the registry — a marked binding it compiled
+    /// and could solve.  A failed build freezes none, so this is read from the
+    /// store after the build rather than from what the lowering compiled.
+    pub frozen: usize,
+    /// Cells dropped before the lowering: the edit reached them, or the program
+    /// no longer marks their position.
+    pub dropped: usize,
 }
 
 impl<P: HighProgram> SessionReport<P>
@@ -74,6 +103,19 @@ where
     P::Value: ValueType,
 {
     source: String,
+    /// The identity of this buffer **as a source** — what a cell recorded from it
+    /// belongs to.  Caller-named, never derived from content
+    /// ([`crate::cells::SourceId`]).
+    source_id: SourceId,
+    /// The retained cells of this buffer, and the registry their artifacts live
+    /// in.  The registry is the session's because a cell's artifact must outlive
+    /// the build that made it, exactly as a package's does for an import.
+    cells: CellStore,
+    registry: Arc<RwLock<Registry<P>>>,
+    /// The artifacts of the cells this session dropped — its debt to the
+    /// registry, taken by [`BufferSession::take_unreachable`].  The session does
+    /// not evict them itself; see that method for why.
+    unreachable: Vec<ModuleKey>,
     cache: Option<Cache<P>>,
     /// The state the last compile ran under — the baseline the *next* edit is
     /// diffed against and, for lexing, the token stream it resumes from.
@@ -111,13 +153,51 @@ where
     P::Value: ValueType + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
-    /// A new session over `source`.
+    /// A new session over `source`, whose cells belong to the **empty** source
+    /// name — an unnamed buffer, which is the single-buffer case.
     pub fn new(source: impl Into<String>) -> Self {
+        Self::with_source_id(source, "")
+    }
+
+    /// A new session over `source`, whose cells belong to `source_id`: the
+    /// caller's name for the file (a path, a URI).  A cell's identity is its
+    /// occurrence path *plus* this name, so one store can hold several buffers
+    /// without confusing them, and nothing about it is derived from content.
+    pub fn with_source_id(source: impl Into<String>, source_id: impl Into<String>) -> Self {
         BufferSession {
             source: source.into(),
+            source_id: source_id.into(),
+            cells: CellStore::new(),
+            registry: Arc::new(RwLock::new(Registry::new())),
+            unreachable: Vec::new(),
             cache: None,
             last: None,
         }
+    }
+
+    /// The source name this session's cells are recorded under.
+    pub fn source_id(&self) -> &str {
+        &self.source_id
+    }
+
+    /// How many cells the session currently retains.
+    pub fn retained_cells(&self) -> usize {
+        self.cells.len()
+    }
+
+    /// Take the artifacts of the cells this session dropped, oldest first — what
+    /// just became unreachable.
+    ///
+    /// The session does **not** evict them, and cannot: a static ref is a raw
+    /// handle into an artifact's arena, and one survives in two places the
+    /// session does not own — the [`SessionReport`]s the caller still holds (a
+    /// `build` is an `Arc`, so the session never sees the last clone die), and
+    /// the artifacts of the cells that *did* survive (a marked binding reading
+    /// another marked binding freezes a ref into it, filed verbatim).  So
+    /// eviction is the caller's call, made when it can rule both out:
+    /// [`Registry::evict`] is that call, and this is the list it takes.
+    pub fn take_unreachable(&mut self) -> Vec<ModuleKey> {
+        std::mem::take(&mut self.unreachable)
     }
 
     /// The current source.
@@ -208,8 +288,11 @@ where
 
         // Parse: re-parse only the statement window the edit touched and splice
         // it into the snapshot's program when that is safe; otherwise parse the
-        // whole buffer (the result is identical either way).
-        let (mut program, errors, _window) = match (&self.last, edit) {
+        // whole buffer (the result is identical either way).  The window comes
+        // back in **both** index spaces — the statements the edit replaced in the
+        // snapshot's program and the statements it re-parsed in the fresh one —
+        // because dirty propagation runs over both (see `crate::dirty`).
+        let (mut program, errors, windows) = match (&self.last, edit) {
             (Some(prev), Some((a, b, delta))) => {
                 match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
                     Some(out) => {
@@ -217,9 +300,10 @@ where
                             program,
                             errors,
                             lo,
+                            old_hi,
                             hi,
                         } = out;
-                        (program, errors, Some((lo, hi)))
+                        (program, errors, Some((lo..old_hi, lo..hi)))
                     }
                     None => {
                         let p = full_parse(&tokens);
@@ -245,7 +329,11 @@ where
 
         // Reuse: the resolved content is unchanged, so the established build is
         // exactly right.  Only the (fresh, above) frontend/resolve diagnostics
-        // moved; the lowering and check are skipped entirely.
+        // moved; the lowering and check are skipped entirely.  The store is left
+        // alone too: no cell is consulted when no lowering happens, and the
+        // build being reused *is* the one that was correct for this content — the
+        // reconciliation belongs to the next lowering, against the program it
+        // will lower.
         if let Some(cache) = &self.cache
             && cache.key == key
             && let Some(build) = &cache.build
@@ -262,22 +350,66 @@ where
                 diagnostics: all,
                 key,
                 reused: true,
+                cells: CellEvents::default(),
             };
         }
 
-        // Rebuild: lower the already-resolved program (total) and check.  The
-        // session ran the resolver itself, so it lowers via `compile_resolved`
-        // rather than `compile_with_imports` (which would resolve again).
-        let (ir, span_index) = crate::compile::compile_resolved(&program, &resolved.import_binders);
+        // Rebuild: the cells first, because the lowering reads them.  The store
+        // is reconciled with the program about to be lowered — a cell the edit
+        // reached, or a position the program no longer marks, must not be read —
+        // and what that drops is the session's debt to the registry.  A full
+        // re-parse (or the first compile) has no window: the whole program is
+        // the dirty region, which is the honest answer.
+        let marked: HashSet<Path> = crate::compile::cached_bindings(&program)
+            .into_values()
+            .collect();
+        let dirty = match &self.last {
+            Some(last) => {
+                let (previous_window, current_window) = windows.unwrap_or_else(|| {
+                    (
+                        0..logical_statements(&last.program),
+                        0..logical_statements(&program),
+                    )
+                });
+                crate::dirty::dirty_marked_paths(
+                    &last.program,
+                    &program,
+                    previous_window,
+                    current_window,
+                )
+            }
+            None => HashSet::new(),
+        };
+        let mut unreachable = self.cells.invalidate_paths(&dirty);
+        unreachable.extend(self.cells.retain_marked(&marked));
+        let dropped = unreachable.len();
+        self.unreachable.extend(unreachable);
+        // Counted *after* the reconciliation: what the lowering will actually
+        // read back is what survived it.
+        let reused_cells = marked
+            .iter()
+            .filter(|path| self.cells.reference(path).is_some())
+            .count();
+        // Lower the already-resolved program (total) and check.  The session ran
+        // the resolver itself, so it lowers via `compile_resolved_with_cells`
+        // rather than `compile_with_imports` (which would resolve again) — with
+        // the cells, so a clean one becomes a static read of its frozen artifact
+        // and the marked bindings that *were* compiled come back to be frozen
+        // once the build is solved.
+        let (ir, span_index, compiled_cells) = crate::compile::compile_resolved_with_cells(
+            &program,
+            &resolved.import_binders,
+            Some(&self.cells),
+        );
         let report: Report<P> = build_report::<P>(
             Some(ir),
             Some(span_index),
             diagnostics,
-            None,
+            Some(Arc::clone(&self.registry)),
             no_native_ops(),
-            None,
-            Vec::new(),
-            "",
+            Some(&mut self.cells),
+            compiled_cells,
+            &self.source_id,
         );
         let check_diagnostics: Vec<Diag<P>> = report
             .diagnostics
@@ -301,8 +433,21 @@ where
             diagnostics: report.diagnostics,
             key,
             reused: false,
+            cells: CellEvents {
+                reused: reused_cells,
+                // The store now holds exactly the cells that were reused plus the
+                // ones this build froze, and both are subsets of `marked`.
+                frozen: self.cells.len().saturating_sub(reused_cells),
+                dropped,
+            },
         }
     }
+}
+
+/// The logical statement count of a program: its statements plus its tail
+/// expression when it has one (the index space [`Program::stmt_ranges`] uses).
+fn logical_statements(program: &Program) -> usize {
+    program.statements.len() + usize::from(program.expr.is_some())
 }
 
 /// The minimal byte span `[a, b)` of `new` that differs from `old`, plus the
@@ -529,16 +674,21 @@ fn splice_program(
         program,
         errors: win_errors,
         lo,
+        old_hi: hi,
         hi: lo + win_stmts.len(),
     })
 }
 
-/// The outcome of a window splice: the fresh frontend plus the window extent
-/// (in the new program's logical-statement index space).
+/// The outcome of a window splice: the fresh frontend plus the window extent in
+/// **both** index spaces — the statements the edit replaced in the snapshot's
+/// program (`lo..old_hi`) and the statements it re-parsed in the new one
+/// (`lo..hi`).  The two differ whenever the edit added or removed statements,
+/// which is exactly what dirty propagation has to see.
 struct SpliceOut {
     program: Program,
     errors: Vec<ParseDiag>,
     lo: usize,
+    old_hi: usize,
     hi: usize,
 }
 

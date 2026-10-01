@@ -31,6 +31,7 @@ pub use lichen_language_parser::{ParseDiag, Parsed};
 pub mod cells;
 pub mod compile;
 pub mod diag;
+mod dirty;
 pub mod package;
 pub mod persist;
 pub mod preprocess;
@@ -178,6 +179,12 @@ pub fn compile_with_cells(
 /// keep, so filing it would record an artifact that says nothing — the cell is
 /// left out and the next build compiles the binding again, which is the honest
 /// answer rather than a silent freeze of nothing.
+///
+/// And only from a **clean** build.  A cell is read back by skipping its body —
+/// its lowering, its check and its evaluation — so a cell frozen from a build
+/// that failed would carry that failure's silence: the error would be reported
+/// once, and then disappear the moment the cell is read.  A failed build has no
+/// answer to keep, so nothing is filed and every binding is compiled again.
 fn freeze_cells<P>(
     build: &Build<P>,
     cells: &mut CellStore,
@@ -189,6 +196,9 @@ fn freeze_cells<P>(
     P::Value: ValueType + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
+    if !build.ok {
+        return;
+    }
     let mut registry = registry.write().unwrap_or_else(PoisonError::into_inner);
     for (path, expr) in compiled_cells {
         let Some(pair) = build.state[expr.0 as usize].term else {

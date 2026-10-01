@@ -115,19 +115,12 @@ pub fn compile_with_imports_with_cells(
 /// import binders the resolver assigned, each lowering to a `Static` node.  The
 /// incremental session calls this directly (it already ran the resolver for its
 /// reuse decision), so resolution is not repeated.
-pub(crate) fn compile_resolved(
-    program: &Program,
-    import_binders: &[crate::resolve::ImportBinder],
-) -> (IR<LangAttr>, SpanIndex) {
-    let (ir, spans, _) = compile_resolved_with_cells(program, import_binders, None);
-    (ir, spans)
-}
-
-/// [`compile_resolved`] with a **cell store**: a marked binding whose cell is
-/// clean is lowered to a static read of its frozen pair — its body is never
-/// lowered, checked or evaluated — and the marked bindings that *were* compiled
-/// come back with their paths so the caller can freeze them once the build is
-/// solved (`docs/notes/incremental-update.md`).
+///
+/// With a **cell store**: a marked binding whose cell is clean is lowered to a
+/// static read of its frozen pair — its body is never lowered, checked or
+/// evaluated — and the marked bindings that *were* compiled come back with their
+/// paths so the caller can freeze them once the build is solved
+/// (`docs/notes/incremental-update.md`).
 pub(crate) fn compile_resolved_with_cells(
     program: &Program,
     import_binders: &[crate::resolve::ImportBinder],
@@ -223,7 +216,11 @@ pub(crate) fn compile_resolved_with_cells(
 /// annotated cell would be read back at the wrong arity.  It is left to be
 /// compiled and re-frozen as an ordinary (unretained) binding, which is honest
 /// rather than silently wrong.
-fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
+///
+/// This is also the set the cell store reconciles against (a position the
+/// program no longer marks is dropped) and the path lookup dirty propagation
+/// needs — see `crate::dirty`.
+pub(crate) fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
     let mut out = HashMap::new();
     crate::path::for_each(program, &mut |path, node| {
         let (cached, binder, annotated) = match node {
