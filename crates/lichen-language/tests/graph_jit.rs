@@ -352,6 +352,108 @@ compute.collect (compute.graphrun built (3,))
     );
 }
 
+/// The three operators a recorded body may not reach for, and why each one is a
+/// separate answer rather than one "unsupported" message.
+///
+/// **All three used to fall through to a bare hole with no diagnostic at all**,
+/// and a hole is the worst of the three outcomes rather than the smallest: a body
+/// that collected a dispatch's result mid-chain recorded a graph that was quietly
+/// missing the collect, and the chain's own numbers looked right anyway, so
+/// nothing in the program's answer said the collect had not happened.
+#[test]
+fn what_a_recorded_body_may_not_reach_for_is_refused_by_name() {
+    let (_guard, _stub) = stub();
+    // **Each case puts the offending operator where it cannot be skipped.** A
+    // block's value is the tuple of its statements' values, and a statement whose
+    // value nobody reads is not demanded — so an unused `collect` is never reached
+    // at all and no refusal can speak for it. Nesting the operator inside the
+    // statement that *is* the body's value forces it. That is worth stating
+    // because it is the other half of the boundary: the recording sees what the
+    // walk forces, and what the walk does not force is not in the graph.
+    let collect = fail(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+step = ins => {{
+  pulled = compute.collect (compute.plrun k1 (ins(0),))
+  compute.plrun k2 (ins(0), (pulled,))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let joined = collect.join(" | ");
+    assert!(
+        collect
+            .iter()
+            .any(|message| message.contains("a collect is asked here")
+                && message.contains("after the graph has run")),
+        "and it names the cause and the way out: {joined}"
+    );
+
+    // A host read of a dispatch's own result, which is the same boundary at a
+    // different size: one number instead of a whole buffer.
+    let read = fail(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+step = ins => {{
+  at_zero = compute.read (compute.plrun k1 (ins(0),), 0)
+  compute.plrun k2 (at_zero, (compute.plrun k1 (ins(0),),))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let joined = read.join(" | ");
+    assert!(
+        read.iter()
+            .any(|message| message.contains("a host read is asked here")),
+        "a read is the same mistake as a collect and gets its own sentence, \
+         because the repair is different: {joined}"
+    );
+
+    // A scalar kernel, refused outright rather than only when it is handed a
+    // placeholder — it has no node to be, so no shape of it can go in.
+    let scalar = fail(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+one = compute.jit (cfg => cfg(0) + 1)
+step = ins => {{
+  scalar = compute.call one (3,)
+  compute.plrun k2 (ins(0), (scalar,))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let joined = scalar.join(" | ");
+    assert!(
+        scalar
+            .iter()
+            .any(|message| message.contains("a graph has no node for one")
+                && message.contains("nowhere for what it computes")),
+        "**and this one is refused with no placeholder involved at all**, so \
+         the message cannot be about a value it was handed: {joined}"
+    );
+    assert!(
+        collect
+            .iter()
+            .any(|message| message.contains("compute.graph"))
+            && read.iter().any(|message| message.contains("compute.graph"))
+            && scalar
+                .iter()
+                .any(|message| message.contains("compute.graph")),
+        "all three are filed under the graph, because all three are about what \
+         a graph can hold and not about a launch that happened to be in flight: \
+         collect={collect:#?} read={read:#?} scalar={scalar:#?}"
+    );
+}
+
 #[test]
 fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
     let (_guard, _stub) = stub();

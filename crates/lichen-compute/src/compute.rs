@@ -276,6 +276,90 @@ fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
 // the *wasm* half: this crate compiles a checked graph down to that IR and then
 // lowers the IR to a wasm module.  See `docs/notes/compute-jit-low-types.md`.
 
+/// Whether any operand of `operator` is one of a graph's placeholders.
+///
+/// **One level, and one level is enough.** Every operator that reads a dispatch's
+/// output takes it as a direct item of its operand array — `collect [b]`, `read
+/// [b, i]`, `call [k, a]` — so a graph's value is never buried inside a tuple the
+/// scan would have to walk to find. A `plrun`'s cfg *is* a tuple of placeholders,
+/// which is why this is asked about operators other than a parallel launch.
+fn handed_a_placeholder<P>(module: &Module<P>, operand: &P::Value) -> bool
+where
+    P: Program,
+    P::Value: AsEnum<LowValue> + AsEnum<ComputeValue>,
+{
+    let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(operand) else {
+        return false;
+    };
+    // SAFETY: the operand array is the operator's own, and this reads only, for
+    // the length of the call.
+    let items = unsafe { operands.items() };
+    items.iter().any(|item| {
+        matches!(
+            module
+                .node_value(item.node)
+                .and_then(|value| AsEnum::<ComputeValue>::as_enum(&value)),
+            Some(ComputeValue::GraphInput(_) | ComputeValue::GraphValue(_))
+        )
+    })
+}
+
+/// Why this operator cannot appear in a body that is being recorded, if it cannot.
+///
+/// **Two shapes, and the difference is whether a graph has anywhere to put the
+/// value at all.** A scalar kernel has no node to be: the one node kind is a
+/// parallel dispatch with its buffers bound to it, while a scalar fragment works
+/// on the kernel's own operand stack and names no buffer whatsoever. So whatever
+/// it produces has no home in a graph, and that is true whether or not a
+/// placeholder is involved — which is why this one is refused outright.
+///
+/// The other two are fine in general and wrong *here*. A host read and a collect
+/// both say "give me this as host data", and the value either would hand back is
+/// a number or an array that a graph has no edge for. They are refused only when
+/// they were actually handed a placeholder, because a read of a host buffer the
+/// body closed over is ordinary host arithmetic, and if its result is used as a
+/// count or an input the value-table filter already refuses that by name.
+///
+/// Both of these used to fall through to a bare `Parameterized` with no
+/// diagnostic, and that is not a smaller mistake than a wrong number — it is an
+/// absent one. A body that collected a dispatch's result mid-chain recorded a
+/// graph that was quietly missing the collect, and the chain's own numbers looked
+/// right anyway.
+fn unrecordable<P>(
+    operator: &ComputeOperator,
+    module: &Module<P>,
+    operand: &P::Value,
+) -> Option<String>
+where
+    P: Program,
+    P::Value: AsEnum<LowValue> + AsEnum<ComputeValue>,
+{
+    match operator {
+        ComputeOperator::Launch | ComputeOperator::Call => Some(
+            "a scalar kernel is called here, and a graph has no node for one. The only node kind \
+             is a parallel dispatch, with its buffers bound to it, while a scalar kernel works on \
+             its own operand stack and names no buffer — so there is nowhere for what it computes \
+             to travel. Run this body un-graphed, or write the work as a parallel kernel."
+                .into(),
+        ),
+        ComputeOperator::Read if handed_a_placeholder(module, operand) => Some(
+            "a host read is asked here for a value one of this graph's own dispatches produced, \
+             and a graph run cannot do that: its values are edges into a run, and what a run \
+             produces is on the device until the run ends. Derive the number from the function's \
+             own argument instead, or read it after the graph has run."
+                .into(),
+        ),
+        ComputeOperator::BufferCollect if handed_a_placeholder(module, operand) => Some(
+            "a collect is asked here for a value one of this graph's own dispatches produced, and \
+             a graph run cannot do that: its values are edges into a run, and what a run produces \
+             is on the device until the run ends. Collect after the graph has run — that is the \
+             one point at which a \"gpu\" chain's results cross the bus."
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
 /// The diagnostic categories this plugin records through the lowlevel's
 /// general extension channel ([`Module::record_extension_diagnostic`]).  They
 /// are the plugin's own compile-time constants, so a consumer selects on them
@@ -840,6 +924,23 @@ where
     }
 
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
+        // **A recorded body is a sequence of dispatches, and this is where
+        // anything else is stopped.** A `plrun` is the one operator that can
+        // consume a graph's placeholders, because a graph's values are edges into
+        // a run; every other operator handed one is asking for something a graph
+        // has no way to be. Checked here, once, rather than in each arm, because
+        // the arms all fail the same way — a bare `Parameterized` with no
+        // diagnostic — and a boundary that is drawn in four places is not a
+        // boundary.
+        //
+        // The reason is computed on an immutable borrow and recorded after it
+        // ends, so the walk's own module is not borrowed across the diagnostic.
+        if graph::is_recording()
+            && let Some(reason) = unrecordable(self, module, &operand)
+        {
+            module.record_extension_diagnostic(GRAPH_DIAGNOSTIC, None, reason);
+            return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+        }
         match self {
             ComputeOperator::Jit => {
                 if matches!(
