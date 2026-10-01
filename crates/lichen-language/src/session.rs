@@ -349,7 +349,17 @@ where
         // because dirty propagation runs over both (see `crate::dirty`).
         let (mut program, errors, windows) = match (&self.last, edit) {
             (Some(prev), Some((a, b, delta))) => {
-                match splice_program(&prev.tokens, &prev.program, &tokens, a, b, delta) {
+                let previous_starts = lex::line_starts(&prev.source);
+                match splice_program(
+                    &prev.tokens,
+                    &prev.program,
+                    &previous_starts,
+                    &tokens,
+                    &line_starts,
+                    a,
+                    b,
+                    delta,
+                ) {
                     Some(out) => {
                         let SpliceOut {
                             program,
@@ -556,7 +566,9 @@ fn full_parse(tokens: &[lex::Token]) -> (Program, Vec<ParseDiag>) {
 fn splice_program(
     old_tokens: &[lex::Token],
     old_program: &Program,
+    old_starts: &[usize],
     new_tokens: &[lex::Token],
+    new_starts: &[usize],
     a: usize,
     b: usize,
     delta: isize,
@@ -602,13 +614,22 @@ fn splice_program(
     }
     if lo > hi {
         // No statement body overlaps: the edit sits in a separator, or appends
-        // at/after the last statement.  Re-parse from the statement that ends
-        // at/before the edit to the end of the buffer.
+        // at/after the last statement.  What the edit produced lands between the
+        // statement ending at/before it and the one after, so the window is those
+        // **two** — not, as it once was, everything from there to the end of the
+        // buffer (measured: an append to a line re-parsed and re-dirtied the whole
+        // tail, 82-90% of a rebuild).
+        //
+        // It must be two rather than one: an insertion at the boundary is inside
+        // the byte range spanning them, and the region parse is byte-bounded, so
+        // every statement the edit inserted there is re-parsed as well.  An
+        // insertion at the very end of the buffer has no statement after it, so
+        // `hi` clamps to the end — which is also the `prev == None` case's floor.
         let prev = (0..old_n)
             .rev()
             .find(|&i| byte_range(i).is_some_and(|(_, eb)| eb <= e_start));
         lo = prev.unwrap_or(0);
-        hi = old_n;
+        hi = (lo + 2).min(old_n);
     }
     // The old token range and byte range of the window.
     let old_tl = old_program.stmt_ranges[lo].0;
@@ -716,7 +737,7 @@ fn splice_program(
     stmts.extend(win_stmts.iter().cloned());
     ranges.extend(win_ranges.iter().copied());
     for i in hi..old_n {
-        let stmt = if i < old_program.statements.len() {
+        let mut statement = if i < old_program.statements.len() {
             old_program.statements[i].clone()
         } else {
             // The tail expression (only in a tail program) — represented here
@@ -728,7 +749,13 @@ fn splice_program(
                 public: false,
             }
         };
-        stmts.push(stmt);
+        // A clone's bytes are unchanged but its *position* is not: an edit that
+        // adds or removes a line moves every statement after it, and a span is a
+        // `(line, col)` pair rather than a byte offset.  Without this shift a
+        // diagnostic inside a cloned statement renders on the wrong line
+        // (`crate::spans`).
+        crate::spans::shift_stmt(&mut statement.stmt, old_starts, new_starts, delta);
+        stmts.push(statement);
         let (r0, r1) = old_program.stmt_ranges[i];
         let s0 = r0 as isize + dk;
         let s1 = r1 as isize + dk;

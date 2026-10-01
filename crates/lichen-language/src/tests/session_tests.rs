@@ -356,13 +356,17 @@ fn a_bracket_swap_between_forms_rebuilds_instead_of_reusing() {
 /// Assert the window splice of `old` → `new` is actually taken (`Some`) and
 /// reproduces exactly a whole-buffer parse of the new source.
 fn assert_splice_equals_full_parse(old: &str, new: &str) {
+    let old_starts = lex::line_starts(old);
     let old_tokens = lex::lex(old).tokens;
     let old_program = parse::parse(&old_tokens).program;
+    let new_starts = lex::line_starts(new);
     let new_tokens = lex::lex(new).tokens;
     let parsed = splice_program(
         &old_tokens,
         &old_program,
+        &old_starts,
         &new_tokens,
+        &new_starts,
         edit_span(old, new).0,
         edit_span(old, new).1,
         edit_span(old, new).2,
