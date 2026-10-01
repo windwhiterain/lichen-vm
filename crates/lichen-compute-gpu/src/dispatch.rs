@@ -194,16 +194,6 @@ pub struct GpuContext {
     /// it makes the exclusion local instead of resting on a reader having to
     /// trace two methods to convince themselves the lock is the same one.
     submit: Mutex<Submit>,
-    /// A **second** command buffer and fence, for a dispatch whose completion the
-    /// caller has not waited for yet — see [`Segment`].
-    ///
-    /// It is a separate pair rather than a mode of `submit` because the two can
-    /// never be in flight at once and for a reason worth stating: a recorded-but-
-    /// unsubmitted command buffer is clobbered by the next `record_and_submit`,
-    /// so a submission that has not been waited for must not share a command
-    /// buffer with one that is about to be recorded. `fetch` records into
-    /// `submit`; a [`Segment`] records into this.
-    detached: Mutex<Submit>,
     /// The descriptor set layout and pipeline layout for a run with `n` buffers
     /// in total. They are a function of `n` alone — the same two objects the old
     /// per-run code built and dropped for every dispatch.
@@ -374,7 +364,6 @@ impl GpuContext {
         // Built before the context exists, because it needs a borrow of the
         // device that the struct literal below is about to move.
         let submit = Submit::new(&device, family)?;
-        let detached = Submit::new(&device, family)?;
 
         Ok(GpuContext {
             entry,
@@ -388,7 +377,6 @@ impl GpuContext {
             next_id: AtomicU64::new(1),
             staging: Mutex::new(Staging::empty()),
             submit: Mutex::new(submit),
-            detached: Mutex::new(detached),
             layouts: Mutex::new(HashMap::new()),
             descriptor_pool,
             recycled: Mutex::new(HashMap::new()),
