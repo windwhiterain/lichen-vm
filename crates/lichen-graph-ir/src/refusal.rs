@@ -87,20 +87,26 @@ pub enum GraphRefusal {
     /// needs a fetch, and telling a caller only that it is "not host data" hands
     /// them the first when they needed the second.
     NotHostData { found: &'static str },
-    /// A dispatch was given a number where it wanted a buffer.
+    /// A dispatch was given something that is not a buffer.
     ///
     /// The mirror of [`Self::CountNotANumber`], and separate for the same
     /// reason: the two are different mistakes in different positions, and a
     /// caller told only "wrong shape" has to work out which one they hit. There
-    /// is a repair that looks reasonable here — read the number as a one-element
+    /// is a repair that looks reasonable here — read a number as a one-element
     /// host vector — and taking it would run a kernel nobody wrote.
+    ///
+    /// `found` names the **kind** and not merely the category, because the
+    /// repairs differ: a caller who passed a number has a literal in the wrong
+    /// position, and a caller who passed a host-owned value has a closure where
+    /// a buffer belongs, and neither of them learns anything from "not a buffer".
     NotBufferData { found: &'static str },
     /// A dispatch's count resolved to something that is not a number.
     ///
-    /// A count is an extent, so the only thing that can be one is a number.
-    /// Naming what the value *is* is what tells a caller whether the edge is
-    /// pointing at the wrong value or whether the builder wrote a number into a
-    /// slot that was meant for data.
+    /// A count is an extent, so the only thing that can be one is a number, and
+    /// this refusal is about the *value* rather than about the role — the role was
+    /// right and the value was not. Naming what the value is what tells a caller
+    /// whether the edge points at the wrong value or the builder wrote a number
+    /// into a slot meant for data.
     CountNotANumber { found: &'static str },
     /// A dispatch's count was negative.
     ///
@@ -182,13 +188,14 @@ impl fmt::Display for GraphRefusal {
             ),
             GraphRefusal::NotBufferData { found } => write!(
                 f,
-                "a buffer was asked of a value that is {found}. A number is not a one-element \
-                 buffer, and reading it as one would run the dispatch against data nobody wrote."
+                "a buffer was asked of a value that is {found}. A value the host computed is \
+                 not a one-element buffer, and reading one as another would run the dispatch \
+                 against data nobody wrote."
             ),
             GraphRefusal::CountNotANumber { found } => write!(
                 f,
-                "a dispatch's count was read from a value that is {found}. A count is an extent, \
-                 so the only thing that can be one is a number."
+                "a dispatch's count was read from a value that is {found}. A count is an \
+                 extent, so the only thing that can be one is a number."
             ),
             GraphRefusal::CountNegative { number } => write!(
                 f,

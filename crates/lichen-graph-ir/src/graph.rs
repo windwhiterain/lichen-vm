@@ -199,7 +199,7 @@ pub struct KernelNode {
 /// kernel covers routinely depends on data — a length off a `collect`, a size
 /// the host computed — and a graph that could only be given a build-time count
 /// would have to be rebuilt for every run, which is the same as not having a
-/// graph. [`crate::Value::Int`] is what makes the edge expressible.
+/// graph. [`crate::Value::Native`] is what makes the edge expressible.
 ///
 /// `Constant` is not a wart on that. It is the one case where the build already
 /// had the answer, and collapsing it into a value would mean inventing a **third

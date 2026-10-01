@@ -18,6 +18,70 @@ use crate::GraphRefusal;
 /// correct rather than dangerous.
 type Shared<'backend> = Arc<Mutex<Option<Box<dyn Pending + 'backend>>>>;
 
+/// A slot in a registry of values the host owns.
+///
+/// **A number, not a reference, and the trace walk is what makes that safe.** A
+/// value reached through this slot is reached because whoever holds the graph
+/// names the slot, and that walk is **recursive**: it asks the node it reaches,
+/// and then whatever *that* node holds, and so on. So a pointer into a registry
+/// keeps a whole transitive environment alive without the graph enumerating any
+/// of it — a closure that captured `x` means whoever captured the closure has
+/// captured `x`, and nothing in the graph has to know that.
+///
+/// **It means nothing outside the process that issued it**, and it is not
+/// comparable across two of them, exactly like a kernel id.
+pub type NativeValueId = usize;
+
+/// A value the table holds that is neither a buffer nor device memory.
+///
+/// # Why this is a kind rather than one more variant of a number
+///
+/// [`Value::Native`] began as a number, because a dispatch's extent is a number
+/// and a number is not `Vec<i64>`. That is a true reason and it is the wrong
+/// amount of surface, because what was added is not *a count can be dynamic* —
+/// it is **the table can hold something that is not a buffer at all**. A number
+/// is the first inhabitant of that, and the kind is named now rather than when
+/// the second one lands because the second one is known: a lichen closure the
+/// graph will call later.
+///
+/// # What every inhabitant has in common, and why it is worth writing
+///
+/// **A native value is never pending.** The host made it, so there is no
+/// submission behind it and no wait that could be owed. That is what lets
+/// [`Value::slot`] and [`Value::as_count`] answer without a submission arm, and
+/// it is why a new inhabitant is a compile error in each of them rather than a
+/// silent pass-through.
+///
+/// **It has no extent.** [`Value::count`] is `None` for all of them, because a
+/// `0` would be a length a caller could act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Native {
+    /// A number, held inline.
+    ///
+    /// **`i64` rather than `usize` because a graph is a program and a program's
+    /// count can be negative**, which is a mistake to be told about by name
+    /// rather than one to be wrapped around into an enormous unsigned number.
+    Int(i64),
+    /// A value the host owns, named by a registry slot.
+    ///
+    /// **The slot is the whole of it.** A pointer is enough rather than a list
+    /// of captures, and the reason is [`NativeValueId`]: the environment is
+    /// reached by a recursive walk, so it needs no declaration here. A graph
+    /// that named its captures would be a second copy of a fact the trace walk
+    /// already holds, and one that could disagree with it.
+    Pointer(NativeValueId),
+}
+
+impl Native {
+    /// What this is, for a refusal that has to say.
+    fn state(&self) -> &'static str {
+        match self {
+            Native::Int(_) => "a number",
+            Native::Pointer(_) => "a value the host owns",
+        }
+    }
+}
+
 /// A value a graph node produces.
 ///
 /// # The three states, and why the middle one is its own case
@@ -48,14 +112,21 @@ type Shared<'backend> = Arc<Mutex<Option<Box<dyn Pending + 'backend>>>>;
 /// That asymmetry is not a rule the runner chooses to follow. It is what the
 /// match arms are.
 ///
-/// # And a number is a fourth case, not a shorter buffer
+/// # And a native value is a fourth case, not a shorter buffer
 ///
-/// [`Self::Int`] is here because a dispatch's extent is a number and a number is
-/// not `Vec<i64>`. It is **never pending**, because a device does not produce
+/// [`Self::Native`] is here because a dispatch's extent is a number and a number
+/// is not `Vec<i64>`. It is **never pending**, because a device does not produce
 /// one, which is what lets a count edge be read without a wait and lets the two
 /// roles of a value — a count and a buffer — be asked separately and refused
-/// separately. Nothing produces one yet: a node that *computes* a number is a
-/// host call, and which of the three ways out of that is still open.
+/// separately. The reason it is a kind of its own rather than an `i64` is
+/// [`Native`]: a number is the first thing the table can hold that is not a
+/// buffer, and the second is a closure the graph will call later.
+///
+/// **Nothing inside a graph produces one yet.** A node that *computes* a value
+/// the host owns is a host call, and which way out of that is still open. So
+/// today a native value enters a graph as an argument and that is the whole of
+/// it, and the kind says so rather than leaving the reader to infer it from the
+/// absence of an arm.
 pub enum Value<'backend> {
     /// Submitted, and the device may not be done with it.
     Pending {
@@ -67,12 +138,8 @@ pub enum Value<'backend> {
     Device { id: ResidentId, count: usize },
     /// Host data. What a native node produces, and what it can read.
     Host(Vec<i64>),
-    /// A number.
-    ///
-    /// **`i64` rather than `usize` because a graph is a program and a program's
-    /// count can be negative**, which is a mistake to be told about by name rather
-    /// than one to be wrapped around into an enormous unsigned number.
-    Int(i64),
+    /// A value that is not a buffer: a number, or a pointer to one the host owns.
+    Native(Native),
 }
 
 impl fmt::Debug for Value<'_> {
@@ -89,7 +156,7 @@ impl fmt::Debug for Value<'_> {
                 write!(f, "Device(buffer {:?}, {count} element(s))", id.0)
             }
             Value::Host(host) => write!(f, "Host({} element(s))", host.len()),
-            Value::Int(number) => write!(f, "Int({number})"),
+            Value::Native(native) => write!(f, "Native({native:?})"),
         }
     }
 }
@@ -108,7 +175,16 @@ impl<'backend> Value<'backend> {
 
     /// A number, for a count edge or a graph's own argument.
     pub fn int(number: i64) -> Self {
-        Value::Int(number)
+        Value::Native(Native::Int(number))
+    }
+
+    /// A pointer to a value the host owns, for a graph that will call it later.
+    ///
+    /// **The slot is all this takes**, and that is the point rather than a
+    /// shortcut: the value behind it is reached by a recursive trace walk, so its
+    /// environment needs no declaration here. See [`NativeValueId`].
+    pub fn native_pointer(slot: NativeValueId) -> Self {
+        Value::Native(Native::Pointer(slot))
     }
 
     /// The outputs of one submission, none of them waited for.
@@ -141,16 +217,19 @@ impl<'backend> Value<'backend> {
     /// submission producing it was recorded first. Refusing a pending value here
     /// would rule out the one shape that pays.
     ///
-    /// **A number is refused rather than borrowed.** The tempting repair is to
-    /// treat it as a one-element host vector, and that produces a run that
-    /// succeeds on a kernel nobody wrote: the count is not a buffer, so this is a
-    /// different mistake from a count that is data, and it gets its own message.
+    /// **A native value is refused rather than borrowed.** The tempting repair is
+    /// to read a number as a one-element host vector, and that produces a run
+    /// that succeeds on a kernel nobody wrote: the count is not a buffer, so this
+    /// is a different mistake from a count that is data, and it gets its own
+    /// message. Naming *what kind of native value* it is rather than only that it
+    /// is one is the difference between a caller who knows they passed a number
+    /// and one who has to go looking.
     pub fn slot(&self) -> Result<BufferSlot<'_>, GraphRefusal> {
         match self {
             Value::Host(host) => Ok(BufferSlot::Host(host)),
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(BufferSlot::Resident(*id)),
-            Value::Int(_) => Err(GraphRefusal::NotBufferData {
-                found: self.state(),
+            Value::Native(native) => Err(GraphRefusal::NotBufferData {
+                found: native.state(),
             }),
         }
     }
@@ -161,9 +240,14 @@ impl<'backend> Value<'backend> {
     /// asked for one role and refused is a different mistake from a value asked
     /// for the other and refused, and a caller who is told only "wrong shape"
     /// has to work out which of the two they hit.
+    ///
+    /// **A number is the only native value a count can be**, and the other kinds
+    /// say so by name rather than by being a `None` somewhere upstream. A count
+    /// is an extent, so refusing a pointer here is about the value, not about the
+    /// role — the role was right and the value was not.
     pub fn as_count(&self) -> Result<usize, GraphRefusal> {
         match self {
-            Value::Int(number) => usize::try_from(*number)
+            Value::Native(Native::Int(number)) => usize::try_from(*number)
                 .map_err(|_| GraphRefusal::CountNegative { number: *number }),
             other => Err(GraphRefusal::CountNotANumber {
                 found: other.state(),
@@ -171,15 +255,15 @@ impl<'backend> Value<'backend> {
         }
     }
 
-    /// How many elements this holds, or `None` for a number.
+    /// How many elements this holds, or `None` for a value with no extent.
     ///
-    /// `None` rather than `0` because a number has no length and reporting `0`
-    /// for it would be a length a caller could act on.
+    /// `None` rather than `0` because a native value has no length and reporting
+    /// `0` for it would be a length a caller could act on.
     pub fn count(&self) -> Option<usize> {
         match self {
             Value::Host(host) => Some(host.len()),
             Value::Device { count, .. } | Value::Pending { count, .. } => Some(*count),
-            Value::Int(_) => None,
+            Value::Native(_) => None,
         }
     }
 
@@ -251,12 +335,16 @@ impl<'backend> Value<'backend> {
     }
 
     /// What this value currently is, for a refusal that has to say.
+    ///
+    /// **It names the kind, not the category.** "A value the host owns" tells a
+    /// caller they passed something that was never a buffer; "a number" tells
+    /// them which of the native values it was, and the two have different fixes.
     fn state(&self) -> &'static str {
         match self {
             Value::Host(_) => "host data",
             Value::Device { .. } => "a device buffer that was waited for",
             Value::Pending { .. } => "a submission that has not been waited for",
-            Value::Int(_) => "a number",
+            Value::Native(native) => native.state(),
         }
     }
 }

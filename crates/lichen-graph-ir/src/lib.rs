@@ -35,4 +35,4 @@ pub mod value;
 pub use graph::{Count, Graph, KernelNode, NativeCall, NativeNode, Node, ValueId};
 pub use refusal::GraphRefusal;
 pub use run::{Policy, Runner};
-pub use value::Value;
+pub use value::{Native, NativeValueId, Value};
