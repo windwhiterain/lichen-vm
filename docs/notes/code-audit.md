@@ -5668,6 +5668,27 @@ These block the items marked `blocked:Dn`. Do not pick an answer silently.
     process), the language server cannot (it holds a `Build` across requests),
     and a wrong guarantee is the silent-wrong-answer failure again.
 
+  **Measured while taking this decision, and it changes the shape of the
+  choice.**  The `Copy` requirement is **not per-variant**, so there is no
+  cheaper "owning handle for buffers only" — the price is a trait bound and it
+  is paid once for any variant.  `P::Value`'s contract is
+  `ValueExt: Debug + Copy + PartialEq` (`lowlevel/lib.rs:416`), and dropping
+  `Copy` from `ComputeValue`, `LangValue` and that bound turns the workspace
+  into **70 errors across 13 files in `lichen-lowlevel`** — every site that
+  copies a node value, in a VM whose value-write and value-read paths are hot.
+  So (a) is one indivisible change, and its cost is the whole lowlevel's
+  value-handling contract, not a plugin's data structure.
+
+  That leaves (b) and (c) as the shapes that do not pay it, and both need the
+  module-lifetime question answered first.  One hazard in (b) that the shape list
+  does not name: per-module tables all start at id 0, so a buffer value that
+  crosses modules resolves against the *receiving* module's table — the wrong
+  buffer, silently, which is the failure this decision exists to avoid.  A
+  module-tagged id (`{ module, index }`) removes it by making a foreign id a
+  *miss*, which degrades to the lazy marker exactly as every other missing
+  buffer does — at the cost of a module identity the lowlevel does not carry
+  today.
+
   Decide the owner before either the bound or the eviction is written. One
   coupling to record with the decision: the module cache added by `P1-18` is
   keyed on `(LaunchMode, KernelId)` and is sound only while a fragment is
