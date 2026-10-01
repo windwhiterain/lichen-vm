@@ -135,17 +135,28 @@ fn kernel_index() -> &'static Mutex<HashMap<u64, KernelId>> {
 /// fragment is already registered.
 fn intern_kernel(fragment: KernelFragment) -> KernelId {
     let digest = fragment_digest(&fragment);
-    // The index read and the registry read are one decision, so take the index
-    // first and re-check under the registry's lock below.
-    let candidate = kernel_index().lock().unwrap().get(&digest).copied();
-    if let Some(id) = candidate
-        && kernels().lock().unwrap().get(&id) == Some(&fragment)
+    // The lookup and the insert are **one** decision, so both registries are held
+    // across it.  Releasing the index in between lets a concurrent intern of the
+    // same digest land its own id after this caller already read the entry, and
+    // this caller is then handed a *second* id for the same fragment on a later
+    // call — defeating content addressing, which every downstream cache is keyed
+    // on.  Serializing the decision also means the reuse path never overwrites
+    // the entry, so the index converges on one id per digest.
+    //
+    // **Lock order: `kernels()` before `kernel_index()`.**  This is the only
+    // place that nests the two; the registry comes first because verifying a
+    // candidate id means reading it, and the digest index is the outer
+    // decision's lookup, not a prerequisite for it.
+    let mut registry = kernels().lock().unwrap();
+    let mut index = kernel_index().lock().unwrap();
+    if let Some(id) = index.get(&digest).copied()
+        && registry.get(&id) == Some(&fragment)
     {
         return id;
     }
     let id = alloc_kernel_id();
-    kernels().lock().unwrap().insert(id, fragment);
-    kernel_index().lock().unwrap().insert(digest, id);
+    registry.insert(id, fragment);
+    index.insert(digest, id);
     id
 }
 
