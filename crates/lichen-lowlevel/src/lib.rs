@@ -413,6 +413,48 @@ pub enum LowOperator {
 /// - [`Self::handle`]'s length is a **byte** count, and the crate's copy path
 ///   copies exactly that many bytes into a slot aligned to
 ///   [`Self::alignment`].
+/// What a program-specific value may look at while declaring the nodes it keeps
+/// alive — the read-only half of a [`Module`], handed to
+/// [`ValueExt::traced`].
+///
+/// **Narrower than `&Module<P>` on purpose, and for a structural reason.** Every
+/// question a holder legitimately asks here — which block is this node in, is it
+/// still there, what does this block or this function hold — is answered in
+/// lowlevel's own types, so none of it needs a program's value type. The single
+/// thing `&Module<P>` would add is reading a node's **value**, and a value that
+/// keeps nodes alive is keeping ids, not values. Keeping `P` off [`ValueExt`]
+/// therefore costs nothing a holder wants and saves a program parameter being
+/// threaded through every `ValueType` bound above the highlevel's checker.
+///
+/// Read-only, and that is not incidental: [`ValueExt::traced`] runs *inside* the
+/// GC walk, which holds the module mutably to move what it names.
+pub trait TraceContext {
+    /// The block `node` is homed in, or `None` if it has been released.
+    fn node_block(&self, node: NodeId) -> Option<BlockId>;
+
+    /// The nodes homed directly in `block`, or `None` if it is gone.
+    fn block_nodes(&self, block: BlockId) -> Option<&[NodeId]>;
+
+    /// The body nodes of `function`, or `None` if it has been released.
+    fn function_nodes(&self, function: FunctionId) -> Option<&[NodeId]>;
+}
+
+impl<P: Program> TraceContext for Module<P> {
+    fn node_block(&self, node: NodeId) -> Option<BlockId> {
+        self.nodes.get(node).map(|node| node.block)
+    }
+
+    fn block_nodes(&self, block: BlockId) -> Option<&[NodeId]> {
+        self.blocks.get(block).map(|block| block.nodes.as_slice())
+    }
+
+    fn function_nodes(&self, function: FunctionId) -> Option<&[NodeId]> {
+        self.functions
+            .get(function)
+            .map(|function| function.nodes.as_slice())
+    }
+}
+
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
     /// The value's handle payload as bytes.  Available if
@@ -438,6 +480,88 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// [`crate::codec::arena_align`] total for every program.
     fn alignment() -> usize {
         1
+    }
+    /// Append every node this one keeps alive to `out`.
+    ///
+    /// **One kind of thing, exactly like an array item.** The GC walks a node by
+    /// looking at that node's *value* and dispatching on its shape — an array's
+    /// items, a table's entries, a function's scope. That dispatch is the
+    /// walk's business, so a value names only *nodes*, and the same
+    /// [`Module::garbage_collect_node`] that walks an array item walks these. A
+    /// function is not a separate kind here: a closure is kept alive by naming
+    /// the node it is the value of, and the walk takes it from there.
+    ///
+    /// # Why `out` and not a slice back
+    ///
+    /// `&[NodeId]` would demand that a value carry its references as one
+    /// contiguous run it could hand back by slice, and no real holder has that
+    /// shape. A compiled graph interleaves the nodes it keeps with the kernel
+    /// ids, counts and element data it also holds, so there is no slice of it
+    /// that is "the node list". Appending also costs a value that keeps nothing
+    /// nothing at all, where a slice forces it to own an empty array.
+    ///
+    /// # Why the context is handed over, and why it is not `&Module<P>`
+    ///
+    /// Because the set need not be *stored*. A value that keeps a node because
+    /// of where that node sits — a block it shares, an operand edge above it —
+    /// has to be able to look, and the module is where looking happens.
+    ///
+    /// It is handed over as a [`TraceContext`] rather than as the module itself,
+    /// for two reasons that point the same way. It is read-only, so naming and
+    /// walking cannot overlap and the walk needs no second phase. And it keeps
+    /// `P` off this trait: everything a holder legitimately needs to look at
+    /// here — a node's block, a block's node list, a function's scope — is
+    /// spelled in lowlevel's own types, so nothing that matters needs a
+    /// program's value type. The one thing a `&Module<P>` would add is reading a
+    /// node's **value**, and a value that keeps nodes is keeping ids, not values.
+    /// Putting `P` on this trait to get at it would cost a program parameter
+    /// threaded through every `ValueType` bound in the highlevel's checker, for
+    /// a capability no holder wants.
+    ///
+    /// # Why this is a seam and not a convenience
+    ///
+    /// The GC's contract is that everything reachable from a live value is moved
+    /// out of the block being vacated *before* [`Module::drop_block`] removes it
+    /// — and `drop_block` deletes by block membership, not by reachability. An
+    /// operator's result is cached, and a cached node's operand is deliberately
+    /// not followed ("a cached value means the node is memoized and its operand
+    /// is dead"). So a value holding a reference only the GC cannot see is
+    /// dropped at the end of the very block evaluation that produced it, with no
+    /// diagnostic. That is the failure this closes.
+    ///
+    /// The default appends nothing, and for the compute vocabulary that is not a
+    /// simplification but the truth: a `Buffer` payload is element bytes, a
+    /// `DeviceBuffer` is an id and a length, a kernel id is a registry slot
+    /// number. None of them names a node, so none of them is an edge the GC has
+    /// to follow. A value that *does* keep nodes alive past its own evaluation
+    /// answers this — a compiled graph, which holds the **buffer values it will
+    /// read on every run** and which live in the block that produced them, so a
+    /// graph that did not name them would read freed arena memory. Those
+    /// references are behind a process registry, which is sound here for a reason
+    /// worth stating: `garbage_collect_node` moves a node by changing its block
+    /// and **keeps its id**, so an id held anywhere outside the module stays
+    /// valid across a collection.
+    ///
+    /// The other shape this seam was cut for — a graph holding the *closures* it
+    /// will call later — is **not** what answers this today, and the reason is a
+    /// recorded contradiction rather than an oversight: the graph IR's native
+    /// node is a bare `fn` pointer, which cannot capture and has no channel to
+    /// name a closure, so a user-written closure cannot become one without
+    /// changing a decision that was made deliberately. See
+    /// `docs/notes/compute-graph-jit.md`.
+    ///
+    /// **A value that fails to answer is not caught.** There is nothing to check
+    /// this against: the lowlevel cannot see what a value holds, so an unlisted
+    /// node is not a detectable omission, it is a node that quietly disappears
+    /// at the end of the block that made it. This contract is held by review and
+    /// by the tests beside it, not by the collector. That is worth knowing before
+    /// writing one, because the failure it guards is the quiet kind.
+    ///
+    /// Nodes only, and only from this module: a static-module object is pinned by
+    /// the registry for as long as the value can be read, so it needs no edge,
+    /// and naming it would be a category error rather than a stronger claim.
+    fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
+        let _ = (context, out);
     }
     /// Full equality of two values: handle payloads compare by content
     /// (same variant, byte-wise against the pointed-to allocation), every
@@ -474,6 +598,62 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+
+    /// Evaluate this operator's operand and hand the **value** to [`Self::run`].
+    ///
+    /// The VM calls this rather than `run`, and the default is exactly what the
+    /// VM did before this method existed — including the deep pass, the
+    /// `Parameterized` read-back, and the nullary stand-in — so an operator that
+    /// does not override it cannot tell the difference.
+    ///
+    /// # Why an operator would override it
+    ///
+    /// [`Self::run`] is handed a value with the operand's structure already
+    /// collapsed into it. That is the right shape for an operator that answers
+    /// from the value alone, and the wrong one for an operator that has to
+    /// decide for itself *when* its operand is evaluated: the module is already
+    /// there, but the node the operand hangs off is not, so there is nowhere to
+    /// start. An operator that keeps lichen references alive past its own call
+    /// needs that node, and needs it unevaluated, because the references it must
+    /// keep alive are in the structure — a compiled graph holds the buffers it
+    /// will read, and reading which of a function's nodes are those buffers is a
+    /// question about the body's *shape*, which a deep pass has already erased.
+    ///
+    /// Overriding this is that capability, and it is **only sound together with
+    /// [`ValueExt::traced`]**: a reference kept past this call is invisible to
+    /// the GC unless the value holding it declares it, and the default GC
+    /// contract is that everything reachable moves out of the block before it is
+    /// dropped.
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: BlockId,
+        module: &mut Module<P>,
+    ) -> P::Value {
+        let value = match operand {
+            Some(node) => {
+                let value = module.evaluate_node_deep(node, Some(block));
+                // The deep pass returns before it writes `evaluated_deep` when
+                // it refuses on budget exhaustion, so an absent node or an unset
+                // flag means "concreteness unknown" — read as parameterized,
+                // never as proven concrete.
+                let parameterized = module
+                    .nodes
+                    .get(node)
+                    .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized));
+                if parameterized {
+                    P::Value::from(LowValue::Parameterized)
+                } else {
+                    value
+                }
+            }
+            // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
+            // node: the honest stand-in is the computed-nothing value — never
+            // the `None` unit value, which a program can genuinely produce.
+            None => P::Value::from(LowValue::Void),
+        };
+        self.run(value, block, module)
+    }
 
     /// Whether a callee node the lowlevel cannot prove a function is a value
     /// this operator vocabulary applies.

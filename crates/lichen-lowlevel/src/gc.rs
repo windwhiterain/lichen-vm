@@ -1,7 +1,8 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId, Program,
+    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId,
+    Program, ValueExt,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -133,9 +134,27 @@ impl<P: Program> Module<P> {
                 }
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
-            // A program-specific value may carry a handle into an arena —
-            // relocate it into the target block like any other payload.
-            None => Self::copy_ext(self, value, target),
+            // A program-specific value may carry a handle into an arena, and
+            // may carry nodes the lowlevel cannot see on its own: an operator's
+            // result is cached, and a cached node's operand is not followed, so a
+            // value holding a node has to name it or the node dies with the block
+            // this walk is vacating.
+            //
+            // The value looks through a shared `TraceContext` and the walk then
+            // mutates, so the two never hold a borrow of the module at once, and
+            // collecting into a scratch the GC owns means a value never has to
+            // hold its references as one contiguous run of its own.
+            None => {
+                let mut traced = Vec::new();
+                value.traced(self, &mut traced);
+                for node in traced {
+                    // The walked value is discarded, exactly as the array and
+                    // table arms discard theirs: a node keeps its id across the
+                    // move, so only its block changes, and a value holds the id.
+                    self.garbage_collect_node(node, source, target);
+                }
+                Self::copy_ext(self, value, target)
+            }
             _ => value,
         });
         self.write_node_value(node, value);

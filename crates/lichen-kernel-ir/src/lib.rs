@@ -66,6 +66,59 @@ pub enum BufferSlot<'a> {
     Resident(ResidentId),
 }
 
+/// A submission a backend has taken but not yet waited for.
+///
+/// [`ParallelBackend::submit`] hands one of these back rather than a
+/// `Vec<ResidentId>`, so the host can do something else while the device is
+/// still working. It is the only thing that can express that, because it is the
+/// only thing that knows which of the backend's own resources the submission is
+/// still holding.
+///
+/// # It is not a token, and it does not outlive the run
+///
+/// It is neither a bare number nor something a host should store. A graph run is
+/// one operation that returns when the run is finished, so a submission made
+/// inside it is submitted and waited for inside the same call — there is no
+/// boundary for "still in flight" to cross. An implementation is free to be
+/// `Drop`-with-wait as a backstop, and the GPU one is, because a dropped
+/// submission is a bug rather than a shape to support.
+///
+/// # Outputs are readable only after the wait
+///
+/// [`Self::outputs`] exists so the next node can be recorded against this
+/// one's buffers, and it returns ids whose **contents the device may not have
+/// written yet**. They are not for fetching. A demand point — a place where the
+/// host needs the data — is [`Self::wait`] followed by an ordinary fetch of the
+/// ids it returns, and waiting is what makes that fetch sound.
+pub trait Pending: Send {
+    /// The buffers this submission will produce, before it has finished.
+    fn outputs(&self) -> &[ResidentId];
+
+    /// Wait for the submission, release whatever it held, and hand the ids over.
+    ///
+    /// After this the ids mean what they mean anywhere else: the device has
+    /// written them and they can be fetched or fed to another run.
+    fn wait(self: Box<Self>) -> Result<Vec<ResidentId>, String>;
+}
+
+/// A submission that was already finished when it was handed back.
+///
+/// What a backend that cannot overlap anything produces, and what every backend
+/// produces for a submission it chose not to overlap.
+struct Waited {
+    ids: Vec<ResidentId>,
+}
+
+impl Pending for Waited {
+    fn outputs(&self) -> &[ResidentId] {
+        &self.ids
+    }
+
+    fn wait(self: Box<Self>) -> Result<Vec<ResidentId>, String> {
+        Ok(self.ids)
+    }
+}
+
 /// A backend that can run a parallel fragment over an index range.
 ///
 /// This is deliberately *not* the shape of a compiled module, a memory pool or a
@@ -107,11 +160,35 @@ pub trait ParallelBackend: Send + Sync {
         count: usize,
     ) -> Result<Vec<ResidentId>, String>;
 
+    /// [`Self::run`], handing back a submission that is still in flight.
+    ///
+    /// **Defaults to `run`**, which is the point: a backend that cannot overlap
+    /// anything still satisfies the contract, it just never collects from it.
+    /// Requiring an implementation would mean every stub and every future
+    /// backend wrote a method whose only correct body is the one that does
+    /// nothing, and a caller could not tell "cannot overlap" from "has not
+    /// implemented overlap yet".
+    fn submit<'backend>(
+        &'backend self,
+        fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Box<dyn Pending + 'backend>, String> {
+        Ok(Box::new(Waited {
+            ids: self.run(fragment, inputs, count)?,
+        }))
+    }
+
     /// The first `count` elements of a buffer this backend is holding.
     ///
     /// The point at which a resident buffer actually crosses back to the host,
     /// and so the point that costs: a run whose results are never fetched never
     /// pays for them.
+    ///
+    /// **The buffer must have been waited for.** That is automatic for anything
+    /// from [`Self::run`], and for anything from [`Pending::wait`] — but not for
+    /// an id read off [`Pending::outputs`] before the wait, and the difference is
+    /// not a slow read: it is whatever the device happened to have written.
     fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String>;
 
     /// Release a resident buffer. Idempotent on an id already released.

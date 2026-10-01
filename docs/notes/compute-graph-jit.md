@@ -1,0 +1,948 @@
+# Graph JIT: a chain of dispatches as one submission
+
+> Status: **designed, framework seams landed, nothing built on top yet.** The
+> two lowlevel seams a graph needs are in and tested; the graph itself, the IR
+> crate, and the first measurement are not. Branch `feature/graph-jit`, three
+> commits, not pushed.
+>
+> This note exists so the next session does not re-derive any of it. Most of
+> what is here is a decision *and the alternative that was rejected*, because
+> the alternatives were not obvious and several of them were tried.
+
+## What this is
+
+`compute.graph` JITs an ordinary lichen function into a **graph IR** — a DAG is
+the natural shape of that IR, not a special case detected in the source — and
+then optimises on the graph. What the graph returns is decided by the function's
+return. Graph-level optimisation (recording a whole chain into one command
+buffer, one submit) does **not** belong to the plain kernel-JIT path.
+
+The premise is already in place: `ResidentId` lets an intermediate result stay
+on the device, and the recycled-buffer pool is the same pool scoped by *graph*
+rather than by *run*.
+
+## The decision the whole design rests on
+
+**A native closure inside a graph function can only reach variables that existed
+before the graph JIT ran.** It cannot capture a value the graph itself produces.
+
+That single fact is why this is tractable:
+
+- a closure's dependency set is fixed and known before the graph runs, and lies
+  **entirely outside** the graph;
+- no edge leads from a graph node into a closure;
+- a closure takes nothing from inside the graph.
+
+So **all the graph's edges are statically known**, scheduling is real
+scheduling, and any topological order is correct. The closure is a node in the
+same graph as a kernel, scheduled the same way, with **no special requirement on
+it at all**. It is not a barrier, and it does not force a flush.
+
+**A correction to how that is written below.** The rule is about a native node's
+**capture**, and the rest of this section once extended it to its **arguments**:
+"no edge leads from a graph node into a closure; a closure takes nothing from
+inside the graph". Taken literally that leaves a native node unable to transform
+anything, which is most of what a host call is for. The soundness invariant is
+the first part; arguments are graph values and the edges into them are ordinary.
+`lichen-graph-ir` builds both kinds of node on that reading, and the cost of the
+distinction is written down where it lands: **a native node that reads a
+dispatch's output has to wait for it and fetch it**, and no arrangement of
+submissions removes that. The shape that pays is a native node whose inputs
+already existed before the run.
+
+And the second thing falls out of that: **a closure can run while a submission
+is in flight**, because it touches nothing the device is writing. That is the
+only thing about native logic in a graph that is worth money — and it is the
+answer to "native logic in the graph makes it complicated". It is not
+complicated; it is the part that pays.
+
+The corollary that must be written down wherever a graph exists: **if a closure
+form ever appears that can capture a post-launch value, the scheduler becomes
+unsound, silently.** Same class of obligation as `spirv`'s single-`OpLabel`
+invariant — see [lichen-compute-gpu.md](lichen-compute-gpu.md).
+
+## What the graph is allowed to change
+
+**Only when it submits. Never what order it runs in.**
+
+Reordering needs to understand the native code. Batching does not: it preserves
+order exactly and changes only when the host observes completion. Correctness
+then reduces to one sentence — *a node's producer is always recorded before the
+demand that asks for it, so submitting everything recorded so far always
+includes the producer* — and no stale read is expressible.
+
+That gives three submission policies, and the "insert a hint" knob is the thing
+that picks between them per segment:
+
+| policy | when it submits | when it waits | what it buys |
+|---|---|---|---|
+| `Serial` | immediately | immediately | nothing; this is today's kernel path |
+| `Batch` | at the next demand | at the next demand | fewest submissions, no overlap |
+| `Async` | as soon as a segment is recordable | at the next demand | host work overlaps device work, same submission count as `Serial` |
+
+`Batch` and `Async` are a real trade-off, submissions against overlap. **`Async`
+is the only one that rewards native logic in the graph**, because a pure launch
+chain has no host work to hide.
+
+With that, submission count becomes a countable formula:
+
+> **submissions = closure calls + segments**, where a segment is the run of
+> launches between two closure calls.
+
+A closure call is a full flush plus a readback, and the program wrote that cost
+itself, so the JIT saves none of it. What it saves is everything *between*
+closures: 16 launches around 3 closures is 4 submissions, not 16. **That formula
+is the diagnostic worth more than the milliseconds** — "your chain has 3 closure
+calls, so it is 4 submissions and not 1" tells a user something actionable.
+
+## Two seams, and they are only sound together
+
+Both landed on `feature/graph-jit`.
+
+### Seam A — `ValueExt::traced` (`82a7948`, `c5de5dc`)
+
+```rust
+fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>)
+
+pub trait TraceContext {
+    fn node_block(&self, node: NodeId) -> Option<BlockId>;
+    fn block_nodes(&self, block: BlockId) -> Option<&[NodeId]>;
+    fn function_nodes(&self, function: FunctionId) -> Option<&[NodeId]>;
+}
+```
+
+A compiled graph holds the **buffer values it will read on every run**, so its
+value holds **nodes** past the operator call that built it. Nothing could see
+that: the GC walks an array's items, a table's entries, a function's scope, and an
+*unevaluated* node's operand — and an operator's result is cached, so **its
+operand is deliberately not followed** (`gc.rs`, "a cached value means the node
+is memoized and its operand is dead"). `drop_block` then deletes by **block
+membership, not reachability**, so such a node is dropped at the end of the very
+block evaluation that produced it, with no diagnostic. `evaluate_block` calls
+`garbage_collect` on every block boundary, so that window is not distant.
+
+`traced` closes it, and the GC walks what it names with the **same
+`garbage_collect_node` it uses for an array item**.
+
+**It is not enforced.** Nothing checks the answer, because nothing can: the
+lowlevel cannot see what a value holds. An unlisted node is not a detectable
+omission, it is a node that quietly disappears. The contract is held by review
+and by `lichen-lowlevel/tests/basic/compaction.rs`. Say this to anyone writing
+the first real `traced`.
+
+### Seam B — `OperatorExt::run_deferred` (`82a7948`)
+
+```rust
+fn run_deferred(&self, operand: Option<NodeId>, block: BlockId, module: &mut Module<P>) -> P::Value
+```
+
+`run` is handed its operand as a **value**, structure already collapsed. That is
+right for an operator that answers from the value alone and wrong for one that
+must decide for itself *when* its operand is evaluated: it already has
+`&mut Module<P>`, and the one thing it lacks is the node to start from. The
+default reproduces the VM's former extension arm verbatim — deep pass,
+`Parameterized` read-back, nullary `Void` stand-in — so an operator that does not
+override it cannot tell the difference, and the VM's arm is now one line.
+
+`is_callable(module, callee: AnyNodeId)` was the existing precedent for handing
+an operator a node.
+
+**Overriding `run_deferred` without implementing `traced` is unsound** (a
+reference kept past the call is invisible to the GC), and `traced` without
+`run_deferred` is inert (nothing can hold a reference past a call). They ship as
+one change. Recorded in both doc comments.
+
+## Three dead ends, kept because they look like the answer
+
+**`&[NodeId]` instead of a callback.** Rejected: it demands the value hold its
+references as one contiguous run, and no real holder has that shape. A graph
+interleaves the nodes it keeps with kernel ids, counts and element data, so there
+is no slice of it that is "the node list". Hence `out: &mut Vec<NodeId>` — the
+GC's own scratch, not the value's.
+
+**`traced(&self, visit: &mut dyn FnMut(NodeId))`.** Rejected: a holder that keeps
+a node *because of where that node sits* has to be able to look, and a callback
+into a walk cannot let it.
+
+**`&Module<P>` in the signature.** Tried, and it is the obvious fix for the
+previous point and the wrong one here. `P` on `ValueExt` reaches
+`ValueType: ValueExt + ...` in the highlevel, and from there into every
+`V: ValueType` bound in the checker — a program parameter threaded through the
+whole generic layer to buy the one thing it adds, reading a node's **value**,
+which a holder keeping ids does not want. `TraceContext` is the narrow middle:
+node block, block's node list, function's scope are all spelled in lowlevel's own
+types, so nothing that matters needs `P`. Read-only also removes the
+naming/walking borrow overlap for free.
+
+**One more, on the currency.** The hook was first written over `LowValue`. The
+GC's unit of work is the **node** — it asks "which node?" at every edge and
+dispatches on shape one level down — so a value is not an address and a node is.
+And "function" is not a separate kind at this seam: a closure is kept alive by
+naming the node it is the value of.
+
+## Corrections to measurements, all of which changed a conclusion
+
+These are the expensive ones. Each was a wrong number that had already been
+written into a document or a plan.
+
+**Submit fusion is not an N-fold win.** A dispatch's round trip — record,
+submit, wait — costs 0.036 ms against a resident input (best of 200), and
+earlier in this work "N-fold on long chains" was asserted. It is wrong, and
+the sweep below says by how much.
+
+**Readbacks are not avoidable.** A `Read` the program performs needs the number
+on the host, so the data must cross. There is no "unnecessary readback" to fold
+away. An earlier claim that a graph could save one, worth 0.5–1 ms, was
+invented — the prize does not exist.
+
+**The first sweep was divided by the wrong floor, and said so by being
+impossible.** The sweep's first run reported links that were 105–108%
+overhead. A fraction over 100% is not a noisy measurement, it is a wrong
+divisor: the floor came from `fixed_cost`, which times a dispatch reading a
+**host** input, and that one `memcpy`s into staging and has the device copy it
+inside the same submission. A chain link after the first reads a **resident**
+buffer and pays neither, so dividing by the host-input floor credits the link
+with an upload it never did — at small counts, with more than the link costs.
+
+**Neither floor is a constant, and the tables below were divided by one run's
+value.** The host-input floor has been measured between 0.043 and 0.045 ms and
+the resident-input one between 0.036 and 0.041 ms across runs of the same
+binary on the same machine, so an upload is worth roughly 0.007 ms and no more
+precisely than that. Every *per link*, *fusion share* and *overhead* figure
+below comes from the 0.036 ms run specifically; a run that measured 0.041 would
+report the same chain costs with about 12% less apparent overhead. The chain
+times themselves are what the tables are for, and those are stable.
+
+**The 10% was the worst row of the table, not its typical one.** Every estimate
+so far computed fusion's value at 1 048 576 elements, because that was the only
+count the crossover example happened to chain. The sweep at fixed chain length
+(`b4d89c1`, 16 links, best of 20) says:
+
+| count | 1 link | 16 links | per link | fusion share | overhead |
+|---|---|---|---|---|---|
+| 1 024 | 0.080 ms | 0.675 ms | 0.040 ms | **80.9%** | 91.9% |
+| 4 096 | 0.086 ms | 0.681 ms | 0.040 ms | 80.2% | 91.7% |
+| 16 384 | 0.111 ms | 0.731 ms | 0.041 ms | 74.7% | 88.1% |
+| 65 536 | 0.214 ms | 0.846 ms | 0.042 ms | 64.6% | 86.4% |
+| 262 144 | 0.814 ms | 1.555 ms | 0.049 ms | 35.1% | 73.7% |
+| 1 048 576 | 3.298 ms | 5.096 ms | 0.120 ms | 10.7% | 30.4% |
+
+*per link* is `(16 links − 1 link) / 15`, a difference of two chain lengths so
+that the upload and the download cancel. *fusion share* is
+`15 × 0.036 ms / 16 links`. *overhead* is `0.036 ms / per link`.
+
+The shape of the table is the answer, and it is the shape the design predicted:
+**the per-link cost barely moves with count** — 0.040 ms to 0.120 ms across a
+1024× range — while the kernel inside it grows with count, so the same fixed
+round trip goes from 92% of a link to 30%. Fusion is worth **65% to 81% of a
+16-link chain at counts up to 65 536**, and 10.7% at a million.
+
+**So: worth building.** The case for it is chains of small and medium kernels,
+which is what a real pipeline is made of, and the 10% figure that was quoted
+until now was the single row least favourable to it.
+
+### And then the feature was built, and it hits that number (`519c9d1`)
+
+`run_chain` records a chain into one command buffer, submits once and waits once.
+The *fusion share* column above was arithmetic done before the feature existed;
+this is the feature:
+
+| count | unfused 16 links | fused 16 links | speed-up | predicted | actual |
+|---|---|---|---|---|---|
+| 1 024 | 0.646 ms | **0.113 ms** | **5.7×** | 86.3% | 82.5% |
+| 4 096 | 0.653 ms | **0.120 ms** | 5.4× | 85.4% | 81.7% |
+| 16 384 | 0.681 ms | **0.146 ms** | 4.7× | 82.0% | 78.5% |
+| 65 536 | 0.801 ms | **0.266 ms** | 3.0× | 69.7% | 66.8% |
+| 262 144 | 1.625 ms | **1.091 ms** | 1.5× | 34.3% | 32.8% |
+| 1 048 576 | 5.752 ms | **4.669 ms** | 1.23× | 9.7% | **18.8%** |
+
+*actual* is `(unfused − fused) / unfused`. Fusing is faster at every count, and
+*actual* lands within a few points of *predicted* — **below** it at the small
+counts, where the fused path's own barriers and per-dispatch set allocations are
+paid, and **above** it at a million, where removing them shows up because the
+0.036 ms floor never counted the host-side work either. The model is
+conservative, which is the direction a model should be wrong in.
+
+**Correctness is checked, not assumed.** The example verifies a fused chain
+against the kernel's closed form, `2^n * x + (2^n − 1)` — derived, not run,
+because checking against a second CPU copy of the same loop would agree with a
+mis-ordered chain just as cheerfully. Four shapes pass, the largest a 16-link
+chain. That is the first execution of the two rules below, and they hold.
+
+**What the sweep does not settle.** The *actual* column is a **Batch ceiling** —
+it assumes fifteen submits *and* fifteen waits all disappear, which is exactly
+what `run_chain` does. Async keeps the submits and removes only the waits, so it
+collects part of this. That part is measured below.
+
+### And how much of it Async actually reaches
+
+The one measurement the design was waiting on. Each row is **the same submission
+and the same host work twice**, once with the work before the wait and once
+after it; nothing else differs, so the difference in `wait` is everything
+overlapping bought and nothing else is in the answer. The host work is a CPU
+pass over the same number of elements the kernel has, which is what a node
+written in lichen rather than compiled to a kernel actually is.
+
+| count | passes | host | submit | wait after | wait before | hidden | predicted |
+|---|---|---|---|---|---|---|---|
+| 262 144 | 0 | 0.000 | 0.072 | 0.199 | 0.198 | 0.001 | 0.000 |
+| 262 144 | 1 | 0.064 | 0.072 | 0.198 | 0.133 | 0.064 | 0.064 |
+| 262 144 | 2 | 0.126 | 0.072 | 0.198 | 0.071 | 0.127 | 0.126 |
+| 262 144 | 4 | 0.214 | 0.074 | 0.200 | 0.002 | 0.198 | 0.200 |
+| 262 144 | 8 | 0.398 | 0.075 | 0.197 | 0.002 | 0.196 | 0.197 |
+| 1 048 576 | 0 | 0.000 | 0.266 | 0.747 | 0.752 | 0.000 | 0.000 |
+| 1 048 576 | 1 | 0.339 | 0.444 | 0.758 | 0.403 | 0.355 | 0.339 |
+| 1 048 576 | 2 | 0.647 | 0.317 | 0.801 | 0.100 | 0.701 | 0.647 |
+| 1 048 576 | 4 | 1.149 | 0.510 | 0.829 | 0.006 | 0.824 | 0.829 |
+| 1 048 576 | 8 | 2.216 | 0.509 | 0.929 | 0.007 | 0.922 | 0.929 |
+
+*hidden* is `wait after − wait before`; *predicted* is `min(host, wait after)`,
+because a wait cannot be cut below zero and cannot be cut by more than the device
+was busy for. Best of 20, whole runs.
+
+**The shape is the answer, and it is the shape that was predicted.** The *wait
+after* column is flat — that is the device's time and host work does not touch
+it — while *wait before* collapses to two microseconds. And *hidden* tracks
+*predicted* to within 0.05 ms in all ten rows, the two at a million being the
+loosest. So **the whole device time can be hidden**, and once the host work
+exceeds it the wait is free and further host work is fully exposed. The
+crossover is at host work ≈ device time: about 0.2 ms at 262 144 elements, which
+is one to two CPU passes, and about 0.8 ms at a million, which is two.
+
+**A first version of this table was wrong in a way worth recording.** It took the
+best of each of the three pieces separately, and the hidden column came out at
+0.479 ms against 0.353 ms of host work — more was hidden than there was to hide.
+The three pieces are a decomposition of *one* elapsed time, so the best wait
+generally comes from a different run than the best host work, and pairing them
+measures an overlap that never happened. **A hidden amount cannot exceed the work
+that hid it**, and a table that says otherwise is telling you about its own
+arithmetic. Reporting all three from the run with the lowest total is what fixed
+it, and the check that the two columns must agree is what would have caught it
+earlier.
+
+**What it does not say.** This is one machine, one kernel, two counts, and best
+of 20 rather than a median, so read the *shape* rather than the digits. And
+*wait after* is not perfectly flat at a million — it drifts 0.747 to 0.929 down
+the table — so the last two rows' *predicted* is partly tracking that drift
+rather than a clean ceiling. The quarter-of-a-million block, where it is flat to
+0.003 ms, is the one to believe.
+
+**The one cost that grows is the submit side.** At a million elements it goes
+from 0.27 ms with no host work to about 0.51 ms with four passes over the same
+data, because a pass that size evicts the input the next submit has to copy into
+staging. It is flat at 262 144, where the pass does not. This is non-monotonic
+row to row, so it is a cost to watch rather than a number to plan against — but
+**Async keeps every submit**, so whatever it grows into comes straight off what
+the overlap wins, and at these sizes the overlap still wins by more.
+
+**The consequence for the design, which is the point of having measured it.**
+Async's saving is not a share of the per-dispatch overhead; it is **the device's
+time for one submission, and no more**. That is a completely different quantity
+from the 65–81% the Batch table reports, and it settles the question those tables
+could not: on a chain of pure kernels Async earns **nothing** — there is no host
+work to overlap, which is why the design said so from the start — and on a graph
+whose nodes are *not* all kernels it earns up to one dispatch's worth of device
+time per node, once the host work in that node exceeds it. The two schedules are
+not alternatives to pick between; Batch removes submissions, Async removes waits,
+and a graph with native nodes in it is the only shape where Async is worth
+anything at all.
+
+## What is built and what is not
+
+**Built and committed** (`feature/graph-jit`, eighteen commits, not pushed):
+
+| commit | what |
+|---|---|
+| `82a7948` | both seams, plus the compaction test |
+| `5b881bb` | delete a false claim from the `traced` docs |
+| `c5de5dc` | callback → `TraceContext`; why `&Module<P>` is wrong |
+| `a2c661d` | this document, and the stale claims in the backend's |
+| `05b5402` | `record_and_submit` / `wait_on` split out of `record_and_wait` |
+| `6c5ac4d` | the two rules a fused submission depends on — see below |
+| `f2e429f` | the same two rules, recorded here; delete an N-fold claim |
+| `91a324c` | delete the single `detached` submit the new design made wrong |
+| `e552a36` | the segment must not cross a call boundary, because it cannot |
+| `b4d89c1` | the count sweep, and the wrong floor it was first divided by |
+| `65582db` | the sweep says build it, and says 10% was the worst row |
+| `519c9d1` | `run_chain` — a chain in one submission, verified and measured |
+| `751cd2b` | the fused chain is checked and faster everywhere |
+| `de5424c` | the pool of submission slots, configurable and defaulting to 2 |
+| `082c4d7` | `Pending` on the backend contract — a submission handed back unwaited |
+| `ad7f97a` | the submit/wait split, measured |
+| `5b58b78` | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
+| `7447fc0` | a graph records what its own function returned |
+| *this one* | the lowering design, the refusals it owes, and the native-node contradiction |
+
+**Not built:** the lowering that compiles a lichen function into this graph, the
+`compute.graph` operator, the `Graph` value in the language, and the
+fused-submission capability `Batch` needs. The lowering's design is settled and
+recorded — see
+[The half that builds a graph](#the-half-that-builds-a-graph-and-what-it-found).
+
+**Measured:** the count sweep, the fused chain it predicted, that two
+submissions can be in flight and chained at the same time, how much of a
+submission's device time the host can be busy across, and that a graph with both
+kinds of node produces on a real device what the same fragments produce outside
+one.
+
+## The graph IR, and the two kinds of node
+
+`lichen-graph-ir`, depending on `lichen-kernel-ir` and nothing else. A graph is a
+list of nodes in evaluation order, and a node is one of exactly two things: a
+**kernel** node (a fragment over an index range) or a **native** node (a host
+call). There is no fused node, no barrier node and no sync node, and the reason
+is the point: what decides when the host observes completion is the *policy*,
+not the graph. A graph that could name its own synchronisation would be one whose
+correctness depended on where somebody put a keyword.
+
+**Edges are `ValueId`s and the list is the topological order**, so a cycle is
+unwritable. `Graph::push` refuses an edge naming a value that does not exist yet
+— which is the only way a cycle could be expressed — and refuses an output count
+the node's own body disagrees with, because that misaligns every value number
+after it.
+
+### `NativeCall` is a `fn` pointer, and that is the invariant
+
+The whole scheduling argument for a graph with host logic rests on a native node
+being unable to reach anything the graph produces. **A `fn` item cannot capture**,
+so the environment is necessarily fixed when the `fn` is named. The rule is a
+property of the type, not a promise in a comment. A caller that has a pre-run
+value to work from builds a `fn` that reads it from wherever it lives — safe for
+exactly the reason it is allowed to be, that the environment predates the run.
+
+The alternative, a boxed trait object, would let the same rule be broken
+invisibly, and the break is a **silently wrong answer** rather than a slow one.
+
+**The arguments are `&[i64]`, not values**, because a host call cannot read
+device memory at all. Handing it a graph value would mean handing it either a
+buffer whose contents may not be written yet or a transfer the call site has to
+know to ask for. So the runner settles and fetches arguments first, which is
+where a native node's cost of sitting in the middle of a data path lands.
+
+### The pending state is a value, not a rule
+
+```rust
+Value::Pending { submission, id, count }   // submitted, device may not be done
+Value::Device  { id, count }               // waited for, contents are there
+Value::Host(Vec<i64>)
+```
+
+This is the one design decision in the crate that everything else leans on. A
+value is pending for exactly as long as the host has other work to do, and
+**spending that window is the whole reason for running a graph this way** — so
+folding it into "a buffer" would either lie about the contents or make every
+reader responsible for knowing whether it had to wait first.
+
+Asking that to the type is what removes a class of bug rather than documenting it.
+**A kernel node can consume a pending value**, because recording a dispatch
+against a buffer only *names* it and the producer was recorded first. **A native
+node cannot**, because a host call reads the data — and matching on `Pending` is
+what a demand point *is*. That asymmetry is not a rule the runner follows; it is
+what the match arms are. A dispatch with several outputs shares one submission
+through an `Arc`, so the wait happens once however many values carry it.
+
+### What a run hands back, and why it is not the last node
+
+The **whole tail of the value table**, not the last node's outputs. What a
+function returns from the graph compiled out of it is the *function's* business,
+and the function is the thing that knows it. A runner that picked a node would be
+making that decision for the caller, and a graph with a dead tail would be unable
+to express its own return. Every value is settled first, so every id handed back
+names a buffer the device has written.
+
+### Two policies work and one is refused
+
+`Serial` is the plain kernel path. `Async` submits each node as soon as it is
+recordable and waits only where something needs the data. **`Batch` is refused by
+name**, because a backend can only fuse if it can be handed several dispatches to
+put in one command buffer, and the contract has no way to ask for that — `submit`
+records one run and hands it over. A runner that accepted `Batch` could only run
+it as something else, and both things it could run it as report a number for a
+schedule nobody asked for. That is a missing capability, named as one, rather
+than a silent downgrade.
+
+**Async needed no new backend capability at all.** `submit` and `Pending::wait`
+were already enough, which is the strongest evidence yet that the two seams landed
+in the right place: the graph runner is written entirely against the existing
+contract.
+
+### Checked, on a stub and on a device
+
+The stub records **what the host asked for and in what order**, because *where*
+the waits are is the claim and a count cannot say it. A three-node graph — add,
+a host call over the result, add again — under `Async` asks for exactly:
+
+```text
+submit         the first dispatch goes to the queue
+wait, fetch    the native node needs that dispatch's data: a demand point
+submit         the second dispatch records against host data, so nothing waited for it
+wait           the run hands back an id, and an id must name a written buffer
+```
+
+Three waits would be a scheduler that waited for everything. **One wait would be
+a scheduler that let the native node read a buffer the device had not written** —
+a wrong answer rather than a slow one, and the reason the pending state is in the
+value type at all.
+
+On a real device, `a_graph_with_a_native_node_beside_its_dispatches` and
+`a_native_node_reading_a_dispatches_output` both produce what the same fragments
+produce outside a graph, under both policies. The second is the shape the design
+warns about, and the test is worth having precisely because it is the one where a
+scheduler could plausibly be wrong: the host call has to read a buffer the device
+has not finished, so the runner waits and fetches, and **no arrangement of
+submissions removes that cost.** What the runner guarantees is that it happens
+before the read rather than being left to chance.
+
+## The half that builds a graph, and what it found
+
+Designed and **not yet written**. The shape is closed and the walk is verified
+against the real node structure; what is missing is the code. Recorded here
+because the design is most of the work and re-deriving it is expensive.
+
+### A graph's inputs are the function's free variables, and that is forced
+
+`$graph(f)` is handed `f` as a **template**. Nothing has been applied to it, so at
+that moment there is no such thing as its argument: every buffer the body reads
+that no earlier dispatch produced is a free variable, and those are exactly the
+graph's inputs. This is not a limitation worked around, it is what the design
+already says from the other end ("a closure can only reach variables that existed
+before the graph JIT ran") landing on the only half that is writable today.
+
+The consequence worth writing down: **the graph holds its inputs.** They are
+`Buffer` values in a block arena, freed with the block, so a graph that did not
+name them would read freed memory on its second run. That is `traced`'s first
+real user, and it is a buffer rather than the closure both seam doc comments
+used to promise (see below).
+
+### `traced` through a process registry is sound, and the reason is in `gc.rs`
+
+`ComputeValue` is `Copy`, so a graph value is a registry slot and the node ids it
+holds live in the registry rather than in the value. That would be unsound if
+collection renumbered nodes, so check: `garbage_collect_node` moves a node by
+writing `self.nodes[node].block = target` and **"a node keeps its id across the
+move, so only its block changes, and a value holds the id"**. An id held anywhere
+outside the module therefore survives every collection, and the `Array`/`Table`
+arms prove the same for payloads: the payload is reallocated into the target
+arena and the holder's handle is rewritten, so reading the value *from the node*
+later gets the current one. A registry entry that holds a `NodeId` and reads the
+value back through it is correct for the same reason.
+
+### The walk is structural, and no dispatch runs while building a graph
+
+`ParLaunch`'s operand array is `[kernel, cfg]` and the `cfg` is `(count, buffers)`.
+Every one of those is an operand edge, readable through `node_operation` and
+`array_items` **without evaluating the `ParLaunch` node** — and evaluating it would
+run a real dispatch, which is the thing a build must not do. Only two things need
+evaluating: the kernel (a `Parallel` node, a pure compile) and the count (a
+scalar). Neither dispatches.
+
+The walk enumerates `function_nodes(function)` rather than following the return's
+operand spine, and that is what makes a **dead tail** findable: a spine walk sees
+only live nodes. The return is then resolved separately and recorded through
+`Graph::returning`, which is why a dead tail and a return are independent facts.
+
+Two passes, because `Graph::with_inputs` needs the input count before the first
+`push`: pass one collects `NodeFacts { kernel, count, inputs: Vec<NodeId> }` in body
+order and numbers the free variables in first-seen order, pass two maps node ids
+to value numbers and pushes. The map is also the whole of the classification: an
+input node not in `produced_by` is a free variable.
+
+### Refusals this design owes, all of them about a graph and not a run
+
+Found while designing, none of them written yet. Each names its cause, per the
+rule the rest of the tree follows.
+
+- **Mixed backends.** A run goes to one `ParallelBackend` and the IR's nodes do
+  not carry one, so a graph whose dispatches name different backends cannot be run
+  at all. Refuse at build time, naming both.
+- **A non-device backend.** `"cpu"` dispatches through this crate's wasm path and
+  never touches a `ParallelBackend`, so a cpu graph would build and then fail at
+  run time with "no backend installed" — a capability mismatch reported as an
+  environment problem. Refuse at build time and say why.
+- **A kernel or a count that is not decided yet.** Both are needed at build time
+  and neither can be invented; the fragment and the element count are facts about
+  the source.
+- **A `cfg` item that is neither a dispatch's output nor a buffer.** A third thing
+  in that position would be the interesting one to support and the wrong one to
+  accept silently.
+- **A return naming neither a dispatch's output nor a free variable.**
+
+### What this step is worth, stated plainly
+
+A kernel-only graph under `Serial` or `Async` is **worth no milliseconds**, and the
+measurement above says so rather than implying otherwise: a pure kernel chain has
+no host work, so `hidden = min(host, device) = 0` and `Async` is exactly the plain
+kernel path. The win for a pure chain is `Batch` (one submission instead of
+sixteen), which is refused for want of a fused-submission contract.
+
+So this half is worth building for three reasons that are not speed: it gives
+`traced` and `run_deferred` a first real user after two commits of zero; it is
+the prerequisite for designing that fused-submission shape, since "hand me N
+dispatches" cannot be specified without knowing what a node is; and it produces
+the repeatable object the feature was decided around. **It is a shape step, and
+the ordering in the list below predates the measurement that says so.**
+
+### The contradiction: a graph cannot hold the closures its native nodes call
+
+Both seam doc comments promised that a compiled graph would hold *the closures it
+calls later*. `NativeCall` is a bare `fn` pointer, and that is deliberate: a `fn`
+item cannot capture, so the environment is fixed when the `fn` is named, which is
+what makes the graph's edges statically known. But `fn(&[&[i64]]) ->
+Vec<Vec<i64>>` has **no channel to name a closure** — its only parameter is the
+arguments. So a user-written lichen closure cannot become a native node without
+replacing that decision, and the two committed things disagree.
+
+Three ways out, none of them free:
+
+1. **Native node is a stateless host function from a fixed set.** The `fn`
+   invariant stands untouched and no code has to move. But nothing in the
+   language's surface today has that shape, so the first version would have to
+   invent one, and the graph's native nodes would not be the ones the design
+   writes about.
+2. **Native node is a user closure, re-entered into the VM at run time.** This is
+   what the seams were cut for and the only shape where `Async`'s measured payoff
+   is reachable, since a native node *is* the host work that gets hidden. The cost
+   is that `NativeCall` stops being a `fn` pointer: the environment moves behind a
+   registry slot, which keeps the soundness property (it is still fixed before the
+   run) but demotes it from a **type fact** to a **discipline**. It also needs a
+   re-entrant apply path the VM does not have yet, and it has to close a type gap:
+   the IR's host data is `Vec<i64>` while the language's host arrays are `[?b]`.
+3. **Leave it open.** Build the kernel-only half, record the contradiction, and
+   decide before writing the first native node.
+
+**3 is what was done**, and the two seam doc comments were corrected to match
+rather than left promising something nothing delivers. The doc comments naming
+closures were the only place the contradiction was written down, so a reader would
+have taken the promise at face value.
+
+## The pool of submission slots
+
+`GpuConfig { slot_depth }`, default **2**, configurable only from Rust:
+`GpuContext::new()` takes the default and `GpuContext::with_config` takes the
+rest. A depth of zero is refused by name, for the same reason a zero-link chain
+is: it is not a smaller pool, it is none.
+
+**One slot is a command buffer, a fence, a staging buffer and a descriptor pool,
+and they live in one struct because they all die at the same moment.** That is
+the whole design. A command buffer cannot be recorded while a previous recording
+of it is running; a staging mapping cannot be written while a copy out of it is
+in flight; a descriptor pool cannot be reset while a dispatch bound to its sets
+is executing. Keeping them together makes recording one submission into another
+submission's command buffer unrepresentable rather than merely discouraged.
+
+So the three consequences that were listed as *what a pool would need* are now
+properties of the type rather than rules someone has to remember:
+
+- **Staging is per slot.** Not a convention — `Segment::reserve` and
+  `Segment::staging` reach only the slot the segment holds, and the segment holds
+  the pool lock. There is no API that names a staging buffer.
+- **The descriptor pool is per slot**, reset in `acquire` and nowhere else.
+  `acquire` is the only place that can safely do it, and it is safe there for a
+  reason it establishes itself: it has just waited the slot's fence, or the slot
+  was never claimed.
+- **`fetch` acquires a slot** like everything else, because it is a submission.
+
+**The claim is the lock.** `GpuContext::acquire` hands back a `Segment` carrying
+the pool's `MutexGuard` for its whole life, so "two threads never record into one
+command buffer" is something the borrow checker sees. Releasing the lock is what
+`Segment::drop` does, and only on a path that neither submitted nor waited: a
+segment that submitted leaves the slot claimed, and the next acquisition of that
+slot waits its fence. That is the entire mechanism by which a slot is never
+reused while the device still owns it.
+
+**`Segment` has three submit methods, and the difference between them is what
+they leave the caller holding.** `submit_and_wait` gives the slot back — that is
+`run` and `run_chain`, and it is literally `submit` then `sync`. `submit` hands
+back a [`Token`] and keeps the slot claimed, which is the only path that leaves
+the device behind the host. `submit_and_read_back` reads its own staging *inside*
+the claim, which is why it is not `submit` plus `sync`: `sync` gives the slot
+away, and the next acquisition would then be free to resize or rewrite the very
+mapping being copied out of. That returns the **wrong numbers** rather than
+failing, so it is structural rather than documented.
+
+**`Token` is consumed by the wait.** One submission is waited for exactly once,
+because by the time a second wait ran, the slot could be running someone else's
+submission and the wait would have proved the wrong thing. Taking it by value
+makes the second wait inexpressible.
+
+**What depth costs, and what it does not.** At depth 2 with callers that all wait
+before returning — which is every caller today — `acquire` never waits: each slot
+is released before the cursor comes back to it, so the round-robin costs one
+index add. What depth does cost is **VRAM and host RAM**: each slot carries its
+own staging buffer, so worst-case staging is `depth` times a run's uploads rather
+than once. The fused chain's numbers are unchanged by this — 0.119 ms against
+0.113 ms at 1 024 elements and 4.468 ms against 4.669 ms at a million, both inside
+the run-to-run spread the tables below already record.
+
+**`acquire`, `Segment` and `Token` are private**, and the entry point that is
+public is `ParallelBackend::submit`, which returns a
+[`Pending`](#the-pending-submission) rather than ids. A public `Segment::record`
+would take a `vk::Pipeline` and a `&[vk::DescriptorBufferInfo]`, and putting
+those in a public signature hands the backend's representation to every caller,
+which is what `lichen-kernel-ir` exists to prevent.
+
+## The pending submission
+
+`ParallelBackend::submit` records a run, hands it to the queue, and returns a
+`Box<dyn Pending>` **without waiting**. The ids it will produce are on
+`Pending::outputs`, and their contents the device has not promised to have
+written — they are for handing to the next node as `BufferSlot::Resident`, and
+that is the chaining the overlapping schedule needs.
+
+**The question this settles is when the ids escape, and the answer is that the
+question was badly posed.** It was put as *at submit, or at the sync*, and at
+the sync is not Async: chaining node `n + 1` needs node `n`'s id, so ids only at
+the sync means waiting for `n` before recording `n + 1`, which leaves the device
+idle for exactly as long as the submission was supposed to be overlapped. That is
+Serial with an extra step.
+
+The real shape is a third thing. **The pending object holds the ids, the token
+and the upload targets, and a demand point is `wait` followed by an ordinary
+fetch.** So the ids a *host* ever sees have been waited for — the graph returns
+its outputs at the end of a run, after the sync — while the ids the *executor*
+chains on have not, and the executor only ever hands them to a recording. The
+closure invariant that starts this document is what makes the second population
+safe: a native closure cannot capture a graph's own outputs, so no closure can
+reach an unwaited id at all.
+
+**The upload targets are the reason a pending object is necessary rather than a
+token.** A host input is `memcpy`'d into a buffer the device is about to copy
+out of, and that buffer is not resident, so nothing else can name it. It has to
+survive until the wait, which means it has to travel with the submission — and a
+bare `Token` has nowhere to put it.
+
+**`Pending::wait` consumes the pending, and dropping one waits.** One submission
+is waited for exactly once, because by the time a second wait ran, the slot could
+be running a different submission and the wait would have proved the wrong thing.
+The `Drop` is a backstop rather than a mechanism: a run submits and waits inside
+one call, so a pending that is merely dropped should not exist, and if one does,
+waiting turns a use-after-free into a slowdown.
+
+**`ParallelBackend::submit` has a default that calls `run`.** A backend that
+cannot overlap anything still satisfies the contract; it just never collects from
+it. Requiring an implementation would mean every stub and every future backend
+wrote a method whose only correct body is the one that does nothing, and a caller
+could not tell "cannot overlap" from "has not implemented it yet". The GPU is
+the only backend here that overrides it, and it can: it has a pool, so a
+submission handed back is a **different slot** from the one the next submission
+takes.
+
+**Checked on a real device, both halves.** `a_submission_can_be_fed_to_one_that_is_still_in_flight`
+records two submissions, feeds the second from the first's output *without
+waiting for the first*, and gets `4x + 3` back — which says the slots really are
+distinct and that the trailing barrier orders two *submissions*, not just two
+dispatches inside one recording.
+`dropping_a_submission_nobody_waited_for_still_frees_it` covers the backstop: at
+depth two, a drop that did not wait would hand the next acquisition a staging
+buffer with a copy still in flight, and the values afterwards would be wrong
+rather than slow.
+
+**What is still missing is the caller.** Nothing schedules: a graph executor that
+submits a node, runs the closures between, and waits at the demand points does
+not exist, and neither does the measurement of what that is worth.
+
+## Two rules, settled before anything depended on them, and since executed (`6c5ac4d`, `519c9d1`)
+
+Both were landmines on this list. They are decided now, while nothing depends on
+them, because each is a **miscompile rather than a slowdown** and so cannot be
+caught by watching the numbers.
+
+They were written down first and **executed later**, which is the only order that
+works for a rule whose failure mode is a wrong answer rather than a slow one: with
+nothing depending on them they are reviewable in isolation, and `run_chain` is
+then the first thing that can be checked against them rather than the first thing
+that depends on them. It is checked, against the kernel's closed form, at four
+shapes up to a 16-link chain, and both hold.
+
+**One descriptor set per dispatch, and no reset under a running command
+buffer.** A set is read when the submission *executes*, so one set cannot serve
+two dispatches — rewriting it between them changes what the first one sees. Nor
+can the pool be reset between them, because a reset frees every set, including
+ones an earlier dispatch in the same command buffer is still bound to. So a
+submission resets the pool once, at its own start, and takes what it needs
+afterwards. This also changes what `MAX_DESCRIPTOR_BINDINGS` means — 32 is now a
+*per-dispatch* limit, and 64 dispatches per submission is a second, separate
+limit the graph will have to live inside. 64 is a placeholder: the graph-level
+node set that ought to own that number does not exist yet, and a larger one
+would be headroom for a program shape nobody has written.
+
+**The trailing barrier names both possible readers.** It was
+`SHADER_WRITE → TRANSFER_READ`, right only because every dispatch is followed by
+a `fetch` in another submission. A dispatch recorded after this one in the same
+command buffer reads those results as a *shader*, and a consumer outside the
+destination scope does not read stale data, it reads undefined data. The scope is
+now `SHADER_WRITE → SHADER_READ | TRANSFER_READ`. That over-covers the
+single-dispatch case the backend records today, which is a cost, so it was
+measured rather than assumed: 16 links at 1 048 576 elements went 7.79 ms →
+7.17 ms and an empty dispatch 0.046 → 0.048, both inside the run-to-run spread of
+the example that produced them. The honest reading is **not measurable, not
+free**.
+
+What is deliberately left open: **nothing counts dispatches within a
+submission.** The constant sizes the pool, but exceeding it is pool exhaustion
+on the device rather than a named refusal. Whoever writes the pool code must
+carry that count, and it is the only part of this rule with no code behind it.
+
+## The next step, in order
+
+1. ~~**A configurable pool of submission slots — not a `Segment` object.**~~ **Done.**
+   Depth 1 was already built and measured (`run_chain`), and it is the whole of
+   the **Batch** case: one submission, one wait, no cross-call state. The pool
+   adds **depth greater than one**, which only Async needs — several submissions
+   in flight at once so the host work between them overlaps the device work. The
+   earlier plan here said a segment must outlive the `GraphRun` operator call, and
+   everything downstream of it was built on that: a `Box<dyn Segment>` on the
+   trait, a token, a `Drop` that has to wait. **That was wrong.** A graph is a
+   value that can be run again, so running it is one operator call that returns
+   when the run is finished. There is no boundary inside a run for "submitted but
+   not yet waited for" to cross, so the state is a local in the executor, and the
+   "who waits" question does not arise.
+
+   The shape is two call-scoped methods beside the three that exist, in the same
+   style as the three that exist: `submit`, which records a stretch of dispatches
+   into one command buffer and submits it without waiting, and `sync`, which
+   waits for the last submission. `run` is `submit` then `sync`. The backend
+   holds a **pool of slots**, and acquiring one when they are all in flight means
+   waiting on the oldest. Depth is configured from Rust — `GpuContext::new()`
+   takes the default, `with_config` takes the rest — defaulting to 2 because that
+   is the smallest depth at which recording overlaps too, and 2 is already more
+   than today. Whether more than 2 earns its keep depends on how much host work
+   a closure does, which is unmeasured.
+
+   **What is left of it is the executor, not the pool.** See
+   [The pool of submission slots](#the-pool-of-submission-slots) and
+   [The pending submission](#the-pending-submission) for the shapes. The
+   contract has a `submit` that hands a submission back unwaited and a
+   `Pending::wait`, the pool is two deep by default, and a host program can hold
+   two submissions in flight. What does not exist is anything that *decides* to:
+   a graph executor that submits a node, runs the closures between, and waits at
+   the demand points.
+
+2. **Overlap does not need language-level async, and that is worth writing
+   down** because it looks like it does. The GPU being in flight is a driver
+   property, and "submit, run the closures for the next stretch, submit again"
+   is ordinary straight-line host code with nothing suspended and nothing
+   resumed. The closures run *inside* `GraphRun`, between a submit and the sync
+   that follows it. lichen needs no `await` and this adds none — which also
+   means the "who waits" question that the old shape made unanswerable simply
+   does not arise.
+
+3. ~~**Three things a pool needs that one command buffer did not.**~~ **All three
+   are now properties of the type**, so this is a record of what the code
+   actually does rather than a plan. Each was a silent wrong answer rather than a
+   slow one:
+   - **Staging is per slot, and there is no way to name another slot's.** A host
+     input is `memcpy`'d into staging and read by the device later, so writing
+     the next slot's input over bytes an in-flight copy has not read yet hands
+     that copy the new data. `Segment::reserve` and `Segment::staging` reach only
+     the slot the segment holds, and the segment holds the pool lock.
+   - **The descriptor pool is per slot, reset in `acquire` and nowhere else.** A
+     set is read when the submission *executes*, so resetting under a running
+     command buffer frees sets it is still bound to. The rule settled above —
+     reset at a submission boundary — was true at depth 1 and stops being true
+     the moment a second submission is in flight. `acquire` is the only place
+     that can do it safely, and it is safe there because it has just waited the
+     slot's fence or found the slot never claimed.
+   - **Bundling the pool into the slot is what makes that safe**, rather than
+     one context-wide pool with a hand-maintained in-flight counter. Command
+     buffer, fence, staging and descriptor pool share a single lifetime and a
+     single owner, so "which of these are mine" has one answer instead of two,
+     and there is no counter that can be wrong. The per-segment
+     `vkFreeDescriptorSets` alternative was rejected because without the
+     `FREE_DESCRIPTOR_SET` flag it exhausts the pool — and while that failure is
+     loud, the one it is preferred to fails silently.
+   - **`fetch` acquires a slot** like everything else; it is a record, submit
+     and immediate wait, and after pooling it no longer has a fixed target. Its
+     read of the staging happens *inside* the claim, which is the one thing
+     `submit` plus `sync` cannot express.
+
+4. ~~**The submit/wait split.**~~ **Measured** — see
+   [And how much of it Async actually reaches](#and-how-much-of-it-async-actually-reaches).
+   The shape is the one that was predicted: the hidden amount is
+   `min(host work, device time)`, to within 0.05 ms in all ten rows, and it
+   saturates at the device's own time. **What it changed is the arithmetic, not
+   the schedule.** Async's saving is not a share of the per-dispatch overhead; it
+   is one submission's device time and no more, which means it earns nothing on a
+   chain of pure kernels and up to a dispatch's worth per node on a graph with
+   native nodes in it.
+5. ~~**Then, and only then**, the IR crate and the node set.~~ **Done** — see
+   [The graph IR, and the two kinds of node](#the-graph-ir-and-the-two-kinds-of-node).
+   What is left of the whole feature is the half that *builds* a graph rather
+   than running one: the `compute.graph` operator, the `Graph` value in the
+   language, and the lowering that fills `Graph::push` — using the two seams
+   already landed, which is what they were cut for. `Batch` needs a
+   fused-submission capability in the contract before it can be anything but a
+   refusal.
+
+6. **The lowering, and the order of this list is now suspect.** The order above was
+   written before the submit/wait split was measured, and the measurement changes
+   it: a **kernel-only** graph is worth no milliseconds under `Serial` or `Async`,
+   because a pure chain has no host work and `hidden = min(host, device) = 0`. The
+   only win for a pure chain is `Batch`. So the two remaining halves are not
+   obviously in this order, and saying otherwise would let a shape step pass for
+   progress. The case for the lowering first is that it is the prerequisite for
+   specifying the fused-submission shape at all, and that it gives the two seams a
+   first real user; the case for `Batch` first is that it is where the measurable
+   value is. **Decided for now: lowering first, with the native-node question left
+   open** — see
+   [The half that builds a graph](#the-half-that-builds-a-graph-and-what-it-found),
+   which also records what the kernel-only version is and is not worth.
+
+7. **The native node, and it is a real contradiction rather than a task.** A graph
+   that holds the closures its native nodes call is what both seams were cut for,
+   and `NativeCall` is a bare `fn` pointer that cannot carry one. Decide this
+   before writing the first native node, not while writing it.
+
+## Landmines, each of which is a silent wrong answer
+
+- **A recorded-but-unsubmitted command buffer is clobbered by the next recording
+  into it**, and a command buffer whose submission is still in flight cannot be
+  recorded into at all. This is the whole reason the pool exists and the reason a
+  slot is not released until its fence signals. The single `detached: Mutex<Submit>`
+  that stood in for it handled exactly one outstanding submission; it is now
+  `Mutex<Slots>`, where a slot's `claimed` flag is the one thing that answers
+  "is the device still using this", and the fence is the only thing that clears
+  it.
+- **A chain that reuses a buffer has a write-after-read hazard that the
+  one-buffer-per-link version does not have.** `run_chain` ping-pongs two
+  buffers, so link `i` reads what link `i + 2` writes; the trailing barrier
+  is widened to order it. The first version did not reuse and did not need
+  it, and it was three times **slower** — a pool holding a buffer per link is
+  empty at the start of every call, so every call allocates the lot and
+  discards most of it. Measured: 2.226 ms fused against 0.679 ms unfused,
+  all of it in `vkAllocateMemory`. The memory profile does **not** invert for
+  a linear chain; it inverts for a fan-out, and there which buffers can be
+  shared is a question about liveness that the graph has to answer.
+- **`BufferSlot::Host` inputs are staged by `memcpy` before recording.** A
+  submission that grows staging after recording has begun is a use-after-write
+  on the mapping — and with several slots in flight, a *different* slot growing
+  or writing staging is the same hazard across slots. Reserve for the whole
+  submission up front, and never share staging between slots.
+- **An uninitialised output buffer is safe only because the emitter emits
+  straight-line code** — one `OpLabel`, no branch, so every invocation reaches
+  its write and the dispatch covers `[0, padded)`. A branch in a body breaks it.
+  See [lichen-compute-gpu.md](lichen-compute-gpu.md).
+- **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
+  memory lives until `GpuContext::drop`. Same rule as the deliberate
+  no-per-value-release decision already recorded there.
+- **A fan-out graph's memory profile inverts; a linear chain's does not.** This
+  note used to claim the inversion without the qualifier, and building the fused
+  chain is what showed it was half wrong. `run_chain` ping-pongs two output
+  buffers, so a 16-link chain at 1 048 576 elements holds 16 MB rather than
+  128 MB and needs no pool deeper than a serial run's. The inversion is real
+  only where two buffers are live at once: a node with two consumers, or two
+  nodes writing from the same input. There the graph's liveness information is
+  the only thing that decides what can be shared, and the recycled-buffer cap
+  was tuned for one-at-a-time — so a fan-out that keeps more than a handful live
+  will be allocating and discarding on every call, at a cost measured above at
+  roughly 0.2 ms per buffer.
+
+## Related
+
+- [lichen-compute-gpu.md](lichen-compute-gpu.md) — the backend, the measured
+  costs, and the invariants a graph must not break.
+- [compiler-plugin.md](compiler-plugin.md) — the `traced` seam as a plugin
+  author sees it is **not written yet**; its "Extension point 5" covers the
+  ext-handle payload contract, which is a different thing.
+- [lichen-compute.md](lichen-compute.md) — the operator vocabulary and the
+  `plrun` path a graph sits beside.

@@ -15,3 +15,10 @@ edition.workspace = true
 [dependencies]
 ash = "0.38.0"
 lichen-kernel-ir.workspace = true
+
+# The graph IR, so a graph can be run against a real device. A **dev**
+# dependency on purpose: this crate is a backend and takes no part in building
+# graphs, and the dependency is here so the tests can prove the two fit rather
+# than so the backend can see a graph.
+[dev-dependencies]
+lichen-graph-ir = { path = "../lichen-graph-ir" }

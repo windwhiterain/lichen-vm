@@ -1,9 +1,10 @@
 # The GPU backend for the lowered-kernel IR
 
-> Status: **implemented, first slice** (`feature/compute-gpu-backend`, not yet
-> merged). One output space and the arithmetic/select subset run on a real
-> device; a cross-kernel call is refused by name. What is *not* here is listed
-> under [Not yet](#not-yet) rather than left implied.
+> Status: **implemented and merged** to `dev`. One output space and the
+> arithmetic/select subset run on a real device; a cross-kernel call is refused
+> by name. What is *not* here is listed under [Not yet](#not-yet) rather than
+> left implied. Work on launching a chain as one submission is designed and
+> tracked in [compute-graph-jit.md](compute-graph-jit.md).
 
 This is the second consumer of the IR that
 [lichen-compute.md §4](lichen-compute.md#4-codegen-bytecode-fragments-not-a-module)
@@ -282,29 +283,123 @@ device-local memory. Two things moved it:
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
 **The GPU wins on a chain, and the fixed cost is what decided it.** An **empty**
-dispatch — one workgroup, so nothing but the dispatch itself — costs **0.046 ms
-at best and 0.053 ms at the median** over 200 runs. That is the per-dispatch
-fixed cost a chain pays once per link, and the chain table shows what it buys:
+dispatch — one workgroup, so nothing but the dispatch itself — costs **0.043 ms
+at best** over 200 runs, and the example prints the median beside it. That number
+measured 0.046, 0.048 and 0.043 ms across three runs of the same binary on this
+machine, so read it as 0.04–0.05 ms rather than to three places.
+
+**There are two of these floors, and using the wrong one invents a result.** A
+dispatch reading a **host** input is 0.043 ms; a dispatch reading a **resident**
+buffer — which is every link of a chain after the first — is **0.036 ms**. The
+difference is the upload: a `memcpy` into staging plus a device-side copy in the
+same submission, worth about 0.007 ms. Neither figure is a constant: across runs
+of the same binary on this machine the host floor has read 0.043–0.045 ms and the
+resident one 0.036–0.041 ms, and the derived columns in the tables below come
+from the 0.036 ms run specifically. The crossover example now measures both,
+because dividing a chain's marginal link by the host-input floor credits the link
+with an upload it never does — and at small counts that credit exceeds the cost of
+the link, which is how a first run of the count sweep below reported links that
+were 108% overhead. A fraction over 100% is a wrong divisor, not a noisy one.
+
+The chain table shows what the floor buys:
 
 | count | chain | GPU | sequential | ratio |
 |---|---|---|---|---|
-| 65 536 | 16 | 1.74 ms | 0.48 ms | 0.28× |
-| 262 144 | 16 | 2.81 ms | 3.64 ms | **1.30×** |
-| 1 048 576 | 1 | 5.52 ms | 3.09 ms | 0.56× |
-| 1 048 576 | 2 | 6.86 ms | 5.14 ms | 0.75× |
-| 1 048 576 | 4 | 6.56 ms | 7.34 ms | **1.12×** |
-| 1 048 576 | 8 | 7.21 ms | 11.43 ms | **1.59×** |
-| 1 048 576 | 16 | 7.79 ms | 21.19 ms | **2.72×** |
+| 65 536 | 16 | 1.493 ms | 0.283 ms | 0.19× |
+| 262 144 | 16 | 3.494 ms | 2.397 ms | 0.69× |
+| 1 048 576 | 1 | 5.769 ms | 3.653 ms | 0.63× |
+| 1 048 576 | 2 | 5.560 ms | 4.818 ms | 0.87× |
+| 1 048 576 | 4 | 7.857 ms | 7.849 ms | **1.00×** |
+| 1 048 576 | 8 | 7.315 ms | 11.434 ms | **1.56×** |
+| 1 048 576 | 16 | 7.168 ms | 25.733 ms | **3.59×** |
 
 A single cold dispatch still loses, and that is not a bug: the first upload is
 8 MB across PCIe, which costs about what the scalar loop costs outright. The
 cross-over is at **about four links** at a million elements, and it climbs from
-there. Note the shape of the GPU column: 16 links cost 7.79 ms against 5.52 ms
-for one, so a link is roughly **0.15 ms** now — the chain is nearly free to
-extend, which is the property that makes a long pipeline worth writing.
+there.
+
+**Read this table loosely, and prefer the count sweep below for anything
+per-link.** It is one sample per point and it is not monotonic in links — two
+links came out *cheaper* than one, and four more expensive than eight. The
+earlier run of it put the 1→16 slope at 0.15 ms per link and this one at
+0.09 ms. The `sequential` column drifted further than the GPU column between
+runs, so the **ratios** moved more than the GPU times did: the 16-link ratio went
+2.72× → 3.59× while its GPU time went 7.79 → 7.168 ms. The ratio is the least
+trustworthy number here, because its denominator is a stand-in for a thread pool
+that is not being measured.
+
+### What a link is actually made of
+
+Everything above is one sample per point, and the question the graph design rests
+on is not "how long is a chain" but "how much of a link is not the work". So: 16
+links fixed, count swept, best of 20 per point, and the per-link cost taken as
+`(16 links − 1 link) / 15` — a difference of two chain lengths, so that the upload
+and the download cancel and what survives is the marginal cost of one link.
+
+| count | 1 link | 16 links | per link | fusion share | overhead |
+|---|---|---|---|---|---|
+| 1 024 | 0.080 ms | 0.675 ms | 0.040 ms | **80.9%** | 91.9% |
+| 4 096 | 0.086 ms | 0.681 ms | 0.040 ms | 80.2% | 91.7% |
+| 16 384 | 0.111 ms | 0.731 ms | 0.041 ms | 74.7% | 88.1% |
+| 65 536 | 0.214 ms | 0.846 ms | 0.042 ms | 64.6% | 86.4% |
+| 262 144 | 0.814 ms | 1.555 ms | 0.049 ms | 35.1% | 73.7% |
+| 1 048 576 | 3.298 ms | 5.096 ms | 0.120 ms | 10.7% | 30.4% |
+
+*fusion share* is `15 × 0.036 ms / 16 links`; *overhead* is `0.036 ms / per link`.
+
+The shape is the point: **the per-link cost barely moves with count** — 0.040 ms
+to 0.120 ms across a 1024× range — because the round trip is fixed and the kernel
+inside it is not. So the same 0.036 ms goes from 92% of a link to 30% of one, and
+recording a chain as one submission is worth **65% to 81% of a 16-link chain at
+counts up to 65 536**, against 10.7% at a million. Every estimate of this made
+before the sweep used a million elements, which is the single row least favourable
+to fusing.
+
+Best of 20 is not a stylistic choice either. The single-sample table above reads
+6.076 ms where this one reads 5.096 ms for the same point — 16% apart, wider than
+most of the effects being measured.
+
+### And the prediction, met
+
+`run_chain` records a chain into one command buffer, submits once and waits once.
+The *fusion share* column above is arithmetic done before that existed; this is
+the feature answering it.
+
+| count | unfused 16 links | fused 16 links | speed-up | predicted | actual |
+|---|---|---|---|---|---|
+| 1 024 | 0.646 ms | **0.113 ms** | **5.7×** | 86.3% | 82.5% |
+| 4 096 | 0.653 ms | **0.120 ms** | 5.4× | 85.4% | 81.7% |
+| 16 384 | 0.681 ms | **0.146 ms** | 4.7× | 82.0% | 78.5% |
+| 65 536 | 0.801 ms | **0.266 ms** | 3.0× | 69.7% | 66.8% |
+| 262 144 | 1.625 ms | **1.091 ms** | 1.5× | 34.3% | 32.8% |
+| 1 048 576 | 5.752 ms | **4.669 ms** | 1.23× | 9.7% | **18.8%** |
+
+*actual* is `(unfused − fused) / unfused`. Fusing is faster at every count, and
+lands within a few points of the prediction — below it at the small counts, where
+the fused path pays for a barrier and a descriptor set per link, and **above** it
+at a million, where removing the host-side work per link shows up because the
+0.036 ms floor never counted that work either. The model is conservative, which
+is the direction to be wrong in.
+
+**And the chain is checked, not assumed.** The example verifies a fused chain
+against the kernel's closed form, `2^n * x + (2^n − 1)` — derived rather than
+run, because a second CPU copy of the same loop would agree with a mis-ordered
+chain just as cheerfully. Four shapes pass, the largest a 16-link chain.
+
+**The version that was three times slower is worth recording too.** It allocated
+one output buffer per link, reasoning that they are all live. They are not: a
+link reads the buffer the link before it wrote, so the one before *that* is dead,
+and two buffers ping-ponged round the chain are enough. Allocating per link was
+not merely bigger — 2.226 ms against 0.679 ms unfused, **three times slower than
+not fusing at all** — because a pool that has to hold a buffer per link is empty
+at the start of every call, so every call allocates the lot and throws most of it
+away. This is the same lesson as the largest win in the history above, arriving
+from the opposite direction: the allocation is the cost, and a design that needs
+more buffers than the pool holds is paying it on every single call.
 
 **Where the fixed cost went, and the surprise in it.** Getting from 0.46 ms to
-0.046 ms took three changes, and they were not equally important:
+0.046 ms — the host-input floor, which is the larger of the two — took three
+changes, and they were not equally important:
 
 1. **Recycling released device buffers** — 0.20 ms → 0.046 ms, about **4×**, and
    by far the largest single win. `vkAllocateMemory` is a kernel-mode allocation
@@ -342,6 +437,30 @@ about a quantity that is not the one that decides it.
 
 Named rather than implied, because each is a decision not a gap:
 
+- **Launching a chain as one submission.** **Built at depth one, and measured.**
+  `run_chain` records a chain into one command buffer, submits once and waits
+  once, and it is faster than the unfused chain at every count measured — 5.7×
+  at 1 024 elements, 3.0× at 65 536, 1.23× at a million. See
+  [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
+  mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
+  What is left is not the pool, not the entry point, and not the measurement:
+  `ParallelBackend::submit` hands a submission back unwaited and `Pending::wait`
+  finishes it (checked on a real device by chaining two in-flight submissions),
+  and the split is measured. **Async's saving is one submission's device time and
+  no more** — `min(host work, device time)`, saturating at the device's own
+  time, to within 0.05 ms in ten rows. So it earns nothing on a chain of pure
+  kernels and up to a dispatch's worth per node on a graph with native nodes in
+  it, and the *Batch* ceiling above is a different quantity entirely. The
+  **executor** that decides when to submit and when to wait exists now, in
+  `lichen-graph-ir`, written entirely against the contract in this file **with no
+  change to it** — which is the strongest evidence yet that `submit` and
+  `Pending::wait` are the right two seams. A graph of both kinds of node runs on
+  a real device under this contract; see this crate's `tests/graph_on_device.rs`.
+  `Batch` needs a fused-submission capability the contract does not have, and is
+  refused by name until it does. What is left is the half that *builds* a graph
+  rather than running one: the `compute.graph` operator and the lowering.
+  `run_chain`'s own shape is a linear chain of one
+  fragment, and a graph's fan-out is not that.
 - **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
   functions in one module and a call graph; the refusal names the callee and the
   instruction position.
@@ -366,10 +485,14 @@ Named rather than implied, because each is a decision not a gap:
   backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
   a refused allocation once the device is full, which names itself. A program
   that runs many large kernels in one process will hit that backstop.
-- **The per-dispatch submit and wait.** 0.046 ms best, paid once per link, so a
-  chain of N still does N submits and N fence waits where one would do. This is
-  worth roughly a factor of N on a long chain, and unlike everything above it is
-  **not** a per-run optimisation.
+- **The per-dispatch submit and wait.** 0.036 ms best against a resident input,
+  paid once per link, so a chain of N still does N submits and N fence waits
+  where one would do — `run_chain` is what makes it one, and it is done. This is
+  **not** worth a factor of N: the saving scales with the link count while the
+  baseline scales with the *kernel* cost, and those are independent. What it is
+  worth depends entirely on kernel size, and the count sweep answers that.
+  Measured, at 16 links: **5.7× at 1 024 elements, 3.0× at 65 536, 1.23× at a
+  million.** A link there is 88% overhead and here it is 29%.
 - **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
   into a graph IR — a DAG of kernels and the dataflow between them, which is the
   IR's natural shape rather than a special case to be detected — and optimises on

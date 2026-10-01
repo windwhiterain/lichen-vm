@@ -679,6 +679,7 @@ name = "lichen-compute-gpu"
 version = "0.1.0"
 dependencies = [
  "ash",
+ "lichen-graph-ir",
  "lichen-kernel-ir",
 ]
 
@@ -690,6 +691,13 @@ dependencies = [
  "lichen-lowlevel",
  "lichen-render",
  "lichen-utils",
+]
+
+[[package]]
+name = "lichen-graph-ir"
+version = "0.1.0"
+dependencies = [
+ "lichen-kernel-ir",
 ]
 
 [[package]]

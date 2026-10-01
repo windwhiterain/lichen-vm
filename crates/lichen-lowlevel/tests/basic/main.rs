@@ -28,7 +28,7 @@ mod verdict;
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, BudgetExhausted, EvalError,
     EvaluatedDeep, Function, FunctionId, GlobalExt, Handle, LowOperator, LowValue, Module, NodeId,
-    Operation, OperatorExt, Program, StaticHandle, ValueExt,
+    Operation, OperatorExt, Program, StaticHandle, TraceContext, ValueExt,
 };
 use lichen_utils::extend::AsEnum;
 use std::collections::HashSet;
@@ -61,6 +61,10 @@ lichen_utils::enum_ext! {
         U128(AnyHandle<u128>),
         /// A `char` payload, four bytes per char.
         String(AnyHandle<[char]>),
+        /// A value that keeps a node alive across its own evaluation, and says
+        /// so through [`ValueExt::traced`]. The reference is invisible to the
+        /// GC any other way: it is not an operand edge and not an array item.
+        HoldsNode(NodeId),
     }
     + LowValue;
 }
@@ -81,6 +85,15 @@ impl ValueExt for TestValue {
     // alignment keeps the `String` copies over-aligned, which is safe.
     fn alignment() -> usize {
         16
+    }
+    fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
+        // The context is what lets a set be *derived* rather than stored: this
+        // one happens to have a node on hand, but a holder that kept a block
+        // could ask `context.block_nodes` for everything in it instead.
+        let _ = context;
+        if let TestValue::HoldsNode(node) = self {
+            out.push(*node);
+        }
     }
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {

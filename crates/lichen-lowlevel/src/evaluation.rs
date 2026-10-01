@@ -273,33 +273,7 @@ impl<P: Program> Module<P> {
                     _ => unreachable!("Index operand must be an array of [array, index]"),
                 }
             }
-            None => {
-                let operand = match operation.operand {
-                    Some(operand) => {
-                        let value = self.evaluate_node_deep(operand, Some(block));
-                        // The deep pass returns before it writes
-                        // `evaluated_deep` when it refuses on budget
-                        // exhaustion, so an absent node or an unset flag means
-                        // "concreteness unknown" — read as parameterized, never
-                        // as proven concrete.
-                        let parameterized = self.nodes.get(operand).is_none_or(|node| {
-                            node.evaluated_deep.is_none_or(|deep| deep.parameterized)
-                        });
-                        if parameterized {
-                            P::Value::from(LowValue::Parameterized)
-                        } else {
-                            value
-                        }
-                    }
-                    // A nullary operator (e.g. `TypeOperator::Fresh`) has no
-                    // operand node: the honest stand-in is the computed-nothing
-                    // value — never the `None` unit value, which a program can
-                    // genuinely produce.  (`OperatorExt::run` takes the operand
-                    // by value, so the absence is spelled as a value.)
-                    None => P::Value::from(LowValue::Void),
-                };
-                operator.run(operand, block, self)
-            }
+            None => operator.run_deferred(operation.operand, block, self),
             Some(LowOperator::Apply) => {
                 let Some(operands) = operation.operand else {
                     unreachable!("Apply expects an operand array node")
