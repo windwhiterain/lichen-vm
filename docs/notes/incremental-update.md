@@ -307,17 +307,36 @@ closure. The closure must be **closed under four edge kinds**, or the existing
 - the **whole function template** (`StaticFunction.nodes` is the template's member
   list, and a missing member is a broken template).
 
-**Per-cell freeze is an ownership transfer, and it differs by value kind** — the
-superior's correction, and the reason this is not merely a smaller `from_module`:
+**Per-cell freeze is an ownership transfer, and it is general** — the superior's
+correction, and the reason this is not merely a smaller `from_module`:
 
 - a **handle-type** value (an array or table whose items live in the module's block
   arena) is **copied** into the artifact's arena, as phase 2 already does; the module
   keeps its own copy, so nothing dangles;
-- a **device-buffer-like** value holds only a handle whose real resource lives outside
-  the arena (the `GpuContext` owns the memory), so the artifact needs a **semantic
-  move**: it takes the *release obligation*, not the bytes. Early release is deferred
-  in this landing — the context still owns the memory until it drops — which is sound,
-  and is §8's "store lifetime" item rather than a correctness hole.
+- **everything else a value owns outside the arena** is transferred by *obligation*,
+  and the mechanism is deliberately not a device-buffer special case.  The artifact
+  (`StaticModule`) owns a list of release obligations, filled at freeze time, and
+  dropping the artifact — its eviction — runs them.  The hook is on **`Program`**, not
+  on `ValueExt`:
+
+  ```rust
+  pub trait Release { fn release(self: Box<Self>); }
+  // on Program:
+  fn release_obligations(value: Self::Value, out: &mut Vec<Box<dyn Release>>) { … }
+  ```
+
+  `ValueExt` is the wrong place because it deliberately carries no `P` (see its own
+  doc: keeping `P` off it is what saves a program parameter being threaded through
+  every `ValueType` bound), while `Program` already hosts the policy hooks — the
+  unification policy is the precedent.  A program that owns nothing takes the default
+  and pays nothing.
+
+  This composes with the existing rule rather than fighting it: a value dropped by
+  `drop_block` **still does not release** (the deliberate no-per-value-release
+  decision), the context still owns the memory until it drops, and the artifact's
+  obligations are the **early** release path.  Because the module's own copy never
+  releases, taking the obligation cannot double-release; adding per-value release
+  later is what would have to revisit this, not the other way round.
 
 Two rules follow:
 
@@ -386,8 +405,9 @@ taken yet.
   cell inside a cyclic instance set should be refused (or bounded) rather than
   silently multiplied.
 - **Store lifetime.** Cells hold device buffers (`ResidentId`), and a value dropped
-  by `drop_block` does not release (`compute-graph-jit`'s landmine list). Eviction
-  must release explicitly, or an agent editing for hours leaks VRAM.
+  by `drop_block` does not release (`compute-graph-jit`'s landmine list). §7.1's
+  obligation list is what makes an eviction release early instead of leaking VRAM for
+  the life of the context.
 
 ## 9. What would falsify it
 
