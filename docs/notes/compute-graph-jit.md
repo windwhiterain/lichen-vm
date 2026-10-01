@@ -710,11 +710,71 @@ that produces a number for free.
 *computes* a number is a host call, which is
 [the native-node contradiction](#the-contradiction-a-graph-cannot-hold-the-closures-its-native-nodes-call).
 Until that is decided, a count is either a build-time literal or a value the
-caller passed, and both are honest answers.
+caller passed, and both are honest answers. **So what was added is the input
+side of a general mechanism and not the mechanism**, which is the next section.
 
 The two roles are asked of the table separately, and each refuses by name: a
 count edge that resolves to data, and a buffer input that resolves to a number,
 are different mistakes with different causes.
+
+#### A number on an edge is the road a closure comes in on
+
+**This was not designed; it was pointed out, and it changes what the open
+native-node question actually is.** `Value::Int` reads like a feature about
+counts — it exists because a dispatch's extent is a number and a number is not
+`Vec<i64>`. But the thing that was added is not "a count can be dynamic". The
+thing that was added is **the first value that is not a buffer and still
+travels an edge**: `Count::Value(ValueId)` is the first consumer of such an
+edge and `Int` is the first thing that can occupy one. Read that way the count
+work was the first inch of a road, and what is at the end of it is a lichen
+closure arriving as a graph value.
+
+**That it is the same road rather than a coincidence is visible once the two
+invariants are laid next to each other: they are one invariant at two levels.**
+The doc on `NativeCall` says a bare `fn` pointer is deliberate, because *a `fn`
+item cannot capture, so a native node's environment is fixed when the `fn` is
+named, which is what makes the graph's edges statically known and any
+topological order correct.* The input rule, decided a section earlier, says the
+same thing from the other side: **a graph's inputs are the function's parameter
+and a free-variable buffer is a refusal, so the graph holds nothing and reaches
+nothing at run time that was decided during the run.** One is a type fact in the
+IR, the other is a named refusal in the lowering, and they agree because both
+say the same single thing — *the graph's entire world is its edges*.
+
+So a closure arriving as a graph value needs no rule of its own; it inherits
+that one. The question it does raise is exactly one:
+
+> **May a closure in a graph capture a value the graph itself produced?**
+
+The answer that keeps the invariant is the one that is not obvious. A closure
+whose free variables are all graph inputs can be reified as **its code plus its
+captures as edges** — `(code, [ValueId])` — so the environment reaches the
+graph only through the value table and `Graph::push` checks it exactly as it
+checks any other edge. A closure that captured an earlier node's output, by
+contrast, would be a native node whose capture lies *inside* the graph, and
+that is the precise hole the `NativeCall` doc says a boxed trait object would
+open "invisibly — and the break is a **silently wrong answer** rather than a
+slow one."
+
+**Which makes the option list below incomplete rather than merely open.**
+Option 2 there concedes that re-entering the VM "demotes it from a **type
+fact** to a **discipline**", because the environment has to move behind a
+registry slot that nothing checks. Reifying captures as edges needs no
+discipline at all: the slot *is* the edge list, and an edge naming a value the
+graph has not produced is already refused by name. **This is not a decision.**
+The question above is open, the re-entrant apply path does not exist yet, and
+the IR's host data is `Vec<i64>` while the language's arrays are `[?b]`, so
+there is a type gap to close either way. But the list is missing its best
+member, and it was missing it because the count work was filed as a feature
+about counts.
+
+**None of it blocks the recording.** `Int` is additive, so a later
+`Value::Closure` would be a new variant rather than a teardown; the count edge
+is already the edge a closure would travel on; and a kernel-only graph contains
+no closures, so the lowering has nothing to know about them. What it does
+change is a naming discipline: **`Count` is the first *consumer* of a
+non-buffer value, not the non-buffer value itself**, so the count machinery
+must not grow into being the general mechanism for one.
 
 #### The arity is the parameter's length, and the probe is why
 
@@ -895,6 +955,16 @@ Three ways out, none of them free:
 rather than left promising something nothing delivers. The doc comments naming
 closures were the only place the contradiction was written down, so a reader would
 have taken the promise at face value.
+
+**A fourth option was added later, and it is the one worth deciding between.**
+See [A number on an edge is the road a closure comes in
+on](#a-number-on-an-edge-is-the-road-a-closure-comes-in-on): the count work
+already put the first non-buffer value on a graph edge, which means the
+question is not only what a native node *calls* but what a graph value can
+*be*, and option 2's concession — that the environment demotes from a type
+fact to a discipline — is avoidable if a closure's captures are edges rather
+than a registry slot. That is not a decision either; it is a fourth member for
+the list that had three.
 
 ## The pool of submission slots
 
@@ -1173,6 +1243,15 @@ carry that count, and it is the only part of this rule with no code behind it.
    that holds the closures its native nodes call is what both seams were cut for,
    and `NativeCall` is a bare `fn` pointer that cannot carry one. Decide this
    before writing the first native node, not while writing it.
+
+   **The question is bigger than "what does a native node call", and the count
+   work is what made that visible.** A non-buffer value on a graph edge is no
+   longer hypothetical — `Int` is one — so the decision is not only about the
+   node but about what a graph *value* can be, and the one open question that
+   governs both is whether a closure may capture a value the graph produced.
+   Four options are now on the table; see
+   [A number on an edge is the road a closure comes in
+   on](#a-number-on-an-edge-is-the-road-a-closure-comes-in-on).
 
 ## Landmines, each of which is a silent wrong answer
 
