@@ -2455,14 +2455,17 @@ one of them):
 | `resolve.rs` `resolve_expr` | `:220-386` (167) | *not listed* |
 | `resolve.rs` `KeyWriter::expr` | `:512-749` (238) | `resolve.rs:478` (the serializer cluster, `:447-749`) |
 | `compile.rs` `compile_expr` | `:388-829` (442) | `:379-832` |
+| `dirty.rs` `walk` | added after this item (`incremental-update`'s dirty propagation) | *not listed* — the newest site |
 
 The note's spans are right but drifted 12-20 lines, and its "~110-line" is wrong:
 each of the three analysis walks is ~150 lines. "Adding an `Expr` variant means
-editing five sites" is **six** in these three crates — `resolve.rs` has two walks,
-the resolver's rewrite and the content-key serializer, not one — and seven
+editing five sites" is **seven** in the table above — `resolve.rs` has two walks,
+the resolver's rewrite and the content-key serializer, not one — and **eight**
 workspace-wide: `lichen-language-parser`'s `collect_error_blocks::walk_expr`
 (`parse.rs:1369-1512`) walks the same AST and is exhaustive too (it is outside
-the note's crate list).
+the note's crate list), and `lichen-language`'s `dirty.rs::walk` joined them with
+the incremental-update landing (its exhaustiveness is load-bearing there: a missed
+edge is a stale retained cell, `incremental-update.md` §12.4).
 
 **The wildcard is where the note says it is — and it is not one of the walks.**
 `range_children` (`checker.rs:1060-1072` before this change, in

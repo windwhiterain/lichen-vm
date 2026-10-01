@@ -12,6 +12,12 @@
 > (b), and it is the only remaining win on the keystroke path — the index cache
 > covers a repeat request for one text, not a text that changed.
 >
+> The session has since grown the **cross-build** half as well: it holds a cell
+> store and lowers through it, so a rebuild reuses every `cache`d binding the edit
+> did not reach.  That is [incremental-update](incremental-update.md) — §7.2 for
+> what landed and §12 for the handoff — and nothing on *this* note's stages
+> (lex → parse → resolve → lower → check) changed for it.
+>
 > **Implemented (the "T1" heart):**
 > - *Step 1* — the `Placeholder` / `ErrorBlock` split: `Expr::Err` now carries a
 >   byte `range` (and `start`); the parser surfaces the recovered error regions

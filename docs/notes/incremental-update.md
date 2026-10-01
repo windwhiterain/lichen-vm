@@ -1,11 +1,14 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **landed through step 3, unwired.** Path identity, the `cache` syntax, the
-> per-cell closure freeze, the general release obligations, the cell store, the dirty
-> input and eviction all exist and are measured (§7.1); the mechanism has **no
-> production caller** yet — the session's reuse gate is still a whole-`Build` content
-> key. **§12 is the handoff**: what exists, in what order to continue, the landmines,
-> and how to verify. Read that first if you are picking this up cold.
+> Status: **the mechanism is complete and measured (§7.1, §7.2); the consumer is
+> not.** Path identity, the `cache` syntax, the per-cell closure freeze, the general
+> release obligations, the cell store and **dirty propagation** all exist, and
+> `BufferSession` now lowers through the store — an edit reuses every marked binding
+> it did not reach. What is still missing is a **production caller**: `BufferSession`
+> itself has none (`P2-1`), and the LSP's analysis path passes no cells. Eviction is
+> deliberately unwired (the session hands the unreachable keys on). **§12 is the
+> handoff**: what exists, in what order to continue, the landmines, and how to
+> verify. Read that first if you are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
 > withdrawn cross-build halves of [incremental-evaluation](incremental-evaluation.md),
@@ -22,7 +25,7 @@
 > outputs are generated content, and the agent's edit loop is what has to get cheap.
 >
 > Points at: `crates/lichen-language-parser/src/path.rs`,
-> `crates/lichen-language/src/{cells,compile,lib,session,run}.rs`,
+> `crates/lichen-language/src/{cells,compile,dirty,lib,session,run}.rs`,
 > `crates/lichen-lowlevel/src/{lib,registry}.rs` +
 > `static_module/{freeze,apply}.rs`, `crates/lichen-compute/src/compute.rs`,
 > `crates/lichen-language/src/program.rs` (the composition macro),
@@ -101,6 +104,13 @@ The vocabulary is the contract, and it lives in exactly one place —
 enumeration of a node's positions. Changing it renumbers every stored path, so it is
 a compatibility contract exactly as the attribute order is.
 
+A name is only a position when it is **unique in its own list**: two entries named
+alike (a shadowing top-level `a = 1; a = 2`, a duplicated `.a` field) would otherwise
+share one path, and a path is an identity — a cell keyed by it could be read back at
+the wrong entry. So a **repeated** name falls back to its index, exactly as an unnamed
+entry does, and `resolve` matches by step as it always did. This is the only case where
+a name is not a name; it is measured (`path_probe`, §7.1).
+
 Names are preferred because of the edit that dominates an agent's loop: **an
 insertion before an existing statement**. Under a pure child-index path, that
 insertion shifts the path of everything after it in the block, so every retained
@@ -111,10 +121,11 @@ invalidations are honest and rare:
 |---|---|---|
 | append a statement | none for the statements before it | kept |
 | insert *before* `terrain` | `terrain`'s own step is a name | kept |
-| change `terrain`'s body | `terrain`'s path unchanged; its value may change | re-derived, then cut by §4.3 |
+| change `terrain`'s body | `terrain`'s path unchanged; its value may change | re-derived, then cut by §4 |
 | rename `terrain` | the step changes | **lost** — a different name is a different cell |
 | move a statement into a block | steps change | **lost** |
 | edit an anonymous literal's children | index steps after it shift | lost below that point |
+| add a second binding named `terrain` | both steps become indices | **lost** — neither is a name any more |
 
 Every "lost" row is *safe* (it over-invalidates; it never serves a stale value), and
 §5.2's event surface is where each one is meant to become a diagnostic.
@@ -173,53 +184,86 @@ a binding the compiler walks once (a program or block statement, a record field)
 a binding inside a lambda body is lowered per apply like any other. §8's instance
 explosion is the item that has to be settled before that changes.
 
-## 4. Invalidation: path-valued dependencies, verified on demand
+The boundary is measured, and it is the *lambda* that is not built, not the nesting: a
+mark in a **block** is solved (it has no free variable) and is retained at its nested
+path, exactly like a top-level one — `cache a = { cache i = 1 + 2; i + 4 }` retains two
+cells and reads both back on an edit outside them (§7.2). A mark in a **lambda** body is
+a template, so its pair is not solved and nothing is retained (§7.2's landmine list).
 
-> **Not built.** This is the design for the *finer* second step. What exists today is
-> coarser and sound without any of it: the caller declares which sources an edit
-> dirtied (§7.1), so a cell is either consulted or dropped, and nothing is recorded.
+## 4. Invalidation: dirty propagation over the resolver's own graph
 
-### 4.1 What a retained cell would record
+> **Landed** (`crates/lichen-language/src/dirty.rs`, §7.2). This section is the design
+> as built; §4.3 records what the earlier draft of this note proposed and why it was
+> dropped.
 
-A marked cell would store, beside its value:
+An edit does not invalidate a *file*, it invalidates **positions**. The propagation is
+push, from the edit outward along read edges, and it needs no recorded read set — the
+AST already *is* the read graph, exactly: the resolver wrote a `BinderId` into every
+`Name` use, so "what does this binding read" is a walk, not a log.
 
-- **its own path** — its key in the store;
-- **the paths it read** — recorded when its value was computed;
-- **a version stamp** — when it was last verified.
+### 4.1 The graph's node is the top-level statement
 
-Dependencies are stored as **paths**, not as node ids and not as a reverse-edge
-index: the same "location, not pointer" move as §2.3, applied to the dependency
-relation. There is no `dependents` graph to maintain, and nothing to hook into
-allocation.
+A statement **declares** the binders its subtree binds and **reads** the binders its
+`Name` uses resolve to. A nested binder (a lambda parameter, a block local) is visible
+only inside its own statement, so it can never carry an edge *between* two statements —
+which is why the statement is the right node, and why a cell anywhere inside a statement
+(a mark in a nested block included) is dirtied exactly when its statement is.
 
-### 4.2 Verification (pull), not propagation (push)
+The **seed** is the window the splice already computed: the statements the edit
+re-parsed. Nothing else has to be detected — the incremental parser knows the dirty
+region because it had to re-parse it.
 
-To re-derive after an edit, a demanded cell is **verified before it is recomputed**:
-for each recorded dependency path, resolve it (§2.3) and ask when it last changed.
-If none changed since the cell's own stamp, the cell is clean and is **not
-recomputed at all** — the red-green step of Salsa's algorithm, with paths in place
-of query keys ([Salsa, the "red-green" algorithm](https://salsa-rs.github.io/salsa/reference/algorithm.html)).
-The topological recomputation order, where recomputation is needed, is the
-recompute-heap discipline of [Incremental](https://ocaml.janestreet.com/ocaml-core/v0.12/doc/incremental/Incremental__/Recompute_heap/)
-(a node only ever consumes an already-verified dependency).
+The **fixpoint**: a statement is dirty if it was re-parsed, or if it reads a binder a
+dirty statement declares. That is the whole rule.
 
-A dependency path that no longer resolves counts as **changed** (conservative) and
-is reported.
+### 4.2 Both programs are propagated over
 
-### 4.3 Cutting the cone: compare values, never keys
+An edit can move a resolution, and the two programs disagree about what a name reads, so
+one propagation is not enough:
 
-After a recomputation, the new value is compared with the retained one. Equal means
-**backdate**: the cell keeps its old stamp, so no consumer is dirtied. This is the
-role `content_key` plays today, replaced by "recompute one layer and compare" — the
-cost the no-keys constraint buys. The comparison needs no authoritative digest: a
-false "different" only costs work, never correctness. (This retires the old note's
-"authoritative value digest" question: a digest is only needed when a *key hit*
-must be trusted to serve an answer, and nothing here is served from a key.)
+- the **previous** program catches a read that **disappeared** — a name the edit deleted
+  or moved out of scope. The current program no longer records that read, so only the old
+  graph has the edge.
+- the **current** program catches a read that **appeared** — a name the edit brought into
+  scope, so the binding now reads something it did not. Only the new graph has the edge.
 
-### 4.4 Cycles
+Either alone is unsound, and neither is a superset of the other (measured: §7.2's
+"a read disappears" and "propagate a → b" cases). A full re-parse has no window, and
+then the whole program is the dirty region — the honest answer.
 
-A marked cell that participates in a value cycle is verified and recomputed as one
-**SCC-atomic** unit; the in-progress assumption the within-build note names (`P1-31`)
+### 4.3 What the earlier draft proposed, and why it was dropped
+
+The draft recorded, per cell, **the paths it read** plus a version stamp, and *verified*
+a demanded cell (pull) before recomputing it: resolve each recorded path, ask when it
+last changed, reuse the cell if nothing did. That is Salsa's red-green step with paths
+in place of query keys, and it was called "verification (pull), not propagation (push)".
+
+It was dropped for three reasons:
+
+- **it contradicts the requirement** — the superior asked for a dirty propagation
+  mechanism, and pull verification is the other thing;
+- **recording is redundant**: the resolver's `BinderId` annotations *are* the read set,
+  complete and exact, and they are re-derived from the AST every compile. A recorded copy
+  is a second source of truth that can go stale, for nothing;
+- **a stamp needs a clock**, and with no keys there is no cheap "when did this last
+  change" — the answer would be the recomputation the stamp was meant to avoid.
+
+The dependency relation the draft stored as paths is still there, and still path-shaped:
+a cell's identity is a path, and what dirties it is the *statement* it sits in.
+
+### 4.4 Backdating — not built
+
+After a recomputation the new value could be compared with the retained one, and equal
+means the cell keeps its identity *and* its consumers stay clean. That is the one part of
+the draft worth keeping, and it is a refinement, not a correction: propagation dirties
+more than necessary and never less, so its absence costs work, never correctness. It
+would pay where an edit changes a marked binding's *bytes* without changing its *value*
+(`cache a = 1 + 2` → `1 + 1 + 2`), which the byte-position seed cannot see through.
+
+### 4.5 Cycles
+
+A marked cell that participates in a value cycle is dirty, recomputed and re-frozen as
+one **SCC-atomic** unit; the in-progress assumption the within-build note names (`P1-31`)
 is the same assumption, at the same place.
 
 ## 5. Retention: the `cache` mark
@@ -241,7 +285,7 @@ the annotation's own `[value, type]` term pair ([attributes](attributes.md)) —
 this mark is static and identity-selecting. A `cache` mark must be visible at
 lowering, before any node exists, which is what a keyword is and what a slot is not.
 
-Durability and the equality policy for backdating (§4.3) are deliberately **not**
+Durability and the equality policy for backdating (§4.4) are deliberately **not**
 in this syntax: the mark carries identity work only, and those two are policy that
 can arrive later on the host side without renumbering anything.
 
@@ -255,13 +299,15 @@ which is how it was found.
 
 - On first computation, the value is frozen into the store under the cell's path and
   later read **in place** (the `StaticModule` read path — no payload copy). **Landed.**
-- On a later build with the same path, the cell is reused or (when its source was
-  invalidated) recomputed. **Landed**, at source granularity.
+- On a later build with the same path, the cell is reused or (when dirty propagation
+  reached it) recomputed. **Landed**, at path granularity (§4).
 - Every one of the events — `created`, `reused`, `recomputed (because …)`, `lost
   (path changed / unresolved)` — is meant to be **reportable**: the PCG-side analogue
   of a cook graph's "why did this re-cook", and the differential harness's oracle.
-  **Not built**: `CellStore` records and drops silently today; the event surface is a
-  caller-facing API that does not exist yet.
+  **Partly landed**: `SessionReport::cells` (`CellEvents { reused, frozen, dropped }`)
+  reports the counts, which is what §7.2's readings are taken from. What is still
+  missing is the *reason* per event (which edit reached this cell, which read carried
+  the dirt) — the counts say "two dropped", not "these two, because `b` reads `a`".
 
 ## 6. The two edit surfaces
 
@@ -273,24 +319,29 @@ Decided by the superior:
   re-parameterize a node — so the edit names the node paths it touched and the
   invalidation is exact. No diffing is involved.
 - **Source edits use file granularity.** A source edit dirties the file; the file's
-  marked cells are re-derived, and §4.3's backdating is what keeps the rest of the
+  marked cells are re-derived, and §4's propagation is what keeps the rest of the
   program, and the graph, from re-running. Sub-file identity is *not* needed for
-  this, which is why no content key is needed either.
+  this, which is why no content key is needed either. (Landed finer than this, and the
+  decision is unchanged: the *caller* still names a file, and what the session does
+  inside it — propagate from the re-parsed window — is strictly more precise than
+  dropping the file's cells. `CellStore::invalidate_source` remains the coarse cut for
+  a file the session does not hold, §7.1.)
 
 ## 7. What changes where
 
 | step | file / item | state |
 |---|---|---|
-| 1 | `lichen-language-parser/src/path.rs` | **landed**: `Step`/`Path`, the position vocabulary (`children`), dynamic `resolve`, the descent (`for_each`) |
-| 1 | the front end / checker | **not built**: recording a marked cell's read paths while it is computed (§4) |
+| 1 | `lichen-language-parser/src/path.rs` | **landed**: `Step`/`Path`, the position vocabulary (`children`), dynamic `resolve`, the descent (`for_each`), and a repeated name falling back to its index so a path is a unique identity |
+| 1 | `lichen-language/src/dirty.rs` | **landed**: dirty propagation over the resolver's `BinderId` graph, both index spaces (§4) |
 | 2 | `lichen-language-lex` / `-parser` / `ast.rs` | **landed**: the `cache` keyword, `Binding.cached`, `RecordField.cached` |
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-lowlevel/src/static_module/freeze.rs` | **landed**: `freeze_closure` (the closure of a root set) and `freeze_set` (the shared phases); `from_module_mapped` is now "the closure of every node" |
 | 3 | `lichen-lowlevel/src/lib.rs` (`Release`, `ValueExt::release_obligations`, `StaticModule::releases` + `Drop`) | **landed**: the general ownership transfer — an artifact owns its out-of-arena resources and releases them when it is dropped |
 | 3 | `lichen-compute/src/compute.rs`, `lichen-language/src/program.rs` | **landed**: the compute leaf's obligation (a `DeviceBuffer` value) and the composition macro's forwards (`traced`, `release_obligations`) |
 | 3 | `lichen-language/src/{cells,compile,lib}.rs` | **landed**: `CellStore`, the lowering hook (a clean cell lowers to `ExprKind::Static`), the per-cell freeze after the build, `compile_with_cells` |
-| 3 | the dirty input and eviction | **landed**: `invalidate(source)` drops a source's cells and hands back the artifacts; `Registry::evict` frees one — the caller's call, because a static ref is a raw handle into the artifact's arena |
-| 3 | a consumer (`session.rs:243`'s `content_key` gate, the LSP, the package store) | **not built**: nothing production calls `compile_with_cells`, so no edit path uses cells yet; `content_key`/`artifact_hash` are to be **demoted** to transport and diagnostics rather than deleted |
+| 3 | `lichen-language/src/session.rs` | **landed**: the session holds the store and the registry, reconciles them per rebuild, lowers through the cells, and reports what it did (`CellEvents`) |
+| 3 | eviction | **deliberately unwired**: `CellStore::invalidate_*` hands back the artifacts that became unreachable and the session accumulates them (`take_unreachable`); `Registry::evict` frees one. Who evicts and when is §11's question, and the reason is §12.4's first landmine |
+| 3 | a **production** consumer (the LSP, the package store) | **not built**: `BufferSession` has no production caller (`P2-1`), so the retention is exercised only by probes; `content_key`/`artifact_hash` stay for transport and diagnostics |
 | 4 | the program's own graph data (the PCG graph a program builds) | **not built**: node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
 Step 4 is a *consumer*, not a mechanism: the agent edits the graph as data, and the
@@ -384,15 +435,22 @@ correction):
 - A marked binding that *was* compiled is frozen **per cell** once the build is solved
   (`Registry::freeze_closure_mapped`, the new entry beside `freeze_mapped`) and
   recorded under its path and its source. The registry's `hash` slot is a documented
-  **placeholder** on this path — a cell's reuse is decided by its path, never by
-  content (§4.3) — which is the same demotion §7's table records for `content_key`.
-- The **dirty input** is the caller's, and it is the granularity chosen for source
-  edits: `CellStore::invalidate(source_id)` drops that source's cells and hands back
-  the artifacts they named, so the caller can evict once it is safe. The caller also
-  drops the cells of every file that **imports** the changed one (the reverse import
-  closure) — that graph is the package store's, not the cell store's. A cell is reused
-  iff its own source was not invalidated. That is sound **without recording a single
-  read**, which is why it comes before §4.
+  **placeholder** on this path — a cell's reuse is decided by its path and by
+  propagation, never by content (§1, §4) — which is the same demotion §7's table
+  records for `content_key`.
+- The **dirty input** has two cuts. The coarse one is the caller's, and it is the
+  granularity chosen for *another* file: `CellStore::invalidate_source(source_id)` drops
+  that source's cells and hands back the artifacts they named. The fine one is the
+  session's, for an edit to the file it holds: `CellStore::invalidate_paths` drops the
+  positions dirty propagation reached (§4) and `CellStore::retain_marked` drops the
+  positions the program no longer marks (a removed `cache`, a rename). A cell is reused
+  iff neither reached it. Both are sound **without recording a single read** — the AST
+  is the read graph — which is why they come before anything that records.
+- **The cell's mark is part of the content key** (`KEY_FORMAT_VERSION` 2). The key is
+  documented as "the structure the lowering consumes", and the lowering *does* consume
+  `cached`: it is what makes a binding the one a clean cell may replace. A key that
+  ignored it would describe a lowering that is not the one that runs — and adding
+  `cache` to a binding would silently do nothing until the next structural edit.
 
 **Two limitations, recorded rather than hidden:**
 
@@ -401,7 +459,8 @@ correction):
   would be read back at the wrong arity) — it is compiled and re-frozen as an ordinary
   binding;
 - a **`Parameterized`** cell is not retained (it has no answer to keep): the cell is
-  left out and the next build compiles the binding again.
+  left out and the next build compiles the binding again. A **failed build** retains
+  nothing at all, for a sharper reason — see §7.2.
 
 **Measurements · all temporary probes, since removed.**
 
@@ -418,25 +477,87 @@ correction):
   positions, 0 mismatches**; a binding inside a lambda body is reached as `f/2/y`; and
   `b`'s path is `b` both before and after a statement is inserted ahead of it — the
   whole reason a step is a name. A path that no longer names anything answers `None`.
+  Re-taken with the repeated-name rule: five shapes (a shadowing top-level pair, a
+  duplicate block pair, a duplicate struct-instantiation field pair, a nested lambda
+  block) — **every position unique and every path round-tripping, 0 mismatches**; the
+  shadowing pair reads `0`, `1`, and a duplicated `.a` field reads `x/1`, `x/2`.
 - **The cell path** (`--example cell_probe`): a two-cell program
   (`cache terrain = 5`, `cache layer = terrain + 1`) — first build **0** static nodes,
   **2** cells; second build **2** static nodes (one per clean cell, **no new artifact
-  filed**), the frozen pair read back as `USize(5)`; then `invalidate("a.lichen")`
+  filed**), the frozen pair read back as `USize(5)`; then `invalidate_source("a.lichen")`
   handed back **2** artifact keys, the next build lowered **0** static nodes again, and
-  each key evicted `true` once and `false` again.
+  each key evicted `true` once and `false` again. (The reading predates the rename of
+  `invalidate` to `invalidate_source`; it is the same call.)
+
+### 7.2 The session landing (step 1 + the fine cut) — what exists
+
+`BufferSession` is the first consumer. It holds the store, the registry the artifacts
+live in, and the caller's `source_id`; `compile` lowers through
+`compile_resolved_with_cells` and reconciles the store against the program about to be
+lowered, so the order is: reconcile (drop dirty and unmarked) → lower (a clean cell
+becomes a static read) → check → freeze what was compiled. Its `SessionReport` carries
+`CellEvents { reused, frozen, dropped }` — without it the mechanism is silent, and a
+caller cannot tell a rebuild that reused nine cells from one that reused none.
+
+Two properties of the shape are worth naming, because both were decisions:
+
+- the **coarse gate runs first**: if the resolved content key is unchanged the whole
+  `Build` is reused and the store is not touched at all — no cell is consulted when no
+  lowering happens, and the build being reused *is* the one that was correct for this
+  content. The cells are the finer cut *under* that gate, for the edits it rejects.
+- the window dirty propagation is seeded from is the **splice's own**, in both index
+  spaces (§4.2). It cost one field (`SpliceOut::old_hi`) and no extra detection.
+
+**Measurements · a temporary probe (`--example session_probe`), since removed.**
+`base = cache a = 1 + 2 / cache b = 3 + 4 / c = a + b / c` unless noted; every row is the
+*second* compile, after replacing the whole source. `reused`/`frozen`/`dropped` are the
+`CellEvents`; the value is the session's own root value, read through the build.
+
+| edit | build reused | reused | frozen | dropped | value |
+|---|---|---|---|---|---|
+| a leaf inside `b` (`3 + 4` → `30 + 4`) | no | 1 | 1 | 1 | `USize(37)` |
+| a leaf inside `a` (`1 + 2` → `10 + 2`) | no | 1 | 1 | 1 | `USize(19)` |
+| the unmarked `c` (`a + b` → `a + b + 1`) | no | 2 | 0 | 0 | `USize(11)` |
+| `a`'s `cache` mark removed | no | 1 | 0 | 1 | `USize(10)` (1 cell) |
+| a rename of `a` (and of `b`'s read) | **yes** | 0 | 0 | 0 | the build was reused |
+
+The propagation cases, on `chain = cache a = 1 + 2 / cache b = a + 4 / b` (the third row
+is a *further* edit on the second row's program, which is the point of it):
+
+| edit | reused | frozen | dropped | value | what it proves |
+|---|---|---|---|---|---|
+| `a`'s leaf (`1 + 2` → `10 + 2`) | 0 | 2 | 2 | `USize(16)` | `b` reads `a`, so `a`'s dirtiness reaches it — a stale `b` would answer 7 |
+| `a` renamed to `z`, `b` still reads `a` | 0 | 2 | 2 | `Parameterized`, `ok=false` | the read *disappeared*: only the **old** graph has that edge |
+| then `b` → `b + 1` | 2 | 0 | 0 | `ok=false` | the resolve error is still reported with both cells reused — a retained body never swallows a frontend diagnostic |
+
+And the boundaries:
+
+- a **nested mark** (`cache a = { cache i = 1 + 2; i + 4 }`, `c = a + 1`): 2 cells
+  (the top-level `a` and the nested `i`), an edit to `c` reuses **both** (2/0/0), value
+  `USize(9)` — so nesting is not the limit, the lambda is (§3).
+- a **failed check** (`cache b = a + "x"`): the first build is `ok=false` and retains
+  **0** cells; the second (an edit to `c`) still fails and still retains 0. Without the
+  guard the cell would have been frozen from the failed build and read back, and the
+  program would have started reporting `ok` — the failure would be reported once and
+  then silently disappear.
+- **pruning**: after a rename (which the key gate reuses wholesale) a second edit forces
+  a rebuild, and the store is reconciled against the *new* program's marks — `dropped`
+  is 2, not 1, so the path the rename left behind does not accumulate.
 
 ## 8. Costs and failure modes
 
 - **Path churn is the whole risk.** If an agent's edits keep moving nodes, paths keep
   changing and retention never hits. That is measurable, and §9 says what it would
   falsify.
-- **A read that is not recorded is a silent stale reuse** — the same class of
-  obligation as `ValueExt::traced` ("nothing checks the answer, because nothing can").
-  Today's landing does not record reads at all, so it is not exposed to this; §4 is
-  where it becomes the obligation. The read sites are enumerable choke points, already
-  inventoried in `incremental-evaluation.md` §3 (`class_value`, the operand read,
-  payload items, table entries, a `StaticNode` reference), and the differential harness
-  is the oracle rather than an argument.
+- **A missed edge is a silent stale reuse.** The read set is no longer the risk it was
+  in the draft — the resolver's `BinderId` annotations are complete and exact, and they
+  are re-derived every compile — so the obligation moved to the *walk* that collects
+  them: `dirty.rs`'s `walk` is exhaustive over `Expr` on purpose, so a new expression
+  form is a compile error rather than a silent missing edge. The other edge is the
+  graph's node: a binder that could be read from a *different* statement would need a
+  finer node than the statement. Today it cannot (a nested binder is visible only inside
+  its own statement), and that is the invariant to re-check if scoping ever changes.
+  §4.5's cycles and §9's differential harness are the oracle, not an argument.
 - **Instance explosion.** A `cache` inside a lambda instantiated per recursion step
   would create one cell per instance (§3). The retention policy must be able to evict,
   and a cell inside a cyclic instance set should be refused (or bounded) rather than
@@ -448,8 +569,10 @@ correction):
   is a raw handle into the artifact's arena (`Registry::evict`'s precondition).
 - **The registry grows between evictions.** Every recomputed cell files a new artifact
   under a new key; nothing evicts automatically, so a long agent session leaks device
-  memory until the caller evicts. That is the one place where this design is *not* yet
-  safe to leave running for hours.
+  memory until the caller evicts. The session accumulates the keys of every cell it
+  drops and hands them on (`take_unreachable`), so nothing is *lost* — but a caller that
+  never takes them and never evicts grows the registry without bound. That is the one
+  place where this design is *not* yet safe to leave running for hours.
 
 ## 9. What would falsify it
 
@@ -459,13 +582,15 @@ correction):
 - **The marked granularity is wrong**: if the expensive work is *inside* one marked
   cell rather than *across* cells, freezing the cell's boundary saves nothing, and the
   retention unit needs to be finer (or the work needs its own incremental operator).
-- **A missed read shows up as a value divergence** in the harness (once §4 records
-  reads). Then the read sites must be widened before anything else.
+- **A missed edge shows up as a value divergence** in the differential harness: the
+  session's value after an edit against a fresh compile of the same source. That is the
+  cheap oracle for the whole mechanism, and it is what §7.2's probe does by hand.
 
 ## 10. Decisions taken, and alternatives rejected
 
 - **No keys** (the superior) — so identity is allocated (§1) and change detection is
-  "recompute and compare" (§4.3) rather than "hash and look up".
+  dirty propagation over the resolver's own read graph (§4) rather than "hash and look
+  up".
 - **Identity = occurrence path, name-preferred** (the superior) — chosen over a
   user-written name only (no identity for anonymous nodes, §2.4) and over pure child
   indices (an insertion invalidates the whole suffix, §2.2).
@@ -498,6 +623,25 @@ correction):
 - **Small step first**: retained cells in a store, `Module::new()` per build unchanged.
   A live module with universal node-level tracking is the next segment of the same
   route, not a second design.
+- **Propagation, not recorded reads** (landed, and a correction of this note's draft):
+  the read set is the resolver's `BinderId` annotations, walked on demand, so nothing is
+  recorded and nothing can go stale. §4.3 has the rejected pull-verification design and
+  the three reasons.
+- **Both programs are propagated over** (landed): the previous one catches a read that
+  disappeared, the current one a read that appeared. Each alone is unsound, and neither
+  is a superset of the other — the one place where "just dirty what the edit touched"
+  is not enough (§4.2).
+- **A failed build freezes no cell** (landed): a cell is read back by skipping its body,
+  so one frozen from a failed *check* would carry that failure's silence — the error
+  reported once, then gone. Conservative on purpose: one broken binding costs the whole
+  program its reuse rather than risking a vanished diagnostic. The finer rule
+  (per-binding cleanliness, which needs the checker's error attribution) is available
+  and not taken.
+- **The `cache` mark is in the content key** (landed, `KEY_FORMAT_VERSION` 2): the key
+  describes what the lowering consumes, and the lowering consumes the mark.
+- **A repeated name falls back to its index** (landed): a path is an identity, so two
+  entries in one list must never share a step. Name-preferred survives; only the
+  ambiguity case changes (§2.2).
 - Rejected: content-keyed reuse (the requirement), and the fine-grained `StaticModule`
   units of the earlier draft (their identity was a content key; the representation
   survives as §5.2's freeze-and-read-in-place, with the path as key).
@@ -511,14 +655,18 @@ correction):
   stay that way.
 - **Who evicts, and when.** `Registry::evict` has a hard precondition (no live ref) and
   refuses to guess; a policy — evict on the next build, on a memory budget, on an
-  explicit call — is not chosen yet. This is what stands between the design and a
-  session that runs for hours (§8).
+  explicit call — is not chosen yet. The session now *hands the keys on*
+  (`take_unreachable`), so the question is only the timing, and it is the caller's
+  because only the caller knows when the last `SessionReport` clone died. This is what
+  stands between the design and a session that runs for hours (§8).
 - **Where the reverse import closure is computed.** The cell store drops what it is
-  told; the graph of who imports whom is the package store's.
+  told; the graph of who imports whom is the package store's. Dirty propagation today
+  covers one file's own statements — an *imported* file's edit needs the coarse cut
+  (§7.1) plus that closure.
 - **The graph-side descriptor's shape**, and whether a graph node's path is expressed
   in the same step vocabulary as a source node's.
-- **The event surface** (§5.2): `created`/`reused`/`recomputed`/`lost` as an API a
-  caller (and the differential harness) can read.
+- **Backdating** (§4.4): comparing a recomputed value with the retained one so a
+  byte-level change that does not change the value stops dirtying consumers.
 - **Per-revision diagnostics and budget semantics** — inherited from
   `incremental-evaluation.md` §7's pending list, since recomputation is observable
   through the budgets.
@@ -540,16 +688,25 @@ correction):
 | `f692d38` | `Release`, `StaticModule::releases` + `Drop`, the freeze fills them |
 | `18c48d8` | the hook moved to `ValueExt`; the macro forwards `traced` and `release_obligations`; `ComputeValue` implements it |
 | `5623f45` | `CellStore`, the lowering hook, the per-cell freeze, `compile_with_cells` |
-| `be43c78` | the edit names the source; `invalidate` drops its cells |
-| `b82b904` | `Registry::evict`; `invalidate` hands back the artifacts |
+| `be43c78` | the edit names the source; the coarse cut drops its cells |
+| `b82b904` | `Registry::evict`; the cut hands back the artifacts |
+| `66043e9` | the note becomes a handoff; the code stops saying `cache` is inert |
+| `389e727` | a repeated name falls back to its index, so a path is an identity |
+| `b42dac2` | the session retains cells and dirties them by propagation (`dirty.rs`, the `cache` key, the failed-build guard) |
 
 ### 12.2 The entry points
 
+- `lichen_language::session::BufferSession` — the consumer. `with_source_id(source,
+  source_id)`, `compile() -> SessionReport` (carrying `CellEvents`), `retained_cells()`,
+  `take_unreachable()`. `new(source)` is the unnamed-buffer shorthand.
 - `lichen_language::compile_with_cells(source_id, source, cells, registry) -> Report<LangProgram>`
-  — the whole cell path. `compile`, `compile_with_imports*`, `frontend*` and
-  `build_report` all delegate with no cells, so nothing else changed.
-- `lichen_language::cells::CellStore` — `reference`, `record`, `invalidate` (returns
-  the artifact keys), `allocate_key`, `len`.
+  — the whole cell path, without a session. `compile`, `compile_with_imports*`,
+  `frontend*` and `build_report` all delegate with no cells, so nothing else changed.
+- `lichen_language::cells::CellStore` — `reference`, `record`, `invalidate_source`,
+  `invalidate_paths`, `retain_marked`, `allocate_key`, `len`.
+- `lichen_language::dirty` (crate-private) — `dirty_marked_paths(previous, current,
+  previous_window, current_window)`; the statement graph, the fixpoint and the
+  exhaustive `walk` are inside.
 - `lichen_lowlevel::Registry` — `freeze_closure_mapped(module, key, roots, hash)`,
   `evict(key)`.
 - `lichen_lowlevel::StaticModule` — `freeze_closure(module, key, roots)`, `releases`,
@@ -561,23 +718,22 @@ correction):
 
 ### 12.3 What to do next, in order
 
-1. **Wire a consumer** (the largest piece, and the reason the feature is inert in
-   production). `BufferSession`/`session.rs` is the natural place: keep a `CellStore`
-   beside the session, call `compile_with_cells` with the buffer's identity as
-   `source_id`, and invalidate that source when the edit names it. The session's
-   current reuse gate — the whole-`Build` `content_key` (`session.rs:243`) — is what
-   this replaces; `content_key`/`artifact_hash` stay for transport and diagnostics.
-   Note `P2-1`: `BufferSession` has no production consumer today, so check who
-   actually runs it before investing (the LSP compiles through `analysis.rs`, which
-   passes no cells yet).
-2. **Decide who evicts and when** (§11), then do it where the session replaces its
-   previous build: at that moment the old build's static refs are gone, which is
-   exactly `Registry::evict`'s precondition.
-3. **The reverse import closure**: drop the cells of every file that imports the
-   changed one, transitively. The graph is the package store's
-   (`ResolvedImport`, `package.rs`).
-4. **§4** (read recording + backdating) — the finer cut, and the only step that needs
-   the read sites widened.
+1. **Run the session somewhere real** (`P2-1`). The session is cell-aware now, so this
+   is no longer "wire the mechanism" but "give it a caller": `BufferSession` has none,
+   and the LSP's analysis path (`analysis.rs:323`) compiles one-shot through
+   `frontend_at`, passing no cells. Whoever takes this must decide *what a source edit
+   is* in that caller — the session's dirty propagation needs the edit as a *source
+   replacement* (it diffs `LastState::source`), so an incremental caller feeds it whole
+   buffers, not ranges.
+2. **Decide the eviction timing** (§11) and call `Registry::evict` on what
+   `take_unreachable` hands back — but read §12.4's first two landmines first: "the
+   reports are gone" is necessary and *not* sufficient (a surviving cell's artifact may
+   reference a dropped one).
+3. **The reverse import closure**: drop the cells of every file that imports the changed
+   one, transitively (`CellStore::invalidate_source` plus the package store's
+   `ResolvedImport` graph, `package.rs`).
+4. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
+   dirtying consumers.
 5. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
    change to `lichen-graph-ir`.
 
@@ -587,18 +743,55 @@ correction):
   artifact's arena: `Module::static_module` panics on an unregistered key, and a
   payload already read through it dangles. Evict only when every module that could
   still hold a ref is gone.
+- **"The reports are gone" is not enough to evict.** A surviving cell's artifact can
+  reference a *dropped* one — a marked binding that reads another marked binding freezes
+  a static ref into it, filed verbatim (`freeze.rs`'s closure deliberately does not pull
+  a static payload in). So eviction also needs "no live registered artifact references
+  this key", and there is no such check yet: `referenced_keys` takes a `Module`, not a
+  `StaticModule`, so it cannot be run over the registry as it stands.
+- **A cell is read back by *skipping the body*.** Its lowering, its check and its
+  evaluation all do not happen, so a cell frozen from a build that failed *carries that
+  failure's silence*: the error is reported once and then disappears. The guard is
+  `freeze_cells`' `!build.ok` early return, and it is load-bearing — measured (§7.2's
+  "a failed check": 0 cells retained, `ok=false` on both builds). Frontend diagnostics
+  are *not* at risk (lex/parse/resolve re-derive from the AST every compile, measured),
+  which is why the guard tests `build.ok` rather than the report.
+- **Dropping either propagation is unsound, not merely imprecise.** The old program's
+  graph is the only one that has a read the edit *deleted*; the new one's is the only one
+  that has a read the edit *created*. Both cases are measured (§7.2).
+- **The window must be reported in both index spaces.** Dirty propagation is seeded by
+  the statements the splice re-parsed, and the old program's window is not the new
+  program's whenever the edit added or removed statements — hence `SpliceOut::old_hi`. A
+  window past the end of a program is silently empty, so an off-by-one there is a silent
+  missed dirty.
+- **A full re-parse dirties everything.** That is correct and expensive: the fallback
+  path (`splice_program` → `None`) drops every cell. It is also what makes the fallback
+  *safe* — do not "optimize" it into a narrower window without the two-space argument.
+- **The `dirty.rs` walk must stay exhaustive over `Expr`.** It is written as a full match
+  on purpose: a new expression form that falls into a catch-all would contribute no
+  edges, and a missed edge is a stale cell.
+- **`retain_marked` is what keeps the store honest.** A cell outliving its mark would be
+  read for a binding that no longer asks to be retained, and would never be compiled
+  again. It is also what prunes the paths a rename leaves behind.
+- **The content key carries `cache`** (`KEY_FORMAT_VERSION` 2). Bumping the constant
+  invalidates every key; today that is in-memory only (the session and the tests), so a
+  bump is free — check that before the keys are ever persisted.
 - **An annotation on a marked binding is skipped, not mis-read.** A static read
   materializes a two-wide pair; an annotation makes the source's pair wider. The
   eligibility check is in `cached_bindings` (`compile.rs`).
 - **A `Parameterized` cell is silently not retained** — by design, but it means a
-  marked binding that never solves is recompiled every build.
+  marked binding that never solves is recompiled every build. This is the whole of a
+  `cache` inside a **lambda**: the mark is honored for a binding the compiler walks once
+  (a program or block statement, a record field), and a lambda body's mark is a template
+  whose pair is unsolved (§3).
 - **The closure's four edges plus `traced`.** Drop any of them and the freeze panics
   (the good case) or the artifact references a node it does not contain (the bad one —
   phase 3 rewrites handles, never the bytes behind them).
 - **`traced` is only as good as its implementors.** A production value that holds
   nodes must implement it, and the composition macro must forward it (it now does —
   this was the landmine the graph work would have hit).
-- **The registry grows between evictions** (§8): a session that never evicts leaks.
+- **The registry grows between evictions** (§8): a session that never evicts leaks, and
+  one that never calls `take_unreachable` leaks the list too.
 
 ### 12.5 How to verify
 
@@ -608,6 +801,12 @@ cargo test -p lichen-lowlevel -p lichen-highlevel -p lichen-language -p lichen-l
 ```
 
 The influenced set is those five crates. The temporary probes are gone; to re-take a
-reading, write one as an `examples/` binary and delete it after — the numbers to
-expect are in §7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches;
-3-of-4 nodes; 1 obligation released once).
+reading, write one as an `examples/` binary and delete it after. The numbers to expect:
+§7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches; every path unique;
+3-of-4 nodes; 1 obligation released once) and §7.2 (the `CellEvents` per edit, the two
+propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check).
+
+A session probe reads the value by **consuming** the session: a `Build`'s module is
+evaluated through a `&mut`, and the report's `Arc` is only unique once the session's own
+clone is gone. On the key-reused path it is still shared, and the probe prints
+`<still shared>` — that is the probe's limit, not a bug.

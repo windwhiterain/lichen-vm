@@ -344,8 +344,10 @@ entry point, and that nothing further should be built.
   index.** "Dirty" is the *tracked* form of "may have changed"; §3.3 gives the
   *excluded* form, and within one pass the excluded form is sufficient. So the
   reverse index (Q1) is **withdrawn here**. Across builds it is a real question, and
-  [incremental-update](incremental-update.md) §4 answers it with **path-valued
-  dependencies verified on demand** — neither a reverse index nor a key.
+  [incremental-update](incremental-update.md) §4 answers it with **dirty propagation
+  over the resolver's own read graph** — neither a reverse index nor a key, and nothing
+  recorded (the draft's "path-valued dependencies verified on demand" is the rejected
+  alternative, recorded in that section).
 - **The CLI build path is the measurement target** (Q5, unchanged): step 0 needs
   no editor, and `BufferSession` still has no production consumer (`P2-1`).
 

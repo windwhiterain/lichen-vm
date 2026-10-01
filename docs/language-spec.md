@@ -325,10 +325,11 @@ span back to the original file.
   **retained cell**: its value is meant to survive a rebuild, identified by the
   binding's occurrence path from the program root.  The mark is independent of
   `let` and the two may appear together (`cache let a = …`); it is accepted in
-  every scope and emits no diagnostic.  The retention mechanism exists
-  (`compile_with_cells` lowers a clean cell to a static read of its frozen
-  value), but **no production path calls it yet**, so a marked binding is
-  currently compiled like an unmarked one — see
+  every scope and emits no diagnostic.  The retention mechanism is complete and
+  wired into the incremental session (`BufferSession` lowers a clean cell to a
+  static read of its frozen value and drops only the cells an edit reached), but
+  **the session itself has no production caller yet**, so outside it a marked
+  binding is compiled like an unmarked one — see
   [incremental-update](notes/incremental-update.md) §12.  Sharing means a bound
   *non-function* value
   has one type across uses, while a bound lambda stays polymorphic — each
