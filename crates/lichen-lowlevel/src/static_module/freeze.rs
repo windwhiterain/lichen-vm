@@ -1,7 +1,6 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
-use crate::ValueExt as _;
 impl<P: Program> StaticModule<P> {
     /// The node's solved value — `Parameterized` when the node is a
     /// residual computation with no cached answer.

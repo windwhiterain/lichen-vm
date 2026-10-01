@@ -189,7 +189,31 @@ pub struct KernelNode {
     /// The values this reads, in the fragment's own input order.
     pub inputs: Vec<ValueId>,
     /// The index range `[0, count)`.
-    pub count: usize,
+    pub count: Count,
+}
+
+/// The extent of a dispatch: a number the build already had, or one the value
+/// table holds.
+///
+/// **A count is a value, because a program's count is.** How many elements a
+/// kernel covers routinely depends on data — a length off a `collect`, a size
+/// the host computed — and a graph that could only be given a build-time count
+/// would have to be rebuilt for every run, which is the same as not having a
+/// graph. [`crate::Value::Int`] is what makes the edge expressible.
+///
+/// `Constant` is not a wart on that. It is the one case where the build already
+/// had the answer, and collapsing it into a value would mean inventing a **third
+/// kind of node** — one that produces a number for free, doing no work — which
+/// is exactly the kind of node the two-kind rule exists to keep out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Count {
+    /// `[0, count)`, decided while the graph was built.
+    Constant(usize),
+    /// A value in the table, read when the node runs.
+    ///
+    /// **Never pending.** A number is not produced by a device, so a count edge
+    /// never needs the wait that a buffer edge does not need but might.
+    Value(ValueId),
 }
 
 /// A host call over the values its inputs resolve to.

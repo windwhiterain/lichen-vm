@@ -87,6 +87,27 @@ pub enum GraphRefusal {
     /// needs a fetch, and telling a caller only that it is "not host data" hands
     /// them the first when they needed the second.
     NotHostData { found: &'static str },
+    /// A dispatch was given a number where it wanted a buffer.
+    ///
+    /// The mirror of [`Self::CountNotANumber`], and separate for the same
+    /// reason: the two are different mistakes in different positions, and a
+    /// caller told only "wrong shape" has to work out which one they hit. There
+    /// is a repair that looks reasonable here — read the number as a one-element
+    /// host vector — and taking it would run a kernel nobody wrote.
+    NotBufferData { found: &'static str },
+    /// A dispatch's count resolved to something that is not a number.
+    ///
+    /// A count is an extent, so the only thing that can be one is a number.
+    /// Naming what the value *is* is what tells a caller whether the edge is
+    /// pointing at the wrong value or whether the builder wrote a number into a
+    /// slot that was meant for data.
+    CountNotANumber { found: &'static str },
+    /// A dispatch's count was negative.
+    ///
+    /// `i64` in the value type so this is reportable rather than wrapped: a
+    /// `usize` would have turned `-1` into an enormous extent and dispatched
+    /// over memory nobody owns.
+    CountNegative { number: i64 },
     /// The policy asked for is not something a backend can do.
     ///
     /// Named rather than approximated, and the reason is that the two
@@ -158,6 +179,20 @@ impl fmt::Display for GraphRefusal {
                 f,
                 "host data was asked of a value that is {found}: one that has not been waited \
                  for needs a wait first, and one that has needs a fetch first."
+            ),
+            GraphRefusal::NotBufferData { found } => write!(
+                f,
+                "a buffer was asked of a value that is {found}. A number is not a one-element \
+                 buffer, and reading it as one would run the dispatch against data nobody wrote."
+            ),
+            GraphRefusal::CountNotANumber { found } => write!(
+                f,
+                "a dispatch's count was read from a value that is {found}. A count is an extent, \
+                 so the only thing that can be one is a number."
+            ),
+            GraphRefusal::CountNegative { number } => write!(
+                f,
+                "a dispatch's count is {number}, and a count cannot be negative."
             ),
             GraphRefusal::PolicyUnsupported { policy, reason } => {
                 write!(f, "the {policy} schedule is not available: {reason}")
