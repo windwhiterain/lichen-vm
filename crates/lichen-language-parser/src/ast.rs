@@ -301,6 +301,13 @@ pub struct Binding {
     /// throughout the block, so it may reference and recurse with itself and
     /// with any other binding in the block.
     pub restrictive: bool,
+    /// `cache` — the binding is a **retained cell**: its value survives a
+    /// rebuild, and its identity is the binding's occurrence path from the
+    /// program root.  Orthogonal to `restrictive` (the two marks may appear
+    /// together).  **Nothing honors the mark yet** -- it is parsed and carried
+    /// so the front end can refuse or use it later; the design is
+    /// `docs/notes/incremental-update.md`.
+    pub cached: bool,
 }
 
 /// One field of a `struct<…>` type: an optional name plus the field's type

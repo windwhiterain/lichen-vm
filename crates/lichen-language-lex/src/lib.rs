@@ -29,7 +29,7 @@
 //! original file via a base offset and the source's line starts.
 //!
 //! Int, string, Type, struct, table, let, if, then, else, return, pub,
-//! type_of, and array lex as keywords.  '->'
+//! cache, type_of, and array lex as keywords.  '->'
 //! is the function-type arrow, '=>' a lambda, '::' the raw named-read
 //! separator, '==>' the table key/value separator, '!' a prefix assert.  A
 //! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into
@@ -88,6 +88,11 @@ pub enum TokenKind {
     KwReturn,
     /// The pub keyword -- a block statement marked as a struct field.
     KwPub,
+    /// The cache keyword -- a binding whose value is a *retained cell*
+    /// (`cache name = expr`).  The mark is parsed and carried on
+    /// `Binding::cached`; nothing honors it yet -- see
+    /// `docs/notes/incremental-update.md`.
+    KwCache,
     /// The type_of keyword -- an ordinary first-class function value whose
     /// application reads its argument's type (`type_of e`, `type_of (e)`).
     KwTypeOf,
@@ -172,6 +177,7 @@ impl TokenKind {
             TokenKind::KwElse => "'else'".to_string(),
             TokenKind::KwReturn => "'return'".to_string(),
             TokenKind::KwPub => "'pub'".to_string(),
+            TokenKind::KwCache => "'cache'".to_string(),
             TokenKind::KwTypeOf => "'type_of'".to_string(),
             TokenKind::KwArray => "'array'".to_string(),
             TokenKind::Arrow => "'->'".to_string(),
@@ -264,6 +270,8 @@ enum RawToken {
     KwReturn,
     #[token("pub")]
     KwPub,
+    #[token("cache")]
+    KwCache,
     #[token("type_of")]
     KwTypeOf,
     #[token("array")]
@@ -702,6 +710,7 @@ fn raw_to_kind(
         RawToken::KwElse => Some(TokenKind::KwElse),
         RawToken::KwReturn => Some(TokenKind::KwReturn),
         RawToken::KwPub => Some(TokenKind::KwPub),
+        RawToken::KwCache => Some(TokenKind::KwCache),
         RawToken::KwTypeOf => Some(TokenKind::KwTypeOf),
         RawToken::KwArray => Some(TokenKind::KwArray),
         RawToken::Arrow => Some(TokenKind::Arrow),

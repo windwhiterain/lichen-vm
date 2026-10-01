@@ -39,6 +39,7 @@
 "import" @keyword
 "return" @keyword
 "pub" @keyword
+"cache" @keyword
 (type_of) @keyword
 
 ; operators (anonymous)

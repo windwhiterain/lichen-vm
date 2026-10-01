@@ -1,6 +1,7 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **proposed** — nothing here is built. This is the *cross-build* half of the
+> Status: **proposed** — the `cache` syntax is landed and **inert** (§7 step 2);
+> no identity, invalidation or retention mechanism is built. This is the *cross-build* half of the
 > incrementality question. It supersedes the withdrawn cross-build halves of
 > [incremental-evaluation](incremental-evaluation.md), which keeps the *within-build*
 > settled cut, the deep-pass measurement and the mutation inventory; where the two
@@ -232,14 +233,22 @@ Decided by the superior:
 |---|---|---|
 | 1 | `lichen-highlevel/src/ir.rs` + the frontend | IR nodes carry their occurrence path (name-preferred steps) |
 | 1 | resolution / checker | resolve a path on demand against the live IR + scopes; record each marked cell's read paths while it is computed |
-| 2 | `lichen-language-lex` / `-parser` / `ast.rs` | the `cache` keyword and `Binding.cached` |
-| 2 | `language-spec.md` §2 (keywords, statements) + §5 (diagnostics) | the syntax and its refusals |
+| 2 | `lichen-language-lex` / `-parser` / `ast.rs` | **landed**: the `cache` keyword and `Binding.cached` — parsed and carried, consumed by nothing |
+| 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-registry` (the store) | cells keyed by path; freeze/read in place; the four events reported |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
 | 4 | the graph side (`feature/graph-jit`'s IR crate and node set) | node paths, the edit descriptor, and per-node residency — this note constrains that crate's shape |
 
 Step 4 is the reason this design is written before that crate: its node set and
 residency rules are exactly what path identity and the `cache` mark constrain.
+
+Step 2 landed **inert rather than rejected**: the mark parses, the AST carries it,
+and no consumer reads it — so the spec and `Binding.cached`'s own doc both say so,
+because a user who writes `cache` must not be led to believe a value is retained.
+The mark is accepted in every scope and combined freely with `let` (the two are
+orthogonal); no diagnostic is emitted, so nothing here can be mistaken for a
+refusal. Making it *refuse* would be a semantic decision the mechanism has not
+taken yet.
 
 ## 8. Costs and failure modes
 

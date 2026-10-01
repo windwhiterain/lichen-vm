@@ -905,6 +905,7 @@ impl Compiler {
                     value: f.value.clone(),
                     span: f.span,
                     restrictive: !f.field,
+                    cached: false,
                 }),
                 None => Stmt::Expr(f.value.clone()),
             })

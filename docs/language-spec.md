@@ -38,7 +38,7 @@ checker, which runs *unchanged*.
 
 ```
 program  := (bstmt sep)* [expr]                      -- a block body: statements, then an optional tail (the top level is a block)
-stmt     := ['let'] name '=' expr                    -- binding (block-wide by default; `let` restrictive)
+stmt     := ['cache'] ['let'] name '=' expr         -- binding (block-wide by default; `let` restrictive; `cache` a retained cell)
           | expr                                     -- bare expression statement
 bstmt    := ['pub'] stmt                             -- a (possibly `pub`) statement
 sep      := newline | ';' | ','                      -- one uniform Separator token
@@ -87,7 +87,7 @@ farg     := '.' name expr                         -- named instantiation argumen
 ```
 
 - **Keywords:** `Int`, `string`, `Type`, `struct`, `array`, `table`, `let`, `if`, `then`,
-  `else`, `return`, `pub`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
+  `else`, `return`, `pub`, `cache`, `type_of`, `=>`, `->`, `:`.  `=` binds a name in a statement; `#`, `?`,
   `$`, `::`, `==>`,
   `~`, `!`, and the
   operators `+ - <= ==` are punctuation.  A binding is **block-wide** by
@@ -321,7 +321,13 @@ span back to the original file.
   recursion, no overflow).  `let name = expr` is the *restrictive* form: the
   value compiles before the name enters scope, so the name is visible only to
   later statements (`let a = a` resolves `a` to the outer binding — the
-  sequential, non-recursive case).  Sharing means a bound *non-function* value
+  sequential, non-recursive case).  `cache name = expr` marks the binding as a
+  **retained cell**: its value is meant to survive a rebuild, identified by the
+  binding's occurrence path from the program root.  The mark is independent of
+  `let` and the two may appear together (`cache let a = …`); it is **parsed and
+  carried, and nothing honors it yet** — the mechanism is `proposed` in
+  [incremental-update](notes/incremental-update.md).  Sharing means a bound
+  *non-function* value
   has one type across uses, while a bound lambda stays polymorphic — each
   application still instantiates the parameter fresh via the runtime's
   per-apply clones.  A **bare expression

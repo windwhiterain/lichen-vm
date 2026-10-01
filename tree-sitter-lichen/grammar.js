@@ -70,6 +70,7 @@ module.exports = grammar({
     statement: $ => choice($.binding, $.expression),
 
     binding: $ => seq(
+      optional('cache'),
       optional('let'),
       field('name', $.identifier),
       '=',
