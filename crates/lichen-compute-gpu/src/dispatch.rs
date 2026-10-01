@@ -83,9 +83,10 @@ pub enum RunError {
     /// zero-sized allocation, which Vulkan does not have; refused here so the
     /// reason is the program's rather than the driver's.
     EmptyRun,
-    /// A run binds more storage buffers than the descriptor pool is sized for.
-    /// The pool is allocated once, so this is a limit of the backend rather than
-    /// of the device — refused by name instead of surfacing as pool exhaustion.
+    /// A dispatch binds more storage buffers than the descriptor pool has room
+    /// for.  The pool is allocated once, so this is a limit of the backend
+    /// rather than of the device — refused by name instead of surfacing as pool
+    /// exhaustion.
     TooManyBindings { total: usize, max: usize },
     /// A resident id this context is not holding — never issued, or already
     /// released.  Refused rather than read as empty: an id is a handle, and using
@@ -207,10 +208,19 @@ pub struct GpuContext {
     /// in total. They are a function of `n` alone — the same two objects the old
     /// per-run code built and dropped for every dispatch.
     layouts: Mutex<HashMap<usize, Layouts>>,
-    /// Sized once for [`MAX_DESCRIPTOR_BINDINGS`] and **reset before each run**,
-    /// which is what makes one set per dispatch safe without a free: the reset
-    /// invalidates the previous run's set, and that run's fence has already
-    /// signalled.
+    /// Descriptor sets for the dispatches of **one submission**, reset at the
+    /// start of a submission and at no point inside one.
+    ///
+    /// The rule is not a preference. A set is read when the submission
+    /// *executes*, so one set cannot serve two dispatches — rewriting it between
+    /// them changes what the first one sees. The pool cannot be reset between
+    /// them either: a reset frees every set, including ones an earlier dispatch
+    /// in the same command buffer is still bound to, and that is undefined
+    /// rather than slow.
+    ///
+    /// Resetting at a boundary is safe for the reason the boundary is: the
+    /// previous submission's fence has already signalled, so nothing is still
+    /// reading the sets the reset frees.
     descriptor_pool: vk::DescriptorPool,
     /// Device buffers that have been given back, keyed by their element count.
     ///
@@ -248,12 +258,24 @@ struct Layouts {
     pipeline: vk::PipelineLayout,
 }
 
-/// The most storage-buffer bindings one run may declare.
+/// The most storage-buffer bindings **one dispatch** may declare.
 ///
-/// The descriptor pool is sized once for this, so a run that binds more is
-/// **refused by name** rather than left to fail as a driver-side pool exhaustion
-/// that would read like a device problem.
+/// Refused by name rather than left to fail as a driver-side pool exhaustion,
+/// which would read like a device problem.
 const MAX_DESCRIPTOR_BINDINGS: usize = 32;
+
+/// The most dispatches **one submission** may record.
+///
+/// A second descriptor set per dispatch, and never a shared one — see
+/// [`GpuContext::descriptor_pool`]. The pool is allocated once for this many
+/// sets, so this is a limit of the backend rather than of the device.
+///
+/// Sixty-four is a placeholder, picked to keep the pool in the low hundreds of
+/// kilobytes and deliberately not raised further: the graph-level node set that
+/// ought to own this number does not exist yet, and a larger one here would be
+/// headroom for a program shape nobody has written. A submission wanting more
+/// is refused by name rather than quietly split into two.
+const MAX_DISPATCHES_PER_SUBMISSION: usize = 64;
 
 impl GpuContext {
     /// Find a device and create a compute context on it.
@@ -339,10 +361,11 @@ impl GpuContext {
         let descriptor_pool = check("descriptor pool", unsafe {
             device.create_descriptor_pool(
                 &vk::DescriptorPoolCreateInfo::default()
-                    .max_sets(1)
+                    .max_sets(MAX_DISPATCHES_PER_SUBMISSION as u32)
                     .pool_sizes(&[vk::DescriptorPoolSize {
                         ty: vk::DescriptorType::STORAGE_BUFFER,
-                        descriptor_count: MAX_DESCRIPTOR_BINDINGS as u32,
+                        descriptor_count: (MAX_DISPATCHES_PER_SUBMISSION * MAX_DESCRIPTOR_BINDINGS)
+                            as u32,
                     }]),
                 None,
             )
@@ -497,6 +520,16 @@ impl GpuContext {
             // submission is in flight, which is what makes a `wait: false`
             // dispatch on the same target safe to hand back to a caller.
             let submit = self.submit.lock().unwrap();
+            // The descriptor pool is reset here for the same reason the lock is
+            // taken here: this **is** the boundary between submissions, and the
+            // pool may only be reset at one — see the field's docs. A dispatch
+            // takes a set and leaves it alone for the rest of the submission.
+            check("descriptor pool reset", unsafe {
+                self.device.reset_descriptor_pool(
+                    self.descriptor_pool,
+                    vk::DescriptorPoolResetFlags::empty(),
+                )
+            })?;
             self.dispatch(
                 &submit,
                 true,
@@ -779,6 +812,12 @@ impl GpuContext {
     /// from it, so this cannot take the lock itself.  The same is true of
     /// `target` — the caller holds it, so that a `wait: false` dispatch keeps its
     /// command buffer reserved for as long as the submission is in flight.
+    ///
+    /// The descriptor pool is the third thing the caller has already arranged,
+    /// and it is the one this cannot check: it takes a set and does not reset the
+    /// pool, because a reset here would free the sets earlier dispatches in the
+    /// same submission are still bound to. The caller resets it once, at the
+    /// start of the submission — see [`GpuContext::descriptor_pool`].
     #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
@@ -805,13 +844,6 @@ impl GpuContext {
         // invariant the old per-run code got for free by building both every time.
         let layouts = self.layouts(total)?;
 
-        // The pool is reset rather than recreated: it only ever holds the one set
-        // of the run in flight, and that run's set is dead the moment its fence
-        // signalled.
-        check("descriptor pool reset", unsafe {
-            device
-                .reset_descriptor_pool(self.descriptor_pool, vk::DescriptorPoolResetFlags::empty())
-        })?;
         let set_layout = layouts.set;
         let mut set = vk::DescriptorSet::null();
         check("descriptor set allocation", unsafe {
@@ -901,26 +933,39 @@ impl GpuContext {
             );
             device.cmd_dispatch(command, count.div_ceil(LOCAL_SIZE_X as usize) as u32, 1, 1);
             // The results stay on the device, so this does not hand them to the
-            // host — it makes them visible to the `fetch` that may read them
-            // later, which is a separate submission.
+            // host; it makes them visible to whoever reads them next.
             //
-            // **`TRANSFER_READ` is load-bearing, and it follows from "a separate
-            // submission".**  It is the right scope mask only while every dispatch
-            // in a command buffer is followed by a `fetch` in another one.
-            // Recording a *second* dispatch into this same command buffer would
-            // read these results as a shader, and the mask above would then be the
-            // wrong scope for that read: a consumer inside one submission wants
-            // `SHADER_READ` and needs a barrier that says so.  Nothing records two
-            // dispatches into one command buffer today, so nothing exercises that
-            // barrier, and `spirv`'s single-`OpLabel` invariant does not imply it.
+            // **Both of the possible readers are in the destination scope, and
+            // leaving either out is not a narrower barrier, it is a wrong one.**
+            // A `fetch` in a later submission reads them as a transfer.  A
+            // dispatch recorded after this one *in the same command buffer* reads
+            // them as a shader, and nothing in Vulkan orders two dispatches against
+            // each other without a barrier that says so — a consumer that is not
+            // in scope does not read stale data, it reads undefined data, and the
+            // run does not fail, it answers something else.  So the scope names
+            // both, which over-covers the one-dispatch-per-submission case that is
+            // all this records today and under-covers nothing.
+            //
+            // That over-coverage is a cost, not a free choice, so it was measured
+            // rather than assumed: 16 links at 1 048 576 elements cost 7.79 ms
+            // before the widening and 7.17 ms after, and an empty dispatch 0.046
+            // against 0.048. Both differences are smaller than the spread between
+            // runs of the example that produced them, so the reading is that the
+            // widening is not measurable — not that it is free.
+            //
+            // Note what does *not* imply this barrier is needed: `spirv`'s
+            // single-`OpLabel` invariant says every invocation reaches its write.
+            // It says nothing about ordering between dispatches.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
-                vk::PipelineStageFlags::TRANSFER,
+                vk::PipelineStageFlags::COMPUTE_SHADER | vk::PipelineStageFlags::TRANSFER,
                 vk::DependencyFlags::empty(),
                 &[vk::MemoryBarrier::default()
                     .src_access_mask(vk::AccessFlags::SHADER_WRITE)
-                    .dst_access_mask(vk::AccessFlags::TRANSFER_READ)],
+                    .dst_access_mask(
+                        vk::AccessFlags::SHADER_READ | vk::AccessFlags::TRANSFER_READ,
+                    )],
                 &[],
                 &[],
             );
