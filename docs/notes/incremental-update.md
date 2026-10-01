@@ -1,14 +1,17 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **the mechanism is complete and measured (§7.1–§7.4); the consumer is
+> Status: **the mechanism is complete and measured (§7.1–§7.5); the consumer is
 > not.** Path identity, the `cache` syntax, the per-cell closure freeze, the general
 > release obligations, the cell store, **dirty propagation** and **eviction** all
 > exist, and `BufferSession` now lowers through the store — an edit reuses every
-> marked binding it did not reach, and the artifacts it drops are freed. What is
-> still missing is a **production caller**: `BufferSession` itself has none
-> (`P2-1`), and the LSP's analysis path passes no cells. **§12 is the handoff**: what
-> exists, in what order to continue, the landmines, and how to verify. Read that
-> first if you are picking this up cold.
+> marked binding it did not reach, and the artifacts it drops are freed. A file-diff
+> caller works and is fast per edit (§7.5), but **two costs block it**: freezing a
+> cell is ~9 ms because a scalar cell's closure is ~600 nodes (a shared type's
+> equality class), and an edit at a statement boundary widens the window to the whole
+> tail. What is missing besides those is a **production caller**: `BufferSession`
+> itself has none (`P2-1`), and the LSP's analysis path passes no cells. **§12 is the
+> handoff**: what exists, in what order to continue, the landmines, and how to verify.
+> Read that first if you are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
 > withdrawn cross-build halves of [incremental-evaluation](incremental-evaluation.md),
@@ -622,6 +625,55 @@ the array that lives in it, and it is freed only once `b`'s own artifact is repl
 sixth row is the same key finally going. Without the check, row five would have freed the
 arena `b` reads through — the "evicting a live artifact dangles" landmine, live.
 
+### 7.5 The file-diff experiment: two costs it found
+
+The first caller shape tried was a **file diff**: the agent rewrites the file, the
+caller re-reads it and hands the whole buffer to one long-lived session
+(`BufferSession::set_source`, the file entry point), and the session derives the edit
+itself. The program was 600 bindings in 75 chains of 8 (a literal first on each line,
+every tenth binding marked `cache` — 60 cells, 9,756 bytes).
+
+The incremental path works, and the readings say exactly what it buys and what it costs.
+`compile()` — no session, no cells — is **17–20 ms** (frontend 13–16 ms, so the check is
+~18% of it). A session's **first** compile is **558–614 ms**: 32×, and all of it freezing.
+
+| edit (mid-statement) | session | session rebuild | cells |
+|---|---|---|---|
+| a literal inside an unmarked binding | 6.2–6.5 ms | 534–561 ms | `reused=60 frozen=0 dropped=0` |
+| a literal inside a marked binding | 13–27 ms | 453–610 ms | `reused=59 frozen=1 dropped=1` |
+
+So the reuse is real and the dirty set is exact (one marked cell, one drop), and the
+incremental compile is *cheaper than a from-scratch frontend* on the same file. Two costs
+sit under it.
+
+**1. A cell's closure is enormous, so freezing is ~9 ms per cell.** For a *single scalar*
+cell the closure is **611 nodes** (and it grows by 8 per cell frozen), and
+`StaticModule::freeze_closure` spends **6.7–9.9 ms** in the walk against **0.14–0.6 ms**
+in `freeze_set`. The walk visits **363,627** nodes for those 611: `closure` calls
+`class_members` for *every* node it visits, and **one node's equality class has 602
+members** — the unified type node, since every binding's value is an `Int` and the checker
+merged all 600 type slots into one class. The "whole equality class" edge is deliberate
+(§7.1: `freeze_set` maps `parent`/`next`/`tail` through `node_map`, so half a class is a
+broken class), but its interaction with a *shared* type makes a per-cell artifact as big
+as the program's type spine. **This is the item to fix before any file-diff caller is
+useful**: at 60 cells the first build is 32× a plain compile, and a program with 600
+marks would be unusable.
+
+**2. An edit at a statement boundary re-parses the whole tail.** Appending to the end of
+a line (`b71 = 71 + b70` → `… + 1`) is an insertion at a statement boundary, so *no*
+statement's byte range overlaps the edit and `splice_program`'s fallback widens the
+window to `[prev, old_n)` — everything from that line to the end of the file:
+
+| edit (at a statement's end) | session | session rebuild | cells |
+|---|---|---|---|
+| append ` + 1` to a line | 376–405 ms | 417–492 ms | `reused=8–10 frozen=50–52 dropped=50–52` |
+
+That is 82–90% of a full rebuild, and it drops ~50 of the 60 cells — for the edit shape an
+agent produces most often. The fallback only needs the boundary and the statement after
+it: the inserted statements land between `prev` and `prev + 1`, so a window of
+`[prev, prev + 2)` covers them (the region parse is byte-bounded, so several inserted
+statements are inside it too), and `prev` is already computed. Not fixed yet.
+
 ## 8. Costs and failure modes
 
 - **Path churn is the whole risk.** If an agent's edits keep moving nodes, paths keep
@@ -807,24 +859,37 @@ arena `b` reads through — the "evicting a live artifact dangles" landmine, liv
 
 ### 12.3 What to do next, in order
 
-1. **Run the session somewhere real** (`P2-1`). The session is cell-aware now, so this
+1. **Fix the closure's size** (§7.5) — it is the one thing between this design and a
+   usable file-diff caller: ~9 ms per cell, because a shared type node's equality class
+   has one member per binding. The edge is deliberate (`freeze_set` maps the class through
+   `node_map`), so the options are to **narrow** it (a decided node's class is a
+   unification structure, not a value: freeze `Meta::new(None, None, None, size)` for a
+   solved node, or drop the operation for one — `apply.rs`'s capture walk and
+   `equality.rs`'s decided-leaf test are the readers to re-check) or to **make the walk
+   cheap** (stop calling `class_members` per visited node; the 363,627 visits for 611
+   nodes are the same class re-walked). Measure both against §7.5's reading.
+2. **Narrow the boundary window** (§7.5) — `hi = (prev + 2).min(old_n)` in
+   `splice_program`'s fallback instead of `old_n`, which turns the common "append to a
+   line" edit from 85% of a rebuild into a two-statement window. Validate with §7.3's
+   differential oracle, which is what found the last splice bug.
+3. **Run the session somewhere real** (`P2-1`). The session is cell-aware now, so this
    is no longer "wire the mechanism" but "give it a caller": `BufferSession` has none,
    and the LSP's analysis path (`analysis.rs:323`) compiles one-shot through
    `frontend_at`, passing no cells. Whoever takes this must decide *what a source edit
    is* in that caller — the session's dirty propagation needs the edit as a *source
    replacement* (it diffs `LastState::source`), so an incremental caller feeds it whole
-   buffers, not ranges.
-2. **Decide the eviction *timing*** (§11) and call `evict_unreachable` on that schedule.
+   buffers, not ranges; `set_source` is that entry point.
+4. **Decide the eviction *timing*** (§11) and call `evict_unreachable` on that schedule.
    The mechanism and its refusal are landed (§7.4); what is open is when the caller can
    promise that every `SessionReport` it kept is dropped. A session that never calls it
    leaks, and the number to watch is `pending_evictions`.
-3. **The reverse import closure**: drop the cells of every file that imports the changed
+5. **The reverse import closure**: drop the cells of every file that imports the changed
    one, transitively (`CellStore::invalidate_source` plus the package store's
    `ResolvedImport` graph, `package.rs`). This is also what makes the eviction refusal
    load-bearing rather than unreachable-by-accident (§11).
-4. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
-   dirtying consumers.
-5. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
+6. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
+   dirtying consumers. A recompute-heap change, not a filter.
+7. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
    change to `lichen-graph-ir`.
 
 ### 12.4 Landmines, each of which is a silent wrong answer or a leak
@@ -900,6 +965,16 @@ arena `b` reads through — the "evicting a live artifact dangles" landmine, liv
 - **`traced` is only as good as its implementors.** A production value that holds
   nodes must implement it, and the composition macro must forward it (it now does —
   this was the landmine the graph work would have hit).
+- **A cell's closure follows the whole equality class, and a shared type makes that
+  class the program.** (§7.5) A scalar cell's closure measured **611 nodes**, and the
+  walk visited **363,627** of them because one node's class had **602** members — every
+  binding's `Int` unified into one class. The artifact is not wrong, just enormous: ~9 ms
+  per freeze, 32× a plain compile at 60 cells. Anything that changes this edge must keep
+  `freeze_set`'s totality (`node_map[&parent]` and friends panic otherwise) and re-check
+  `apply.rs`'s `static_function_captures` and `equality.rs`'s decided-leaf test.
+- **An edit at a statement boundary widens the window to the whole tail** (§7.5): 82–90%
+  of a rebuild and ~50 of 60 cells dropped, for the edit shape an agent produces most
+  often. Not a wrong answer — the program is right — but it is where the savings go.
 - **The registry grows between evictions** (§8): a session that never calls
   `evict_unreachable` leaks, and so does one whose refusals never clear (§7.4's shared
   payload, and a mutual reference).

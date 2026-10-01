@@ -276,6 +276,20 @@ where
         self.source.replace_range(range, text);
     }
 
+    /// Replace the whole buffer with `source` — what a caller that re-reads a
+    /// **file** has, rather than an edit range.
+    ///
+    /// This is the file-diff entry point, and it is deliberately the same thing
+    /// the byte-level edits do: it only sets the buffer.  The edit itself is still
+    /// the session's to derive — the next [`Self::compile`] diffs this against the
+    /// last state — so a caller that re-reads a file gets the incremental lex, the
+    /// statement-window splice and the cell reuse without describing the change,
+    /// and a caller that has a range uses [`Self::replace`].  Both are the same
+    /// path from there on.
+    pub fn set_source(&mut self, source: impl Into<String>) {
+        self.source = source.into();
+    }
+
     /// The resolved content key of the last compile.
     pub fn key(&self) -> Vec<u64> {
         self.cache
