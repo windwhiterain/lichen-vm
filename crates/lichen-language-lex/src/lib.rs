@@ -90,8 +90,9 @@ pub enum TokenKind {
     KwPub,
     /// The cache keyword -- a binding whose value is a *retained cell*
     /// (`cache name = expr`).  The mark is parsed and carried on
-    /// `Binding::cached`; nothing honors it yet -- see
-    /// `docs/notes/incremental-update.md`.
+    /// `Binding::cached`, and the retention mechanism exists
+    /// (`lichen_language::compile_with_cells`); no production path calls it yet
+    /// -- see `docs/notes/incremental-update.md` §12.
     KwCache,
     /// The type_of keyword -- an ordinary first-class function value whose
     /// application reads its argument's type (`type_of e`, `type_of (e)`).

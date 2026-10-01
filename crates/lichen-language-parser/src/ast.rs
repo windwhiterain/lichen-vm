@@ -304,9 +304,9 @@ pub struct Binding {
     /// `cache` — the binding is a **retained cell**: its value survives a
     /// rebuild, and its identity is the binding's occurrence path from the
     /// program root.  Orthogonal to `restrictive` (the two marks may appear
-    /// together).  **Nothing honors the mark yet** -- it is parsed and carried
-    /// so the front end can refuse or use it later; the design is
-    /// `docs/notes/incremental-update.md`.
+    /// together).  The mechanism is
+    /// `lichen_language::compile_with_cells`, which lowers a clean cell to a
+    /// static read; the design is `docs/notes/incremental-update.md`.
     pub cached: bool,
 }
 
@@ -344,8 +344,7 @@ pub struct RecordField {
     pub field: bool,
     /// `cache` — the field is a retained cell, exactly as
     /// [`Binding::cached`] is for a statement binding (a record block's fields
-    /// *are* the block's statements).  **Nothing honors the mark yet** — see
-    /// `docs/notes/incremental-update.md`.
+    /// *are* the block's statements).  See `docs/notes/incremental-update.md`.
     pub cached: bool,
     pub span: Span,
 }

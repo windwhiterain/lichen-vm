@@ -324,9 +324,12 @@ span back to the original file.
   sequential, non-recursive case).  `cache name = expr` marks the binding as a
   **retained cell**: its value is meant to survive a rebuild, identified by the
   binding's occurrence path from the program root.  The mark is independent of
-  `let` and the two may appear together (`cache let a = …`); it is **parsed and
-  carried, and nothing honors it yet** — the mechanism is `proposed` in
-  [incremental-update](notes/incremental-update.md).  Sharing means a bound
+  `let` and the two may appear together (`cache let a = …`); it is accepted in
+  every scope and emits no diagnostic.  The retention mechanism exists
+  (`compile_with_cells` lowers a clean cell to a static read of its frozen
+  value), but **no production path calls it yet**, so a marked binding is
+  currently compiled like an unmarked one — see
+  [incremental-update](notes/incremental-update.md) §12.  Sharing means a bound
   *non-function* value
   has one type across uses, while a bound lambda stays polymorphic — each
   application still instantiates the parameter fresh via the runtime's
