@@ -277,28 +277,54 @@ it — the two graphs are different structures (§1.1).
 
 The mechanism is the **existing** import path, which is what makes this step small:
 
-1. A cell's value is a `[value, type]` pair, and `Registry::freeze_mapped`
-   (`lichen-lowlevel/src/registry.rs:46`) already turns a solved module into a
-   static artifact *and* hands back the `NodeId → LocalNodeId` map — so a cell's
-   frozen reference is
+1. A cell's value is a `[value, type]` pair, and freezing turns a solved node set
+   into a static artifact *and* hands back the `NodeId → LocalNodeId` map — so a
+   cell's frozen reference is
    `StaticNodeId { module: key, index: node_map[&pair] }` (`lib.rs:901`).
 2. A later build **reuses** a clean cell by lowering it to
    `ExprKind::Static { export }` instead of compiling its body — the node the front
    end already emits for an import (`compile.rs:227`), materialized by the checker's
    own arm (`checker.rs:1399`). The body is not lowered, not checked and not
    evaluated: the reuse skips the work rather than caching its result.
-3. So the store is a map `Path → StaticNodeId` and nothing else is new: no partial
-   freeze, no second read path, no new node kind.
+3. So the store is a map `Path → StaticNodeId` and nothing else is new: no second
+   read path, no new node kind.
 
-**The cost, stated up front:** `freeze_mapped` is **whole-module**, so a build that
-uses `cache` at all freezes everything, not only the marked cells. Two things bound
-it, and one is a decision:
+**The freeze is per cell** (the superior's decision), not whole-module: each cell gets
+its own artifact and its own key, and only a *recomputed* cell is frozen, so an edit
+pays for the cells it dirtied and nothing else. That needs one new entry point — a
+**closure** freeze — because `from_module_mapped` maps *every* node of the module.
+The three phases already work on a set of nodes; what changes is that the set is the
+closure. The closure must be **closed under four edge kinds**, or the existing
+`node_map[&x]` lookups panic — they assume totality, which is the built-in check:
 
-- the freeze is **gated on the program having at least one `cache` cell**, so a
-  program that does not use the mark pays nothing;
-- narrowing it to a **partial freeze** — the sub-graph rooted at a marked node — is
-  the recorded optimization rather than part of this landing, because it is a new
-  entry point into a walk that is otherwise already understood.
+- a value's items/entries (arrays, tables, ext handles);
+- `operation.operand` — a residual node must be able to re-run later, so unlike the
+  GC's walk, which deliberately does not follow a cached value's operand, this one
+  must;
+- the **whole equality class** (`parent`/`next`/`tail` all go through `node_map`, and
+  half a class is a broken class);
+- the **whole function template** (`StaticFunction.nodes` is the template's member
+  list, and a missing member is a broken template).
+
+**Per-cell freeze is an ownership transfer, and it differs by value kind** — the
+superior's correction, and the reason this is not merely a smaller `from_module`:
+
+- a **handle-type** value (an array or table whose items live in the module's block
+  arena) is **copied** into the artifact's arena, as phase 2 already does; the module
+  keeps its own copy, so nothing dangles;
+- a **device-buffer-like** value holds only a handle whose real resource lives outside
+  the arena (the `GpuContext` owns the memory), so the artifact needs a **semantic
+  move**: it takes the *release obligation*, not the bytes. Early release is deferred
+  in this landing — the context still owns the memory until it drops — which is sound,
+  and is §8's "store lifetime" item rather than a correctness hole.
+
+Two rules follow:
+
+- **only a solved cell can be frozen**: a `Parameterized` cell has no answer to keep,
+  so it is not retained — a diagnostic, not a silent freeze of nothing;
+- **cells freeze in dependency order**: `freeze_mapped` already asserts that every
+  referenced key is registered, the same discipline packages use, and a cell that read
+  another cell's frozen reference satisfies it by construction.
 
 The dirty input for this landing is the caller's, and it is the granularity the
 superior chose for source edits: the edit declares which file changed, and every file
