@@ -19,7 +19,7 @@ use std::time::Instant;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
 use lichen_kernel_ir::BufferSlot;
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending};
 
 /// `out[i] = in[i] + in[i] + 1` — enough arithmetic that the run is not purely
 /// launch overhead, and the same shape the acceptance tests use.
@@ -194,6 +194,140 @@ fn check_fused(context: &GpuContext, count: usize, links: usize) {
             "a fused chain of {links} over {count} element(s) is wrong at index {index}"
         );
     }
+}
+
+/// Which side of the wait the host work goes on.
+///
+/// The two schedules run **the same submission and the same host work**; the
+/// only difference is whether the host is busy while the device is. So the
+/// difference in `wait` between them is everything that overlapping is worth,
+/// and nothing else is in the answer — which is the only way to make the number
+/// mean something. Any of it that came from the work itself, or from the
+/// submission being different, would show up in both columns.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Overlap {
+    /// Before the wait, which is the schedule Async exists for.
+    BeforeWait,
+    /// After the wait, which is what the same work costs with nothing to hide
+    /// behind.
+    AfterWait,
+}
+
+/// One submission timed in three pieces, in milliseconds.
+#[derive(Clone, Copy)]
+struct Split {
+    /// Getting it onto the queue: staging, recording, `queue_submit`.
+    submit: f64,
+    /// Blocking on the fence.
+    wait: f64,
+    /// The host work, wherever it was put.
+    host: f64,
+}
+
+/// A CPU pass over `data`, repeated `passes` times.
+///
+/// This stands in for the one thing in a graph run the device cannot do: host
+/// code touching every element, which is exactly what a node written in lichen
+/// rather than compiled to a kernel is. The `black_box` is load-bearing — a
+/// pass whose stores are provably dead would be deleted, and the measurement
+/// would be of nothing at all while still printing a number.
+fn host_passes(data: &mut [i64], passes: usize) {
+    for _ in 0..passes {
+        for value in data.iter_mut() {
+            *value = value.wrapping_mul(2).wrapping_add(1);
+        }
+    }
+    std::hint::black_box(data);
+}
+
+/// One submission, with `passes` host passes on one side of its wait or the
+/// other.
+fn time_split(
+    context: &GpuContext,
+    input: &[i64],
+    count: usize,
+    overlap: Overlap,
+    host: &mut [i64],
+    passes: usize,
+) -> Split {
+    let millis = |elapsed: std::time::Duration| elapsed.as_secs_f64() * 1e3;
+    let started = Instant::now();
+    let pending = context
+        .submit(&fragment(), &[BufferSlot::Host(input)], count)
+        .expect("the run is recorded and handed to the queue");
+    let submitted = Instant::now();
+
+    // The passes run on both sides even at zero, so the two schedules do
+    // exactly the same work and differ only in where the wait falls.
+    if overlap == Overlap::BeforeWait {
+        host_passes(host, passes);
+    }
+    let worked = Instant::now();
+    let ids = Box::new(pending).wait().expect("the submission finishes");
+    let waited = Instant::now();
+    if overlap == Overlap::AfterWait {
+        host_passes(host, passes);
+    }
+    let after = Instant::now();
+
+    let split = match overlap {
+        Overlap::BeforeWait => Split {
+            submit: millis(submitted - started),
+            host: millis(worked - submitted),
+            wait: millis(waited - worked),
+        },
+        Overlap::AfterWait => Split {
+            submit: millis(submitted - started),
+            wait: millis(waited - submitted),
+            host: millis(after - waited),
+        },
+    };
+    context.release(ids[0]);
+    split
+}
+
+/// The single fastest run of [`time_split`], on each side of the wait.
+///
+/// The three pieces are reported from **one** run, not as three independent
+/// minima, and the reason is not tidiness. They are a decomposition of one
+/// elapsed time, so the best wait and the best host work generally come from
+/// different runs — and pairing the shortest wait with the shortest host work
+/// measures an overlap that never happened. Reported that way the hidden column
+/// came out *larger* than the host work it is supposed to be hiding, which is
+/// the tell: a hidden amount cannot exceed the work that hid it.
+fn best_split(
+    context: &GpuContext,
+    input: &[i64],
+    count: usize,
+    host: &mut [i64],
+    passes: usize,
+    repeats: usize,
+) -> (Split, Split) {
+    let fastest = |current: &Option<Split>, sample: Split| match current {
+        Some(best) if total(best) <= total(&sample) => *best,
+        _ => sample,
+    };
+    let mut before = None;
+    let mut after = None;
+    for _ in 0..repeats {
+        before = Some(fastest(
+            &before,
+            time_split(context, input, count, Overlap::BeforeWait, host, passes),
+        ));
+        after = Some(fastest(
+            &after,
+            time_split(context, input, count, Overlap::AfterWait, host, passes),
+        ));
+    }
+    (
+        before.unwrap_or_else(|| unreachable!("repeats is positive")),
+        after.unwrap_or_else(|| unreachable!("repeats is positive")),
+    )
+}
+
+/// The elapsed time one [`Split`] decomposes.
+fn total(split: &Split) -> f64 {
+    split.submit + split.host + split.wait
 }
 
 fn main() {
@@ -415,5 +549,75 @@ fn main() {
          buffer, not the {best:.3} ms host-input one, because a chain link after the first\n\
          uploads nothing. It is still an upper bound: an empty dispatch's fence wait has no\n\
          device work to hide behind, so a link that does work waits for less."
+    );
+
+    // **What the Async schedule is actually worth.** The tables above are Batch:
+    // they say what disappears when fifteen submits *and* fifteen waits go. Async
+    // keeps the submits and removes only the waits, and only where something
+    // needs the data, so it collects a different and smaller number — and the
+    // only way to that number is to split a submission in half and measure each
+    // half against a controlled amount of host work in the gap.
+    //
+    // Each row is the same submission and the same host work twice, once with
+    // the work before the wait and once after it. Nothing else differs, so the
+    // difference in `wait` is the whole of what overlapping bought. The
+    // prediction is `min(host, wait after)`: the wait cannot be cut below zero,
+    // and it cannot be cut by more than the device was busy for.
+    const SPLIT_REPEATS: usize = 20;
+    println!("\nsubmit and wait, split, with host work in the gap — best of {SPLIT_REPEATS}");
+    println!(
+        "{:>10}  {:>7}  {:>9}  {:>9}  {:>11}  {:>11}  {:>9}  {:>10}",
+        "count", "passes", "host", "submit", "wait after", "wait before", "hidden", "predicted"
+    );
+
+    for count in [262_144usize, 1_048_576] {
+        let input: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        // The host work is over the same number of elements the kernel is, so
+        // one pass is the same order of magnitude as the dispatch it would sit
+        // beside. That is not a tuning choice: it is what a graph looks like when
+        // one node is compiled and the next is written in lichen.
+        let mut host: Vec<i64> = (0..count).map(|value| value as i64).collect();
+        let warm = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .expect("the warm-up run completes");
+        for id in &warm {
+            context.release(*id);
+        }
+
+        for passes in [0usize, 1, 2, 4, 8] {
+            let (before, after) =
+                best_split(&context, &input, count, &mut host, passes, SPLIT_REPEATS);
+            // Reported from the *after* schedule: with nothing to hide behind,
+            // that wait is the device's time, and it is the ceiling on how much
+            // the other one can be cut by.  The host figure is the *before*
+            // schedule's, because that is the work doing the hiding.
+            let hidden = (after.wait - before.wait).max(0.0);
+            println!(
+                "{count:>10}  {passes:>7}  {:>9.3}  {:>9.3}  {:>11.3}  {:>11.3}  {:>9.3}  {:>10.3}",
+                before.host,
+                after.submit,
+                after.wait,
+                before.wait,
+                hidden,
+                before.host.min(after.wait),
+            );
+        }
+    }
+
+    println!(
+        "\n*hidden* is `wait after - wait before` and *predicted* is `min(host, wait after)`:\n\
+         a wait cannot be cut below zero and cannot be cut by more than the device was\n\
+         busy for. The host column is the host time **of the run that was selected for\n\
+         its total**, so it jitters -- selecting on the total picks the run that hid the\n\
+         most, and that run's host work was not necessarily a typical one. It does not\n\
+         matter for the check, because both columns come from the same run.\n\
+         \n\
+         The submit column is worth a second look and is **not** a constant: flat at a\n\
+         quarter of a million elements, and rather more than doubled at a million, where\n\
+         a pass over the data is big enough to evict the input the next submit has to\n\
+         copy into staging. It is non-monotonic row to row as well, so read it as a cost\n\
+         the schedule pays rather than as a number to plan against -- and note that Async\n\
+         keeps every submit, so whatever it grows into comes straight off what the\n\
+         overlap wins."
     );
 }

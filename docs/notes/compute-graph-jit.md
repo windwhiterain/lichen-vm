@@ -260,12 +260,84 @@ chain. That is the first execution of the two rules below, and they hold.
 **What the sweep does not settle.** The *actual* column is a **Batch ceiling** —
 it assumes fifteen submits *and* fifteen waits all disappear, which is exactly
 what `run_chain` does. Async keeps the submits and removes only the waits, so it
-collects part of this. How much is the split inside the 0.036 ms between the
-record-and-submit side and the wait side, and that is still unmeasured.
+collects part of this. That part is measured below.
+
+### And how much of it Async actually reaches
+
+The one measurement the design was waiting on. Each row is **the same submission
+and the same host work twice**, once with the work before the wait and once
+after it; nothing else differs, so the difference in `wait` is everything
+overlapping bought and nothing else is in the answer. The host work is a CPU
+pass over the same number of elements the kernel has, which is what a node
+written in lichen rather than compiled to a kernel actually is.
+
+| count | passes | host | submit | wait after | wait before | hidden | predicted |
+|---|---|---|---|---|---|---|---|
+| 262 144 | 0 | 0.000 | 0.072 | 0.199 | 0.198 | 0.001 | 0.000 |
+| 262 144 | 1 | 0.064 | 0.072 | 0.198 | 0.133 | 0.064 | 0.064 |
+| 262 144 | 2 | 0.126 | 0.072 | 0.198 | 0.071 | 0.127 | 0.126 |
+| 262 144 | 4 | 0.214 | 0.074 | 0.200 | 0.002 | 0.198 | 0.200 |
+| 262 144 | 8 | 0.398 | 0.075 | 0.197 | 0.002 | 0.196 | 0.197 |
+| 1 048 576 | 0 | 0.000 | 0.266 | 0.747 | 0.752 | 0.000 | 0.000 |
+| 1 048 576 | 1 | 0.339 | 0.444 | 0.758 | 0.403 | 0.355 | 0.339 |
+| 1 048 576 | 2 | 0.647 | 0.317 | 0.801 | 0.100 | 0.701 | 0.647 |
+| 1 048 576 | 4 | 1.149 | 0.510 | 0.829 | 0.006 | 0.824 | 0.829 |
+| 1 048 576 | 8 | 2.216 | 0.509 | 0.929 | 0.007 | 0.922 | 0.929 |
+
+*hidden* is `wait after − wait before`; *predicted* is `min(host, wait after)`,
+because a wait cannot be cut below zero and cannot be cut by more than the device
+was busy for. Best of 20, whole runs.
+
+**The shape is the answer, and it is the shape that was predicted.** The *wait
+after* column is flat — that is the device's time and host work does not touch
+it — while *wait before* collapses to two microseconds. And *hidden* tracks
+*predicted* to within 0.05 ms in all ten rows, the two at a million being the
+loosest. So **the whole device time can be hidden**, and once the host work
+exceeds it the wait is free and further host work is fully exposed. The
+crossover is at host work ≈ device time: about 0.2 ms at 262 144 elements, which
+is one to two CPU passes, and about 0.8 ms at a million, which is two.
+
+**A first version of this table was wrong in a way worth recording.** It took the
+best of each of the three pieces separately, and the hidden column came out at
+0.479 ms against 0.353 ms of host work — more was hidden than there was to hide.
+The three pieces are a decomposition of *one* elapsed time, so the best wait
+generally comes from a different run than the best host work, and pairing them
+measures an overlap that never happened. **A hidden amount cannot exceed the work
+that hid it**, and a table that says otherwise is telling you about its own
+arithmetic. Reporting all three from the run with the lowest total is what fixed
+it, and the check that the two columns must agree is what would have caught it
+earlier.
+
+**What it does not say.** This is one machine, one kernel, two counts, and best
+of 20 rather than a median, so read the *shape* rather than the digits. And
+*wait after* is not perfectly flat at a million — it drifts 0.747 to 0.929 down
+the table — so the last two rows' *predicted* is partly tracking that drift
+rather than a clean ceiling. The quarter-of-a-million block, where it is flat to
+0.003 ms, is the one to believe.
+
+**The one cost that grows is the submit side.** At a million elements it goes
+from 0.27 ms with no host work to about 0.51 ms with four passes over the same
+data, because a pass that size evicts the input the next submit has to copy into
+staging. It is flat at 262 144, where the pass does not. This is non-monotonic
+row to row, so it is a cost to watch rather than a number to plan against — but
+**Async keeps every submit**, so whatever it grows into comes straight off what
+the overlap wins, and at these sizes the overlap still wins by more.
+
+**The consequence for the design, which is the point of having measured it.**
+Async's saving is not a share of the per-dispatch overhead; it is **the device's
+time for one submission, and no more**. That is a completely different quantity
+from the 65–81% the Batch table reports, and it settles the question those tables
+could not: on a chain of pure kernels Async earns **nothing** — there is no host
+work to overlap, which is why the design said so from the start — and on a graph
+whose nodes are *not* all kernels it earns up to one dispatch's worth of device
+time per node, once the host work in that node exceeds it. The two schedules are
+not alternatives to pick between; Batch removes submissions, Async removes waits,
+and a graph with native nodes in it is the only shape where Async is worth
+anything at all.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, fifteen commits, not pushed):
+**Built and committed** (`feature/graph-jit`, sixteen commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -283,14 +355,15 @@ record-and-submit side and the wait side, and that is still unmeasured.
 | `519c9d1` | `run_chain` — a chain in one submission, verified and measured |
 | `751cd2b` | the fused chain is checked and faster everywhere |
 | `de5424c` | the pool of submission slots, configurable and defaulting to 2 |
-| *this one* | `Pending` on the backend contract — a submission handed back unwaited |
+| `082c4d7` | `Pending` on the backend contract — a submission handed back unwaited |
+| *this one* | the submit/wait split, measured |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-the executor that schedules submissions and closures, and the submit/wait split
-that measures what the overlap is worth.
+and the executor that schedules submissions and closures.
 
-**Measured:** the count sweep, the fused chain it predicted, and that two
-submissions can be in flight and chained at the same time.
+**Measured:** the count sweep, the fused chain it predicted, that two
+submissions can be in flight and chained at the same time, and how much of a
+submission's device time the host can be busy across.
 
 ## The pool of submission slots
 
@@ -533,14 +606,15 @@ carry that count, and it is the only part of this rule with no code behind it.
      read of the staging happens *inside* the claim, which is the one thing
      `submit` plus `sync` cannot express.
 
-4. **The submit/wait split**, the one measurement still missing. It decides how
-   much of the 65–81% the **Async** schedule can reach, because Async keeps the
-   submits and removes only the waits, while the `fusion share` column is the
-   **Batch** ceiling. It needs the pool, so it comes after the pool rather than
-   instead of it: time the record-and-submit side and the wait side separately,
-   then put a controlled amount of host work between submit and wait and look at
-   the slope. Flat while the host work is under the device time, 1:1 above it —
-   that knee is the proof that the overlap is real and not just a smaller number.
+4. ~~**The submit/wait split.**~~ **Measured** — see
+   [And how much of it Async actually reaches](#and-how-much-of-it-async-actually-reaches).
+   The shape is the one that was predicted: the hidden amount is
+   `min(host work, device time)`, to within 0.05 ms in all ten rows, and it
+   saturates at the device's own time. **What it changed is the arithmetic, not
+   the schedule.** Async's saving is not a share of the per-dispatch overhead; it
+   is one submission's device time and no more, which means it earns nothing on a
+   chain of pure kernels and up to a dispatch's worth per node on a graph with
+   native nodes in it.
 5. **Then, and only then**, the IR crate and the node set.
 
 ## Landmines, each of which is a silent wrong answer
