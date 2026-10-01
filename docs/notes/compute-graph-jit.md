@@ -525,29 +525,55 @@ Two facts that fall out and are now checked:
 - a callee can be **static** (frozen in a package) as well as dynamic. A static
   one has no body in this module and yields no operator, so a body mixes both
   kinds and only the dynamic kind is a dispatch.
-- the operator node's operand array is `[kernel, cfg]` and is readable through
-  `node_operation` plus `array_items` **without evaluating the node** — which is
-  what keeps a *build* from running a dispatch.
+- the operator node's operand array is `[kernel, cfg]`, and both slots are
+  `value_of` extractions — `Index(x, i)` — reached by the same walk
+  `kernel_id_of` already does. The `cfg` is an `Index` into the cfg tuple, and
+  the tuple's payload is readable with no evaluation at all.
 
-### What is still open, and it is the part that matters
+### The body is decided by applying it, so a graph is *recorded*, not read
 
-Two things the probe could not answer, both about the cfg and the kernel:
+**This is the correction, and it undoes the "pure structural walk" the design
+had settled on.** The probe's next fact:
 
-- **The cfg slot is not a readable array.** It is an unevaluated
-  array-constructing node, so `array_items` — which reads a node's *cached
-  payload* — has nothing to read. `ParLaunch`'s `run` branch sees `[kernel, cfg]`
-  as values because the VM evaluated them first, and **that evaluation is the
-  dispatch**. So the count and the buffers have to be reached through the cfg
-  node's *operation*, and how is not yet known.
-- **The kernel slot is an unresolved capture.** It is a node in the function's
-  own block with **no cached value**, because the template has never been
-  applied and so nothing has resolved the capture. Note this also kills the
-  tidier-sounding test for a free variable: the slot is *not* homed outside the
-  function's block, so "a node the body does not own" does not identify one.
+> The cfg tuple is readable. Its two elements — the count and the buffer — are
+> **`Parameterized`**. The `4` and the `data` in the body are unbound cells
+> until the function is applied, because nothing has applied it.
 
-Both are the same underlying question — how a capture is read out of a template
-nothing has applied — and it is the question that decides which nodes a graph has
-to keep alive, so it is the one to answer before writing the walk.
+So walking the structure without evaluating gets the graph's **shape** and
+**none of its values**, and the values are the part a run needs. A graph cannot
+be built by reading a template.
+
+It is built by **applying** the function and **recording** what it dispatches —
+which is what `ValueId`'s own note said from the first commit: "the graph is
+built by recording an evaluation that has already happened". The design drifted
+away from that and had to be walked back.
+
+And applying is exactly equivalent to not applying, for a reason the language
+gives for free: **every** lichen function has exactly one parameter (see below),
+and a graph function does not read it, so what is applied does not matter. Under
+laziness nothing else is forced either — the body is a thunk, and the lowering
+demands exactly the parts the recording handles. **The "no dispatch while
+building" property comes from the recording intercepting `ParLaunch` and
+substituting a placeholder, not from refusing to evaluate.** Those are different
+mechanisms and only one of them was in the design.
+
+The remaining design work is the recording mechanism itself: what `ParLaunch`
+returns in place of a buffer, and how a later `cfg` referring to that dispatch's
+output becomes an edge rather than a second dispatch. The `produced_by` map is
+what answers the second half.
+
+### What is still open
+
+- **What a recorded `ParLaunch` hands back.** It normally produces a `Buffer` (an
+  arena payload) or a `DeviceBuffer`. A placeholder that carries a **graph value
+  id** is the obvious shape, and a buffer payload is the wrong one to borrow
+  from — it is arena data with a block's lifetime, and a graph's values are not
+  arena data. This is the first thing to design, because everything else in the
+  build hangs off it.
+- **Whether a recorded run is one evaluation or a chain of them.** The chain case
+  (`a = plrun k1 …; b = plrun k2 (…, a)`) is where the recording has to turn
+  the second dispatch's buffer into an edge, and the probe program already has
+  that shape.
 
 ### A graph's inputs are the function's free variables, and that is forced
 
@@ -588,32 +614,25 @@ value back through it is correct for the same reason.
 
 ### The walk is structural, and no dispatch runs while building a graph
 
-**Half of this is right and half was wrong; the wrong half is above.**
+**The title is now half wrong and the second half is the correction above.** The
+walk is structural *in shape* — the body's `Apply` nodes, each dynamic callee,
+the operator in it — but the body has to be **applied** for any of it to mean
+anything, so the walk happens *during* an evaluation rather than instead of one.
 
-Right: the `ParLaunch` node's own operand array is `[kernel, cfg]`, readable
-through `node_operation` and `array_items` **without evaluating that node** — and
-evaluating it runs a real dispatch, which is the one thing a build must not do.
+What survives unchanged:
 
-Wrong: the claim that the count and the buffers are "two things that need
-evaluating, neither of which dispatches". The **count** is a decided value on a
-node and that part holds. The **buffers** are not readable the same way, and the
-cfg as a whole is an unevaluated array-constructing node whose payload does not
-exist yet, so a value-level read of it fails. Reaching the count and the buffers
-means going through that node's *operation*, and the shape of that operation is
-not yet known.
+- Two passes, because `Graph::with_inputs` needs the input count before the
+  first `push`. Pass one collects `NodeFacts { kernel, count, inputs }` in
+  **body order** and numbers the free variables first-seen; pass two maps node
+  ids to value numbers and pushes. The map is the whole of the classification:
+  an input node not in `produced_by` is a free variable.
+- The reason the body is walked rather than the return's operand spine: a spine
+  sees only live nodes, so **it cannot find a dead tail**. The return is resolved
+  separately and recorded through `Graph::returning`, which is why a dead tail and
+  a return are independent facts.
 
-Wrong: "the walk enumerates `function_nodes(function)`". It enumerates the
-body's `Apply` nodes and descends into each dynamic callee (above). The *reason*
-the original wanted the body's own node list still stands, though — a return's
-operand spine sees only live nodes, so it cannot find a **dead tail**. The return
-is resolved separately and recorded through `Graph::returning`, which is why a
-dead tail and a return are independent facts.
-
-Still right: two passes, because `Graph::with_inputs` needs the input count before
-the first `push`. Pass one collects `NodeFacts { kernel, count, inputs }` in
-**body order** and numbers the free variables first-seen; pass two maps node ids
-to value numbers and pushes. The map is the whole of the classification: an
-input node not in `produced_by` is a free variable.
+What changes: "the count is a decided value and only it needs evaluating" is
+false. In an unapplied body *nothing* is decided.
 
 ### Refusals this design owes, all of them about a graph and not a run
 
