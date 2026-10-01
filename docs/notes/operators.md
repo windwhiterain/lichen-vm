@@ -207,3 +207,14 @@ oversight:
   hand-written expectation **and** an independent CPU reading of the IR.
 - The example programs `examples/operators.lichen` and `examples/gcd.lichen` are
   the user-visible statement of the set, and `tests/examples.rs` runs them.
+
+**Not covered, and named rather than left implied:** the *editor* grammars.
+`tree-sitter-lichen/grammar.js` still lists `==`/`<=` and `+`/`-`, so the new
+operators are unlisted in `queries/highlights.scm` (they do not colour) and a
+`a < b` may surface as an error node in an editor. The generated parser is
+regenerated from `grammar.js` by the tree-sitter CLI, which was not available
+here — and the grammar's precedence table and the `<`/`>` ambiguity are exactly
+what a blind edit would get wrong — so the file was left alone rather than
+changed unverified. Updating it is a follow-up with a working CLI:
+`cargo test --manifest-path tree-sitter-lichen/Cargo.toml`
+(see [tree-sitter-generated-files](tree-sitter-generated-files.md)).
