@@ -1239,15 +1239,16 @@ fn block<'a>(
                         .map(|b| {
                             let public = b.public;
                             let span = b.stmt.span();
-                            let (name, value, field) = match b.stmt {
+                            let (name, value, field, cached) = match b.stmt {
                                 Stmt::Binding(binding) => (
                                     Some(binding.name),
                                     binding.value,
                                     // A `let` binding is a block-local, never a
                                     // struct field.
                                     !binding.restrictive,
+                                    binding.cached,
                                 ),
-                                Stmt::Expr(e) => (None, e, true),
+                                Stmt::Expr(e) => (None, e, true, false),
                             };
                             RecordField {
                                 name,
@@ -1255,6 +1256,7 @@ fn block<'a>(
                                 value,
                                 public,
                                 field,
+                                cached,
                                 span,
                             }
                         })
