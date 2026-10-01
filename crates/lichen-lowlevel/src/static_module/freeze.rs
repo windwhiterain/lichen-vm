@@ -129,10 +129,10 @@ impl<P: Program> StaticModule<P> {
 
         // The ownership transfer: every frozen value is asked what it owns
         // outside the arena, and the artifact carries the obligations until it is
-        // dropped — which is its eviction (see `Program::release_obligations`).
+        // dropped — which is its eviction (see `ValueExt::release_obligations`).
         let mut releases: Vec<Box<dyn Release>> = Vec::new();
         for value in values.iter().flatten() {
-            P::release_obligations(*value, &mut releases);
+            value.release_obligations(&mut releases);
         }
 
         // Phase 2: collect, dedupe, and lay out the payload regions.  Only

@@ -66,7 +66,7 @@ use lichen_kernel_ir::{
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Handle, LowOperator, LowShape,
-    LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, StaticHandle, StaticModule,
+    LowValue, Module, ModuleKey, NodeId, OperatorExt, Program, Release, StaticHandle, StaticModule,
     ValueExt,
 };
 use lichen_utils::disjoint;
@@ -520,6 +520,40 @@ impl ValueExt for ComputeValue {
     /// payload alignment and the freeze layout follows it.
     fn alignment() -> usize {
         std::mem::align_of::<i64>()
+    }
+
+    /// A value that left its results **on the device** owns device memory, and a
+    /// freeze of it takes the obligation to give that memory back.
+    ///
+    /// The id alone cannot release: it names a buffer in the backend that issued
+    /// it.  That backend is the **installed** one — the same assumption `collect`
+    /// and `read` already make when they fetch by id — so the obligation holds the
+    /// `Arc` the lookup hands back, which also keeps the issuer alive for as long
+    /// as the obligation does.  A backend that is not installed has nothing to
+    /// release: its memory went with it.
+    fn release_obligations(&self, out: &mut Vec<Box<dyn Release>>) {
+        let ComputeValue::DeviceBuffer(resident) = self else {
+            return;
+        };
+        if let Some(backend) = lichen_kernel_ir::parallel_backend() {
+            out.push(Box::new(ReleaseResident {
+                backend,
+                id: resident.id,
+            }));
+        }
+    }
+}
+
+/// One device buffer's release, owed by the artifact that froze the value naming
+/// it (see [`ValueExt::release_obligations`]).
+struct ReleaseResident {
+    backend: std::sync::Arc<dyn lichen_kernel_ir::ParallelBackend>,
+    id: ResidentId,
+}
+
+impl Release for ReleaseResident {
+    fn release(self: Box<Self>) {
+        self.backend.release(self.id);
     }
 }
 
