@@ -9,7 +9,9 @@
 //! if that padding were not allocated the run would scribble past the buffers.
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
-use lichen_kernel_ir::{BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_kernel_ir::{
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, Pending,
+};
 
 /// A fragment over `(input, index)` — the shape a single-input parallel kernel has.
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
@@ -310,4 +312,102 @@ fn an_exact_workgroup_multiple_matches_too() {
     let expected: Vec<i64> = input.iter().map(|value| value + value + 1).collect();
     let device = check(&adds(), &input, &expected);
     println!("ran on {device}");
+}
+
+/// Two submissions in flight at once, the second fed from the first.
+///
+/// This is the property the pool exists for, and nothing else here covers it.
+/// Every other path waits before it returns, so this is the only place a
+/// command buffer is recorded while a previous submission may still be running,
+/// and the only place a dispatch is recorded against a buffer the earlier
+/// submission's shader may not have written yet. Getting `4x + 3` back says both
+/// halves held: the slots really are distinct, and the trailing barrier really
+/// does order two submissions rather than two dispatches in one recording.
+#[test]
+fn a_submission_can_be_fed_to_one_that_is_still_in_flight() {
+    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let count = 100;
+    let input: Vec<i64> = (0..count as i64).collect();
+
+    let first = context
+        .submit(&adds(), &[BufferSlot::Host(&input)], count)
+        .expect("the first submission is recorded");
+    // Deliberately not waited, and deliberately feeding the second from the
+    // first: `first.outputs()[0]` names a buffer the device has not promised to
+    // have written.
+    let first_output = first.outputs()[0];
+    let second = context
+        .submit(&adds(), &[BufferSlot::Resident(first_output)], count)
+        .expect("the second submission is recorded into a different slot");
+
+    let first_ids = Box::new(first)
+        .wait()
+        .expect("the first submission finishes");
+    let second_ids = Box::new(second)
+        .wait()
+        .expect("the second submission finishes");
+
+    let expected: Vec<i64> = input.iter().map(|value| 4 * value + 3).collect();
+    assert_eq!(
+        context
+            .fetch(second_ids[0], count)
+            .expect("the chained result comes back off the device"),
+        expected,
+        "adds applied to adds, recorded before the first had finished"
+    );
+    // A consumer of the intermediate, fetched after its own wait, so this one is
+    // a plain fetch of a waited buffer.
+    assert_eq!(
+        context
+            .fetch(first_ids[0], count)
+            .expect("the intermediate comes back"),
+        input
+            .iter()
+            .map(|value| value + value + 1)
+            .collect::<Vec<i64>>(),
+        "the intermediate is right too, and only once its submission was waited for"
+    );
+    context.release(first_ids[0]);
+    context.release(second_ids[0]);
+}
+
+/// A submission nobody waited for is still released when it is dropped.
+///
+/// Nothing in a run relies on this — a run submits and waits inside one call —
+/// but the resources it holds are a claimed slot, a staging buffer the device
+/// may still be copying out of, and upload targets nothing else can name. The
+/// drop waits, and the assertion is that a run afterwards is still right: at
+/// depth two, a drop that did *not* wait would hand the next acquisition a
+/// staging buffer with a copy still in flight, and the values would be wrong
+/// rather than slow.
+#[test]
+fn dropping_a_submission_nobody_waited_for_still_frees_it() {
+    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let count = 100;
+    let input: Vec<i64> = (0..count as i64).collect();
+
+    for round in 0..4 {
+        drop(
+            context
+                .submit(&adds(), &[BufferSlot::Host(&input)], count)
+                .expect("the abandoned submission is recorded"),
+        );
+        // An id from an abandoned submission is still a live buffer, and it is
+        // still readable — the drop waited, so the data is there.
+        let pending = context
+            .submit(&adds(), &[BufferSlot::Host(&input)], count)
+            .expect("the next submission is recorded");
+        let ids = Box::new(pending)
+            .wait()
+            .expect("the next submission finishes");
+        assert_eq!(
+            context.fetch(ids[0], count).expect("comes back"),
+            input
+                .iter()
+                .map(|value| value + value + 1)
+                .collect::<Vec<i64>>(),
+            "round {round}: a run after an abandoned one is right"
+        );
+        context.release(ids[0]);
+    }
 }

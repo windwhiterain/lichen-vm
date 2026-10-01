@@ -265,7 +265,7 @@ record-and-submit side and the wait side, and that is still unmeasured.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, thirteen commits, not pushed):
+**Built and committed** (`feature/graph-jit`, fifteen commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -282,15 +282,15 @@ record-and-submit side and the wait side, and that is still unmeasured.
 | `65582db` | the sweep says build it, and says 10% was the worst row |
 | `519c9d1` | `run_chain` — a chain in one submission, verified and measured |
 | `751cd2b` | the fused chain is checked and faster everywhere |
+| `de5424c` | the pool of submission slots, configurable and defaulting to 2 |
+| *this one* | `Pending` on the backend contract — a submission handed back unwaited |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-the **entry point that lets a caller submit without waiting**, and the
-submit/wait split. The pool of submission slots *is* built — see
-[The next step, in order](#the-next-step-in-order) — but nothing outside
-`dispatch.rs` can yet hold two of them in flight, so depth 2 is configured and
-round-robined over, and its one interesting path is not taken.
+the executor that schedules submissions and closures, and the submit/wait split
+that measures what the overlap is worth.
 
-**Measured:** the count sweep, and the fused chain it predicted.
+**Measured:** the count sweep, the fused chain it predicted, and that two
+submissions can be in flight and chained at the same time.
 
 ## The pool of submission slots
 
@@ -351,15 +351,72 @@ than once. The fused chain's numbers are unchanged by this — 0.119 ms against
 0.113 ms at 1 024 elements and 4.468 ms against 4.669 ms at a million, both inside
 the run-to-run spread the tables below already record.
 
-**The one thing this does not do is make overlap reachable.** `acquire`,
-`Segment` and `Token` are private to `dispatch.rs`, deliberately: a public
-`Segment::record` would take a `vk::Pipeline` and a `&[vk::DescriptorBufferInfo]`,
-and leaking Vulkan's representation into a public API is exactly what
-`lichen-kernel-ir` exists to prevent. The entry point that a host program can
-actually use has to be run-shaped, and run-shaped brings the next question —
-**when do the resident ids escape, before the wait or after it** — which is a
-design decision rather than a plumbing one, so it belongs with the measurement
-that will show what the overlap is worth.
+**`acquire`, `Segment` and `Token` are private**, and the entry point that is
+public is `ParallelBackend::submit`, which returns a
+[`Pending`](#the-pending-submission) rather than ids. A public `Segment::record`
+would take a `vk::Pipeline` and a `&[vk::DescriptorBufferInfo]`, and putting
+those in a public signature hands the backend's representation to every caller,
+which is what `lichen-kernel-ir` exists to prevent.
+
+## The pending submission
+
+`ParallelBackend::submit` records a run, hands it to the queue, and returns a
+`Box<dyn Pending>` **without waiting**. The ids it will produce are on
+`Pending::outputs`, and their contents the device has not promised to have
+written — they are for handing to the next node as `BufferSlot::Resident`, and
+that is the chaining the overlapping schedule needs.
+
+**The question this settles is when the ids escape, and the answer is that the
+question was badly posed.** It was put as *at submit, or at the sync*, and at
+the sync is not Async: chaining node `n + 1` needs node `n`'s id, so ids only at
+the sync means waiting for `n` before recording `n + 1`, which leaves the device
+idle for exactly as long as the submission was supposed to be overlapped. That is
+Serial with an extra step.
+
+The real shape is a third thing. **The pending object holds the ids, the token
+and the upload targets, and a demand point is `wait` followed by an ordinary
+fetch.** So the ids a *host* ever sees have been waited for — the graph returns
+its outputs at the end of a run, after the sync — while the ids the *executor*
+chains on have not, and the executor only ever hands them to a recording. The
+closure invariant that starts this document is what makes the second population
+safe: a native closure cannot capture a graph's own outputs, so no closure can
+reach an unwaited id at all.
+
+**The upload targets are the reason a pending object is necessary rather than a
+token.** A host input is `memcpy`'d into a buffer the device is about to copy
+out of, and that buffer is not resident, so nothing else can name it. It has to
+survive until the wait, which means it has to travel with the submission — and a
+bare `Token` has nowhere to put it.
+
+**`Pending::wait` consumes the pending, and dropping one waits.** One submission
+is waited for exactly once, because by the time a second wait ran, the slot could
+be running a different submission and the wait would have proved the wrong thing.
+The `Drop` is a backstop rather than a mechanism: a run submits and waits inside
+one call, so a pending that is merely dropped should not exist, and if one does,
+waiting turns a use-after-free into a slowdown.
+
+**`ParallelBackend::submit` has a default that calls `run`.** A backend that
+cannot overlap anything still satisfies the contract; it just never collects from
+it. Requiring an implementation would mean every stub and every future backend
+wrote a method whose only correct body is the one that does nothing, and a caller
+could not tell "cannot overlap" from "has not implemented it yet". The GPU is
+the only backend here that overrides it, and it can: it has a pool, so a
+submission handed back is a **different slot** from the one the next submission
+takes.
+
+**Checked on a real device, both halves.** `a_submission_can_be_fed_to_one_that_is_still_in_flight`
+records two submissions, feeds the second from the first's output *without
+waiting for the first*, and gets `4x + 3` back — which says the slots really are
+distinct and that the trailing barrier orders two *submissions*, not just two
+dispatches inside one recording.
+`dropping_a_submission_nobody_waited_for_still_frees_it` covers the backstop: at
+depth two, a drop that did not wait would hand the next acquisition a staging
+buffer with a copy still in flight, and the values afterwards would be wrong
+rather than slow.
+
+**What is still missing is the caller.** Nothing schedules: a graph executor that
+submits a node, runs the closures between, and waits at the demand points does
+not exist, and neither does the measurement of what that is worth.
 
 ## Two rules, settled before anything depended on them, and since executed (`6c5ac4d`, `519c9d1`)
 
@@ -429,16 +486,14 @@ carry that count, and it is the only part of this rule with no code behind it.
    than today. Whether more than 2 earns its keep depends on how much host work
    a closure does, which is unmeasured.
 
-   **What is left of it is the entry point, not the pool.** See
-   [The pool of submission slots](#the-pool-of-submission-slots) for the shape
-   and for why the public method has to be run-shaped: a `Segment` that a host
-   could record into would take `vk::Pipeline` and `vk::DescriptorBufferInfo`,
-   and putting those in a public signature hands the backend's representation to
-   every caller. The open question that raises is **when the resident ids
-   escape** — at submit, so the caller can chain them immediately, or at the sync,
-   so an id can never name a buffer the device has not written yet. Chaining
-   wants the first, and the second wants it, and a `fetch` on a pending id returns
-   **wrong numbers** rather than failing.
+   **What is left of it is the executor, not the pool.** See
+   [The pool of submission slots](#the-pool-of-submission-slots) and
+   [The pending submission](#the-pending-submission) for the shapes. The
+   contract has a `submit` that hands a submission back unwaited and a
+   `Pending::wait`, the pool is two deep by default, and a host program can hold
+   two submissions in flight. What does not exist is anything that *decides* to:
+   a graph executor that submits a node, runs the closures between, and waits at
+   the demand points.
 
 2. **Overlap does not need language-level async, and that is worth writing
    down** because it looks like it does. The GPU being in flight is a driver

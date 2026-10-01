@@ -443,10 +443,10 @@ Named rather than implied, because each is a decision not a gap:
   at 1 024 elements, 3.0× at 65 536, 1.23× at a million. See
   [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
   mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
-  What is left is the **entry point that lets a caller submit without waiting** —
-  the pool of submission slots is built and configured (`GpuConfig { slot_depth }`,
-  default 2), but nothing outside `dispatch.rs` can yet hold two of them in
-  flight — and the submit/wait split that says how
+  What is left is not the pool and not the entry point — `ParallelBackend::submit`
+  hands a submission back unwaited and `Pending::wait` finishes it, checked on a
+  real device by chaining two in-flight submissions — but the **executor** that
+  decides when to submit and when to wait, and the submit/wait split that says how
   much of the above Async can reach — the numbers here are the Batch ceiling,
   where fifteen submits *and* fifteen waits disappear, while Async keeps the
   submits and removes only the waits. Its shape is a linear chain of one

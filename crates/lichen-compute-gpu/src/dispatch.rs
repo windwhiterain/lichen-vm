@@ -615,12 +615,73 @@ impl GpuContext {
     /// the shader ran, and [`Self::fetch`] is what brings them home.  A run whose
     /// outputs are fed to another run — or never read at all — pays for no
     /// transfer down.
+    ///
+    /// Literally [`Self::submit`] then a wait, and the shared half is
+    /// [`Self::stage_run`] so the two cannot drift apart.
     pub fn run(
         &self,
         fragment: &KernelFragment,
         inputs: &[BufferSlot],
         count: usize,
     ) -> Result<Vec<ResidentId>, RunError> {
+        let staged = self.stage_run(fragment, inputs, count)?;
+        // The upload targets are recycled after the wait rather than in a
+        // `finally`, so a wait that fails does not leave them unreachable — and
+        // a fence that has not signalled in thirty seconds is a device that has
+        // stopped, so handing its memory back is the only honest thing left.
+        let waited = self.sync(staged.token);
+        for buffer in staged.scratch {
+            self.recycle(buffer);
+        }
+        waited?;
+        Ok(staged.ids)
+    }
+
+    /// [`Self::run`], handed back **before the device is done**.
+    ///
+    /// This is the one place the host can be ahead of the device, and it is only
+    /// a place: whether the device is still busy when the next thing is recorded
+    /// is a property of the device and of how much work the host does in
+    /// between, which is the caller's measurement to make and not this
+    /// function's promise.
+    ///
+    /// The returned ids name buffers the shader **has not been guaranteed to
+    /// have written**. They are for handing to the next run as
+    /// [`BufferSlot::Resident`], and a run that needs their values waits first —
+    /// see [`GpuPending`].
+    pub fn submit(
+        &self,
+        fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<GpuPending<'_>, RunError> {
+        let staged = self.stage_run(fragment, inputs, count)?;
+        Ok(GpuPending {
+            context: self,
+            token: staged.token,
+            scratch: Some(staged.scratch),
+            ids: staged.ids,
+            finished: false,
+        })
+    }
+
+    /// Record one run and hand it to the queue, leaving three things for the
+    /// caller to finish: the token that waits for it, the ids it will produce,
+    /// and the scratch its host inputs were staged through.
+    ///
+    /// The scratch is the reason this is a separate method. Those buffers are
+    /// not resident, so nothing else can name them and **this submission is the
+    /// only thing keeping them alive** — the device is copying out of one of
+    /// them right now. A caller that waits has to hold them across the wait, and
+    /// a caller that does not has to hold them until someone does. Neither
+    /// [`Self::run`] nor [`Self::submit`] can let the buffer pool see them before
+    /// then, so they travel in the return value.
+    fn stage_run(
+        &self,
+        fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Staged, RunError> {
         let binding = Binding {
             inputs: inputs.len(),
             outputs: fragment.outputs,
@@ -730,11 +791,12 @@ impl GpuContext {
 
         segment.begin()?;
         segment.record(pipeline, &descriptors, &uploads, count)?;
-        segment.submit_and_wait()?;
-
-        // Success: the output buffers stop being scratch and become the ids the
-        // caller is handed.  Nothing can fail from here, and the guard owns
-        // whatever is left in `buffers` — the host upload targets — either way.
+        // Nothing below this can fail, which is why the buffer bookkeeping comes
+        // after the submit rather than before it: a failed submit means nothing
+        // reached the queue, and the guard still owns every buffer, so they all
+        // go back to the pool.  After it, the outputs become ids and the upload
+        // targets become the submission's to hold.
+        let token = segment.submit()?;
         let mut resident = self.resident.lock().unwrap();
         let mut ids = Vec::with_capacity(binding.outputs);
         for buffer in scratch
@@ -752,7 +814,15 @@ impl GpuContext {
             );
             ids.push(id);
         }
-        Ok(ids)
+        // The guard is now empty and drops to nothing; whatever is left is the
+        // host upload targets, which the device is reading through.
+        let scratch = std::mem::take(&mut scratch.buffers);
+        drop(resident);
+        Ok(Staged {
+            token,
+            ids,
+            scratch,
+        })
     }
 
     /// Record `links` dispatches into **one** command buffer, submit once, wait
@@ -1503,6 +1573,23 @@ impl lichen_kernel_ir::ParallelBackend for GpuContext {
         GpuContext::run(self, fragment, inputs, count).map_err(|error| error.to_string())
     }
 
+    /// The only backend here that overrides the default, and the reason it can:
+    /// it has a pool, so a submission handed back is a **different slot** from
+    /// the one the next submission will take, and the host's work in between is
+    /// the device's work overlapping rather than waiting.
+    fn submit<'backend>(
+        &'backend self,
+        fragment: &KernelFragment,
+        inputs: &[BufferSlot],
+        count: usize,
+    ) -> Result<Box<dyn lichen_kernel_ir::Pending + 'backend>, String> {
+        // The inherent form, named explicitly: `self.submit` would be the trait
+        // method recursively.
+        Ok(Box::new(
+            GpuContext::submit(self, fragment, inputs, count).map_err(|error| error.to_string())?,
+        ))
+    }
+
     fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
         GpuContext::fetch(self, id, count).map_err(|error| error.to_string())
     }
@@ -1564,6 +1651,88 @@ struct Transfer {
     /// elements of bus traffic and not `padded` — and the surplus lanes still read
     /// a defined `0` rather than whatever was in the allocation.
     tail: vk::DeviceSize,
+}
+
+/// What one run leaves behind for whoever is going to wait for it.
+///
+/// Produced by [`GpuContext::stage_run`] and consumed by exactly two callers,
+/// which is the whole reason it is a struct: the buffers in `scratch` are
+/// unreachable by name, so the only correct way to think about them is "they
+/// belong to this submission until it is waited for".
+struct Staged {
+    /// The slot the submission is in, and the only way to wait for it.
+    token: Token,
+    /// The ids the submission will produce, valid once the token is waited for.
+    ids: Vec<ResidentId>,
+    /// Buffers a host input was uploaded into. Not resident, so nothing else can
+    /// reach them while the copy out of them is in flight.
+    scratch: Vec<DeviceBuffer>,
+}
+
+/// A run this context has recorded and handed to the queue, and has not waited
+/// for.
+///
+/// It is the implementation of [`lichen_kernel_ir::Pending`] for this backend,
+/// and it is what makes a graph's "only wait where something actually needs the
+/// data" schedule expressible: between [`GpuContext::submit`] and
+/// [`Pending::wait`] the host is doing whatever else the run needs to do, and
+/// the device is not being held up waiting to be asked.
+///
+/// # Dropping it waits
+///
+/// A dropped submission would leave a claimed slot, a staging buffer the device
+/// may be copying out of, and upload targets nothing else can name. So the
+/// `Drop` here waits and releases, which makes the mistake a slowdown rather
+/// than a use-after-free. It is a backstop and not a mechanism: a run submits
+/// and waits inside one call, so a pending that is merely dropped should not
+/// exist, and if one does the wait is the wrong-but-safe answer.
+pub struct GpuPending<'backend> {
+    context: &'backend GpuContext,
+    token: Token,
+    /// `None` once the submission has been waited for. An `Option` rather than a
+    /// flag because the buffers have to be *moved out* to be recycled, and this
+    /// type has a `Drop`.
+    scratch: Option<Vec<DeviceBuffer>>,
+    ids: Vec<ResidentId>,
+    finished: bool,
+}
+
+impl GpuPending<'_> {
+    /// Wait for the submission and release what it held, if it has not been
+    /// waited for already.
+    fn finish(&mut self) -> Result<(), RunError> {
+        if self.finished {
+            return Ok(());
+        }
+        self.finished = true;
+        // The order is fixed: the fence first, then the memory it was reading.
+        // Recycling an upload target while the copy out of it is in flight would
+        // hand the buffer to the next run to write into.
+        self.context.sync(self.token)?;
+        for buffer in self.scratch.take().into_iter().flatten() {
+            self.context.recycle(buffer);
+        }
+        Ok(())
+    }
+}
+
+impl lichen_kernel_ir::Pending for GpuPending<'_> {
+    fn outputs(&self) -> &[ResidentId] {
+        &self.ids
+    }
+
+    fn wait(mut self: Box<Self>) -> Result<Vec<ResidentId>, String> {
+        self.finish().map_err(|error| error.to_string())?;
+        Ok(std::mem::take(&mut self.ids))
+    }
+}
+
+impl Drop for GpuPending<'_> {
+    fn drop(&mut self) {
+        // A wait that fails is a fence that did not signal, which `sync` has
+        // already said out loud. Saying it again here would only bury it.
+        let _ = self.finish();
+    }
 }
 
 /// A device-local buffer of `i64` elements.
