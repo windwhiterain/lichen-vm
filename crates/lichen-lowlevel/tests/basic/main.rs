@@ -59,6 +59,10 @@ lichen_utils::enum_ext! {
         U128(AnyHandle<u128>),
         /// A `char` payload, four bytes per char.
         String(AnyHandle<[char]>),
+        /// A value that keeps a node alive across its own evaluation, and says
+        /// so through [`ValueExt::traced`]. The reference is invisible to the
+        /// GC any other way: it is not an operand edge and not an array item.
+        HoldsNode(NodeId),
     }
     + LowValue;
 }
@@ -79,6 +83,11 @@ impl ValueExt for TestValue {
     // alignment keeps the `String` copies over-aligned, which is safe.
     fn alignment() -> usize {
         16
+    }
+    fn traced(&self, visit: &mut dyn FnMut(NodeId)) {
+        if let TestValue::HoldsNode(node) = self {
+            visit(*node);
+        }
     }
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {

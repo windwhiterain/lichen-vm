@@ -326,6 +326,29 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 42);
 }
 #[test]
+fn a_value_that_declares_a_node_keeps_it_across_compaction() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let grandchild = m.add_block(Some(child));
+    // The held node is homed in the grandchild and reachable *only* through the
+    // value: no operand edge (the holding node is already evaluated, and a
+    // cached node's operand is not walked) and no array item. Without
+    // `traced` the GC has no way to see it, so it dies with the grandchild.
+    let held = u128_node(&mut m, grandchild, 7);
+    let ret = m.add_node(child, None, Some(TestValue::HoldsNode(held)));
+
+    let value = m.garbage_collect(ret).expect("the holding node's value");
+    assert_eq!(value, TestValue::HoldsNode(held));
+
+    // The vacated subtree is gone, and the node the value named came with it.
+    assert!(!m.blocks.contains_key(child));
+    assert!(!m.blocks.contains_key(grandchild));
+    assert_eq!(m.node_block(held), root);
+    // Still readable — the point of naming it, not merely of surviving.
+    assert_eq!(u128_of(m.evaluate_node_deep(held, None)), 7);
+}
+#[test]
 fn garbage_collect_hoists_unevaluated_scalar_operand() {
     let mut m = Module::new();
     let root = m.add_block(None);

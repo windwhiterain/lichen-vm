@@ -439,6 +439,52 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn alignment() -> usize {
         1
     }
+    /// Hand every node this one keeps alive to `visit`.
+    ///
+    /// **One kind of thing, exactly like an array item.** The GC walks a node by
+    /// looking at that node's *value* and dispatching on its shape — an array's
+    /// items, a table's entries, a function's scope. That dispatch is the
+    /// walk's business, so a value names only *nodes*, and the same
+    /// [`Module::garbage_collect_node`] that walks an array item walks these. A
+    /// function is not a separate kind here: a closure is kept alive by naming
+    /// the node it is the value of, and the walk takes it from there.
+    ///
+    /// # A callback and not a slice
+    ///
+    /// `&[NodeId]` would demand that a value carry its references as one
+    /// contiguous run it could hand back by slice, and that is a shape no real
+    /// holder has. A compiled graph interleaves the nodes it keeps with the
+    /// kernel ids, counts and element data it also holds, so there is no slice
+    /// of it that is "the node list" — naming them is a walk over the structure,
+    /// not a read off the front of it. A callback also costs a value that keeps
+    /// nothing a single `&[]`, and lets a holder decide *what* to name as it
+    /// goes rather than having decided it at build time.
+    ///
+    /// The default is empty, and for the compute vocabulary that is not a
+    /// simplification but the truth: a `Buffer` payload is element bytes, a
+    /// `DeviceBuffer` is an id and a length, a kernel id is a registry slot
+    /// number. None of them names a node, so none of them is an edge the GC has
+    /// to follow. A value that *does* keep nodes alive past its own evaluation —
+    /// a compiled graph holding the closures it will call later — answers this,
+    /// and gets a hard error if it lies.
+    ///
+    /// # Why this is a seam and not a convenience
+    ///
+    /// The GC's contract is that everything reachable from a live value is moved
+    /// out of the block being vacated *before* [`Module::drop_block`] removes it
+    /// — and `drop_block` deletes by block membership, not by reachability. An
+    /// operator's result is cached, and a cached node's operand is deliberately
+    /// not followed ("a cached value means the node is memoized and its operand
+    /// is dead"). So a value holding a reference only the GC cannot see is
+    /// dropped at the end of the very block evaluation that produced it, with no
+    /// diagnostic. That is the failure this closes.
+    ///
+    /// Nodes only, and only from this module: a static-module object is pinned by
+    /// the registry for as long as the value can be read, so it needs no edge,
+    /// and naming it would be a category error rather than a stronger claim.
+    fn traced(&self, visit: &mut dyn FnMut(NodeId)) {
+        let _ = visit;
+    }
     /// Full equality of two values: handle payloads compare by content
     /// (same variant, byte-wise against the pointed-to allocation), every
     /// other pair is the derived [`PartialEq`].  This is the equality
@@ -474,6 +520,61 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+
+    /// Evaluate this operator's operand and hand the **value** to [`Self::run`].
+    ///
+    /// The VM calls this rather than `run`, and the default is exactly what the
+    /// VM did before this method existed — including the deep pass, the
+    /// `Parameterized` read-back, and the nullary stand-in — so an operator that
+    /// does not override it cannot tell the difference.
+    ///
+    /// # Why an operator would override it
+    ///
+    /// [`Self::run`] is handed a value with the operand's structure already
+    /// collapsed into it. That is the right shape for an operator that answers
+    /// from the value alone, and the wrong one for an operator that has to
+    /// decide for itself *when* its operand is evaluated: the module is already
+    /// there, but the node the operand hangs off is not, so there is nowhere to
+    /// start. An operator that keeps lichen references alive past its own call —
+    /// a compiled graph that holds the closures it will call later — needs that
+    /// node, and needs it unevaluated, because the references it must keep alive
+    /// are in the structure.
+    ///
+    /// Overriding this is that capability, and it is **only sound together with
+    /// [`ValueExt::traced`]**: a reference kept past this call is invisible to
+    /// the GC unless the value holding it declares it, and the default GC
+    /// contract is that everything reachable moves out of the block before it is
+    /// dropped.
+    fn run_deferred(
+        &self,
+        operand: Option<NodeId>,
+        block: BlockId,
+        module: &mut Module<P>,
+    ) -> P::Value {
+        let value = match operand {
+            Some(node) => {
+                let value = module.evaluate_node_deep(node, Some(block));
+                // The deep pass returns before it writes `evaluated_deep` when
+                // it refuses on budget exhaustion, so an absent node or an unset
+                // flag means "concreteness unknown" — read as parameterized,
+                // never as proven concrete.
+                let parameterized = module
+                    .nodes
+                    .get(node)
+                    .is_none_or(|node| node.evaluated_deep.is_none_or(|deep| deep.parameterized));
+                if parameterized {
+                    P::Value::from(LowValue::Parameterized)
+                } else {
+                    value
+                }
+            }
+            // A nullary operator (e.g. `TypeOperator::Fresh`) has no operand
+            // node: the honest stand-in is the computed-nothing value — never
+            // the `None` unit value, which a program can genuinely produce.
+            None => P::Value::from(LowValue::Void),
+        };
+        self.run(value, block, module)
+    }
 
     /// Whether a callee node the lowlevel cannot prove a function is a value
     /// this operator vocabulary applies.

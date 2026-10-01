@@ -1,7 +1,8 @@
 use stacksafe::stacksafe;
 
 use crate::{
-    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId, Program,
+    AnyFunctionId, AnyHandle, AnyNodeId::Dynamic as Dyn, BlockId, LowValue, Module, NodeId,
+    Program, ValueExt,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -133,9 +134,25 @@ impl<P: Program> Module<P> {
                 }
                 P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(function)))
             }
-            // A program-specific value may carry a handle into an arena —
-            // relocate it into the target block like any other payload.
-            None => Self::copy_ext(self, value, target),
+            // A program-specific value may carry a handle into an arena, and
+            // may carry references the lowlevel cannot see on its own: an
+            // operator's result is cached, and a cached node's operand is not
+            // followed, so a value holding a node has to name it or the node
+            // dies with the block this walk is vacating. `traced` is walked by
+            // this same function, one level up from here, so the shape dispatch
+            // above is what resolves a traced node into an array's items, a
+            // table's entries or a function's scope — a value declares nodes and
+            // nothing else.
+            None => {
+                // The walked value is discarded, exactly as the array and table
+                // arms discard theirs: a node keeps its id across the move, so
+                // only its block changes, and this value holds the id.
+                let mut walk = |node: NodeId| {
+                    self.garbage_collect_node(node, source, target);
+                };
+                value.traced(&mut walk);
+                Self::copy_ext(self, value, target)
+            }
             _ => value,
         });
         self.write_node_value(node, value);
