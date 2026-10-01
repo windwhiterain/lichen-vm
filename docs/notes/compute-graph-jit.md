@@ -667,8 +667,17 @@ only builds a type marker), so pinning means holding a node with a block's
 lifetime, which is the hazard above.
 
 The slot's index **is** its number, so `ins(i)` is the `i`-th argument and no
-ordering has to be guessed. An unread slot is still an input the caller passes
-and nothing consumes, which is visible in the source that caused it.
+ordering has to be guessed.
+
+The build binds the parameter to a tuple of `GraphInput(i)` placeholders and
+applies the body, which is the ordinary VM path — `$graph` builds the `Apply`
+node itself and evaluates it, so the cloning, unification and pattern walk are
+the VM's own and no lowlevel seam has to grow for this. Reading `ins(i)` yields
+`GraphInput(i)` and reading a dispatch's output yields `GraphValue(v)`; the two
+are distinguishable at the point of use, which is what lets a literal count stay
+a constant. See [The arity is the parameter's
+length](#the-arity-is-the-parameters-length-and-the-probe-is-why) for how the
+tuple is sized and how the one fact that is not structural is checked.
 
 #### The count is a value, because a program's count is
 
@@ -707,25 +716,39 @@ The two roles are asked of the table separately, and each refuses by name: a
 count edge that resolves to data, and a buffer input that resolves to a number,
 are different mistakes with different causes.
 
-#### The graph's inputs are found by reading the parameter, not by traversing
+#### The arity is the parameter's length, and the probe is why
 
-The build binds the parameter to a tuple of placeholders and applies the body,
-which is the ordinary VM path — `$graph` builds the `Apply` node itself and
-evaluates it, so the cloning, unification and pattern walk are the VM's own and
-no lowlevel seam has to grow for this.
+**This paragraph was written twice and the probe deleted the first version of
+it.** It said the placeholder tuple has to be built at a ceiling and trimmed to
+the highest slot the recording saw, with a named refusal for reading past the
+ceiling, because the body's read positions are not visible before the apply.
+Half of that survives and half of it does not, and the difference is worth
+writing down because the tidier version is the wrong one.
 
-Reading `ins(i)` yields `GraphInput(i)`, and reading a dispatch's output yields
-`GraphValue(v)`. The two are distinguishable at the point of use, which is what
-lets a literal count stay a constant: a placeholder is a value the recorder put
-there, and a literal is a number the program wrote.
+What the probe found:
 
-The placeholder tuple has to be long enough for the highest index the body reads
-and the body decides that, so the tuple is built at a ceiling, the recording
-trims to the highest slot actually read, and a read past the ceiling is a
-refusal naming the index. **Trimming rather than renumbering is the whole
-point**: renumbering in first-seen order is the same silent-wrong-data trap this
-input rule exists to remove, and a graph whose inputs are numbered by evaluation
-order asks the user to match an order they cannot see.
+- a read of `ins(i)` compiles to a **bare cell** — no operation, no subscript,
+  and not even a member of the parameter's class. So which read is which slot is
+  **not visible in the unapplied body at all**, and the decided `USize(0)` that
+  looks like an input position belongs to the extraction of the *cfg slot* out
+  of the operand pair. A lowering that read it would conclude the graph takes one
+  input and silently drop the rest.
+- **but the parameter cell is a tuple with one cell per read**, and its length is
+  the arity. It needs no evaluation, so `Graph::with_inputs` gets its number
+  before anything runs, and the placeholder tuple is sized from it.
+
+So there is no ceiling, no trim, and no refusal for reading past one. The
+ceiling was a symptom of looking for the arity in the wrong place.
+
+**Which read is which slot is settled by the apply, and it is settled by
+position.** That is the one fact in this whole input rule that cannot be read
+structurally, so it is checked by running a function that reads its parameter
+**back to front** and comparing the numbers against the kernel's closed form: a
+caller passing `(count, buffer)` has to reach the count slot and the buffer slot
+respectively, and read-order numbering would have swapped them into a dispatch
+that reads a number as a buffer. A silently wrong answer rather than a refusal is
+the only class of bug this repository cares most about, so it is checked by
+behaviour and not by inspection.
 
 #### What is left after this
 
@@ -812,9 +835,10 @@ rule the rest of the tree follows.
   value": the graph would have to hold a `Buffer` that lives in a block arena, and
   `drop_block` takes it away by block membership. A graph function that takes its
   inputs as its parameter has no such problem.
-- **A parameter slot read past the ceiling the placeholder tuple was built at.**
-  Name the index and the ceiling. It is a build-time bound, not a semantic one, so
-  the message says which number to raise.
+- **A parameter that is not a tuple.** The arity is the parameter cell's tuple
+  length, so a function whose parameter is a single buffer or a number has no
+  input list to be the argument to. Name that rather than reporting a length of
+  zero and building a graph nobody can call.
 - **A count that is a negative number, or a buffer input that is a number, or a
   count that is data.** Three different mistakes, so three messages; the runner
   asks the two roles of a value separately and refuses rather than coercing.

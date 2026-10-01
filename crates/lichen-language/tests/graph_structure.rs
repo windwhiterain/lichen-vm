@@ -32,6 +32,16 @@
 //! *applying* the function and recording what it dispatches, not by reading a
 //! template. See
 //! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
+//!
+//! **And a read of the parameter is a bare cell, while the parameter itself is a
+//! tuple with one cell per read.** So a graph's *arity* is readable from the
+//! unapplied function — `array_items(function.parameter).len()` — which is what
+//! sizes the placeholder tuple a build binds the parameter to, and there is no
+//! ceiling and nothing to trim. Which read is which slot is not visible
+//! structurally at all; the apply settles it, and it settles it by the position
+//! the source names rather than by the order the body reads. See
+//! [`a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length`] and
+//! [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
 
 use std::sync::Arc;
 
@@ -44,7 +54,7 @@ use lichen_lowlevel::{
 };
 use lichen_utils::extend::AsEnum;
 
-use lichen_compute::ComputeOperator;
+use lichen_compute::{ComputeOperator, ComputeValue};
 
 /// Compile a program the way a host does — imports resolved through a package
 /// store, so `import "compute.lichen"` brings the compute plugin in — and hand
@@ -333,5 +343,201 @@ fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() 
         module.node_value(AnyNodeId::Dynamic(target)),
         None,
         "and the captured struct it reads out of has no value yet either"
+    );
+}
+
+/// The index a `value_of` extraction reads at, if it is a decided number.
+fn index_position(module: &Module<LangProgram>, node: NodeId) -> Option<usize> {
+    let operation = module.node_operation(node)?;
+    let pair = items(module, operation.operand?);
+    let subscript = *pair.get(1)?;
+    match module.node_value(AnyNodeId::Dynamic(subscript))?.as_enum() {
+        Some(LowValue::USize(index)) => Some(index),
+        _ => None,
+    }
+}
+
+/// A graph function: its dispatch reads both its count and its buffer out of
+/// its own parameter, which is where a graph's inputs come from.
+///
+/// The buffer slot is a **tuple**, because that is the shape `ParLaunch` reads
+/// (`cfg(1)` is a tuple of `Buffer` values) and therefore the shape a source
+/// program has to write — `compute.plrun k (n, (buffer,))`, not
+/// `compute.plrun k (n, buffer)`.
+const FROM_PARAMETER: &str = r#"@{
+  compute = import "compute.lichen"
+@}
+adder = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 3]
+}) "Cpu"
+step = ins => {
+  out = compute.plrun adder (ins(0), (ins(1),))
+  out
+}
+step
+"#;
+
+/// **A parameter read is a bare cell, and the arity is the parameter tuple's
+/// length.** The second correction this probe forced, and it is what decides how
+/// a graph is sized.
+///
+/// `ins(0)` and `ins(1)` do not compile to two extractions off the parameter.
+/// The compiler resolves each read into a cell of its own, so the cfg that
+/// reaches the dispatch has two elements that carry **no operation, no
+/// subscript, and an unbound value** — there is no `ins(i)` whose `i` a walk
+/// could read. The design had assumed there was, because the operand pair's
+/// subscript is a decided `USize(0)`; that subscript belongs to the extraction
+/// of the **cfg slot**, not to the body's read, and reading it as an input
+/// position would conclude the graph takes one input and silently drop the rest.
+///
+/// **But the arity is still decidable before the apply**, and from the parameter
+/// rather than from the body: the parameter cell is a tuple with one cell per
+/// read, so its length is how many inputs a caller has to satisfy. That is what
+/// sizes the placeholder tuple `$graph` binds the parameter to, and it is why
+/// there is no ceiling, no trim, and no refusal for reading past one. The design
+/// had a ceiling and a named refusal for it; the body does not need either.
+///
+/// Which read is which slot is *not* visible here — the cfg's cells are not the
+/// parameter's cells, and are not even in their classes. That half is settled by
+/// the apply, and is checked behaviourally in
+/// [`a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order`].
+#[test]
+fn a_parameter_read_is_a_bare_cell_and_the_arity_is_the_tuples_length() {
+    let (mut module, root) = run(FROM_PARAMETER);
+    let function = function_of(&mut module, root);
+    let parameter = module.functions[dynamic(function)].parameter;
+
+    let dispatch = the_dispatch(&module, function).expect("the body dispatches");
+    let operands = items(
+        &module,
+        module.node_operation(dispatch).unwrap().operand.unwrap(),
+    );
+    let cfg = through_index(&module, operands[1]);
+
+    // The cfg is a readable two-element array, and both of its elements are
+    // **bare cells**: no operation, and an unbound value. There is no `ins(i)`
+    // subscript anywhere in them.
+    let cfg_items = items(&module, cfg);
+    assert_eq!(cfg_items.len(), 2, "(count, buffers)");
+    for (position, &cell) in cfg_items.iter().enumerate() {
+        assert!(
+            module.node_operation(cell).is_none(),
+            "cfg[{position}] is {cell:?} and carries no operation, so it is a \
+             cell the apply binds rather than an extraction that names a slot"
+        );
+        assert_eq!(
+            module
+                .node_value(AnyNodeId::Dynamic(cell))
+                .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
+            Some(LowValue::Parameterized),
+            "cfg[{position}] is unbound until the function is applied"
+        );
+    }
+
+    // The one subscript that *is* decided belongs to the extraction of the cfg
+    // slot out of the operand pair, so it says nothing about `ins(i)`. Reading
+    // it as an input position is the mistake this test is named for.
+    assert_eq!(
+        index_position(&module, operands[1]),
+        Some(0),
+        "and the cfg sits at position 0 of the operand pair, which is not an \
+         input position"
+    );
+
+    // The parameter is a **tuple of cells, one per read of it**, and that is the
+    // arity: it is readable with no evaluation at all, which is what sizes the
+    // placeholder tuple `$graph` binds the parameter to. No ceiling and no trim.
+    let slots = items(&module, parameter);
+    assert_eq!(slots.len(), 2, "one cell per `ins(i)` the body reads");
+    for (position, &cell) in slots.iter().enumerate() {
+        assert!(
+            module.node_operation(cell).is_none(),
+            "slot {position} is {cell:?} and carries no operation, so it is a \
+             cell the apply binds rather than a value"
+        );
+        assert_eq!(
+            module
+                .node_value(AnyNodeId::Dynamic(cell))
+                .and_then(|v| AsEnum::<LowValue>::as_enum(&v)),
+            Some(LowValue::Parameterized),
+            "and slot {position} is unbound until the function is applied"
+        );
+    }
+}
+
+/// A graph function that reads its parameter **back to front**, and then runs,
+/// which is the only way to tell position from order.
+const BACK_TO_FRONT: &str = r#"@{
+  compute = import "compute.lichen"
+@}
+adder = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  compute.write [n, i, i + 3]
+}) "cpu"
+doubler = compute.parallel (cfg => {
+  n = cfg(0)
+  i = compute.range n
+  j = compute.read [cfg(1)(0), i]
+  compute.write [n, i, j + j]
+}) "cpu"
+data = compute.plrun adder (4,)
+step = ins => {
+  buffer = ins(1)
+  count = ins(0)
+  compute.plrun doubler (count, (buffer,))
+}
+step (4, data)
+"#;
+
+/// The `i64`s behind a buffer value.
+fn buffer_data(handle: &lichen_lowlevel::AnyHandle<[i64]>) -> Vec<i64> {
+    let pointer = match handle {
+        lichen_lowlevel::AnyHandle::Dynamic(dynamic) => dynamic.as_ptr(),
+        lichen_lowlevel::AnyHandle::Static(statics) => statics.as_ptr(),
+    };
+    let length = <*const [i64]>::len(pointer);
+    // SAFETY: the handle is the value's own arena payload, its home block is the
+    // live one the evaluation just ran in, and nothing has dropped it.
+    unsafe { std::slice::from_raw_parts(pointer as *const i64, length) }.to_vec()
+}
+
+/// **`ins(i)` is the `i`-th argument, and the only way to know that is to apply
+/// the function — the unapplied body does not say.**
+///
+/// The third correction this probe has forced, and the one that would have been
+/// the worst to get wrong.
+///
+/// A body read of `ins(i)` compiles to a bare cell: no operation, no subscript,
+/// and not even a member of the parameter's class, so **nothing in the
+/// unapplied body links a read to a slot**. The parameter cell is a tuple of
+/// cells, one per read, and its length is therefore the arity — that part *is*
+/// readable — but which read is which slot is settled by the apply.
+///
+/// If it were settled by read order, `step` below would take its two arguments
+/// swapped: a caller passing `(4, data)` would get a dispatch over four
+/// elements reading the **number** as a buffer. That is a silently wrong answer
+/// rather than a refusal, which is the only class of bug this repository cares
+/// most about, so it is checked by running the program and reading the numbers
+/// out of the buffer.
+///
+/// The numbers are derived, not copied: `data` is `i + 3` over `[0, 4)` and
+/// `doubler` writes `j + j`, so the result is `[6, 8, 10, 12]`.
+#[test]
+fn a_parameter_is_bound_by_the_position_the_source_names_and_not_by_read_order() {
+    let (mut module, root) = run(BACK_TO_FRONT);
+
+    let value = module.evaluate_node_deep(root, None);
+    let Some(ComputeValue::Buffer(handle)) = AsEnum::<ComputeValue>::as_enum(&value) else {
+        panic!("the dispatch ran, so the root is a buffer, got {value:?}");
+    };
+    assert_eq!(
+        buffer_data(&handle),
+        vec![6, 8, 10, 12],
+        "the count reached the count slot and the buffer reached the buffer slot, \
+         so the cells are indexed by the position the source writes rather than by \
+         when the body got round to reading them"
     );
 }
