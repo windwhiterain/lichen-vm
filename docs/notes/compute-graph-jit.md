@@ -689,7 +689,7 @@ data is ordinary — a length off a `collect` is the common case — and a graph
 that cannot take one forces every such program to rebuild the graph per run,
 which is the same as not having a graph.
 
-So `Value` gains `Int(i64)`, and a dispatch's range becomes:
+So `Value` gains a scalar, and a dispatch's range becomes:
 
 ```rust
 pub enum Count {
@@ -701,6 +701,10 @@ pub enum Count {
     Value(ValueId),
 }
 ```
+
+**The scalar arrived as `Value::Int(i64)` and was renamed `Value::Native`,**
+because the next section shows the thing that was added is the category and not
+the number. `Count` itself did not change and did not need to.
 
 `Constant` is not a wart on `Value`; it is the one case where the build already
 had the answer, and collapsing it into a value would mean inventing a node kind
@@ -720,14 +724,14 @@ are different mistakes with different causes.
 #### A number on an edge is the road a closure comes in on
 
 **This was not designed; it was pointed out, and it changes what the open
-native-node question actually is.** `Value::Int` reads like a feature about
+native-node question actually is.** `Value::Native` reads like a feature about
 counts — it exists because a dispatch's extent is a number and a number is not
 `Vec<i64>`. But the thing that was added is not "a count can be dynamic". The
 thing that was added is **the first value that is not a buffer and still
 travels an edge**: `Count::Value(ValueId)` is the first consumer of such an
-edge and `Int` is the first thing that can occupy one. Read that way the count
-work was the first inch of a road, and what is at the end of it is a lichen
-closure arriving as a graph value.
+edge and `Native::Int` is the first thing that can occupy one. Read that way the
+count work was the first inch of a road, and what is at the end of it is a
+lichen closure arriving as a graph value.
 
 **That it is the same road rather than a coincidence is visible once the two
 invariants are laid next to each other: they are one invariant at two levels.**
@@ -742,39 +746,63 @@ IR, the other is a named refusal in the lowering, and they agree because both
 say the same single thing — *the graph's entire world is its edges*.
 
 So a closure arriving as a graph value needs no rule of its own; it inherits
-that one. The question it does raise is exactly one:
+that one, and the question it raises is narrower than it first looked.
 
-> **May a closure in a graph capture a value the graph itself produced?**
+**A pointer is enough, and it is enough because the trace walk is recursive.**
+`gc.rs:149-155` asks a value for the nodes it holds and then calls
+`garbage_collect_node` on each, which walks that node's value and whatever
+*that* holds, and so on. So a slot in a registry of host-owned values keeps its
+whole transitive environment alive without the graph enumerating any of it: *a
+`fn` captured `x`, so whoever captured the `fn` has captured `x`*, and nothing
+in the graph has to know that. A graph that listed its captures would be a
+second copy of a fact the walk already holds, and one that could disagree with
+it. `freeze.rs:429-431` does the same thing for a frozen artifact, so this is
+the mechanism twice over rather than a corner argued for here.
 
-The answer that keeps the invariant is the one that is not obvious. A closure
-whose free variables are all graph inputs can be reified as **its code plus its
-captures as edges** — `(code, [ValueId])` — so the environment reaches the
-graph only through the value table and `Graph::push` checks it exactly as it
-checks any other edge. A closure that captured an earlier node's output, by
-contrast, would be a native node whose capture lies *inside* the graph, and
-that is the precise hole the `NativeCall` doc says a boxed trait object would
-open "invisibly — and the break is a **silently wrong answer** rather than a
-slow one."
+**The reason the capture question nearly dissolves is not the walk — it is that
+a graph's output is not a language value.** The graph's products are numbers in
+a value table, and they only become `ComputeValue`s after `Runner::run`
+returns. A closure cannot capture "value 7 of some graph", because that is not a
+thing the language can name. Every closure a graph can hold was therefore built
+before the run, and its environment was fixed before the run, which is exactly
+the condition the `NativeCall` doc requires.
 
-**Which makes the option list below incomplete rather than merely open.**
-Option 2 there concedes that re-entering the VM "demotes it from a **type
-fact** to a **discipline**", because the environment has to move behind a
-registry slot that nothing checks. Reifying captures as edges needs no
-discipline at all: the slot *is* the edge list, and an edge naming a value the
-graph has not produced is already refused by name. **This is not a decision.**
-The question above is open, the re-entrant apply path does not exist yet, and
-the IR's host data is `Vec<i64>` while the language's arrays are `[?b]`, so
-there is a type gap to close either way. But the list is missing its best
-member, and it was missing it because the count work was filed as a feature
-about counts.
+**There is one case where the environment does reach inside the graph, and it
+is worth naming rather than waving through: a closure defined *inside the
+recorded body*, capturing a `GraphValue`.** While the body is being recorded the
+dispatch has not run, so what the closure captures is the **placeholder** — and
+at run time that slot names a buffer the run is producing. The node's own input
+list does not mention it, so the runner has no demand point at which to wait,
+and the host call would read device memory the device may not have written. That
+is a silent wrong answer, and it is the one thing here that is not answered by
+recursion.
 
-**None of it blocks the recording.** `Int` is additive, so a later
-`Value::Closure` would be a new variant rather than a teardown; the count edge
-is already the edge a closure would travel on; and a kernel-only graph contains
-no closures, so the lowering has nothing to know about them. What it does
-change is a naming discipline: **`Count` is the first *consumer* of a
-non-buffer value, not the non-buffer value itself**, so the count machinery
-must not grow into being the general mechanism for one.
+It is also **narrow, and detectable while the graph is built**, which is why it
+is a decision rather than a worry. Two repairs, and they are not equivalent:
+make such a capture into an **edge of the node that calls the closure**, so the
+existing demand point waits for it; or **refuse it by name**, on the grounds that
+a closure reaching into the graph is the same class of mistake as a
+free-variable buffer, which is already a refusal. The first keeps the case, the
+second is the rule the language-level input decision already follows. **Not
+decided.**
+
+**So `NativeCall` does not have to become a list of captures.** It needs a
+channel for a *slot*, which is a registry id like the `Graph` value itself, and
+the environment behind that slot is the walk's business. What option 2 still
+owes is the other half: a user closure is a language value, so calling it means
+**re-entering the VM at run time**, and that path does not exist. So does the
+type gap — the IR's host data is `Vec<i64>` while the language's arrays are
+`[?b]`.
+
+**None of it blocks the recording.** The second inhabitant is already there —
+`Native::Pointer` is the slot, with no producer and no consumer yet, which is
+what makes adding a producer a compile error in each role method rather than a
+silent pass-through. So a closure later is a new *producer*, not a new
+mechanism; the count edge is already the edge it would travel on; and a
+kernel-only graph contains no closures, so the lowering has nothing to know
+about them. What it does change is a naming discipline: **`Count` is the first
+*consumer* of a non-buffer value, not the non-buffer value itself**, so the
+count machinery must not grow into being the general mechanism for one.
 
 #### The arity is the parameter's length, and the probe is why
 
@@ -956,15 +984,17 @@ rather than left promising something nothing delivers. The doc comments naming
 closures were the only place the contradiction was written down, so a reader would
 have taken the promise at face value.
 
-**A fourth option was added later, and it is the one worth deciding between.**
+**What the count work settled about this, and what it did not.** The question
+above was filed as "a graph cannot hold a closure" because the graph IR's native
+node is a bare `fn` pointer. But `Int` put the first non-buffer value on a
+graph edge, so the real question is what a graph *value* can be, and a **slot
+turns out to be enough for the holding**: the trace walk is recursive, so a
+registry id keeps a closure's whole environment alive with nothing enumerated.
 See [A number on an edge is the road a closure comes in
-on](#a-number-on-an-edge-is-the-road-a-closure-comes-in-on): the count work
-already put the first non-buffer value on a graph edge, which means the
-question is not only what a native node *calls* but what a graph value can
-*be*, and option 2's concession — that the environment demotes from a type
-fact to a discipline — is avoidable if a closure's captures are edges rather
-than a registry slot. That is not a decision either; it is a fourth member for
-the list that had three.
+on](#a-number-on-an-edge-is-the-road-a-closure-comes-in-on). So the contradiction
+is narrower than the three options suggest — what is left is the **re-entrant
+apply path** and one narrow case where a closure's environment does reach inside
+the graph, neither of which is decided.
 
 ## The pool of submission slots
 
@@ -1246,10 +1276,11 @@ carry that count, and it is the only part of this rule with no code behind it.
 
    **The question is bigger than "what does a native node call", and the count
    work is what made that visible.** A non-buffer value on a graph edge is no
-   longer hypothetical — `Int` is one — so the decision is not only about the
-   node but about what a graph *value* can be, and the one open question that
-   governs both is whether a closure may capture a value the graph produced.
-   Four options are now on the table; see
+   longer hypothetical — `Native::Int` is one — so the decision is not only about
+   the node but about what a graph *value* can be. **The holding half is
+   settled**: a slot is enough, because the trace walk is recursive. What is
+   still open is the calling half (a re-entrant apply path) and one narrow case
+   where a closure's environment does reach inside the graph. See
    [A number on an edge is the road a closure comes in
    on](#a-number-on-an-edge-is-the-road-a-closure-comes-in-on).
 

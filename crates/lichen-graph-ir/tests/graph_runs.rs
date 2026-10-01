@@ -534,3 +534,61 @@ fn a_negative_count_is_refused_rather_than_wrapped_into_an_enormous_extent() {
          large dispatch rather than a mistake"
     );
 }
+
+#[test]
+fn a_native_value_names_its_kind_in_every_refusal_that_reads_one() {
+    // The second inhabitant of `Native`, and the one the value table exists for:
+    // a pointer to a value the host owns. Nothing produces one yet, so this is
+    // only ever an argument — but both roles have to answer for it, and they have
+    // to answer differently, because the two repairs are different.
+    let pointer = || Value::native_pointer(7);
+    let stub = Stub::new();
+
+    // Asked for a count: the role was right and the value was not.
+    let as_count = Runner::new(&stub, Policy::Serial)
+        .run(
+            &counted_by_input(),
+            vec![Value::host(vec![1, 2, 3, 4]), pointer()],
+        )
+        .map(|_| ())
+        .expect_err("a count read from a host-owned value");
+    assert_eq!(
+        as_count,
+        GraphRefusal::CountNotANumber {
+            found: "a value the host owns"
+        }
+    );
+
+    // Asked for a buffer: the other role, refused by the other message.
+    let as_buffer = Runner::new(&stub, Policy::Serial)
+        .run(&counted_by_input(), vec![pointer(), Value::int(4)])
+        .map(|_| ())
+        .expect_err("a buffer slot holding a host-owned value");
+    assert_eq!(
+        as_buffer,
+        GraphRefusal::NotBufferData {
+            found: "a value the host owns"
+        }
+    );
+
+    // And it is not the number's message either, which is the point of the kind:
+    // both native values have no extent, but a caller who passed one knows which.
+    let number_as_buffer = Runner::new(&Stub::new(), Policy::Serial)
+        .run(&counted_by_input(), vec![Value::int(4), Value::int(4)])
+        .map(|_| ())
+        .expect_err("a buffer slot holding a number");
+    assert_ne!(
+        as_buffer, number_as_buffer,
+        "a number and a host-owned value are the same category and different \
+         mistakes, so they must not be reported as the same one"
+    );
+
+    // Ready, and without an extent. A native value is never pending because the
+    // host made it, and a count of zero would be a length somebody could act on.
+    let value = pointer();
+    assert!(
+        value.is_ready(),
+        "the host made it, so there is no wait owed"
+    );
+    assert_eq!(value.count(), None, "and it has no extent to report");
+}
