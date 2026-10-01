@@ -168,38 +168,68 @@ dispatches on shape one level down — so a value is not an address and a node i
 And "function" is not a separate kind at this seam: a closure is kept alive by
 naming the node it is the value of.
 
-## Three corrections to measurements, all of which changed a conclusion
+## Corrections to measurements, all of which changed a conclusion
 
 These are the expensive ones. Each was a wrong number that had already been
 written into a document or a plan.
 
-**Submit fusion is not an N-fold win.** The empty-dispatch floor is 0.048 ms
-(best of 200) and 16 links are 7.17 ms. Removing 15 submissions is 0.72 ms →
-6.45 ms, **about 10%** — and 0.048 ms is an *upper* bound, because an empty
-dispatch's fence wait has no GPU work to hide behind. Earlier in this work
-"N-fold on long chains" was asserted; it is wrong. Note which half of that
-arithmetic is trustworthy: the floor is a 200-sample best and reproduces, while
-the 7.17 ms is one pass of an example whose chain column is not monotonic in
-links, so treat 10% as 10%-ish and the numerator as the solid part.
+**Submit fusion is not an N-fold win.** A dispatch's round trip — record,
+submit, wait — costs 0.036 ms against a resident input (best of 200), and
+earlier in this work "N-fold on long chains" was asserted. It is wrong, and
+the sweep below says by how much.
 
 **Readbacks are not avoidable.** A `Read` the program performs needs the number
 on the host, so the data must cross. There is no "unnecessary readback" to fold
 away. An earlier claim that a graph could save one, worth 0.5–1 ms, was
 invented — the prize does not exist.
 
-**The ~10% is a function of kernel size, not chain length.** 0.048 ms is a
-per-dispatch floor *independent of count*, so what decides graph's value is the
-ratio of per-dispatch overhead to per-kernel work — and ~10% was computed at
-1 048 576 elements, where a kernel is ~0.10 ms and the overhead is noise. A chain
-of many small kernels is the realistic target and would show a far higher
-overhead fraction. **The decisive measurement is a count sweep at fixed chain
-length**, and it has not been run. The crossover example already has the
-machinery (200 runs reporting best and median, CPU baseline swapping two buffers
-per link); it needs count as a swept variable.
+**The first sweep was divided by the wrong floor, and said so by being
+impossible.** The sweep's first run reported links that were 105–108%
+overhead. A fraction over 100% is not a noisy measurement, it is a wrong
+divisor: the floor came from `fixed_cost`, which times a dispatch reading a
+**host** input, and that one `memcpy`s into staging and has the device copy it
+inside the same submission. A chain link after the first reads a **resident**
+buffer and pays neither, so dividing by the host-input floor credits the link
+with an upload it never did — at small counts, with more than the link costs.
+The two floors are 0.043 ms and 0.036 ms, so an upload is worth about 0.007 ms.
+
+**The 10% was the worst row of the table, not its typical one.** Every estimate
+so far computed fusion's value at 1 048 576 elements, because that was the only
+count the crossover example happened to chain. The sweep at fixed chain length
+(`b4d89c1`, 16 links, best of 20) says:
+
+| count | 1 link | 16 links | per link | fusion share | overhead |
+|---|---|---|---|---|---|
+| 1 024 | 0.080 ms | 0.675 ms | 0.040 ms | **80.9%** | 91.9% |
+| 4 096 | 0.086 ms | 0.681 ms | 0.040 ms | 80.2% | 91.7% |
+| 16 384 | 0.111 ms | 0.731 ms | 0.041 ms | 74.7% | 88.1% |
+| 65 536 | 0.214 ms | 0.846 ms | 0.042 ms | 64.6% | 86.4% |
+| 262 144 | 0.814 ms | 1.555 ms | 0.049 ms | 35.1% | 73.7% |
+| 1 048 576 | 3.298 ms | 5.096 ms | 0.120 ms | 10.7% | 30.4% |
+
+*per link* is `(16 links − 1 link) / 15`, a difference of two chain lengths so
+that the upload and the download cancel. *fusion share* is
+`15 × 0.036 ms / 16 links`. *overhead* is `0.036 ms / per link`.
+
+The shape of the table is the answer, and it is the shape the design predicted:
+**the per-link cost barely moves with count** — 0.040 ms to 0.120 ms across a
+1024× range — while the kernel inside it grows with count, so the same fixed
+round trip goes from 92% of a link to 30%. Fusion is worth **65% to 81% of a
+16-link chain at counts up to 65 536**, and 10.7% at a million.
+
+**So: worth building.** The case for it is chains of small and medium kernels,
+which is what a real pipeline is made of, and the 10% figure that was quoted
+until now was the single row least favourable to it.
+
+**What the sweep does not settle.** `fusion share` is a **Batch ceiling** — it
+assumes fifteen submits *and* fifteen waits all disappear. Async keeps the
+submits and removes only the waits, so it collects part of this. How much is
+the split inside the 0.036 ms between the record-and-submit side and the wait
+side, and that is still unmeasured.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, seven commits, not pushed):
+**Built and committed** (`feature/graph-jit`, eight commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -210,9 +240,13 @@ per link); it needs count as a swept variable.
 | `05b5402` | `record_and_submit` / `wait_on` split out of `record_and_wait` |
 | `6c5ac4d` | the two rules a fused submission depends on — see below |
 | `91a324c` | delete the single `detached` submit the new design made wrong |
+| `b4d89c1` | the count sweep, and the wrong floor it was first divided by |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-the pool of submission slots, and any of the measurements above.
+the pool of submission slots, and the submit/wait split.
+
+**Measured:** the count sweep above. It is the measurement this design was
+waiting on, and it says build it.
 
 ## Two rules settled before anything depends on them (`6c5ac4d`)
 
@@ -305,13 +339,15 @@ carry that count, and it is the only part of this rule with no code behind it.
    - **`fetch` acquires a slot** like everything else; it is a record, submit
      and immediate wait, and after pooling it no longer has a fixed target.
 
-4. **The overlap measurement**, which needs the pool: time the record-and-submit
-   side and the wait side separately (this decomposes the 0.048 ms, which every
-   estimate so far has treated as one lump), then put a controlled amount of
-   host work between submit and wait and look at the slope. Flat while the host
-   work is under the device time, 1:1 above it — that knee is the proof.
-5. **The count sweep**, which decides whether any of this is worth building.
-6. **Then, and only then**, the IR crate and the node set.
+4. **The submit/wait split**, the one measurement still missing. It decides how
+   much of the 65–81% the **Async** schedule can reach, because Async keeps the
+   submits and removes only the waits, while the `fusion share` column is the
+   **Batch** ceiling. It needs the pool, so it comes after the pool rather than
+   instead of it: time the record-and-submit side and the wait side separately,
+   then put a controlled amount of host work between submit and wait and look at
+   the slope. Flat while the host work is under the device time, 1:1 above it —
+   that knee is the proof that the overlap is real and not just a smaller number.
+5. **Then, and only then**, the IR crate and the node set.
 
 ## Landmines, each of which is a silent wrong answer
 

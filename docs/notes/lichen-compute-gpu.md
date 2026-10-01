@@ -283,9 +283,22 @@ device-local memory. Two things moved it:
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
 **The GPU wins on a chain, and the fixed cost is what decided it.** An **empty**
-dispatch — one workgroup, so nothing but the dispatch itself — costs **0.048 ms
-at best and 0.061 ms at the median** over 200 runs. That is the per-dispatch
-fixed cost a chain pays once per link, and the chain table shows what it buys:
+dispatch — one workgroup, so nothing but the dispatch itself — costs **0.043 ms
+at best** over 200 runs, and the example prints the median beside it. That number
+measured 0.046, 0.048 and 0.043 ms across three runs of the same binary on this
+machine, so read it as 0.04–0.05 ms rather than to three places.
+
+**There are two of these floors, and using the wrong one invents a result.** A
+dispatch reading a **host** input is 0.043 ms; a dispatch reading a **resident**
+buffer — which is every link of a chain after the first — is **0.036 ms**. The
+difference is the upload: a `memcpy` into staging plus a device-side copy in the
+same submission, worth about 0.007 ms. The crossover example now measures both,
+because dividing a chain's marginal link by the host-input floor credits the link
+with an upload it never does — and at small counts that credit exceeds the cost of
+the link, which is how a first run of the count sweep below reported links that
+were 108% overhead. A fraction over 100% is a wrong divisor, not a noisy one.
+
+The chain table shows what the floor buys:
 
 | count | chain | GPU | sequential | ratio |
 |---|---|---|---|---|
@@ -302,26 +315,52 @@ A single cold dispatch still loses, and that is not a bug: the first upload is
 cross-over is at **about four links** at a million elements, and it climbs from
 there.
 
-**Read the GPU column's shape loosely.** It is not monotonic in links — two
-links came out *cheaper* than one, and four more expensive than eight — so the
-run-to-run spread of this example is on the order of a millisecond at this
-scale, and the marginal cost of a link is not well determined by it. The earlier
-run of the same table put the 1→16 link slope at 0.15 ms per link and this one
-puts it at 0.09 ms. Treat the per-dispatch floor above, which is measured
-directly over 200 samples, as the reliable number and the slope as a range. That
-matters below: the submit-fusion estimate is built from the floor, not from the
-slope.
+**Read this table loosely, and prefer the count sweep below for anything
+per-link.** It is one sample per point and it is not monotonic in links — two
+links came out *cheaper* than one, and four more expensive than eight. The
+earlier run of it put the 1→16 slope at 0.15 ms per link and this one at
+0.09 ms. The `sequential` column drifted further than the GPU column between
+runs, so the **ratios** moved more than the GPU times did: the 16-link ratio went
+2.72× → 3.59× while its GPU time went 7.79 → 7.168 ms. The ratio is the least
+trustworthy number here, because its denominator is a stand-in for a thread pool
+that is not being measured.
 
-The `sequential` column drifted by more than the GPU column did between the two
-runs, so the **ratios** moved further than the GPU times did — the 16-link ratio
-went 2.72× → 3.59× while its GPU time went 7.79 ms → 7.168 ms. The ratio is the
-less trustworthy of the two numbers on this table, because its denominator is a
-stand-in for a thread pool that is not being measured here.
+### What a link is actually made of
+
+Everything above is one sample per point, and the question the graph design rests
+on is not "how long is a chain" but "how much of a link is not the work". So: 16
+links fixed, count swept, best of 20 per point, and the per-link cost taken as
+`(16 links − 1 link) / 15` — a difference of two chain lengths, so that the upload
+and the download cancel and what survives is the marginal cost of one link.
+
+| count | 1 link | 16 links | per link | fusion share | overhead |
+|---|---|---|---|---|---|
+| 1 024 | 0.080 ms | 0.675 ms | 0.040 ms | **80.9%** | 91.9% |
+| 4 096 | 0.086 ms | 0.681 ms | 0.040 ms | 80.2% | 91.7% |
+| 16 384 | 0.111 ms | 0.731 ms | 0.041 ms | 74.7% | 88.1% |
+| 65 536 | 0.214 ms | 0.846 ms | 0.042 ms | 64.6% | 86.4% |
+| 262 144 | 0.814 ms | 1.555 ms | 0.049 ms | 35.1% | 73.7% |
+| 1 048 576 | 3.298 ms | 5.096 ms | 0.120 ms | 10.7% | 30.4% |
+
+*fusion share* is `15 × 0.036 ms / 16 links`; *overhead* is `0.036 ms / per link`.
+
+The shape is the point: **the per-link cost barely moves with count** — 0.040 ms
+to 0.120 ms across a 1024× range — because the round trip is fixed and the kernel
+inside it is not. So the same 0.036 ms goes from 92% of a link to 30% of one, and
+recording a chain as one submission is worth **65% to 81% of a 16-link chain at
+counts up to 65 536**, against 10.7% at a million. Every estimate of this made
+before the sweep used a million elements, which is the single row least favourable
+to fusing.
+
+Best of 20 is not a stylistic choice either. The single-sample table above reads
+6.076 ms where this one reads 5.096 ms for the same point — 16% apart, wider than
+most of the effects being measured.
 
 **Where the fixed cost went, and the surprise in it.** Getting from 0.46 ms to
-0.048 ms took three changes, and they were not equally important:
+0.046 ms — the host-input floor, which is the larger of the two — took three
+changes, and they were not equally important:
 
-1. **Recycling released device buffers** — 0.20 ms → 0.048 ms, about **4×**, and
+1. **Recycling released device buffers** — 0.20 ms → 0.046 ms, about **4×**, and
    by far the largest single win. `vkAllocateMemory` is a kernel-mode allocation
    and it was happening once per run, for an 8 MB buffer at a million elements.
 2. **Reusing the per-dispatch objects** — command pool, command buffer, fence,
@@ -361,12 +400,15 @@ Named rather than implied, because each is a decision not a gap:
   rules are settled; the machinery is not built** — see
   [compute-graph-jit.md](compute-graph-jit.md). It is a sibling of `jit`, not a
   mode of `plrun`, and the two seams it needs in `lichen-lowlevel` have landed.
-  What is left is the `Segment` primitive, the scheduling, and the measurement
-  that decides whether it is worth having: on these numbers submit fusion is
-  worth about 10% of a 16-link chain at 1 048 576 elements, and what actually
-  decides it is kernel size rather than chain length. Two rules a fused
+  What is left is the pool of submission slots, the scheduling, and one
+  measurement that the count sweep narrowed but did not finish: fusing is worth
+  **65% to 81% of a 16-link chain at counts up to 65 536** and 10.7% at a
+  million, and that 65–81% is a *Batch ceiling* — it assumes fifteen submits and
+  fifteen waits all disappear, while the Async schedule keeps the submits and
+  removes only the waits. How much of the 0.036 ms is the submit side is not
+  measured, so how much Async reaches is not known. Two rules a fused
   submission depends on are already in this file — one descriptor set per
-  dispatch with the reset at the submission boundary, and a trailing barrier
+  dispatch with the reset at the submission's own start, and a trailing barrier
   that names both a transfer and a shader as the next reader. Neither is
   exercised, because nothing records two dispatches into one command buffer
   yet; the entry point, when it comes, goes on `ParallelBackend` rather than in
@@ -396,14 +438,15 @@ Named rather than implied, because each is a decision not a gap:
   backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
   a refused allocation once the device is full, which names itself. A program
   that runs many large kernels in one process will hit that backstop.
-- **The per-dispatch submit and wait.** 0.048 ms best, paid once per link, so a
-  chain of N still does N submits and N fence waits where one would do. This is
-  **not** worth a factor of N — an earlier version of this bullet said so and it
-  is wrong, because the saving is the fixed cost times the link count while the
-  baseline grows with the *kernel* cost, and those are independent. At
-  1 048 576 elements it is worth about 10%, because a kernel there is ~0.10 ms
-  and drowns it; a chain of many small kernels is where the fraction would be
-  large, and that has not been measured.
+- **The per-dispatch submit and wait.** 0.036 ms best against a resident input,
+  paid once per link, so a chain of N still does N submits and N fence waits
+  where one would do. This is **not** worth a factor of N — an earlier version
+  of this bullet said so and it is wrong, because the saving scales with the
+  link count while the baseline scales with the *kernel* cost, and those are
+  independent. What it is worth depends entirely on kernel size, and the count
+  sweep answers that: **65% to 81% of a 16-link chain at counts up to 65 536,
+  10.7% at a million.** The kernel there is ~0.08 ms and drowns a 0.036 ms round
+  trip; at 16 384 elements a link is 0.041 ms and is 88% overhead.
 - **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
   into a graph IR — a DAG of kernels and the dataflow between them, which is the
   IR's natural shape rather than a special case to be detected — and optimises on
