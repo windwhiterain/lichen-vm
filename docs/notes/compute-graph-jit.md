@@ -111,9 +111,9 @@ pub trait TraceContext {
 }
 ```
 
-A computed graph holds the closures it will call later, so its value holds
-**nodes** past the operator call that built it. Nothing could see that: the GC
-walks an array's items, a table's entries, a function's scope, and an
+A compiled graph holds the **buffer values it will read on every run**, so its
+value holds **nodes** past the operator call that built it. Nothing could see
+that: the GC walks an array's items, a table's entries, a function's scope, and an
 *unevaluated* node's operand — and an operator's result is cached, so **its
 operand is deliberately not followed** (`gc.rs`, "a cached value means the node
 is memoized and its operand is dead"). `drop_block` then deletes by **block
@@ -349,7 +349,7 @@ anything at all.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, seventeen commits, not pushed):
+**Built and committed** (`feature/graph-jit`, eighteen commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -369,11 +369,15 @@ anything at all.
 | `de5424c` | the pool of submission slots, configurable and defaulting to 2 |
 | `082c4d7` | `Pending` on the backend contract — a submission handed back unwaited |
 | `ad7f97a` | the submit/wait split, measured |
-| *this one* | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
+| `5b58b78` | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
+| `7447fc0` | a graph records what its own function returned |
+| *this one* | the lowering design, the refusals it owes, and the native-node contradiction |
 
-**Not built:** the IR that *compiles* a lichen function into this graph, the
+**Not built:** the lowering that compiles a lichen function into this graph, the
 `compute.graph` operator, the `Graph` value in the language, and the
-fused-submission capability `Batch` needs.
+fused-submission capability `Batch` needs. The lowering's design is settled and
+recorded — see
+[The half that builds a graph](#the-half-that-builds-a-graph-and-what-it-found).
 
 **Measured:** the count sweep, the fused chain it predicted, that two
 submissions can be in flight and chained at the same time, how much of a
@@ -488,6 +492,128 @@ scheduler could plausibly be wrong: the host call has to read a buffer the devic
 has not finished, so the runner waits and fetches, and **no arrangement of
 submissions removes that cost.** What the runner guarantees is that it happens
 before the read rather than being left to chance.
+
+## The half that builds a graph, and what it found
+
+Designed and **not yet written**. The shape is closed and the walk is verified
+against the real node structure; what is missing is the code. Recorded here
+because the design is most of the work and re-deriving it is expensive.
+
+### A graph's inputs are the function's free variables, and that is forced
+
+`$graph(f)` is handed `f` as a **template**. Nothing has been applied to it, so at
+that moment there is no such thing as its argument: every buffer the body reads
+that no earlier dispatch produced is a free variable, and those are exactly the
+graph's inputs. This is not a limitation worked around, it is what the design
+already says from the other end ("a closure can only reach variables that existed
+before the graph JIT ran") landing on the only half that is writable today.
+
+The consequence worth writing down: **the graph holds its inputs.** They are
+`Buffer` values in a block arena, freed with the block, so a graph that did not
+name them would read freed memory on its second run. That is `traced`'s first
+real user, and it is a buffer rather than the closure both seam doc comments
+used to promise (see below).
+
+### `traced` through a process registry is sound, and the reason is in `gc.rs`
+
+`ComputeValue` is `Copy`, so a graph value is a registry slot and the node ids it
+holds live in the registry rather than in the value. That would be unsound if
+collection renumbered nodes, so check: `garbage_collect_node` moves a node by
+writing `self.nodes[node].block = target` and **"a node keeps its id across the
+move, so only its block changes, and a value holds the id"**. An id held anywhere
+outside the module therefore survives every collection, and the `Array`/`Table`
+arms prove the same for payloads: the payload is reallocated into the target
+arena and the holder's handle is rewritten, so reading the value *from the node*
+later gets the current one. A registry entry that holds a `NodeId` and reads the
+value back through it is correct for the same reason.
+
+### The walk is structural, and no dispatch runs while building a graph
+
+`ParLaunch`'s operand array is `[kernel, cfg]` and the `cfg` is `(count, buffers)`.
+Every one of those is an operand edge, readable through `node_operation` and
+`array_items` **without evaluating the `ParLaunch` node** — and evaluating it would
+run a real dispatch, which is the thing a build must not do. Only two things need
+evaluating: the kernel (a `Parallel` node, a pure compile) and the count (a
+scalar). Neither dispatches.
+
+The walk enumerates `function_nodes(function)` rather than following the return's
+operand spine, and that is what makes a **dead tail** findable: a spine walk sees
+only live nodes. The return is then resolved separately and recorded through
+`Graph::returning`, which is why a dead tail and a return are independent facts.
+
+Two passes, because `Graph::with_inputs` needs the input count before the first
+`push`: pass one collects `NodeFacts { kernel, count, inputs: Vec<NodeId> }` in body
+order and numbers the free variables in first-seen order, pass two maps node ids
+to value numbers and pushes. The map is also the whole of the classification: an
+input node not in `produced_by` is a free variable.
+
+### Refusals this design owes, all of them about a graph and not a run
+
+Found while designing, none of them written yet. Each names its cause, per the
+rule the rest of the tree follows.
+
+- **Mixed backends.** A run goes to one `ParallelBackend` and the IR's nodes do
+  not carry one, so a graph whose dispatches name different backends cannot be run
+  at all. Refuse at build time, naming both.
+- **A non-device backend.** `"cpu"` dispatches through this crate's wasm path and
+  never touches a `ParallelBackend`, so a cpu graph would build and then fail at
+  run time with "no backend installed" — a capability mismatch reported as an
+  environment problem. Refuse at build time and say why.
+- **A kernel or a count that is not decided yet.** Both are needed at build time
+  and neither can be invented; the fragment and the element count are facts about
+  the source.
+- **A `cfg` item that is neither a dispatch's output nor a buffer.** A third thing
+  in that position would be the interesting one to support and the wrong one to
+  accept silently.
+- **A return naming neither a dispatch's output nor a free variable.**
+
+### What this step is worth, stated plainly
+
+A kernel-only graph under `Serial` or `Async` is **worth no milliseconds**, and the
+measurement above says so rather than implying otherwise: a pure kernel chain has
+no host work, so `hidden = min(host, device) = 0` and `Async` is exactly the plain
+kernel path. The win for a pure chain is `Batch` (one submission instead of
+sixteen), which is refused for want of a fused-submission contract.
+
+So this half is worth building for three reasons that are not speed: it gives
+`traced` and `run_deferred` a first real user after two commits of zero; it is
+the prerequisite for designing that fused-submission shape, since "hand me N
+dispatches" cannot be specified without knowing what a node is; and it produces
+the repeatable object the feature was decided around. **It is a shape step, and
+the ordering in the list below predates the measurement that says so.**
+
+### The contradiction: a graph cannot hold the closures its native nodes call
+
+Both seam doc comments promised that a compiled graph would hold *the closures it
+calls later*. `NativeCall` is a bare `fn` pointer, and that is deliberate: a `fn`
+item cannot capture, so the environment is fixed when the `fn` is named, which is
+what makes the graph's edges statically known. But `fn(&[&[i64]]) ->
+Vec<Vec<i64>>` has **no channel to name a closure** — its only parameter is the
+arguments. So a user-written lichen closure cannot become a native node without
+replacing that decision, and the two committed things disagree.
+
+Three ways out, none of them free:
+
+1. **Native node is a stateless host function from a fixed set.** The `fn`
+   invariant stands untouched and no code has to move. But nothing in the
+   language's surface today has that shape, so the first version would have to
+   invent one, and the graph's native nodes would not be the ones the design
+   writes about.
+2. **Native node is a user closure, re-entered into the VM at run time.** This is
+   what the seams were cut for and the only shape where `Async`'s measured payoff
+   is reachable, since a native node *is* the host work that gets hidden. The cost
+   is that `NativeCall` stops being a `fn` pointer: the environment moves behind a
+   registry slot, which keeps the soundness property (it is still fixed before the
+   run) but demotes it from a **type fact** to a **discipline**. It also needs a
+   re-entrant apply path the VM does not have yet, and it has to close a type gap:
+   the IR's host data is `Vec<i64>` while the language's host arrays are `[?b]`.
+3. **Leave it open.** Build the kernel-only half, record the contradiction, and
+   decide before writing the first native node.
+
+**3 is what was done**, and the two seam doc comments were corrected to match
+rather than left promising something nothing delivers. The doc comments naming
+closures were the only place the contradiction was written down, so a reader would
+have taken the promise at face value.
 
 ## The pool of submission slots
 
@@ -748,6 +874,25 @@ carry that count, and it is the only part of this rule with no code behind it.
    fused-submission capability in the contract before it can be anything but a
    refusal.
 
+6. **The lowering, and the order of this list is now suspect.** The order above was
+   written before the submit/wait split was measured, and the measurement changes
+   it: a **kernel-only** graph is worth no milliseconds under `Serial` or `Async`,
+   because a pure chain has no host work and `hidden = min(host, device) = 0`. The
+   only win for a pure chain is `Batch`. So the two remaining halves are not
+   obviously in this order, and saying otherwise would let a shape step pass for
+   progress. The case for the lowering first is that it is the prerequisite for
+   specifying the fused-submission shape at all, and that it gives the two seams a
+   first real user; the case for `Batch` first is that it is where the measurable
+   value is. **Decided for now: lowering first, with the native-node question left
+   open** — see
+   [The half that builds a graph](#the-half-that-builds-a-graph-and-what-it-found),
+   which also records what the kernel-only version is and is not worth.
+
+7. **The native node, and it is a real contradiction rather than a task.** A graph
+   that holds the closures its native nodes call is what both seams were cut for,
+   and `NativeCall` is a bare `fn` pointer that cannot carry one. Decide this
+   before writing the first native node, not while writing it.
+
 ## Landmines, each of which is a silent wrong answer
 
 - **A recorded-but-unsubmitted command buffer is clobbered by the next recording
@@ -797,6 +942,7 @@ carry that count, and it is the only part of this rule with no code behind it.
 - [lichen-compute-gpu.md](lichen-compute-gpu.md) — the backend, the measured
   costs, and the invariants a graph must not break.
 - [compiler-plugin.md](compiler-plugin.md) — the `traced` seam as a plugin
-  author sees it, under "Extension point 5b".
+  author sees it is **not written yet**; its "Extension point 5" covers the
+  ext-handle payload contract, which is a different thing.
 - [lichen-compute.md](lichen-compute.md) — the operator vocabulary and the
   `plrun` path a graph sits beside.

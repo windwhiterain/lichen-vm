@@ -533,8 +533,22 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// simplification but the truth: a `Buffer` payload is element bytes, a
     /// `DeviceBuffer` is an id and a length, a kernel id is a registry slot
     /// number. None of them names a node, so none of them is an edge the GC has
-    /// to follow. A value that *does* keep nodes alive past its own evaluation —
-    /// a compiled graph holding the closures it will call later — answers this.
+    /// to follow. A value that *does* keep nodes alive past its own evaluation
+    /// answers this — a compiled graph, which holds the **buffer values it will
+    /// read on every run** and which live in the block that produced them, so a
+    /// graph that did not name them would read freed arena memory. Those
+    /// references are behind a process registry, which is sound here for a reason
+    /// worth stating: `garbage_collect_node` moves a node by changing its block
+    /// and **keeps its id**, so an id held anywhere outside the module stays
+    /// valid across a collection.
+    ///
+    /// The other shape this seam was cut for — a graph holding the *closures* it
+    /// will call later — is **not** what answers this today, and the reason is a
+    /// recorded contradiction rather than an oversight: the graph IR's native
+    /// node is a bare `fn` pointer, which cannot capture and has no channel to
+    /// name a closure, so a user-written closure cannot become one without
+    /// changing a decision that was made deliberately. See
+    /// `docs/notes/compute-graph-jit.md`.
     ///
     /// **A value that fails to answer is not caught.** There is nothing to check
     /// this against: the lowlevel cannot see what a value holds, so an unlisted
@@ -599,10 +613,11 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
     /// from the value alone, and the wrong one for an operator that has to
     /// decide for itself *when* its operand is evaluated: the module is already
     /// there, but the node the operand hangs off is not, so there is nowhere to
-    /// start. An operator that keeps lichen references alive past its own call —
-    /// a compiled graph that holds the closures it will call later — needs that
-    /// node, and needs it unevaluated, because the references it must keep alive
-    /// are in the structure.
+    /// start. An operator that keeps lichen references alive past its own call
+    /// needs that node, and needs it unevaluated, because the references it must
+    /// keep alive are in the structure — a compiled graph holds the buffers it
+    /// will read, and reading which of a function's nodes are those buffers is a
+    /// question about the body's *shape*, which a deep pass has already erased.
     ///
     /// Overriding this is that capability, and it is **only sound together with
     /// [`ValueExt::traced`]**: a reference kept past this call is invisible to
