@@ -304,6 +304,55 @@ compute.collect (compute.graphrun built (3,))
 }
 
 #[test]
+fn a_count_the_body_closed_over_is_refused_by_the_count_filter_not_the_buffer_one() {
+    let (_guard, _stub) = stub();
+    // **One dispatch with both roles in it, and only the count one wrong.**
+    // `k2`'s buffer is `(first,)` — a value the parameter supplied, so the buffer
+    // filter has nothing to say — while its count is `held`, a free variable the
+    // body closed over. The two roles are read by two separate filters, and this
+    // is the case that shows it: a filter that refused both would pass here too,
+    // and a body that swapped the two roles would be told the wrong thing.
+    //
+    // The count is also read *first*, before the buffer tuple, so a refusal from
+    // the count filter is the one that answers.
+    let messages = fail(&format!(
+        r#"@{{
+  compute = import "compute.lichen"
+@}}
+{KERNELS}
+held = compute.plrun k1 (3,)
+step = ins => {{
+  first = compute.plrun k1 (ins(0),)
+  compute.plrun k2 (held, (first,))
+}}
+built = compute.graph step
+compute.collect (compute.graphrun built (3,))
+"#
+    ));
+    let joined = messages.join(" | ");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("compute.graph")),
+        "the refusal is filed under the graph, like the buffer role's: {joined}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("a dispatch's count is")
+                && message.contains("a literal or one of this function's arguments")),
+        "**and it is the count's own rule**, because the count is the role that \
+         was wrong: {joined}"
+    );
+    assert!(
+        !joined.contains("would have to hold it"),
+        "and not the buffer role's message, which would send a caller after a \
+         capture that did not happen — the buffer here came from the parameter: \
+         {joined}"
+    );
+}
+
+#[test]
 fn a_function_that_dispatches_nothing_has_no_backend_to_run_on() {
     let (_guard, _stub) = stub();
     // A graph is run by a runner against a backend, and a body that dispatches

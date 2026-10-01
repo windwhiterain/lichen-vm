@@ -63,12 +63,20 @@ type Shared<'backend> = Arc<Mutex<Option<Box<dyn Pending + 'backend>>>>;
 /// oversight to be tidied up later.** Whether a value is a buffer is a *role*,
 /// not a type category, and the roles are already explicit: [`Self::slot`] is
 /// the filter that keeps the buffers out of a dispatch's edge list and
-/// [`Self::as_count`] is the one that keeps a number in. A jit'd function may be
+/// [`Self::as_number`] is the one that keeps a number in. A jit'd function may be
 /// handed arbitrary lichen values, and a recording sorts them into roles by
 /// asking; a value table that also carried "some other host value" would be a
 /// third place the same question is answered, and one that could disagree with
 /// the other two. Nothing produces one yet — a node that *computes* a number is
 /// a compiled kernel like any other, and that is the node set this crate has.
+///
+/// **And the two of them cannot drift apart, because both are exhaustive
+/// matches over the variants above.** That is what makes it safe for a reader to
+/// classify a value by matching on it instead: a finished run's *return* is a
+/// three-way sort rather than a demand some node made, and it is told so by
+/// `lichen-compute` without re-deriving the rules. Adding a kind to this enum
+/// breaks every one of those places at compile time, which is the disagreement
+/// a third answer would have produced silently.
 pub enum Value<'backend> {
     /// Submitted, and the device may not be done with it.
     Pending {
@@ -162,20 +170,25 @@ impl<'backend> Value<'backend> {
     /// **This is the filter, and it is why there is no "not a buffer" category
     /// to add kinds to.** A jit'd function may be handed arbitrary lichen
     /// values, and a recording sorts them into roles by asking each one. The
-    /// answers live here and in [`Self::as_count`], one method per role, rather
+    /// answers live here and in [`Self::as_number`], one method per role, rather
     /// than in a type that claims to know which role a value has before anyone
     /// has asked.
-    pub fn slot(&self) -> Result<BufferSlot<'_>, GraphRefusal> {
+    ///
+    /// **The failure is what this value is, and not a refusal** — the demand is
+    /// not the value's to describe. "Node 7 was given a number where it wanted a
+    /// buffer" is a fact about the graph, and the value is not a node and names
+    /// no edge, so a [`GraphRefusal`] raised here could only leave those two out
+    /// and hand the caller a sentence with nothing in it to look up. The runner
+    /// asks, and the runner is where both numbers are already in hand.
+    pub fn slot(&self) -> Result<BufferSlot<'_>, &'static str> {
         match self {
             Value::Host(host) => Ok(BufferSlot::Host(host)),
             Value::Device { id, .. } | Value::Pending { id, .. } => Ok(BufferSlot::Resident(*id)),
-            Value::Int(_) => Err(GraphRefusal::NotBufferData {
-                found: self.state(),
-            }),
+            Value::Int(_) => Err(self.state()),
         }
     }
 
-    /// This value as a count, for a dispatch's extent.
+    /// The number this holds, for a dispatch's count.
     ///
     /// The mirror of [`Self::slot`], and separate for the same reason: a value
     /// asked for one role and refused is a different mistake from a value asked
@@ -186,13 +199,19 @@ impl<'backend> Value<'backend> {
     /// say so by name rather than by being a `None` somewhere upstream. A count
     /// is an extent, so refusing a pointer here is about the value, not about the
     /// role — the role was right and the value was not.
-    pub fn as_count(&self) -> Result<usize, GraphRefusal> {
+    ///
+    /// **The number comes back as `i64` and the extent is the caller's to
+    /// decide.** A negative count is a mistake worth reporting rather than
+    /// wrapping, and a caller that dispatches over `[0, count)` has to know that
+    /// before it dispatches — while the *same* rule has to hold for a number
+    /// that arrives as a function's own return, which is asked for by nobody at
+    /// all. Keeping the conversion here would mean either a refusal with no node
+    /// in it or a second rule in a second place; handing back the number puts
+    /// both callers in charge of the one rule that is theirs.
+    pub fn as_number(&self) -> Result<i64, &'static str> {
         match self {
-            Value::Int(number) => usize::try_from(*number)
-                .map_err(|_| GraphRefusal::CountNegative { number: *number }),
-            other => Err(GraphRefusal::CountNotANumber {
-                found: other.state(),
-            }),
+            Value::Int(number) => Ok(*number),
+            other => Err(other.state()),
         }
     }
 
@@ -243,7 +262,8 @@ impl<'backend> Value<'backend> {
         Ok(())
     }
 
-    /// What this value currently is, for a refusal that has to say.
+    /// What this value currently is, which is what a role it is not in answers
+    /// with.
     ///
     /// **The readiness and the kind are two different facts, and both are here.**
     /// "A submission that has not been waited for" and "a device buffer that was

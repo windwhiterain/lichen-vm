@@ -40,7 +40,7 @@ use std::sync::{Mutex, OnceLock};
 use lichen_graph_ir::{
     Count, Graph, GraphRefusal, KernelNode, Node, Policy, Runner, Value, ValueId,
 };
-use lichen_kernel_ir::{BufferSlot, KernelFragment};
+use lichen_kernel_ir::KernelFragment;
 
 use super::{Backend, ComputeValue, ResidentBuffer};
 
@@ -599,27 +599,50 @@ pub fn run(
 
 /// What one entry of a finished run is, for the caller to turn into a value.
 ///
+/// **Matched rather than asked, and the difference is who is doing the asking.**
+/// [`Value::slot`] and [`Value::as_number`] are the runner's two filters: they
+/// exist to answer a *demand* — node 7 wanted a buffer, node 8 wanted an extent —
+/// and so they refuse, which is right there and wrong here. A return is not a
+/// demand any node made, so the two filters have nothing to refuse and a third
+/// question is the honest one: a value is a number, host data, or a device
+/// buffer, and which one it is has to become a `RunResult` either way.
+///
+/// The old version asked for the buffer and caught the refusal, so a number was
+/// recognised by the fact that it had been *refused*. That made the readback
+/// depend on a diagnostic it was about to throw away, and it would have broken
+/// outright the day a refusal wanted to say which node asked — a number
+/// classified here has no node, because no node asked for it.
+///
 /// **A number is one of the three rather than a refusal**, and that is what makes
 /// the "nobody recorded a return, so take every value" answer above actually
 /// work. A graph whose extent is one of its own arguments has that number in its
 /// value table, so a graph that takes everything meets a number — and a function
 /// is allowed to return its own extent. Refusing here would make the permissive
 /// answer unreachable for exactly the graphs that most need it.
+///
+/// **The extent is decided here, because this is the one place a count is not
+/// asked for by a node.** A node's count becomes a `usize` in the runner, which
+/// is about to dispatch over it; a returned number becomes one here, on its way
+/// to the caller's value table. One rule, both callers, and the `i64` never
+/// reaches a `usize` slot without the conversion in between.
 fn returned_role(value: &Value<'_>) -> Result<RunResult, GraphRefusal> {
-    match value.slot() {
-        Ok(BufferSlot::Host(data)) => Ok(RunResult::Buffer(data.to_vec())),
-        Ok(BufferSlot::Resident(id)) => Ok(RunResult::Resident(ResidentBuffer {
-            id,
-            count: value.count().unwrap_or(0),
-        })),
-        // A count read as a count rather than borrowed as a buffer: the two
-        // questions are separate for a reason, and this one was asked as the
-        // second and so is answered as the second.
-        Err(GraphRefusal::NotBufferData { .. }) => value
-            .as_count()
-            .map(|number| RunResult::Count(number as i64)),
-        Err(refusal) => Err(refusal),
-    }
+    Ok(match value {
+        Value::Host(host) => RunResult::Buffer(host.to_vec()),
+        // The pending arm is a shape the match has to name rather than one it
+        // expects: the runner settles every value before it hands the table back,
+        // so a resident here has been waited for. Naming it anyway costs one arm
+        // and means a readback that somehow met a submission would name the
+        // buffer rather than disagree with the runner about what it is.
+        Value::Device { id, count } | Value::Pending { id, count, .. } => {
+            RunResult::Resident(ResidentBuffer {
+                id: *id,
+                count: *count,
+            })
+        }
+        Value::Int(number) => usize::try_from(*number)
+            .map(RunResult::Count)
+            .map_err(|_| GraphRefusal::CountNegative { number: *number })?,
+    })
 }
 
 /// A returned value, already separated by the role it is in.
@@ -630,5 +653,11 @@ pub enum RunResult {
     Resident(ResidentBuffer),
     /// A number, which a function is allowed to have returned — its own extent,
     /// most often, since that is the one number a graph always has.
-    Count(i64),
+    ///
+    /// **`usize` rather than the `i64` the value table holds**, because this is
+    /// the last point at which a count can be checked and the next one is a
+    /// `LowValue::USize`. Handing an `i64` to that slot is a `as usize` in
+    /// somebody's `match`, and an `as usize` is how `-1` becomes a very large
+    /// number that looks like a length.
+    Count(usize),
 }

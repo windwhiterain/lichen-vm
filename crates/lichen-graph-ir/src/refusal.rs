@@ -1,4 +1,4 @@
-﻿//! Why a graph could not be run, with each refusal naming its own cause.
+//! Why a graph could not be run, with each refusal naming its own cause.
 
 use std::fmt;
 
@@ -88,7 +88,17 @@ pub enum GraphRefusal {
     /// caller told only "wrong shape" has to work out which one they hit. There
     /// is a repair that looks reasonable here — read the number as a one-element
     /// host vector — and taking it would run a kernel nobody wrote.
-    NotBufferData { found: &'static str },
+    ///
+    /// **It names the node and the value because a graph has many of each.** A
+    /// sentence saying only what the value was leaves a reader of a forty-node
+    /// graph to work out which of forty demands was the wrong one, and the two
+    /// numbers are the ones the graph already gave away: `node` is the position
+    /// the runner is at, and `value` is the edge the node was built with.
+    NotBufferData {
+        node: usize,
+        value: usize,
+        found: &'static str,
+    },
     /// A dispatch's count resolved to something that is not a number.
     ///
     /// A count is an extent, so the only thing that can be one is a number, and
@@ -96,12 +106,30 @@ pub enum GraphRefusal {
     /// right and the value was not. Naming what the value is what tells a caller
     /// whether the edge points at the wrong value or the builder wrote a number
     /// into a slot meant for data.
-    CountNotANumber { found: &'static str },
-    /// A dispatch's count was negative.
+    ///
+    /// **It carries the same two numbers as [`Self::NotBufferData`] and for the
+    /// same reason**: a count edge is one of a node's two roles, so saying which
+    /// role was wrong without saying which node asked leaves the harder half of
+    /// the question open.
+    CountNotANumber {
+        node: usize,
+        value: usize,
+        found: &'static str,
+    },
+    /// A count was negative.
     ///
     /// `i64` in the value type so this is reportable rather than wrapped: a
     /// `usize` would have turned `-1` into an enormous extent and dispatched
     /// over memory nobody owns.
+    ///
+    /// **This is the one refusal here with no node, and the asymmetry is the
+    /// point rather than an omission.** The other two are about a *demand* — a
+    /// node asked for a role — and a value cannot say who asked. This one is
+    /// about the number itself, and a number is asked for as an extent by a node
+    /// *or* handed back as a function's own return, which is asked for by nobody
+    /// in particular. Putting a node in this variant would mean inventing one
+    /// where the mistake is not in any node at all, which is the bug an earlier
+    /// version of this enum had with `node: usize::MAX`.
     CountNegative { number: i64 },
     /// The policy asked for is not something a backend can do.
     ///
@@ -170,20 +198,20 @@ impl fmt::Display for GraphRefusal {
                  dispatch over [0, count) reads every input to `count`, so a lane would read \
                  past the shorter one."
             ),
-            GraphRefusal::NotBufferData { found } => write!(
+            GraphRefusal::NotBufferData { node, value, found } => write!(
                 f,
-                "a buffer was asked of a value that is {found}. A number is not a one-element \
-                 buffer, and reading it as one would run the dispatch against data nobody wrote."
+                "node {node} was given value {value} as a buffer, and that value is {found}. A \
+                 number is not a one-element buffer, and reading it as one would run the \
+                 dispatch against data nobody wrote."
             ),
-            GraphRefusal::CountNotANumber { found } => write!(
+            GraphRefusal::CountNotANumber { node, value, found } => write!(
                 f,
-                "a dispatch's count was read from a value that is {found}. A count is an \
-                 extent, so the only thing that can be one is a number."
+                "node {node} reads its count from value {value}, and that value is {found}. A \
+                 count is an extent, so the only thing that can be one is a number."
             ),
-            GraphRefusal::CountNegative { number } => write!(
-                f,
-                "a dispatch's count is {number}, and a count cannot be negative."
-            ),
+            GraphRefusal::CountNegative { number } => {
+                write!(f, "a count is {number}, and a count cannot be negative.")
+            }
             GraphRefusal::PolicyUnsupported { policy, reason } => {
                 write!(f, "the {policy} schedule is not available: {reason}")
             }

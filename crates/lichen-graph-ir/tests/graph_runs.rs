@@ -485,9 +485,18 @@ fn a_count_read_from_data_and_a_buffer_given_a_number_are_two_different_refusals
         .expect_err("a count read from data");
     assert_eq!(
         count_from_data,
-        GraphRefusal::CountNotANumber { found: "host data" },
+        GraphRefusal::CountNotANumber {
+            node: 0,
+            value: 1,
+            found: "host data"
+        },
         "and the message says what the value was, so a caller can tell the edge \
          is wrong from the builder having written a number into a data slot"
+    );
+    assert!(
+        count_from_data.to_string().contains("node 0"),
+        "and it names the node, because a refusal that does not is a sentence \
+         about a graph of one node: {count_from_data}"
     );
 
     // The same graph with a number in the buffer slot.
@@ -497,10 +506,21 @@ fn a_count_read_from_data_and_a_buffer_given_a_number_are_two_different_refusals
         .expect_err("a buffer slot holding a number");
     assert_eq!(
         buffer_is_a_number,
-        GraphRefusal::NotBufferData { found: "a number" },
+        GraphRefusal::NotBufferData {
+            node: 0,
+            value: 0,
+            found: "a number"
+        },
         "which is a different message and not the same one twice: a number is \
          not a one-element buffer, and reading it as one would run the dispatch \
          against data nobody wrote"
+    );
+    assert!(
+        buffer_is_a_number.to_string().contains("value 0"),
+        "**and the value, which is the other half of the same lookup.** The two \
+         refusals above are told apart by the *role* — one edge wanted a count \
+         and the other a buffer — so a reader has to be able to find both edges \
+         by number: {buffer_is_a_number}"
     );
 }
 
@@ -516,9 +536,16 @@ fn a_negative_count_is_refused_rather_than_wrapped_into_an_enormous_extent() {
     assert_eq!(refusal, GraphRefusal::CountNegative { number: -1 });
     assert_eq!(
         refusal.to_string(),
-        "a dispatch's count is -1, and a count cannot be negative.",
+        "a count is -1, and a count cannot be negative.",
         "and it says so in a `usize` world where -1 would have become a very \
          large dispatch rather than a mistake"
+    );
+    assert!(
+        !refusal.to_string().contains("node"),
+        "**and it names no node, on purpose.** The other two refusals in this \
+         file are about a demand a node made; this one is about the number, and \
+         a number is also what a function can *return*, which no node asked \
+         for. Inventing a node here would name a place the mistake is not in"
     );
 }
 
