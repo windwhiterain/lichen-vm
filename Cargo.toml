@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/lichen-kernel-ir",
+    "crates/lichen-graph-ir",
     "crates/lichen-compute-gpu",
     "crates/lichen-span",
     "crates/lichen-utils",

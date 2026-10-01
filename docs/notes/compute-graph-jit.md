@@ -38,6 +38,18 @@ scheduling, and any topological order is correct. The closure is a node in the
 same graph as a kernel, scheduled the same way, with **no special requirement on
 it at all**. It is not a barrier, and it does not force a flush.
 
+**A correction to how that is written below.** The rule is about a native node's
+**capture**, and the rest of this section once extended it to its **arguments**:
+"no edge leads from a graph node into a closure; a closure takes nothing from
+inside the graph". Taken literally that leaves a native node unable to transform
+anything, which is most of what a host call is for. The soundness invariant is
+the first part; arguments are graph values and the edges into them are ordinary.
+`lichen-graph-ir` builds both kinds of node on that reading, and the cost of the
+distinction is written down where it lands: **a native node that reads a
+dispatch's output has to wait for it and fetch it**, and no arrangement of
+submissions removes that. The shape that pays is a native node whose inputs
+already existed before the run.
+
 And the second thing falls out of that: **a closure can run while a submission
 is in flight**, because it touches nothing the device is writing. That is the
 only thing about native logic in a graph that is worth money — and it is the
@@ -337,7 +349,7 @@ anything at all.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, sixteen commits, not pushed):
+**Built and committed** (`feature/graph-jit`, seventeen commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -356,14 +368,126 @@ anything at all.
 | `751cd2b` | the fused chain is checked and faster everywhere |
 | `de5424c` | the pool of submission slots, configurable and defaulting to 2 |
 | `082c4d7` | `Pending` on the backend contract — a submission handed back unwaited |
-| *this one* | the submit/wait split, measured |
+| `ad7f97a` | the submit/wait split, measured |
+| *this one* | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
 
-**Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-and the executor that schedules submissions and closures.
+**Not built:** the IR that *compiles* a lichen function into this graph, the
+`compute.graph` operator, the `Graph` value in the language, and the
+fused-submission capability `Batch` needs.
 
 **Measured:** the count sweep, the fused chain it predicted, that two
-submissions can be in flight and chained at the same time, and how much of a
-submission's device time the host can be busy across.
+submissions can be in flight and chained at the same time, how much of a
+submission's device time the host can be busy across, and that a graph with both
+kinds of node produces on a real device what the same fragments produce outside
+one.
+
+## The graph IR, and the two kinds of node
+
+`lichen-graph-ir`, depending on `lichen-kernel-ir` and nothing else. A graph is a
+list of nodes in evaluation order, and a node is one of exactly two things: a
+**kernel** node (a fragment over an index range) or a **native** node (a host
+call). There is no fused node, no barrier node and no sync node, and the reason
+is the point: what decides when the host observes completion is the *policy*,
+not the graph. A graph that could name its own synchronisation would be one whose
+correctness depended on where somebody put a keyword.
+
+**Edges are `ValueId`s and the list is the topological order**, so a cycle is
+unwritable. `Graph::push` refuses an edge naming a value that does not exist yet
+— which is the only way a cycle could be expressed — and refuses an output count
+the node's own body disagrees with, because that misaligns every value number
+after it.
+
+### `NativeCall` is a `fn` pointer, and that is the invariant
+
+The whole scheduling argument for a graph with host logic rests on a native node
+being unable to reach anything the graph produces. **A `fn` item cannot capture**,
+so the environment is necessarily fixed when the `fn` is named. The rule is a
+property of the type, not a promise in a comment. A caller that has a pre-run
+value to work from builds a `fn` that reads it from wherever it lives — safe for
+exactly the reason it is allowed to be, that the environment predates the run.
+
+The alternative, a boxed trait object, would let the same rule be broken
+invisibly, and the break is a **silently wrong answer** rather than a slow one.
+
+**The arguments are `&[i64]`, not values**, because a host call cannot read
+device memory at all. Handing it a graph value would mean handing it either a
+buffer whose contents may not be written yet or a transfer the call site has to
+know to ask for. So the runner settles and fetches arguments first, which is
+where a native node's cost of sitting in the middle of a data path lands.
+
+### The pending state is a value, not a rule
+
+```rust
+Value::Pending { submission, id, count }   // submitted, device may not be done
+Value::Device  { id, count }               // waited for, contents are there
+Value::Host(Vec<i64>)
+```
+
+This is the one design decision in the crate that everything else leans on. A
+value is pending for exactly as long as the host has other work to do, and
+**spending that window is the whole reason for running a graph this way** — so
+folding it into "a buffer" would either lie about the contents or make every
+reader responsible for knowing whether it had to wait first.
+
+Asking that to the type is what removes a class of bug rather than documenting it.
+**A kernel node can consume a pending value**, because recording a dispatch
+against a buffer only *names* it and the producer was recorded first. **A native
+node cannot**, because a host call reads the data — and matching on `Pending` is
+what a demand point *is*. That asymmetry is not a rule the runner follows; it is
+what the match arms are. A dispatch with several outputs shares one submission
+through an `Arc`, so the wait happens once however many values carry it.
+
+### What a run hands back, and why it is not the last node
+
+The **whole tail of the value table**, not the last node's outputs. What a
+function returns from the graph compiled out of it is the *function's* business,
+and the function is the thing that knows it. A runner that picked a node would be
+making that decision for the caller, and a graph with a dead tail would be unable
+to express its own return. Every value is settled first, so every id handed back
+names a buffer the device has written.
+
+### Two policies work and one is refused
+
+`Serial` is the plain kernel path. `Async` submits each node as soon as it is
+recordable and waits only where something needs the data. **`Batch` is refused by
+name**, because a backend can only fuse if it can be handed several dispatches to
+put in one command buffer, and the contract has no way to ask for that — `submit`
+records one run and hands it over. A runner that accepted `Batch` could only run
+it as something else, and both things it could run it as report a number for a
+schedule nobody asked for. That is a missing capability, named as one, rather
+than a silent downgrade.
+
+**Async needed no new backend capability at all.** `submit` and `Pending::wait`
+were already enough, which is the strongest evidence yet that the two seams landed
+in the right place: the graph runner is written entirely against the existing
+contract.
+
+### Checked, on a stub and on a device
+
+The stub records **what the host asked for and in what order**, because *where*
+the waits are is the claim and a count cannot say it. A three-node graph — add,
+a host call over the result, add again — under `Async` asks for exactly:
+
+```text
+submit         the first dispatch goes to the queue
+wait, fetch    the native node needs that dispatch's data: a demand point
+submit         the second dispatch records against host data, so nothing waited for it
+wait           the run hands back an id, and an id must name a written buffer
+```
+
+Three waits would be a scheduler that waited for everything. **One wait would be
+a scheduler that let the native node read a buffer the device had not written** —
+a wrong answer rather than a slow one, and the reason the pending state is in the
+value type at all.
+
+On a real device, `a_graph_with_a_native_node_beside_its_dispatches` and
+`a_native_node_reading_a_dispatches_output` both produce what the same fragments
+produce outside a graph, under both policies. The second is the shape the design
+warns about, and the test is worth having precisely because it is the one where a
+scheduler could plausibly be wrong: the host call has to read a buffer the device
+has not finished, so the runner waits and fetches, and **no arrangement of
+submissions removes that cost.** What the runner guarantees is that it happens
+before the read rather than being left to chance.
 
 ## The pool of submission slots
 
@@ -615,7 +739,14 @@ carry that count, and it is the only part of this rule with no code behind it.
    is one submission's device time and no more, which means it earns nothing on a
    chain of pure kernels and up to a dispatch's worth per node on a graph with
    native nodes in it.
-5. **Then, and only then**, the IR crate and the node set.
+5. ~~**Then, and only then**, the IR crate and the node set.~~ **Done** — see
+   [The graph IR, and the two kinds of node](#the-graph-ir-and-the-two-kinds-of-node).
+   What is left of the whole feature is the half that *builds* a graph rather
+   than running one: the `compute.graph` operator, the `Graph` value in the
+   language, and the lowering that fills `Graph::push` — using the two seams
+   already landed, which is what they were cut for. `Batch` needs a
+   fused-submission capability in the contract before it can be anything but a
+   refusal.
 
 ## Landmines, each of which is a silent wrong answer
 

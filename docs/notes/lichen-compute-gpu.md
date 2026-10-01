@@ -450,8 +450,15 @@ Named rather than implied, because each is a decision not a gap:
   no more** — `min(host work, device time)`, saturating at the device's own
   time, to within 0.05 ms in ten rows. So it earns nothing on a chain of pure
   kernels and up to a dispatch's worth per node on a graph with native nodes in
-  it, and the *Batch* ceiling above is a different quantity entirely. What is
-  left is the **executor** that decides when to submit and when to wait.
+  it, and the *Batch* ceiling above is a different quantity entirely. The
+  **executor** that decides when to submit and when to wait exists now, in
+  `lichen-graph-ir`, written entirely against the contract in this file **with no
+  change to it** — which is the strongest evidence yet that `submit` and
+  `Pending::wait` are the right two seams. A graph of both kinds of node runs on
+  a real device under this contract; see this crate's `tests/graph_on_device.rs`.
+  `Batch` needs a fused-submission capability the contract does not have, and is
+  refused by name until it does. What is left is the half that *builds* a graph
+  rather than running one: the `compute.graph` operator and the lowering.
   `run_chain`'s own shape is a linear chain of one
   fragment, and a graph's fan-out is not that.
 - **Cross-kernel calls.** `SpirvRefusal::CrossKernelCall`. Needs several
