@@ -371,7 +371,8 @@ anything at all.
 | `ad7f97a` | the submit/wait split, measured |
 | `5b58b78` | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
 | `7447fc0` | a graph records what its own function returned |
-| *this one* | the lowering design, the refusals it owes, and the native-node contradiction |
+| `781ed18` | the lowering's design, and the native-node contradiction it uncovered |
+| *this one* | a probe of the real node structure, which corrected the lowering's walk |
 
 **Not built:** the lowering that compiles a lichen function into this graph, the
 `compute.graph` operator, the `Graph` value in the language, and the
@@ -495,9 +496,58 @@ before the read rather than being left to chance.
 
 ## The half that builds a graph, and what it found
 
-Designed and **not yet written**. The shape is closed and the walk is verified
-against the real node structure; what is missing is the code. Recorded here
-because the design is most of the work and re-deriving it is expensive.
+**The design below was wrong in its central walk, and a probe found it.** It is
+kept rather than rewritten, because the correction is the expensive part and
+re-deriving it would be worse. `crates/lichen-language/tests/graph_structure.rs`
+is the probe: it compiles a real `plrun` chain and asserts the structure a
+lowering would meet, so the next attempt is written on observation.
+
+### A native call is an `Apply`, and the operator lives in a synthesized callee
+
+**What the design assumed:** the function's own node list contains `ParLaunch`
+nodes, so the lowering enumerates `function_nodes(function)` and picks them out.
+
+**What is true:** the body contains **no compute operator at all**. A native
+call is a `LowOperator::Apply)`, and the operator that the native op built lives
+in a **synthesized per-call-site function** that the `Apply` enters. A lowering
+that searched the body would find nothing and record an empty graph from a
+program that dispatches — silently, and looking like a program with no work in
+it.
+
+So the walk is: the body's `Apply` nodes, each one's callee, and the compute
+operators in the callee's body. That is **better** than what it replaced, and
+the reason is worth keeping: the lowering now sees *the program's own calls*
+rather than compute operators directly, so it is generic over the surface and a
+new `$` op is a node rather than a special case.
+
+Two facts that fall out and are now checked:
+
+- a callee can be **static** (frozen in a package) as well as dynamic. A static
+  one has no body in this module and yields no operator, so a body mixes both
+  kinds and only the dynamic kind is a dispatch.
+- the operator node's operand array is `[kernel, cfg]` and is readable through
+  `node_operation` plus `array_items` **without evaluating the node** — which is
+  what keeps a *build* from running a dispatch.
+
+### What is still open, and it is the part that matters
+
+Two things the probe could not answer, both about the cfg and the kernel:
+
+- **The cfg slot is not a readable array.** It is an unevaluated
+  array-constructing node, so `array_items` — which reads a node's *cached
+  payload* — has nothing to read. `ParLaunch`'s `run` branch sees `[kernel, cfg]`
+  as values because the VM evaluated them first, and **that evaluation is the
+  dispatch**. So the count and the buffers have to be reached through the cfg
+  node's *operation*, and how is not yet known.
+- **The kernel slot is an unresolved capture.** It is a node in the function's
+  own block with **no cached value**, because the template has never been
+  applied and so nothing has resolved the capture. Note this also kills the
+  tidier-sounding test for a free variable: the slot is *not* homed outside the
+  function's block, so "a node the body does not own" does not identify one.
+
+Both are the same underlying question — how a capture is read out of a template
+nothing has applied — and it is the question that decides which nodes a graph has
+to keep alive, so it is the one to answer before writing the walk.
 
 ### A graph's inputs are the function's free variables, and that is forced
 
@@ -508,7 +558,16 @@ graph's inputs. This is not a limitation worked around, it is what the design
 already says from the other end ("a closure can only reach variables that existed
 before the graph JIT ran") landing on the only half that is writable today.
 
-The consequence worth writing down: **the graph holds its inputs.** They are
+**And the language makes it precise, which the design had not noticed.** The
+grammar is `lambda := annotated ('=>' expr)?` with a *name* on the left, so
+**every lichen function has exactly one parameter** and a free variable is simply
+a name the body reads that is not that parameter. There is no nullary lambda
+syntax at all. A consequence nobody had written down: a source function that
+dispatches a buffer *directly* is unrecordable, because its parameter is not a
+value at the moment the graph is built. That is a refusal, and it is a fourth one
+this design owes.
+
+The other consequence worth writing down: **the graph holds its inputs.** They are
 `Buffer` values in a block arena, freed with the block, so a graph that did not
 name them would read freed memory on its second run. That is `traced`'s first
 real user, and it is a buffer rather than the closure both seam doc comments
@@ -529,22 +588,31 @@ value back through it is correct for the same reason.
 
 ### The walk is structural, and no dispatch runs while building a graph
 
-`ParLaunch`'s operand array is `[kernel, cfg]` and the `cfg` is `(count, buffers)`.
-Every one of those is an operand edge, readable through `node_operation` and
-`array_items` **without evaluating the `ParLaunch` node** — and evaluating it would
-run a real dispatch, which is the thing a build must not do. Only two things need
-evaluating: the kernel (a `Parallel` node, a pure compile) and the count (a
-scalar). Neither dispatches.
+**Half of this is right and half was wrong; the wrong half is above.**
 
-The walk enumerates `function_nodes(function)` rather than following the return's
-operand spine, and that is what makes a **dead tail** findable: a spine walk sees
-only live nodes. The return is then resolved separately and recorded through
-`Graph::returning`, which is why a dead tail and a return are independent facts.
+Right: the `ParLaunch` node's own operand array is `[kernel, cfg]`, readable
+through `node_operation` and `array_items` **without evaluating that node** — and
+evaluating it runs a real dispatch, which is the one thing a build must not do.
 
-Two passes, because `Graph::with_inputs` needs the input count before the first
-`push`: pass one collects `NodeFacts { kernel, count, inputs: Vec<NodeId> }` in body
-order and numbers the free variables in first-seen order, pass two maps node ids
-to value numbers and pushes. The map is also the whole of the classification: an
+Wrong: the claim that the count and the buffers are "two things that need
+evaluating, neither of which dispatches". The **count** is a decided value on a
+node and that part holds. The **buffers** are not readable the same way, and the
+cfg as a whole is an unevaluated array-constructing node whose payload does not
+exist yet, so a value-level read of it fails. Reaching the count and the buffers
+means going through that node's *operation*, and the shape of that operation is
+not yet known.
+
+Wrong: "the walk enumerates `function_nodes(function)`". It enumerates the
+body's `Apply` nodes and descends into each dynamic callee (above). The *reason*
+the original wanted the body's own node list still stands, though — a return's
+operand spine sees only live nodes, so it cannot find a **dead tail**. The return
+is resolved separately and recorded through `Graph::returning`, which is why a
+dead tail and a return are independent facts.
+
+Still right: two passes, because `Graph::with_inputs` needs the input count before
+the first `push`. Pass one collects `NodeFacts { kernel, count, inputs }` in
+**body order** and numbers the free variables first-seen; pass two maps node ids
+to value numbers and pushes. The map is the whole of the classification: an
 input node not in `produced_by` is a free variable.
 
 ### Refusals this design owes, all of them about a graph and not a run
@@ -565,6 +633,11 @@ rule the rest of the tree follows.
 - **A `cfg` item that is neither a dispatch's output nor a buffer.** A third thing
   in that position would be the interesting one to support and the wrong one to
   accept silently.
+- **A dispatch that reads the function's own parameter.** Every lichen function
+  has exactly one parameter and nothing has applied the template, so the
+  parameter is not a value at build time. A body that dispatches it is
+  unrecordable, and the reason to give is the parameter — not "unresolved value",
+  which is what the same node looks like when it is a perfectly good capture.
 - **A return naming neither a dispatch's output nor a free variable.**
 
 ### What this step is worth, stated plainly
