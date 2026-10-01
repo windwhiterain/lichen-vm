@@ -64,19 +64,30 @@ impl CellStore {
         );
     }
 
-    /// Drop every cell that came from `source`, returning how many went.
+    /// Drop every cell that came from `source`, returning the artifacts they
+    /// named.
     ///
     /// This is the **dirty input**, and it is deliberately the caller's: an edit
     /// names the file it changed, so the store never has to detect anything — and
-    /// the caller drops the cells of every file that *imports* the changed one
-    /// too (the reverse import closure), which is the file granularity the design
-    /// chose for source edits.  A dropped cell is not consulted again, so its
-    /// binding is compiled and re-frozen on the next build; its artifact stays in
-    /// the registry until eviction exists.
-    pub fn invalidate(&mut self, source: &str) -> usize {
-        let before = self.cells.len();
-        self.cells.retain(|_, cell| cell.source != source);
-        before - self.cells.len()
+    /// the caller drops the cells of every file that *imports* the changed one too
+    /// (the reverse import closure), which is the file granularity the design chose
+    /// for source edits.  A dropped cell is not consulted again, so its binding is
+    /// compiled and re-frozen on the next build.
+    ///
+    /// The returned keys are the artifacts that just became unreachable.  The store
+    /// does **not** evict them: a static ref is a raw handle into the artifact's
+    /// arena, so eviction is sound only once every module that could still hold one
+    /// is gone ([`Registry::evict`]'s precondition), and only the caller knows that.
+    pub fn invalidate(&mut self, source: &str) -> Vec<ModuleKey> {
+        let mut dropped = Vec::new();
+        self.cells.retain(|_, cell| {
+            let keep = cell.source != source;
+            if !keep {
+                dropped.push(cell.reference.module);
+            }
+            keep
+        });
+        dropped
     }
 
     /// A device key for the next artifact.

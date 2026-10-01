@@ -126,6 +126,20 @@ impl<P: Program> Registry<P> {
         );
     }
 
+    /// Evict a filed artifact: drop it, which frees its arena and runs the release
+    /// obligations it owns ([`Release`]).  Returns whether it was registered.
+    ///
+    /// **Precondition: nothing may still reference it.**  A static ref is a raw
+    /// handle into the artifact's arena, so a `StaticNodeId` naming an evicted key
+    /// is not a miss — [`Module::static_module`] panics on one, and a payload
+    /// already read through it dangles.  So eviction is the caller's decision, made
+    /// when the caller knows every module that could still hold such a ref is gone;
+    /// the registry cannot know that, which is why this is a separate call rather
+    /// than something a freeze or a release does on its own.
+    pub fn evict(&mut self, key: ModuleKey) -> bool {
+        self.entries.remove(&key).is_some()
+    }
+
     /// Set the opaque per-package metadata for an existing registered
     /// package.  Higher layers use this to store export markers, source
     /// paths, or any future package-level state without the lowlevel
