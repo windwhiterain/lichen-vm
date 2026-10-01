@@ -1,9 +1,11 @@
 # Graph JIT: a chain of dispatches as one submission
 
-> Status: **designed, framework seams landed, nothing built on top yet.** The
-> two lowlevel seams a graph needs are in and tested; the graph itself, the IR
-> crate, and the first measurement are not. Branch `feature/graph-jit`, three
-> commits, not pushed.
+> Status: **the IR and the seams are in and tested; the lowering is decided and
+> not written.** The two lowlevel seams, the graph IR crate, and the return
+> recording all exist and are tested. The half that builds a graph — the
+> `compute.graph` operator, the `Graph` value, and the recording that fills
+> `Graph::push` — is designed below and unwritten. Branch `feature/graph-jit`,
+> not pushed.
 >
 > This note exists so the next session does not re-derive any of it. Most of
 > what is here is a decision *and the alternative that was rejected*, because
@@ -127,8 +129,14 @@ block evaluation that produced it, with no diagnostic. `evaluate_block` calls
 **It is not enforced.** Nothing checks the answer, because nothing can: the
 lowlevel cannot see what a value holds. An unlisted node is not a detectable
 omission, it is a node that quietly disappears. The contract is held by review
-and by `lichen-lowlevel/tests/basic/compaction.rs`. Say this to anyone writing
-the first real `traced`.
+and by `lichen-lowlevel/tests/basic/compaction.rs`.
+
+**This seam still has no user, and the graph was supposed to be it.** Reading
+`gc.rs` while designing the lowering is what settled that it is not: a graph
+holding input *nodes* would be relying on this for survival across a
+`drop_block`, and this protects against compaction only. The graph therefore
+holds no references, and this seam waits for whatever genuinely needs it. Say
+this to anyone writing the first real `traced`.
 
 ### Seam B — `OperatorExt::run_deferred` (`82a7948`)
 
@@ -372,7 +380,8 @@ anything at all.
 | `5b58b78` | `lichen-graph-ir`: the graph, its two kinds of node, and a runner |
 | `7447fc0` | a graph records what its own function returned |
 | `781ed18` | the lowering's design, and the native-node contradiction it uncovered |
-| *this one* | a probe of the real node structure, which corrected the lowering's walk |
+| `7347bff`, `ebfa982` | a probe of the real node structure, which corrected the lowering's walk |
+| *this one* | what a recorded dispatch hands back, and what a graph holds |
 
 **Not built:** the lowering that compiles a lichen function into this graph, the
 `compute.graph` operator, the `Graph` value in the language, and the
@@ -426,6 +435,7 @@ where a native node's cost of sitting in the middle of a data path lands.
 Value::Pending { submission, id, count }   // submitted, device may not be done
 Value::Device  { id, count }               // waited for, contents are there
 Value::Host(Vec<i64>)
+Value::Int(i64)                            // a number, so never pending
 ```
 
 This is the one design decision in the crate that everything else leans on. A
@@ -441,6 +451,12 @@ node cannot**, because a host call reads the data — and matching on `Pending` 
 what a demand point *is*. That asymmetry is not a rule the runner follows; it is
 what the match arms are. A dispatch with several outputs shares one submission
 through an `Arc`, so the wait happens once however many values carry it.
+
+**A count is asked in the other direction, and that is the point of `Int`.** A
+count edge is a number, so it can never be pending and never needs a wait; a
+count edge that resolves to a buffer is a mistake the type already forbids, and
+asking for the two roles separately is what keeps one from being coerced into
+the other.
 
 ### What a run hands back, and why it is not the last node
 
@@ -557,60 +573,200 @@ building" property comes from the recording intercepting `ParLaunch` and
 substituting a placeholder, not from refusing to evaluate.** Those are different
 mechanisms and only one of them was in the design.
 
-The remaining design work is the recording mechanism itself: what `ParLaunch`
-returns in place of a buffer, and how a later `cfg` referring to that dispatch's
-output becomes an edge rather than a second dispatch. The `produced_by` map is
-what answers the second half.
+Both are answered, and the answers together are what the build hangs off. See
+[The lowering, decided](#the-lowering-decided).
 
-### What is still open
+### The lowering, decided
 
-- **What a recorded `ParLaunch` hands back.** It normally produces a `Buffer` (an
-  arena payload) or a `DeviceBuffer`. A placeholder that carries a **graph value
-  id** is the obvious shape, and a buffer payload is the wrong one to borrow
-  from — it is arena data with a block's lifetime, and a graph's values are not
-  arena data. This is the first thing to design, because everything else in the
-  build hangs off it.
-- **Whether a recorded run is one evaluation or a chain of them.** The chain case
-  (`a = plrun k1 …; b = plrun k2 (…, a)`) is where the recording has to turn
-  the second dispatch's buffer into an edge, and the probe program already has
-  that shape.
+Everything below is decided. It is written here rather than in the code because
+the code is the next checkpoint and a design that is only in code cannot be
+reviewed against the thing it replaced.
 
-### A graph's inputs are the function's free variables, and that is forced
+#### A recorded dispatch hands back a value number, and nothing else
 
-`$graph(f)` is handed `f` as a **template**. Nothing has been applied to it, so at
-that moment there is no such thing as its argument: every buffer the body reads
-that no earlier dispatch produced is a free variable, and those are exactly the
-graph's inputs. This is not a limitation worked around, it is what the design
-already says from the other end ("a closure can only reach variables that existed
-before the graph JIT ran") landing on the only half that is writable today.
+`ParLaunch` normally hands back a `Buffer` (an arena payload) or a
+`DeviceBuffer`. A recording cannot hand back either:
 
-**And the language makes it precise, which the design had not noticed.** The
-grammar is `lambda := annotated ('=>' expr)?` with a *name* on the left, so
-**every lichen function has exactly one parameter** and a free variable is simply
-a name the body reads that is not that parameter. There is no nullary lambda
-syntax at all. A consequence nobody had written down: a source function that
-dispatches a buffer *directly* is unrecordable, because its parameter is not a
-value at the moment the graph is built. That is a refusal, and it is a fourth one
-this design owes.
+- a buffer payload is **arena data with a block's lifetime**, and a graph's
+  values are not arena data;
+- a resident id is plain data that happens to be the *wrong plain data*, because
+  it names device memory rather than a position in the value table.
 
-The other consequence worth writing down: **the graph holds its inputs.** They are
-`Buffer` values in a block arena, freed with the block, so a graph that did not
-name them would read freed memory on its second run. That is `traced`'s first
-real user, and it is a buffer rather than the closure both seam doc comments
-used to promise (see below).
+So the recording hands back a **new `ComputeValue` variant carrying a `usize`**.
+Two of them, and the pair is what the whole build is made of:
 
-### `traced` through a process registry is sound, and the reason is in `gc.rs`
+| variant | carries | stands for |
+|---|---|---|
+| `GraphInput(slot)` | the parameter's slot | a value the caller supplies at `graphrun` |
+| `GraphValue(id)` | a value number | a dispatch this recording already recorded |
 
-`ComputeValue` is `Copy`, so a graph value is a registry slot and the node ids it
-holds live in the registry rather than in the value. That would be unsound if
-collection renumbered nodes, so check: `garbage_collect_node` moves a node by
-writing `self.nodes[node].block = target` and **"a node keeps its id across the
-move, so only its block changes, and a value holds the id"**. An id held anywhere
-outside the module therefore survives every collection, and the `Array`/`Table`
-arms prove the same for payloads: the payload is reallocated into the target
-arena and the holder's handle is rewritten, so reading the value *from the node*
-later gets the current one. A registry entry that holds a `NodeId` and reads the
-value back through it is correct for the same reason.
+**Both are invisible to the checker, and that is what makes them usable here.**
+The type at a `cfg` position is fixed by `check_unify` at compile time
+(`compute.rs:4618-4627` builds `[?b, [TypeBuffer, Type]]` and unifies); nothing
+re-derives a type from a runtime value, so a new variant is not a type error
+anywhere. Neither is a handle: `is_handle` is `false` for both, so the copy path
+copies them rather than relocating a pointer, exactly as `DeviceBuffer` does.
+
+**The chain needs no side table.** The design had planned a `produced_by` map
+from node to value number, written before the walk was known to be a recording
+rather than a traversal. Once the walk *is* a recording, the placeholder is
+already sitting in the node that the next `cfg` reads, carrying the value number
+with it: a second dispatch's input is a `GraphValue(v)`, and `v` is the edge.
+A side table would be a second copy of the same fact that could disagree with the
+first.
+
+#### A graph holds no references at all, which retires `traced`
+
+This is the correction that cost the most, because it deletes a documented
+reason for the step.
+
+The design said the graph holds its input buffers as **nodes**, and that this is
+`traced`'s first real user. Check what `traced` actually buys
+(`gc.rs:186-196`):
+
+> Drops `block` and everything homed in it … **The caller guarantees no live node
+> outside the block still references one inside it** — evaluating a surviving
+> reference to a released block panics.
+
+`drop_block` removes **by block membership, not reachability**. `traced` keeps a
+node alive across `garbage_collect` compaction (ids are stable, the payload is
+relocated and re-read through the id) and gives it **no** protection at all
+against its block being dropped. So a graph holding input nodes is correct only
+if the host never drops a block a live graph points into, and violating that is a
+use-after-free in some *later* `graphrun`, not an error at build time.
+
+The fix is not to hold the nodes. **The fix is to hold nothing.** The graph's
+inputs arrive through the function's parameter, so the graph value is a `Graph`,
+a `usize`, and nothing else: kernel ids, edge numbers and counts, all plain data
+with no block, no arena and no device lifetime in them. There is nothing to
+trace, no host obligation to state, and no copy to pay.
+
+So this step does **not** give `traced` a user, and the earlier claim that it
+would is withdrawn. What it does give a user is `run_deferred`: the `Graph`
+operator has to decide for itself when its operand is evaluated, which is
+precisely what that seam is for.
+
+#### Inputs come from the function's parameter, and nowhere else
+
+Every lichen function has exactly one parameter (the grammar's
+`lambda := annotated ('=>' expr)?` puts a *name* on the left), so there is
+exactly one channel a value can arrive through that the graph does not have to
+capture. The shape is:
+
+```lichen
+step = ins => compute.plrun doubler (ins(0), ins(1))
+built = compute.graph step
+compute.graphrun built (4, data)
+```
+
+**A buffer the body reads as a free variable is a refusal, and the refusal names
+the capture.** "A graph that captured a buffer would have to hold it" is the
+whole reason, and the alternative — pinning the data at build time — was measured
+out as well: buffers are immutable once built (`plrun` makes new ones, `$write`
+only builds a type marker), so pinning means holding a node with a block's
+lifetime, which is the hazard above.
+
+The slot's index **is** its number, so `ins(i)` is the `i`-th argument and no
+ordering has to be guessed. An unread slot is still an input the caller passes
+and nothing consumes, which is visible in the source that caused it.
+
+#### The count is a value, because a program's count is
+
+`KernelNode.count` was a `usize`, decided at build time, and the reason given for
+it was that the value table cannot hold a number: `Value` is `Pending` or
+`Device` or `Host(Vec<i64>)`, and none of those is a scalar. **That reason
+argues for adding the scalar, not against needing one.** A count that depends on
+data is ordinary — a length off a `collect` is the common case — and a graph
+that cannot take one forces every such program to rebuild the graph per run,
+which is the same as not having a graph.
+
+So `Value` gains `Int(i64)`, and a dispatch's range becomes:
+
+```rust
+pub enum Count {
+    /// A number the build already knew: a literal, or a value nothing in the
+    /// graph produced.
+    Constant(usize),
+    /// A value in the table, read when the node runs. Never pending, because a
+    /// number is not produced by a device.
+    Value(ValueId),
+}
+```
+
+`Constant` is not a wart on `Value`; it is the one case where the build already
+had the answer, and collapsing it into a value would mean inventing a node kind
+that produces a number for free.
+
+**A scalar is an input today and nothing produces one yet.** A node that
+*computes* a number is a host call, which is
+[the native-node contradiction](#the-contradiction-a-graph-cannot-hold-the-closures-its-native-nodes-call).
+Until that is decided, a count is either a build-time literal or a value the
+caller passed, and both are honest answers.
+
+The two roles are asked of the table separately, and each refuses by name: a
+count edge that resolves to data, and a buffer input that resolves to a number,
+are different mistakes with different causes.
+
+#### The graph's inputs are found by reading the parameter, not by traversing
+
+The build binds the parameter to a tuple of placeholders and applies the body,
+which is the ordinary VM path — `$graph` builds the `Apply` node itself and
+evaluates it, so the cloning, unification and pattern walk are the VM's own and
+no lowlevel seam has to grow for this.
+
+Reading `ins(i)` yields `GraphInput(i)`, and reading a dispatch's output yields
+`GraphValue(v)`. The two are distinguishable at the point of use, which is what
+lets a literal count stay a constant: a placeholder is a value the recorder put
+there, and a literal is a number the program wrote.
+
+The placeholder tuple has to be long enough for the highest index the body reads
+and the body decides that, so the tuple is built at a ceiling, the recording
+trims to the highest slot actually read, and a read past the ceiling is a
+refusal naming the index. **Trimming rather than renumbering is the whole
+point**: renumbering in first-seen order is the same silent-wrong-data trap this
+input rule exists to remove, and a graph whose inputs are numbered by evaluation
+order asks the user to match an order they cannot see.
+
+#### What is left after this
+
+- **The lowering itself**, in `crates/lichen-compute/src/compute/graph.rs`.
+- **The `Graph` value and the `GraphRun` operator**, and the `compute.graph` /
+  `compute.graphrun` surface.
+- **The refusals below**, which are design, not code, and none are written.
+
+### A graph's inputs are not its free variables, and the reason is `drop_block`
+
+**This section was wrong and is kept as the record of why.** It argued that
+`$graph(f)`'s inputs are the body's free variables, because nothing has been
+applied to the template and so a free variable is the only buffer the body can
+name. The argument is sound and the conclusion is not usable: a free variable is
+a `Buffer` in a block arena, so a graph taking it has to **hold it**, and holding
+it is exactly the hazard `drop_block` creates.
+
+The argument also produced a second claim that has to go with it: "a source
+function that dispatches a buffer directly is unrecordable, because its parameter
+is not a value at the moment the graph is built". That refusal is **withdrawn**.
+The parameter is now the input channel, so a function dispatching its own
+parameter is the *ordinary* case and reading it is how an input arrives.
+
+What survives is the observation that every lichen function has exactly one
+parameter, because the grammar's `lambda := annotated ('=>' expr)?` puts a *name*
+on the left. There is no nullary lambda syntax, which is why there is exactly one
+channel and why the design does not have to invent an argument-passing form.
+
+### Node ids survive collection, and that is not enough
+
+`garbage_collect_node` moves a node by writing `self.nodes[node].block = target`
+and **"a node keeps its id across the move, so only its block changes, and a
+value holds the id"**, so an id held outside the module survives every
+collection; the `Array`/`Table` arms prove the same for payloads, which are
+reallocated into the target arena with the holder's handle rewritten.
+
+So a registry entry holding a `NodeId` and reading the value back through it
+would be correct. **A built graph holds no such id**, because it holds no node at
+all, so what is recorded here is a property of the collector rather than a
+licence the graph uses. The half that would have needed it is `drop_block`, and
+that one is by block membership.
 
 ### The walk is structural, and no dispatch runs while building a graph
 
@@ -621,11 +777,12 @@ anything, so the walk happens *during* an evaluation rather than instead of one.
 
 What survives unchanged:
 
-- Two passes, because `Graph::with_inputs` needs the input count before the
-  first `push`. Pass one collects `NodeFacts { kernel, count, inputs }` in
-  **body order** and numbers the free variables first-seen; pass two maps node
-  ids to value numbers and pushes. The map is the whole of the classification:
-  an input node not in `produced_by` is a free variable.
+- `Graph::with_inputs` needs the input count before the first `push`, so there
+  are two passes. **But they are two passes over the facts the recording
+  collected, not two walks of the module.** Pass one is the recording itself and
+  produces `NodeFacts { kernel, count, inputs }` in body order; pass two pushes
+  them once the arity is known. The earlier plan walked the body twice, which
+  would have meant running the recording twice.
 - The reason the body is walked rather than the return's operand spine: a spine
   sees only live nodes, so **it cannot find a dead tail**. The return is resolved
   separately and recorded through `Graph::returning`, which is why a dead tail and
@@ -646,18 +803,22 @@ rule the rest of the tree follows.
   never touches a `ParallelBackend`, so a cpu graph would build and then fail at
   run time with "no backend installed" — a capability mismatch reported as an
   environment problem. Refuse at build time and say why.
-- **A kernel or a count that is not decided yet.** Both are needed at build time
-  and neither can be invented; the fragment and the element count are facts about
-  the source.
-- **A `cfg` item that is neither a dispatch's output nor a buffer.** A third thing
-  in that position would be the interesting one to support and the wrong one to
-  accept silently.
-- **A dispatch that reads the function's own parameter.** Every lichen function
-  has exactly one parameter and nothing has applied the template, so the
-  parameter is not a value at build time. A body that dispatches it is
-  unrecordable, and the reason to give is the parameter — not "unresolved value",
-  which is what the same node looks like when it is a perfectly good capture.
-- **A return naming neither a dispatch's output nor a free variable.**
+- **A `cfg` item that is neither a dispatch's output nor an input slot.** A third
+  thing in that position would be the interesting one to support and the wrong one
+  to accept silently. In practice this is where a **free variable** lands now that
+  inputs come from the parameter, so the refusal that matters most is its own
+  entry.
+- **A buffer the body reads as a free variable.** Name the capture, not "unresolved
+  value": the graph would have to hold a `Buffer` that lives in a block arena, and
+  `drop_block` takes it away by block membership. A graph function that takes its
+  inputs as its parameter has no such problem.
+- **A parameter slot read past the ceiling the placeholder tuple was built at.**
+  Name the index and the ceiling. It is a build-time bound, not a semantic one, so
+  the message says which number to raise.
+- **A count that is a negative number, or a buffer input that is a number, or a
+  count that is data.** Three different mistakes, so three messages; the runner
+  asks the two roles of a value separately and refuses rather than coercing.
+- **A return naming neither a dispatch's output nor an input slot.**
 
 ### What this step is worth, stated plainly
 
@@ -667,12 +828,16 @@ no host work, so `hidden = min(host, device) = 0` and `Async` is exactly the pla
 kernel path. The win for a pure chain is `Batch` (one submission instead of
 sixteen), which is refused for want of a fused-submission contract.
 
-So this half is worth building for three reasons that are not speed: it gives
-`traced` and `run_deferred` a first real user after two commits of zero; it is
-the prerequisite for designing that fused-submission shape, since "hand me N
-dispatches" cannot be specified without knowing what a node is; and it produces
-the repeatable object the feature was decided around. **It is a shape step, and
-the ordering in the list below predates the measurement that says so.**
+So this half is worth building for reasons that are not speed, and **one of the
+three reasons it used to claim is now withdrawn.** It was "it gives `traced` and
+`run_deferred` a first real user after two commits of zero", and a graph that
+holds no references gives `traced` nothing to trace. `run_deferred` still gets
+its user, because the `Graph` operator has to decide for itself when its operand
+is evaluated. The surviving reasons are that this is the prerequisite for
+designing the fused-submission shape, since "hand me N dispatches" cannot be
+specified without knowing what a node is, and that it produces the repeatable
+object the feature was decided around. **It is a shape step, and the ordering in
+the list below predates the measurement that says so.**
 
 ### The contradiction: a graph cannot hold the closures its native nodes call
 
@@ -1017,6 +1182,16 @@ carry that count, and it is the only part of this rule with no code behind it.
 - **A `DeviceBuffer` value dropped by `drop_block` never calls `release`.** Its
   memory lives until `GpuContext::drop`. Same rule as the deliberate
   no-per-value-release decision already recorded there.
+- **A count is a value, and a value asked for the wrong role must be refused
+  rather than coerced.** A count edge that resolves to a buffer and a buffer input
+  that resolves to a number are two different mistakes, and the tempting repair
+  for the second — treat the number as a one-element host vector — is a run that
+  succeeds on a kernel nobody wrote. The two roles are separate functions.
+- **A graph that captures anything is a use-after-free waiting for a
+  `drop_block`.** Nothing in the type says so, because `Graph` is plain data and
+  a capture is what the *builder* would have done. The refusal is the only thing
+  standing between a program and a graph that reads a freed arena on its second
+  run, so it is a build-time refusal and not a run-time check.
 - **A fan-out graph's memory profile inverts; a linear chain's does not.** This
   note used to claim the inversion without the qualifier, and building the fused
   chain is what showed it was half wrong. `run_chain` ping-pongs two output
