@@ -40,6 +40,7 @@ Every note opens with a `> Status:` line:
 | [Architecture overview](notes/overview.md) | — | current |
 | [Lowlevel VM](notes/lowlevel-vm.md) | `lichen-lowlevel` | current |
 | [Static modules & registry](notes/static-modules.md) | `lichen-lowlevel`, `lichen-language` (`persist`) | current |
+| [The computational operators](notes/operators.md) | `lichen-language-lex`/`-parser`/`-language`, `lichen-highlevel` (`ir`/`program`/`checker`), `lichen-kernel-ir`, `lichen-compute`, `lichen-compute-gpu` | current |
 | [The compute JIT on low types](notes/compute-jit-low-types.md) | `lichen-compute` | current |
 | [Low types for a lowlevel-based JIT](notes/lowlevel-low-types.md) | `lichen-lowlevel` (`LowShape`), `lichen-highlevel` (`shape`), `lichen-compute` | implemented (Phases 3a–3c) |
 | [Type-system cleanup plan](notes/type-system-cleanup-plan.md) | `lichen-lowlevel`, `lichen-highlevel`, `lichen-compute` | current (Phases 0–5 complete) |

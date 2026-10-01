@@ -2013,13 +2013,52 @@ fn lower_body(
                 KernelBin::Sub => {
                     out.instruction(&Instruction::I64Sub);
                 }
+                KernelBin::Mul => {
+                    out.instruction(&Instruction::I64Mul);
+                }
+                // An `Int` is unsigned, so these are the unsigned division,
+                // remainder and comparisons (`I64DivS` would agree below 2^63
+                // and differ above).  The order comparisons yield an `i32`
+                // boolean, which is widened to the `0/1` scalar the language
+                // has instead of a `Bool` — the same widening `Eq` needs.
+                KernelBin::Div => {
+                    out.instruction(&Instruction::I64DivU);
+                }
+                KernelBin::Rem => {
+                    out.instruction(&Instruction::I64RemU);
+                }
+                KernelBin::Lt => {
+                    out.instruction(&Instruction::I64LtU);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
+                KernelBin::Gt => {
+                    out.instruction(&Instruction::I64GtU);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
                 KernelBin::Leq => {
-                    out.instruction(&Instruction::I64LeS);
+                    out.instruction(&Instruction::I64LeU);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
+                KernelBin::Geq => {
+                    out.instruction(&Instruction::I64GeU);
                     out.instruction(&Instruction::I64ExtendI32U);
                 }
                 KernelBin::Eq => {
                     out.instruction(&Instruction::I64Eq);
                     out.instruction(&Instruction::I64ExtendI32U);
+                }
+                KernelBin::Neq => {
+                    out.instruction(&Instruction::I64Ne);
+                    out.instruction(&Instruction::I64ExtendI32U);
+                }
+                KernelBin::BitAnd => {
+                    out.instruction(&Instruction::I64And);
+                }
+                KernelBin::BitOr => {
+                    out.instruction(&Instruction::I64Or);
+                }
+                KernelBin::BitXor => {
+                    out.instruction(&Instruction::I64Xor);
                 }
             },
             KernelInstr::LocalGet(k) => {
@@ -2214,9 +2253,40 @@ struct Positions {
     reads: usize,
 }
 
+/// The kernel-safe reading of a highlevel binary operator — the one conversion
+/// between the language's operator vocabulary and the lowered-kernel IR's.
+/// `None` for an operator no kernel body can contain (`Fresh` mints a nominal
+/// struct id), which the caller reports by name rather than approximating.
+///
+/// **The arithmetic is unsigned, and that is a fact of the language rather than
+/// of this backend:** an `Int` is a machine-sized unsigned integer, so `Div`
+/// and `Rem` are the unsigned operations and the order comparisons are the
+/// unsigned ones.  See [`lichen_kernel_ir::KernelBin`], which states the choice
+/// once for every backend.
+fn kernel_bin(operator: TypeOperator) -> Option<KernelBin> {
+    Some(match operator {
+        TypeOperator::Add => KernelBin::Add,
+        TypeOperator::Sub => KernelBin::Sub,
+        TypeOperator::Mul => KernelBin::Mul,
+        TypeOperator::Div => KernelBin::Div,
+        TypeOperator::Rem => KernelBin::Rem,
+        TypeOperator::Lt => KernelBin::Lt,
+        TypeOperator::Gt => KernelBin::Gt,
+        TypeOperator::Leq => KernelBin::Leq,
+        TypeOperator::Geq => KernelBin::Geq,
+        TypeOperator::Eq => KernelBin::Eq,
+        TypeOperator::Neq => KernelBin::Neq,
+        TypeOperator::BitAnd => KernelBin::BitAnd,
+        TypeOperator::BitOr => KernelBin::BitOr,
+        TypeOperator::BitXor => KernelBin::BitXor,
+        TypeOperator::Fresh => return None,
+    })
+}
+
 /// Emit wasm instructions for one lichen graph node — the scalar kernel-safe
-/// subset: integer constants, `Add`/`Sub`/`Leq`/`Eq`, and parameter reads
-/// (`Index(param_pair, 0)` → `local.get k`).  `params` is the kernel's
+/// subset: integer constants, the [`KernelBin`] arithmetic/comparison/bitwise
+/// operators, and parameter reads (`Index(param_pair, 0)` → `local.get k`).
+/// `params` is the kernel's
 /// parameter-slot list (one for a scalar `jit` kernel, two — config then index
 /// — for a parallel kernel).
 ///
@@ -2375,30 +2445,18 @@ where
             ),
         }
     }
-    // The highlevel's type-level arithmetic: `Add`/`Sub`/`Leq`/`Eq` over
-    // `[left, right]`.
+    // The highlevel's type-level arithmetic over `[left, right]`.
     if let Some(ty_op) = AsEnum::<TypeOperator>::as_enum(op) {
-        match ty_op {
-            TypeOperator::Add | TypeOperator::Sub | TypeOperator::Leq | TypeOperator::Eq => {
-                let (left, right) = operand_pair(module, operation.operand)?;
-                emit_node(module, params, left, body, tally)?;
-                emit_node(module, params, right, body, tally)?;
-                let bin = match ty_op {
-                    TypeOperator::Add => KernelBin::Add,
-                    TypeOperator::Sub => KernelBin::Sub,
-                    TypeOperator::Leq => KernelBin::Leq,
-                    TypeOperator::Eq => KernelBin::Eq,
-                    _ => unreachable!(),
-                };
-                body.push(KernelInstr::Bin(bin));
-                return Ok(());
-            }
-            _ => {
-                return Err(format!(
-                    "unsupported highlevel operator in kernel body: {ty_op:?}"
-                ));
-            }
-        }
+        let Some(bin) = kernel_bin(ty_op) else {
+            return Err(format!(
+                "unsupported highlevel operator in kernel body: {ty_op:?}"
+            ));
+        };
+        let (left, right) = operand_pair(module, operation.operand)?;
+        emit_node(module, params, left, body, tally)?;
+        emit_node(module, params, right, body, tally)?;
+        body.push(KernelInstr::Bin(bin));
+        return Ok(());
     }
     // The compute plugin's own operators: `Launch`/`Call` inside a kernel body
     // are the wrapper cross-kernel call forms (`compute.launch k x` /

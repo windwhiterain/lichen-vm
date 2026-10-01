@@ -21,15 +21,28 @@ pub enum TypeConst {
     Type,
 }
 
-/// A binary operator.  `+`/`-` are arithmetic; `<=`/`==` compare and yield
-/// `0` or `1` (there is no `Bool` — the comparison result drives an `if`
-/// branch).  All operate on `Int`.
+/// A binary operator.  `+ - * / %` and `& | ^` are arithmetic on `Int`; the
+/// comparisons (`< > <= >= == !=`) compare and yield `0` or `1` (there is no
+/// `Bool` — the comparison result drives an `if` branch).  `==`/`!=` are the
+/// generalized equality over any two same-typed values; every other operator
+/// is `Int`-only, and an `Int` is **unsigned**, so `/` and `%` are the unsigned
+/// division and remainder.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum BinOp {
     Add,
     Sub,
+    Mul,
+    Div,
+    Rem,
+    Lt,
+    Gt,
     Leq,
+    Geq,
     Eq,
+    Neq,
+    BitAnd,
+    BitOr,
+    BitXor,
 }
 
 #[derive(Clone, Debug)]

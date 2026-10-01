@@ -81,6 +81,106 @@ fn conditional() -> KernelFragment {
     fragment(body)
 }
 
+/// `out[i] = (in[i] * 3) % 7 + in[i] / 5`
+///
+/// The three arithmetic operators that do not exist on wasm's `i32` path at all:
+/// a product, an **unsigned** remainder and an **unsigned** division.  The
+/// values are small enough that the signed reading would agree, so this test
+/// pins the operators' existence and their operand order rather than the
+/// signedness; `an_unsigned_reading_is_what_the_language_means` is the one that
+/// separates the two.
+fn arithmetic() -> KernelFragment {
+    let read = |body: &mut Vec<KernelInstr>| {
+        body.push(KernelInstr::Const(0));
+        body.push(KernelInstr::LocalGet(1));
+        body.push(KernelInstr::BufferReadCall);
+    };
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
+    read(&mut body);
+    body.push(KernelInstr::Const(3));
+    body.push(KernelInstr::Bin(KernelBin::Mul));
+    body.push(KernelInstr::Const(7));
+    body.push(KernelInstr::Bin(KernelBin::Rem));
+    read(&mut body);
+    body.push(KernelInstr::Const(5));
+    body.push(KernelInstr::Bin(KernelBin::Div));
+    body.push(KernelInstr::Bin(KernelBin::Add));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
+    fragment(body)
+}
+
+/// `out[i] = ((in[i] < 3) & (in[i] > 0)) | (in[i] == 50)`
+///
+/// **The fragment that pins the two conversions the target needs and wasm gets
+/// from its integer instructions.**  A comparison yields a `bool` on this
+/// target, so `&` and `|` — which are the language's `and`/`or` over the `0`/`1`
+/// a comparison means — force both operands to be materialised into the 64-bit
+/// scalar, and the write forces the result to be too.  Without that
+/// materialisation the module mixes `OpTypeBool` with `OpTypeInt` and the driver
+/// rejects it; with it, the answer is the `0`/`1` the language says.
+///
+/// It also covers three comparisons at once (`<`, `>`, `==`) and a write of a
+/// comparison's own scalar, which is the shape a returned predicate has.
+fn predicates() -> KernelFragment {
+    let read = |body: &mut Vec<KernelInstr>| {
+        body.push(KernelInstr::Const(0));
+        body.push(KernelInstr::LocalGet(1));
+        body.push(KernelInstr::BufferReadCall);
+    };
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
+    read(&mut body);
+    body.push(KernelInstr::Const(3));
+    body.push(KernelInstr::Bin(KernelBin::Lt)); // in[i] < 3
+    read(&mut body);
+    body.push(KernelInstr::Const(0));
+    body.push(KernelInstr::Bin(KernelBin::Gt)); // in[i] > 0
+    body.push(KernelInstr::Bin(KernelBin::BitAnd));
+    read(&mut body);
+    body.push(KernelInstr::Const(50));
+    body.push(KernelInstr::Bin(KernelBin::Eq)); // in[i] == 50
+    body.push(KernelInstr::Bin(KernelBin::BitOr));
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
+    fragment(body)
+}
+
+/// `out[i] = if in[i] < 2^63 then in[i] / 2 else in[i] % 2`
+///
+/// **Where a signed reading and an unsigned one part company.**  With the
+/// element declared signed, `2^63` — which the host writes as `i64::MIN`'s bit
+/// pattern — is the most *negative* value there is, so `OpSLessThan` would send
+/// it down the wrong branch and `OpSDiv` would halve it to a negative number.
+/// The language's `Int` is unsigned, so the comparison is `OpULessThan`, the
+/// divisor is its own positive value, and `in[i] % 2` picks the branch for
+/// every element at or above `2^63`.
+///
+/// The condition is a *parameter read*, not a comparison, so this is also the
+/// fragment where `I32WrapI64` has something to do: an `i64` condition becomes
+/// the `bool` the target's `select` takes (and, on wasm, an `i32`).
+fn unsigned_reading() -> KernelFragment {
+    let read = |body: &mut Vec<KernelInstr>| {
+        body.push(KernelInstr::Const(0));
+        body.push(KernelInstr::LocalGet(1));
+        body.push(KernelInstr::BufferReadCall);
+    };
+    let mut body = vec![KernelInstr::Const(0), KernelInstr::LocalGet(1)];
+    read(&mut body);
+    body.push(KernelInstr::Const(2));
+    body.push(KernelInstr::Bin(KernelBin::Div)); // then: in[i] / 2
+    read(&mut body);
+    body.push(KernelInstr::Const(2));
+    body.push(KernelInstr::Bin(KernelBin::Rem)); // else: in[i] % 2
+    read(&mut body);
+    body.push(KernelInstr::Const(i64::MIN)); // 2^63, as a bit pattern
+    body.push(KernelInstr::Bin(KernelBin::Lt));
+    body.push(KernelInstr::I32WrapI64);
+    body.push(KernelInstr::Select);
+    body.push(KernelInstr::BufferWriteCall);
+    body.push(KernelInstr::Const(0));
+    fragment(body)
+}
+
 /// An independent reading of the IR, written from the `KernelInstr` docs rather
 /// than from the shader, used as the second opinion on the GPU's answer.
 fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64> {
@@ -100,25 +200,33 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
                     stack.push(value);
                 }
                 // A comparison yields 1 or 0 here; a `select` only tests it.
-                KernelInstr::Bin(KernelBin::Add) => {
+                //
+                // **Unsigned, all of it.** An `Int` is a machine-sized unsigned
+                // integer in this language, so `Div`/`Rem` and the order
+                // comparisons read the two words as `u64` — which is also what
+                // the shader does, its buffer elements being declared
+                // unsigned. A reference that used the signed reading would
+                // agree for every value below 2^63 and disagree above it.
+                KernelInstr::Bin(operator) => {
                     let rhs = stack.pop().unwrap();
                     let lhs = stack.pop().unwrap();
-                    stack.push(lhs + rhs);
-                }
-                KernelInstr::Bin(KernelBin::Sub) => {
-                    let rhs = stack.pop().unwrap();
-                    let lhs = stack.pop().unwrap();
-                    stack.push(lhs - rhs);
-                }
-                KernelInstr::Bin(KernelBin::Leq) => {
-                    let rhs = stack.pop().unwrap();
-                    let lhs = stack.pop().unwrap();
-                    stack.push(i64::from(lhs <= rhs));
-                }
-                KernelInstr::Bin(KernelBin::Eq) => {
-                    let rhs = stack.pop().unwrap();
-                    let lhs = stack.pop().unwrap();
-                    stack.push(i64::from(lhs == rhs));
+                    let (left, right) = (lhs as u64, rhs as u64);
+                    stack.push(match operator {
+                        KernelBin::Add => lhs.wrapping_add(rhs),
+                        KernelBin::Sub => lhs.wrapping_sub(rhs),
+                        KernelBin::Mul => lhs.wrapping_mul(rhs),
+                        KernelBin::Div => (left / right) as i64,
+                        KernelBin::Rem => (left % right) as i64,
+                        KernelBin::Lt => i64::from(left < right),
+                        KernelBin::Gt => i64::from(left > right),
+                        KernelBin::Leq => i64::from(left <= right),
+                        KernelBin::Geq => i64::from(left >= right),
+                        KernelBin::Eq => i64::from(lhs == rhs),
+                        KernelBin::Neq => i64::from(lhs != rhs),
+                        KernelBin::BitAnd => lhs & rhs,
+                        KernelBin::BitOr => lhs | rhs,
+                        KernelBin::BitXor => lhs ^ rhs,
+                    });
                 }
                 KernelInstr::I32WrapI64 => {}
                 KernelInstr::Select => {
@@ -317,6 +425,56 @@ fn an_exact_workgroup_multiple_matches_too() {
         .collect();
     let expected: Vec<i64> = input.iter().map(|value| value + value + 1).collect();
     let device = check(&adds(), &input, &expected);
+    println!("ran on {device}");
+}
+
+#[test]
+fn multiplication_division_and_remainder_match_the_cpu_bit_for_bit() {
+    let input: Vec<i64> = (0..100).collect();
+    let expected: Vec<i64> = input
+        .iter()
+        .map(|value| (value * 3) % 7 + value / 5)
+        .collect();
+    let device = check(&arithmetic(), &input, &expected);
+    println!("ran on {device}");
+}
+
+#[test]
+fn a_stored_predicate_matches_the_cpu_bit_for_bit() {
+    let input: Vec<i64> = (0..100).collect();
+    let expected: Vec<i64> = input
+        .iter()
+        .map(|value| i64::from((*value < 3 && *value > 0) || *value == 50))
+        .collect();
+    let device = check(&predicates(), &input, &expected);
+    println!("ran on {device}");
+}
+
+/// The signed reading and the unsigned one give different answers here, and the
+/// unsigned one is what the language means.
+#[test]
+fn an_unsigned_reading_is_what_the_language_means() {
+    // Every one of these is `2^63` or above as an unsigned 64-bit value, which
+    // is a *negative* `i64` — the host writes the same bits either way, so the
+    // two readings differ only in what the shader does with them.
+    let input: Vec<i64> = vec![-1, -2, i64::MIN, 5, -100];
+    let expected: Vec<i64> = input
+        .iter()
+        .map(|value| {
+            let value = *value as u64;
+            if value < 1u64 << 63 {
+                (value / 2) as i64
+            } else {
+                (value % 2) as i64
+            }
+        })
+        .collect();
+    assert_eq!(
+        expected,
+        vec![1, 0, 0, 2, 0],
+        "the expectation itself is the unsigned reading, written out"
+    );
+    let device = check(&unsigned_reading(), &input, &expected);
     println!("ran on {device}");
 }
 

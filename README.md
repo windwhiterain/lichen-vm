@@ -419,4 +419,37 @@ s = S(.a 1, .b "h")
 (S::a, S::b, s.a)
 ```
 
+### `gcd.lichen`
+
+```text
+@{
+  order = "13"
+  doc = "Euclid's algorithm — the shape a real algorithm has: a recursive function
+whose base case is a comparison and whose step is a remainder.  The parameter is a
+pair, so the recursion carries both numbers, and the **annotation is what fixes
+the result's type**: under self-recursion a call's result is its own type cell, so
+without `: <Int, Int> -> Int` the program computes the right number and reports
+its type as undetermined (`6: ?a`) — the language's answer to a recursive
+definition is to write its type out, exactly as an ML-family language needs."
+  output = "6: Int"
+@}
+gcd = (p => if p(1) == 0 then p(0) else gcd (p(1), p(0) % p(1))) : <Int, Int> -> Int
+gcd (48, 18)
+```
+
+### `operators.lichen`
+
+```text
+@{
+  order = "14"
+  doc = "The arithmetic, comparison and bitwise operators, and the two precedence
+facts worth knowing: `* / %` bind tighter than `+ -`, and a comparison is the
+loosest binary level — so `1 & 3 == 1` is `(1 & 3) == 1`.  `& | ^` over two
+comparison results are the language's `and`/`or`/`xor`, and `!=` is the
+generalized equality's other face, so it compares type values too."
+  output = "(7, 3, 1, 3, 0, 1, 2, 1, Int): <Int, Int, Int, Int, Int, Int, Int, Int, Type>"
+@}
+(1 + 2 * 3, 7 / 2, 7 % 2, 1 | 2 ^ 3 & 1, (2 > 1) & (2 < 1), (1 < 2) == 1, 6 & 3, Int != string, Int)
+```
+
 <!-- end: examples -->

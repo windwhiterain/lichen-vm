@@ -28,13 +28,39 @@ the two disagree is the clearest evidence it is genuinely neutral:
 |---|---|---|
 | buffer access | a host import, `call` a function | `OpAccessChain` + `OpLoad`/`OpStore` on a storage buffer |
 | comparison result | an `i64`, narrowed to `i32` for `select` | a `bool` already |
-| `KernelInstr::I32WrapI64` | **emitted** | **a no-op** |
+| `KernelInstr::I32WrapI64` | **emitted** | **a no-op** *when the condition is a comparison* |
 
 That last row is the whole argument in one line. `I32WrapI64` exists *solely*
 because the wasm MVP's `select` takes an `i32` condition; SPIR-V's
-`OpSLessThanEqual` yields `OpTypeBool`, which is what `OpSelect` takes, so the
+`OpULessThanEqual` yields `OpTypeBool`, which is what `OpSelect` takes, so the
 narrowing has nowhere to go. An IR that had encoded either target's choice
 would have made the other backend wrong.
+
+### …and the two type facts the IR does not carry
+
+The IR is untyped, and this target is not: `OpTypeBool` and `OpTypeInt` are
+distinct, and a module that mixed them is rejected by the driver. Two facts
+therefore live in the emitter rather than in the IR, and both are the *same*
+fact — that the language says a comparison is the `0`/`1` scalar, which is not
+what this target's comparisons produce:
+
+- **A `bool` reaching a scalar position is materialised** (`as_scalar`:
+  `OpSelect` over the i64 `1` and `0`), and a **scalar condition is converted**
+  (`as_condition`: `OpINotEqual` against zero — non-zero is true, which is what
+  wasm's `select` means by its `i32`). Each slot on the emitter's stack records
+  which of the two it holds, because "was this a comparison" is knowledge only
+  the walk has. The common shape — an `if` over a comparison — needs neither, and
+  that is why `I32WrapI64` is a no-op there; the operators added in
+  [operators](operators.md) are what made the other shapes reachable
+  (`(a < b) & c`, a stored predicate, a comparison of a comparison).
+- **The fragment's integer type is unsigned** — `OpTypeInt 64 0`. This is not a
+  style choice: `OpUDiv`, `OpUMod` and `OpULessThan` require operands whose
+  signedness is `0`, so a signed type with those opcodes is an invalid module
+  rather than a wrong answer, and `spirv-val` names it (`Expected unsigned int
+  scalar or vector type as Result Type: UDiv`). It is also simply true — an `Int`
+  is a machine-sized unsigned integer, so `/`, `%` and the order comparisons are
+  the unsigned ones, and declaring the type signed would have *required* the
+  signed opcodes and their silent divergence above `2^63`.
 
 ## The corrections, because the first two answers were wrong
 
@@ -141,10 +167,16 @@ The criterion is bit-for-bit agreement, checked three ways per run: against a
 IR. The expected vector is the point — comparing the GPU only against another
 implementation of the same reading would pass a fragment that both misread.
 
-`cargo test -p lichen-compute-gpu` on the target above: **13 passing** — 9 device runs
-(7 in `gpu_matches_cpu`, 2 graph runs in `graph_on_device`) and 4 refusals. The refusal
+`cargo test -p lichen-compute-gpu` on the target above: **16 passing** — 12 device runs
+(10 in `gpu_matches_cpu`, 2 graph runs in `graph_on_device`) and 4 refusals. The refusal
 tests need no device, deliberately: a refusal that only appeared once a GPU was present
 would be untestable on a machine without one.
+
+The three device tests the operator set added are the ones that pin the two type
+facts above: `arithmetic` (a product, an unsigned division and remainder),
+`predicates` (comparisons combined with `&`/`|` and stored — the materialisation),
+and `unsigned_reading` (a `2^63` element, where the signed and unsigned readings
+take different branches).
 
 ## The language selects the backend, on `parallel` only
 

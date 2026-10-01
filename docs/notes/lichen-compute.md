@@ -249,7 +249,7 @@ change to the digest is a cold start and has no on-disk consequence.
 ```
 enum KernelInstr {
   Const(i64),           // i64.const
-  Bin(KernelBin),       // add/sub/leq/eq over the top two i64
+  Bin(KernelBin),       // an arithmetic/comparison/bitwise op over the top two i64
   LocalGet(u32),        // a flattened parameter read
   I32WrapI64,           // the `select` condition
   Select,               // if c then a else b
@@ -259,10 +259,19 @@ enum KernelInstr {
 }
 ```
 
-`emit_node` walks the simple kernel-safe subset — integer constants, `Add`/`Sub`/`Leq`/
-`Eq`, the parameter read (`Index(param_pair, 0)` → a `local.get`), a `value_of`
+`emit_node` walks the simple kernel-safe subset — integer constants, every
+`KernelBin` operator (the arithmetic, comparison and bitwise sets the language
+has: `kernel_bin` is the one conversion from `TypeOperator`, and `None` for the
+one operator no body can contain), the parameter read (`Index(param_pair, 0)` →
+a `local.get`), a `value_of`
 extraction (`Index(pair, 0)`), and a 2-element conditional (a wasm `select`), plus a
 cross-kernel `Launch`/`Call` (lowered to `CallKernel`).
+
+The arithmetic is **unsigned** in both backends — `I64DivU`/`I64RemU` and the
+`U` comparisons, never the `S` siblings — because an `Int` is a machine-sized
+unsigned integer: a signed reading agrees with the interpreter below `2^63` and
+diverges above it, silently. The choice is stated once, in `KernelBin`. See
+[operators](operators.md).
 
 ### The JIT walks the value graph, not the types
 
@@ -390,7 +399,10 @@ the same sites, not three more.
 
 ## 8. v1 scope
 
-The kernel-safe subset is scalar arithmetic over a scalar or tuple-of-scalars domain; the
+The kernel-safe subset is the language's **unsigned** scalar arithmetic —
+`+ - * / %`, the six comparisons and the bitwise trio, plus the conditional — over
+a scalar or tuple-of-scalars domain ([operators](operators.md) is the set and the
+rules that come with it); the
 codomain is a scalar `i64` or a **tuple** of them — a tuple codomain's body is flattened to
 one stack slot per leaf, the wasm function returns one `i64` per leaf
 (`KernelFragment::results`), and the launch yields their tuple. A **nested** tuple codomain
