@@ -141,10 +141,10 @@ The criterion is bit-for-bit agreement, checked three ways per run: against a
 IR. The expected vector is the point — comparing the GPU only against another
 implementation of the same reading would pass a fragment that both misread.
 
-`cargo test -p lichen-compute-gpu` on the target above: **7 passing** — 3 device
-runs, 4 refusals. The refusal tests need no device, deliberately: a refusal that
-only appeared once a GPU was present would be untestable on a machine without
-one.
+`cargo test -p lichen-compute-gpu` on the target above: **13 passing** — 9 device runs
+(7 in `gpu_matches_cpu`, 2 graph runs in `graph_on_device`) and 4 refusals. The refusal
+tests need no device, deliberately: a refusal that only appeared once a GPU was present
+would be untestable on a machine without one.
 
 ## The language selects the backend, on `parallel` only
 

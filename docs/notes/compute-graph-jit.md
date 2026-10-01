@@ -485,30 +485,43 @@ contract.
 
 ### Checked, on a stub and on a device
 
-The stub records **what the host asked for and in what order**, because *where*
-the waits are is the claim and a count cannot say it. A three-node graph — add,
-a host call over the result, add again — under `Async` asks for exactly:
+Two claims, checked in two places, because they are two claims.
 
-```text
-submit         the first dispatch goes to the queue
-wait, fetch    the native node needs that dispatch's data: a demand point
-submit         the second dispatch records against host data, so nothing waited for it
-wait           the run hands back an id, and an id must name a written buffer
-```
+**The schedule is checked on a stub, because only a stub can say when the host
+waited.** The stub records what it was asked for and in what order, and `run` and
+`submit` are told apart because that is exactly what a policy chooses between — a stub
+that treated them alike could not see the difference at all. A two-node chain under
+`Async` submits both nodes and waits **once, at the end**; under `Serial` every `run` is
+waited for before the next.
 
-Three waits would be a scheduler that waited for everything. **One wait would be
-a scheduler that let the native node read a buffer the device had not written** —
-a wrong answer rather than a slow one, and the reason the pending state is in the
-value type at all.
+The middle case this section used to describe — a host call between two dispatches,
+where the wait is a demand point and anything else would read a buffer the device had
+not written — **no longer exists**, and its removal is a consequence of the decision to
+leave one kind of node: with nothing in the graph that reads data on the host, the
+runner has no demand point at all and settles every value before handing the table back.
+`Value`'s doc says this, and it is why the pending state survives as a property of a
+value rather than as a rule. The two device tests it used to point at were never
+written; a design that was retracted cannot have left tests behind, and a note claiming
+otherwise is worse than no note.
 
-On a real device, `a_graph_with_a_native_node_beside_its_dispatches` and
-`a_native_node_reading_a_dispatches_output` both produce what the same fragments
-produce outside a graph, under both policies. The second is the shape the design
-warns about, and the test is worth having precisely because it is the one where a
-scheduler could plausibly be wrong: the host call has to read a buffer the device
-has not finished, so the runner waits and fetches, and **no arrangement of
-submissions removes that cost.** What the runner guarantees is that it happens
-before the read rather than being left to chance.
+**The arithmetic is checked on a real device**, in `lichen-compute-gpu`'s
+`graph_on_device.rs`, because the stub computes `sum(inputs) + 1` whatever the body says
+and so cannot say whether a fragment means what it says. Two tests: a two-node chain
+(`adds`, then `sums` — the second node recording against a resident id the device has not
+finished writing), and a graph whose extent is one of its own arguments, run at three
+extents with the data deliberately longer than the count. Both compare against a
+**hand-derived expected vector** rather than against another implementation of the same
+reading, and the second is the one a device is worth having for: the count decides how
+many elements are allocated, dispatched and read back, so a count read from the wrong
+slot would answer with a wrong *length* and not merely a wrong number.
+
+**And one thing that run does not check, stated so it is not read as a check.** Neither
+fragment on the device has `param_shape.flat_arity() - 1` disagreeing with
+`fragment.inputs`: `adds` declares two leaves and reads one buffer, `sums` declares
+three and reads two, so both satisfy the old formula by coincidence. The divergence — a
+fragment that reads no buffer at all, which the old check would have refused for having
+no input — is a stub-side fact, pinned in `refusals.rs` and `graph_runs.rs`. A device is
+not where it can be observed, and a green device run is not evidence about it.
 
 ## The half that builds a graph, and what it found
 
