@@ -134,8 +134,9 @@ tuple.  The index param is last.
 `run_parallel_kernel` reads the count from `cfg(0)`, registers the input buffers
 (by their position in `cfg(1)`), allocates one output buffer per output
 (`KernelFragment::outputs`, each of length `n`), runs the kernel for each
-`i ∈ [0, n)`, and returns the buffers.  `Read`/`BufferCollect` consume them (and
-a single one as a bare `Buffer`).
+`i ∈ [0, n)` — spread over worker threads, see [The run is parallel](#the-run-is-parallel)
+— and returns the buffers.  `Read`/`BufferCollect` consume them (and a single
+one as a bare `Buffer`).
 
 ## Type checking
 
@@ -182,6 +183,67 @@ a single one as a bare `Buffer`).
 - **Implemented**: **multi-output** — a tuple codomain of `Write`s, ordinals by
   emission order, one buffer per output (see above).
 - Read-from-write (reading an output buffer while it is written) is future work.
-- Arbitrary element indices are allowed (a gather/scatter within `[0, n)`).
-- The parallel run is sequential (the data-parallelism is logical); a worker
-  pool is future work.
+- Arbitrary element indices are allowed (a gather/scatter within `[0, n)`), and
+  this is **the one place the run's result stops being reproducible**: a kernel
+  whose write index is not its own makes two indices collide on a slot, and the
+  winner is then decided by the partition rather than by the loop — so the same
+  program can answer differently on a machine with a different core count.  A
+  kernel that writes at its own index (`compute.write [n, i, v]`, which is what
+  a mapping kernel is) is unaffected.  See "The run is parallel" below.
+
+## The run is parallel
+
+`run_parallel_kernel` cuts the index range into one contiguous chunk per worker.
+Each worker gets a **disjoint span of every output buffer** (`split_at_mut` down
+each buffer, so the partition is the same spans in each) plus its own
+`Store`/`Linker`/instance over the **one cached module and engine**; the calling
+thread runs chunk `0` itself and joins the rest through `std::thread::scope`.
+There is therefore **no lock on the write path** — a worker's `write` import
+stores into a slice it exclusively borrows.
+
+- **The index is global, the store is local.**  A worker calls `main` with the
+  same `cfg(0) = n` and a **global** `i` as any other worker, so the emitted
+  wasm is identical whichever worker runs it; the host `write` import adds the
+  worker's **base offset** to `idx` before indexing its span.  The base lives in
+  the `Store` data rather than in the import closure because `Linker::func_new`
+  requires a `'static` host function — a per-worker value could only be reached
+  through the store.
+- **Worker count** — `min(available_parallelism(), count)`, and never 0.  The
+  machine bounds it above because a worker past the core count is pure overhead;
+  the index count bounds it because a worker with no index to run is worse than
+  no worker.
+- **Sequential threshold** — below `SEQUENTIAL_PARALLEL_ELEMENTS` (4096) the run
+  stays on the calling thread.  A small run gives up the fan-out's wall-clock
+  time to keep its own latency: each worker costs a spawn plus its own store,
+  linker and instantiation, and that is only repaid once a worker owns enough
+  indices for the interpreted calls to dominate it.  `MAX_PARALLEL_ELEMENTS`
+  already separates the two regimes, so the bound is read off the same trade.
+- **Inputs are never partitioned.**  A read is by a global index, so every
+  worker reads the whole input buffer and the `read` import needs no rebase.
+
+### The determinism invariant
+
+**The partition depends only on the count and the worker count** — never on a
+schedule, a timing or a thread interleaving — and it tiles `[0, n)` with no gap
+and no overlap (chunk lengths differ by at most one element, and the calling
+thread's chunk is one of the longest, never the shortest).  Since each index
+writes only its own slot and no slot is shared, a run is therefore
+**bit-identical to the sequential loop's, for every `count` and whatever the
+worker count** — regrouping the indices cannot change what is computed.  There is
+no reduction, no accumulation and no order to depend on.
+
+The general statement is narrower, and worth stating precisely: the result equals
+the sequential loop's **iff no two indices write the same output slot**.  A
+kernel that writes a slot that is not its own — `compute.write [n, i - i, v]`
+has the index `0` for every `i`, so all of them collide on one slot — already
+had an order-dependent winner sequentially; "last write to a slot wins" is an
+artefact of loop order, not a designed semantic — so the partition, rather than
+the launch, is then what decides it.  Every mapping kernel, which is what this
+primitive is for, is in the first case.
+
+**A worker failure is reported, never swallowed.**  A scoped thread cannot be
+aborted, so a failing worker is *joined* like any other and the run reports the
+first failure in index order, naming the worker and the range it was running
+(`parallel launch of kernel {id} failed in worker {k}, over indices [a, b): …`).
+A partial run is never returned as a result.  The `count > MAX_PARALLEL_ELEMENTS`
+refusal is unchanged and still fires before a buffer is allocated.

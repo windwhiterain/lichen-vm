@@ -46,6 +46,7 @@
 //!   A **tuple** codomain of `Write`s is the multi-output form: the `k`-th write
 //!   is output buffer `k`, and `plrun` returns the buffers as a tuple.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -2729,18 +2730,38 @@ fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
 }
 
 /// The execution state a parallel kernel's host imports read/write against:
-/// the input buffers (indexed by cfg position) and the output buffers (indexed
-/// by output ordinal, then by element).  Carried as the wasmi [`wasmi::Store`]
-/// data, so the `read`/`write` imports reach it through `Caller::data`/
-/// `data_mut`.
-struct ParallelState {
-    /// The input buffers (the cfg buffer tuple), indexed by cfg position.
-    inputs: Vec<Vec<i64>>,
-    /// The output buffers, indexed by the write's `out_pos` ordinal.  There is
-    /// one per output the index function declares — the count comes from the
-    /// compiled fragment ([`KernelFragment::outputs`]), never from which slots
-    /// happened to be written.
-    outputs: Vec<Vec<i64>>,
+/// the input buffers (indexed by cfg position) and **one worker's partition**
+/// of the output buffers (indexed by output ordinal, then by element).  Carried
+/// as the wasmi [`wasmi::Store`] data, so the `read`/`write` imports reach it
+/// through `Caller::data`/`data_mut`.
+///
+/// **The partition invariant.**  A worker owns one contiguous element span of
+/// *every* output buffer, and no two workers own overlapping spans, so the
+/// `write` import is a plain store into a slice it exclusively borrows: there
+/// is no lock anywhere on the write path, and no slot is written by two
+/// workers.  A sequential run is the same state with `base = 0` and the whole
+/// buffer as the span.
+///
+/// The state *borrows* its output buffers rather than owning them, so the
+/// caller keeps the `Vec<Vec<i64>>` it hands back as the result and
+/// `std::thread::scope` can lend a partition that is not `'static`.  The base
+/// offset lives here rather than in the `write` closure because
+/// [`wasmi::Linker::func_new`] requires a `'static` host function — a
+/// per-worker base could not be captured, only reached through the store.
+struct ParallelState<'a> {
+    /// The input buffers (the cfg buffer tuple), indexed by cfg position.  They
+    /// are never partitioned: a read is by a **global** index, so every worker
+    /// reads the whole buffer.
+    inputs: &'a [Vec<i64>],
+    /// This worker's span of each output buffer, indexed by the write's
+    /// `out_pos` ordinal.  There is one span per output the index function
+    /// declares — the count comes from the compiled fragment
+    /// ([`KernelFragment::outputs`]), never from which slots happened to be
+    /// written.
+    outputs: Vec<&'a mut [i64]>,
+    /// The global index of this partition's first element, which the `write`
+    /// import adds to the index the kernel passes.
+    base: usize,
 }
 
 /// Assemble the wasm bytes of one **parallel** fragment — the degenerate
@@ -2771,6 +2792,59 @@ fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
 /// vocabulary (see `run_parallel_kernel`).
 const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 
+/// The element count at or above which a parallel run spreads its indices over
+/// worker threads; below it the run stays on the calling thread.
+///
+/// Below this bound a run gives up the fan-out's wall-clock time to keep its
+/// own latency: every worker costs a thread spawn plus its own store, linker
+/// and instantiation, and that is only repaid once a worker owns enough indices
+/// for the interpreted calls to dominate it.  [`MAX_PARALLEL_ELEMENTS`] already
+/// separates the two regimes (the first few thousand indices are launch
+/// overhead, the rest is work), so this bound is read off the same trade — a few
+/// thousand indices cost milliseconds of interpretation against a spawn measured
+/// in tens of microseconds, which is where the fan-out stops being a
+/// pessimisation.
+const SEQUENTIAL_PARALLEL_ELEMENTS: usize = 1 << 12;
+
+/// How many workers a parallel run of `count` indices uses, the calling thread
+/// among them (it runs the first chunk itself, so the count of 1 is the
+/// sequential run and spawns nothing).
+///
+/// Two rules: never below [`SEQUENTIAL_PARALLEL_ELEMENTS`] — the fan-out must
+/// pay for itself — and never above what the machine has available or what
+/// there are indices for, because a worker with no index to run is pure
+/// overhead.  An unavailable [`std::thread::available_parallelism`] reads as
+/// one, which is the sequential run.
+fn parallel_worker_count(count: usize) -> usize {
+    if count < SEQUENTIAL_PARALLEL_ELEMENTS {
+        return 1;
+    }
+    let available = std::thread::available_parallelism().map_or(1, |count| count.get());
+    available.clamp(1, count)
+}
+
+// How many workers the calling thread's most recent parallel launch used.  It is
+// a **thread-local**, not a process counter like `MODULE_CACHE_MISSES`: the value
+// is about *one* launch and is written by the thread that launched it, so a
+// shared global would be overwritten by a concurrent launch before the observer
+// read it.  (A `thread_local!` is a macro invocation, so it takes a plain
+// comment; the contract is on the accessor.)
+thread_local! {
+    static PARALLEL_LAUNCH_WORKERS: Cell<usize> = const { Cell::new(1) };
+}
+
+/// How many workers the calling thread's most recent parallel launch used; `1`
+/// is a sequential run (below [`SEQUENTIAL_PARALLEL_ELEMENTS`], or a machine
+/// with one available processor).
+///
+/// Test- and measurement-visible on purpose, for the reason
+/// [`module_cache_misses`] gives: a parallel result is bit-identical to a
+/// sequential one by construction, so *no assertion on values* can tell a
+/// working fan-out from a dead code path.  This is what a test asserts on.
+pub fn parallel_launch_workers() -> usize {
+    PARALLEL_LAUNCH_WORKERS.get()
+}
+
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
 /// index function once per index with `cfg(0) = count` and the cfg input
 /// buffers fixed, and collecting the writes into the output buffers.
@@ -2780,15 +2854,35 @@ const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 /// buffer element — wired to the host-side input/output buffers through the
 /// [`ParallelState`] the store carries.  The kernel is called once per index;
 /// the writes accumulate into the output buffers (last write to a slot wins, a
-/// scatter).  Runs sequentially (the data-parallelism is logical); a worker
-/// pool is future work.
+/// scatter).
+///
+/// **The run is parallel.**  The index range is cut into one contiguous chunk
+/// per worker, each worker gets a **disjoint span of every output buffer**
+/// ([`ParallelState`]'s partition invariant) and its own store, linker and
+/// instance over the one cached module and engine, and the calling thread runs
+/// the first chunk itself.  The kernel sees **global** indices in every chunk
+/// and the `write` import rebases by the worker's base, so the emitted wasm is
+/// identical whichever worker runs it.
 ///
 /// How many output buffers there are is the compiled fragment's
 /// [`KernelFragment::outputs`] — the index function's codomain arity, read when
 /// the kernel was compiled — so the allocation here is a static fact and never
-/// a discovery of which slots were written.  Every ordinal is written on every
-/// index (see [`compile_parallel_fragment`]), so each buffer is fully defined
-/// after the run.
+/// a discovery of which slots happened to be written.  Every ordinal is written
+/// on every index (see [`compile_parallel_fragment`]), so each buffer is fully
+/// defined after the run.
+///
+/// **Determinism.**  The result is bit-identical to the sequential loop's, for
+/// every `count` and whatever the worker count: the chunks depend only on the
+/// count and the worker count (never on a schedule or a timing), each worker
+/// writes only the slots it owns, and no value is accumulated or reduced — so
+/// regrouping the indices cannot change what is computed.  This holds exactly
+/// for an index function that writes its own slot, which is what the primitive
+/// is a map over.  The general statement is narrower: the result equals the
+/// sequential loop's **iff no two indices write the same slot**, and a kernel
+/// that writes a slot that is not its own (`compute.write [n, i - i, v]`,
+/// whose index is `0` for every `i`, so all of them collide) already had an
+/// order-dependent winner sequentially — the partition, not the launch, is then
+/// what decides it.
 ///
 /// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
 /// buffers are allocated.  The caller turns a refusal into the lazy
@@ -2799,11 +2893,12 @@ const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
 /// alternative:** `plrun` is a synchronous, caller-blocking call, so there is
 /// nothing to queue onto — the choice is refuse or run.
 ///
-/// The module comes from [`cached_module`].  The [`wasmi::Linker`] is
-/// deliberately rebuilt per launch rather than cached: it is the object that
-/// carries host-function bindings, so keeping it out of the cache makes "no
-/// host binding is shared between two launches" true by construction, and its
-/// cost is the two fixed registrations below.
+/// The module comes from [`cached_module`], and one `Engine` backs every
+/// worker's store.  The [`wasmi::Linker`] is deliberately rebuilt per worker
+/// rather than cached or shared: it is the object that carries host-function
+/// bindings to *that* worker's state, so building it here makes "no host
+/// binding is shared between two launches, or between two workers of one"
+/// true by construction, and its cost is the two fixed registrations below.
 fn run_parallel_kernel(
     id: KernelId,
     count: usize,
@@ -2827,9 +2922,167 @@ fn run_parallel_kernel(
     };
     let (engine, module) =
         cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
-    let outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
-    let mut store = wasmi::Store::new(&engine, ParallelState { inputs, outputs });
-    let mut linker = wasmi::Linker::new(&engine);
+    let mut outputs: Vec<Vec<i64>> = (0..outputs).map(|_| vec![0i64; count]).collect();
+    let workers = parallel_worker_count(count);
+    PARALLEL_LAUNCH_WORKERS.set(workers);
+    if workers == 1 {
+        // The sequential run *is* the one-worker run: the calling thread owns
+        // every slot, and nothing is spawned.
+        let state = ParallelState {
+            inputs: &inputs,
+            outputs: output_spans(&mut outputs),
+            base: 0,
+        };
+        run_parallel_range(&engine, &module, count, state, 0, count)?;
+    } else {
+        // Contiguous chunk bounds, a function of the count and the worker count
+        // alone: the leading chunks carry the remainder elements, so the
+        // calling thread's chunk is never the shortest.
+        let bounds = chunk_bounds(count, workers);
+        let partitions = partition_outputs(output_spans(&mut outputs), &bounds);
+        let mut failures: Vec<Option<Result<(), String>>> = (0..workers).map(|_| None).collect();
+        // Scoped, not detached: every worker borrows its partition and the
+        // engine, so the scope joins them all before the borrowed buffers are
+        // read back.  A scoped thread cannot be aborted, so a failing worker is
+        // **joined like any other** and the run reports the first failure in
+        // index order below — a failure is never dropped for a partial result.
+        std::thread::scope(|scope| {
+            for ((failure, partition), window) in
+                failures.iter_mut().zip(partitions).zip(bounds.windows(2))
+            {
+                let (base, end) = (window[0], window[1]);
+                let engine = &engine;
+                let module = &module;
+                let inputs = &inputs;
+                let run = move || {
+                    run_parallel_range(
+                        engine,
+                        module,
+                        count,
+                        ParallelState {
+                            inputs,
+                            outputs: partition,
+                            base,
+                        },
+                        base,
+                        end,
+                    )
+                };
+                // The first chunk is the calling thread's own work: it runs here
+                // and joins only the others.
+                if base == 0 {
+                    *failure = Some(run());
+                    continue;
+                }
+                scope.spawn(move || *failure = Some(run()));
+            }
+        });
+        for (worker, failure) in failures.into_iter().enumerate() {
+            if let Some(Err(message)) = failure {
+                return Err(format!(
+                    "parallel launch of kernel {id} failed in worker {worker}, \
+                     over indices [{}, {}): {message}",
+                    bounds[worker],
+                    bounds[worker + 1]
+                ));
+            }
+        }
+    }
+    Ok(outputs)
+}
+
+/// The chunk end of each of `workers` contiguous chunks of `count` indices, so
+/// `bounds.len() == workers + 1`, `bounds[0] == 0` and `bounds[workers] ==
+/// count`.
+///
+/// A function of its two arguments and nothing else — not of a schedule or a
+/// timing — so a given partition is reproducible, and (each index being handled
+/// by exactly one worker) the result does not depend on how the indices are
+/// grouped.  Chunk `k` is `count / workers` long, and the first
+/// `count % workers` chunks are one element longer, so the chunks differ in
+/// length by at most one element and always cover every index exactly once.  The
+/// calling thread takes chunk `0`, so giving the *front* chunks the extra
+/// elements keeps the later workers — which pay an extra wakeup before they
+/// start — off the shortest chunk.
+fn chunk_bounds(count: usize, workers: usize) -> Vec<usize> {
+    let (length, extra) = (count / workers, count % workers);
+    (0..=workers)
+        .map(|index| index * length + index.min(extra))
+        .collect()
+}
+
+/// Every output buffer as a mutable span, in output-ordinal order — the whole
+/// buffer, for a worker that owns every slot.
+fn output_spans(outputs: &mut [Vec<i64>]) -> Vec<&mut [i64]> {
+    outputs
+        .iter_mut()
+        .map(|buffer| buffer.as_mut_slice())
+        .collect()
+}
+
+/// Cut every buffer of `spans` into one contiguous chunk per `[bounds[i],
+/// bounds[i + 1])`, in worker order.
+///
+/// Each split consumes the spans by value so that both halves come back with
+/// the full lifetime the store's state needs: a `&mut` reborrowed *through* a
+/// vector element cannot outlive the vector borrow, so moving each span's
+/// ownership out first is what makes the partition possible without `unsafe`.
+/// Every span is split once per level, and the result is the disjoint
+/// `bounds` partition of `[0, count)`.
+fn partition_outputs<'a>(
+    mut spans: Vec<&'a mut [i64]>,
+    bounds: &[usize],
+) -> Vec<Vec<&'a mut [i64]>> {
+    let mut partitions: Vec<Vec<&'a mut [i64]>> = Vec::with_capacity(bounds.len() - 1);
+    for index in 0..bounds.len() - 1 {
+        // The last chunk is what is left, so it is not split again.
+        if index + 1 == bounds.len() - 1 {
+            partitions.push(spans);
+            break;
+        }
+        let (heads, tails) = split_spans(
+            std::mem::take(&mut spans),
+            bounds[index + 1] - bounds[index],
+        );
+        partitions.push(heads);
+        spans = tails;
+    }
+    partitions
+}
+
+/// Cut the leading `len` elements off every span of `spans` — the same length in
+/// each, because a worker owns a span of *every* output buffer.
+fn split_spans<'a>(
+    spans: Vec<&'a mut [i64]>,
+    len: usize,
+) -> (Vec<&'a mut [i64]>, Vec<&'a mut [i64]>) {
+    let mut heads = Vec::with_capacity(spans.len());
+    let mut tails = Vec::with_capacity(spans.len());
+    for span in spans {
+        let (head, tail) = span.split_at_mut(len);
+        heads.push(head);
+        tails.push(tail);
+    }
+    (heads, tails)
+}
+
+/// Run one worker's index range `[base, end)` — the store, the linker, the
+/// instance and the per-index call loop, for a worker that owns exactly
+/// `state.outputs`' slots.
+///
+/// `count` is passed whole because `cfg(0)` is the whole launch's count: the
+/// index function is a function of the full extent, not of the chunk, so a
+/// worker must not see a narrowed one.
+fn run_parallel_range(
+    engine: &wasmi::Engine,
+    module: &wasmi::Module,
+    count: usize,
+    state: ParallelState<'_>,
+    base: usize,
+    end: usize,
+) -> Result<(), String> {
+    let mut store = wasmi::Store::new(engine, state);
+    let mut linker = wasmi::Linker::<ParallelState<'_>>::new(engine);
 
     let read_ty = wasmi::FuncType::new(
         [wasmi::ValType::I64, wasmi::ValType::I64],
@@ -2848,11 +3101,13 @@ fn run_parallel_kernel(
             "env",
             "read",
             read_ty,
-            |caller: wasmi::Caller<'_, ParallelState>,
+            |caller: wasmi::Caller<'_, ParallelState<'_>>,
              params: &[wasmi::Val],
              results: &mut [wasmi::Val]| {
                 let pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
                 let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
+                // The index is **global** — inputs are never partitioned — so
+                // no rebase here; a worker reads the whole input buffer.
                 let value = caller
                     .data()
                     .inputs
@@ -2870,17 +3125,23 @@ fn run_parallel_kernel(
             "env",
             "write",
             write_ty,
-            |mut caller: wasmi::Caller<'_, ParallelState>,
+            |mut caller: wasmi::Caller<'_, ParallelState<'_>>,
              params: &[wasmi::Val],
              _results: &mut [wasmi::Val]| {
                 let out_pos = params.first().and_then(|v| v.i64()).unwrap_or(0) as usize;
                 let idx = params.get(1).and_then(|v| v.i64()).unwrap_or(0) as usize;
                 let value = params.get(2).and_then(|v| v.i64()).unwrap_or(0);
-                if let Some(slot) = caller
-                    .data_mut()
+                let state = caller.data_mut();
+                // **The rebase.**  The kernel is handed a global index, and the
+                // worker owns `[base, base + span.len())` of this buffer, so the
+                // store is at `idx - base`.  A write outside the worker's own
+                // span cannot be rebased into it — `checked_sub` yields `None`
+                // and the write is dropped, exactly as an out-of-range write is
+                // today, rather than aliasing another worker's slots.
+                if let Some(slot) = state
                     .outputs
                     .get_mut(out_pos)
-                    .and_then(|buffer| buffer.get_mut(idx))
+                    .and_then(|buffer| buffer.get_mut(idx.checked_sub(state.base)?))
                 {
                     *slot = value;
                 }
@@ -2890,21 +3151,190 @@ fn run_parallel_kernel(
         .map_err(|e| e.to_string())?;
 
     let instance = linker
-        .instantiate_and_start(&mut store, &module)
+        .instantiate_and_start(&mut store, module)
         .map_err(|e| e.to_string())?;
     let main = instance
         .get_func(&store, "main")
         .ok_or_else(|| "parallel kernel has no export `main`".to_string())?;
-    for i in 0..count {
+    for i in base..end {
         let args = [wasmi::Val::I64(count as i64), wasmi::Val::I64(i as i64)];
-        let mut outputs = [wasmi::Val::I64(0)];
-        main.call(&mut store, &args, &mut outputs)
+        let mut results = [wasmi::Val::I64(0)];
+        main.call(&mut store, &args, &mut results)
             .map_err(|e| e.to_string())?;
     }
-    Ok(store.into_data().outputs)
+    Ok(())
 }
 
-// --- Native-op registry: the plugin's native-operator registry --
+// --- The parallel run: the worker rule, the partition, the fan-out ---
+
+#[cfg(test)]
+mod parallel_launch_tests {
+    use super::*;
+
+    /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and
+    /// `out1[i] = i + i`, with each `BufferWriteCall` fed the
+    /// `[out_pos, idx, val]` stack its host import takes.  The trailing
+    /// `Const(0)` is what `compile_parallel_fragment` appends: the index
+    /// function only has side effects, and the shared assembler's `-> i64`
+    /// signature needs one value left on the stack.
+    fn two_outputs() -> KernelFragment {
+        KernelFragment {
+            param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
+            body: vec![
+                KernelInstr::Const(0),
+                KernelInstr::LocalGet(1),
+                KernelInstr::LocalGet(1),
+                KernelInstr::Const(1),
+                KernelInstr::Bin(KernelBin::Add),
+                KernelInstr::BufferWriteCall,
+                KernelInstr::Const(1),
+                KernelInstr::LocalGet(1),
+                KernelInstr::LocalGet(1),
+                KernelInstr::LocalGet(1),
+                KernelInstr::Bin(KernelBin::Add),
+                KernelInstr::BufferWriteCall,
+                KernelInstr::Const(0),
+            ],
+            outputs: 2,
+        }
+    }
+
+    /// The threshold is a **count** boundary and nothing else: a run below it
+    /// must not spawn, which is what keeps a handful of indices from getting
+    /// slower than the single-store run it replaced.
+    #[test]
+    fn a_run_below_the_threshold_uses_one_worker() {
+        assert_eq!(parallel_worker_count(0), 1);
+        assert_eq!(parallel_worker_count(1), 1);
+        assert_eq!(parallel_worker_count(SEQUENTIAL_PARALLEL_ELEMENTS - 1), 1);
+    }
+
+    /// ...and at or above it the fan-out is the machine's, never more: one
+    /// worker per index would be pure overhead, and `available_parallelism` is
+    /// what bounds it above.
+    #[test]
+    fn a_run_over_the_threshold_is_capped_by_the_machine() {
+        let count = SEQUENTIAL_PARALLEL_ELEMENTS;
+        let available = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let workers = parallel_worker_count(count);
+        assert_eq!(workers, available.clamp(1, count));
+        assert!(
+            workers <= count,
+            "never more workers than indices to process: {workers} > {count}"
+        );
+    }
+
+    /// The chunk bounds are the determinism argument in one assertion: they are
+    /// a function of the count and the worker count alone, they tile
+    /// `[0, count)` with no gap and no overlap, and no chunk is more than one
+    /// element longer than the shortest.
+    #[test]
+    fn the_chunk_bounds_tile_every_index_exactly_once() {
+        for count in [SEQUENTIAL_PARALLEL_ELEMENTS, 4097, MAX_PARALLEL_ELEMENTS] {
+            for workers in [1, 2, 3, 8, 20] {
+                let bounds = chunk_bounds(count, workers);
+                assert_eq!(bounds.len(), workers + 1, "{count} over {workers}");
+                assert_eq!(bounds[0], 0);
+                assert_eq!(bounds[workers], count, "the chunks must cover the range");
+                let lengths: Vec<usize> = bounds
+                    .windows(2)
+                    .map(|window| window[1] - window[0])
+                    .collect();
+                assert!(
+                    lengths.iter().all(|len| *len > 0),
+                    "every chunk must be non-empty: {lengths:?}"
+                );
+                assert_eq!(
+                    lengths.iter().sum::<usize>(),
+                    count,
+                    "every index belongs to exactly one chunk: {lengths:?}"
+                );
+                let (shortest, longest) = (
+                    *lengths.iter().min().unwrap(),
+                    *lengths.iter().max().unwrap(),
+                );
+                assert!(
+                    longest - shortest <= 1,
+                    "chunks must differ by at most one element: {lengths:?}"
+                );
+                assert!(
+                    lengths[0] >= longest,
+                    "the calling thread's chunk must not be the shortest: {lengths:?}"
+                );
+            }
+        }
+    }
+
+    /// The partition the workers actually get: every output buffer cut into
+    /// the same disjoint spans, so the union is each whole buffer exactly once.
+    #[test]
+    fn the_partitions_are_a_disjoint_cover_of_every_output_buffer() {
+        let count = 100;
+        let workers = 4;
+        let mut outputs: Vec<Vec<i64>> = (0..3).map(|_| (0..count as i64).collect()).collect();
+        let bounds = chunk_bounds(count, workers);
+        let partitions = partition_outputs(output_spans(&mut outputs), &bounds);
+        assert_eq!(partitions.len(), workers);
+        for (worker, partition) in partitions.iter().enumerate() {
+            assert_eq!(partition.len(), 3, "one span per output buffer");
+            let expected: Vec<i64> = (bounds[worker]..bounds[worker + 1])
+                .map(|index| index as i64)
+                .collect();
+            for span in partition {
+                assert_eq!(
+                    &span[..],
+                    &expected[..],
+                    "worker {worker} must own exactly indices [{}, {})",
+                    bounds[worker],
+                    bounds[worker + 1]
+                );
+            }
+        }
+    }
+
+    /// The fan-out itself.  A parallel result is bit-identical to a sequential
+    /// one, so no value can distinguish a working fan-out from a dead code
+    /// path — [`PARALLEL_LAUNCH_WORKERS`] is what a test can see, and this
+    /// checks the run actually took it.
+    #[test]
+    fn a_run_over_the_threshold_fans_out_and_covers_every_index() {
+        let id = intern_kernel(two_outputs());
+        let count = SEQUENTIAL_PARALLEL_ELEMENTS;
+        let outputs = run_parallel_kernel(id, count, vec![]).expect("the run must succeed");
+        assert_eq!(outputs.len(), 2, "one buffer per declared output");
+        // The machine must have the processors to fan out at all; on a
+        // single-processor run the worker count is 1 and the run is the
+        // sequential one, which the values below still pin.
+        if std::thread::available_parallelism().map_or(1, |n| n.get()) > 1 {
+            assert!(
+                parallel_launch_workers() > 1,
+                "a run of {count} elements must not be the single-worker one"
+            );
+        }
+        // First, middle and last index of each buffer: the boundaries between
+        // two workers are where a wrong rebase or a skipped chunk would show.
+        for index in [0, count / 2, count - 1] {
+            assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");
+            assert_eq!(outputs[1][index], index as i64 * 2, "out1[{index}]");
+        }
+    }
+
+    /// The same kernel below the threshold, on the calling thread: the
+    /// sequential result the fan-out has to reproduce.
+    #[test]
+    fn a_run_below_the_threshold_is_sequential_and_writes_every_index() {
+        let id = intern_kernel(two_outputs());
+        let count = SEQUENTIAL_PARALLEL_ELEMENTS - 1;
+        let outputs = run_parallel_kernel(id, count, vec![]).expect("the run must succeed");
+        assert_eq!(parallel_launch_workers(), 1, "no spawn below the threshold");
+        for index in [0, count / 2, count - 1] {
+            assert_eq!(outputs[0][index], index as i64 + 1, "out0[{index}]");
+            assert_eq!(outputs[1][index], index as i64 * 2, "out1[{index}]");
+        }
+    }
+}
+
+// --- Native-op registry: the plugin's native-operator registry ---
 
 /// The `lichen-compute` native plugin marker — the nominal declaration that
 /// this crate plays the native-plugin role

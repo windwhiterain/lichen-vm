@@ -139,7 +139,12 @@ arm:
 - **`ParLaunch`** — reads `[parallel_kernel, cfg]`; runs the kernel over the
   index range `[0, cfg(0))` and collects the results into one buffer **per
   output** — a single output is a bare `Buffer(id)`, several are the tuple of
-  them (`Read`/`BufferCollect` then address each by ordinal).
+  them (`Read`/`BufferCollect` then address each by ordinal).  The range is cut
+  into one contiguous chunk per **worker** (`available_parallelism`, capped by
+  the index count), each owning a disjoint span of every output buffer and
+  running the one cached module in its own store; below
+  `SEQUENTIAL_PARALLEL_ELEMENTS` indices the whole run stays on the calling
+  thread.  See [the parallel run](compute-parallel-buffer-read-write.md#the-run-is-parallel).
 - **`Read`** / **`BufferCollect`** — read one element / collect the whole buffer.
 
 A kernel body that calls another kernel is a **cross-kernel call**: `kernel_id_of` walks a
@@ -239,6 +244,17 @@ by ordinal (`(2, 4): <Int, Int>`), three outputs with `collect` on a middle one,
 refusals that keep the every-ordinal-written invariant — a `compute.write` inside a
 conditional, and a codomain position that is not a write (refused *by position*).
 
+The **parallel-run** group pins that the worker partition is invisible in the result: the
+same two-output kernel over a count below the sequential threshold and over one above it
+agrees element for element, and the run over the threshold produces the exact expected
+value at the first, a middle and the last index of **both** buffers — the chunk boundaries
+between two workers, where a wrong rebase or a skipped chunk would show.  Which regime a
+count is in is `parallel_worker_count`, and the fact that a fan-out happened at all is
+`parallel_launch_workers`; both are unit-tested in `lichen-compute` next to
+`chunk_bounds`/`partition_outputs`, because a parallel result is bit-identical to a
+sequential one and no end-to-end *value* can distinguish a working fan-out from a dead
+code path.
+
 ## 8. v1 scope
 
 The kernel-safe subset is scalar arithmetic over a scalar or tuple-of-scalars domain; the
@@ -267,6 +283,28 @@ The one thing multi-output cannot have is a **check-time result type**: the arit
 run-time fact of the kernel, so `plrun`'s result is an unconstrained cell rather than an
 N-tuple of buffer types (see `ParLaunchOp::build` in §2). The cost is that a positional read
 of a `plrun` result is checked at run time rather than at check time.
+
+### The parallel run
+
+A `plrun` is **data-parallel for real**: the index range is cut into one contiguous
+chunk per worker, and each worker runs the one cached module in its own `Store`/
+`Linker`/instance and writes only its own **disjoint span of every output buffer** —
+a partition built with `split_at_mut`, so there is no lock on the write path.  The
+kernel is handed a *global* index either way and the `write` import rebases it by
+the worker's base, so the emitted wasm does not know it was split.  Inputs are never
+partitioned (a read is by a global index).
+
+Two bounds keep it from being a pessimisation: the worker count is
+`min(available_parallelism(), count)`, and a run below `SEQUENTIAL_PARALLEL_ELEMENTS`
+indices stays sequential, because a spawn plus a store per worker is only repaid once
+a worker owns enough indices for the interpreted calls to dominate it.
+
+The result is **bit-identical to the sequential loop's**: the partition depends only on the
+count and the worker count (never on a schedule or a timing), no slot is written by two
+workers, and there is no reduction to reorder — so regrouping the indices across a
+different number of workers cannot change what is computed.  A worker that fails is
+joined and reported with its cause rather than dropped for a partial result.  See
+[compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md#the-run-is-parallel).
 
 ### Multi-arity cross-kernel calls
 

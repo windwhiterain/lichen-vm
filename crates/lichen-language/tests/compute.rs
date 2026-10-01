@@ -602,6 +602,84 @@ compute.collect outs(1)
 }
 
 #[test]
+fn a_multi_output_parallel_run_is_identical_sequential_and_parallel() {
+    // A parallel run **partitions** the index range over worker threads: each
+    // worker owns a disjoint span of every output buffer and the `write` import
+    // rebases the global index by the worker's base.  The consequence to pin is
+    // that the partition is invisible in the result — the same kernel over a
+    // count *below* `SEQUENTIAL_PARALLEL_ELEMENTS` (one worker, the calling
+    // thread) and over a count *above* it (every worker) must agree element for
+    // element.
+    //
+    // The count decides which regime a run gets (on a machine with a single
+    // available processor both counts are the same one-worker run), so this pins
+    // both sides of that one rule: the collected prefix of the big run must be
+    // exactly the small run's whole result, and the big run's tail must be the
+    // same arithmetic.  (Which regime a *given* count is in is
+    // `lichen-compute`'s `parallel_worker_count`, unit-tested there; no
+    // lichen-level value can distinguish the two, which is the point.)
+    let small = run(r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+}
+k = compute.parallel f
+outs = compute.plrun k (4,)
+(compute.collect outs(0), compute.collect outs(1))
+"#);
+    assert_eq!(
+        small, "([3, 4, 5, 6], [0, 2, 4, 6]): <array<?a, ?b>, array<?c, ?d>>",
+        "the sequential multi-output run produced: {small:?}"
+    );
+    let big = run(r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+}
+k = compute.parallel f
+outs = compute.plrun k (4096,)
+(compute.collect outs(0), compute.collect outs(1))
+"#);
+    assert!(
+        big.starts_with("([3, 4, 5, 6, 7, 8, 9, 10,"),
+        "the parallel run's first elements must be the sequential run's: {big:?}"
+    );
+    assert!(
+        big.ends_with("8190]): <array<?a, ?b>, array<?c, ?d>>"),
+        "the parallel run's last element must be the same arithmetic: {big:?}"
+    );
+}
+
+#[test]
+fn a_parallel_run_over_the_threshold_covers_every_index() {
+    // 4096 indices is over the fan-out threshold, so the run is spread over
+    // workers whose chunk boundaries are a function of the count and the worker
+    // count.  The boundary between two workers is where a rebased `write` would
+    // go wrong, so this reads the first index, one in the middle and the last of
+    // **both** output buffers: a worker that wrote into the wrong span, or one
+    // that was skipped, cannot produce those values.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+f = cfg => {
+  n = cfg(0)
+  i = compute.range n
+  (compute.write [n, i, i + 3], compute.write [n, i, i + i])
+}
+k = compute.parallel f
+outs = compute.plrun k (4096,)
+(compute.read [outs(0), 0], compute.read [outs(0), 2048], compute.read [outs(0), 4095], compute.read [outs(1), 0], compute.read [outs(1), 2048], compute.read [outs(1), 4095])
+"#);
+    assert_eq!(
+        out, "(3, 2051, 4098, 0, 4096, 8190): <Int, Int, Int, Int, Int, Int>",
+        "a fan-out over 4096 indices produced: {out:?}"
+    );
+}
+
+#[test]
 fn a_write_inside_a_conditional_is_refused() {
     // The every-ordinal-written invariant: output ordinal `k` must be written
     // on *every* index.  A write behind a condition would be written on only

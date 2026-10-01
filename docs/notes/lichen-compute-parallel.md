@@ -4,10 +4,15 @@
 > **superseded** by the buffer-map model
 > ([compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md)):
 > `parallel`/`plrun` survive as the launcher, but `pget`/`pcollect` are gone
-> (`compute.read` / `compute.collect` take their place), the index function is
-> single-arg over a fixed-shape `cfg = (n, (buffer…))`, and the v1 runtime is
-> sequential (the thread pool described in §5 is not what shipped).  Kept for
-> the design record.
+> (`compute.read` / `compute.collect` take their place) and the index function is
+> single-arg over a fixed-shape `cfg = (n, (buffer…))`.  **The runtime is now
+> parallel, but not by the mechanism §5 describes**: there is no worker pool of
+> `run_kernel` calls reassembling chunks, and no warm-call validation.  A run
+> partitions the index range across worker threads, each instantiating the one
+> cached module over its own disjoint span of the output buffers — see
+> [compute-parallel-buffer-read-write](compute-parallel-buffer-read-write.md),
+> "The run is parallel".  §5 below is therefore a design record of an approach
+> that was **not** the one implemented, and is kept for that reason.
 > Points at: `crates/lichen-compute/src/compute.lichen` (the wrapper),
 > `crates/lichen-compute/src/compute.rs` (`ComputeValue`/`ComputeOperator`,
 > `compile_parallel_fragment`, `run_parallel_kernel`),
