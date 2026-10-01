@@ -4,6 +4,7 @@
 //! (and `ast`), so `lichen_language::parse::parse` / `::ast::Expr` resolve.
 
 pub mod ast;
+pub mod path;
 
 #[path = "parse.rs"]
 mod parser;

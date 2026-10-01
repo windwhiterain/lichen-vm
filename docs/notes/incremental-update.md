@@ -1,7 +1,8 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **proposed** — the `cache` syntax is landed and **inert** (§7 step 2);
-> no identity, invalidation or retention mechanism is built. This is the *cross-build* half of the
+> Status: **proposed** — the `cache` syntax is landed and **inert** (§7 step 2), and
+> so is path identity (§7 step 1: the path module); no invalidation or retention
+> mechanism is built. This is the *cross-build* half of the
 > incrementality question. It supersedes the withdrawn cross-build halves of
 > [incremental-evaluation](incremental-evaluation.md), which keeps the *within-build*
 > settled cut, the deep-pass measurement and the mutation inventory; where the two
@@ -69,10 +70,18 @@ which is small, storable and resolvable.
 
 ### 2.2 Steps: a name where the syntax has one, an index only where it does not
 
-A step is a **name** wherever the position has one in the source — a binding name, a
-lambda's parameter list position, a field name — and a **child index** only for
-positions the syntax leaves anonymous (the `i`-th element of a tuple or array
-literal, an argument of a `$op(…)` form).
+A step is a **name** wherever the position sits in a *list the syntax can name* — a
+binding statement, a named struct field, a named instantiation argument — and a
+**child index** everywhere else: an element of a tuple, array or table literal, an
+argument of a `$op(…)` form, or a fixed-arity role. Fixed-arity positions use
+**reserved role slots**, never compacted ones: a lambda's `parameter_type` is always
+`Index(0)` and its `return` always `Index(2)`, whether or not the optional
+annotations are present, so adding an annotation does not renumber a stored path.
+
+The vocabulary is the contract, and it lives in exactly one place —
+`crates/lichen-language-parser/src/path.rs`, whose `children` is the only
+enumeration of a node's positions. Changing it renumbers every stored path, so it is
+a compatibility contract exactly as the attribute order is.
 
 Names are preferred because of the edit that dominates an agent's loop: **an
 insertion before an existing statement**. Under a pure child-index path, that
@@ -94,11 +103,16 @@ and §5.2 makes each one a diagnostic rather than a silent miss.
 
 ### 2.3 Resolution is dynamic — a path is a locator, not a registry entry
 
-**Nothing is registered when a node is allocated.** No `Path → NodeId` table exists,
-and the checker's allocation path is untouched. A path is resolved **on demand** by
-walking the same navigable structure name resolution already walks — the IR tree and
-the scopes built over it — one step at a time, exactly as `SyntaxNodePtr` is
-resolved into a node when someone needs one.
+**Nothing is registered when a node is built.** No `Path → NodeId` table exists, and
+neither the front end's compilation nor the checker's allocation path is touched. A
+path is resolved **on demand** by walking the tree one step at a time — exactly as
+`SyntaxNodePtr` is resolved into a node when someone needs one.
+
+The tree is the **AST**, not the highlevel IR: the IR is a *graph* (a binding's node
+*is* its value's node, so it has several positions) and it carries no binding names,
+while the AST is the tree the resolver already walks by name. A path therefore names
+a **position**: a node reached by several positions has several paths, and a
+retained cell is a position, not a node.
 
 Three consequences, all wanted:
 
@@ -231,8 +245,8 @@ Decided by the superior:
 
 | step | file / item | change |
 |---|---|---|
-| 1 | `lichen-highlevel/src/ir.rs` + the frontend | IR nodes carry their occurrence path (name-preferred steps) |
-| 1 | resolution / checker | resolve a path on demand against the live IR + scopes; record each marked cell's read paths while it is computed |
+| 1 | `lichen-language-parser/src/path.rs` | **landed**: `Step`/`Path`, the position vocabulary (`children`), dynamic `resolve`, and the descent (`for_each`) |
+| 1 | the front end / checker | **not built**: recording a marked cell's read paths while it is computed |
 | 2 | `lichen-language-lex` / `-parser` / `ast.rs` | **landed**: the `cache` keyword and `Binding.cached` — parsed and carried, consumed by nothing |
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-registry` (the store) | cells keyed by path; freeze/read in place; the four events reported |
@@ -242,9 +256,28 @@ Decided by the superior:
 Step 4 is the reason this design is written before that crate: its node set and
 residency rules are exactly what path identity and the `cache` mark constrain.
 
+**Step 1 measured · a temporary probe (`cargo run -p lichen-language --example
+path_probe`), since removed.** Over seven shapes — top-level bindings, a binding
+inside a lambda body, a record program, struct fields and named arguments, a table
+and an `if`, a record block, a shallow array with an assert — it derived every
+binding/field position with `for_each`, resolved each path back with `resolve`, and
+compared the resolved position with the one it started from: **13 positions, 0
+mismatches**. The two readings that matter:
+
+- a binding inside a lambda body is reached as `f/2/y` — the reserved role slot for
+  the body, then the binding's own name;
+- **a binding's path is stable under an insertion before it**: `b`'s path is `b`
+  both in `a = 1 / b = 2 / b` and in `z = 0 / a = 1 / b = 2 / b`, which is the whole
+  reason the step is a name;
+- a path that no longer names anything resolves to `None` rather than to a
+  neighbour.
+
 Step 2 landed **inert rather than rejected**: the mark parses, the AST carries it,
 and no consumer reads it — so the spec and `Binding.cached`'s own doc both say so,
 because a user who writes `cache` must not be led to believe a value is retained.
+A record block's field carries it too (`RecordField.cached`), since a record block's
+fields *are* its statements; without that the mark vanished in the statement →
+field conversion, which is how it was found.
 The mark is accepted in every scope and combined freely with `let` (the two are
 orthogonal); no diagnostic is emitted, so nothing here can be mistaken for a
 refusal. Making it *refuse* would be a semantic decision the mechanism has not
@@ -290,6 +323,11 @@ taken yet.
   child indices (an insertion invalidates the whole suffix, §2.2).
 - **Resolution is dynamic** (the superior): no `Path → NodeId` registration; a path
   is resolved on demand (§2.3).
+- **The tree is the AST, not the IR** (decided while landing step 1): the IR is a
+  graph with no binding names, and the AST is the tree the resolver already walks by
+  name. A path therefore names a position, which is what a cell is (§2.3). Landing it
+  there also kept the front end's compilation and the checker's allocation path
+  untouched, which a name-carrying IR would not have.
 - **`cache` is a keyword, not an attribute** (the superior): a slot is a runtime
   value; the mark is static and identity-selecting (§5.1).
 - **`cache` is allowed in any scope** (the superior): an instance reaches a
@@ -303,11 +341,11 @@ taken yet.
 
 ## 11. Open questions
 
-- **The step grammar**: exactly which syntactic positions are named, and what a path
-  looks like across an import boundary (the package's file identity is
-  path-derived — `is_lichen_file_id` / `file_id_hash(file_id: &str)`,
-  `lichen-registry/src/device.rs:57,85` — which is a name, not a content hash, and
-  must stay that way).
+- **A path across an import boundary.** The step vocabulary is settled and landed
+  (§2.2); what is not is how a package's file identity prefixes a path — the
+  registry's file identity is path-derived (`is_lichen_file_id` /
+  `file_id_hash(file_id: &str)`, `lichen-registry/src/device.rs:57,85`), which is a
+  name, not a content hash, and must stay that way.
 - **Eviction and residency policy** for cells that hold device buffers.
 - **The graph-side descriptor's shape**, and whether a graph node's path is
   expressed in the same step vocabulary as a source node's.

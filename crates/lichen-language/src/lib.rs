@@ -25,6 +25,7 @@ pub use lichen_language_lex as lex;
 pub use lichen_language_lex::{LexDiag, Span};
 pub use lichen_language_parser as parse;
 pub use lichen_language_parser::ast;
+pub use lichen_language_parser::path;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
 pub mod compile;
