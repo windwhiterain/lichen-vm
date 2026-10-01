@@ -37,7 +37,7 @@
 >
 > Points at: `crates/lichen-lowlevel/src/{evaluation,equality,function,gc,table,module,lib,utils,apply}.rs`,
 > `crates/lichen-highlevel/src/checker.rs` + `checker/lambda.rs`,
-> `crates/lichen-language/src/run.rs`, `crates/lichen-language/examples/deep_pass_stats.rs`,
+> `crates/lichen-language/src/run.rs`,
 > and the notes [lowlevel-vm](lowlevel-vm.md), [static-modules](static-modules.md),
 > [code-audit](code-audit.md) (`P1-31`, done).
 
@@ -82,8 +82,8 @@ structural cycle an outer frame is currently computing (`:593-597`) — and
 skip. Every entry point therefore re-descends the whole value-reachable graph it
 covers, arrays and tables included (`:641-670`, `:674-699`).
 
-**Measured · `cargo run -p lichen-language --example deep_pass_stats`.**  The
-counters are `lichen_lowlevel::deep_pass_stats()`: *stamped* is the nodes one
+**Measured · `cargo run -p lichen-language --example deep_pass_stats`, temporary and since removed.**  The
+readings were: *stamped* is the nodes one
 build left a verdict on, *cheap* is the visits that returned without evaluating a
 node (a static leaf or a cycle cut), and *revisit* is the visits that reached a
 node **already carrying a verdict** — the headroom any cut has:
@@ -309,8 +309,8 @@ entry point, and that nothing further should be built.
 
 ## 5. Recommendation and staged roadmap
 
-0. **Measure first.** *Half done*: the redundancy and revisit shares are measured
-   (§1.3) with the counters and the harness that landed with `P1-31`. Still owed:
+0. **Measure first.** *Half done.* The redundancy and revisit shares are measured
+   (§1.3) with temporary counters that have since been removed. Still owed:
    the pass's share of a build's **wall-clock** — the counters do not separate
    (deep pass) from (check) from (lex+parse), and without that split "1.65–8.15×
    redundant" does not say how much of a build it is.
@@ -369,7 +369,7 @@ entry point, and that nothing further should be built.
   as §4.1 defines it. The obligation that remains is the differential harness,
   not another design question. What is genuinely not known is the *take*
   (§4.5), which is a measurement, not a decision.
-- **Q9 — the wall-clock split.** The counters measure redundancy, not cost. A
+- **Q9 — the wall-clock split.** Those counters measured redundancy, not cost. A
   probe that separates the deep pass from the checker and the frontend is what
   would say whether any of this matters; it is the one thing step 0 still owes.
 
@@ -377,11 +377,11 @@ entry point, and that nothing further should be built.
 
 | Step | File / function | Change |
 |---|---|---|
-| 0 | `evaluation.rs` `DEEP_PASS_*` / `DeepPassStats`; `crates/lichen-language/examples/deep_pass_stats.rs` | **landed**: walks / visits / cheap / revisit counters and the harness; the wall-clock split is still owed |
+| 0 | `evaluation.rs` `evaluate_node_deep_inner` + the two entry points | **removed**: the temporary walks / visits / cheap / revisit counters that took §1.3's numbers; re-add them (or a real profile) for the wall-clock split |
 | 1 | `lib.rs` `EvaluatedDeep`; `evaluation.rs` `value_is_parameterized` + `evaluate_node_deep_inner` | the `settled` bit and the early return |
 | 1 | `module.rs` `close_operation_cycle` | clear `settled` with the verdict it invalidates |
 | 2 | `crates/lichen-lowlevel/tests/` (new file) | the differential harness: with and without the cut, over the existing corpus |
-| 3 | `crates/lichen-language/examples/deep_pass_stats.rs` | re-run; the delta is the decision |
+| 3 | — | re-run the measurement; the delta is the decision |
 
 ## 9. Recorded discussion
 

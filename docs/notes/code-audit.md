@@ -2375,10 +2375,12 @@ needs `parameterized` to be a function of the graph rather than of where a walk
 started — a dirty-flag recomputation restarts elsewhere — and it needs the deep
 pass's redundancy to be worth removing. That note's step 0 measured the redundancy
 at 1.7–8.2 node-evaluations per decided node over six shapes, worst on the
-canonical cyclic ones; the counters it uses (`lichen_lowlevel::deep_pass_stats`,
-`reset_deep_pass_stats`) and the harness
-(`cargo run -p lichen-language --example deep_pass_stats`) landed with this item.
-The pass's share of a build's wall-clock is still unmeasured.
+canonical cyclic ones. The counters that took those numbers were **temporary** and
+have been removed again — the `deep_pass_stats` / `reset_deep_pass_stats`
+re-exports and the `deep_pass_stats` example with them — on the same rule this
+queue's `P4-1` records ("a temporary counter … removed after"). The numbers are
+the record; the instrument is not. The pass's share of a build's wall-clock is
+still unmeasured.
 
 ## P2 — architecture
 

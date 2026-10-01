@@ -1,5 +1,4 @@
 use stacksafe::stacksafe;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
@@ -482,7 +481,6 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        DEEP_PASS_WALKS.fetch_add(1, Ordering::Relaxed);
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
     }
@@ -502,7 +500,6 @@ impl<P: Program> Module<P> {
     /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        DEEP_PASS_WALKS.fetch_add(1, Ordering::Relaxed);
         let mut cache = StaticModuleCache::new();
         self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
     }
@@ -572,16 +569,11 @@ impl<P: Program> Module<P> {
         force_operand: bool,
         cache: &mut StaticModuleCache<P>,
     ) -> P::Value {
-        // Counted on entry, before the static-leaf and cycle-cut early returns:
-        // those returns are exactly the redundant work the counter exists to
-        // measure.
-        DEEP_PASS_VISITS.fetch_add(1, Ordering::Relaxed);
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
         // Even a forced pass gains nothing from a solved subtree (residuals
         // never re-run), so the leaf rule is unconditional.
         if let AnyNodeId::Static(sref) = node {
-            DEEP_PASS_CHEAP_RETURNS.fetch_add(1, Ordering::Relaxed);
             return cache.read(self, sref);
         }
         let node = match node {
@@ -608,17 +600,7 @@ impl<P: Program> Module<P> {
             // universe's `[Type, ↺]`) and a longer cycle read alike, and it is
             // cleared where the real verdict is written below.
             self.nodes[node].assumed_concrete = true;
-            DEEP_PASS_CHEAP_RETURNS.fetch_add(1, Ordering::Relaxed);
             return value;
-        }
-        // A node that already carries a verdict when this walk reaches it is a
-        // **re-visit**: either a diamond inside this walk or a subtree an
-        // earlier entry point already decided.  Either way it is what a cut
-        // would skip, so the count is the headroom a cut has — and how it splits
-        // between the two is what decides whether a walk-scoped visited set is
-        // enough or whether a verdict must be trusted *across* entry points.
-        if self.nodes[node].evaluated_deep.is_some() {
-            DEEP_PASS_DECIDED_REVISITS.fetch_add(1, Ordering::Relaxed);
         }
         self.deep_depth += 1;
         if self.deep_depth > self.evaluate_depth_limit {
@@ -858,71 +840,4 @@ impl<P: Program> Module<P> {
         // refusal rather than reporting it a second time.
         self.garbage_collect(root).unwrap_or(value)
     }
-}
-
-/// The deep pass's **entry points**: one per [`Module::evaluate_node_deep`] /
-/// [`Module::evaluate_node_forced`] call.  See [`deep_pass_stats`].
-static DEEP_PASS_WALKS: AtomicUsize = AtomicUsize::new(0);
-
-/// The deep pass's **work**: one per `evaluate_node_deep_inner` entry, so a node
-/// reached from several entry points is counted once per entry that reached it.
-/// See [`deep_pass_stats`].
-static DEEP_PASS_VISITS: AtomicUsize = AtomicUsize::new(0);
-
-/// The subset of [`DEEP_PASS_VISITS`] that returned without doing a node's work:
-/// a static ref (a decided leaf, one cached read) and a structural-cycle cut
-/// (an ancestor an outer frame already computed).  Both are `O(1)`, so the
-/// visits that actually evaluate and stamp a node are `visits - cheap_returns`.
-static DEEP_PASS_CHEAP_RETURNS: AtomicUsize = AtomicUsize::new(0);
-
-/// The subset of [`DEEP_PASS_VISITS`] that reached a node which **already
-/// carried a verdict** — a re-visit inside one walk (a diamond) or a subtree an
-/// earlier entry point already decided.  It is the headroom a cut has.
-static DEEP_PASS_DECIDED_REVISITS: AtomicUsize = AtomicUsize::new(0);
-
-/// What the deep pass has done since the counters were last reset — a
-/// **measurement channel, not behaviour**: nothing in the VM reads it, and every
-/// value, verdict and diagnostic is identical whether it is observed or not.
-///
-/// The two numbers answer "how redundant is the deep pass".  It memoizes no
-/// subtree across entry points (see `incremental-evaluation` in `docs/notes`),
-/// so a shared subtree is walked once per entry point that reaches it; the
-/// number of nodes one pass *stamped* is separately readable as
-/// `Module::node_evaluated_deep(node) != None` over the node table.  A
-/// process-global counter is the shape the compute plugin already uses for the
-/// same purpose (`MODULE_CACHE_MISSES`), and it is why a measurement must come
-/// from a harness that runs alone — an integration test in its own file rather
-/// than beside parallel tests in one binary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DeepPassStats {
-    /// [`Module::evaluate_node_deep`] and [`Module::evaluate_node_forced`]
-    /// calls, nested walks included.
-    pub walks: usize,
-    /// `evaluate_node_deep_inner` entries.
-    pub visits: usize,
-    /// The `visits` that returned without evaluating a node — a static leaf or
-    /// a cycle cut.  The visits that did a node's work are
-    /// `visits - cheap_returns`.
-    pub cheap_returns: usize,
-    /// The `visits` that reached a node already carrying a verdict — a diamond
-    /// inside one walk, or a subtree an earlier entry point already decided.
-    pub decided_revisits: usize,
-}
-
-/// The counters behind [`DeepPassStats`].
-pub fn deep_pass_stats() -> DeepPassStats {
-    DeepPassStats {
-        walks: DEEP_PASS_WALKS.load(Ordering::Relaxed),
-        visits: DEEP_PASS_VISITS.load(Ordering::Relaxed),
-        cheap_returns: DEEP_PASS_CHEAP_RETURNS.load(Ordering::Relaxed),
-        decided_revisits: DEEP_PASS_DECIDED_REVISITS.load(Ordering::Relaxed),
-    }
-}
-
-/// Zero the counters behind [`DeepPassStats`].
-pub fn reset_deep_pass_stats() {
-    DEEP_PASS_WALKS.store(0, Ordering::Relaxed);
-    DEEP_PASS_VISITS.store(0, Ordering::Relaxed);
-    DEEP_PASS_CHEAP_RETURNS.store(0, Ordering::Relaxed);
-    DEEP_PASS_DECIDED_REVISITS.store(0, Ordering::Relaxed);
 }

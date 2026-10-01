@@ -11,7 +11,7 @@ use lichen_utils::extend::AsEnum;
 
 pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
-pub use crate::evaluation::{DeepPassStats, EvalError, deep_pass_stats, reset_deep_pass_stats};
+pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
 pub(crate) use crate::static_module::StaticModuleCache;
 
