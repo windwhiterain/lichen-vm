@@ -407,9 +407,14 @@ the cell is simply left out and the next build compiles it again).
 (`cache terrain = 5`, `cache layer = terrain + 1`): the first build lowered **0**
 static nodes and recorded **2** cells; the second lowered **2** static nodes — one per
 clean cell, with no new artifact filed — and read the frozen pair back as `USize(5)`.
-The dirty input is still the caller's, so this second build is the "nothing changed"
-case: the mechanism is proven, and what remains is the edit-side wiring (the named
-file plus its reverse import closure, §7.1 above).
+Then `invalidate("a.lichen")` dropped **2** cells and the next build lowered **0**
+static nodes again (both bindings recompiled and re-recorded): the edit names the
+source, the store drops that source's cells, and nothing else had to detect anything.
+
+What remains on this step is **who computes the reverse import closure** — the caller
+drops the cells of every file that imports the changed one, and that graph is the
+package store's, not the cell store's — and **eviction**, since a dropped cell's
+artifact stays in the registry (it is unreachable, not freed).
 
 **Measured · a temporary probe in the lowlevel's own test harness, since removed.**
 On a four-node module — an array of two constants, plus one node no root reaches —

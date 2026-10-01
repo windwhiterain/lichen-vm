@@ -147,9 +147,12 @@ where
 /// binding that *is* compiled is frozen into `registry` and recorded under its
 /// occurrence path.
 ///
-/// The registry is the caller's because a cell's artifact must outlive the build
-/// that made it, exactly as a package's artifact does for an import.
+/// `source_id` names the file the cells belong to; it is what
+/// [`CellStore::invalidate`] drops, so the caller names the edit.  The registry is
+/// the caller's because a cell's artifact must outlive the build that made it,
+/// exactly as a package's artifact does for an import.
 pub fn compile_with_cells(
+    source_id: &str,
     source: &str,
     cells: &mut CellStore,
     registry: Arc<RwLock<Registry<LangProgram>>>,
@@ -164,6 +167,7 @@ pub fn compile_with_cells(
         no_native_ops(),
         Some(cells),
         Vec::new(),
+        source_id,
     )
 }
 
@@ -179,6 +183,7 @@ fn freeze_cells<P>(
     cells: &mut CellStore,
     registry: &Arc<RwLock<Registry<P>>>,
     compiled_cells: Vec<(Path, ExprId)>,
+    source_id: &str,
 ) where
     P: LangProgramShape,
     P::Value: ValueType + 'static,
@@ -197,7 +202,7 @@ fn freeze_cells<P>(
         // **path**, never by content (`docs/notes/incremental-update.md` §4.3).
         let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);
         let index = freeze.node_map[&pair];
-        cells.record(path, StaticNodeId { module: key, index });
+        cells.record(path, source_id, StaticNodeId { module: key, index });
     }
 }
 
@@ -260,13 +265,14 @@ where
         native_ops,
         None,
         Vec::new(),
+        "",
     )
 }
 
 /// [`compile_with_imports_at`] with a **cell store**: `cache`d bindings whose cell
 /// is clean are lowered to a read of their frozen artifact instead of being
 /// compiled, and the marked bindings that *were* compiled are frozen into
-/// `registry` and recorded under their occurrence paths.
+/// `registry` and recorded under their occurrence paths, owned by `source_id`.
 pub fn compile_with_imports_at_with_cells<P>(
     code: &str,
     imports: &[ResolvedImport],
@@ -276,6 +282,7 @@ pub fn compile_with_imports_at_with_cells<P>(
     native_ops: NativeOps<P>,
     cells: Option<&mut CellStore>,
     compiled_cells: Vec<(Path, ExprId)>,
+    source_id: &str,
 ) -> Report<P>
 where
     P: LangProgramShape,
@@ -306,6 +313,7 @@ where
         native_ops,
         cells,
         compiled_cells,
+        source_id,
     )
 }
 
@@ -322,6 +330,7 @@ pub fn build_report<P>(
     native_ops: NativeOps<P>,
     cells: Option<&mut CellStore>,
     compiled_cells: Vec<(Path, ExprId)>,
+    source_id: &str,
 ) -> Report<P>
 where
     P: LangProgramShape,
@@ -341,7 +350,7 @@ where
     // The cells this build compiled: frozen now, because the build is solved (the
     // definition pass ran) and a frozen artifact must be complete.
     if let Some(cells) = cells {
-        freeze_cells(&build, cells, &registry, compiled_cells);
+        freeze_cells(&build, cells, &registry, compiled_cells, source_id);
     }
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
