@@ -402,6 +402,9 @@ where
             nodes,
             functions,
             arena,
+            // A loaded artifact owns no out-of-arena resource: a resource handle
+            // is process-local and cannot be in the bytes.
+            releases: Vec::new(),
         },
         export,
     ))
