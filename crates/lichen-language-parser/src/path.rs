@@ -6,7 +6,11 @@
 //! a named struct field, a named instantiation argument) and an **index** only
 //! where it does not — so inserting a statement *before* a binding does not
 //! move that binding's path, while a pure child-index scheme would move every
-//! path after it.
+//! path after it.  A name that **repeats** in its own list is not a position
+//! (two entries would share one path, and a path is an identity): every entry
+//! carrying a repeated name falls back to its index, exactly as an unnamed one
+//! does.  Only that list's own names are compared — the same name in two
+//! different lists is two positions, which is what a path's steps already say.
 //!
 //! The tree is the **AST**, not the highlevel IR.  The IR is a graph (a
 //! binding's node *is* its value's node, and it holds no binding names), while
@@ -24,6 +28,7 @@
 //!   `return` always `Index(2)`, whether or not the optional annotations are
 //!   present.  An absent role simply does not resolve.
 
+use std::collections::HashSet;
 use std::fmt;
 
 use crate::ast::{Binding, Expr, Program, RecordField, Stmt};
@@ -212,15 +217,20 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
             }
         }
         Expr::StructType(fields, _) => {
+            let repeated = repeated_names(fields.iter().map(|field| field.name.as_deref()));
             for (i, field) in fields.iter().enumerate() {
-                out.push((field_step(&field.name, i), Node::Expr(&field.ty)));
+                out.push((field_step(&field.name, i, &repeated), Node::Expr(&field.ty)));
             }
         }
         Expr::StructInst { callee, fields, .. } => {
             push_index(&mut out, 0, callee);
+            let repeated = repeated_names(fields.iter().map(|field| field.name.as_deref()));
             for (i, field) in fields.iter().enumerate() {
                 // The callee reserves slot 0, so the field list starts at 1.
-                out.push((field_step(&field.name, i + 1), Node::Expr(&field.value)));
+                out.push((
+                    field_step(&field.name, i + 1, &repeated),
+                    Node::Expr(&field.value),
+                ));
             }
         }
         Expr::Table(entries, _) => {
@@ -241,28 +251,45 @@ pub fn children(expr: &Expr) -> Vec<(Step, Node<'_>)> {
         Expr::Block {
             statements, expr, ..
         } => {
+            let repeated = repeated_names(statements.iter().map(statement_name));
             let mut positions: Vec<(Step, Node<'_>)> = statements
                 .iter()
                 .enumerate()
-                .map(|(i, statement)| statement_position(statement, i))
+                .map(|(i, statement)| statement_position(statement, i, &repeated))
                 .collect();
             positions.push((Step::Tail, Node::Expr(expr)));
             out.extend(positions);
         }
         Expr::RecordBlock { fields, .. } => {
+            let repeated = repeated_names(fields.iter().map(|field| field.name.as_deref()));
             for (i, field) in fields.iter().enumerate() {
-                out.push((field_step(&field.name, i), Node::Field(field)));
+                out.push((field_step(&field.name, i, &repeated), Node::Field(field)));
             }
         }
     }
     out
 }
 
-/// The step reaching a named-or-positional list entry.
-fn field_step(name: &Option<String>, index: usize) -> Step {
+/// The names that appear more than once among `names` — the entries whose step
+/// must fall back to an index (see the module doc).
+fn repeated_names<'a>(names: impl Iterator<Item = Option<&'a str>>) -> HashSet<&'a str> {
+    let mut seen = HashSet::new();
+    let mut repeated = HashSet::new();
+    for name in names.into_iter().flatten() {
+        if !seen.insert(name) {
+            repeated.insert(name);
+        }
+    }
+    repeated
+}
+
+/// The step reaching a named-or-positional list entry: the name where the
+/// syntax gives one *and it is unique in this list*, the entry's index
+/// otherwise.
+fn field_step(name: &Option<String>, index: usize, repeated: &HashSet<&str>) -> Step {
     match name {
-        Some(name) => Step::Name(name.clone()),
-        None => Step::Index(index as u32),
+        Some(name) if !repeated.contains(name.as_str()) => Step::Name(name.clone()),
+        _ => Step::Index(index as u32),
     }
 }
 
@@ -272,22 +299,43 @@ fn push_index<'a>(out: &mut Vec<(Step, Node<'a>)>, index: u32, expr: &'a Expr) {
 }
 
 /// The step and node of a statement position: a binding is reached by its
-/// **name**, a bare expression statement by its index.
-fn statement_position(statement: &Stmt, index: usize) -> (Step, Node<'_>) {
+/// **name** (unless that name repeats in the same statement list), a bare
+/// expression statement by its index.
+fn statement_position<'a>(
+    statement: &'a Stmt,
+    index: usize,
+    repeated: &HashSet<&str>,
+) -> (Step, Node<'a>) {
     match statement {
-        Stmt::Binding(binding) => (Step::Name(binding.name.clone()), Node::Binding(binding)),
+        Stmt::Binding(binding) => {
+            let step = if repeated.contains(binding.name.as_str()) {
+                Step::Index(index as u32)
+            } else {
+                Step::Name(binding.name.clone())
+            };
+            (step, Node::Binding(binding))
+        }
         Stmt::Expr(expr) => (Step::Index(index as u32), Node::Expr(expr)),
+    }
+}
+
+/// A statement's binding name, for [`repeated_names`].
+fn statement_name(statement: &Stmt) -> Option<&str> {
+    match statement {
+        Stmt::Binding(binding) => Some(binding.name.as_str()),
+        Stmt::Expr(_) => None,
     }
 }
 
 /// The children of the program root: its statements, then its tail (absent for
 /// a record program — a module has no tail position).
 pub fn root_children(program: &Program) -> Vec<(Step, Node<'_>)> {
+    let repeated = repeated_names(program.statements.iter().map(|bs| statement_name(&bs.stmt)));
     let mut out: Vec<(Step, Node<'_>)> = program
         .statements
         .iter()
         .enumerate()
-        .map(|(i, statement)| statement_position(&statement.stmt, i))
+        .map(|(i, statement)| statement_position(&statement.stmt, i, &repeated))
         .collect();
     if let Some(tail) = &program.expr {
         out.push((Step::Tail, Node::Expr(tail)));
