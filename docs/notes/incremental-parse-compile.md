@@ -358,6 +358,27 @@ Because the mask is excluded from the signature, `r2` needs no re-lowering of
   The oracle that found it is `incremental-update.md` §7.3's differential
   comparison (value *and* diagnostics against a fresh compile, over every prefix
   of an edit sequence); a count-only reading would have missed it.
+- **A cloned statement's spans must be shifted, and a boundary edit must not widen
+  the window** (found next, `35fac3e`; `incremental-update.md` §7.5).  Two rules,
+  and they interact:
+  - a **clone's spans are stale**.  The splice clones the untouched statements
+    around the window, and a clone's bytes are unchanged but its *position* is
+    not — a `Span` is a `(line, col)` pair, so an edit that adds or removes a
+    **line** moves every statement after it.  A diagnostic in a cloned statement
+    then renders on the wrong line (measured: deleting a line put the tail's
+    diagnostic one line too far down).  `lichen-language`'s `spans` module walks
+    the clone and rewrites every span — and a recovered error's byte range —
+    through `offset_of_span`/`line_col`, which is exact.  A *wider* window hides
+    this by re-parsing; it does not fix it, and the overlap path is exposed either
+    way.
+  - the **boundary fallback** (`no statement body overlaps` — a separator edit, or
+    an append at a statement's end) must window `[prev, prev + 2)`, not
+    `[prev, old_n)`.  Widening to the end of the buffer re-parses and re-dirties
+    the whole tail: measured at 82–90% of a rebuild and ~50 of 60 retained cells
+    dropped, for the edit shape an agent produces most often (appending to a
+    line).  Two statements rather than one, because the insertion is inside the
+    byte range spanning them and the region parse is byte-bounded — several
+    inserted statements are re-parsed too.
 
 ## 9. Roadmap
 
