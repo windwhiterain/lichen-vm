@@ -172,6 +172,42 @@ vocabulary-wide trait bound (`ValueExt: Debug + Copy + PartialEq`), so a single
 non-`Copy` variant would cost the whole lowlevel's value handling (`D15` measured
 it at 70 sites).
 
+## Extension point 5b: keeping nodes alive (`ValueExt::traced`)
+
+`is_handle`/`handle`/`set_handle` cover a value that owns **data**. A value that
+keeps **module objects** alive needs a second, separate answer, and it is the
+obligation no existing extension had because no existing extension had the
+problem:
+
+```rust
+fn traced(&self, context: &dyn TraceContext, out: &mut Vec<NodeId>) {
+    // nothing by default
+}
+```
+
+A value appends the nodes it keeps. The GC walks each with the same
+`garbage_collect_node` it uses for an array item, so **a value names nodes and
+nothing else** — a function is kept alive by naming the node it is the value of,
+and the walk's shape dispatch resolves it from there. `out` rather than a returned
+slice because no real holder's references are one contiguous run: a compiled
+graph interleaves them with kernel ids, counts and element data. `TraceContext`
+rather than `&Module<P>` because everything worth looking at here — a node's
+block, a block's node list, a function's scope — is spelled in lowlevel's own
+types, so `P` stays off `ValueExt` and off the `ValueType` bounds above it.
+
+**Why this is a seam at all.** The GC follows an array's items, a table's
+entries, a function's scope, and an *unevaluated* node's operand. An operator's
+result is cached, and a cached node's operand is deliberately not followed. So a
+value holding a reference the GC cannot see loses it at the end of the very block
+evaluation that produced it — `drop_block` deletes by block membership, not
+reachability, so there is no diagnostic. A compiled graph holding the closures it
+will call later is the first value in the tree to need this.
+
+**It is not enforced.** Nothing checks the answer, because nothing can: the
+lowlevel cannot see what a value holds. An unlisted node is not a detectable
+omission, it is a node that quietly disappears. The contract is held by review
+and by `lichen-lowlevel/tests/basic/compaction.rs`.
+
 ## Extension point 6: global extension state (`GlobalExt`)
 
 A plugin can carry per-module, program-global state in the module's `global_ext` slot.
