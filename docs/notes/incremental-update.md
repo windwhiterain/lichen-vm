@@ -1,14 +1,14 @@
 # Incremental update: identity by path, retention by `cache`
 
-> Status: **the mechanism is complete and measured (§7.1, §7.2); the consumer is
+> Status: **the mechanism is complete and measured (§7.1–§7.4); the consumer is
 > not.** Path identity, the `cache` syntax, the per-cell closure freeze, the general
-> release obligations, the cell store and **dirty propagation** all exist, and
-> `BufferSession` now lowers through the store — an edit reuses every marked binding
-> it did not reach. What is still missing is a **production caller**: `BufferSession`
-> itself has none (`P2-1`), and the LSP's analysis path passes no cells. Eviction is
-> deliberately unwired (the session hands the unreachable keys on). **§12 is the
-> handoff**: what exists, in what order to continue, the landmines, and how to
-> verify. Read that first if you are picking this up cold.
+> release obligations, the cell store, **dirty propagation** and **eviction** all
+> exist, and `BufferSession` now lowers through the store — an edit reuses every
+> marked binding it did not reach, and the artifacts it drops are freed. What is
+> still missing is a **production caller**: `BufferSession` itself has none
+> (`P2-1`), and the LSP's analysis path passes no cells. **§12 is the handoff**: what
+> exists, in what order to continue, the landmines, and how to verify. Read that
+> first if you are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
 > withdrawn cross-build halves of [incremental-evaluation](incremental-evaluation.md),
@@ -260,6 +260,15 @@ more than necessary and never less, so its absence costs work, never correctness
 would pay where an edit changes a marked binding's *bytes* without changing its *value*
 (`cache a = 1 + 2` → `1 + 1 + 2`), which the byte-position seed cannot see through.
 
+**It is not a local addition to `dirty.rs`**, which is why it is not built. Today the
+dirty set is computed *before* the lowering and every dirty cell is dropped; backdating
+needs the opposite order — recompute in dependency order, compare each result with the
+retained one, and only then decide whether a *consumer* is dirty. That is the recompute
+heap of [Incremental](https://ocaml.janestreet.com/ocaml-core/v0.12/doc/incremental/Incremental__/Recompute_heap/),
+not a filter on the propagation. A cheaper half exists (compare a recomputed cell's value
+with the retained artifact's and keep the old artifact, saving the freeze and the key
+churn) but it saves the least expensive part of the work.
+
 ### 4.5 Cycles
 
 A marked cell that participates in a value cycle is dirty, recomputed and re-frozen as
@@ -339,8 +348,8 @@ Decided by the superior:
 | 3 | `lichen-lowlevel/src/lib.rs` (`Release`, `ValueExt::release_obligations`, `StaticModule::releases` + `Drop`) | **landed**: the general ownership transfer — an artifact owns its out-of-arena resources and releases them when it is dropped |
 | 3 | `lichen-compute/src/compute.rs`, `lichen-language/src/program.rs` | **landed**: the compute leaf's obligation (a `DeviceBuffer` value) and the composition macro's forwards (`traced`, `release_obligations`) |
 | 3 | `lichen-language/src/{cells,compile,lib}.rs` | **landed**: `CellStore`, the lowering hook (a clean cell lowers to `ExprKind::Static`), the per-cell freeze after the build, `compile_with_cells` |
-| 3 | `lichen-language/src/session.rs` | **landed**: the session holds the store and the registry, reconciles them per rebuild, lowers through the cells, and reports what it did (`CellEvents`) |
-| 3 | eviction | **deliberately unwired**: `CellStore::invalidate_*` hands back the artifacts that became unreachable and the session accumulates them (`take_unreachable`); `Registry::evict` frees one. Who evicts and when is §11's question, and the reason is §12.4's first landmine |
+| 3 | `lichen-language/src/session.rs` | **landed**: the session holds the store and the registry, reconciles them per rebuild, lowers through the cells, reports what it did (`CellEvents`), and evicts what it dropped (`evict_unreachable`) |
+| 3 | eviction | **landed**: `Registry::evict` answers `Eviction::{Freed, NotRegistered, StillReferenced}` and refuses to free an artifact a live one references (the `refs` recorded per package); the session pays its debt in `evict_unreachable`. The **timing** stays the caller's — a static ref also lives in the reports it still holds (§7.4) |
 | 3 | a **production** consumer (the LSP, the package store) | **not built**: `BufferSession` has no production caller (`P2-1`), so the retention is exercised only by probes; `content_key`/`artifact_hash` stay for transport and diagnostics |
 | 4 | the program's own graph data (the PCG graph a program builds) | **not built**: node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
@@ -497,7 +506,8 @@ live in, and the caller's `source_id`; `compile` lowers through
 lowered, so the order is: reconcile (drop dirty and unmarked) → lower (a clean cell
 becomes a static read) → check → freeze what was compiled. Its `SessionReport` carries
 `CellEvents { reused, frozen, dropped }` — without it the mechanism is silent, and a
-caller cannot tell a rebuild that reused nine cells from one that reused none.
+caller cannot tell a rebuild that reused nine cells from one that reused none. What it
+dropped it owes the registry, and `evict_unreachable` is where it pays (§7.4).
 
 Two properties of the shape are worth naming, because both were decisions:
 
@@ -570,6 +580,48 @@ pre-existing splice bug on its first run** (§12.4). A count-only reading would 
 the corrupted program still evaluated to the right value, and only the *diagnostic count*
 and the next splice's panic gave it away.
 
+### 7.4 Eviction: who pays, and what cannot be paid
+
+`CellStore::invalidate_paths`/`retain_marked` hand back the artifacts they just made
+unreachable, and the session accumulates them (`pending_evictions`).
+`BufferSession::evict_unreachable` pays the debt: it calls `Registry::evict` on each, in
+**repeated passes until a pass frees nothing** — because a key that is still referenced
+may be free once the artifact referencing it is gone, and that artifact may be in the
+same list, later in it. What a pass cannot free is left pending, honestly.
+
+`Registry::evict` answers [`Eviction`] rather than a `bool`, because "not registered" and
+"still referenced" are different facts to a caller (the second means *retry later*), and
+it checks the half of its precondition a registry can check: an artifact that a live
+registered artifact still references is **refused**. A static ref is a raw handle into
+the artifact's arena, so freeing it would leave the referencing artifact dangling. The
+other half stays the caller's and is documented at the call site: a static ref also lives
+in every `SessionReport` the caller still holds, and the session never sees the last
+`Arc` clone die.
+
+**When does one artifact reference another?** Only when a cell's value *is* a static
+payload shared from another cell's arena — an array, a table, a function, an ext handle.
+A scalar is just a value: `cache b = a + 4` copies nothing and holds no ref, so the whole
+chain is free to go. The sharing needs two builds: cells are frozen *after* a build, so
+within one build a later binding never reads an earlier one's cell — it compiles the body
+and gets its own copy. A *later* build, with `b` recompiled while `a`'s cell is clean,
+is what makes `b`'s artifact read `a`'s in place.
+
+**Measured** (`--example evict_probe`, since removed):
+
+| case | freed | pending |
+|---|---|---|
+| a scalar chain, both cells dropped (`cache b = a + 4`) | 2, then 0 | 0 |
+| independent cells, one dropped and one reused | 1, then 0 | 0 |
+| a rename the key gate reuses wholesale (nothing dropped) | 0 | 0 |
+| a mark removed (its cell dropped, nothing references it) | 2, then 0 | 0 |
+| **a shared array**: the stale path dropped while `b` survives | **1**, then 0 | **1** |
+| then `b` recompiled too, so nothing references the old arena | 2, then 0 | 0 |
+
+The fifth row is the refusal doing its job: `a`'s artifact is kept because `b`'s value is
+the array that lives in it, and it is freed only once `b`'s own artifact is replaced. The
+sixth row is the same key finally going. Without the check, row five would have freed the
+arena `b` reads through — the "evicting a live artifact dangles" landmine, live.
+
 ## 8. Costs and failure modes
 
 - **Path churn is the whole risk.** If an agent's edits keep moving nodes, paths keep
@@ -594,11 +646,13 @@ and the next splice's panic gave it away.
   the life of the context — and **eviction is the caller's call**, because a static ref
   is a raw handle into the artifact's arena (`Registry::evict`'s precondition).
 - **The registry grows between evictions.** Every recomputed cell files a new artifact
-  under a new key; nothing evicts automatically, so a long agent session leaks device
-  memory until the caller evicts. The session accumulates the keys of every cell it
-  drops and hands them on (`take_unreachable`), so nothing is *lost* — but a caller that
-  never takes them and never evicts grows the registry without bound. That is the one
-  place where this design is *not* yet safe to leave running for hours.
+  under a new key, so a long agent session leaks device memory until something evicts.
+  The session now *can* pay it back (`evict_unreachable`, §7.4), in repeated passes and
+  with a refusal for anything a live artifact still references — but **it does not do so
+  on its own**, because the other half of the precondition is the caller's: a static ref
+  survives in every `SessionReport` the caller holds, and the session cannot see when the
+  last one dies. A caller that never calls it leaks; a caller that calls it while still
+  holding a report dangles. That is the remaining sharp edge.
 
 ## 9. What would falsify it
 
@@ -679,16 +733,17 @@ and the next splice's panic gave it away.
   file identity is path-derived (`is_lichen_file_id` / `file_id_hash(file_id: &str)`,
   `lichen-registry/src/device.rs:57,85`), which is a name, not a content hash, and must
   stay that way.
-- **Who evicts, and when.** `Registry::evict` has a hard precondition (no live ref) and
-  refuses to guess; a policy — evict on the next build, on a memory budget, on an
-  explicit call — is not chosen yet. The session now *hands the keys on*
-  (`take_unreachable`), so the question is only the timing, and it is the caller's
-  because only the caller knows when the last `SessionReport` clone died. This is what
-  stands between the design and a session that runs for hours (§8).
-- **Where the reverse import closure is computed.** The cell store drops what it is
-  told; the graph of who imports whom is the package store's. Dirty propagation today
-  covers one file's own statements — an *imported* file's edit needs the coarse cut
-  (§7.1) plus that closure.
+- **Who evicts, and when.** *Answered for the mechanism, open for the policy.* The
+  session evicts what it dropped when the caller says so (`evict_unreachable`), and the
+  registry refuses what it must; what is not decided is the *timing* — evict after every
+  compile, on a memory budget, or on an explicit call. The caller owns it because only
+  the caller knows when the last `SessionReport` clone died, which is the half of the
+  precondition the registry cannot check (§7.4).
+- **The reverse import closure.** The cell store drops what it is told; the graph of who
+  imports whom is the package store's. Dirty propagation today covers one file's own
+  statements — an *imported* file's edit needs the coarse cut (§7.1) plus that closure.
+  This is also where the eviction refusal stops being unreachable-by-accident and starts
+  being the thing that keeps a cross-file reference from dangling.
 - **The graph-side descriptor's shape**, and whether a graph node's path is expressed
   in the same step vocabulary as a source node's.
 - **Backdating** (§4.4): comparing a recomputed value with the retained one so a
@@ -721,12 +776,15 @@ and the next splice's panic gave it away.
 | `b42dac2` | the session retains cells and dirties them by propagation (`dirty.rs`, the `cache` key, the failed-build guard) |
 | `b338ec5` | the note records the propagation landing (this handoff) |
 | `3463f22` | the splice's window projection: an edit that deletes statements no longer cuts the window |
+| `d037de5` | the note records the splice fix and the differential oracle |
+| `5845c90` | eviction: the registry refuses a live reference, the session pays its debt |
 
 ### 12.2 The entry points
 
 - `lichen_language::session::BufferSession` — the consumer. `with_source_id(source,
   source_id)`, `compile() -> SessionReport` (carrying `CellEvents`), `retained_cells()`,
-  `take_unreachable()`. `new(source)` is the unnamed-buffer shorthand.
+  `pending_evictions()`, `evict_unreachable()`. `new(source)` is the unnamed-buffer
+  shorthand.
 - `lichen_language::compile_with_cells(source_id, source, cells, registry) -> Report<LangProgram>`
   — the whole cell path, without a session. `compile`, `compile_with_imports*`,
   `frontend*` and `build_report` all delegate with no cells, so nothing else changed.
@@ -736,7 +794,10 @@ and the next splice's panic gave it away.
   previous_window, current_window)`; the statement graph, the fixpoint and the
   exhaustive `walk` are inside.
 - `lichen_lowlevel::Registry` — `freeze_closure_mapped(module, key, roots, hash)`,
-  `evict(key)`.
+  `evict(key) -> Eviction`; `lichen_lowlevel::Eviction`.
+- `lichen_lowlevel::Package` — `refs`, the keys the artifact references (read off the
+  frozen values, so it is the closure's set); `StaticModule::referenced_keys` is the
+  reader.
 - `lichen_lowlevel::StaticModule` — `freeze_closure(module, key, roots)`, `releases`,
   `Drop`.
 - `lichen_lowlevel::ValueExt` — `traced`, `release_obligations`;
@@ -753,13 +814,14 @@ and the next splice's panic gave it away.
    is* in that caller — the session's dirty propagation needs the edit as a *source
    replacement* (it diffs `LastState::source`), so an incremental caller feeds it whole
    buffers, not ranges.
-2. **Decide the eviction timing** (§11) and call `Registry::evict` on what
-   `take_unreachable` hands back — but read §12.4's first two landmines first: "the
-   reports are gone" is necessary and *not* sufficient (a surviving cell's artifact may
-   reference a dropped one).
+2. **Decide the eviction *timing*** (§11) and call `evict_unreachable` on that schedule.
+   The mechanism and its refusal are landed (§7.4); what is open is when the caller can
+   promise that every `SessionReport` it kept is dropped. A session that never calls it
+   leaks, and the number to watch is `pending_evictions`.
 3. **The reverse import closure**: drop the cells of every file that imports the changed
    one, transitively (`CellStore::invalidate_source` plus the package store's
-   `ResolvedImport` graph, `package.rs`).
+   `ResolvedImport` graph, `package.rs`). This is also what makes the eviction refusal
+   load-bearing rather than unreachable-by-accident (§11).
 4. **Backdating** (§4.4) — the refinement that stops a value-preserving byte edit from
    dirtying consumers.
 5. **Step 4** (the PCG graph's own node paths and edit descriptor) — a consumer, not a
@@ -769,14 +831,18 @@ and the next splice's panic gave it away.
 
 - **Evicting a live artifact dangles.** A static ref is a raw handle into the
   artifact's arena: `Module::static_module` panics on an unregistered key, and a
-  payload already read through it dangles. Evict only when every module that could
-  still hold a ref is gone.
-- **"The reports are gone" is not enough to evict.** A surviving cell's artifact can
-  reference a *dropped* one — a marked binding that reads another marked binding freezes
-  a static ref into it, filed verbatim (`freeze.rs`'s closure deliberately does not pull
-  a static payload in). So eviction also needs "no live registered artifact references
-  this key", and there is no such check yet: `referenced_keys` takes a `Module`, not a
-  `StaticModule`, so it cannot be run over the registry as it stands.
+  payload already read through it dangles. `Registry::evict` now refuses the half it can
+  see (a live registered artifact's `refs`, §7.4); the other half — a `StaticNodeId` in a
+  `Module` the caller still holds — is the caller's, and calling `evict_unreachable`
+  while still holding a `SessionReport` is how it is violated.
+- **A shared payload is what makes one artifact reference another**, and a scalar is
+  not. `cache b = a + 4` leaves `b`'s artifact free of `a`'s; `cache b = a` with `a` an
+  array, in a build where `a`'s cell was clean, does not. So a test that evicts a
+  *scalar* chain proves nothing about the refusal — the reading in §7.4 needs the shared
+  array and the two-build sequence.
+- **Two artifacts that reference each other are never freed.** `evict` refuses both, and
+  `evict_unreachable`'s passes stop making progress, so the pair stays pending forever.
+  The honest answer for a cycle, but it is a leak.
 - **A cell is read back by *skipping the body*.** Its lowering, its check and its
   evaluation all do not happen, so a cell frozen from a build that failed *carries that
   failure's silence*: the error is reported once and then disappears. The guard is
@@ -834,8 +900,9 @@ and the next splice's panic gave it away.
 - **`traced` is only as good as its implementors.** A production value that holds
   nodes must implement it, and the composition macro must forward it (it now does —
   this was the landmine the graph work would have hit).
-- **The registry grows between evictions** (§8): a session that never evicts leaks, and
-  one that never calls `take_unreachable` leaks the list too.
+- **The registry grows between evictions** (§8): a session that never calls
+  `evict_unreachable` leaks, and so does one whose refusals never clear (§7.4's shared
+  payload, and a mutual reference).
 
 ### 12.5 How to verify
 
@@ -847,8 +914,10 @@ cargo test -p lichen-lowlevel -p lichen-highlevel -p lichen-language -p lichen-l
 The influenced set is those five crates. The temporary probes are gone; to re-take a
 reading, write one as an `examples/` binary and delete it after. The numbers to expect:
 §7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches; every path unique;
-3-of-4 nodes; 1 obligation released once) and §7.2 (the `CellEvents` per edit, the two
-propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check).
+3-of-4 nodes; 1 obligation released once), §7.2 (the `CellEvents` per edit, the two
+propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check)
+and §7.4 (2/1/0/2 freed, and the shared-array case's 1 then 0 with `pending` stuck at 1
+until `b` is recompiled).
 
 **Write the differential probe first** (§7.3) — it is the cheapest oracle for the whole
 mechanism, it compares diagnostics as well as values, and it is what found the last
