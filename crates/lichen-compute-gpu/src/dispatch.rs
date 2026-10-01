@@ -193,6 +193,16 @@ pub struct GpuContext {
     /// it makes the exclusion local instead of resting on a reader having to
     /// trace two methods to convince themselves the lock is the same one.
     submit: Mutex<Submit>,
+    /// A **second** command buffer and fence, for a dispatch whose completion the
+    /// caller has not waited for yet — see [`Segment`].
+    ///
+    /// It is a separate pair rather than a mode of `submit` because the two can
+    /// never be in flight at once and for a reason worth stating: a recorded-but-
+    /// unsubmitted command buffer is clobbered by the next `record_and_submit`,
+    /// so a submission that has not been waited for must not share a command
+    /// buffer with one that is about to be recorded. `fetch` records into
+    /// `submit`; a [`Segment`] records into this.
+    detached: Mutex<Submit>,
     /// The descriptor set layout and pipeline layout for a run with `n` buffers
     /// in total. They are a function of `n` alone — the same two objects the old
     /// per-run code built and dropped for every dispatch.
@@ -341,6 +351,7 @@ impl GpuContext {
         // Built before the context exists, because it needs a borrow of the
         // device that the struct literal below is about to move.
         let submit = Submit::new(&device, family)?;
+        let detached = Submit::new(&device, family)?;
 
         Ok(GpuContext {
             entry,
@@ -354,6 +365,7 @@ impl GpuContext {
             next_id: AtomicU64::new(1),
             staging: Mutex::new(Staging::empty()),
             submit: Mutex::new(submit),
+            detached: Mutex::new(detached),
             layouts: Mutex::new(HashMap::new()),
             descriptor_pool,
             recycled: Mutex::new(HashMap::new()),
@@ -479,7 +491,22 @@ impl GpuContext {
             scratch.buffers.push(buffer);
         }
 
-        let outcome = self.dispatch(pipeline, &descriptors, staging.handle, &uploads, count);
+        let outcome = {
+            // The submit lock is taken here rather than inside `dispatch` so that
+            // the command buffer stays reserved for exactly as long as this
+            // submission is in flight, which is what makes a `wait: false`
+            // dispatch on the same target safe to hand back to a caller.
+            let submit = self.submit.lock().unwrap();
+            self.dispatch(
+                &submit,
+                true,
+                pipeline,
+                &descriptors,
+                staging.handle,
+                &uploads,
+                count,
+            )
+        };
         drop(staging);
         outcome?;
 
@@ -675,10 +702,32 @@ impl GpuContext {
     /// pairs.  Every call is serialised by [`Self::submit`], so reusing both is
     /// sound: there is never a second submission in flight to trample.
     fn record_and_wait(&self, record: impl FnOnce(vk::CommandBuffer)) -> Result<(), RunError> {
-        let device = &self.device;
         let submit = self.submit.lock().unwrap();
-        let command = submit.command;
-        let fence = submit.fence;
+        self.record_and_submit(&submit, record)?;
+        self.wait_on(&submit)
+    }
+
+    /// Reset `target`'s command buffer, record into it, and submit it — **without
+    /// waiting for the fence**.
+    ///
+    /// Split from [`Self::wait_on`] so a caller can hold the gap open: a dispatch
+    /// that is submitted and not waited for is *in flight*, and the host is free
+    /// for that whole window. Whether the host actually gets anything back from
+    /// that window is a property of the device, not of this function, which is why
+    /// it is the caller's measurement to make.
+    ///
+    /// The caller must hold whatever locks make the recorded commands valid until
+    /// the wait: the staging mapping the uploads read, and the command buffer
+    /// itself, which the next `record_and_submit` into the same target would
+    /// reset out from under this submission.
+    fn record_and_submit(
+        &self,
+        target: &Submit,
+        record: impl FnOnce(vk::CommandBuffer),
+    ) -> Result<(), RunError> {
+        let device = &self.device;
+        let command = target.command;
+        let fence = target.fence;
         check("command buffer reset", unsafe {
             device.reset_command_buffer(command, vk::CommandBufferResetFlags::empty())
         })
@@ -694,8 +743,8 @@ impl GpuContext {
             device.end_command_buffer(command)
         })
         .and_then(|()| {
-            // The fence is created unsignalled and left signalled by the wait
-            // below, so it has to be reset or this would return immediately.
+            // The fence is created unsignalled and left signalled by the wait,
+            // so it has to be reset or this would return immediately.
             check("fence reset", unsafe { device.reset_fences(&[fence]) })?;
             check("queue submit", unsafe {
                 device.queue_submit(
@@ -703,24 +752,38 @@ impl GpuContext {
                     &[vk::SubmitInfo::default().command_buffers(&[command])],
                     fence,
                 )
-            })?;
-            check("fence wait", unsafe {
-                device.wait_for_fences(
-                    &[fence],
-                    true,
-                    std::time::Duration::from_secs(30).as_nanos() as u64,
-                )
             })
         })
     }
 
-    /// Record and submit one dispatch, waiting for it to finish.
+    /// Block until `target`'s last submission has finished.
+    ///
+    /// The thirty-second bound is a driver-error bound, not a timeout anyone
+    /// chose: a fence that has not signalled that long is a device that has
+    /// stopped making progress, and returning would hand back buffers the device
+    /// is still writing.
+    fn wait_on(&self, target: &Submit) -> Result<(), RunError> {
+        check("fence wait", unsafe {
+            self.device.wait_for_fences(
+                &[target.fence],
+                true,
+                std::time::Duration::from_secs(30).as_nanos() as u64,
+            )
+        })
+    }
+
+    /// Record and submit one dispatch into `target`, waiting for it to finish
+    /// only when `wait` says so.
     ///
     /// `staging` is the caller's already-locked staging buffer: the uploads read
-    /// from it, so this cannot take the lock itself.
+    /// from it, so this cannot take the lock itself.  The same is true of
+    /// `target` — the caller holds it, so that a `wait: false` dispatch keeps its
+    /// command buffer reserved for as long as the submission is in flight.
     #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
+        target: &Submit,
+        wait: bool,
         pipeline: vk::Pipeline,
         descriptors: &[vk::DescriptorBufferInfo],
         staging: vk::Buffer,
@@ -781,7 +844,7 @@ impl GpuContext {
             .collect();
         unsafe { device.update_descriptor_sets(&writes, &[]) };
 
-        self.record_and_wait(|command| unsafe {
+        self.record_and_submit(target, |command| unsafe {
             // The host wrote staging before this submit, so the copies below are
             // the first reader of it: make that write visible to them.
             device.cmd_pipeline_barrier(
@@ -840,6 +903,16 @@ impl GpuContext {
             // The results stay on the device, so this does not hand them to the
             // host — it makes them visible to the `fetch` that may read them
             // later, which is a separate submission.
+            //
+            // **`TRANSFER_READ` is load-bearing, and it follows from "a separate
+            // submission".**  It is the right scope mask only while every dispatch
+            // in a command buffer is followed by a `fetch` in another one.
+            // Recording a *second* dispatch into this same command buffer would
+            // read these results as a shader, and the mask above would then be the
+            // wrong scope for that read: a consumer inside one submission wants
+            // `SHADER_READ` and needs a barrier that says so.  Nothing records two
+            // dispatches into one command buffer today, so nothing exercises that
+            // barrier, and `spirv`'s single-`OpLabel` invariant does not imply it.
             device.cmd_pipeline_barrier(
                 command,
                 vk::PipelineStageFlags::COMPUTE_SHADER,
@@ -851,7 +924,11 @@ impl GpuContext {
                 &[],
                 &[],
             );
-        })
+        })?;
+        if wait {
+            self.wait_on(target)?;
+        }
+        Ok(())
     }
 
     /// The descriptor set layout and pipeline layout for a run binding `total`
