@@ -1381,4 +1381,8 @@ pub enum Eviction {
 /// reused (see [`ModuleKey`]).
 pub struct Registry<P: Program> {
     entries: HashMap<ModuleKey, Package<P>>,
+    /// The counter behind [`Self::allocate_cell_key`] — the registry's, not a
+    /// caller's, because the registry is what a key must be unique *in*: two
+    /// sessions (two documents) share one registry and each allocates keys.
+    next_cell_key: u64,
 }

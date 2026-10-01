@@ -255,6 +255,25 @@ fn moved(byte: u32, delta: isize) -> u32 {
     moved_from(byte as isize + delta)
 }
 
+/// Move a byte offset through an edit that replaced `[a, b_old)` of the old
+/// source with new text, shifting by `delta = new.len() - old.len()`.
+///
+/// `None` when the offset is **inside** the replaced region: those bytes are
+/// gone, so no position in the new source is the one it named, and a caller that
+/// needs a position there (a rendered diagnostic pointing into the text an edit
+/// rewrote) must re-derive it rather than be handed a plausible-looking one.
+/// This is what makes a *reuse* of a retained build safe when an edit moved text
+/// without changing the resolved structure (`session::Cache`).
+pub(crate) fn moved_offset(byte: u32, a: u32, b_old: u32, delta: isize) -> Option<u32> {
+    if byte < a {
+        Some(byte)
+    } else if byte >= b_old {
+        Some(moved_from(byte as isize + delta))
+    } else {
+        None
+    }
+}
+
 /// A byte offset clamped to a position the source has (an edit never moves a
 /// cloned statement before the start of the file, so the clamp is a floor for a
 /// degenerate `delta`, not a policy).

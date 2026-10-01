@@ -22,20 +22,40 @@
 //! fallback: a marked binding the edit did not reach is lowered to a read of its
 //! frozen artifact instead of being compiled, and only the cells dirty
 //! propagation reaches are dropped (`crate::dirty`).
+//!
+//! # A caller's view
+//!
+//! A session over a **file** is not necessarily over a whole buffer: a real
+//! source begins with a `@{…@}` block whose `@import`s resolve through the
+//! package store, so a caller that runs the preprocessor itself (the language
+//! server — it owns the store, and the block's directive spans) compiles the
+//! text *after* the block.  [`BufferSession::set_view`] is how that caller hands
+//! the session the region, where it begins in the original file, the file's line
+//! starts, and the imports resolved for it, so every span the session produces
+//! is absolute in the file the user is editing.
+//!
+//! The session's buffer is the **code**, and the imports are seeded into the
+//! resolution ([`crate::resolve`]) — so a cell whose value reads an import
+//! freezes a closure that resolves through the same registry the import lives in
+//! ([`BufferSession::with_registry`], and the cell key space that keeps the two
+//! allocators apart).
 
 use std::collections::HashSet;
 use std::sync::{Arc, PoisonError, RwLock};
 
+use lichen_language_lex::{line_col, offset_of_span};
 use lichen_lowlevel::{Eviction, ModuleKey, Registry};
 
 use crate::LangProgramShape;
 use crate::ast::{BlockStmt, Program, Stmt};
 use crate::cells::{CellStore, SourceId};
+use crate::compile::SpanIndex;
 use crate::diag::{Diag, Stage};
 use crate::lex;
 use crate::parse;
 use crate::path::Path;
 use crate::persist::ProgramCodecOf;
+use crate::preprocess::ResolvedImport;
 use crate::program::GcdOp;
 use crate::{ParseDiag, Report, build_report};
 use lichen_highlevel::checker::Build;
@@ -57,6 +77,20 @@ where
     /// Lex + parse (always fresh) and the checker's rendered failures (from the
     /// reused or freshly built [`Build`]).
     pub diagnostics: Vec<Diag<P>>,
+    /// The token stream this report was derived from — every compile lexes (only
+    /// the region an edit touched is re-lexed), and a caller that reads tokens
+    /// (an editor's semantic tokens and offsets) reads them here rather than
+    /// lexing the same text again.  Positions are absolute in the original file.
+    pub tokens: Arc<Vec<lex::Token>>,
+    /// The **resolved** AST this report was derived from: binder ids written,
+    /// spans absolute in the original file.  Fresh on every compile — the parse
+    /// runs even when the build is reused — so it is the current text's AST, not
+    /// the cached build's.
+    pub program: Arc<Program>,
+    /// `ExprId → span` for [`Self::build`], in the original file's coordinates.
+    /// `None` only when no build was produced.  On a reuse this is the retained
+    /// index **moved** through the edit, so it describes the current text.
+    pub span_index: Option<Arc<SpanIndex>>,
     /// The resolved content key (a name-free serialization over the resolver's
     /// `BinderId`s) this report was compiled under — equal across edits that
     /// only change an error block, extend an unresolved name, or consistently
@@ -102,7 +136,19 @@ pub struct BufferSession<P: ProgramCodecOf>
 where
     P::Value: ValueType,
 {
+    /// The code compiled — the whole buffer, or the text after a stripped
+    /// `@{…@}` block ([`Self::set_view`]).  This is what an edit changes and what
+    /// the diff, the re-lex and the window splice are all over.
     source: String,
+    /// Where [`Self::source`] begins in the original file: `0` for a whole-file
+    /// buffer, the block's end for a view.
+    base: u32,
+    /// The **original file's** line starts, for a view with a base offset (a
+    /// suffix's own line starts are not the file's).  Unused when `base` is zero,
+    /// where they are derived from the buffer.
+    line_starts: Vec<usize>,
+    /// The imports resolved for the view, seeded into every resolution.
+    imports: Vec<ResolvedImport>,
     /// The identity of this buffer **as a source** — what a cell recorded from it
     /// belongs to.  Caller-named, never derived from content
     /// ([`crate::cells::SourceId`]).
@@ -129,8 +175,13 @@ where
 /// into.
 struct LastState {
     source: String,
-    tokens: Vec<lex::Token>,
-    program: Program,
+    /// The view this snapshot was taken under.  A view that moved makes every
+    /// token range and span in the snapshot stale, so neither the incremental lex
+    /// nor a reuse may read it.
+    base: u32,
+    line_starts: Vec<usize>,
+    tokens: Arc<Vec<lex::Token>>,
+    program: Arc<Program>,
 }
 
 struct Cache<P: HighProgram>
@@ -145,6 +196,76 @@ where
     /// that keep the resolved content (the fresh frontend diagnostics are
     /// re-derived per call).
     check_diagnostics: Vec<Diag<P>>,
+    /// The build's `ExprId → span` index, and the same positions as **byte
+    /// offsets** in the original file.
+    ///
+    /// Both are kept because an edit moves bytes, not `(line, col)` pairs: the
+    /// offsets are what a reuse shifts, and the pair is what it returns.  They are
+    /// always the *latest* mapping, so a reuse that moves them writes both back —
+    /// otherwise the next reuse would shift an already-shifted position.
+    span_index: Option<Arc<SpanIndex>>,
+    span_bytes: Vec<Option<u32>>,
+}
+
+impl<P> Cache<P>
+where
+    P: HighProgram,
+    P::Value: ValueType,
+{
+    /// The moved positions of a reuse: whether every retained position survives
+    /// the edit, and if so what it moves to.
+    ///
+    /// A position **inside** the replaced text `[a, b_old)` has no counterpart in
+    /// the new source — its bytes are gone — so a check diagnostic that points
+    /// there cannot be moved, and the caller must rebuild rather than point it
+    /// somewhere it does not mean.  A *span-index* entry inside the region is a
+    /// different matter: it can only be an error block's (a check diagnostic never
+    /// points into one, the lowering masks it), and such an entry becomes `None`
+    /// — "no position" is exactly what an inert node has.
+    fn moved(
+        &self,
+        a: u32,
+        b_old: u32,
+        delta: isize,
+        old_starts: &[usize],
+        new_starts: &[usize],
+    ) -> Option<Moved<P>> {
+        let mut diagnostics = self.check_diagnostics.clone();
+        for diagnostic in &mut diagnostics {
+            let Some(span) = diagnostic.span else {
+                continue;
+            };
+            let byte = offset_of_span(old_starts, span) as u32;
+            diagnostic.span = Some(line_col(
+                new_starts,
+                crate::spans::moved_offset(byte, a, b_old, delta)?,
+            ));
+        }
+        let bytes: Vec<Option<u32>> = self
+            .span_bytes
+            .iter()
+            .map(|byte| byte.and_then(|byte| crate::spans::moved_offset(byte, a, b_old, delta)))
+            .collect();
+        let spans: SpanIndex = bytes
+            .iter()
+            .map(|byte| byte.map(|byte| line_col(new_starts, byte)))
+            .collect();
+        Some(Moved {
+            spans,
+            bytes,
+            diagnostics,
+        })
+    }
+}
+
+/// The positions of a [`Cache`] after a reuse moved them.
+struct Moved<P: HighProgram>
+where
+    P::Value: ValueType,
+{
+    spans: SpanIndex,
+    bytes: Vec<Option<u32>>,
+    diagnostics: Vec<Diag<P>>,
 }
 
 impl<P> BufferSession<P>
@@ -164,15 +285,42 @@ where
     /// occurrence path *plus* this name, so one store can hold several buffers
     /// without confusing them, and nothing about it is derived from content.
     pub fn with_source_id(source: impl Into<String>, source_id: impl Into<String>) -> Self {
+        Self::with_registry(source, source_id, Arc::new(RwLock::new(Registry::new())))
+    }
+
+    /// [`Self::with_source_id`] over a **caller-owned registry** — the one a
+    /// package store registered the imported packages in.
+    ///
+    /// A cell's artifact is frozen as a closure, and a closure that reads an
+    /// import names that import's module key; the registry it is filed in must
+    /// already hold the import, or the artifact would not resolve for the
+    /// importer that reads it ([`Registry::freeze_closure_mapped`] asserts
+    /// exactly that).  So a session that compiles a file with imports shares the
+    /// store's registry, and the cell keys live in their own space
+    /// ([`crate::cells`]) so the two allocators cannot meet.
+    pub fn with_registry(
+        source: impl Into<String>,
+        source_id: impl Into<String>,
+        registry: Arc<RwLock<Registry<P>>>,
+    ) -> Self {
         BufferSession {
             source: source.into(),
+            base: 0,
+            line_starts: Vec::new(),
+            imports: Vec::new(),
             source_id: source_id.into(),
             cells: CellStore::new(),
-            registry: Arc::new(RwLock::new(Registry::new())),
+            registry,
             unreachable: Vec::new(),
             cache: None,
             last: None,
         }
+    }
+
+    /// The registry this session's cells are filed in — the handle a caller that
+    /// shares it (a package store, another session) holds.
+    pub fn registry(&self) -> Arc<RwLock<Registry<P>>> {
+        Arc::clone(&self.registry)
     }
 
     /// The source name this session's cells are recorded under.
@@ -286,8 +434,51 @@ where
     /// statement-window splice and the cell reuse without describing the change,
     /// and a caller that has a range uses [`Self::replace`].  Both are the same
     /// path from there on.
+    ///
+    /// It sets the **whole-file** view: base `0` and no imports, because a whole
+    /// file's imports are the ones its own `@{…@}` block resolves — which is the
+    /// caller's stage, not the session's.  A caller that runs the preprocessor
+    /// itself uses [`Self::set_view`] instead.
     pub fn set_source(&mut self, source: impl Into<String>) {
         self.source = source.into();
+        self.base = 0;
+        self.line_starts.clear();
+        self.imports.clear();
+    }
+
+    /// Point the session at a **caller's frontend view**: the code to compile,
+    /// where it begins in the original file, that file's line starts, and the
+    /// imports resolved for it.
+    ///
+    /// A real source begins with a `@{…@}` block whose `@import`s resolve through
+    /// the package store, so the caller that owns the store (the language server)
+    /// runs the preprocessor and compiles what follows it.  `code` is that text,
+    /// `base` is its byte offset in the original file, `line_starts` is the
+    /// **original file's** (a suffix's own are not the file's), and `imports` are
+    /// the block's resolved bindings — seeded into every resolution, so a name
+    /// that resolves to an import is not reported unresolved.
+    ///
+    /// The session's buffer *is* the code, so an edit anywhere in it — including
+    /// the block's own text, which moves `base` — is diffed like any other.  A
+    /// view whose mapping moved drops the incremental snapshot (its token ranges
+    /// and spans are in the old coordinates) and re-parses whole; the cells are
+    /// untouched, since their identity is a path, not a position.
+    ///
+    /// This is the whole-buffer entry point for a caller with a view: the
+    /// byte-edit methods ([`Self::insert`], [`Self::replace`], …) keep the view
+    /// they were given and re-derive nothing, so a caller with a base offset feeds
+    /// the next buffer through `set_view` too.
+    pub fn set_view(
+        &mut self,
+        code: impl Into<String>,
+        base: u32,
+        line_starts: &[usize],
+        imports: &[ResolvedImport],
+    ) {
+        self.source = code.into();
+        self.base = base;
+        self.line_starts = line_starts.to_vec();
+        self.imports = imports.to_vec();
     }
 
     /// The resolved content key of the last compile.
@@ -315,7 +506,20 @@ where
     /// proven equal to [`lex::lex_with`] — see the lex tests); only the cost
     /// changes.
     pub fn compile(&mut self) -> SessionReport<P> {
-        let line_starts = lex::line_starts(&self.source);
+        // The line starts every span this compile produces is measured against:
+        // the **original file's**.  A whole-file buffer derives them from the
+        // buffer (the byte-edit methods mutate it directly); a view with a base
+        // offset carries them, because a suffix's line starts are not the file's.
+        let line_starts = view_line_starts(&self.source, self.base, &self.line_starts);
+
+        // Whether the previous snapshot is in the same coordinate space.  A view
+        // that moved (an edited `@{…@}` block) leaves every token range and span in
+        // the snapshot describing the old file, so neither the incremental lex nor
+        // a reuse may read it — the cells are untouched either way, since a cell's
+        // identity is a path, not a position.
+        let view_same = self.last.as_ref().is_some_and(|prev| {
+            prev.base == self.base && (self.base == 0 || prev.line_starts == self.line_starts)
+        });
 
         // Whether a prior snapshot plus a changed source lets us re-derive only
         // the touched region (both lex and parse become incremental); otherwise
@@ -323,19 +527,37 @@ where
         let edit = self
             .last
             .as_ref()
-            .filter(|prev| prev.source != self.source)
+            .filter(|prev| view_same && prev.source != self.source)
             .map(|prev| edit_span(&prev.source, &self.source));
+        // The same edit in the original file's coordinates: token ranges and spans
+        // are absolute, so the diff's code-relative span is what has to move.
+        let absolute_edit =
+            edit.map(|(a, b, delta)| (a + self.base as usize, b + self.base as usize, delta));
+        // The line starts the snapshot's spans are in — needed to locate a
+        // retained position's byte before the edit moves it.
+        let previous_starts = self
+            .last
+            .as_ref()
+            .filter(|_| view_same)
+            .map(|prev| view_line_starts(&prev.source, prev.base, &prev.line_starts));
 
         // Lex: resume from the snapshot's token stream over the edit span; on the
         // first compile (or a reset without an edit) lex the whole buffer.
-        let (tokens, lex_errors) = match (&self.last, edit) {
+        let (tokens, lex_errors) = match (&self.last, absolute_edit) {
             (Some(prev), Some((a, b, _delta))) => {
-                let lexed =
-                    lex::lex_resume(&prev.tokens, &prev.source, &self.source, &line_starts, a, b);
+                let lexed = lex::lex_resume(
+                    &prev.tokens,
+                    &prev.source,
+                    &self.source,
+                    &line_starts,
+                    self.base,
+                    a,
+                    b,
+                );
                 (lexed.tokens, lexed.errors)
             }
             _ => {
-                let lexed = lex::lex_with(&self.source, &line_starts, 0);
+                let lexed = lex::lex_with(&self.source, &line_starts, self.base);
                 (lexed.tokens, lexed.errors)
             }
         };
@@ -347,13 +569,13 @@ where
         // back in **both** index spaces — the statements the edit replaced in the
         // snapshot's program and the statements it re-parsed in the fresh one —
         // because dirty propagation runs over both (see `crate::dirty`).
-        let (mut program, errors, windows) = match (&self.last, edit) {
+        let (mut program, errors, windows) = match (&self.last, absolute_edit) {
             (Some(prev), Some((a, b, delta))) => {
-                let previous_starts = lex::line_starts(&prev.source);
+                let previous_starts = previous_starts.as_deref().unwrap_or(&line_starts);
                 match splice_program(
                     &prev.tokens,
                     &prev.program,
-                    &previous_starts,
+                    previous_starts,
                     &tokens,
                     &line_starts,
                     a,
@@ -387,10 +609,13 @@ where
         // each binder, writes it into the AST's resolve fields, and emits the
         // resolve diagnostics.  Then the resolved content key: a name-free,
         // digest-free serialization over those `BinderId`s, which is what the
-        // lowering actually consumes.
-        let resolved = crate::resolve::resolve(&mut program, &[]);
+        // lowering actually consumes.  The view's imports are the base scope, so a
+        // name that resolves to an import is not an unresolved name.
+        let resolved = crate::resolve::resolve(&mut program, &self.imports);
         let key = crate::resolve::content_key(&program);
         diagnostics.extend(resolved.diagnostics.iter().cloned().map(|d| d.retype()));
+        let tokens = Arc::new(tokens);
+        let program = Arc::new(program);
 
         // Reuse: the resolved content is unchanged, so the established build is
         // exactly right.  Only the (fresh, above) frontend/resolve diagnostics
@@ -399,24 +624,71 @@ where
         // build being reused *is* the one that was correct for this content — the
         // reconciliation belongs to the next lowering, against the program it
         // will lower.
-        if let Some(cache) = &self.cache
+        //
+        // The retained positions must also *survive* the edit: a rendered
+        // diagnostic is a `(line, col)` pair, and the content key is span-free, so
+        // an edit that moves text without changing the resolved structure leaves
+        // the cached spans describing the old file.  They are moved through the
+        // edit here, and a position the edit replaced outright — which no honest
+        // mapping exists for — falls through to the rebuild below instead.
+        if view_same
+            && let Some(cache) = &self.cache
             && cache.key == key
-            && let Some(build) = &cache.build
+            && cache.build.is_some()
         {
-            let mut all = diagnostics;
-            all.extend(cache.check_diagnostics.iter().cloned());
-            self.last = Some(LastState {
-                source: self.source.clone(),
-                tokens,
-                program,
-            });
-            return SessionReport {
-                build: Some(Arc::clone(build)),
-                diagnostics: all,
-                key,
-                reused: true,
-                cells: CellEvents::default(),
+            let moved = match absolute_edit {
+                // Nothing moved: the retained positions are already current.
+                None => Some(None),
+                Some((a, b, delta)) => {
+                    let old_starts = previous_starts.as_deref().unwrap_or(&line_starts);
+                    cache
+                        .moved(
+                            a as u32,
+                            (b as isize - delta) as u32,
+                            delta,
+                            old_starts,
+                            &line_starts,
+                        )
+                        .map(Some)
+                }
             };
+            if let Some(moved) = moved {
+                let cache = self
+                    .cache
+                    .as_mut()
+                    .expect("the reuse was decided from this cache");
+                if let Some(moved) = moved {
+                    cache.span_index = Some(Arc::new(moved.spans));
+                    cache.span_bytes = moved.bytes;
+                    cache.check_diagnostics = moved.diagnostics;
+                }
+                let mut all = diagnostics;
+                all.extend(cache.check_diagnostics.iter().cloned());
+                let build = Arc::clone(
+                    cache
+                        .build
+                        .as_ref()
+                        .expect("a reuse needs the build it reuses"),
+                );
+                let span_index = cache.span_index.clone();
+                self.last = Some(LastState {
+                    source: self.source.clone(),
+                    base: self.base,
+                    line_starts: self.line_starts.clone(),
+                    tokens: Arc::clone(&tokens),
+                    program: Arc::clone(&program),
+                });
+                return SessionReport {
+                    build: Some(build),
+                    diagnostics: all,
+                    tokens,
+                    program,
+                    span_index,
+                    key,
+                    reused: true,
+                    cells: CellEvents::default(),
+                };
+            }
         }
 
         // Rebuild: the cells first, because the lowering reads them.  The store
@@ -466,7 +738,7 @@ where
             &resolved.import_binders,
             Some(&self.cells),
         );
-        let report: Report<P> = build_report::<P>(
+        let mut report: Report<P> = build_report::<P>(
             Some(ir),
             Some(span_index),
             diagnostics,
@@ -482,20 +754,40 @@ where
             .filter(|d| d.stage == Stage::Check)
             .cloned()
             .collect();
+        // The build's span index, and the same positions as byte offsets: an edit
+        // moves bytes, so the offsets are what a later reuse shifts (see `Cache`).
+        let span_index = report.span_index.take();
+        let span_bytes: Vec<Option<u32>> = span_index
+            .as_ref()
+            .map(|index| {
+                index
+                    .iter()
+                    .map(|span| span.map(|span| offset_of_span(&line_starts, span) as u32))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let span_index = span_index.map(Arc::new);
         let build = report.build.map(Arc::new);
         self.cache = Some(Cache {
             key: key.clone(),
             build: build.clone(),
-            check_diagnostics: check_diagnostics.clone(),
+            check_diagnostics,
+            span_index: span_index.clone(),
+            span_bytes,
         });
         self.last = Some(LastState {
             source: self.source.clone(),
-            tokens,
-            program,
+            base: self.base,
+            line_starts: self.line_starts.clone(),
+            tokens: Arc::clone(&tokens),
+            program: Arc::clone(&program),
         });
         SessionReport {
             build,
             diagnostics: report.diagnostics,
+            tokens,
+            program,
+            span_index,
             key,
             reused: false,
             cells: CellEvents {
@@ -513,6 +805,21 @@ where
 /// expression when it has one (the index space [`Program::stmt_ranges`] uses).
 fn logical_statements(program: &Program) -> usize {
     program.statements.len() + usize::from(program.expr.is_some())
+}
+
+/// The line starts a view's spans are measured against: the original file's.
+///
+/// A whole-file view (`base == 0`) *is* the file, so its line starts are the
+/// buffer's and are derived here — that is also what keeps the byte-edit methods
+/// (`insert`/`replace`/…), which mutate the buffer directly, in step with the
+/// model.  A view with a base offset carries the file's, because a suffix's own
+/// line starts are not the file's.
+fn view_line_starts(code: &str, base: u32, line_starts: &[usize]) -> Vec<usize> {
+    if base == 0 {
+        lex::line_starts(code)
+    } else {
+        line_starts.to_vec()
+    }
 }
 
 /// The minimal byte span `[a, b)` of `new` that differs from `old`, plus the

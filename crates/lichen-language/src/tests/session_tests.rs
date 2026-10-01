@@ -8,6 +8,7 @@ use super::{edit_span, splice_program};
 use crate::ast::{Expr, Stmt};
 use crate::diag::Stage;
 use crate::lex;
+use crate::package::PackageStore;
 use crate::parse::{self, Parsed};
 use crate::program::LangProgram;
 use crate::session::BufferSession;
@@ -482,4 +483,237 @@ fn the_content_key_distinguishes_a_string_from_a_named_field_read() {
         content_key_of(named_field_read),
         "a string literal is not a named field read"
     );
+}
+
+// ---------------------------------------------------------------------------
+// A caller's view: the code after a `@{…@}` block, the imports resolved for it,
+// and the positions every span is measured in.  This is the shape the language
+// server drives the session with.
+// ---------------------------------------------------------------------------
+
+/// A store with `plug.lichen` registered as the embedded source `42`, so an
+/// `@import` resolves without touching the disk.
+fn store_with_plug() -> PackageStore<LangProgram> {
+    let mut store = PackageStore::<LangProgram>::new();
+    store
+        .register_native("plug.lichen", "42", lichen_highlevel::no_native_ops())
+        .unwrap();
+    store
+}
+
+/// Preprocess `source` through `store` and point `sess` at the resulting view.
+fn set_view_of(
+    sess: &mut BufferSession<LangProgram>,
+    source: &str,
+    store: &mut PackageStore<LangProgram>,
+) {
+    let (pre, diagnostics) = crate::preprocess::preprocess(source, None, store);
+    assert!(
+        diagnostics.is_empty(),
+        "the imports resolve: {diagnostics:?}"
+    );
+    let line_starts = lex::line_starts(source);
+    sess.set_view(pre.code, pre.code_base, &line_starts, &pre.imports);
+}
+
+#[test]
+fn a_view_compiles_the_code_after_the_block_with_absolute_spans() {
+    // The session's buffer is the code *after* the block, but every span it
+    // produces is the file's: an unresolved name on the file's line 5 is reported
+    // on line 5, not on the code's line 3.
+    let source = "@{\n  p = import \"plug.lichen\"\n@}\na = p\nzzz\n";
+    let mut store = store_with_plug();
+    let mut sess = BufferSession::with_registry("", "file:///view.lichen", store.registry());
+    set_view_of(&mut sess, source, &mut store);
+
+    let report = sess.compile();
+    // The import resolved, so the only diagnostic is the unresolved `zzz`.
+    let resolve: Vec<_> = report
+        .diagnostics
+        .iter()
+        .filter(|d| d.stage == Stage::Resolve)
+        .collect();
+    assert_eq!(
+        resolve.len(),
+        1,
+        "one unresolved name: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(
+        resolve[0].span,
+        Some((5, 1)),
+        "the unresolved name is at its position in the *file*"
+    );
+    // The AST and the token stream carry the file's positions too — the caller
+    // (an editor) reads both.
+    let Stmt::Binding(binding) = &report.program.statements[0].stmt else {
+        panic!("the first statement is a binding");
+    };
+    assert_eq!(binding.span, (4, 1), "`a = p` is the file's line 4");
+    assert_eq!(report.tokens[0].span, (4, 1), "the first token is line 4's");
+    // The resolved `p` read: the import seeded the resolution, so the program
+    // checks (the only complaint left is the deliberately unresolved `zzz`).
+    assert_eq!(
+        report.build.as_ref().map(|b| b.ok),
+        Some(true),
+        "the import resolves, so the program checks: {:?}",
+        report.diagnostics
+    );
+}
+
+#[test]
+fn a_reuse_moves_the_retained_spans_through_the_edit() {
+    // A check failure on the file's last line, and an edit *before* it that
+    // changes no resolved content (a leading newline): the content key is
+    // unchanged, so the established build — and its rendered diagnostic — is
+    // reused.  The diagnostic's position must move with the text, or the editor
+    // underlines the wrong line.
+    let before = "f = x => x + 1\nf \"s\"\n";
+    let after = "\nf = x => x + 1\nf \"s\"\n";
+    let mut sess = BufferSession::<LangProgram>::new(before);
+    let r0 = sess.compile();
+    assert!(!r0.reused, "the first compile is a fresh build");
+    let span_before = check_span(&r0);
+    assert_eq!(span_before, Some((2, 3)), "the failing argument is line 2");
+
+    sess.replace(0..0, "\n");
+    let r1 = sess.compile();
+    assert!(r1.reused, "the resolved content is unchanged");
+    assert_eq!(
+        check_span(&r1),
+        Some((3, 3)),
+        "the retained diagnostic moved with the text it points at"
+    );
+    // The whole report — diagnostics and their spans, the build outcome, the
+    // content key — equals a fresh session's over the same source, and the
+    // returned `ExprId → span` index does too.
+    let fresh = BufferSession::<LangProgram>::new(after).compile();
+    assert_eq!(
+        shape(&r1),
+        shape(&fresh),
+        "a reuse diverged from a fresh compile"
+    );
+    assert_eq!(
+        format!("{:?}", r1.span_index),
+        format!("{:?}", fresh.span_index),
+        "the moved span index is the one a fresh build produces"
+    );
+}
+
+#[test]
+fn a_diagnostic_inside_the_rewritten_text_rebuilds_instead_of_reusing() {
+    // The same reuse, but the edit *rewrote* the text the check diagnostic points
+    // at (a consistent rename, which leaves the resolved content — and so the
+    // key — alone).  There is no honest position for the retained diagnostic, so
+    // the session must re-derive rather than point it at the replacement.
+    let before = "f = 1 + \"s\"\nf\n";
+    let after = "g = 1 + \"s\"\ng\n";
+    let mut sess = BufferSession::<LangProgram>::new(before);
+    let r0 = sess.compile();
+    assert!(!r0.reused);
+    assert!(
+        r0.diagnostics.iter().any(|d| d.stage == Stage::Check),
+        "the `Int + string` is a check failure: {:?}",
+        r0.diagnostics
+    );
+
+    sess.replace(0..sess.len(), after);
+    let r1 = sess.compile();
+    assert_eq!(
+        r1.key, r0.key,
+        "a consistent rename keeps the resolved content"
+    );
+    assert!(
+        !r1.reused,
+        "a diagnostic inside the rewritten region has no movable position, so the build is re-derived"
+    );
+    assert_eq!(
+        shape(&r1),
+        shape(&BufferSession::<LangProgram>::new(after).compile())
+    );
+}
+
+#[test]
+fn a_cell_shares_the_registry_with_the_import_its_value_reads() {
+    // A `cache`d binding whose value *is* the import: the frozen closure names the
+    // import's module, and `freeze_closure_mapped` asserts every key the module
+    // references is registered in the registry the artifact is filed in — so the
+    // session's registry must be the store's.  Both allocate keys (the import
+    // from the device, the cell from the registry's cell space), and the two
+    // spaces must not meet.
+    let source = "@{ p = import \"plug.lichen\" @}\ncache base = p\nx = base + 1\nx\n";
+    let mut store = store_with_plug();
+    let mut sess = BufferSession::with_registry("", "file:///cells.lichen", store.registry());
+    set_view_of(&mut sess, source, &mut store);
+
+    let r0 = sess.compile();
+    assert!(r0.ok(), "the program checks: {:?}", r0.diagnostics);
+    assert_eq!(r0.cells.frozen, 1, "the marked binding was frozen");
+    assert_eq!(sess.retained_cells(), 1);
+    let registry = sess.registry();
+    assert!(
+        !registry.read().unwrap().is_empty(),
+        "the import and the cell are both filed"
+    );
+
+    // The next compile reuses the established build and reads the cell back.
+    let r1 = sess.compile();
+    assert!(r1.reused, "nothing changed, so the build is reused");
+    assert_eq!(
+        r1.cells.reused, 0,
+        "a reuse lowers nothing, so it reads no cell"
+    );
+}
+
+#[test]
+fn an_edited_view_compiles_identically_to_a_fresh_one() {
+    // The view path, edited: every prefix of an edit sequence must equal a fresh
+    // session over the same view — the key, the build outcome, the diagnostics
+    // (spans included), the span index, and the resolved AST.
+    let block = "@{ p = import \"plug.lichen\" @}\n";
+    let cases = [
+        "a = p\ncache b = a + 1\nb\n",
+        "a = p\ncache b = a + 2\nb\n",
+        "a = p\ncache b = a + 1\nb + 1\n",
+        "a = p\ncache b = a + 1\nzzz\n",
+        "a = p\ncache b = a + 1\n",
+    ];
+    let mut store = store_with_plug();
+    let mut sess = BufferSession::with_registry("", "file:///edited.lichen", store.registry());
+    for target in cases {
+        let source = format!("{block}{target}");
+        set_view_of(&mut sess, &source, &mut store);
+        let got = sess.compile();
+
+        let mut fresh_store = store_with_plug();
+        let mut fresh =
+            BufferSession::with_registry("", "file:///fresh.lichen", fresh_store.registry());
+        set_view_of(&mut fresh, &source, &mut fresh_store);
+        let want = fresh.compile();
+
+        assert_eq!(
+            shape(&got),
+            shape(&want),
+            "the edited view diverged from a fresh one for {target:?}"
+        );
+        assert_eq!(
+            format!("{:?}", got.span_index),
+            format!("{:?}", want.span_index),
+            "the span index diverged for {target:?}"
+        );
+        assert_eq!(
+            format!("{:?}", got.program.statements),
+            format!("{:?}", want.program.statements),
+            "the resolved AST diverged for {target:?}"
+        );
+    }
+}
+
+/// The span of the first check diagnostic, if any.
+fn check_span(report: &crate::session::SessionReport<LangProgram>) -> Option<(u32, u32)> {
+    report
+        .diagnostics
+        .iter()
+        .find(|d| d.stage == Stage::Check)
+        .and_then(|d| d.span)
 }

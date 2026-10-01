@@ -208,7 +208,7 @@ fn freeze_cells<P>(
         if is_unbound(build.module.class_value(pair)) {
             continue;
         }
-        let key = cells.allocate_key();
+        let key = registry.allocate_cell_key();
         // The hash is a placeholder on this path: a cell's reuse is decided by its
         // **path**, never by content (`docs/notes/incremental-update.md` §4.3).
         let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);

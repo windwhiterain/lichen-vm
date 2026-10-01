@@ -433,6 +433,12 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
 /// stream of `old_source` (including its `Eof`), with byte ranges in absolute
 /// source coordinates.
 ///
+/// `old_source` and `new_source` are the **code** of a possibly larger source
+/// (the text after a stripped `@{…@}` block) beginning at byte `base` within it,
+/// exactly as [`lex_with`] takes them; `a`, `b` and the token ranges are
+/// *absolute* positions in that larger source, so the two coordinate spaces are
+/// never mixed.  A whole-file caller passes `base = 0`, where the two coincide.
+///
 /// The result reuses the *prefix* of `prev` unchanged, re-lexes only the
 /// affected region, and re-uses the *suffix* by re-synchronizing against the
 /// old stream once lexing has passed the changed region and produced a token
@@ -450,6 +456,7 @@ pub fn lex_resume(
     old_source: &str,
     new_source: &str,
     line_starts: &[usize],
+    base: u32,
     a: usize,
     b: usize,
 ) -> Lexed {
@@ -479,7 +486,14 @@ pub fn lex_resume(
     // region, or `None` after a separator/error/bos.
     let mut prev_end = seed_prev_end(prev, i);
 
-    let code = &new_source[s as usize..];
+    // `s` is absolute; the text it indexes starts at `base` in that space.  A
+    // caller that passes a code-relative `a` with a base offset breaks the
+    // contract the doc states, and this is where it is caught rather than
+    // slicing at a silently wrong offset.
+    let local = s
+        .checked_sub(base)
+        .expect("lex_resume: the edit span is absolute, like the token ranges");
+    let code = &new_source[local as usize..];
     let mut lexer = RawToken::lexer(code);
 
     // Probe index into `prev` for the re-sync search.

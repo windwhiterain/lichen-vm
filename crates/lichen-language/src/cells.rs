@@ -10,7 +10,11 @@
 //! The store is deliberately small: it holds references, not values.  Who owns an
 //! artifact and when it is evicted is the registry's business, and releasing what
 //! an artifact owns is the artifact's own `Drop` (see
-//! `lichen_lowlevel::Release`).
+//! `lichen_lowlevel::Release`).  The key an artifact is filed under is the
+//! **registry's** to allocate ([`lichen_lowlevel::Registry::allocate_cell_key`])
+//! — several sessions share one registry — in a key space disjoint from the
+//! device's, so a cell and the imported packages its closure reads are filed side
+//! by side.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,7 +38,6 @@ struct Cell {
 #[derive(Default)]
 pub struct CellStore {
     cells: HashMap<Path, Cell>,
-    next_key: u64,
 }
 
 impl CellStore {
@@ -131,16 +134,6 @@ impl CellStore {
             keep
         });
         dropped
-    }
-
-    /// A device key for the next artifact.
-    ///
-    /// A **counter**, because a cell's identity is its path: the key only has to
-    /// be distinct, and nothing may be derived from content (the requirement) or
-    /// reused across artifacts (the registry asserts a key is filed once).
-    pub fn allocate_key(&mut self) -> ModuleKey {
-        self.next_key += 1;
-        ModuleKey::from_raw(self.next_key)
     }
 
     /// How many cells are retained.

@@ -423,7 +423,7 @@ fn assert_incremental_eq(old: &str, a: usize, b: usize, text: &str) {
     let ls = line_starts(&new);
     let prev = lex(old).tokens;
     let expected = lex(&new);
-    let got = lex_resume(&prev, old, &new, &ls, a, b);
+    let got = lex_resume(&prev, old, &new, &ls, 0, a, b);
 
     assert_eq!(
         got.tokens,
@@ -488,7 +488,70 @@ fn incremental_resume_append_to_large_prefix() {
     let ls = line_starts(&new);
     let prev = lex(&old).tokens;
     let expected = lex(&new);
-    let got = lex_resume(&prev, &old, &new, &ls, a, old.len());
+    let got = lex_resume(&prev, &old, &new, &ls, 0, a, old.len());
     assert_eq!(got.tokens, expected.tokens);
     assert_eq!(got.errors.len(), expected.errors.len());
+}
+
+/// The same equivalence when the code is a **suffix** of a larger source (the
+/// text after a stripped `@{…@}` block): `base` is the offset it starts at, and
+/// every token range and span is absolute in the larger source.
+///
+/// This is the shape the language server's session compiles, and the offset is
+/// exactly what the code-relative and absolute coordinate spaces must not be
+/// confused about.
+#[test]
+fn incremental_resume_matches_full_relex_with_a_base_offset() {
+    let cases: &[(&str, usize, usize, &str)] = &[
+        // Grow an identifier.
+        ("x = 1", 1, 1, "y"),
+        // Split an identifier.
+        ("ab = 1", 1, 1, " "),
+        // Insert a newline mid-file: shifts the suffix and its line numbers.
+        ("a = 1\nb = 2\nc = 3", 6, 6, "\n"),
+        // Append at the very end.
+        ("a = 1\nf = x => a + x", 20, 20, "\nf 2"),
+    ];
+    // Two prefixes with different line structure, so the base is not a whole
+    // number of lines in one of them.
+    for prefix in [
+        "@{\n  math = import \"math.lichen\"\n@}\n",
+        "@{ math = 1 @}",
+    ] {
+        let base = prefix.len() as u32;
+        let line_count = prefix.matches('\n').count();
+        for &(code, a, b, text) in cases {
+            let mut old = prefix.to_string();
+            old.push_str(code);
+            let mut new_code = String::new();
+            new_code.push_str(&code[..a]);
+            new_code.push_str(text);
+            new_code.push_str(&code[b..]);
+            let new = format!("{prefix}{new_code}");
+
+            // The whole-source line starts, as a real caller has them.
+            let ls = line_starts(&new);
+            assert_eq!(ls.len(), line_count + line_starts(&new_code).len());
+            let prev = lex_with(code, &line_starts(&old), base).tokens;
+            let expected = lex_with(&new_code, &ls, base);
+            // `a`/`b` are absolute, as the doc requires.
+            let got = lex_resume(
+                &prev,
+                code,
+                &new_code,
+                &ls,
+                base,
+                a + base as usize,
+                b + base as usize,
+            );
+            assert_eq!(
+                got.tokens,
+                expected.tokens,
+                "incremental tokens differ for edit {:?} under prefix {:?}",
+                (a, b, text),
+                prefix
+            );
+            assert_eq!(got.errors.len(), expected.errors.len());
+        }
+    }
 }

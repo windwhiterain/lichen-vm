@@ -2,6 +2,10 @@
 //! artifact map (freeze, insert, read, iterate).
 
 use super::*;
+
+/// The top bit of a key: set for a **retained cell**'s artifact, clear for a
+/// device's (see [`Registry::allocate_cell_key`]).
+pub const CELL_KEY_BIT: u64 = 1 << 63;
 impl<P: Program> Default for Registry<P> {
     fn default() -> Self {
         Self::new()
@@ -12,7 +16,28 @@ impl<P: Program> Registry<P> {
     pub fn new() -> Self {
         Registry {
             entries: HashMap::new(),
+            next_cell_key: 0,
         }
+    }
+
+    /// A fresh key for a **retained cell**'s artifact, unique within this
+    /// registry.
+    ///
+    /// A cell's identity is its occurrence path, never its content, so the key
+    /// only has to be distinct — and the counter is the registry's because the
+    /// registry is what uniqueness is relative to: several sessions (an editor's
+    /// open documents) file cells into one registry, each keeping its own paths.
+    ///
+    /// The keys live in their **own space** ([`CELL_KEY_BIT`]), disjoint from the
+    /// device's, because the two kinds of artifact share the registry: a cell's
+    /// frozen closure must resolve the imported packages it read through the
+    /// registry it is filed in ([`Self::freeze_closure_mapped`] asserts exactly
+    /// that), so a cell and an import are filed side by side.  The device's keys
+    /// are a dense counter (and the reclaimed holes in it), so the two spaces
+    /// cannot meet.
+    pub fn allocate_cell_key(&mut self) -> ModuleKey {
+        self.next_cell_key += 1;
+        ModuleKey::from_raw(CELL_KEY_BIT | self.next_cell_key)
     }
 
     /// An executing module bound to this registry: every static ref it
