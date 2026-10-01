@@ -89,6 +89,14 @@
 > - T3 memoized check (`done`/`check_into` resume) and T4 true
 >   unification-state checkpoint/rollback.
 >
+> T3 and T4 are not only a checking concern: the checker *is* the evaluator
+> (its definition pass runs the program), so "resume the check" and "reuse the
+> evaluation" are one problem with a representation choice attached.  That
+> choice, and the deep pass's own lack of memoization, are worked out in
+> [incremental-evaluation](incremental-evaluation.md) — which is where T3's
+> remaining scope is stated; this note stays the account of `lex → parse →
+> resolve → lower → check`.
+>
 > Points at: `crates/lichen-language-lex` (`lex_resume`),
 > `crates/lichen-language-parser` (`parse_statement_region*`, `Program::stmt_ranges`),
 > `crates/lichen-language/src/{resolve,compile,lib,session}.rs`,
@@ -253,7 +261,9 @@ built (`done`), so re-checking after an error-only edit does nothing.
   Optimizes the *recompute* cost on large files (no 16 MB-stack re-thread, no
   whole-file re-parse). Optional on top of T1.
 - **T3 — memoized check** (`done`/`term` skip + `check_into` resume). The full
-  "do not re-check the established program" effect.
+  "do not re-check the established program" effect.  Its evaluation half — what
+  a reused answer is allowed to be, and the deep pass's own missing memo — is
+  [incremental-evaluation](incremental-evaluation.md).
 - **T4 — the honest boundary** — true incremental checking with unification-state
   checkpoint/rollback. Large change to `Checker`/`Module`; not warranted for an
   editor. The error-only case (the common one) is fully covered by T1+T3; a
