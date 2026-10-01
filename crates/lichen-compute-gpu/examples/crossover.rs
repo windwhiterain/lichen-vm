@@ -18,6 +18,7 @@
 use std::time::Instant;
 
 use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
+use lichen_kernel_ir::BufferSlot;
 use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
 
 /// `out[i] = in[i] + in[i] + 1` — enough arithmetic that the run is not purely
@@ -61,8 +62,8 @@ fn main() {
     println!("device: {}", context.device_name());
     println!("workgroup: {LOCAL_SIZE_X} invocations\n");
     println!(
-        "{:>10}  {:>12}  {:>12}  {:>8}",
-        "count", "gpu (ms)", "sequential (ms)", "ratio"
+        "{:>10}  {:>12}  {:>12}  {:>12}  {:>8}",
+        "count", "gpu (ms)", "dispatch", "fetch", "ratio"
     );
 
     for count in [
@@ -74,27 +75,46 @@ fn main() {
 
         // A warm-up run, so the first timed run is not paying for pipeline
         // creation — the pipeline cache makes the second run of a fragment free.
-        context
-            .run(&fragment(), &[input.clone()], count)
+        // Its result is released rather than kept: the ids are what a program
+        // releases, and this example is also where that path gets exercised.
+        let warm = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
             .expect("the warm-up run completes");
+        for id in &warm {
+            context.release(*id);
+        }
+
+        // Timed as two steps, because they are two costs: the dispatch uploads and
+        // runs, and the fetch brings the answer home.  A program that chains
+        // kernels pays the first and not the second.
+        let started = Instant::now();
+        let resident = context
+            .run(&fragment(), &[BufferSlot::Host(&input)], count)
+            .expect("the timed run completes");
+        let dispatch = started.elapsed();
 
         let started = Instant::now();
         let from_gpu = context
-            .run(&fragment(), &[input.clone()], count)
-            .expect("the timed run completes");
-        let gpu = started.elapsed();
+            .fetch(resident[0], count)
+            .expect("the result comes back off the device");
+        let fetch = started.elapsed();
+        for id in &resident {
+            context.release(*id);
+        }
+        let gpu = dispatch + fetch;
 
         let mut produced = vec![0i64; count];
         let started = Instant::now();
         sequential(&input, &mut produced);
         let cpu = started.elapsed();
 
-        assert_eq!(from_gpu[0], expected, "the GPU result must still be right");
+        assert_eq!(from_gpu, expected, "the GPU result must still be right");
 
         println!(
-            "{count:>10}  {:>12.3}  {:>12.3}  {:>7.2}x",
+            "{count:>10}  {:>12.3}  {:>12.3}  {:>10.3}  {:>7.2}x",
             gpu.as_secs_f64() * 1e3,
-            cpu.as_secs_f64() * 1e3,
+            dispatch.as_secs_f64() * 1e3,
+            fetch.as_secs_f64() * 1e3,
             cpu.as_secs_f64() / gpu.as_secs_f64().max(f64::MIN_POSITIVE),
         );
     }

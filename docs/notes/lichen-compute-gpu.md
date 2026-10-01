@@ -202,37 +202,79 @@ The seam between the two — a real installed backend serving a real lichen prog
 both, and the only such crate would be a test-only dependency cycle. That is the
 next thing to close.
 
-## The GPU backend is currently a *pessimisation*, and the language says so
+## Staging must be cached, or the run is refused
+
+The single biggest performance fact about this backend is not in the dispatch at
+all — it is in which Vulkan memory type the staging lands in, and the rule is
+easy to get wrong in a way that still produces correct results.
+
+On the target machine, the memory types the RTX 3060 offers are:
+
+| index | flags | heap | what it is |
+|---|---|---|---|
+| 1 | `0x0001` | VRAM 5.85 GiB | device-local, not host-visible |
+| 3 | `0x0006` | system RAM | host-visible + coherent, **no cache** |
+| 4 | `0x000e` | system RAM | host-visible + coherent + **cached** |
+| 5 | `0x0007` | VRAM | BAR aperture, device-local + host-visible |
+
+Selecting "the first type that is host-visible and host-coherent" picks **index
+3**, which on a discrete GPU is system RAM reached over PCIe with nothing behind
+it. Every host touch on it is a round trip, so a run pays two uncached transfers
+per element and the whole backend lands ~15× behind a scalar loop — while
+reporting success at every step. The fix is one flag (`HOST_CACHED`), and the
+measured difference between index 3 and index 4 is the difference between 55 ms
+and 4.8 ms at a million elements.
+
+So `cached_memory_type` **requires** `HOST_CACHED` and refuses a device that has
+none, rather than falling back. A fallback would be *correct* and would silently
+put the backend back where it started, with nothing in the output to say so. The
+refusal names the missing property instead. This is the same rule the rest of
+the crate follows: no silent fallback onto a path that changes what the numbers
+mean.
+
+## What the GPU actually costs, and where the crossover is
 
 Measured on the target (`cargo run --release --example crossover`), against a
 plain sequential scalar loop standing in for the CPU thread pool's single-worker
-path — a deliberately **conservative** comparison:
+path — a deliberately **conservative** comparison, because that path fans out
+over threads above 4096 indices.
 
-| count | GPU | sequential | ratio |
-|---|---|---|---|
-| 1 024 | 0.63 ms | 0.003 ms | 0.02× |
-| 65 536 | 4.32 ms | 0.086 ms | 0.02× |
-| 1 048 576 | 59.9 ms | 3.98 ms | **0.07×** |
+The table reports the dispatch and the fetch separately, because they are two
+different costs: the dispatch uploads and runs, the fetch brings the answer home.
+A program that chains kernels pays the first and not the second — that is the
+entire reason `run` hands back an id instead of data.
 
-The GPU does not win anywhere in that range, and at a million elements it is
-about **15× slower**. The fixed cost is ~0.5 ms, and it is *per-run object churn*:
-every run builds and destroys its buffers, a descriptor pool, a command pool and
-a fence, and the buffers are host-visible, so every element crosses the bus.
+| count | total | dispatch | fetch | sequential | ratio |
+|---|---|---|---|---|---|
+| 1 024 | 0.304 ms | 0.249 ms | 0.055 ms | 0.003 ms | 0.01× |
+| 65 536 | 0.616 ms | 0.351 ms | 0.266 ms | 0.033 ms | 0.05× |
+| 262 144 | 1.651 ms | 0.693 ms | 0.957 ms | 0.38 ms | 0.23× |
+| 1 048 576 | 4.841 ms | 2.107 ms | 2.735 ms | 1.50 ms | 0.31× |
 
-So `"cpu"` is what programs should write today, and the honest framing is that
-this backend is a **correct reference implementation, not a fast one**. What
-would change that, in the order it pays:
+The GPU still loses, but it is no longer losing by 15× — it is within about
+3× of a single-threaded scalar loop at a million elements, against 18× before
+device-local memory. Two things moved it:
 
-1. Reuse the command pool, descriptor pool and buffers across runs instead of
-   rebuilding them per dispatch. This is most of the 0.5 ms.
-2. Device-local buffers with a staging upload/download, so the transfer is one
-   contiguous copy per run instead of per element.
-3. Then, and only then, a crossover worth a threshold constant.
+1. **Buffers are device-local, staged through `HOST_CACHED` memory.** This is
+   where the order of magnitude was. The previous code asked for
+   `HOST_VISIBLE | HOST_COHERENT` and took the *first* matching memory type,
+   which on this machine is `memoryTypes[3]` — system RAM over PCIe with no
+   cache behind it. Correct, and ruinous: every element cost two uncached
+   round trips. See [Staging must be cached](#staging-must-be-cached-or-the-run-is-refused).
+2. **Staging is reused.** One mapping per context rather than per run, which is
+   why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
-There is deliberately **no** minimum-count gate today, because the measurement
-says no honest gate exists yet: the GPU loses at every count tested. Adding a
-threshold that "protects" small runs would be a number invented to look
-careful.
+**The honest framing is that a single cold dispatch still cannot win**, and that
+is not a bug: the first upload is 8 MB across PCIe, which is about the cost of
+the scalar loop it is competing with. The GPU wins where a scalar loop cannot —
+several kernels over data that is already resident. So the number worth
+measuring is no longer "at what count does the GPU win" but **"over how many
+chained dispatches does the fixed cost amortise"**, and that is a property of
+`plrun` chains rather than of this example.
+
+There is deliberately **no** minimum-count gate. A threshold would be a number
+invented to look careful: the measurement says the answer depends on how much of
+the data stays on the device, not on `count`.
 
 ## Not yet
 
@@ -249,9 +291,9 @@ Named rather than implied, because each is a decision not a gap:
 - **Wiring into `compute.plrun`.** Done, and narrowly: `parallel` names a
   backend and `plrun` dispatches to it, with the refusals above. What is *not*
   wired is a single end-to-end test across both crates (see
-  [Where a run is *not* wired yet](#where-a-run-is-not-wired-yet)), and the
-  performance work that would make `"gpu"` worth writing.
-- **Device-local memory and staging.** Buffers are host-visible and host-coherent,
-  which is correct and simple, and is the right choice for a kernel whose working
-  set is its input and output. Memory ordering is explicit: coherence is not
-  ordering, so the command buffer carries a barrier on each side of the dispatch.
+  [Where a run is *not* wired yet](#where-a-run-is-not-wired-yet)).
+- **Holding a resident buffer across kernels.** The backend hands back a
+  [`ResidentId`] and the language's value set still cannot hold one, so
+  `plrun` fetches immediately. This is the one that matters: until the value
+  vocabulary can carry an id, a chain of `"gpu"` kernels pays a fetch per link
+  and the reuse the table above is shaped for never happens.

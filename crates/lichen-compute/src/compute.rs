@@ -60,7 +60,7 @@ use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
 use lichen_kernel_ir::{
-    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, fragment_digest,
+    BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, fragment_digest,
 };
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
@@ -3171,12 +3171,37 @@ fn run_on_installed_backend(
             outputs, fragment.outputs
         ));
     }
-    backend.run(&fragment, &inputs, count).map_err(|reason| {
+    // Every input is host data at this point: nothing in the language's value set
+    // can hold a resident id yet, so this call site is the one that pays the
+    // fetch.  It is the only place a round trip is forced from the language side,
+    // and it is forced by the value vocabulary rather than by the backend.
+    let slots: Vec<BufferSlot> = inputs.iter().map(|data| BufferSlot::Host(data)).collect();
+    let resident = backend.run(&fragment, &slots, count).map_err(|reason| {
         format!(
             "the {:?} backend declined this run: {reason}",
             backend.name()
         )
-    })
+    })?;
+
+    // Fetched and released whatever happens, because an id the host drops is a
+    // leak rather than a cleanup the backend could do later: the backend has no
+    // way to know the run is over.
+    let fetched = resident
+        .iter()
+        .map(|id| {
+            backend.fetch(*id, count).map_err(|reason| {
+                format!(
+                    "the {:?} backend declined to return buffer {}: {reason}",
+                    backend.name(),
+                    id.0
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>();
+    for id in &resident {
+        backend.release(*id);
+    }
+    fetched
 }
 
 /// Assemble the wasm bytes of one **parallel** fragment — the degenerate
@@ -3590,6 +3615,7 @@ fn run_parallel_range(
 #[cfg(test)]
 mod parallel_launch_tests {
     use super::*;
+    use lichen_kernel_ir::ResidentId;
 
     /// A two-output parallel fragment over `(n, i)`: `out0[i] = i + 1` and
     /// `out1[i] = i + i`, with each `BufferWriteCall` fed the
@@ -3644,6 +3670,7 @@ mod parallel_launch_tests {
 
         struct Stub {
             seen: AtomicUsize,
+            released: Mutex<Vec<u64>>,
         }
         impl lichen_kernel_ir::ParallelBackend for Stub {
             fn name(&self) -> &'static str {
@@ -3652,17 +3679,25 @@ mod parallel_launch_tests {
             fn run(
                 &self,
                 _fragment: &KernelFragment,
-                _inputs: &[Vec<i64>],
-                count: usize,
-            ) -> Result<Vec<Vec<i64>>, String> {
+                _inputs: &[BufferSlot],
+                _count: usize,
+            ) -> Result<Vec<ResidentId>, String> {
                 self.seen.fetch_add(1, Ordering::SeqCst);
-                Ok(vec![vec![7; count]])
+                Ok(vec![ResidentId(41)])
+            }
+            fn fetch(&self, _id: ResidentId, count: usize) -> Result<Vec<i64>, String> {
+                Ok(vec![7; count])
+            }
+            fn release(&self, id: ResidentId) {
+                self.released.lock().unwrap().push(id.0);
             }
         }
 
-        lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub {
+        let stub = std::sync::Arc::new(Stub {
             seen: AtomicUsize::new(0),
-        }));
+            released: Mutex::new(Vec::new()),
+        });
+        lichen_kernel_ir::install_parallel_backend(stub.clone());
         let id = intern_kernel(two_outputs());
         let outputs =
             run_parallel_kernel(id, Backend::Gpu, 8, vec![]).expect("the installed backend runs");
@@ -3672,6 +3707,12 @@ mod parallel_launch_tests {
             outputs,
             vec![vec![7; 8]],
             "the answer is the backend's, and there is one buffer per declared output"
+        );
+        assert_eq!(
+            *stub.released.lock().unwrap(),
+            vec![41],
+            "the host releases every id it was handed — a dropped id is a leak, and nothing \
+             else can reclaim it"
         );
     }
 
@@ -3704,10 +3745,18 @@ mod parallel_launch_tests {
             fn run(
                 &self,
                 _fragment: &KernelFragment,
-                _inputs: &[Vec<i64>],
+                _inputs: &[BufferSlot],
                 _count: usize,
-            ) -> Result<Vec<Vec<i64>>, String> {
+            ) -> Result<Vec<ResidentId>, String> {
                 Err("this device has no compute queue".to_string())
+            }
+
+            fn fetch(&self, _id: ResidentId, _count: usize) -> Result<Vec<i64>, String> {
+                unreachable!("a run that declined never hands back an id to fetch")
+            }
+
+            fn release(&self, _id: ResidentId) {
+                unreachable!("a run that declined never hands back an id to release")
             }
         }
         lichen_kernel_ir::install_parallel_backend(std::sync::Arc::new(Stub));

@@ -43,12 +43,48 @@
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+/// A backend's own name for a buffer it is holding.
+///
+/// **Opaque on purpose, and backend-scoped:** this is whatever the backend calls
+/// the buffer, so an id means nothing without the backend that issued it and must
+/// never be compared across backends or persisted. Passing one to a backend other
+/// than the issuer is a caller error, not a lookup that misses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ResidentId(pub u64);
+
+/// One input buffer as it crosses the backend boundary.
+///
+/// The point of the two forms is that **data the backend already holds costs
+/// nothing to use again**: handing back a [`Self::Resident`] instead of its
+/// contents is what lets a chain of kernels run without the intermediate results
+/// ever reaching the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BufferSlot<'a> {
+    /// Data the host already holds, at least `count` elements long.
+    Host(&'a [i64]),
+    /// A buffer the backend is already holding, from an earlier [`ParallelBackend::run`].
+    Resident(ResidentId),
+}
+
 /// A backend that can run a parallel fragment over an index range.
 ///
 /// This is deliberately *not* the shape of a compiled module, a memory pool or a
 /// device queue. It is the smallest thing a host program has to hand over, and
 /// the smallest thing a backend has to promise: given a fragment, its input
 /// buffers and a count, produce one output buffer per declared output.
+///
+/// # Outputs are ids, not data
+///
+/// [`Self::run`] returns [`ResidentId`]s rather than the results, and
+/// [`Self::fetch`] is the only way to get the data back. A backend that cannot
+/// keep a result would have to hand it over eagerly, and the boundary would
+/// force the round trip on every run — the round trip being the thing worth
+/// avoiding. Making the *host's* choice explicit also means a program that feeds
+/// one kernel's output into the next never pays for data it never looks at.
+///
+/// A resident id is a resource: the host must [`Self::release`] it. There is no
+/// finaliser behind an id, so a host that drops one leaks whatever the backend
+/// spent on it.
 ///
 /// A refusal is a `String` naming its own cause, and a host is expected to
 /// **fall back** rather than fail: a backend is never more capable than the one
@@ -60,15 +96,26 @@ pub trait ParallelBackend: Send + Sync {
 
     /// Run `fragment` over the index range `[0, count)`.
     ///
-    /// `inputs` holds one buffer per read position, each at least `count` long.
-    /// The result is one buffer per [`KernelFragment::outputs`], each exactly
-    /// `count` long.
+    /// `inputs` holds one slot per read position; a [`BufferSlot::Host`] must be
+    /// at least `count` long. The result is one [`ResidentId`] per
+    /// [`KernelFragment::outputs`], each holding at least `count` elements, owned
+    /// by the host until it [`Self::release`]s it.
     fn run(
         &self,
         fragment: &KernelFragment,
-        inputs: &[Vec<i64>],
+        inputs: &[BufferSlot],
         count: usize,
-    ) -> Result<Vec<Vec<i64>>, String>;
+    ) -> Result<Vec<ResidentId>, String>;
+
+    /// The first `count` elements of a buffer this backend is holding.
+    ///
+    /// The point at which a resident buffer actually crosses back to the host,
+    /// and so the point that costs: a run whose results are never fetched never
+    /// pays for them.
+    fn fetch(&self, id: ResidentId, count: usize) -> Result<Vec<i64>, String>;
+
+    /// Release a resident buffer. Idempotent on an id already released.
+    fn release(&self, id: ResidentId);
 }
 
 /// The installed backend, if a host program installed one.

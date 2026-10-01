@@ -8,8 +8,8 @@
 //! lanes of the last workgroup are covered too: those lanes address padding, and
 //! if that padding were not allocated the run would scribble past the buffers.
 
-use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X};
-use lichen_kernel_ir::{IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
+use lichen_compute_gpu::{GpuContext, LOCAL_SIZE_X, RunError};
+use lichen_kernel_ir::{BufferSlot, IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape};
 
 /// A fragment over `(input, index)` — the shape a single-input parallel kernel has.
 fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
@@ -146,18 +146,24 @@ fn reference(fragment: &KernelFragment, input: &[i64], count: usize) -> Vec<i64>
 
 /// One run, checked three ways.  Returns the device name so a passing test says
 /// which GPU it actually ran on.
+///
+/// The run hands back a resident id and the data only comes home on the `fetch`,
+/// so this also pins the split itself: if the run leaked results to the host, or
+/// the fetch read something the dispatch did not write, these would differ.
 fn check(fragment: &KernelFragment, input: &[i64], expected: &[i64]) -> String {
     let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
     let count = input.len();
-    let from_gpu = context
-        .run(fragment, &[input.to_vec()], count)
+    let resident = context
+        .run(fragment, &[BufferSlot::Host(input)], count)
         .expect("the dispatch completes");
     assert_eq!(
-        from_gpu.len(),
+        resident.len(),
         fragment.outputs,
-        "one buffer per declared output"
+        "one resident buffer per declared output"
     );
-    let from_gpu = &from_gpu[0];
+    let from_gpu = context
+        .fetch(resident[0], count)
+        .expect("the result comes back off the device");
     assert_eq!(from_gpu.len(), count, "the result is exactly `count` long");
 
     assert_eq!(
@@ -168,8 +174,20 @@ fn check(fragment: &KernelFragment, input: &[i64], expected: &[i64]) -> String {
     );
     assert_eq!(
         from_gpu,
-        &reference(fragment, input, count),
+        reference(fragment, input, count),
         "the GPU disagrees with the CPU reference"
+    );
+
+    // A released id names no buffer, and the backend says so rather than
+    // answering with zeroes: an id is a handle, and a dead one means the host
+    // lost track of its own memory.
+    context.release(resident[0]);
+    assert!(
+        matches!(
+            context.fetch(resident[0], count),
+            Err(RunError::UnknownResident { .. })
+        ),
+        "fetching a released id is refused by name"
     );
     context.device_name().to_string()
 }
