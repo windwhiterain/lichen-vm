@@ -199,7 +199,7 @@ per link); it needs count as a swept variable.
 
 ## What is built and what is not
 
-**Built and committed** (`feature/graph-jit`, six commits, not pushed):
+**Built and committed** (`feature/graph-jit`, seven commits, not pushed):
 
 | commit | what |
 |---|---|
@@ -207,11 +207,12 @@ per link); it needs count as a swept variable.
 | `5b881bb` | delete a false claim from the `traced` docs |
 | `c5de5dc` | callback → `TraceContext`; why `&Module<P>` is wrong |
 | `a2c661d` | this document, and the stale claims in the backend's |
-| `05b5402` | `record_and_submit` / `wait_on` split out of `record_and_wait`; a second `Submit` on the context |
+| `05b5402` | `record_and_submit` / `wait_on` split out of `record_and_wait` |
 | `6c5ac4d` | the two rules a fused submission depends on — see below |
+| `91a324c` | delete the single `detached` submit the new design made wrong |
 
 **Not built:** the graph IR crate, the `Graph` value, the `GraphRun` operator,
-any segment-level scheduling, any of the measurements above.
+the pool of submission slots, and any of the measurements above.
 
 ## Two rules settled before anything depends on them (`6c5ac4d`)
 
@@ -221,19 +222,17 @@ caught by watching the numbers. Neither is exercised: no code records two
 dispatches into one command buffer, so what exists is the rule and the capacity
 for it, not a fused path.
 
-**One descriptor set per dispatch, and no reset inside a submission.** A set is
-read when the submission *executes*, so one set cannot serve two dispatches —
-rewriting it between them changes what the first one sees. The pool cannot be
-reset between them either, because a reset frees every set, including ones an
-earlier dispatch in the same command buffer is still bound to. So the pool is
-sized for `MAX_DISPATCHES_PER_SUBMISSION` sets and reset at the submission
-boundary, the only place a reset can be correct: the previous submission's fence
-has signalled, so nothing is still reading what the reset frees. This also
-changes what `MAX_DESCRIPTOR_BINDINGS` means — 32 is now a *per-dispatch* limit,
-and 64 dispatches per submission is a second, separate limit the graph will have
-to live inside. 64 is a placeholder: the graph-level node set that ought to own
-that number does not exist yet, and a larger one would be headroom for a program
-shape nobody has written.
+**One descriptor set per dispatch, and no reset under a running command
+buffer.** A set is read when the submission *executes*, so one set cannot serve
+two dispatches — rewriting it between them changes what the first one sees. Nor
+can the pool be reset between them, because a reset frees every set, including
+ones an earlier dispatch in the same command buffer is still bound to. So a
+submission resets the pool once, at its own start, and takes what it needs
+afterwards. This also changes what `MAX_DESCRIPTOR_BINDINGS` means — 32 is now a
+*per-dispatch* limit, and 64 dispatches per submission is a second, separate
+limit the graph will have to live inside. 64 is a placeholder: the graph-level
+node set that ought to own that number does not exist yet, and a larger one
+would be headroom for a program shape nobody has written.
 
 **The trailing barrier names both possible readers.** It was
 `SHADER_WRITE → TRANSFER_READ`, right only because every dispatch is followed by
@@ -248,36 +247,71 @@ the example that produced them. The honest reading is **not measurable, not
 free**.
 
 What is deliberately left open: **nothing counts dispatches within a
-submission.** The constant sizes the pool, but exceeding it today is pool
-exhaustion on the device rather than a named refusal. Whoever writes the segment
-code must carry that count, and it is the only part of this rule with no code
-behind it.
+submission.** The constant sizes the pool, but exceeding it is pool exhaustion
+on the device rather than a named refusal. Whoever writes the pool code must
+carry that count, and it is the only part of this rule with no code behind it.
 
 ## The next step, in order
 
-1. **`Segment`.** One dispatch recorded and submitted without waiting. It must
-   outlive the `GraphRun` operator call (the graph is lazy), so it **holds the
-   staging lock, its command buffer, and its scratch buffers until the fence
-   signals** — all three stay in use. A `Drop` impl has to wait, or a dropped
-   segment lets the next `run` overwrite staging an in-flight submission is
-   still reading. Two obligations ride along from the rules above: count
-   dispatches against `MAX_DISPATCHES_PER_SUBMISSION` and refuse by name, and
-   size the staging reservation for the whole segment up front rather than
-   growing it after recording has begun.
-2. **The detached entry point belongs on `ParallelBackend`, not in an
-   example.** Decided, so the measurement is not built against a shape that then
-   has to be thrown away. The trait's hardest question is still open — *who
-   waits* — and it has to be answered before the signature is written, because a
-   segment outlives the call that started it while every other method on that
-   trait is call-scoped. **This is the next thing to think about**, before any
-   code.
-3. **The overlap measurement**, which needs `Segment`: time the record-and-submit
+1. **A configurable pool of submission slots — not a `Segment` object.** The
+   earlier plan here said a segment must outlive the `GraphRun` operator call,
+   and everything downstream of it was built on that: a `Box<dyn Segment>` on
+   the trait, a token, a `Drop` that has to wait. **That was wrong.** A graph is
+   a value that can be run again, so running it is one operator call that
+   returns when the run is finished. There is no "submitted but not yet waited
+   for" state to carry across a call boundary, because there is no boundary
+   inside a run.
+
+   The shape is two call-scoped methods beside the three that exist, in the same
+   style as the three that exist: `submit`, which records a stretch of dispatches
+   into one command buffer and submits it without waiting, and `sync`, which
+   waits for the last submission. `run` is `submit` then `sync`. The backend
+   holds a **pool of slots**, and acquiring one when they are all in flight means
+   waiting on the oldest. Depth is configured from Rust — `GpuContext::new()`
+   takes the default, `with_config` takes the rest — defaulting to 2 because that
+   is the smallest depth at which recording overlaps too, and 2 is already more
+   than today. Whether more than 2 earns its keep depends on how much host work
+   a closure does, which is unmeasured.
+
+2. **Overlap does not need language-level async, and that is worth writing
+   down** because it looks like it does. The GPU being in flight is a driver
+   property, and "submit, run the closures for the next stretch, submit again"
+   is ordinary straight-line host code with nothing suspended and nothing
+   resumed. The closures run *inside* `GraphRun`, between a submit and the sync
+   that follows it. lichen needs no `await` and this adds none — which also
+   means the "who waits" question that the old shape made unanswerable simply
+   does not arise.
+
+3. **Three things a pool needs that one command buffer did not.** All three are
+   settled, because each is a silent wrong answer rather than a slow one:
+   - **Staging cannot be shared between in-flight slots.** A host input is
+     `memcpy`'d into staging and read by the device later, so writing the next
+     slot's input over bytes an in-flight copy has not read yet hands that copy
+     the new data. Each slot carries its own staging.
+   - **The descriptor pool cannot be reset while anything is in flight.** A set
+     is read when the submission *executes*, so resetting under a running
+     command buffer frees sets it is still bound to. The rule settled above —
+     reset at a submission boundary — was true at depth 1 and stops being true
+     the moment a second submission is in flight. Each slot therefore carries
+     **its own** pool, reset at its own fence.
+   - **Bundling the pool into the slot is what makes that safe**, rather than
+     one context-wide pool with a hand-maintained in-flight counter. Command
+     buffer, fence, staging and descriptor pool then share a single lifetime and
+     a single owner, so "which of these are mine" has one answer instead of
+     two, and there is no counter that can be wrong. The per-segment
+     `vkFreeDescriptorSets` alternative was rejected because without the
+     `FREE_DESCRIPTOR_SET` flag it exhausts the pool — and while that failure is
+     loud, the one it is preferred to fails silently.
+   - **`fetch` acquires a slot** like everything else; it is a record, submit
+     and immediate wait, and after pooling it no longer has a fixed target.
+
+4. **The overlap measurement**, which needs the pool: time the record-and-submit
    side and the wait side separately (this decomposes the 0.048 ms, which every
    estimate so far has treated as one lump), then put a controlled amount of
    host work between submit and wait and look at the slope. Flat while the host
    work is under the device time, 1:1 above it — that knee is the proof.
-4. **The count sweep**, which decides whether any of this is worth building.
-5. **Then, and only then**, the IR crate and the node set.
+5. **The count sweep**, which decides whether any of this is worth building.
+6. **Then, and only then**, the IR crate and the node set.
 
 ## Landmines, each of which is a silent wrong answer
 
@@ -288,12 +322,16 @@ behind it.
   dispatch is the first real test of them — judge it by reading its output, not
   by watching whether it is fast.
 - **A recorded-but-unsubmitted command buffer is clobbered by the next
-  `record_and_submit` into the same target.** This is why the detached
-  submission has its own `Submit` rather than a mode of the shared one, and why
-  `fetch` cannot run while a segment is pending.
+  `record_and_submit` into the same target**, and a command buffer whose
+  submission is still in flight cannot be recorded into at all. This is the
+  whole reason the pool exists and the reason a slot is not released until its
+  fence signals — the single `detached: Mutex<Submit>` that stood in for it
+  handles exactly one outstanding submission and is replaced by the pool.
 - **`BufferSlot::Host` inputs are staged by `memcpy` before recording.** A
-  segment that grows staging after recording has begun is a use-after-write on
-  the mapping; reserve for the whole segment up front.
+  submission that grows staging after recording has begun is a use-after-write
+  on the mapping — and with several slots in flight, a *different* slot growing
+  or writing staging is the same hazard across slots. Reserve for the whole
+  submission up front, and never share staging between slots.
 - **An uninitialised output buffer is safe only because the emitter emits
   straight-line code** — one `OpLabel`, no branch, so every invocation reaches
   its write and the dispatch covers `[0, padded)`. A branch in a body breaks it.
