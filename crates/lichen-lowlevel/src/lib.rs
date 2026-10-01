@@ -465,8 +465,14 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     /// `DeviceBuffer` is an id and a length, a kernel id is a registry slot
     /// number. None of them names a node, so none of them is an edge the GC has
     /// to follow. A value that *does* keep nodes alive past its own evaluation —
-    /// a compiled graph holding the closures it will call later — answers this,
-    /// and gets a hard error if it lies.
+    /// a compiled graph holding the closures it will call later — answers this.
+    ///
+    /// **A value that fails to answer is not caught.** There is nothing to check
+    /// this against: the lowlevel cannot see what a value holds, so an unlisted
+    /// node is not a detectable omission, it is a node that quietly disappears
+    /// at the end of the block that made it. This contract is held by review and
+    /// by the tests beside it, not by the collector. That is worth knowing before
+    /// writing one, because the failure it guards is the quiet kind.
     ///
     /// # Why this is a seam and not a convenience
     ///
