@@ -3730,9 +3730,7 @@ where
             RunResult::Resident(resident) => {
                 <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
             }
-            RunResult::Count(number) => {
-                <P::Value as From<LowValue>>::from(LowValue::USize(*number as usize))
-            }
+            RunResult::Count(count) => <P::Value as From<LowValue>>::from(LowValue::USize(*count)),
         };
     }
     let items: Vec<ArrayItem> = produced
@@ -3745,8 +3743,8 @@ where
                 RunResult::Resident(resident) => {
                     <P::Value as From<ComputeValue>>::from(ComputeValue::DeviceBuffer(*resident))
                 }
-                RunResult::Count(number) => {
-                    <P::Value as From<LowValue>>::from(LowValue::USize(*number as usize))
+                RunResult::Count(count) => {
+                    <P::Value as From<LowValue>>::from(LowValue::USize(*count))
                 }
             };
             let node = module.add_node(block, None, Some(value));

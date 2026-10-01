@@ -136,15 +136,23 @@ impl<'backend> Runner<'backend> {
                         });
                     }
                     let mut slots = Vec::with_capacity(kernel.inputs.len());
-                    for value in &kernel.inputs {
+                    for &value in &kernel.inputs {
+                        // **The refusal is assembled here rather than by the
+                        // filter.** `slot` says what the value *is*, and this is
+                        // the only place that knows who wanted it as a buffer and
+                        // which edge they named — so a refusal raised inside the
+                        // value would have to leave those two out and say
+                        // something a reader could not look up.
                         slots.push(
                             values
-                                .get(*value)
-                                .ok_or(GraphRefusal::UnknownValue {
+                                .get(value)
+                                .ok_or(GraphRefusal::UnknownValue { node: index, value })?
+                                .slot()
+                                .map_err(|found| GraphRefusal::NotBufferData {
                                     node: index,
-                                    value: *value,
-                                })?
-                                .slot()?,
+                                    value,
+                                    found,
+                                })?,
                         );
                     }
                     if let Some((first, other)) = ragged_host(&slots) {
@@ -157,12 +165,28 @@ impl<'backend> Runner<'backend> {
                     // The count is read **after** the buffers, and separately from
                     // them, so a node that swapped the two is told which of the two
                     // roles it got wrong rather than that a shape did not match.
+                    //
+                    // **The number is turned into an extent here, not by
+                    // `as_number`.** A negative count is about the number, and a
+                    // number reaches a graph in two ways — a node's count edge,
+                    // and a function's own return, which is asked for by nobody at
+                    // all — so the conversion belongs to whoever is about to
+                    // dispatch over `[0, count)` and the filter does not make it.
                     let count = match kernel.count {
                         Count::Constant(count) => count,
-                        Count::Value(value) => values
-                            .get(value)
-                            .ok_or(GraphRefusal::UnknownValue { node: index, value })?
-                            .as_count()?,
+                        Count::Value(value) => {
+                            let number = values
+                                .get(value)
+                                .ok_or(GraphRefusal::UnknownValue { node: index, value })?
+                                .as_number()
+                                .map_err(|found| GraphRefusal::CountNotANumber {
+                                    node: index,
+                                    value,
+                                    found,
+                                })?;
+                            usize::try_from(number)
+                                .map_err(|_| GraphRefusal::CountNegative { number })?
+                        }
                     };
 
                     let produced = match self.policy {

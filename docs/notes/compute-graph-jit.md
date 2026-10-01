@@ -722,12 +722,14 @@ and leaves `results` scalars on its own stack, and a node's outputs are the
 buffers. So a count is either a build-time literal or a value the caller passed,
 and both are honest answers.
 
-The two roles are asked of the table separately, and each refuses by name: a
-count edge that resolves to data, and a buffer input that resolves to a number,
-are different mistakes with different causes. **Those two methods are the filter,
-and there is no type category saying which role a value has** — a jit'd function
-may be handed arbitrary lichen values, and a recording sorts them into roles by
-asking, one value at a time.
+The two roles are asked of the table separately, and each is refused by name: a count
+edge that resolves to data, and a buffer input that resolves to a number, are different
+mistakes with different causes. **Those two methods are the filter, and there is no
+type category saying which role a value has** — a jit'd function may be handed arbitrary
+lichen values, and a recording sorts them into roles by asking, one value at a time.
+What each method returns on a refusal is *what the value is* and not a message: the
+node and the edge belong to the runner's demand, and only the runner is holding them
+(see [the fifth finding](#a-refusal-raised-where-it-cannot-say-who-asked-and-a-number-spotted-by-being-refused)).
 
 #### A number on an edge, and the closure question it exposed
 
@@ -953,7 +955,11 @@ rule the rest of the tree follows.
   zero and building a graph nobody can call.
 - **A count that is a negative number, or a buffer input that is a number, or a
   count that is data.** Three different mistakes, so three messages; the runner
-  asks the two roles of a value separately and refuses rather than coercing.
+  asks the two roles of a value separately and refuses rather than coercing. The
+  two that are about a demand also name **the node and the edge**, because a
+  refusal that cannot say who asked is a sentence about a graph of one node; the
+  negative one names neither, because a number is also what a function may
+  return and no node asked for that.
 - **A return naming neither a dispatch's output nor an input slot.**
 
 ### What this step is worth, stated plainly
@@ -975,12 +981,14 @@ specified without knowing what a node is, and that it produces the repeatable
 object the feature was decided around. **It is a shape step, and the ordering in
 the list below predates the measurement that says so.**
 
-## Three things a recording found, each of them a bug the walk had to have
+## Five things a recording found, each of them a bug the walk had to have
 
-These are the findings of building the recording half, and all three were live bugs
-rather than design questions. They are grouped because they share a cause: **a
-recording numbers things in its own space and a graph numbers them in another, and
-every one of these is a place where the two were confused.**
+These are the findings of building the recording half, and all five were live bugs
+rather than design questions. **Four share a cause: a recording numbers things in its
+own space and a graph numbers them in another, and every one of those four is a place
+where the two were confused.** The fifth is a different mistake with the same shape as
+the first — a check asked in the wrong place, where the facts it needed to answer with
+were not to be had.
 
 ### How many buffers a fragment reads is not in its shape, and the check that asked was wrong
 
@@ -1066,6 +1074,53 @@ return has to be able to say which of the two placeholder kinds it is — the sa
 `Placed` an edge carries. And having made it say so, `RunResult` grew a `Count` arm,
 because a graph that returns a number has to be able to hand it back. Refusing there
 would have made the permissive answer unreachable for exactly the graphs that need it.
+
+### A refusal raised where it cannot say who asked, and a number spotted by being refused
+
+`Value::slot()` and `Value::as_count()` raised `NotBufferData` and `CountNotANumber`
+themselves, and both variants named only `found` — what the value was. That is a
+sentence about a graph of one node. A graph has one demand per node and two edges per
+demand, so a refusal with neither number in it leaves the reader to work out which of
+forty demands was the wrong one, and the two numbers that would settle it are the ones
+the **runner** is holding: the position it is at, and the edge the node was built with.
+A value is not a node and names no edge, so no refusal raised inside a value could ever
+say them.
+
+So the filters now return `&'static str` — what the value *is* — and the runner
+assembles `NotBufferData { node, value, found }` and `CountNotANumber { node, value,
+found }`. A filter answers about itself; the asker names the demand.
+
+**`CountNegative` keeps no node, and that is now a decision rather than an omission.**
+It is about the *number*, and a number reaches a graph two ways: a node's count edge,
+and a function's own return, which no node asked for. Putting a node in that variant
+would mean inventing one where the mistake is not in any node — which is exactly the
+bug `RunArity` was split out of last round, where a run-level refusal carried
+`node: usize::MAX` and printed as a node number. Its message lost "a dispatch's" for
+the same reason: it is no longer only a dispatch that can hold a negative count.
+
+**And the consequence nobody planned was on the readback side.** `returned_role` used
+to classify a returned value by asking for its buffer and *catching* the refusal —
+`Err(NotBufferData) => value.as_count()` — so a number was recognised by the fact that
+it had been refused. That made the readback depend on a diagnostic it was about to throw
+away, and it would have broken outright the day that diagnostic wanted to say which node
+asked: a returned number has no node, because no node asked for it. It is now a total
+match on `Value`'s variants, which is what a three-way sort actually is.
+
+The two filters and that match **cannot drift apart**, and that is the reason the
+readback is allowed to classify on its own: all three are exhaustive matches over the
+same enum, so adding a kind to `Value` breaks every one of them at compile time. That
+is a stronger guarantee than the one the filters were introduced with, which argued
+only that no *third kind* existed.
+
+**The extent moved with it, and it took a real hazard away.** `as_count` returned
+`usize` and did the `usize::try_from` itself, so it was the only thing standing between
+`LowValue::USize(number as usize)` — written twice in `compute.rs` — and a negative
+count silently becoming an enormous length. That was a coincidence and not an
+invariant: the conversion belongs to whoever is about to dispatch over `[0, count)`, and
+a count arrives as a node's edge *or* as the function's own return. So `as_number`
+hands back the `i64`, the runner and the readback each convert once, and
+`RunResult::Count` is a `usize` — which **deletes the two `as usize` rather than
+guarding them.**
 
 ### The contradiction: a graph cannot hold the closures its native nodes call
 
