@@ -395,6 +395,123 @@ k
 }
 
 #[test]
+fn jit_tuple_codomain_returns_several_values() {
+    // The mirror of the multi-arity *domain*: a tuple codomain returns several
+    // values at once.  The body is one wasm stack slot per leaf, so the
+    // function is `(i64, i64) -> (i64, i64)` and the launch yields the tuple of
+    // them — the two facts are the same count, read from the body at compile
+    // time and from the run at launch time.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Int> => (p(0), p(1)))
+compute.launch k (5, 3)
+"#);
+    assert_eq!(
+        out, "(5, 3): <Int, Int>",
+        "tuple-codomain jit+launch produced: {out:?}"
+    );
+}
+
+#[test]
+fn jit_tuple_codomain_computes_each_leaf() {
+    // Each leaf is its own scalar body, not a copy of the tuple: the first is
+    // the identity and the second sums the domain, so a leaf that were emitted
+    // as the wrong expression — or read from the wrong stack slot — would show
+    // here.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Int> => (p(0), p(0) + p(1)))
+compute.launch k (5, 3)
+"#);
+    assert_eq!(
+        out, "(5, 8): <Int, Int>",
+        "per-leaf tuple codomain produced: {out:?}"
+    );
+}
+
+#[test]
+fn jit_tuple_codomain_elements_are_indexable() {
+    // The tuple the launch returns is an ordinary lichen array value, so a
+    // downstream read addresses a leaf by position with no special case.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Int> => (p(0) + 10, p(1) + 100))
+r = compute.launch k (2, 3)
+(r(0), r(1))
+"#);
+    assert_eq!(
+        out, "(12, 103): <Int, Int>",
+        "indexing a returned tuple produced: {out:?}"
+    );
+}
+
+#[test]
+fn jit_three_value_codomain_returns_three_values() {
+    // Three leaves, so the function is `(i64) -> (i64, i64, i64)` — a distinct
+    // wasm signature from the two-value one, which is what forces the assembler
+    // to key its type index on the (parameter arity, result arity) *pair*.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (x : Int => (x, x + 1, x + 2))
+compute.launch k 7
+"#);
+    assert_eq!(
+        out, "(7, 8, 9): <Int, Int, Int>",
+        "three-value tuple codomain produced: {out:?}"
+    );
+}
+
+#[test]
+fn jit_tuple_codomain_launches_through_the_cross_kernel_wrapper() {
+    // The `compute.call k a` form reaches the same path (`run_kernel`) as
+    // `launch`, so the multi-value result is a property of the *run*, not of the
+    // one operator that usually spells it.  It renders as an array rather than
+    // a tuple because `call` is the **untyped** form: `CallOp` types its result
+    // as a fresh codomain cell (the callee's signature is read at assembly time,
+    // not by the gate), so the type is undecided here — the same fact
+    // `jit_cross_kernel_call` pins for the single-value case.
+    let out = run(r#"
+@{ compute = import "compute.lichen" @}
+k = compute.jit (p : <Int, Int> => (p(0) - p(1), p(0) + p(1)))
+compute.call k (10, 4)
+"#);
+    assert_eq!(
+        out, "[6, 14]: ?a",
+        "compute.call on a tuple-codomain kernel produced: {out:?}"
+    );
+}
+
+#[test]
+fn jit_refuses_a_cross_kernel_call_to_a_multi_value_kernel() {
+    // A callee that returns several values cannot be read as a *single* value
+    // by a caller's body: the wasm `call` pushes one value per result, where
+    // the body expects one.  So it is refused **by name** — naming the callee
+    // and its result arity — rather than silently truncated to the first result
+    // (which would answer `p(0)` here and look like it worked).
+    let messages = fail(
+        r#"
+@{ compute = import "compute.lichen" @}
+k0 = compute.jit (p : <Int, Int> => (p(0), p(1)))
+k1 = compute.jit (q : <Int, Int> => compute.launch k0 q)
+compute.launch k1 (5, 3)
+"#,
+    );
+    assert!(
+        !messages.is_empty(),
+        "calling a multi-value kernel must be refused, got: {messages:?}"
+    );
+    let message = messages.join("; ");
+    assert!(
+        message.contains("more than one value"),
+        "the refusal must name its own cause: {message:?}"
+    );
+    assert!(
+        message.contains("compute.jit"),
+        "the refusal must name the diagnostic it was recorded under: {message:?}"
+    );
+}
+
+#[test]
 fn a_tuple_domain_kernel_type_renders_as_a_function() {
     // A tuple-domain kernel's signature is `[<Int, Int>, Int]`; the struct's
     // `.sig` field carries it, so the type renders as the struct

@@ -101,8 +101,12 @@ emits the operator via `ctx.op_node(...)`, and returns the `[value, type]` pair.
   (`$plrun(native, sig, a)`) — gate the signature value (a function type),
   unify the argument against the domain, and emit the operator over
   `[native, a]`.  `LaunchOp` pairs the result with the **lazy codomain**, so a
-  launch's result is the callee's own codomain (`Int` for a scalar kernel).
-  `ParLaunchOp` cannot: its result is a `Buffer` for a one-output index function
+  launch's result is the callee's own codomain (`Int` for a scalar kernel, and the
+  tuple type itself for a tuple-codomain one).  This needs **no change** for a
+  tuple codomain, and the asymmetry with `ParLaunchOp` is the point: the codomain
+  is *read* here as a type value the checker has already built, so its arity rides
+  along for free.  `ParLaunchOp` cannot read it: its result is a `Buffer` for a
+  one-output index function
   and a *tuple* of buffers for a several-output one, and the arity that decides
   which is not knowable here — `build` runs once on the frozen wrapper template,
   where `.sig` is still an unbound cell, and a tuple type is a value node with
@@ -171,10 +175,20 @@ cross-module-shared artifacts.
 ## 4. Codegen: bytecode fragments, not a module
 
 `jit` emits the function's **body** as a `KernelFragment { param_shape, body,
-outputs }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
+outputs, results }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
 Splitting "emit bytecode" from "assemble a module" is what lets the launcher
 resolve cross-kernel call indices after the kernel's relative launch set is laid
 out.
+
+`outputs` and `results` are two different counts and must not be conflated:
+`outputs` is how many **output buffers** a fragment writes (a parallel kernel's
+output-buffer count; `0` for a scalar `jit`), and `results` is how many `i64`
+values the body leaves on the **stack** — the wasm function's result arity. A
+parallel fragment has `results: 1` (its dummy `Const(0)`); a scalar kernel has
+`results: 1`; a tuple-codomain kernel has one per leaf. Both are compiled
+properties read off the fragment rather than discovered at run time, and both are
+in `fragment_digest`, so two fragments differing only in either cannot intern to
+one id and be served each other's module.
 
 ```
 enum KernelInstr {
@@ -214,6 +228,36 @@ drives the wasm parameter list (`Vec![ValType::I64; arity]`) and the per-element
 `flatten_offset`. On the launch side the tuple argument is unwrapped by `collect_args` and
 the now multi-arity `main` is called through the dynamic `wasmi::Func::call` API.
 
+A **tuple codomain** is the mirror: `compute.jit (p : <Int, Int> => (p(0), p(1)))`
+compiles to wasm `(i64, i64) -> (i64, i64)`. `codomain_leaves` resolves the body's
+return value into the leaves to emit — a bare value is the one-leaf form, a
+materialized tuple value one leaf per element, in source order — and each leaf is
+emitted by `emit_node`, so each is its own stack slot. The walk is the same shape
+as `emit_tuple_leaves`'s (the cross-kernel **argument** walk), reached through the
+same peel chain: a `value_of` extraction, a `Parameterized` cell, then the node
+itself. A *nested* tuple is refused by name rather than flattened, because each
+leaf must leave exactly one value or the stack slots interleave.
+
+The count of leaves becomes `KernelFragment::results`, and it is what types the
+assembled function and sizes the launch's output buffer. `assemble_module`
+therefore keys its type index on the **pair** `(parameter arity, result arity)`,
+not on the parameter arity alone: two fragments can share a parameter arity and
+differ in result arity (`(i64) -> i64` against `(i64) -> (i64, i64)`), and wasm
+function types are indexed by type — keying on one arity would hand the second the
+first's single-`i64` signature and the module would not validate. On the way back,
+`kernel_results_value` gives a bare `USize` for one result and the **tuple** of
+them for several (the same array value `ParLaunch` builds for its output buffers),
+so `r(0)`/`r(1)` index a returned tuple with no special case.
+
+A **callee that returns several values** is refused by name inside a kernel body.
+A wasm `call` pushes one value per result, where the caller's body expects one, so
+an `N`-result callee would leave `N` values in a one-value position — the silent
+miscompilation this crate never allows (the same reason a conditional write is
+refused rather than emitted). Re-materialising a tuple would mean spilling those
+values into locals, a primitive `KernelInstr` has no encoding for; so until it
+does, `emit_cross_kernel_call` refuses naming the callee and its arity
+(`CROSS_KERNEL_RESULT_ARITY`) rather than truncating to the first result.
+
 ## 5. Launch-time assembly (the deferred linker)
 
 `run_kernel` BFS's the kernel's **relative launch set** — the kernel plus every kernel it
@@ -252,7 +296,17 @@ the wrapper `launch` (whose argument arrives as a `Parameterized` cell). The ass
 the struct rendering (`struct<.native <_>, .sig Int -> Int>`) and the lazily-read codomain
 resolution (`6 : Int`, `12 : Int`).
 
-The **multi-output** group pins the tuple codomain: one `plrun` producing two buffers read
+The **multi-value** group pins a **tuple codomain** end to end — the mirror of the
+multi-arity domain: two leaves returning `(5, 3): <Int, Int>`, a per-leaf body
+(pin `5, 8`) so a leaf emitted from the wrong stack slot would show, a returned
+tuple indexed back with `r(0)`/`r(1)`, a three-leaf codomain `(7, 8, 9)` (the
+distinct wasm signature that forces `assemble_module` to key its type index on the
+arity *pair*), and the same multi-value run reached through the untyped
+`compute.call` path. One test pins the **decision** about a multi-value callee
+called from inside another body: it is refused, and the refusal names its cause
+("more than one value") rather than silently truncating to the first result.
+
+The **multi-output** group pins the parallel tuple codomain: one `plrun` producing two buffers read
 by ordinal (`(2, 4): <Int, Int>`), three outputs with `collect` on a middle one, and the two
 refusals that keep the every-ordinal-written invariant — a `compute.write` inside a
 conditional, and a codomain position that is not a write (refused *by position*).
@@ -279,7 +333,11 @@ the same sites, not three more.
 ## 8. v1 scope
 
 The kernel-safe subset is scalar arithmetic over a scalar or tuple-of-scalars domain; the
-codomain is a single `i64`. A cross-kernel callee may have **any** scalar-or-tuple domain:
+codomain is a scalar `i64` or a **tuple** of them — a tuple codomain's body is flattened to
+one stack slot per leaf, the wasm function returns one `i64` per leaf
+(`KernelFragment::results`), and the launch yields their tuple. A **nested** tuple codomain
+is refused, and a callee that returns several values is refused inside a body (it cannot be
+read as one value). A cross-kernel callee may have **any** scalar-or-tuple domain:
 its argument is flattened into one `i64` per leaf of that domain, either from a concrete
 tuple value or passed through from the caller's own parameter (see
 [below](#multi-arity-cross-kernel-calls)). Beyond that: higher-order kernels, recursion

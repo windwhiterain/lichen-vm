@@ -68,6 +68,12 @@ the remaining coupling lives (see
 
 - `flat_arity` counts the scalar leaves for the wasm signature, so a nested
   tuple `((Int, Int), Int)` flattens to three `i64` parameters.
+- The **result** side is deliberately *not* a low type: a tuple codomain's arity
+  is counted by walking the body's own value into its leaves
+  (`codomain_leaves`), because the low-type pass only ever sees the domain. So
+  the wasm signature's two halves come from two different places — the domain
+  from `flat_arity`, the results from the body walk — and `assemble_module`
+  therefore keys its type index on the `(parameter arity, result arity)` pair.
 - `emit_node` reads a parameter at an index path (`param_path` +
   `flatten_offset`) and maps it to its flattened wasm local — one mechanism for
   scalar, flat-tuple, and nested-tuple reads. It also looks through the

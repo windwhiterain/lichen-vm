@@ -38,6 +38,9 @@
 //! - `launch k a` reads `k.native`/`k.sig`, gates the `.sig` (a function type,
 //!   binding the domain/codomain lazily), unifies `a` against the domain, and
 //!   its result is the kernel's codomain — a function-style apply over a kernel.
+//!   A **tuple** codomain is the multi-result form: the body is flattened to one
+//!   stack slot per leaf, the wasm function returns one `i64` per leaf, and the
+//!   launch yields the tuple of them.
 //! - `parallel f` lifts a single-arg `?cfg -> Write` index function into a
 //!   parallel kernel struct (`cfg = (n, (buffer…))` — the count is `cfg(0)`,
 //!   the input buffers a tuple at `cfg(1)`); `plrun k cfg` runs it over
@@ -164,18 +167,27 @@ fn intern_kernel(fragment: KernelFragment) -> KernelId {
 }
 
 /// A fragment's content digest: the domain shape plus the lowered body plus the
-/// output count.
+/// output count plus the result count.
+///
+/// **Every field of the fragment is hashed, and that is the invariant.**  The
+/// digest is what makes a [`KernelId`] an identity, so a field left out of it
+/// is a way for two fragments that differ in it to intern to *one* id — and
+/// then the module cache, keyed on `(LaunchMode, KernelId)`, serves one kernel's
+/// module for another's, silently.  `results` in particular is what types the
+/// assembled function's result vector, so a fragment that returned two values
+/// and one that returned three must not share an entry.
 ///
 /// The `Debug` rendering is the canonical form here because it is a total,
-/// deterministic function of all three — the same reason the round-trip tests
-/// can print a value — and this runs once per `jit`, against a wasm compile it
-/// exists to avoid repeating.
+/// deterministic function of the fields it hashes — the same reason the
+/// round-trip tests can print a value — and this runs once per `jit`, against a
+/// wasm compile it exists to avoid repeating.
 fn fragment_digest(fragment: &KernelFragment) -> u64 {
     use std::hash::{Hash as _, Hasher as _};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}", fragment.param_shape).hash(&mut hasher);
     format!("{:?}", fragment.body).hash(&mut hasher);
     fragment.outputs.hash(&mut hasher);
+    fragment.results.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -188,6 +200,7 @@ mod kernel_intern_tests {
             param_shape: LowShape::USize,
             body,
             outputs: 0,
+            results: 1,
         }
     }
 
@@ -323,6 +336,21 @@ struct KernelFragment {
     /// of the *compiled* fragment, so a `plrun` allocates exactly this many
     /// buffers and never has to discover at run time which ones were written.
     outputs: usize,
+    /// How many `i64` values this fragment's body leaves on the stack — the wasm
+    /// function's **result arity**, and the length of the `Vec<ValType>` the
+    /// assembler emits for it.
+    ///
+    /// `1` for a scalar body and for a parallel fragment (whose body ends in
+    /// the dummy `Const(0)`), and one per leaf of a **tuple** codomain: the
+    /// body's tuple value is flattened so each leaf is its own stack slot, which
+    /// is what makes a kernel return several values at once.
+    ///
+    /// This is a *compiled* property, read from the registry by [`run_kernel`]
+    /// to size its output buffer and by the assembler to type the function, so
+    /// it must never be discovered at run time from the values that came back.
+    /// It is part of [`fragment_digest`] for the same reason `outputs` is: two
+    /// fragments differing only in result arity must not intern to one id.
+    results: usize,
 }
 
 /// The compute value vocabulary — injected as a sibling leaf into a host's
@@ -701,7 +729,7 @@ where
                     }
                 };
                 match run_kernel(id, &args) {
-                    Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
+                    Ok(results) => kernel_results_value(module, block, results),
                     Err(err) => {
                         // Whatever the wasm run said — the assembly, the `main`
                         // export, or the call itself — is this refusal's own
@@ -762,7 +790,7 @@ where
                     }
                 };
                 match run_kernel(id, &args) {
-                    Ok(result) => <P::Value as From<LowValue>>::from(LowValue::USize(result)),
+                    Ok(results) => kernel_results_value(module, block, results),
                     Err(err) => {
                         // As in `Launch`: the run's own message is this
                         // refusal's cause, so it is recorded as it stands.
@@ -1161,13 +1189,80 @@ where
     // A scalar kernel has no output buffer: `compute.write` is a parallel-only
     // operator, so the ordinal counter below stays at 0 and `outputs` is 0.
     let mut out = 0usize;
-    emit_node(module, &params, ret_value, &mut body, &mut out)?;
+    // The body is emitted **leaf by leaf**: a scalar codomain is the one leaf,
+    // a tuple codomain one leaf per element, each becoming its own stack slot.
+    // The count of what the walk returns is the fragment's result arity, so the
+    // wasm signature and the value the launcher reads back are both a function
+    // of the body's own value rather than of a hardcoded one.
+    let leaves = codomain_leaves(module, ret_value)?;
+    for leaf in &leaves {
+        emit_node(module, &params, *leaf, &mut body, &mut out)?;
+    }
 
     Ok(KernelFragment {
         param_shape,
         body,
         outputs: 0,
+        results: leaves.len(),
     })
+}
+
+/// The body's value resolved into the **leaves** a wasm body must leave on the
+/// stack — one stack slot each, in source order.
+///
+/// This is the codomain counterpart of [`parallel_output_nodes`], and it is the
+/// same walk: a bare value node is the single-leaf form (a scalar codomain),
+/// and a **materialized tuple value** is the multi-leaf one (a tuple codomain,
+/// `p => (p(0), p(1))`), reached through a `value_of` extraction or a
+/// `Parameterized` cell exactly as an argument tuple is.
+///
+/// A *nested* tuple is not flattened into extra leaves here: each leaf is emitted
+/// by [`emit_node`], which produces exactly one value, so a nested tuple would
+/// leave its elements interleaved on the stack in the wrong order.  It is
+/// refused by name instead, with the path to the offending position.
+fn codomain_leaves<P>(module: &Module<P>, ret_value: NodeId) -> Result<Vec<NodeId>, String>
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // Peel the `value_of` extraction first: the checker reaches most values
+    // through one, so asking the extraction whether it is a tuple would answer
+    // for the *pair* it wraps.
+    let value = value_of_node(module, ret_value).unwrap_or(ret_value);
+    // SAFETY: `value` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = match unsafe { module.array_items(value) } {
+        Some(items) if !items.is_empty() => items,
+        _ => return Ok(vec![ret_value]),
+    };
+    let mut leaves = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let element = dyn_node(item.node)?;
+        if is_tuple_value(module, element) {
+            return Err(format!(
+                "a kernel codomain must be a scalar or a tuple of scalars, but element {index} \
+                 of the returned tuple is itself a tuple"
+            ));
+        }
+        leaves.push(element);
+    }
+    Ok(leaves)
+}
+
+/// Whether `node` is (or peels to) a materialized tuple value — the
+/// multi-element array value a tuple literal is stored as.  Shared by the
+/// codomain walk and the cross-kernel argument walk, which must agree on what
+/// counts as a tuple.
+fn is_tuple_value<P>(module: &Module<P>, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let value = value_of_node(module, node).unwrap_or(node);
+    // SAFETY: `value` is a live node of `module`.
+    matches!(unsafe { module.array_items(value) }, Some(items) if !items.is_empty())
 }
 
 /// Lower a single-arg `?cfg -> ?write` index function into a **parallel
@@ -1274,13 +1369,17 @@ where
         ));
     }
     // The index function writes into the output buffers (side effects); leave a
-    // dummy scalar on the stack so the shared `assemble_module`'s `-> i64`
-    // signature holds for the write-only kernel.
+    // dummy scalar on the stack so the shared `assemble_module` signature holds
+    // for the write-only kernel.  That dummy is exactly **one** value, which is
+    // what this fragment's `results` records — a parallel kernel's result
+    // buffers are its outputs, not its wasm results, and the run reads them out
+    // of the buffers the `write` import filled.
     body_instr.push(KernelInstr::Const(0));
     Ok(KernelFragment {
         param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
         body: body_instr,
         outputs: outputs.len(),
+        results: 1,
     })
 }
 
@@ -1357,7 +1456,17 @@ fn assemble_module(
     let base: u32 = if uses_imports { 2 } else { 0 };
 
     // Type section: the import signatures (if any), then one
-    // `(param-arity) -> i64` signature per distinct arity.
+    // `(param-arity) -> (result-arity)` signature per distinct **pair** of
+    // arities.
+    //
+    // Keying on the pair is what a multi-value codomain requires: two fragments
+    // can share a parameter arity and differ in result arity (`(i64) -> i64`
+    // against `(i64) -> (i64, i64)`), and wasm function types are indexed by
+    // type, not by arity — so keying on the parameter arity alone would hand the
+    // second fragment the first one's single-`i64` signature and the module
+    // would not validate.  Keying on the pair also keeps the shared entry for
+    // the two runs that *do* agree: the scalar root and the parallel path's
+    // write-only kernel, both `(i64…; n) -> i64`.
     let mut types = TypeSection::new();
     let (mut read_ty, mut write_ty) = (0u32, 0u32);
     if uses_imports {
@@ -1370,18 +1479,25 @@ fn assemble_module(
             .ty()
             .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
     }
-    let mut type_index_by_arity: HashMap<usize, u32> = HashMap::new();
+    // Keyed by the **whole** signature, not the parameter arity alone: wasm
+    // indexes a type by its whole `(params, results)` pair, and `(i64) -> i64`
+    // and `(i64) -> (i64, i64)` share a parameter arity, so keying on one half
+    // would hand the second fragment the first one's signature and the module
+    // would not validate.
+    let mut type_index_by_signature: HashMap<(usize, usize), u32> = HashMap::new();
     let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
     for frag in ordered {
-        let arity = flat_arity(&frag.param_shape);
-        let ti = *type_index_by_arity.entry(arity).or_insert_with(|| {
-            let id = types.len();
-            types
-                .ty()
-                .function(vec![ValType::I64; arity], vec![ValType::I64]);
-            id
-        });
-        func_types.push(ti);
+        let (params, results) = (flat_arity(&frag.param_shape), frag.results);
+        let ti = type_index_by_signature
+            .entry((params, results))
+            .or_insert_with(|| {
+                let id = types.len();
+                types
+                    .ty()
+                    .function(vec![ValType::I64; params], vec![ValType::I64; results]);
+                id
+            });
+        func_types.push(*ti);
     }
 
     let mut wasm = WasmModule::new();
@@ -1924,11 +2040,33 @@ where
     Some(k)
 }
 
+/// A cross-kernel call to a callee that returns **more than one value**.
+///
+/// The emitter's contract is that every `emit_node` leaves exactly one value on
+/// the stack, and a wasm `call` pushes one value per result the callee declares.
+/// So an `N`-result callee inside a body would push `N` values where the body
+/// expects one — which is exactly the silent miscompilation this crate never
+/// allows (the same reason a conditional write is refused rather than emitted).
+///
+/// Re-materialising a tuple would mean spilling those `N` values into locals and
+/// reading one back for a further `local.get`, a spilling primitive
+/// [`KernelInstr`] has no encoding for; until it does, the call is **refused by
+/// name**, saying the callee and its arity, rather than truncated to its first
+/// value.
+const CROSS_KERNEL_RESULT_ARITY: &str = "a cross-kernel call to a kernel that returns more than \
+one value is not supported: a kernel body reads a callee result as a single value, and \
+re-materialising a tuple result needs local slots the kernel instruction set does not yet \
+have";
+
 /// Emit a cross-kernel call (style 2): the (scalar) argument expression, then
 /// a [`KernelInstr::CallKernel`] the launch-time assembler resolves.  Both a
 /// direct kernel `Apply` (`k x`) and the wrapper's `launch`/`$launch`
 /// (`compute.launch k x`) lower here — the latter is the typed form (its
 /// codomain is resolved by [`LaunchOp`]), the former the untyped-form gap.
+///
+/// **The callee must return exactly one value.**  A multi-value callee is
+/// refused by name (see [`CROSS_KERNEL_RESULT_ARITY`]) rather than truncated to
+/// its first result.
 fn emit_cross_kernel_call<P>(
     module: &Module<P>,
     params: &[ParamSlot],
@@ -1944,17 +2082,23 @@ where
 {
     let kid = kernel_id_of(module, kernel)
         .ok_or_else(|| "cross-kernel call target is not a kernel value".to_string())?;
-    // The callee's domain is a fact of the *callee's* registration, read here
-    // and released before any emission: emitting can reach a further
-    // cross-kernel call, which locks the same registry again, and the lock is
-    // not reentrant.
-    let shape = {
+    // The callee's domain **and** result arity are facts of the *callee's*
+    // registration, read here and released before any emission: emitting can
+    // reach a further cross-kernel call, which locks the same registry again,
+    // and the lock is not reentrant.
+    let (shape, results) = {
         let fragments = kernels().lock().unwrap();
-        fragments
+        let fragment = fragments
             .get(&kid)
-            .map(|fragment| fragment.param_shape.clone())
-            .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?
+            .ok_or_else(|| "cross-kernel callee is not a registered kernel".to_string())?;
+        (fragment.param_shape.clone(), fragment.results)
     };
+    if results != 1 {
+        return Err(format!(
+            "cross-kernel call to kernel {kid}, which returns {results} value(s): {}",
+            CROSS_KERNEL_RESULT_ARITY
+        ));
+    }
     if flat_arity(&shape) == 1 {
         // A scalar-domain callee takes one i64, and the argument is peeled
         // once and emitted once — the pre-existing path, kept exactly as it was.
@@ -2562,6 +2706,42 @@ fn argument_kind(value: Option<&LowValue>) -> &'static str {
     }
 }
 
+/// The value a completed kernel run produces: a bare `USize` for a
+/// single-result kernel, and the **tuple** of them for a multi-result one.
+///
+/// This is the same shape `ParLaunch` builds for its several output buffers —
+/// each result becomes a node of `block` first, so the array holds live nodes
+/// rather than detached values — and it is the direct counterpart of
+/// [`codomain_leaves`], which is what decided how many results there are.  A
+/// lichen tuple is an ordinary array value, so `r(0)`/`r(1)` index it with no
+/// special case, exactly as the codomain's leaves were ordinary `i64`s.
+fn kernel_results_value<P>(module: &mut Module<P>, block: BlockId, results: Vec<usize>) -> P::Value
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    let Some((first, rest)) = results.split_first() else {
+        // A fragment always leaves at least one value, so an empty run is not
+        // reachable; stay lazy rather than fabricating a value for it.
+        return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
+    };
+    if rest.is_empty() {
+        // The single-result form is a bare `USize`, exactly what it always was.
+        return <P::Value as From<LowValue>>::from(LowValue::USize(*first));
+    }
+    let scalar = |value: &usize| <P::Value as From<LowValue>>::from(LowValue::USize(*value));
+    let items: Vec<ArrayItem> = results
+        .iter()
+        .map(|value| {
+            let node = module.add_node(block, None, Some(scalar(value)));
+            ArrayItem::new(AnyNodeId::Dynamic(node))
+        })
+        .collect();
+    let handle = module.alloc_array(&items, block);
+    <P::Value as From<LowValue>>::from(LowValue::Array(handle))
+}
+
 /// Read a binary op/Index operand array `[a, b]` as two dynamic node ids.
 fn operand_pair<P>(module: &Module<P>, operand: Option<NodeId>) -> Result<(NodeId, NodeId), String>
 where
@@ -2757,20 +2937,24 @@ fn cached_module(
     Ok((engine, module))
 }
 
-/// Execute a compiled kernel on an argument vector with wasmi, returning the
-/// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number of
-/// `i64` inputs, so a tuple-domain kernel (arity N) launches with N arguments
-/// and a scalar kernel (arity 1) with one.
+/// Execute a compiled kernel on an argument vector with wasmi, returning its
+/// results — one `usize` per value the fragment declares
+/// ([`KernelFragment::results`]).  The dynamic [`wasmi::Func::call`] API accepts
+/// any number of `i64` inputs, so a tuple-domain kernel (arity N) launches with
+/// N arguments and a scalar kernel (arity 1) with one.
 ///
-/// **The argument count is checked here, not by `wasmi`.**  Both numbers are
-/// facts compute already holds — the callee's registered domain flattened by
-/// [`flat_arity`], and the vector built from the argument — so the refusal can
-/// state them, where a mismatch left to `wasmi::Func::call` reports only that
-/// the count was wrong.  It is the **only** place the check happens for a
-/// `compute.call`, whose `CallOp` gate deliberately leaves the argument's
-/// shape unconstrained (a fresh domain cell), so this message is the only
-/// account of a wrong-arity call.  A registered fragment's `param_shape` is a
-/// decided scalar or tuple of them ([`kernel_domain`]), which is what makes
+/// **Both the argument count and the output buffer are decided here, not by
+/// `wasmi`.**  All three numbers are facts compute already holds — the callee's
+/// registered domain flattened by [`flat_arity`], its registered result arity,
+/// and the vector built from the argument — so the refusals can state them,
+/// where a mismatch left to `wasmi::Func::call` reports only that a count was
+/// wrong.  The **argument** check is the *only* place it happens for a
+/// `compute.call`, whose `CallOp` gate deliberately leaves the argument's shape
+/// unconstrained (a fresh domain cell), so this message is the only account of a
+/// wrong-arity call.  The **output** buffer is sized from the fragment because a
+/// too-small one would make wasmi report a type error against a signature this
+/// crate itself emitted.  A registered fragment's `param_shape` is a decided
+/// scalar or tuple of them ([`kernel_domain`]), which is what makes
 /// [`flat_arity`] an exact parameter count here rather than its filler.
 ///
 /// The kernel's **relative launch set** — the kernel itself plus every kernel
@@ -2779,13 +2963,15 @@ fn cached_module(
 /// assembly, the deferred linker), the root exported as `main`.  The module is
 /// fetched through [`cached_module`], so a repeat launch of the same kernel
 /// reuses it (`P1-18`).
-fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
-    let expected = {
+fn run_kernel(id: KernelId, args: &[i64]) -> Result<Vec<usize>, String> {
+    // Both counts are read under one lock and released before assembly, which
+    // locks the same registry again through [`assemble_launch_set`].
+    let (expected, results) = {
         let fragments = kernels().lock().unwrap();
         let fragment = fragments
             .get(&id)
             .ok_or_else(|| format!("kernel {id} is not registered"))?;
-        flat_arity(&fragment.param_shape)
+        (flat_arity(&fragment.param_shape), fragment.results)
     };
     if args.len() != expected {
         return Err(format!(
@@ -2798,6 +2984,10 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
             args.len()
         ));
     }
+    // A fragment's result arity is at least one (a body always leaves a value),
+    // so the buffer is never empty; the guard keeps the invariant stated here
+    // rather than resting on the emitter alone.
+    let outputs = results.max(1);
     let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
     let mut store = wasmi::Store::new(&engine, ());
     let linker = wasmi::Linker::new(&engine);
@@ -2808,13 +2998,18 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
         .get_func(&store, "main")
         .ok_or_else(|| "kernel has no export `main`".to_string())?;
     let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
-    let mut outputs = [wasmi::Val::I64(0)];
-    main.call(&mut store, &inputs, &mut outputs)
+    let mut results: Vec<wasmi::Val> = vec![wasmi::Val::I64(0); outputs];
+    main.call(&mut store, &inputs, &mut results)
         .map_err(|e| e.to_string())?;
-    let result = outputs[0]
-        .i64()
-        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
-    Ok(result as usize)
+    results
+        .iter()
+        .map(|value| {
+            value
+                .i64()
+                .map(|result| result as usize)
+                .ok_or_else(|| "kernel `main` returned a non-i64".to_string())
+        })
+        .collect()
 }
 
 /// Assemble the wasm bytes of the root kernel's **relative launch set** — the
@@ -3327,6 +3522,7 @@ mod parallel_launch_tests {
                 KernelInstr::Const(0),
             ],
             outputs: 2,
+            results: 1,
         }
     }
 
