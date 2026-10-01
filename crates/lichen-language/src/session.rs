@@ -575,24 +575,45 @@ fn splice_program(
         return None;
     }
 
-    // Project the window's byte range into the new source: positions at/before
-    // the edit start are unchanged; positions at/after the edit end shift by
-    // the length delta.
-    let new_ob = win_ob;
-    let new_eb = if win_eb >= e_end {
-        win_eb + delta
+    // The window's byte range in the new source.  Its **start** is at or before
+    // the edit start (the window's first statement is one the edit reached, and a
+    // statement starting *inside* the replaced region was replaced, so it clamps
+    // to the edit start); its **end** is where the untouched suffix begins, which
+    // is at or after the edit end, because a statement overlapping the edit is in
+    // the window and the first one after it therefore cannot be.
+    //
+    // Projecting the end from the *suffix* rather than from the window's own last
+    // token is what keeps an edit that deletes whole statements from cutting the
+    // window through the statement that follows: the deleted text includes the
+    // separator between them, so the window's last token ends *inside* the
+    // replaced region and projecting it would leave half a statement in the
+    // window — and a window that reaches past the edit would drop the new
+    // statements entirely.
+    let suffix_ob = if hi < old_n {
+        old_tokens[old_program.stmt_ranges[hi].0].range.0 as isize
     } else {
-        win_eb
+        // The window reaches the end, so the "suffix" is the end of the old
+        // source and the window's new end is the end of the new one — which is
+        // what puts an append inside the window.
+        old_tokens
+            .last()
+            .map_or(win_eb, |token| token.range.1 as isize)
     };
+    let new_ob = win_ob.min(e_start);
+    let new_eb = suffix_ob + delta;
 
-    // New token index range [ns, ne) covering the window.
+    // New token index range [ns, ne) covering the window: from the first token
+    // the edit reaches to the suffix's first **statement** token.  A separator at
+    // the boundary is not a statement, so it is skipped — and the index `ne`
+    // lands on is exactly the token the suffix shift below is measured against,
+    // in both the old and the new stream.
     let ns = new_tokens
         .iter()
         .position(|t| t.range.1 as isize > new_ob)
         .unwrap_or(new_tokens.len());
     let mut ne = new_tokens.len();
     for (k, t) in new_tokens.iter().enumerate() {
-        if t.range.0 as isize >= new_eb {
+        if t.range.0 as isize >= new_eb && t.kind != lex::TokenKind::Separator {
             ne = k;
             break;
         }
@@ -602,24 +623,37 @@ fn splice_program(
         return None;
     }
     let ns = ns.min(eof);
-    // When the window is the tail (it reaches the last statement), extend it to
-    // the end of the buffer so an append that adds statements is fully parsed.
-    let mut ne = ne.clamp(ns, eof);
-    if hi == old_n {
-        ne = eof;
-    }
-    if ns >= ne {
+    // An **empty** window is a legal splice: the edit deleted statements outright,
+    // so the prefix and the suffix meet with nothing between them.  (`ns > ne`
+    // cannot arise from the two scans above; the clamp only makes the empty case
+    // explicit.)
+    let ne = ne.clamp(ns, eof);
+    if ns > ne {
         return None;
     }
 
-    let (win_stmts, win_ranges, win_errors) =
-        crate::parse::parse_statement_region_traced(new_tokens, ns, ne);
+    // An empty window is a legal splice — the edit deleted statements outright, so
+    // the prefix and the suffix meet with nothing between them — but it is not a
+    // *parse*: the region parser requires at least one statement, so asking it for
+    // an empty region reports "found the end of the program".
+    let (win_stmts, win_ranges, win_errors) = if ns == ne {
+        (Vec::new(), Vec::new(), Vec::new())
+    } else {
+        crate::parse::parse_statement_region_traced(new_tokens, ns, ne)
+    };
 
     // Spliced logical statements: the unchanged prefix, the freshly re-parsed
     // window, then the unchanged suffix.  The suffix's *content* is untouched
     // but its token indices shift by `dk`, since the window's token count may
-    // have changed (an insertion/removal before it).
-    let dk = ne as isize - old_th as isize;
+    // have changed (an insertion/removal before it).  `dk` is measured from the
+    // suffix's **own** first token in each stream, which is the same token on
+    // both sides — not from the window's end, which the edit may have deleted
+    // along with the separator that used to sit there.
+    let dk = if hi < old_n {
+        ne as isize - old_program.stmt_ranges[hi].0 as isize
+    } else {
+        0
+    };
     let mut stmts: Vec<BlockStmt> = Vec::new();
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     stmts.extend(old_program.statements[..lo].iter().cloned());
