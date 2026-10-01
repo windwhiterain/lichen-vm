@@ -330,6 +330,7 @@ where
         no_native_ops(),
         None,
         Vec::new(),
+        "",
     );
     let diagnostics = report.diagnostics;
     // The frontend's `ExprId → span` index (highlevel is span-free).

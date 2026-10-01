@@ -17,10 +17,23 @@ use std::collections::HashMap;
 use lichen_language_parser::path::Path;
 use lichen_lowlevel::{ModuleKey, StaticNodeId};
 
+/// The name of the source a cell came from — a file identity the caller names
+/// (a path, a URI), **never** anything derived from content: the whole design
+/// serves a requirement that no key decides reuse, and a cell's identity is its
+/// path plus this name.
+pub type SourceId = String;
+
+/// One retained cell.
+struct Cell {
+    reference: StaticNodeId,
+    /// The source that produced it — what [`CellStore::invalidate`] drops.
+    source: SourceId,
+}
+
 /// The retained cells of one compilation context, keyed by occurrence path.
 #[derive(Default)]
 pub struct CellStore {
-    cells: HashMap<Path, StaticNodeId>,
+    cells: HashMap<Path, Cell>,
     next_key: u64,
 }
 
@@ -32,15 +45,38 @@ impl CellStore {
     /// The frozen value of a cell, or `None` when the binding must be compiled.
     ///
     /// A `None` is the honest answer for both "never retained" and "dirty": the
-    /// caller decides dirtiness (the edit names the file it changed), and a cell
-    /// whose file is dirty is simply not consulted.
+    /// caller decides dirtiness (the edit names the file it changed) and drops a
+    /// dirty source's cells with [`Self::invalidate`], so this only ever answers
+    /// for a cell the caller still believes in.
     pub fn reference(&self, path: &Path) -> Option<StaticNodeId> {
-        self.cells.get(path).copied()
+        self.cells.get(path).map(|cell| cell.reference)
     }
 
-    /// Record a freshly frozen cell under its path.
-    pub fn record(&mut self, path: Path, reference: StaticNodeId) {
-        self.cells.insert(path, reference);
+    /// Record a freshly frozen cell under its path and the source that produced
+    /// it.
+    pub fn record(&mut self, path: Path, source: &str, reference: StaticNodeId) {
+        self.cells.insert(
+            path,
+            Cell {
+                reference,
+                source: source.to_string(),
+            },
+        );
+    }
+
+    /// Drop every cell that came from `source`, returning how many went.
+    ///
+    /// This is the **dirty input**, and it is deliberately the caller's: an edit
+    /// names the file it changed, so the store never has to detect anything — and
+    /// the caller drops the cells of every file that *imports* the changed one
+    /// too (the reverse import closure), which is the file granularity the design
+    /// chose for source edits.  A dropped cell is not consulted again, so its
+    /// binding is compiled and re-frozen on the next build; its artifact stays in
+    /// the registry until eviction exists.
+    pub fn invalidate(&mut self, source: &str) -> usize {
+        let before = self.cells.len();
+        self.cells.retain(|_, cell| cell.source != source);
+        before - self.cells.len()
     }
 
     /// A device key for the next artifact.
