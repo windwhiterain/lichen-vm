@@ -1,7 +1,7 @@
 //! Freezing a solved module into static form under its registry-allocated key.
 
 use super::*;
-use crate::Release;
+use crate::{Release, is_unbound};
 impl<P: Program> StaticModule<P> {
     /// The node's solved value — `Parameterized` when the node is a
     /// residual computation with no cached answer.
@@ -70,7 +70,12 @@ impl<P: Program> StaticModule<P> {
     ///
     /// Every intra-artifact reference must land inside the set: the maps below
     /// are indexed with `[...]`, so a reference that escapes panics here rather
-    /// than producing an artifact that names a node it does not contain.
+    /// than producing an artifact that names a node it does not contain.  The
+    /// one edge that may leave the set is the equality class — the closure takes
+    /// a class whole only from a node whose own value is unbound ([`closure`]) —
+    /// so a class the artifact does not hold whole is **spliced** to the members
+    /// it does hold, exactly as the GC splices a class that lost members
+    /// (`Module::flatten_class`).
     fn freeze_set(
         module: &Module<P>,
         key: ModuleKey,
@@ -84,26 +89,70 @@ impl<P: Program> StaticModule<P> {
         for (index, &id) in node_ids.iter().enumerate() {
             node_map.insert(id, LocalNodeId { index });
         }
+        // The frozen nodes of each class, in slotmap order (so a spliced class's
+        // member list is canonical).  A class is held whole when the artifact has
+        // as many of its members as the class has — every member present is a
+        // distinct member, so the counts can only agree when nothing is missing.
+        let mut classes: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for &id in node_ids {
+            classes.entry(class_root(module, id)).or_default().push(id);
+        }
+        // The links a class the artifact does not hold whole is spliced down to,
+        // in the source's key space (mapped through `node_map` below): the first
+        // frozen member (in slotmap order) is the representative, every other
+        // member's parent points straight at it, and the member list is re-linked
+        // in that order — `disjoint::rebuild`'s splice, in the artifact's own key
+        // space.  Two frozen members of one class therefore stay in one class,
+        // which is all the frozen links are read for (`static_find`, the apply's
+        // clone grouping), and a member the artifact does not hold has no clone to
+        // be grouped with.
+        let mut spliced: HashMap<NodeId, disjoint::Meta<NodeId>> = HashMap::new();
+        for (&class, members) in &classes {
+            if members.len() as u32 == module.nodes[class].equality.size() {
+                continue;
+            }
+            for (position, &member) in members.iter().enumerate() {
+                spliced.insert(
+                    member,
+                    disjoint::Meta::new(
+                        (position > 0).then_some(members[0]),
+                        members.get(position + 1).copied(),
+                        (position == 0).then_some(members[members.len() - 1]),
+                        // A non-representative's size is never read
+                        // (`disjoint::Meta`'s contract); 1 is `make_set`'s value.
+                        if position == 0 {
+                            members.len() as u32
+                        } else {
+                            1
+                        },
+                    ),
+                );
+            }
+        }
         let mut nodes: Vec<StaticNode<P>> = Vec::with_capacity(node_ids.len());
         let mut values: Vec<Option<P::Value>> = Vec::with_capacity(node_ids.len());
         for &id in node_ids {
             let node = &module.nodes[id];
             values.push(node.value);
+            // A class held whole carries its links over verbatim; one that is not
+            // is spliced to the members the artifact holds.
+            let equality = spliced.get(&id).copied().unwrap_or(node.equality);
             nodes.push(StaticNode {
                 value: None, // rewritten in phase 2, once arena offsets exist
-                // The class's low type, not this member's own slot: a frozen
-                // class is a decided leaf whose members all read alike, and
-                // the authoritative copy lives on the representative.
+                // The class's low type, not this member's own slot: the low type
+                // is a property of the class, and the authoritative copy lives on
+                // its representative — a member's own slot may hold nothing while
+                // its class is decided.
                 low_shape: module.class_low_type(id).cloned(),
                 operation: node.operation.map(|operation| StaticOperation {
                     operator: operation.operator,
                     operand: operation.operand.map(|operand| node_map[&operand]),
                 }),
                 equality: disjoint::Meta::new(
-                    node.equality.parent().map(|p| node_map[&p]),
-                    node.equality.next().map(|n| node_map[&n]),
-                    node.equality.tail().map(|t| node_map[&t]),
-                    node.equality.size(),
+                    equality.parent().map(|p| node_map[&p]),
+                    equality.next().map(|n| node_map[&n]),
+                    equality.tail().map(|t| node_map[&t]),
+                    equality.size(),
                 ),
                 // A node the deep pass never ran on is unproven — treated as
                 // parameterized (conservative: it materializes as a clone).
@@ -395,11 +444,19 @@ fn rewrite_value<P: Program>(
 /// - `operation.operand` — a residual node must be able to re-run later, so
 ///   unlike the GC's walk, which deliberately does not follow a cached value's
 ///   operand, this one must;
-/// - the **whole equality class** — `parent`/`next`/`tail` all go through
-///   `node_map`, and half a class is a broken class.  A class is expanded **once**
-///   however many of its members the walk reaches: a shared type node puts every
-///   binding of a program in one class, and expanding it per visited member was
-///   the walk's entire cost;
+/// - the equality class of a node whose **own value is still unbound** — the
+///   class is what holds that node's answer (the shared inference cell, the
+///   template's pattern), so the class is the structure a later read of it
+///   depends on and is taken whole.  A node that already carries its own solved
+///   value takes nothing from its class: every member of a solved class reads
+///   alike, and a member the walk never reaches has no clone to be grouped with
+///   (`static_find`, the apply's clone grouping, only ever asks about nodes the
+///   artifact holds).  Either way a class is expanded **once**, however many of
+///   its members the walk reaches: a shared type node puts every binding of a
+///   program in one class, and walking it per visited member was the walk's
+///   entire cost.  What the artifact does with a class it does not hold whole is
+///   [`freeze_set`]'s business (it splices it, as the GC splices a class that
+///   lost members);
 /// - the **whole function template** — `StaticFunction.nodes` is the template's
 ///   member list, and a missing member is a broken template.
 ///
@@ -413,13 +470,23 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
     let mut nodes: HashSet<NodeId> = HashSet::new();
     let mut functions: HashSet<FunctionId> = HashSet::new();
     let mut work: Vec<NodeId> = roots.to_vec();
-    // The classes whose members have already been pulled in.  A class is expanded
-    // **once**, not once per member the walk visits: `class_members` is a walk of
-    // its own, and a *shared* type node puts every binding of the program in one
-    // class — so re-expanding it for each visited node was the whole cost of this
-    // walk (measured: 363,627 visits for a 611-node closure, 7 ms; a class is
-    // expanded once now).  The set of nodes the closure ends up with is unchanged.
-    let mut expanded: HashSet<NodeId> = HashSet::new();
+    // The classes the walk has already expanded.  A class is expanded **once**,
+    // not once per member the walk visits: `class_members` is a walk of its own,
+    // and a *shared* type node puts every binding of the program in one class —
+    // so re-expanding it for each visited member was the whole cost of this walk
+    // (measured: 363,627 visits for a 611-node closure, 7 ms).
+    //
+    // Only a node whose **own value is unbound** takes its class, and that is what
+    // keeps a decided leaf from paying for a class it does not need.  Such a
+    // node's answer *is* its class — a shared inference cell, a template's
+    // pattern — so the class is the structure a later read of it depends on and is
+    // taken whole.  A node that already carries its own solved value takes nothing
+    // from its class: a solved class reads alike at every member, and a member the
+    // walk never reaches has no clone to be grouped with.  Deciding it per class
+    // instead — "is every member of this class bound?" — costs the class's size at
+    // every freeze that touches it: measured, ~50 µs for a 601-member shared type
+    // class, against ~7 µs for the same freeze in a small program.
+    let mut decided: HashSet<NodeId> = HashSet::new();
     while let Some(node) = work.pop() {
         if !nodes.insert(node) {
             continue;
@@ -429,10 +496,12 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
         let Some(entry) = module.nodes.get(node) else {
             continue;
         };
-        let class = class_root(module, node);
-        if expanded.insert(class) {
-            for member in class_members(module, class) {
-                work.push(member);
+        if is_unbound(entry.value) {
+            let class = class_root(module, node);
+            if decided.insert(class) {
+                for member in class_members(module, class) {
+                    work.push(member);
+                }
             }
         }
         if let Some(operand) = entry.operation.and_then(|operation| operation.operand) {
@@ -479,18 +548,23 @@ fn closure<P: Program>(module: &Module<P>, roots: &[NodeId]) -> (Vec<NodeId>, Ve
             _ => {}
         }
     }
-    let node_ids: Vec<NodeId> = module
-        .nodes
-        .iter()
-        .map(|(id, _)| id)
-        .filter(|id| nodes.contains(id))
+    let mut node_ids: Vec<NodeId> = nodes
+        .into_iter()
+        .filter(|&node| module.nodes.contains_key(node))
         .collect();
-    let function_ids: Vec<FunctionId> = module
-        .functions
-        .iter()
-        .map(|(id, _)| id)
-        .filter(|id| functions.contains(id))
+    let mut function_ids: Vec<FunctionId> = functions
+        .into_iter()
+        .filter(|&function| module.functions.contains_key(function))
         .collect();
+    // Slot order, without scanning the module: `NodeId`'s `Ord` is its key data's,
+    // whose first field is the slot index, so sorting the frozen set is exactly
+    // the order `SlotMap::iter` yields — the order the whole-module freeze files
+    // its nodes in, so a closure's local indices are a subsequence of that one's.
+    // The scan this replaces was the walk's dominant cost once the closure was
+    // small: one lookup per node of the *module* per freeze (measured, ~40 µs to
+    // order a 7-node closure in a 3,600-node module).
+    node_ids.sort_unstable();
+    function_ids.sort_unstable();
     (node_ids, function_ids)
 }
 
