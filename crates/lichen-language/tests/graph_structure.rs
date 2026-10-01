@@ -23,12 +23,15 @@
 //! - the callee's body holds the compute operator node, and *that* node's
 //!   operand array is `[kernel, cfg]`, readable without evaluating it — which is
 //!   what keeps a **build** from running a dispatch;
-//! - the `cfg`'s count is a **decided value** on a node, and the buffers are
-//!   node ids to be classified rather than values to be read.
+//! - the `cfg` reaches the dispatch through a `value_of`-style `Index`
+//!   extraction, and the tuple behind it is readable with no evaluation at all.
 //!
-//! What is **not** settled is how a capture is read out of a template nothing
-//! has applied, which is the last test here: the kernel slot is a node in the
-//! function's own block with no cached value. See the module note on that test.
+//! **But nothing in a template's body is decided**, and that is the fact the
+//! lowering turns on: the count and the buffers in the `cfg` are
+//! `Parameterized` until the function is applied. So a graph is built by
+//! *applying* the function and recording what it dispatches, not by reading a
+//! template. See
+//! [`a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied`].
 
 use std::sync::Arc;
 
@@ -37,7 +40,7 @@ use lichen_language::preprocess::preprocess;
 use lichen_language::program::LangProgram;
 use lichen_language::{compile_with_imports_at, lex};
 use lichen_lowlevel::{
-    AnyFunctionId, AnyNodeId, BlockId, FunctionId, LowOperator, LowValue, Module, NodeId,
+    AnyFunctionId, AnyNodeId, FunctionId, LowOperator, LowValue, Module, NodeId,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -246,37 +249,89 @@ fn a_body_dispatches_through_an_apply_whose_callee_holds_the_operator() {
     );
 }
 
-/// What the kernel slot is, and the part of the lowering that is still open.
+/// Follow a `value_of` extraction — `Index(x, i)` — to `x`, which is how the
+/// checker reaches through a pair or a struct field to the value itself.
+fn through_index(module: &Module<LangProgram>, node: NodeId) -> NodeId {
+    let operation = module.node_operation(node).expect("an Index node");
+    assert_eq!(
+        format!("{:?}", operation.operator),
+        "LowOperator(Index)",
+        "this is the extraction the shape is about"
+    );
+    items(module, operation.operand.expect("an operand"))[0]
+}
+
+/// **Nothing in a template's body is decided, and that is the fact that decides
+/// how a graph has to be built.**
 ///
-/// The kernel slot is **not** a `ParKernel` value sitting there ready to read,
-/// and it is not a free variable homed outside the function either. It is a node
-/// inside the function's own block with **no cached value**, because the
-/// template has never been applied and so nothing has resolved the capture.
+/// The cfg tuple is readable without any evaluation, and reading it is not
+/// enough: its two elements — the count and the buffer — are `Parameterized`.
+/// The `4` and the `data` in the body are unbound cells until the function is
+/// applied, because nothing has applied it.
 ///
-/// That is the honest state of the design: the indirection from `Apply` to
-/// operator is settled and the operand array's shape is settled, but *how a
-/// capture is read out of an unapplied template* is not. A lowering written
-/// before that is answered would be guessing at exactly the part that decides
-/// which nodes a graph has to keep alive.
+/// So a graph cannot be built by *reading* a template. It has to be built by
+/// **applying** the function and recording what it dispatches, which is what
+/// `ValueId`'s own note says ("the graph is built by recording an evaluation
+/// that has already happened"). Walking the structure without evaluating gets
+/// you the graph's shape and none of its values, and the values are the part a
+/// run needs.
+///
+/// Applying is safe, and is equivalent to not applying, for the reason the
+/// language gives for free: **every** lichen function has exactly one
+/// parameter, and this one does not read it, so what is applied does not
+/// matter. A body that dispatched its own parameter is the unrecordable case.
 #[test]
-fn the_kernel_slot_is_an_unresolved_capture_rather_than_a_readable_value() {
+fn a_templates_cfg_is_readable_but_nothing_in_it_is_decided_until_it_is_applied() {
     let (mut module, root) = run(CHAIN);
     let function = function_of(&mut module, root);
-    let home: BlockId = module.functions[dynamic(function)].block;
-
     let dispatch = the_dispatch(&module, function).expect("the body dispatches");
-    let operation = module.node_operation(dispatch).unwrap();
-    let kernel = items(&module, operation.operand.unwrap())[0];
-
-    assert_eq!(
-        module.node_value(AnyNodeId::Dynamic(kernel)),
-        None,
-        "nothing has evaluated the capture, so the kernel slot holds no value yet"
+    let operands = items(
+        &module,
+        module.node_operation(dispatch).unwrap().operand.unwrap(),
     );
+
+    // The cfg reaches the dispatch through an `Index` extraction, so following
+    // it is the whole of the lookup — the same walk `value_of_node` does.
+    let cfg = through_index(&module, operands[1]);
+    let cfg_items = items(&module, cfg);
+    assert_eq!(cfg_items.len(), 2, "(count, buffers), read off the value");
+    for (position, &node) in cfg_items.iter().enumerate() {
+        let value = module
+            .node_value(AnyNodeId::Dynamic(node))
+            .and_then(|v| AsEnum::<LowValue>::as_enum(&v));
+        assert_eq!(
+            value,
+            Some(LowValue::Parameterized),
+            "cfg[{position}] is {node:?}, and it is an unbound cell: the count and the buffer \
+             in the body are decided by applying the function, not before it"
+        );
+    }
+}
+
+#[test]
+fn the_kernel_slot_is_a_field_read_whose_target_is_the_captured_kernel_struct() {
+    let (mut module, root) = run(CHAIN);
+    let function = function_of(&mut module, root);
+    let dispatch = the_dispatch(&module, function).expect("the body dispatches");
+    let operands = items(
+        &module,
+        module.node_operation(dispatch).unwrap().operand.unwrap(),
+    );
+
+    // `k.native` — an `Index` into the captured kernel struct, with neither the
+    // struct nor the field index carrying a value, for the same reason the cfg
+    // does not. What settles it is the application, not the read.
     assert_eq!(
-        module.node_block(kernel),
-        home,
-        "and the slot is a node in the function's own block — so \"homed outside the \
-         function\" is not the test for a free variable either"
+        format!(
+            "{:?}",
+            module.node_operation(operands[0]).map(|o| o.operator)
+        ),
+        "Some(LowOperator(Index))"
+    );
+    let target = through_index(&module, operands[0]);
+    assert_eq!(
+        module.node_value(AnyNodeId::Dynamic(target)),
+        None,
+        "and the captured struct it reads out of has no value yet either"
     );
 }
