@@ -3557,9 +3557,22 @@ where
     // **Deep, not shallow, and that is the whole difference between recording a
     // body and applying one.** A block's value is the tuple of its statements'
     // values, so a shallow evaluation of the body produces that tuple and stops —
-    // the statements inside it have not run, and a recording taken there is an
+    // the statements inside it have not run, and a recording taken here is an
     // empty graph that still looks like a graph. The deep pass is what *demands*
     // the tuple, and demanding it is what performs the dispatches.
+    //
+    // **Not forced, and the reason is measured rather than preferred.** A deep
+    // pass still honours the shallow mask, so a statement the body's answer never
+    // reads is a subtree nothing descends into — and the recording misses the
+    // dispatch the program performed. `Module::evaluate_node_forced` reaches it
+    // and was tried here: it performs every statement, and it also leaves the
+    // deep pass's value caches unwritten, so the reader that has to name the
+    // function's return finds no value and every recording — including one with
+    // no unread statement at all — refuses with "this function's return is not a
+    // value a graph can hand back". A second ordinary deep pass over the block's
+    // items did not restore the caches. Forcing is the right walk and it is not
+    // this one: the invariants it trades away are the lowlevel's, and they are
+    // worth more here than the completeness is worth on its own. See the landmine.
     let result = module.evaluate_node_deep(apply, Some(block));
     if matches!(
         AsEnum::<LowValue>::as_enum(&result),

@@ -1373,16 +1373,28 @@ the rule is one sentence — *a `plrun` is the only operator that may see a plac
 which is worth more than three correct arms that each know their own case.
 
 **And the probe that found all this found something larger, which this does not
-close.** A body of three statements — dispatch, `collect` the result into a name
-nobody reads, dispatch again — records a two-node graph and answers with the numbers
-the chain gives anyway. The `collect` was not refused or miscompiled: **it was never
-executed**, because a block's value is the tuple of its statements' values and nothing
-demanded that one. That is dead-code elimination, and dead code is not a bug. The wart
-is that the elision is invisible while the refusal is loud, so **one more `let` binding
-turns a working program into a named refusal for a reason that has nothing to do with
-what it computes.** The refusals above cannot catch the elided case, because the
-statement never reaches an operator arm. Whether the walk should demand every statement
-— making the elision impossible rather than silent — is open; see the landmine.
+close.** A body of three statements — dispatch, bind the result to a name nobody reads,
+dispatch again — records a two-node graph and answers with the numbers the chain gives
+anyway. The middle dispatch was neither refused nor miscompiled: **it was never
+performed**, because a `let` inside a block is lazy and nothing read the name. The
+decision taken is that this must not stand — a graph has to be what its function wrote,
+or a dispatch the program performed is missing from the thing that is supposed to be the
+program, and the program's own answer gives nothing away.
+
+**It cannot be fixed from `lichen-compute`, and the reason is measured.** The lowlevel
+has the right walk — `Module::evaluate_node_forced`, which descends every array position
+and forces operand chains before the operation runs — and it performs every statement.
+It also leaves the deep pass's value caches unwritten, so `returned_value_ids` finds no
+value where the function's return is, and **every** recording refuses with "this
+function's return is not a value a graph can hand back" — including the ordinary
+two-dispatch chain with nothing unread in it. A second ordinary deep pass over the
+block's own items did not put the caches back. Forcing is the right walk in general and
+the wrong one for a recording, because what it spends is the lowlevel's laziness
+invariants.
+
+So this half is left open on purpose, with the number pinned in
+`an_unread_dispatch_is_missing_from_the_graph_and_that_is_measured`, and the next step is
+in the lowlevel: a pass that descends the shallow mask without giving up the caches.
 
 ## The next step, in order
 
@@ -1540,20 +1552,25 @@ statement never reaches an operator arm. Whether the walk should demand every st
   that resolves to a number are two different mistakes, and the tempting repair
   for the second — treat the number as a one-element host vector — is a run that
   succeeds on a kernel nobody wrote. The two roles are separate functions.
-- **A recorded body is only recorded as far as the recording walk *forces* it.**
-  Measured, not reasoned: a body of three statements — dispatch, `collect` the
-  dispatch's result into a name nobody reads, dispatch again — produced a two-node
-  graph, and the program answered with the numbers the chain gives anyway. The
-  `collect` was not dropped or miscompiled: **it was never executed**, because a
-  block's value is the tuple of its statements' values and nothing read that one.
-  **As dead code that is correct** — a dispatch whose result is discarded has no
-  observable effect but device time, and leaving it out is what any compiler
-  would do. The wart is not the elision, it is that **the same statement is
-  refused or silently elided depending on whether anything reads its result**: one
-  more `let` binding in the body and the `collect` is now a named refusal, and the
-  program that was working stops working for a reason that has nothing to do with
-  what it computes. Whether the walk should demand every statement instead — and
-  make the elision impossible rather than invisible — is open.
+- **A recorded body is only recorded as far as the recording walk *forces* it, and
+  that is a measured gap rather than a settled decision.** Measured, not reasoned: a
+  body of three statements — dispatch, bind the result to a name nobody reads, dispatch
+  again — produced a two-node graph, and the program answered with the numbers the chain
+  gives anyway. The middle dispatch was not dropped or miscompiled: **it was never
+  performed**, because a `let` inside a block is lazy and nothing read the name. A block's
+  value is the tuple of its statements' values, and that tuple does not even contain the
+  unread one — so nothing reachable from the result can force it.
+  **The decision taken is that a graph must be what its function wrote**, and the answer
+  is not the obvious one. `Module::evaluate_node_forced` is the lowlevel's own "ignore
+  laziness, descend everything" pass, and it *does* perform every statement — and it also
+  leaves the deep pass's value caches unwritten, so the reader that has to name the
+  function's return finds no value and **every** recording refuses, including one with no
+  unread statement at all. A second ordinary deep pass over the block's items did not
+  restore the caches. Forcing is the right walk in general and it is the wrong one here:
+  what it trades away is `lichen-lowlevel`'s laziness invariants, and they are worth more
+  than this completeness until the lowlevel grows a pass that descends without spending
+  them. `an_unread_dispatch_is_missing_from_the_graph_and_that_is_measured` pins the
+  number, so the day it becomes 3 that is the fix rather than a regression.
 - **A graph that captures anything is a use-after-free waiting for a
   `drop_block`.** Nothing in the type says so, because `Graph` is plain data and
   a capture is what the *builder* would have done. The refusal is the only thing
