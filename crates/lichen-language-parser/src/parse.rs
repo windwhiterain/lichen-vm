@@ -1,5 +1,8 @@
 //! The parser: tokens → AST, with error recovery.
 //!
+//! The recovered-error walk and chumsky's diagnostic conversion live in the
+//! sibling modules `error_blocks` and `diagnostics`.
+//!
 //! The top level **is a block** — a program is a [`block_body`]: a `name =
 //! expr; …` binding / bare-expression statement list, `pub`-capable, followed
 //! by an optional tail expression (the end of the input acts as the closing
@@ -22,12 +25,13 @@
 //! flag: `(a, b)` is always a `Tuple` value, `<a, b>` always a `TypeTuple`
 //! type expression, and `_` always a [`Expr::Placeholder`] (never a name)
 //! — an annotated `expr : expr` parses both sides the same way.  Angle
-//! brackets are exclusively type-level: `<a, b>` is always a `TypeTuple`,
-//! `struct<T1, T2>` always a `StructType`, and `T<e>` (a `<` directly after
-//! an expression) is always the array type.  Postfix forms are marked by a `Glue` token (the lexer
+//! brackets are type-level: `<a, b>` is always a `TypeTuple`, `struct<T1, T2>`
+//! always a `StructType`, and the array type is the keyword-led
+//! `array<T, n>`.  Postfix forms are marked by a `Glue` token (the lexer
 //! emits it when the delimiter is directly glued to the previous token): a
-//! glued `[` is an index `e[i]`, a glued `<` an array type.  A spaced `[` is
-//! a fresh array-literal atom (so `f ([1, 2])` applies `f` to the array) and
+//! glued `[` is an index `e[i]`, a glued `<` a raw type-component read
+//! `X<e>`.  A spaced `[` is a fresh array-literal atom (so `f ([1, 2])`
+//! applies `f` to the array) and
 //! a spaced `<` a tuple-type atom.  Precedence (loosest → tightest): `=>` (right) → `:`
 //! (right) → `->` (right) → `<=`/`==` (left) → `+`/`-` (left) → application
 //! (left) → postfix `<e>` / `[e]` / `(…)` / atoms.  A `(` immediately after
@@ -52,15 +56,24 @@
 //! therefore produces a program (possibly with error nodes) for almost any
 //! input; only an input with no parseable statement at all fails outright.
 
-use chumsky::error::RichReason;
 use chumsky::input::Stream;
 use chumsky::prelude::*;
+use std::collections::HashSet;
 
 use lichen_language_lex::{Span, Token, TokenKind};
 
+#[path = "parse/diagnostics.rs"]
+mod diagnostics;
+#[path = "parse/error_blocks.rs"]
+mod error_blocks;
+
+use diagnostics::diag_from;
+
+pub use error_blocks::collect_error_blocks;
+
 use crate::ast::{
-    BinOp, Binding, BlockStmt, ErrorBlock, Expr, Program, RecordField, Stmt, StructField,
-    StructInstArg, TypeConst,
+    BinOp, Binding, BlockStmt, Expr, Program, RecordField, Stmt, StructField, StructInstArg,
+    TypeConst,
 };
 
 /// A parse diagnostic: a message plus the source position it is grounded in.
@@ -111,12 +124,14 @@ fn parse_inner(tokens: &[Token]) -> ParseOut {
     let parser = program_parser(tokens);
     let (output, errs) = parser.parse(stream).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
+    // The dedup key is the diagnostic's whole content, so the set answers
+    // "has this exact diagnostic been emitted?" in one hash lookup instead of
+    // a scan of the list built so far — chumsky emits the same rich error
+    // more than once, and the list it feeds is the recovery's whole output.
+    let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
     for e in &errs {
         let diag = diag_from(tokens, e);
-        if !errors
-            .iter()
-            .any(|d| d.span == diag.span && d.message == diag.message)
-        {
+        if seen.insert((diag.span, diag.message.clone())) {
             errors.push(diag);
         }
     }
@@ -244,12 +259,11 @@ fn region_inner(tokens: &[Token], start: usize, end: usize) -> RegionOut {
     let stream = Stream::from_iter(region.iter().cloned());
     let (output, errs) = parser.parse(stream).into_output_errors();
     let mut errors: Vec<ParseDiag> = Vec::new();
+    // The same content-keyed dedup as [`parse_inner`]'s.
+    let mut seen: HashSet<(Option<Span>, String)> = HashSet::new();
     for e in &errs {
         let diag = diag_from(region, e);
-        if !errors
-            .iter()
-            .any(|d| d.span == diag.span && d.message == diag.message)
-        {
+        if seen.insert((diag.span, diag.message.clone())) {
             errors.push(diag);
         }
     }
@@ -655,9 +669,10 @@ enum Pre {
 
 /// The atoms, with their postfix forms: `e[i]` (array index), `a(k)` (the
 /// positional slot read — an adjacent single-expression paren), `t{k}`
-/// (table lookup), `T<e>` (array type), and `C(...)` (struct instantiation
-/// — any other adjacent paren content).  The bracket and angle forms are
-/// always postfix, with no whitespace rule; a paren or a brace is postfix
+/// (table lookup), `X<e>` (raw type-component read), and `C(...)` (struct
+/// instantiation — any other adjacent paren content).  The bracket and angle
+/// forms are always postfix, with no whitespace rule; a paren or a brace is
+/// postfix
 /// *only when adjacent* (no space before it) — a spaced `(` is a paren
 /// atom, and a spaced `{` is a block: the application rule treats either
 /// as an argument, never this postfix.
@@ -842,6 +857,33 @@ fn struct_inst_field<'a>(
     ))
 }
 
+/// A comma-separated list, a trailing comma tolerated — plus *whether any
+/// comma appeared*, which the callers use to split the single-comma-free form
+/// from the instantiating one.  One combinator, so the comma discipline and
+/// the trailing-comma tolerance of the two callers below cannot differ.
+fn comma_list<'a, T>(
+    item: impl Parser<'a, In<'a>, T, E<'a>> + Clone,
+) -> impl Parser<'a, In<'a>, (Vec<T>, bool), E<'a>> + Clone {
+    let first = item.clone().or_not();
+    first
+        .then(
+            token(TokenKind::Separator)
+                .ignore_then(item)
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then(token(TokenKind::Separator).or_not())
+        .map(|((first, rest), trailing)| {
+            let saw_comma = !rest.is_empty() || trailing.is_some();
+            let mut items = Vec::new();
+            if let Some(first) = first {
+                items.push(first);
+            }
+            items.extend(rest);
+            (items, saw_comma)
+        })
+}
+
 /// The content of an adjacent `(` in a struct-instantiation position: zero or
 /// more field arguments (each positional or `.name`-prefixed) separated by
 /// commas, a trailing comma tolerated — plus *whether any comma appeared*.
@@ -850,25 +892,7 @@ fn struct_inst_field<'a>(
 fn struct_inst_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<StructInstArg>, bool), E<'a>> + Clone {
-    let field = struct_inst_field(expr.clone());
-    let first = field.clone().or_not();
-    first
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(field.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
-        .map(|((first, rest), trailing)| {
-            let saw_comma = !rest.is_empty() || trailing.is_some();
-            let mut fields = Vec::new();
-            if let Some(f0) = first {
-                fields.push(f0);
-            }
-            fields.extend(rest);
-            (fields, saw_comma)
-        })
+    comma_list(struct_inst_field(expr))
 }
 
 /// The content of an adjacent `(`: zero or more expressions separated by
@@ -882,24 +906,7 @@ fn struct_inst_fields<'a>(
 fn paren_fields<'a>(
     expr: impl Parser<'a, In<'a>, Expr, E<'a>> + Clone,
 ) -> impl Parser<'a, In<'a>, (Vec<Expr>, bool), E<'a>> + Clone {
-    let first = expr.clone().or_not();
-    first
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(expr.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
-        .map(|((first, rest), trailing)| {
-            let saw_comma = !rest.is_empty() || trailing.is_some();
-            let mut fields = Vec::new();
-            if let Some(f0) = first {
-                fields.push(f0);
-            }
-            fields.extend(rest);
-            (fields, saw_comma)
-        })
+    comma_list(expr)
 }
 
 /// `(e)` — grouping, parens transparent; `(e1, …, en)` — a tuple value (always
@@ -1010,23 +1017,9 @@ fn table_literal<'a>(
     token(TokenKind::KwTable)
         .ignore_then(token(TokenKind::Glue).ignored().or_not())
         .ignore_then(token(TokenKind::LBrace))
-        .ignore_then(entry.clone().or_not())
-        .then(
-            token(TokenKind::Separator)
-                .ignore_then(entry.clone())
-                .repeated()
-                .collect::<Vec<_>>(),
-        )
-        .then(token(TokenKind::Separator).or_not())
+        .ignore_then(comma_list(entry))
         .then_ignore(token(TokenKind::RBrace))
-        .map_with(|((first, mut rest), _trailing), me| {
-            let mut entries = Vec::new();
-            if let Some(first) = first {
-                entries.push(first);
-            }
-            entries.append(&mut rest);
-            Expr::Table(entries, span_at(tokens, me.span().start))
-        })
+        .map_with(|(entries, _), me| Expr::Table(entries, span_at(tokens, me.span().start)))
 }
 
 /// An array element with an optional `~` prefix: `~ e`, `~2 e`, or a plain
@@ -1378,205 +1371,6 @@ fn if_expr<'a>(
             else_branch: Box::new(else_branch),
             span: span_at(tokens, me.span().start),
         })
-}
-
-/// Collect the byte-range masks of every recovered-error node in the AST, in
-/// source order.  [`Program::error_blocks`] carries these so the frontend can
-/// exclude the error regions from a content signature / diff.
-pub fn collect_error_blocks(program: &Program) -> Vec<ErrorBlock> {
-    fn walk_expr(e: &Expr, out: &mut Vec<ErrorBlock>) {
-        match e {
-            Expr::Err { range, start } => out.push(ErrorBlock {
-                range: *range,
-                start: *start,
-            }),
-            Expr::Int(..)
-            | Expr::Str(..)
-            | Expr::TypeConst(..)
-            | Expr::Name(..)
-            | Expr::Placeholder(..)
-            | Expr::TypeOf(..) => {}
-            Expr::Lambda {
-                parameter_type,
-                parameter_perspective,
-                r#return,
-                ..
-            } => {
-                if let Some(t) = parameter_type {
-                    walk_expr(t, out);
-                }
-                if let Some(p) = parameter_perspective {
-                    walk_expr(p, out);
-                }
-                walk_expr(r#return, out);
-            }
-            Expr::Apply {
-                function, argument, ..
-            } => {
-                walk_expr(function, out);
-                walk_expr(argument, out);
-            }
-            Expr::BinOp { left, right, .. } => {
-                walk_expr(left, out);
-                walk_expr(right, out);
-            }
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                walk_expr(condition, out);
-                walk_expr(then_branch, out);
-                walk_expr(else_branch, out);
-            }
-            Expr::Assert { value, .. } => walk_expr(value, out),
-            Expr::NativeCall { args, .. } => {
-                for a in args {
-                    walk_expr(a, out);
-                }
-            }
-            Expr::Index { array, index, .. } => {
-                walk_expr(array, out);
-                walk_expr(index, out);
-            }
-            Expr::RawIndex {
-                container, index, ..
-            } => {
-                walk_expr(container, out);
-                walk_expr(index, out);
-            }
-            Expr::FieldRead { container, key, .. } => {
-                walk_expr(container, out);
-                walk_expr(key, out);
-            }
-            Expr::NamedFieldRead { container, .. } => {
-                walk_expr(container, out);
-            }
-            Expr::RawNamedField { container, .. } => {
-                walk_expr(container, out);
-            }
-            Expr::TableFind { container, key, .. } => {
-                walk_expr(container, out);
-                walk_expr(key, out);
-            }
-            Expr::Annotation {
-                value,
-                r#type,
-                perspective,
-                ..
-            } => {
-                walk_expr(value, out);
-                if let Some(t) = r#type {
-                    walk_expr(t, out);
-                }
-                if let Some(p) = perspective {
-                    walk_expr(p, out);
-                }
-            }
-            Expr::Arrow {
-                parameter,
-                r#return,
-                ..
-            } => {
-                walk_expr(parameter, out);
-                walk_expr(r#return, out);
-            }
-            Expr::Tuple(elems, _) | Expr::TypeTuple(elems, _) | Expr::Array(elems, _) => {
-                for el in elems {
-                    walk_expr(el, out);
-                }
-            }
-            Expr::StructType(fields, _) => {
-                for field in fields {
-                    walk_expr(&field.ty, out);
-                }
-            }
-            Expr::StructInst { callee, fields, .. } => {
-                walk_expr(callee, out);
-                for f in fields {
-                    walk_expr(&f.value, out);
-                }
-            }
-            Expr::Table(entries, _) => {
-                for (k, v) in entries {
-                    walk_expr(k, out);
-                    walk_expr(v, out);
-                }
-            }
-            Expr::Shallow(inner, _, _) => walk_expr(inner, out),
-            Expr::TypeArray {
-                element_type,
-                length,
-                ..
-            } => {
-                walk_expr(element_type, out);
-                walk_expr(length, out);
-            }
-            Expr::Block {
-                statements, expr, ..
-            } => {
-                for s in statements {
-                    walk_stmt(s, out);
-                }
-                walk_expr(expr, out);
-            }
-            Expr::RecordBlock { fields, .. } => {
-                for f in fields {
-                    walk_expr(&f.value, out);
-                }
-            }
-        }
-    }
-    fn walk_stmt(s: &Stmt, out: &mut Vec<ErrorBlock>) {
-        match s {
-            Stmt::Binding(binding) => walk_expr(&binding.value, out),
-            Stmt::Expr(e) => walk_expr(e, out),
-        }
-    }
-    let mut out = Vec::new();
-    for bs in &program.statements {
-        walk_stmt(&bs.stmt, &mut out);
-    }
-    if let Some(e) = &program.expr {
-        walk_expr(e, &mut out);
-    }
-    out
-}
-
-// ---------------------------------------------------------------------------
-// Diagnostics
-
-/// Convert a chumsky error (token-index span, found token, expected labels)
-/// into this crate's diagnostic.
-fn diag_from(tokens: &[Token], e: &Rich<'_, Token, SimpleSpan<usize>>) -> ParseDiag {
-    let span = span_at(tokens, e.span().start);
-    let message = match e.reason() {
-        // A custom error (from the parser's own checks, e.g. a recovered
-        // binding value) carries its message directly.
-        RichReason::Custom(message) => message.to_string(),
-        RichReason::ExpectedFound { .. } => {
-            let found = e
-                .found()
-                .map(|t| t.kind.describe())
-                .unwrap_or_else(|| "the end of the program".to_string());
-            let expected: Vec<String> = e.expected().map(|p| p.to_string()).collect();
-            match expected.as_slice() {
-                [] => format!("unexpected {found}"),
-                [one] => format!("expected {one}, found {found}"),
-                [a, b] => format!("expected {a} or {b}, found {found}"),
-                _ => format!(
-                    "expected {}, or {}, found {found}",
-                    expected[..expected.len() - 1].join(", "),
-                    expected[expected.len() - 1],
-                ),
-            }
-        }
-    };
-    ParseDiag {
-        span: Some(span),
-        message,
-    }
 }
 
 #[cfg(test)]

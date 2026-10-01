@@ -41,24 +41,62 @@ and it is **yes: it already does.**
 `lichen-registry::device` (re-exported as `persist::artifact_hash`):
 
 ```rust
-pub fn artifact_hash(source: &[u8], dep_keys: &[ModuleKey]) -> Hash
+pub fn artifact_hash(source: Hash, deps: &[(ModuleKey, Hash)]) -> Hash
 ```
 
-SHA-256 over the raw source bytes **followed by its direct dependency keys in
-source order**. It is:
+SHA-256 over the raw source hash **followed by each direct dependency's key and
+identity, in source order**. It is:
 
-- **transitive** — a dependency change changes the importer's hash, so the
-  importer recompiles;
-- **deterministic** — every process computes the same hash for the same source
-  chain, so keys agree across processes;
+- **transitive** — a dependency's identity is the identity *it* was published
+  with, so a change anywhere in the recorded closure changes every importer's
+  identity, and the importer recompiles;
+- **deterministic** — every process computes the same identity for the same
+  source chain, so keys agree across processes;
 - **precise per stage in effect** — a file's token/AST depend on its own source
   only; only its lower/check depend on the (keyed) dependencies.
+
+**The dependency's identity, not its key, is what makes it transitive.** A
+recompile **reuses the key** (the key names the cache slot, not the content
+behind it — see `DeviceRegistry::alloc`), so a fold over keys alone leaves an
+importer's identity unchanged when a dependency's *content* changes. That is not
+a missed recompile but a wrong one: a frozen artifact is full of cross-module
+node references written as `(dependency key, index)`, so serving it after its
+dependency changed resolves those indices against the dependency's **new** node
+layout — wrong answers, and, when the index no longer names a slot, a hard
+`invalid SlotMap key used` panic. This was not hypothetical: the language server
+crashed on it every time an imported `.lichen` file was edited (recorded in
+[code-audit](code-audit.md), `P1-17`).
+
+Three sites answer "what identity does this dependency contribute", and they
+must give the **same** answer — a disagreement is not a miss but a permanent one,
+since the dependent would then recompile on every single run:
+
+- `DeviceRegistry::artifact_identity` — the write side, which needs the identity
+  *before* publishing, because the frozen artifact carries it in its header and
+  the load rejects a header that does not match;
+- `DeviceRegistry::publish` — the fold recorded with the artifact;
+- `DeviceRegistry::verify` — the fold **recomputed** from the graph as it stands
+  now, not read from the record. That recomputation is the whole mechanism: a
+  dependency republished since folds in its new identity, the answer stops
+  matching the frozen header, and the load rejects it.
+
+All three read the **registry's own record**, never the caller's in-memory view:
+an embedded dependency (`virtual:<name>`) has no source file and need have no
+record, and it must contribute the all-zero sentinel on both sides of the fold
+or every dependent would miss forever. `Entry::artifact` carries that recorded
+identity per file ID, which is what makes the fold transitive past one level;
+the registry file format is version 3 for it, and a version-2 file reads as
+unreadable and is recovered as a fresh registry — one full recompile, nothing
+else.
 
 `DeviceRegistry::verify(file_id, source)` is the *incremental verification*: it
 walks the **recorded** dependency graph (each node compares one source-file hash
 and recurses into its recorded deps) — "a source file hash and an index lookup
 per node, never a re-parse or a transitive re-hash — and only the chain that
-actually changed is recompiled."
+actually changed is recompiled." Note what the walk alone cannot catch: a
+dependency that was *already recompiled and republished* earlier in the same
+store matches its record again, so the walk passes and only the identity fold
+above rejects the importer.
 
 ## Cross-process sharing
 
@@ -113,7 +151,7 @@ dependency-aware) *is* the cross-process artifact.
 ### The artifact store is scoped per plugin set
 
 The `DeviceRegistry` cache root is **not** `lichendir()`: the compiler CLI
-takes an explicit cache root ([`lichen_language::cli::main_with_cache_dir`]), and
+takes an explicit cache root ([`lichen_compiler::cli::main_with_cache_dir`]), and
 **every** compiler — shipping and **plugin-built** — scopes it to a
 `compilers/<plugin-set-key>` slot (`lichendir()/compilers/<key>`).  This isolates
 the *compiled-artifact* store per vocabulary.  The artifact encoding depends on

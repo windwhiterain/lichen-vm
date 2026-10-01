@@ -42,7 +42,9 @@ fn raw_items(value: TestValue) -> Vec<ArrayItem> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value")
     };
-    array.items().to_vec()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }.to_vec()
 }
 
 #[test]
@@ -139,7 +141,7 @@ fn static_apply_bakes_constants_in_place() {
     let TestValue::U128(AnyHandle::Static(h)) = constant else {
         panic!("expected the baked static constant")
     };
-    let addr = h.offset as usize;
+    let addr = h.as_ptr() as usize;
     assert!(
         addr >= base && addr < end,
         "the payload must stay in the shared static arena"
@@ -673,6 +675,11 @@ fn frozen_dependency() -> (
     StaticNodeId,
     StaticNodeId,
 ) {
+    // Single-threaded sharing: a filed value carries raw arena handles, so this
+    // `Arc` cannot cross a thread (see the `Registry` doc in this crate); `Rc`
+    // is not available — `AGENTS.md`'s code taste forbids it.  The `Arc` stays
+    // because `Registry::new_module` takes it by reference.
+    #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     let mut a = Registry::new_module(&registry);
     let block = a.add_block(None);
@@ -799,11 +806,8 @@ fn freeze_rejects_an_unregistered_dependency_key() {
     );
     b.evaluate_node_deep(holder, None);
 
-    let elsewhere = Arc::new(RwLock::new(Registry::new()));
-    let _ = elsewhere
-        .write()
-        .unwrap()
-        .freeze_mapped(&b, ModuleKey::from_raw(1), [0; 32]);
+    let mut elsewhere = Registry::new();
+    let _ = elsewhere.freeze_mapped(&b, ModuleKey::from_raw(1), [0; 32]);
 }
 
 #[test]
@@ -814,6 +818,11 @@ fn static_apply_keeps_foreign_items_in_place() {
     // keep the foreign item in place — a foreign local index may never be
     // looked up in B's node table (A's array sits at local index 62, far
     // past B's node count, so the unguarded lookup would panic).
+    // Single-threaded sharing: a filed value carries raw arena handles, so this
+    // `Arc` cannot cross a thread (see the `Registry` doc in this crate); `Rc`
+    // is not available — `AGENTS.md`'s code taste forbids it.  The `Arc` stays
+    // because `Registry::new_module` takes it by reference.
+    #[allow(clippy::arc_with_non_send_sync)]
     let registry = Arc::new(RwLock::new(Registry::new()));
     let mut a = Registry::new_module(&registry);
     let ablock = a.add_block(None);

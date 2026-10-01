@@ -129,7 +129,7 @@ for the live buffer**, rather than building a second cache. See
 
 The store is **scoped per plugin set**: a plugin-built compiler uses its own
 `<lichendir>/compilers/<key>/` as the artifact-cache root (via
-`lichen_language::cli::main_with_cache_dir`), so its compile artifacts never
+`lichen_compiler::cli::main_with_cache_dir`), so its compile artifacts never
 collide with (or reuse) another vocabulary's — only the shipping compiler uses
 the base `lichendir()` root.
 
@@ -265,21 +265,21 @@ not pull the tokio/tower async stack.
   launch, if `Worktree::which` cannot find it, the extension reports install
   progress to Zed and runs `lichen path language-server`, which installs the
   **prebuilt** compiler + language server into **Lichen Home**
-  (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) at the package
-  manager's own commit, then prints the binary path. `lichen` is the single
-  canonical copy at `$LICHEN_HOME/tools/lichen` (or a `lichen` on `$PATH`); on a
-  machine with neither, the extension downloads the prebuilt package manager from
-  the repo's GitHub release **into that same `$LICHEN_HOME/tools` slot** via
-  `curl` (mirroring `toolchain::download`) and then runs it. Because the extension
-  uses this canonical copy, a later `liche update` — which refreshes exactly
-  `$LICHEN_HOME/tools/lichen` — stays in sync with what the extension runs (it
-  never keeps a private copy of its own). `liche install` and `liche path` always
-  fetch the toolchain at the running package manager's **own commit** (so a
-  same-revision toolchain); `liche update` moves it to the **latest published
+  (`$LICHEN_HOME/compilers/<plugin-set-key>/`, default `~/.lichen`) from the
+  release tagged at the package manager's own commit, then prints the binary
+  path. `lichen` is the single canonical copy at `$LICHEN_HOME/tools/lichen` (or a
+  `lichen` on `$PATH`); on a machine with neither, the extension downloads the
+  prebuilt package manager from the repo's GitHub release **into that same
+  `$LICHEN_HOME/tools` slot** via `curl` (mirroring `toolchain::download`) and then
+  runs it. Because the extension uses this canonical copy, a later `liche update` —
+  which refreshes exactly `$LICHEN_HOME/tools/lichen` — stays in sync with what the
+  extension runs (it never keeps a private copy of its own). `liche install` and
+  `liche path` always address the toolchain release tagged with the running package
+  manager's **own commit**; `liche update` moves it to the **latest published
   release** rather than the repo tip, so a manual-release workflow never leaves
-  `update` looking for an unpublished commit. Run it
-  by hand and restart Zed, or `lichen update` to move the package manager (and the
-  toolchain it installs) to the latest release:
+  `update` looking for an unpublished commit. Run it by hand and restart Zed, or
+  `lichen update` to move the package manager (and the toolchain it installs) to the
+  latest release:
 
   ```text
   lichen install language-server   # install the prebuilt server into Lichen Home

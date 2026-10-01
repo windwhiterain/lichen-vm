@@ -231,3 +231,17 @@ where
             .filter(|v| !matches!(v, LowValue::Parameterized))
     }
 }
+
+/// The **attribute-extension registry**: a lookup from an attribute marker to
+/// the [`AttrExt`] implementing that marker's lowering behaviour, coerced to
+/// `'static` because a build holds it for its whole lifetime.
+///
+/// `P` is the host program and `Attr` its marker type — `P::Attr` for a
+/// composed program ([`crate::checker::Checker::build_in_attr`] and siblings),
+/// or a concrete marker when a language layer returns its own registry (e.g.
+/// `lichen-perspective`'s `persp_attr_ext`).  The checker takes it as
+/// `Option<AttrExtRegistry<P, P::Attr>>`: `None` is a build with no attribute
+/// extension at all, and a marker it cannot resolve is
+/// [`DiagKind::NoAttributeExtension`](crate::diagnostic::DiagKind), never a
+/// panic.
+pub type AttrExtRegistry<P, Attr> = Box<dyn Fn(&Attr) -> &'static dyn AttrExt<P>>;

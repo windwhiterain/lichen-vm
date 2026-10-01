@@ -2,7 +2,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyFunctionId, AnyNodeId, AnyNodeId::Dynamic as Dyn, BlockId, BudgetExhausted, EvaluatedDeep,
-    LowOperator, LowValue, Module, NodeId, OperatorExt as _, Program, table::KeyState,
+    LowOperator, LowValue, Module, NodeId, OperatorExt, Program, StaticModuleCache,
+    ancestors::AncestorPairs, table::KeyState,
 };
 use lichen_utils::extend::AsEnum;
 
@@ -17,8 +18,9 @@ struct VisitGuard<'a, P: Program> {
 }
 
 impl<P: Program> VisitGuard<'_, P> {
-    /// Run one evaluation attempt with the mark held.
-    fn run(self, body: impl FnOnce(&mut Module<P>, NodeId) -> P::Value) -> P::Value {
+    /// Run `body` with the mark held: an evaluation attempt of the marked
+    /// node, or one descent of the deep pass that is cut against it.
+    fn run<R>(self, body: impl FnOnce(&mut Module<P>, NodeId) -> R) -> R {
         let node = self.node;
         body(self.module, node)
     }
@@ -70,6 +72,14 @@ pub enum EvalError {
     /// index operand node, so the highlevel can attribute the diagnostic to
     /// the expression that was used as a subscript.
     IndexSubscript { subscript: AnyNodeId },
+    /// A [`LowOperator::Apply`] whose **target** is a structural value that
+    /// cannot be applied — a scalar, a string, a table, or the unit value.
+    /// Reachable from source (`g 1` with `g : int`), including through a
+    /// deferred callee whose unbound type the checker's function-ness guard
+    /// cannot see, so it is a recorded failure and a computed nothing:
+    /// `function` is the callee operand node, so the highlevel can attribute
+    /// the diagnostic to the expression that was applied.
+    ApplyTarget { function: AnyNodeId },
 }
 
 impl<P: Program> Module<P> {
@@ -91,10 +101,12 @@ impl<P: Program> Module<P> {
         }
     }
 
-    /// The mark of one evaluation attempt, held until it drops.
+    /// Take the mark of the node an evaluation attempt — or a deep-pass
+    /// descent that must be cut against it — is computing, held until the
+    /// returned guard drops.
     ///
-    /// Invariant: an evaluation attempt owns `Node::visiting` for exactly its
-    /// own frame and clears it on every exit — a cached answer, a lazy
+    /// Invariant: a frame owns `Node::visiting` for exactly its own scope, and
+    /// the guard clears it on every exit — a cached answer, a lazy
     /// (`Parameterized`) answer, and an unwinding panic alike.  A node is
     /// therefore never left flagged visiting once no frame is computing it,
     /// because the next evaluation of that node must not read the stale flag
@@ -162,7 +174,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the operand node; its home block is
+                        // alive and not dropped.
+                        let operands = unsafe { array.items() };
                         match self.evaluate_node(operands[1].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -180,7 +195,10 @@ impl<P: Program> Module<P> {
                                     // the same way — no second diagnostic.
                                     Some(LowValue::Void) => P::Value::from(LowValue::Void),
                                     Some(LowValue::Array(array)) => {
-                                        let array = array.items();
+                                        // SAFETY: `array` is the value the
+                                        // module just evaluated for the target
+                                        // node; its home block is alive.
+                                        let array = unsafe { array.items() };
                                         // An out-of-bounds index is a user error,
                                         // not an invariant violation: record it
                                         // and yield a computed nothing (`Void`)
@@ -259,7 +277,15 @@ impl<P: Program> Module<P> {
                 let operand = match operation.operand {
                     Some(operand) => {
                         let value = self.evaluate_node_deep(operand, Some(block));
-                        if self.nodes[operand].evaluated_deep.unwrap().parameterized {
+                        // The deep pass returns before it writes
+                        // `evaluated_deep` when it refuses on budget
+                        // exhaustion, so an absent node or an unset flag means
+                        // "concreteness unknown" — read as parameterized, never
+                        // as proven concrete.
+                        let parameterized = self.nodes.get(operand).is_none_or(|node| {
+                            node.evaluated_deep.is_none_or(|deep| deep.parameterized)
+                        });
+                        if parameterized {
                             P::Value::from(LowValue::Parameterized)
                         } else {
                             value
@@ -283,7 +309,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the Apply operand node; its home block
+                        // is alive and not dropped.
+                        let operands = unsafe { array.items() };
                         match self.evaluate_node(operands[0].node, Some(block)).as_enum() {
                             Some(LowValue::Parameterized) => {
                                 P::Value::from(LowValue::Parameterized)
@@ -307,16 +336,54 @@ impl<P: Program> Module<P> {
                                         .static_function_apply(sref, argument, block, node, cell),
                                 }
                             }
-                            // A non-`Function` target is a *callable program
-                            // value* (e.g. a compute `Kernel`) — not a
-                            // structural apply.  The compute layer compiles it;
-                            // here it stays lazy so a body's deep pass and the
-                            // JIT can read the graph instead of panicking on a
-                            // legitimate (checker-validated) kernel apply.  A
-                            // genuinely non-callable target is caught by the
-                            // checker's unification before the deep pass runs,
-                            // so reaching this arm is never a real error.
-                            _ => P::Value::from(LowValue::Parameterized),
+                            // A scalar, a string, a table, or the unit value
+                            // can never be a function — and never a callable
+                            // program value — so applying one is a user error.
+                            // The checker's function-ness guard cannot see a
+                            // deferred callee's unbound type, so this is where
+                            // the apply is refused: recorded, with the callee
+                            // operand node carrying the fact, and a computed
+                            // nothing.
+                            Some(
+                                LowValue::USize(_)
+                                | LowValue::Str(_)
+                                | LowValue::Table(_)
+                                | LowValue::None,
+                            ) => {
+                                self.eval_errors.push(EvalError::ApplyTarget {
+                                    function: operands[0].node,
+                                });
+                                P::Value::from(LowValue::Void)
+                            }
+                            // A computed nothing is the residue of an
+                            // already-recorded failure: propagate it without
+                            // recording a second one.
+                            Some(LowValue::Void) => P::Value::from(LowValue::Void),
+                            // A structural array and the program's own value
+                            // both reach here, and neither is provably a
+                            // function: the program's value variant is opaque
+                            // to the lowlevel, and a compute `Kernel` is a
+                            // struct — structurally an array — that the
+                            // compute layer compiles into a cross-kernel call.
+                            // The program answers through its operator
+                            // dispatch (`OperatorExt::is_callable`), whose
+                            // default refuses; a callee it disclaims is a user
+                            // error recorded exactly as a scalar is, and a
+                            // callee it claims stays lazy so a body's deep pass
+                            // and the JIT keep the graph readable.
+                            _ => {
+                                if <P::Operator as OperatorExt<P>>::is_callable(
+                                    self,
+                                    operands[0].node,
+                                ) {
+                                    P::Value::from(LowValue::Parameterized)
+                                } else {
+                                    self.eval_errors.push(EvalError::ApplyTarget {
+                                        function: operands[0].node,
+                                    });
+                                    P::Value::from(LowValue::Void)
+                                }
+                            }
                         }
                     }
                     _ => unreachable!("Apply operand must be an array of [function, argument]"),
@@ -329,7 +396,10 @@ impl<P: Program> Module<P> {
                 match self.evaluate_node(Dyn(operands), Some(block)).as_enum() {
                     Some(LowValue::Parameterized) => P::Value::from(LowValue::Parameterized),
                     Some(LowValue::Array(array)) => {
-                        let operands = array.items();
+                        // SAFETY: `array` is the value the module just
+                        // evaluated for the TableGet operand node; its home
+                        // block is alive and not dropped.
+                        let operands = unsafe { array.items() };
                         let table = operands[0].node;
                         let key = operands[1].node;
                         match self.evaluate_node(table, Some(block)).as_enum() {
@@ -355,9 +425,12 @@ impl<P: Program> Module<P> {
                                         return P::Value::from(LowValue::Void);
                                     }
                                     KeyState::Hashed(hash) => {
-                                        let items = payload.items();
+                                        // SAFETY: `payload` is the evaluated
+                                        // table value of a live node of this
+                                        // module; its home block is alive.
+                                        let items = unsafe { payload.items() };
                                         let start = items.partition_point(|item| item.hash < hash);
-                                        let mut path = Vec::new();
+                                        let mut path = AncestorPairs::new();
                                         let mut found = None;
                                         for item in &items[start..] {
                                             if item.hash != hash {
@@ -408,7 +481,8 @@ impl<P: Program> Module<P> {
     /// Run [`Self::evaluate_node`] for all nodes in the reachable subtree of `id`.
     #[stacksafe]
     pub fn evaluate_node_deep(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(Dyn(node), current, true, false)
+        let mut cache = StaticModuleCache::new();
+        self.evaluate_node_deep_inner(Dyn(node), current, true, false, &mut cache)
     }
 
     /// Deep-evaluate `id` *ignoring laziness*: unlike
@@ -426,7 +500,8 @@ impl<P: Program> Module<P> {
     /// cost of redundant clones.
     #[stacksafe]
     pub fn evaluate_node_forced(&mut self, node: NodeId, current: Option<BlockId>) -> P::Value {
-        self.evaluate_node_deep_inner(Dyn(node), current, false, true)
+        let mut cache = StaticModuleCache::new();
+        self.evaluate_node_deep_inner(Dyn(node), current, false, true, &mut cache)
     }
 
     /// The tail of a [`LowOperator::TableGet`] once the entry is located: a
@@ -469,7 +544,9 @@ impl<P: Program> Module<P> {
             .and_then(|value| value.as_enum())
         {
             Some(LowValue::Array(array)) => {
-                let items = array.items();
+                // SAFETY: `array` is the payload of `node`'s operand, a live
+                // node of this module, so its home block has not been dropped.
+                let items = unsafe { array.items() };
                 (items[0].node, items[1].node)
             }
             _ => unreachable!("a TableGet operand is the [table, key] array"),
@@ -481,6 +558,8 @@ impl<P: Program> Module<P> {
     /// into); `force_operand` runs an unevaluated operation's operand chain
     /// first, so a forced evaluation resolves the operation against fully
     /// evaluated operands instead of the parameterized gate keeping it lazy.
+    /// `cache` is the walk's one-entry static-module resolution cache (see
+    /// [`StaticModuleCache`]) — one lookup per module per walk, not per ref.
     #[stacksafe]
     fn evaluate_node_deep_inner(
         &mut self,
@@ -488,13 +567,14 @@ impl<P: Program> Module<P> {
         current: Option<BlockId>,
         skip_shallow: bool,
         force_operand: bool,
+        cache: &mut StaticModuleCache<P>,
     ) -> P::Value {
         // A static ref is a decided leaf: the module solved it, so there is
         // nothing to evaluate, descend, or mark — read its value.
         // Even a forced pass gains nothing from a solved subtree (residuals
         // never re-run), so the leaf rule is unconditional.
         if let AnyNodeId::Static(sref) = node {
-            return self.static_read(sref);
+            return cache.read(self, sref);
         }
         let node = match node {
             Dyn(node) => node,
@@ -531,8 +611,16 @@ impl<P: Program> Module<P> {
             // this value is never cached onto a node (this returns before
             // `evaluate_node`, whose postlude does the writing), so it cannot
             // be mistaken for a decided proven answer — the node's
-            // `evaluated_deep` stays `None`, "never ran".  The nested counter
-            // deliberately stays inflated, as it did when the guard unwound.
+            // `evaluated_deep` stays `None`, "never ran".  The counter is
+            // decremented on the way out because `deep_depth` is a *nesting*
+            // counter, not a cumulative budget: it is incremented at entry and
+            // restored on every exit.  Left inflated, the refusal would be
+            // permanent — nothing else restores the counter except
+            // `reset_apply_budget`, so every later `evaluate_node_deep` in the
+            // process would start already past the limit and refuse too.
+            // Restoring it scopes the refusal to the subtree that is too deep:
+            // shallow siblings still walk and are decided, and only the nodes
+            // past the limit yield `Void`.
             self.deep_depth -= 1;
             return P::Value::from(LowValue::Void);
         }
@@ -547,80 +635,132 @@ impl<P: Program> Module<P> {
             && let Some(operand) = self.nodes[node].operation.and_then(|op| op.operand)
         {
             let block = self.nodes[node].block;
-            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true);
+            self.evaluate_node_deep_inner(Dyn(operand), Some(block), false, true, cache);
         }
         let value = self.evaluate_node(Dyn(node), current);
         if let Some(LowValue::Array(array)) = value.as_enum() {
             // The descent below may reach `node` again through the array's own
             // items (a self-referential value), so it is marked for the
             // duration: the same structural-cycle cut as the entry above.
-            self.nodes[node].visiting = true;
-            let block = self.nodes[node].block;
-            for item in array.items() {
-                // A shallow position is a lazy region: its whole subtree
-                // stays unevaluated (never proven concrete), and a read
-                // forces the single element on demand through `Index` —
-                // unless the forced pass is running, which descends into it
-                // like any other position.
-                if skip_shallow && item.shallow {
-                    continue;
+            let guard = self.retain_node(node);
+            guard.run(|module, node| {
+                let block = module.nodes[node].block;
+                // SAFETY: `array` is the value this module just evaluated for
+                // `node`.  The descent below mutates the module but never releases
+                // a block — `drop_block` is called only from `garbage_collect` —
+                // so the payload's arena stays alive for the whole loop.
+                for item in unsafe { array.items() } {
+                    // A shallow position is a lazy region: its whole subtree
+                    // stays unevaluated (never proven concrete), and a read
+                    // forces the single element on demand through `Index` —
+                    // unless the forced pass is running, which descends into it
+                    // like any other position.
+                    if skip_shallow && item.shallow {
+                        continue;
+                    }
+                    module.evaluate_node_deep_inner(
+                        item.node,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                        cache,
+                    );
                 }
-                self.evaluate_node_deep_inner(item.node, Some(block), skip_shallow, force_operand);
-            }
-            self.nodes[node].visiting = false;
+            });
         }
         // A table's entries are edges like array items: its keys were
         // already forced concrete at build, but its values are lazy refs —
         // both must be proven (or disproven) concrete by the descent.
         if let Some(LowValue::Table(table)) = value.as_enum() {
-            self.nodes[node].visiting = true;
-            let block = self.nodes[node].block;
-            for item in table.items() {
-                self.evaluate_node_deep_inner(item.key, Some(block), skip_shallow, force_operand);
-                self.evaluate_node_deep_inner(item.value, Some(block), skip_shallow, force_operand);
-            }
-            self.nodes[node].visiting = false;
+            let guard = self.retain_node(node);
+            guard.run(|module, node| {
+                let block = module.nodes[node].block;
+                // SAFETY: `table` is the value this module just evaluated for
+                // `node`.  The descent below mutates the module but never releases
+                // a block — `drop_block` is called only from `garbage_collect` —
+                // so the payload's arena stays alive for the whole loop.
+                for item in unsafe { table.items() } {
+                    module.evaluate_node_deep_inner(
+                        item.key,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                        cache,
+                    );
+                    module.evaluate_node_deep_inner(
+                        item.value,
+                        Some(block),
+                        skip_shallow,
+                        force_operand,
+                        cache,
+                    );
+                }
+            });
         }
         // An array is unproven while any position resolved to the lazy
         // marker, or any position at all sits behind a shallow mark.  A
         // static position's concreteness is the module's solved flag — it
         // was already decided by the deep pass that solved the module.
-        let parameterized = matches!(value.as_enum(), Some(LowValue::Parameterized))
+        let parameterized = self.value_is_parameterized(cache, value, node);
+        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
+        self.deep_depth -= 1;
+        value
+    }
+
+    /// Whether `value` — the value this module just evaluated for `node` — is
+    /// unproven: the lazy marker itself, an array or table with a shallow
+    /// position or a parameterized element, or an operation whose operand is
+    /// parameterized.  `cache` is the walk's static-module resolution cache,
+    /// so a static element's solved flag costs one lookup per module for the
+    /// whole walk rather than one per element.
+    fn value_is_parameterized(
+        &self,
+        cache: &mut StaticModuleCache<P>,
+        value: P::Value,
+        node: NodeId,
+    ) -> bool {
+        // The value's extension view is taken once: every arm below tests the
+        // same value, and taking the view clones the extension leaf out of the
+        // composed union, so re-taking it per arm is work already done.
+        let view = value.as_enum();
+        matches!(view, Some(LowValue::Parameterized))
             || matches!(
-                value.as_enum(),
+                view,
                 Some(LowValue::Array(array))
                     // An array holding a shallow position can never be
                     // proven concrete — its marked subtree was deliberately
                     // not evaluated, and even an assert's forced pass that
                     // cached values in it leaves it unproven by this flag,
                     // so it is never referenced in place across applies.
-                    if array.items().iter().any(|item| item.shallow)
-                        || array.items().iter().any(|item| match item.node {
+                    // SAFETY: `array` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
+                    if unsafe { array.items() }.iter().any(|item| item.shallow)
+                        || unsafe { array.items() }.iter().any(|item| match item.node {
                             Dyn(node) => self.nodes[node]
                                 .evaluated_deep
                                 .is_some_and(|e| e.parameterized),
-                            AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                                [sref.index.index]
-                                .parameterized,
+                            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
                         })
             )
             || matches!(
-                value.as_enum(),
+                view,
                 Some(LowValue::Table(table))
-                    if table.items().iter().any(|item| match item.key {
+                    // SAFETY: `table` is the payload of `value`, the value this
+                    // module just evaluated for `node`, so its home block is
+                    // alive.  The note covers the two `items()` calls in this
+                    // arm.
+                    if unsafe { table.items() }.iter().any(|item| match item.key {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                            [sref.index.index]
-                            .parameterized,
-                    }) || table.items().iter().any(|item| match item.value {
+                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
+                    }) || unsafe { table.items() }.iter().any(|item| match item.value {
                         Dyn(node) => self.nodes[node]
                             .evaluated_deep
                             .is_some_and(|e| e.parameterized),
-                        AnyNodeId::Static(sref) => self.static_module(sref.module).nodes
-                            [sref.index.index]
-                            .parameterized,
+                        AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
                     })
             )
             || self.nodes[node].operation.is_some_and(|op| {
@@ -631,14 +771,19 @@ impl<P: Program> Module<P> {
                         .get(operand)
                         .is_some_and(|node| node.evaluated_deep.is_some_and(|e| e.parameterized))
                 })
-            });
-        self.nodes[node].evaluated_deep = Some(EvaluatedDeep { parameterized });
-        self.deep_depth -= 1;
-        value
+            })
     }
 
     fn evaluate_block(&mut self, root: NodeId) -> P::Value {
-        self.evaluate_node_deep(root, None);
-        self.garbage_collect(root).expect("evaluated return node")
+        let value = self.evaluate_node_deep(root, None);
+        // The deep pass answers without caching the root in two legitimate
+        // cases, so the compaction below may have no moved value to return:
+        // a budget refusal returns before `evaluate_node`, and a
+        // `Parameterized` answer is deliberately left uncached by the
+        // postlude.  Both are leaf markers owned by no arena, so the pass's
+        // own answer is the block's value verbatim — `Void` for a refusal,
+        // whose budget verdict is already recorded, so this propagates the
+        // refusal rather than reporting it a second time.
+        self.garbage_collect(root).unwrap_or(value)
     }
 }

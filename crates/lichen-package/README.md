@@ -9,7 +9,7 @@ language server) into **Lichen Home**, building a plugin-composed compiler (in t
 lichen-home compiler cache) when a native plugin is imported.
 
 It is the companion to the language compiler, now `lichen-compiler`
-(`crates/lichen-language`, formerly the `lichen` binary).  There is **no
+(`crates/lichen-compiler`, formerly the `lichen` binary).  There is **no
 project manifest** — dependencies are declared per file.
 
 ## Commands
@@ -22,7 +22,7 @@ lichen clean                                   reclaim the plugin-composed compi
                                                  cache slots (device-cache artifacts)
 lichen install <compiler|language-server|all>  install a prebuilt toolchain binary into Lichen Home
 lichen path <compiler|language-server>         print the resolved toolchain binary path (installing if absent)
-lichen update                                  update the package manager itself to the repo's latest commit
+lichen update                                  update the package manager itself to the newest released tag
 lichen rebuild-plugin [<file|dir>] [--repo <u>] build (or reuse) a cached compiler
                                                  over the project's native plugins
 ```
@@ -32,9 +32,10 @@ lichen rebuild-plugin [<file|dir>] [--repo <u>] build (or reuse) a cached compil
 The toolchain binaries are **never built on the user's machine** — they are
 downloaded as **prebuilt release assets** from `DEFAULT_REPO`, from the **GitHub
 release tagged at the commit the `lichen` binary itself was built from** (recorded
-by `build.rs`). So the package manager and the toolchain are always the **same
-revision**. `lichen update` moves the package manager (and the toolchain it then
-installs) to a later commit.
+by `build.rs`). That tag names the revision the download asks for; nothing verifies
+that what arrives is that revision (see the `toolchain` module doc). `lichen update`
+moves the package manager (and the toolchain it then installs) to the newest
+published release.
 
 There are two classes, living in different places under Lichen Home
 (`$LICHEN_HOME`, default `~/.lichen`):

@@ -88,8 +88,9 @@ fn array_ids(value: HighProgramValue) -> Vec<NodeId> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value")
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| dyn_node(item.node))
         .collect()
@@ -263,7 +264,7 @@ fn a_resolvable_index_read_pins_its_element() {
         Some(HighProgramValue::LowValue(LowValue::USize(3)))
     ));
     assert!(
-        m.nodes[read].operation.is_some(),
+        m.node_operation(read).is_some(),
         "the pinned read keeps its operation (the operand edge must survive)"
     );
 

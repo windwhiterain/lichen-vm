@@ -12,9 +12,11 @@
 //!
 //! - a **missing** home is created lazily (first use, `create_dir_all`);
 //! - a **corrupt** home is repaired lazily by the store — `DeviceRegistry`
-//!   reloads the last-known (or empty) state from an unparseable `registry` and
-//!   repairs it on the next save, and a corrupt/missing artifact falls through to
-//!   a recompile.  We never add an extra "reset" layer; the store already heals.
+//!   preserves an unparseable `registry` (and the artifacts only it could
+//!   describe) as `registry.corrupt[.n]` / `artifacts.corrupt[.n]`, restarts
+//!   the key space over the now-empty artifact directory, and a corrupt/missing
+//!   artifact falls through to a recompile.  We never add an extra "reset"
+//!   layer; the store already heals.
 //! - we **never silently fall back to in-memory**.  An in-memory store is used
 //!   only when it is *intended*: the program's artifact codec cannot serialize
 //!   (`NoPersist`, `P::Codec::PERSISTENT == false`), or no root was supplied

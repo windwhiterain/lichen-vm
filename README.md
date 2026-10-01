@@ -66,21 +66,21 @@ cargo test
 Run every example program (one `file: output` line each):
 
 ```bash
-cargo run -p lichen-language -- examples
+cargo run -p lichen-compiler -- examples
 ```
 
 Run a single program:
 
 ```bash
-cargo run -p lichen-language -- examples/bindings.lichen
+cargo run -p lichen-compiler -- examples/bindings.lichen
 # 1
 ```
 
 Install the compiler (a binary named `lichen-compiler`, formerly `lichen`):
 
 ```bash
-cargo install --path crates/lichen-language  # from a checkout of this repo
-cargo install --git git@github.com:windwhiterain/lichen-vm.git lichen-language
+cargo install --path crates/lichen-compiler  # from a checkout of this repo
+cargo install --git git@github.com:windwhiterain/lichen-vm.git lichen-compiler
 ```
 
 then run it directly:
@@ -98,7 +98,7 @@ compiler when a native plugin is imported: see [`crates/lichen-package`](crates/
 
 ## Examples
 
-This section is generated from [`examples`](examples) by `cargo run -p lichen-language --bin sync-readme` and enforced by [`tests/readme.rs`](crates/lichen-language/tests/readme.rs).
+This section is generated from [`examples`](examples) by `cargo run -p lichen-tools --bin sync-readme` and enforced by [`tests/readme.rs`](crates/lichen-language/tests/readme.rs).
 
 <!-- begin: examples -->
 

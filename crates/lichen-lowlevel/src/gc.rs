@@ -54,7 +54,12 @@ impl<P: Program> Module<P> {
                 value
             }
             Some(LowValue::Array(array)) => {
-                for item in array.items() {
+                // SAFETY: `array` is the payload of `node`, a live node of
+                // this module.  `garbage_collect` releases `source` only after
+                // this walk returns, so both the source and target arenas stay
+                // alive for the whole loop; the note covers both `items()`
+                // calls in this arm.
+                for item in unsafe { array.items() } {
                     // A static item lives in the static module — nothing to
                     // move (its value stays, referenced in place).
                     if let Dyn(node) = item.node {
@@ -65,7 +70,9 @@ impl<P: Program> Module<P> {
                 // together — moves into the target arena, so a compacted
                 // array keeps its markers (static item refs are absolute and
                 // copy verbatim).
-                P::Value::from(LowValue::Array(self.alloc_array(array.items(), target)))
+                P::Value::from(LowValue::Array(
+                    self.alloc_array(unsafe { array.items() }, target),
+                ))
             }
             Some(LowValue::Table(AnyHandle::Static(_))) => {
                 // A static payload lives in the plugged module's shared
@@ -76,7 +83,12 @@ impl<P: Program> Module<P> {
                 value
             }
             Some(LowValue::Table(table)) => {
-                for item in table.items() {
+                // SAFETY: `table` is the payload of `node`, a live node of
+                // this module.  `garbage_collect` releases `source` only after
+                // this walk returns, so both the source and target arenas stay
+                // alive for the whole loop; the note covers both `items()`
+                // calls in this arm.
+                for item in unsafe { table.items() } {
                     // A static entry lives in the static module — nothing
                     // to move (its value stays, referenced in place).
                     if let Dyn(node) = item.key {
@@ -90,7 +102,9 @@ impl<P: Program> Module<P> {
                 // together — moves into the target arena, so a compacted
                 // table keeps its sorted order and per-entry hashes (static
                 // entry refs are absolute and copy verbatim).
-                P::Value::from(LowValue::Table(self.alloc_table(table.items(), target)))
+                P::Value::from(LowValue::Table(
+                    self.alloc_table(unsafe { table.items() }, target),
+                ))
             }
             // A static function value is frozen in the static module — no
             // scope to walk, no home block to re-point.
@@ -138,40 +152,16 @@ impl<P: Program> Module<P> {
     /// Must run before the block's nodes are removed — the walk reads the
     /// `next` pointers of the members being removed.
     fn flatten_class(&mut self, rep: NodeId, dropped: BlockId) {
+        let mut survivors = Vec::new();
         let mut current = Some(rep);
-        let mut new_rep: Option<NodeId> = None;
-        let mut prev: Option<NodeId> = None;
-        let mut tail: Option<NodeId> = None;
-        let mut size = 0u32;
         while let Some(member) = current {
-            current = self.nodes[member].meta().next;
+            current = self.nodes[member].meta().next();
             if self.nodes[member].block == dropped {
                 continue; // removed below; keep walking past it
             }
-            let representative = match new_rep {
-                Some(representative) => representative,
-                None => {
-                    new_rep = Some(member);
-                    member
-                }
-            };
-            if let Some(prev) = prev {
-                self.nodes[prev].meta_mut().next = Some(member);
-            }
-            self.nodes[member].meta_mut().parent =
-                (member != representative).then_some(representative);
-            prev = Some(member);
-            tail = Some(member);
-            size += 1;
+            survivors.push(member);
         }
-        let Some(representative) = new_rep else {
-            return;
-        };
-        let last = prev.expect("a surviving member was elected representative");
-        self.nodes[last].meta_mut().next = None;
-        let meta = self.nodes[representative].meta_mut();
-        meta.tail = tail;
-        meta.size = size;
+        disjoint::rebuild(&mut self.nodes, &survivors);
     }
 
     /// Drops `block` and everything homed in it (children, functions,

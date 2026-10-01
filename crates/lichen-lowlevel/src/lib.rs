@@ -1,6 +1,6 @@
 use bumpalo::Bump;
 use slotmap::{SlotMap, new_key_type};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::PoisonError;
@@ -13,7 +13,9 @@ pub use crate::assert::{AssertError, PendingAssert};
 pub use crate::equality::{UnifyError, UnifyStep};
 pub use crate::evaluation::EvalError;
 pub use crate::function::ApplyError;
+pub(crate) use crate::static_module::StaticModuleCache;
 
+pub mod ancestors;
 mod apply;
 mod assert;
 pub mod codec;
@@ -22,6 +24,8 @@ mod evaluation;
 mod function;
 mod gc;
 mod low_type;
+mod module;
+mod registry;
 mod static_module;
 mod table;
 mod utils;
@@ -180,41 +184,23 @@ pub enum LowValue {
     Parameterized,
 }
 
-/// The **low type** of a node's class: the [`LowValue`] variant tag its value
-/// takes, plus — recursively — the element, domain, or codomain shape.
+/// A host-side, **optional** static shape of a node's eventual value.
 ///
 /// This closes the gap that blocks emitting bytecode directly from the
-/// lowlevel: a [`Node`] carries a value (possibly still
-/// [`LowValue::Parameterized`]) and an operator, but no compile-time notion
-/// of *what shape* the value will take.  A backend therefore had to either
-/// read the already-evaluated value, or walk the *type half* of the
-/// `[value, type]` pair — the second coupling the encoding change
-/// ([`crate`](../lichen_highlevel) `shape`) would silently break.
+/// lowlevel: a [`Node`] carries a value (possibly still [`LowValue::Parameterized`])
+/// and an operator, but has no compile-time notion of *what shape* the value
+/// will take.  A layer above the lowlevel — the checker, or a compute
+/// frontend that *has* the type — generates a [`LowShape`] for exactly the
+/// nodes a backend will **trace**, and stores it in [`Module::shapes`].  The
+/// backend reads the shape and emits code without consulting the type half,
+/// without forcing the value, and without waiting for evaluation.
 ///
-/// # It is a lower bound of a class, not a fact about a node
-///
-/// Identity in the VM is the equivalence class, so a low type is a **property
-/// of the union-find class**, read through the representative
-/// ([`Module::class_low_type`]) and maintained by two automatic writers plus
-/// one computation route:
-///
-/// - **observation** — whenever a concrete value lands on a node
-///   ([`Module::write_node_value`], [`Module::add_node`]), the class refines
-///   from the value's variant tag: O(1), monotone, no traversal;
-/// - **class merge** — a union joins the two representatives' low types onto
-///   the new one ([`Module::add_equality`]);
-/// - **abstract interpretation** — an on-demand fixed-point pass over a
-///   function *template*, which is what makes pre-apply compilation work (see
-///   `docs/notes/lowlevel-low-types.md`).
-///
-/// The lattice is `Unknown → Known(shape)`, refined monotonically, so a reader
-/// can only ever read `Unknown` — never a wrong shape.  **No notification
-/// mechanism exists or is needed**: a backend reads the class's current lower
-/// bound at the moment it runs.
-///
-/// `Option<LowShape>` keeps its two distinguished states: `None` is untraced
-/// scaffolding (the default, costing nothing) and `Some(Unknown)` is traced but
-/// undecided.
+/// Shape generation is optional and per-node, by design:
+/// - a node with **no** entry in [`Module::shapes`] has no traced shape —
+///   it is either *type-check-only* scaffolding the backend never reaches,
+///   or it is *materialized before the backend runs* (so the backend sees a
+///   concrete leaf, not a traceable computation);
+/// - only the nodes that form the traceable value-graph spine are annotated.
 ///
 /// A [`LowShape`] is never a lichen value — it is host metadata, sibling to
 /// [`ArrayItem::shallow`] and [`Node::evaluated_deep`] — so "a type is just a
@@ -323,13 +309,34 @@ pub struct TableItem {
 }
 
 impl AnyHandle<[ArrayItem]> {
-    /// The array's items — valid for as long as the handle's home storage is
-    /// alive: the array's home block arena for a dynamic payload, or the
-    /// static arena (pinned by every importer's [`Dependency`]) for a static
-    /// payload — the caller's existing safety contract for arena payloads.
-    pub fn items(&self) -> &'static [ArrayItem] {
+    /// The array's items.
+    ///
+    /// The `'static` return is the arena's lifetime, not a borrow of `&self`:
+    /// the slice outlives one call, which the signature cannot express, so the
+    /// obligation moves to the caller.  This method's `# Safety` is the one
+    /// written contract for the arena accessors;
+    /// [`AnyHandle<[TableItem]>::items`] and [`Module::array_items`] cite it
+    /// rather than restating it.
+    ///
+    /// # Safety
+    ///
+    /// The payload pointer names bytes in a block's arena (a dynamic payload,
+    /// allocated by [`Module::alloc_array`]) or in a registered static
+    /// module's arena (a static payload, filed by a freeze and pinned by the
+    /// registry entry every reader resolves `module` through).  The home
+    /// storage must not be released while the returned slice is read.
+    /// [`Module::drop_block`] releasing the block's `Bump` is what invalidates
+    /// a dynamic payload's slice; a static module's arena lives as long as the
+    /// module stays registered.
+    pub unsafe fn items(&self) -> &'static [ArrayItem] {
         match self {
+            // SAFETY: the caller upholds this method's `# Safety` — the
+            // dynamic payload's home block arena has not been released — so
+            // the pointer names a live `[ArrayItem]`.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            // SAFETY: the caller upholds this method's `# Safety` — the static
+            // module `handle.module` names is still registered, pinning the
+            // arena the payload lives in.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -337,10 +344,21 @@ impl AnyHandle<[ArrayItem]> {
 
 impl AnyHandle<[TableItem]> {
     /// The table's entries — same arena-lifetime contract as
-    /// [`AnyHandle<[ArrayItem]>::items`].
-    pub fn items(&self) -> &'static [TableItem] {
+    /// [`AnyHandle<[ArrayItem]>::items`], which states it.
+    ///
+    /// # Safety
+    ///
+    /// As [`AnyHandle<[ArrayItem]>::items`]: the payload's home storage must
+    /// not have been released while the returned slice is read.
+    pub unsafe fn items(&self) -> &'static [TableItem] {
         match self {
+            // SAFETY: the caller upholds this method's `# Safety` — the
+            // dynamic payload's home block arena has not been released — so
+            // the pointer names a live `[TableItem]`.
             AnyHandle::Dynamic(handle) => unsafe { &*handle.0 },
+            // SAFETY: the caller upholds this method's `# Safety` — the static
+            // module `handle.module` names is still registered, pinning the
+            // arena the payload lives in.
             AnyHandle::Static(handle) => unsafe { &*handle.offset },
         }
     }
@@ -380,9 +398,30 @@ pub enum LowOperator {
 /// unification merges on is [`ValueExt::value_eq`], which compares handle
 /// payloads by content.  Equality *through* arrays is not any `==`'s job —
 /// unification recurses into them elementwise.
+///
+/// # Contract
+///
+/// The crate reads and relocates an implementor's handle payloads by raw
+/// pointer, so every implementor owes three obligations:
+///
+/// - [`Self::handle`] must stay valid while the value lives, and its payload
+///   must be stable — the same address and the same length — for as long as
+///   the value is reachable.
+/// - [`Self::alignment`] must be a power of two: the freeze layout
+///   ([`crate::codec::arena_align`]) and the crate's copy path both derive
+///   the arena slot from it.
+/// - [`Self::handle`]'s length is a **byte** count, and the crate's copy path
+///   copies exactly that many bytes into a slot aligned to
+///   [`Self::alignment`].
 pub trait ValueExt: Debug + Copy + PartialEq {
     fn is_handle(&self) -> bool;
-    /// Available if [`Self::is_handle()`].
+    /// The value's handle payload as bytes.  Available if
+    /// [`Self::is_handle()`].
+    ///
+    /// **Contract:** the returned handle must stay valid while the value
+    /// lives, its payload must be stable for as long as the value is
+    /// reachable, and its length is a byte count — exactly the bytes
+    /// [`Self::value_eq`] compares and the crate's copy path moves.
     fn handle(&self) -> AnyHandle<[u8]> {
         unreachable!()
     }
@@ -390,9 +429,12 @@ pub trait ValueExt: Debug + Copy + PartialEq {
     fn set_handle(&mut self, _payload: AnyHandle<[u8]>) {
         unreachable!()
     }
-    /// The payload alignment ext handle values need (a power of two).
-    /// Available if [`Self::is_handle()`]; a vocabulary with no handle
-    /// payloads has no alignment need, so the default is 1 — this keeps
+    /// The payload alignment ext handle values need.  **Contract: must be a
+    /// power of two** — the freeze layout ([`crate::codec::arena_align`]) and
+    /// the crate's copy path (`Layout::from_size_align`) both derive from it
+    /// and the latter refuses anything else.  Available if
+    /// [`Self::is_handle()`]; a vocabulary with no handle payloads has no
+    /// alignment need, so the default is 1 — this keeps
     /// [`crate::codec::arena_align`] total for every program.
     fn alignment() -> usize {
         1
@@ -413,6 +455,14 @@ pub trait ValueExt: Debug + Copy + PartialEq {
             let (a, b) = (self.handle(), other.handle());
             return a.len() == b.len()
                 && (std::ptr::eq(a.as_ptr(), b.as_ptr())
+                    // SAFETY: `a` and `b` are handle payloads of the same
+                    // byte length.  Both values are reachable (`value_eq`
+                    // reads them through `self`/`other`), so each payload's
+                    // home storage is alive — the dynamic case by
+                    // `drop_block`'s no-live-reference contract, the static
+                    // case by the registry pinning the module — and
+                    // `as_ptr()`/`len()` are the pointer and byte count the
+                    // payload was built with.
                     || unsafe {
                         std::slice::from_raw_parts(a.as_ptr(), a.len())
                             == std::slice::from_raw_parts(b.as_ptr(), b.len())
@@ -424,6 +474,28 @@ pub trait ValueExt: Debug + Copy + PartialEq {
 
 pub trait OperatorExt<P: Program>: Debug + Copy {
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value;
+
+    /// Whether a callee node the lowlevel cannot prove a function is a value
+    /// this operator vocabulary applies.
+    ///
+    /// [`LowOperator::Apply`] refuses a callee it can prove is not a function —
+    /// a scalar, a string, a table, the unit value — and records
+    /// [`EvalError::ApplyTarget`]; everything else stays lazy.  It has to,
+    /// because the program's own values are opaque to the lowlevel and a
+    /// structural **array** is the same shape for a struct instance and for a
+    /// compute kernel's `[native, sig]` pair.  Only the program knows which of
+    /// its values are callable, and this is where it answers: a composed
+    /// operator union ORs its extension leaves' policies, so the leaf whose
+    /// vocabulary can apply the value declares it.
+    ///
+    /// The default refuses — the honest answer for a program that names none.
+    /// The policy is given the callee node and reads the module (that is how
+    /// it recognises its own values inside a structural array); it must not
+    /// mutate the module.
+    fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
+        let _ = (module, callee);
+        false
+    }
 
     /// The **low-type transfer** of this operator: the low type its result
     /// has, given the low types of its operand array's elements.
@@ -452,9 +524,7 @@ pub trait OperatorExt<P: Program>: Debug + Copy {
 // leaves through [`AsEnum`] *before* `run` is ever reached — the `None` arm
 // of the dispatch is the extension fall-through — so a structural `run` is
 // genuinely unreachable: a structural operator is never an extension
-// computation.  The low-type pass makes the same routing choice for the same
-// reason: it owns the [`LowOperator`] transfers itself, so the default
-// [`OperatorExt::low_type`] below is unreachable for them.
+// computation.
 impl<P: Program> OperatorExt<P> for LowOperator {
     fn run(&self, _operand: P::Value, _block: BlockId, _module: &mut Module<P>) -> P::Value {
         unreachable!("structural operators are dispatched by the VM")
@@ -481,21 +551,28 @@ pub fn is_unbound(value: Option<impl AsEnum<LowValue>>) -> bool {
     value.is_none_or(|value| value.as_enum() == Some(LowValue::Parameterized))
 }
 
-/// Pointer into a [`Block::arena`].
+/// Pointer into a [`Block::arena`] — or, after a freeze, into a
+/// [`StaticModule`]'s shared arena.
 /// `PartialEq` is pointer identity: two handles are equal iff they point at
 /// the same allocation (same address and length) — never a dereference.
 /// Content equality of two handle payloads is a value-level question,
 /// answered by [`Module::value_eq`].
+///
+/// The pointer is private: a handle is built through [`Handle::from_raw`],
+/// whose contract carries the payload's arena-lifetime obligation.
 #[derive(Debug)]
-pub struct Handle<T: ?Sized>(pub *const T);
+pub struct Handle<T: ?Sized>(pub(crate) *const T);
 #[derive(Debug)]
 pub struct StaticHandle<T: ?Sized> {
     /// The payload's home module — [`StaticModule::key`], global and
     /// position-independent, so the handle reads identically from any
     /// importer that plugged the module and identity is shared across them.
     pub module: ModuleKey,
-    /// Not really pointing to anything, just offset encoded with possible slice length.
-    pub offset: *const T,
+    /// The payload's address in the home module's static arena.  The codec
+    /// resolves an artifact's stored form — a base-relative byte offset plus
+    /// an element count (`codec.rs`) — into this address at load, and every
+    /// reader dereferences it.
+    pub(crate) offset: *const T,
 }
 
 #[derive(Debug)]
@@ -522,6 +599,48 @@ impl<T: ?Sized> Clone for AnyHandle<T> {
 impl<T: ?Sized> Copy for Handle<T> {}
 impl<T: ?Sized> Copy for StaticHandle<T> {}
 impl<T: ?Sized> Copy for AnyHandle<T> {}
+
+impl<T: ?Sized> Handle<T> {
+    /// A handle to the payload at `pointer`.
+    ///
+    /// # Safety
+    /// `pointer` must name a payload in a live [`Block::arena`] — the address
+    /// [`Module::alloc_array`] or [`Module::alloc_table`] returned, or the one
+    /// the crate's copy path relocated it to — and must stay valid, meaning
+    /// the payload's home block must not be released, for as long as any
+    /// reader may dereference the handle.  [`Module::drop_block`] releasing
+    /// the block's `Bump` is what invalidates the pointer.
+    pub unsafe fn from_raw(pointer: *const T) -> Self {
+        Handle(pointer)
+    }
+
+    /// The payload's raw pointer.  Dereferencing it carries the same
+    /// arena-lifetime obligation as [`Self::from_raw`].
+    pub fn as_ptr(&self) -> *const T {
+        self.0
+    }
+}
+
+impl<T: ?Sized> StaticHandle<T> {
+    /// A handle to the payload at `offset` of `module`'s static arena — the
+    /// mirror of [`Handle::from_raw`] for a payload a freeze filed into a
+    /// registered [`StaticModule`].
+    ///
+    /// # Safety
+    /// `offset` must name a payload inside `module`'s arena — what the freeze
+    /// layout writes and the codec's load resolves a stored offset to — and
+    /// `module` must stay registered, pinning that arena, for as long as any
+    /// reader may dereference the handle.
+    pub unsafe fn from_raw(module: ModuleKey, offset: *const T) -> Self {
+        StaticHandle { module, offset }
+    }
+
+    /// The payload's raw pointer.  Dereferencing it carries the same
+    /// arena-lifetime obligation as [`Self::from_raw`].
+    pub fn as_ptr(&self) -> *const T {
+        self.offset
+    }
+}
 
 impl<T: ?Sized> PartialEq for Handle<T> {
     fn eq(&self, other: &Self) -> bool {
@@ -550,9 +669,10 @@ impl<T: ?Sized> PartialEq for AnyHandle<T> {
 }
 
 impl Handle<[u8]> {
+    /// The payload's byte length.  Reads the fat pointer's metadata
+    /// (`<*const [T]>::len`) without forming a reference, so it is safe.
     pub fn len(&self) -> usize {
-        let slice = unsafe { &*self.0 };
-        slice.len()
+        self.0.len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -560,9 +680,10 @@ impl Handle<[u8]> {
 }
 
 impl StaticHandle<[u8]> {
+    /// The payload's byte length.  Reads the fat pointer's metadata
+    /// (`<*const [T]>::len`) without forming a reference, so it is safe.
     pub fn len(&self) -> usize {
-        let slice = unsafe { &*self.offset };
-        slice.len()
+        self.offset.len()
     }
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -590,21 +711,11 @@ impl AnyHandle<[u8]> {
 
 new_key_type! {pub struct NodeId;}
 
-/// The device key of a static module — the module's compact index in the
-/// device's [`Registry`].  A monotonically increasing index allocated by
-/// the device registry (the persistent store that maps keys to artifact
-/// content hashes), so the same module has the same key in every process
-/// sharing the registry — keys are stable across processes and are
-/// reclaimed (reused) when a module is removed from the registry, so the
-/// key space stays bounded.  Refs (node, function, handle) carry the key
-/// of their home module, so refs are absolute from birth: an importer
-/// stores them verbatim and resolves the key through the shared registry —
-/// no per-importer retarget, no re-based copies, and the same payload is
-/// shared by every importer.
 /// The device key naming a compiled module — defined in the `lichen-registry`
 /// crate (the type-independent persistence layer) and re-exported here so the
 /// lowlevel's registry and serialization can name modules without coupling to
-/// the language stack.
+/// the language stack.  Its key-space rules live on the type itself, in
+/// `lichen-registry`'s `module_key`.
 pub use lichen_registry::ModuleKey;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct StaticNodeId {
@@ -615,7 +726,11 @@ pub struct StaticNodeId {
     pub module: ModuleKey,
     pub index: LocalNodeId,
 }
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// A node's index within its own static module — the module-local half of
+/// [`StaticNodeId`].  It carries `Ord` so a set of these can be grouped by a
+/// stable sort (see `apply::regroup_clones`); the order is the plain index
+/// order, not an opaque key encoding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct LocalNodeId {
     pub index: usize,
 }
@@ -728,51 +843,64 @@ pub struct Node<P: Program> {
     /// pure-cell members).  External crates must never touch the field
     /// directly.
     value: Option<P::Value>,
-    /// The class's low type — stored *with* the value, behind the same
-    /// private gate.  It is **class-routed**: the authoritative copy lives on
-    /// the equality-class representative, and every read goes through
-    /// [`Module::class_low_type`] (or the recursive [`Module::low_type_of_node`]),
-    /// so a backend never has to know which member of a class resolved first.
-    /// It is written only by the two automatic maintenance sites
-    /// ([`Module::add_equality`]'s join and the observation in
-    /// [`Module::write_node_value`]) and by an explicit seed
-    /// ([`Module::seed_class_low_type`]).
-    ///
-    /// It is an **analysis result, not a checker stamp**: the checker cannot
-    /// know a value's shape at lowering (types are lazy), and `None` means the
-    /// class is untraced — type-check-only scaffolding a backend never reaches,
-    /// or a class materialized before the backend runs.
+    /// The node's optional [`LowShape`] — stored *with* the value, behind the
+    /// same private gate.  A layer above the lowlevel (which *has* the type)
+    /// sets it via [`Module::set_node_shape`], and a backend reads it via
+    /// [`Module::node_shape`].  It is an **analysis result, not a checker
+    /// stamp**: the checker cannot know a value's shape at lowering (types are
+    /// lazy); the shape comes from the graph after it is resolved, and is
+    /// absent for any node the backend will not trace (type-check-only
+    /// scaffolding, or a node materialized before the backend runs).
     low_shape: Option<LowShape>,
-    pub operation: Option<Operation<P>>,
+    /// The node's computation — the operator and its single operand edge, or
+    /// `None` for a node that carries a value instead.  **Private**: read
+    /// through [`Module::node_operation`], and defined once, either by
+    /// [`Module::add_node`] or by the cycle-closing late half
+    /// [`Module::close_operation_cycle`].  Replacing it in place would strand
+    /// the old operand edge and invalidate every cached value and deep-pass
+    /// verdict derived through it.
+    operation: Option<Operation<P>>,
     /// The function whose body owns this node — the template membership
     /// back-pointer ([`None`] for top-level and runtime-created nodes whose
     /// owner is not a template).  The apply clone walk tests membership by
     /// walking this chain through [`Function::parent`]; clones carry the
-    /// tag of the context that created them.
-    pub function: Option<FunctionId>,
-    /// Owner.
-    pub block: BlockId,
-    /// Detect circular recursion.
-    pub visiting: bool,
+    /// tag of the context that created them.  **Private**: read through
+    /// [`Module::node_function`]; a node joins a function's body through
+    /// [`Module::register_in_function`], and the clone walks re-stamp the tag
+    /// on the nodes they instantiate.
+    function: Option<FunctionId>,
+    /// Owner — the garbage-collection unit whose lifetime bounds this node.
+    /// **Private**: read through [`Module::node_block`]; only
+    /// [`Module::garbage_collect`] moves it.
+    block: BlockId,
+    /// Whether an evaluation attempt is computing this node *right now* —
+    /// the cycle mark, owned by a frame and released on every exit including
+    /// unwind (see [`Module::retain_node`]).  **Private**: read through
+    /// [`Module::node_visiting`], which states what the mark does and does
+    /// not mean.
+    visiting: bool,
     /// Whether the deep pass ([`Module::evaluate_node_deep`],
     /// [`Module::evaluate_node_forced`]) has run on this node, and what it
     /// proved.  [`Some`] means the deep pass ran and
     /// [`EvaluatedDeep::parameterized`] records whether any node in self's
     /// reachable subtree has a [`LowValue::Parameterized`].  [`None`] means
-    /// it never ran, so the node's concreteness is unknown.
-    pub evaluated_deep: Option<EvaluatedDeep>,
+    /// it never ran, so the node's concreteness is unknown.  **Private**:
+    /// read through [`Module::node_evaluated_deep`].
+    evaluated_deep: Option<EvaluatedDeep>,
     /// Disjoint-set metadata for node equality classes, maintained by
     /// [`Module::add_equality`] and [`Module::equality_representative`].
-    pub equality: disjoint::Meta<NodeId>,
+    /// **Private**: read through [`Module::node_equality`]; the only writer
+    /// is the union-find itself ([`Module::add_equality`],
+    /// [`Module::equality_representative`], garbage collection's class
+    /// splice).
+    equality: disjoint::Meta<NodeId>,
 }
 
 pub struct StaticNode<P: Program> {
     pub value: Option<P::Value>,
     /// The optional [`LowShape`] copied from the source dynamic node by
-    /// [`StaticModule::from_module`] — read through the *class* representative
-    /// there, so every member of a frozen class carries its class's low type.
-    /// A frozen node keeps it so an importer's backend can still derive
-    /// bytecode.
+    /// [`StaticModule::from_module`] — a frozen node keeps its shape so an
+    /// importer's backend can still derive bytecode.
     pub low_shape: Option<LowShape>,
     pub operation: Option<StaticOperation<P>>,
     pub equality: disjoint::Meta<LocalNodeId>,
@@ -783,34 +911,6 @@ pub struct StaticNode<P: Program> {
     /// is parameterized.  The importer's deep pass reads this instead of
     /// descending — a static ref is a decided leaf.
     pub parameterized: bool,
-}
-
-/// A diagnostic a **layer above the lowlevel** recorded, through
-/// [`Module::record_extension_diagnostic`].
-///
-/// Every other channel on a [`Module`] — [`Module::unify_errors`],
-/// [`Module::eval_errors`], [`Module::assert_errors`] — is one the VM itself
-/// produces, so each is a typed channel for a fact the lowlevel can describe.
-/// This is the general channel for everything that has no such home: a native
-/// plugin refusing to lower a computation, a backend declining to compile a
-/// shape, a host error a future extension needs to surface.  The lowlevel
-/// stores the entry and knows nothing else about it — not the meaning of
-/// `category`, not the node it points at — so adding an external error kind
-/// never means adding a channel here.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtensionDiagnostic {
-    /// The recording layer's own category, so a consumer can select the
-    /// diagnostics it renders without parsing the message (for example
-    /// `"compute.jit"`).  It is a `&'static str` because a layer's categories
-    /// are its own compile-time constants, never a runtime string.
-    pub category: &'static str,
-    /// The node the diagnostic is about, when the recorder can name one.  A
-    /// `None` is an honest "not about a node", not a placeholder: a record
-    /// with no attributable node still carries its reason.
-    pub node: Option<NodeId>,
-    /// The message, rendered by the layer that recorded it — the lowlevel has
-    /// no vocabulary for it and must not try to re-render one.
-    pub message: String,
 }
 
 /// Which evaluation budget a [`Module`] exhausted, and what its limit was.
@@ -837,10 +937,18 @@ pub enum BudgetExhausted {
 }
 
 pub struct Module<P: Program> {
-    /// The device's registry — shared with every module executing in the
-    /// process.  All static refs resolve through it; the module itself is
-    /// never shared (`Arc<Module>` does not exist).
+    /// The device's registry — shared with every module bound to it (see the
+    /// `Registry` doc for the thread rule).  All static refs resolve through
+    /// it; the module itself is never shared (`Arc<Module>` does not exist).
     pub registry: Arc<RwLock<Registry<P>>>,
+    /// The node table — the slot allocation that **names** a node and owns
+    /// its lifetime.  Node *state* is not read here: every state field of
+    /// [`Node`] is private, so the only route to a node's block, operation,
+    /// owner, visit mark, deep verdict or equality class is the `node_*`
+    /// accessors on [`Module`] (see [`Self::node_block`] and friends).  The
+    /// table itself stays public because iteration and the union-find walk
+    /// it ([`lichen_utils::disjoint::members`]), and because a released
+    /// node's absence is itself a readable fact ([`Self::node_value`]).
     pub nodes: SlotMap<NodeId, Node<P>>,
     pub blocks: SlotMap<BlockId, Block>,
     pub functions: SlotMap<FunctionId, Function>,
@@ -898,6 +1006,12 @@ pub struct Module<P: Program> {
     /// failed `function_apply`; the raw [`UnifyError`] entries it produced
     /// stay in [`Self::unify_errors`] alongside it.
     pub apply_errors: Vec<ApplyError>,
+    /// The apply nodes [`Self::apply_errors`] already holds an entry for — the
+    /// dedup's membership test, kept beside the list so recording an apply
+    /// error costs one hash probe instead of a scan of every entry recorded
+    /// so far.  Both stay append-only and are never cleared, so the two
+    /// cannot drift.
+    apply_error_nodes: HashSet<NodeId>,
     /// Diagnostics recorded by layers above the lowlevel — see
     /// [`ExtensionDiagnostic`].  Append-only and never cleared, the same
     /// contract as [`Self::unify_errors`] and [`Self::eval_errors`]: an entry
@@ -909,6 +1023,29 @@ pub struct Module<P: Program> {
     apply_depth: usize,
     apply_total: usize,
     deep_depth: usize,
+}
+
+/// One diagnostic a layer **above** the lowlevel recorded through
+/// [`Module::record_extension_diagnostic`]: a plugin refusing to lower a
+/// computation, a backend declining to compile a shape, a host error a future
+/// extension needs to surface.  The lowlevel stores the entry and knows
+/// nothing else about it — not the meaning of `category`, not the node it
+/// points at — so adding an external error kind never means adding a channel
+/// here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtensionDiagnostic {
+    /// The recording layer's own category, so a consumer can select the
+    /// diagnostics it renders without parsing the message (for example
+    /// `"compute.jit"`).  It is a `&'static str` because a layer's categories
+    /// are its own compile-time constants, never a runtime string.
+    pub category: &'static str,
+    /// The node the diagnostic is about, when the recorder can name one.  A
+    /// `None` is an honest "not about a node", not a placeholder: a record
+    /// with no attributable node still carries its reason.
+    pub node: Option<NodeId>,
+    /// The message, rendered by the layer that recorded it — the lowlevel has
+    /// no vocabulary for it and never parses it.
+    pub message: String,
 }
 
 /// One entry of the [`Registry`]: a registered static module plus the home
@@ -956,8 +1093,10 @@ pub struct Freeze {
 }
 
 /// The device's module registry — the virtual file system of the device's
-/// compiled modules, shared by every [`Module`] executing (in threads) as
-/// `Arc<RwLock<Registry>>`.  It handles **registering** (compiling a
+/// compiled modules, shared by every [`Module`] bound to one
+/// `Arc<RwLock<Registry>>`.  A filed value carries arena handles (raw
+/// pointers), so the registry cannot cross a thread: the sharing is within one
+/// thread, never across threads.  It handles **registering** (compiling a
 /// dynamic module into a static artifact and filing it under its device
 /// key), **storage** (the resident map of loaded modules), and resolution
 /// **during evaluating** (every static ref an executing module touches is
@@ -969,375 +1108,8 @@ pub struct Freeze {
 /// and `persist.rs`), which maps keys to artifact content hashes and back;
 /// the lowlevel only files a built artifact under the caller-provided key
 /// ([`Self::freeze_mapped`], [`Self::insert_module`]).  Keys are compact
-/// indices, stable across processes and reclaimed when a module is removed
-/// from the device registry.
+/// indices, stable across processes; the device registry decides when one is
+/// reused (see [`ModuleKey`]).
 pub struct Registry<P: Program> {
     entries: HashMap<ModuleKey, Package<P>>,
-}
-impl<P: Program> Default for Registry<P> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<P: Program> Registry<P> {
-    pub fn new() -> Self {
-        Registry {
-            entries: HashMap::new(),
-        }
-    }
-
-    /// An executing module bound to this registry: every static ref it
-    /// touches resolves through `self`.  Modules executing in threads share
-    /// the one registry `Arc` — a `Module` itself is never shared
-    /// (`Arc<Module>` does not exist; it is a per-thread owned value).
-    pub fn new_module(registry: &Arc<RwLock<Registry<P>>>) -> Module<P> {
-        Module::with_registry(registry.clone())
-    }
-
-    /// Compile a dynamic module into a static artifact and file it under
-    /// `key` — the device key allocated by the device registry (the caller
-    /// provides it so the artifact's refs are baked with their final key;
-    /// the key must not already be registered — same content must not be
-    /// compiled twice).  A failed build leaves the registry untouched.
-    pub fn freeze(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> ModuleKey {
-        self.freeze_mapped(module, key, hash).key
-    }
-
-    /// Like [`Self::freeze`], but also returns the source→statics node map
-    /// so a caller can construct exported [`StaticNodeId`]s for root nodes.
-    ///
-    /// The source may itself carry static refs — its frozen dependencies
-    /// (a package importing packages).  They are absolute from birth, so the
-    /// artifact keeps them verbatim; this method checks the soundness
-    /// precondition the verbatim refs imply: every module key the source's
-    /// values reference must already be registered *here*, so the frozen
-    /// artifact resolves from any importer through this registry.  Freeze
-    /// dependencies first.
-    pub fn freeze_mapped(&mut self, module: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
-        for dep in crate::static_module::referenced_keys(module) {
-            assert!(
-                self.entries.contains_key(&dep),
-                "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
-            );
-        }
-        assert!(
-            !self.entries.contains_key(&key),
-            "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
-        );
-        let (static_module, node_map) = StaticModule::from_module_mapped(module, key);
-        self.entries.insert(
-            key,
-            Package {
-                module: Arc::new(static_module),
-                meta: Default::default(),
-                hash,
-            },
-        );
-        Freeze { key, node_map }
-    }
-
-    /// File an already-built artifact (a module loaded from the device's
-    /// persistent store) under its device `key` — the load-time mirror of
-    /// [`Self::freeze_mapped`]: the artifact's refs are already baked with
-    /// `key`, nothing is rebuilt or re-keyed.  The key must not already be
-    /// registered — a registered key is a loaded module, and re-inserting
-    /// it would shadow the resident one; the caller checks first
-    /// ([`Self::get`], comparing [`Package::hash`] to recognize a key
-    /// reallocated after reclamation).
-    pub fn insert_module(&mut self, key: ModuleKey, hash: [u8; 32], module: StaticModule<P>) {
-        assert!(
-            self.entries
-                .insert(
-                    key,
-                    Package {
-                        module: Arc::new(module),
-                        meta: Default::default(),
-                        hash,
-                    }
-                )
-                .is_none(),
-            "inserting a module under device key {key:?}, which is already registered — a loaded module is never shadowed"
-        );
-    }
-
-    /// Set the opaque per-package metadata for an existing registered
-    /// package.  Higher layers use this to store export markers, source
-    /// paths, or any future package-level state without the lowlevel
-    /// knowing what that state means.
-    pub fn set_package_meta(&mut self, key: ModuleKey, meta: P::PackageMeta) {
-        self.entries
-            .get_mut(&key)
-            .expect("set_package_meta on an unregistered module key")
-            .meta = meta;
-    }
-
-    /// The registered module behind a device key — the file-system `get`.
-    /// `None` is the "no such key" answer; a static ref naming an
-    /// unregistered key is a broken module graph and panics at its
-    /// resolution site.
-    pub fn get(&self, key: ModuleKey) -> Option<&Package<P>> {
-        self.entries.get(&key)
-    }
-
-    /// Iterate the registered modules — the device's directory listing.
-    /// (The persistent store uses it to collect the arenas a serialized
-    /// artifact's payload refs point into.)
-    pub fn iter(&self) -> impl Iterator<Item = (ModuleKey, &Package<P>)> {
-        self.entries.iter().map(|(&key, package)| (key, package))
-    }
-
-    /// Whether the registry holds no registered modules.  (Sources with
-    /// static refs — packages importing packages — may only be frozen into
-    /// a registry that holds their dependencies; see
-    /// [`Self::freeze_mapped`].)
-    pub fn is_empty(&self) -> bool {
-        self.entries.is_empty()
-    }
-}
-
-impl<P: Program> Default for Module<P> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl<P: Program> Module<P> {
-    pub const MAX_APPLY_DEPTH: usize = 10_000;
-    /// The default total-application budget.  Each application clones its
-    /// function's body (~tens of nodes), so this also bounds the module's
-    /// growth — an indeterminate recursion stops before it drains memory.
-    pub const MAX_APPLY_TOTAL: usize = 100_000;
-    pub const MAX_DEEP_DEPTH: usize = 300_000;
-
-    pub fn new() -> Self {
-        Self::with_registry(Arc::new(RwLock::new(Registry::new())))
-    }
-
-    /// A module bound to the given registry — every static ref it touches
-    /// resolves through it.  Modules executing in threads share the one
-    /// registry `Arc` ([`Registry::new_module`]); a standalone module owns
-    /// a private registry, which is the same thing at one-module scale.
-    fn with_registry(registry: Arc<RwLock<Registry<P>>>) -> Self {
-        Module {
-            registry,
-            nodes: SlotMap::with_key(),
-            blocks: SlotMap::with_key(),
-            functions: SlotMap::with_key(),
-            apply_depth_limit: Self::MAX_APPLY_DEPTH,
-            apply_total_limit: Self::MAX_APPLY_TOTAL,
-            evaluate_depth_limit: Self::MAX_DEEP_DEPTH,
-            unify_errors: Vec::new(),
-            eval_errors: Vec::new(),
-            asserts: Vec::new(),
-            assert_errors: Vec::new(),
-            apply_errors: Vec::new(),
-            extension_diagnostics: Vec::new(),
-            global_ext: P::GlobalExt::default(),
-            apply_depth: 0,
-            apply_total: 0,
-            deep_depth: 0,
-            budget_exhausted: None,
-        }
-    }
-
-    /// Compile `source` into a static artifact and register it with this
-    /// module's registry under `key` — the device key allocated by the
-    /// device registry (the caller provides it so the artifact's refs are
-    /// baked with their final key).  Convenience over [`Registry::freeze`].
-    /// `source` must be a different module — freezing a module into itself
-    /// would deadlock its own registry lock.
-    pub fn freeze(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> ModuleKey {
-        self.freeze_mapped(source, key, hash).key
-    }
-
-    /// Compile `source` into a static artifact and register it with this
-    /// module's registry under `key`, returning both the device key and the
-    /// source→statics node map.  Convenience over
-    /// [`Registry::freeze_mapped`].
-    pub fn freeze_mapped(&mut self, source: &Module<P>, key: ModuleKey, hash: [u8; 32]) -> Freeze {
-        // Hard in release too: a self-freeze (reachable only through a raw
-        // pointer, since the borrows of `self` and `source` exclude it)
-        // deadlocks on the registry write lock.
-        assert!(
-            !std::ptr::eq(self, source),
-            "freezing a module into itself would deadlock its registry lock"
-        );
-        self.registry
-            .write()
-            .unwrap_or_else(PoisonError::into_inner)
-            .freeze_mapped(source, key, hash)
-    }
-
-    /// Resets the per-run evaluation budgets ([`Self::apply_depth`],    /// [`Self::apply_total`], [`Self::deep_depth`]) so a host can drive the
-    /// module in a long-running loop (e.g. one kernel call per GUI frame)
-    /// without the cumulative apply count exhausting
-    /// [`Self::apply_total_limit`]. The budgets guard *one* run; a host that
-    /// resets them per run keeps the guard while shedding lifetime
-    /// accumulation. The limits themselves are unchanged.
-    ///
-    /// [`Self::budget_exhausted`] resets with them: it is a per-run verdict,
-    /// so a host starting a new run must not read the previous run's
-    /// refusal.
-    pub fn reset_apply_budget(&mut self) {
-        self.apply_depth = 0;
-        self.apply_total = 0;
-        self.deep_depth = 0;
-        self.budget_exhausted = None;
-    }
-
-    pub fn add_block(&mut self, parent: Option<BlockId>) -> BlockId {
-        let block = self.blocks.insert(Block {
-            arena: Bump::new(),
-            parent,
-            children: Vec::new(),
-            nodes: Vec::new(),
-            functions: Vec::new(),
-        });
-        if let Some(parent) = parent {
-            self.blocks[parent].children.push(block);
-        }
-        block
-    }
-
-    pub fn add_node(
-        &mut self,
-        block: BlockId,
-        operation: Option<Operation<P>>,
-        value: Option<P::Value>,
-    ) -> NodeId {
-        let node = self.nodes.insert(Node {
-            value,
-            operation,
-            low_shape: None,
-            function: None,
-            block,
-            visiting: false,
-            evaluated_deep: None,
-            equality: disjoint::Meta::default(),
-        });
-        disjoint::make_set(&mut self.nodes, node);
-        self.blocks[block].nodes.push(node);
-        // Allocation with a concrete value is the second of the two value-write
-        // sites (`write_node_value` is the first), so the observation runs here
-        // too — otherwise a literal, a marker, or a freshly built array would
-        // carry no low type at all, and only the evaluated spine ever would.
-        if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
-            self.observe_class_low_type(node, value);
-        }
-        node
-    }
-
-    /// Record a diagnostic a **layer above the lowlevel** produced, through the
-    /// general channel ([`Self::extension_diagnostics`]).
-    ///
-    /// A layer records when it has decided something the lowlevel cannot
-    /// describe on its behalf — a backend that refuses to lower a shape, a
-    /// plugin that cannot compile a body.  The companion decision is always the
-    /// caller's: a record is not an error state, and recording one never
-    /// changes what the VM does next.
-    pub fn record_extension_diagnostic(
-        &mut self,
-        category: &'static str,
-        node: Option<NodeId>,
-        message: impl Into<String>,
-    ) {
-        self.extension_diagnostics.push(ExtensionDiagnostic {
-            category,
-            node,
-            message: message.into(),
-        });
-    }
-
-    /// Registers `condition` as an assert — an explicit constraint, not a
-    /// unification, so an unbound condition is *not* bound to `1`, it stays
-    /// untriggered until an apply binds it.  [`Self::check_asserts`]
-    /// force-evaluates every registered condition (ignoring laziness) and
-    /// requires `USize(1)`, see there.  The registry is a worklist; a
-    /// condition owned by a function body ([`Function::asserts`]) is cloned
-    /// and re-registered per apply, so a body's assert re-checks against
-    /// each call's argument.
-    pub fn add_assert(&mut self, condition: NodeId) -> NodeId {
-        self.asserts.push(PendingAssert {
-            condition,
-            template: AnyNodeId::Dynamic(condition),
-        });
-        condition
-    }
-
-    /// Create a function template's **shell**, before any of its nodes exist.
-    ///
-    /// The record this inserts is deliberately incomplete: its
-    /// [`Function::parameter`] and [`Function::r#return`] are unset until
-    /// [`Self::finish_function`] names them, and nothing may read a function
-    /// in between.  Building the shell first is what lets a compiler emit the
-    /// parameter nodes *into this function's scope*: the node allocator tags
-    /// and registers each node against the function currently being built, so
-    /// a parameter allocated after the shell lands in the right template
-    /// without being moved there afterwards.
-    ///
-    /// `parent` is the enclosing template, or `None` at the top level and for
-    /// a same-depth sibling (see [`Function::parent`]).
-    pub fn begin_function(&mut self, block: BlockId, parent: Option<FunctionId>) -> FunctionId {
-        let function = self.functions.insert(Function {
-            nodes: Vec::new(),
-            r#return: NodeId::default(),
-            parameter: NodeId::default(),
-            parent,
-            asserts: Vec::new(),
-            block,
-        });
-        self.blocks[block].functions.push(function);
-        function
-    }
-
-    /// Complete the shell begun by [`Self::begin_function`], naming the
-    /// return and parameter slots.
-    ///
-    /// Both must already be registered in the function's scope: the apply
-    /// clone walk reads its members through [`Function::nodes`], and
-    /// `parameter` in particular is what it instantiates, so a parameter
-    /// missing from the scope is a construction error, not a runtime one.
-    pub fn finish_function(&mut self, function: FunctionId, r#return: NodeId, parameter: NodeId) {
-        debug_assert!(
-            self.functions[function].nodes.contains(&parameter),
-            "a function's parameter slot must be registered in its own scope before the shell is finished"
-        );
-        self.functions[function].r#return = r#return;
-        self.functions[function].parameter = parameter;
-    }
-
-    pub fn add_function(
-        &mut self,
-        block: BlockId,
-        ret: NodeId,
-        param: NodeId,
-        nodes: impl IntoIterator<Item = NodeId>,
-        asserts: impl IntoIterator<Item = NodeId>,
-    ) -> NodeId {
-        let nodes: Vec<NodeId> = nodes.into_iter().collect();
-        let function = self.begin_function(block, None);
-        // The passed nodes are this function's template: tag each with its
-        // owner, so the apply clone walk's chain membership test recognizes
-        // them.  The function id must exist before the tags point at it.
-        for &node in &nodes {
-            self.nodes[node].function = Some(function);
-        }
-        self.functions[function].nodes = nodes;
-        self.functions[function].asserts = asserts.into_iter().collect();
-        self.finish_function(function, ret, param);
-        // The value node is the function's own too — tagged with it, so an
-        // enclosing template (a nested function's parent link) clones it and
-        // instantiates a fresh closure per call instead of referencing the
-        // template's function value in place.
-        let func_node = self.add_node(
-            block,
-            None,
-            Some(P::Value::from(LowValue::Function(AnyFunctionId::Dynamic(
-                function,
-            )))),
-        );
-        self.nodes[func_node].function = Some(function);
-        func_node
-    }
 }

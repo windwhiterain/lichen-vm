@@ -194,16 +194,16 @@ fn the_checker_runs_on_an_extended_union() {
     ir.set_root(tuple);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok, "the extended-union program must check");
-    let float_pair = build.term[float_ty.0 as usize].unwrap();
-    let float_value = build.val[float_ty.0 as usize].unwrap();
+    let float_pair = build.state[float_ty.0 as usize].term.unwrap();
+    let float_value = build.state[float_ty.0 as usize].val.unwrap();
     assert_eq!(
         build.module.node_value(AnyNodeId::Dynamic(float_value)),
         Some(ProbeValue::FloatType)
     );
-    assert_eq!(build.ty[float_ty.0 as usize], Some(build.type_expr));
-    let ids = build
-        .module
-        .array_items(float_pair)
+    assert_eq!(build.state[float_ty.0 as usize].ty, Some(build.type_expr));
+    // SAFETY: `float_pair` is a live node of the build under test, whose block
+    // has not been dropped.
+    let ids = unsafe { build.module.array_items(float_pair) }
         .expect("the pair is an array")
         .iter()
         .map(|item| dyn_node(item.node))
@@ -222,7 +222,7 @@ fn value_node_shares_the_canonical_type_marker() {
     ir.set_root(marker);
     let build = Checker::<ProbeProgram>::build(ir);
     assert!(build.ok, "the type-marker literal must check");
-    assert_eq!(build.val[marker.0 as usize], Some(build.type_marker));
+    assert_eq!(build.state[marker.0 as usize].val, Some(build.type_marker));
 }
 
 #[test]

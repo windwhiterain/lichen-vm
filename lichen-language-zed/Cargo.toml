@@ -1,7 +1,7 @@
 [package]
 name = "lichen-language-zed"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 description = "A Zed editor extension for Lichen (syntax support + LSP integration)."
 
 [lib]

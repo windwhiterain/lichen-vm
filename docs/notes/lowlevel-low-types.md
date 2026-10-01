@@ -55,17 +55,18 @@ pre-existing moments (`jit` and `launch`).
 
 Identity in the VM is the equivalence class, so the low type lives on the
 class (read through the representative, the same `&self` walk
-`class_value` already uses, `equality.rs:71-77`), stored in the existing
+`class_value` already uses, `equality.rs:81`), stored in the existing
 `Node::low_shape` field. Two writers maintain it:
 
-- **Observation — hooked into `write_node_value`** (`equality.rs:93`) and into
-  `add_node`, the single choke-point every value write already flows through
+- **Observation — hooked into `write_node_value`** (`equality.rs:178`) and into
+  `add_node` (`module.rs:110`), the single choke-point every value write already
+  flows through
   (evaluation results, apply-clone bindings, launch-argument unification). When a
   concrete value binds, the class's low type refines from the value's variant
   tag — O(1), monotone, no extra traversal. Deep shapes are not unfolded at
   write time; a read recurses into element classes, which refine
   independently as they bind.
-- **Class merge — hooked into `add_equality`** (`equality.rs:59`): a union
+- **Class merge — hooked into `add_equality`** (`equality.rs:60`): a union
   joins the two representatives' low types onto the new representative.
   `Unknown ∨ k = k`; two equal `Known`s are unchanged; two different `Known`s
   join to `Unknown` — which the design expected to be unreachable, and is not
@@ -127,7 +128,7 @@ requires pre-apply compilation, which is why it is the mainstream.
 
 | Phase | Content | Touch points |
 |---|---|---|
-| 3a | `LowShape` gains `Unknown`; class-routed storage (read through the representative); observation hook in `write_node_value`; join in `add_equality`; read APIs (`class_low_type`, recursive `low_type_of_node`) | `lowlevel/src/equality.rs`, `lib.rs`; clone/freeze/codec plumbing already exists (`function.rs:303`, `static_module.rs:539`) |
+| 3a | `LowShape` gains `Unknown`; class-routed storage (read through the representative); observation hook in `write_node_value`; join in `add_equality`; read APIs (`class_low_type`, recursive `low_type_of_node`) | `lowlevel/src/equality.rs`, `lib.rs`; clone/freeze/codec plumbing already exists (`function.rs:303`, `static_module/freeze.rs`) |
 | 3b | The abstract-interpretation pass: seeds, `LowOperator` transfer table, `OperatorExt` hook, template fixed point | new lowlevel module |
 | 3c | highlevel `low_type_of` in `shape.rs` (Unknown explicit); `compile_fragment` rewired to seed → pass → read; `kernel_param_shape`/`element_shape` raw walks deleted; polymorphic `jit` → honest lazy + diagnostic | `highlevel/src/shape.rs`, `compute/src/compute.rs` |
 

@@ -11,20 +11,30 @@
 //!   fixed binary, at `<lichendir>/tools/<name>`.
 //!
 //! Binaries are fetched as **prebuilt release assets** (never built on the user's
-//! machine), from the GitHub **release at the package manager's own commit** — so
-//! the toolchain and the package manager are always the same revision. The package
-//! manager is only ever *run*; how it got installed (any way) is irrelevant.
+//! machine), from the GitHub release tagged with the short SHA of the commit this
+//! binary was built from (see [`release_tag`]). The tag is derived from that
+//! embedded commit, so the download **addresses** the release that claims to be
+//! that revision — the commit is pinned; the bytes are not. Nothing confirms that
+//! the asset delivered is the one that commit produced: the contents are trusted
+//! as delivered, over HTTPS to GitHub. The package manager is only ever *run*; how
+//! it got installed (any way) is irrelevant.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use lichen_preprocess::{Depend, lichendir};
 
 use crate::compiler_cache;
 use crate::plugin;
 
-/// The default repository toolchain releases are fetched from.
-pub const DEFAULT_REPO: &str = "https://github.com/windwhiterain/lichen-vm";
+/// The default repository toolchain releases are fetched from — and the fixed
+/// core-repository identity the shipping compiler slot is keyed by, so a slot
+/// names the toolchain a home holds, not the address its bytes arrived from.
+/// The compiler derives that same slot from its own
+/// `persist::shipping_cache_root`, so the two must name one repository; the
+/// value is defined once, in `lichen_utils::cache`.
+pub const DEFAULT_REPO: &str = lichen_utils::cache::DEFAULT_CORE_REPO;
 
 /// The package manager's own binary name.
 pub const PACKAGE_MANAGER_BIN: &str = "lichen";
@@ -32,9 +42,9 @@ pub const PACKAGE_MANAGER_BIN: &str = "lichen";
 /// The commit this `lichen` binary was compiled from, if known.
 ///
 /// Set by [`build.rs`](crate::build) from `git rev-parse HEAD`; `None` when the
-/// crate was built outside a git checkout (the package manager then falls back to
-/// the repo's default-branch tip). The toolchain release is fetched at this commit
-/// so the package manager and the toolchain are the same revision.
+/// crate was built outside a git checkout, in which case `install` cannot derive a
+/// release tag and refuses rather than chasing the repository tip. The release is
+/// addressed by the tag derived from this commit (see [`release_tag`]).
 pub fn self_commit() -> Option<&'static str> {
     let commit = env!("LICHEN_BUILD_COMMIT");
     if commit.is_empty() {
@@ -99,7 +109,7 @@ impl Tool {
 // ---------------------------------------------------------------------------
 
 /// The `.exe` suffix on Windows, else empty.
-fn exe_suffix() -> &'static str {
+pub(crate) fn exe_suffix() -> &'static str {
     if cfg!(windows) { ".exe" } else { "" }
 }
 
@@ -137,8 +147,8 @@ pub fn tools_dir() -> PathBuf {
 /// binaries for the plugin-sensitive tools. Project plugin sets are composed into
 /// their own keyed sllot by [`crate::compiler_cache`].
 fn shipping_dir() -> Result<PathBuf, String> {
-    let key =
-        compiler_cache::key(&[]).map_err(|e| format!("cannot key the base plugin set: {e}"))?;
+    let key = compiler_cache::key(DEFAULT_REPO, &[])
+        .map_err(|e| format!("cannot key the base plugin set: {e}"))?;
     Ok(lichendir()
         .join(compiler_cache::COMPILERS_DIR)
         .join(key)
@@ -163,11 +173,11 @@ pub fn tool_dest_path(tool: Tool) -> Result<PathBuf, String> {
 // Prebuilt-release fetch.
 // ---------------------------------------------------------------------------
 
-/// The commit the toolchain release should come from: this binary's own commit.
-/// A `lichen` built outside a git checkout has no pinned commit, so it cannot
-/// install a same-commit toolchain — the caller is told to `liche update` rather
-/// than silently chasing the repo tip (which may have no release, since the user
-/// publishes manually).
+/// The commit the toolchain release is addressed by: this binary's own commit.
+/// A `lichen` built outside a git checkout has no commit to derive a release tag
+/// from, so it cannot pin the download and the caller is told to `liche update`
+/// rather than silently chasing the repo tip (which may have no release, since the
+/// user publishes manually).
 fn toolchain_commit() -> Result<String, String> {
     self_commit().map(str::to_string).ok_or_else(|| {
         "cannot pin the toolchain to a commit: this `lichen` was built outside a \
@@ -255,16 +265,26 @@ pub fn asset_url(repo: &str, tag: &str, bin: &str) -> String {
     format!("{repo}/releases/download/{tag}/{}", asset_name(bin))
 }
 
-/// Download `url` to `dest` (a temp sibling, then rename) using `curl`.
+/// A per-process counter making download temp names unique within one process;
+/// the pid separates processes.
+static DOWNLOAD_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Download `url` to `dest` (a unique temp sibling, then rename) using `curl`.
 ///
-/// Windows ships `curl.exe`; Unix systems ship `curl`. Returns the download
-/// command's stderr on failure.
+/// A **predictable** temp name would let two invocations for the same tool
+/// interleave on one file, and let anything else in the destination directory
+/// pre-create or replace it; the pid + counter suffix keeps one invocation's
+/// bytes out of another's.  The file is flushed before the rename, so a crash
+/// cannot install a truncated binary under the final name.  Windows ships
+/// `curl.exe`; Unix systems ship `curl`. Returns the download command's stderr
+/// on failure.
 fn download(url: &str, dest: &PathBuf) -> Result<(), String> {
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("cannot create {}: {e}", parent.display()))?;
     }
-    let tmp = dest.with_extension("download.tmp");
+    let nonce = DOWNLOAD_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = dest.with_extension(format!("download.{}.{nonce}.tmp", std::process::id()));
     let out = Command::new("curl")
         .args(["-L", "--fail", "--output"])
         .arg(&tmp)
@@ -278,9 +298,23 @@ fn download(url: &str, dest: &PathBuf) -> Result<(), String> {
             String::from_utf8_lossy(&out.stderr).trim()
         ));
     }
+    if let Err(e) = flush_to_disk(&tmp) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!("cannot flush the download: {e}"));
+    }
     std::fs::rename(&tmp, dest).map_err(|e| format!("cannot move download into place: {e}"))?;
     make_executable(dest)?;
     Ok(())
+}
+
+/// Flush `path` to disk, so a crash after this cannot leave a truncated file
+/// behind the rename that follows.
+fn flush_to_disk(path: &Path) -> std::io::Result<()> {
+    // Opened for writing, not reading: `sync_all` needs write access on Windows.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .sync_all()
 }
 
 /// Make `path` executable (a no-op on Windows).
@@ -304,9 +338,9 @@ fn make_executable(path: &PathBuf) -> Result<(), String> {
 // Public operations.
 // ---------------------------------------------------------------------------
 
-/// Install (refresh) `tool` from the prebuilt release at the package manager's own
-/// commit into Lichen Home. Returns the installed binary path. If the release at
-/// that commit is missing, the error hints at `lichen update`.
+/// Install (refresh) `tool` from the prebuilt release tagged with the package
+/// manager's own commit into Lichen Home. Returns the installed binary path. If
+/// that release is missing, the error hints at `lichen update`.
 pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     let bin = tool.bin_name();
     let commit = toolchain_commit()?;
@@ -322,14 +356,25 @@ pub fn install(tool: Tool, repo: &str) -> Result<PathBuf, String> {
     }
 }
 
-/// Resolve the shipped binary for `tool`: the Lichen Home copy first, then `$PATH`.
+/// Resolve the shipped binary for `tool`: the Lichen Home copy first, then
+/// `$PATH`.  A `$PATH` hit is reported on stderr, because it executes whatever
+/// binary the user's environment happens to carry in place of the pinned
+/// release.
 pub fn resolve(tool: Tool) -> Option<PathBuf> {
-    if let Ok(dest) = tool_dest_path(tool) {
-        if dest.is_file() {
-            return Some(dest);
-        }
+    if let Ok(dest) = tool_dest_path(tool)
+        && dest.is_file()
+    {
+        return Some(dest);
     }
-    find_on_path(tool.bin_name())
+    let found = find_on_path(tool.bin_name());
+    if let Some(path) = &found {
+        eprintln!(
+            "note: `{}` is not installed in Lichen Home; using the copy on $PATH at {}",
+            tool.bin_name(),
+            path.display()
+        );
+    }
+    found
 }
 
 /// Resolve the language-server binary for a plugin set.
@@ -353,7 +398,7 @@ pub fn resolve_lsp_for(plugins: &[Depend]) -> Result<Option<PathBuf>, String> {
         let dest = install(Tool::LanguageServer, DEFAULT_REPO)?;
         return Ok(Some(dest));
     }
-    println!(
+    eprintln!(
         "composing a language server over the project's {} native plugin(s)...",
         plugins.len()
     );

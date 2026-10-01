@@ -14,6 +14,10 @@
 //! [`Depend::alias`]) — the same derivation the compiler uses when it stages
 //! the vendored alias, so fetch and run agree by construction.
 //!
+//! Every source-file value git receives — the `depend` URL and the
+//! `rev`/`branch`/`tag` revision — is never read as a git option: the URL is
+//! terminated by `--`, and any value starting with `-` is refused.
+//!
 //! Paths handed to git are normalized to drop the Windows `\\?\` extended-path
 //! prefix that `std::fs::canonicalize` produces — git refuses a `\\?\`
 //! destination on clone ("could not create work tree dir").
@@ -42,6 +46,20 @@ pub fn checkout(dep: &Depend) -> Option<&str> {
         .or(dep.tag.as_deref())
 }
 
+/// Refuse a source-file value git would read as an option rather than an
+/// operand: no legitimate URL or revision starts with `-`, and a `-` first byte
+/// turns `--upload-pack=<command>` into command execution or `-f` into a silent
+/// `HEAD` checkout.  `directive` is the `Depend` field the value came from, for
+/// the error message.
+fn reject_option_like(value: &str, directive: &str) -> Result<(), String> {
+    if value.starts_with('-') {
+        return Err(format!(
+            "dependency {directive} '{value}' is invalid: git would read its leading '-' as an option"
+        ));
+    }
+    Ok(())
+}
+
 /// A path as git wants it: without the `\\?\` (and `\\?\UNC\`) extended-path
 /// prefix that canonicalized Windows paths carry.
 fn git_path(p: &Path) -> String {
@@ -57,10 +75,7 @@ fn git_path(p: &Path) -> String {
 
 /// Whether the `git` CLI is available.
 pub fn git_available() -> bool {
-    Command::new("git")
-        .arg("--version")
-        .output()
-        .is_ok_and(|out| out.status.success())
+    crate::tool_available("git")
 }
 
 /// Clone or update a dependency into the lichen-home source cache and return
@@ -70,20 +85,36 @@ pub fn git_available() -> bool {
 /// revision; an existing source is `fetch`ed and the pinned revision is
 /// checked out.
 pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
+    // Reject an invalid `sub` before any git command or cache write.
+    let vendored = dep.vendored_dir()?;
+    // The URL and the revision are source-file text, so neither may reach git
+    // as an option.  `clone --` terminates the URL; this refusal is the layer
+    // that also covers `checkout <rev>` and needs no minimum git version.
+    reject_option_like(&dep.url, "url")?;
+    let rev = checkout(dep);
+    if let Some(rev) = rev {
+        let directive = if dep.rev.is_some() {
+            "rev"
+        } else if dep.branch.is_some() {
+            "branch"
+        } else {
+            "tag"
+        };
+        reject_option_like(rev, directive)?;
+    }
     if !git_available() {
         return Err(
             "the `git` CLI is required to fetch dependencies, but it is not on $PATH".into(),
         );
     }
     let dir = dep.sources_dir();
-    let rev = checkout(dep);
     let dir_git = git_path(&dir);
     // The cache root must exist; the clone lands under it.
     let root = sources_root();
     std::fs::create_dir_all(&root).map_err(|e| format!("cannot create {}: {e}", root.display()))?;
     let root_git = git_path(&root);
     if !dir.join(".git").exists() {
-        git(&["clone", &dep.url, &dir_git], &root_git)?;
+        git(&["clone", "--", &dep.url, &dir_git], &root_git)?;
         if let Some(rev) = rev {
             git_in(&dir_git, &["checkout", rev])?;
         }
@@ -93,7 +124,7 @@ pub fn fetch(dep: &Depend) -> Result<PathBuf, String> {
             git_in(&dir_git, &["checkout", rev])?;
         }
     }
-    Ok(dep.vendored_dir())
+    Ok(vendored)
 }
 
 /// The resolved version (commit hash) of a fetched dependency: the current
@@ -137,3 +168,7 @@ fn git(args: &[&str], cwd: &str) -> Result<(), String> {
 fn git_in(dir: &str, args: &[&str]) -> Result<(), String> {
     git(args, dir)
 }
+
+#[cfg(test)]
+#[path = "tests/git_tests.rs"]
+mod git_tests;

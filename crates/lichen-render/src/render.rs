@@ -7,15 +7,22 @@
 //! in a concrete language's syntax.  Nothing names a concrete host program —
 //! a host (e.g. `lichen-language`) composes `ValuePrinter`/`TypePrinter` with
 //! its own value vocabulary and the free printers below.
+//!
+//! The two printers' methods live in the sibling modules `type_printer` and
+//! `value_printer`; their state and the shared helpers stay here.
 
 use std::collections::{HashMap, HashSet};
 
 use lichen_highlevel::attr::AttrExt;
 use lichen_highlevel::program::{HighProgram, ValueType};
 use lichen_highlevel::shape;
+use lichen_lowlevel::ancestors::AncestorNodes;
 use lichen_lowlevel::{AnyNodeId, ArrayItem, LowValue, Module, NodeId};
 use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
+
+mod type_printer;
+mod value_printer;
 // A rendering hook for extension vocabularies: an extension value → its
 // spelling, or `None` when the value is not the extension’s to name.  The
 // alias exists because the bare closure type trips clippy’s `type_complexity`.
@@ -72,7 +79,9 @@ where
         .node_value(AnyNodeId::Dynamic(pair))
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(a) => Some(a.items().to_vec()),
+            // SAFETY: `a` is the payload of a value read from a live node of
+            // the module being rendered; this printer releases no block.
+            LowValue::Array(a) => Some(unsafe { a.items() }.to_vec()),
             _ => None,
         });
     let Some(values) = values else {
@@ -121,7 +130,7 @@ where
     static_names: HashMap<lichen_lowlevel::StaticNodeId, String>,
     next: usize,
     /// Array nodes on the current recursion; a cycle renders as `…`.
-    path: Vec<NodeId>,
+    path: AncestorNodes<NodeId>,
     /// The extension's own value variants — how a variant the base
     /// vocabulary does not know renders.  `None` (the base vocabulary) or a
     /// hook returning `None` for a value leaves it `?`.
@@ -131,458 +140,6 @@ where
     /// distinguishable), off for the value/type output path (a single value's
     /// type needs no id noise).
     show_struct_id: bool,
-}
-
-impl<'a, P: HighProgram> TypePrinter<'a, P>
-where
-    P::Value: ValueType,
-{
-    pub fn new(module: &'a Module<P>) -> Self {
-        Self::new_with(module, None, None)
-    }
-
-    /// A printer that also knows the checker's arrow shapes, so bare
-    /// `[in, out]` shapes render as `in -> out`.
-    pub fn new_with_arrows(module: &'a Module<P>, arrows: Option<&'a HashSet<NodeId>>) -> Self {
-        Self::new_with(module, arrows, None)
-    }
-
-    /// A printer that renders an extension vocabulary's own variants through
-    /// `render_ext` — a hook the base renderer cannot know, returning the
-    /// variant's spelling (or `None` for a value it does not recognize).
-    pub fn new_with_ext(
-        module: &'a Module<P>,
-        render_ext: Option<RenderExt<'a, P::Value>>,
-    ) -> Self {
-        Self::new_with(module, None, render_ext)
-    }
-
-    fn new_with(
-        module: &'a Module<P>,
-        arrows: Option<&'a HashSet<NodeId>>,
-        render_ext: Option<RenderExt<'a, P::Value>>,
-    ) -> Self {
-        TypePrinter {
-            module,
-            arrows,
-            names: HashMap::new(),
-            static_names: HashMap::new(),
-            next: 0,
-            path: Vec::new(),
-            render_ext,
-            show_struct_id: false,
-        }
-    }
-
-    /// Turn the nominal-id suffix on — the diagnostic printer needs it so two
-    /// structs with the same field shape stay distinguishable.
-    pub fn show_struct_ids(&mut self) {
-        self.show_struct_id = true;
-    }
-
-    /// The module this printer renders from — for a renderer that needs to walk
-    /// the module alongside a rendered type (e.g. a [`DiagKind::NamedField`]
-    /// diagnostic's did-you-mean clause, which enumerates the struct's fields).
-    pub fn module(&self) -> &'a Module<P> {
-        self.module
-    }
-
-    /// Render a type node; an unbound cell renders as its class name.  A
-    /// computed nothing ([`LowValue::Void`]) is a concrete value and renders
-    /// as `none` — it is never a fresh class variable.
-    pub fn node(&mut self, node: NodeId) -> String {
-        if self.path.contains(&node) {
-            return "…".to_string();
-        }
-        // A value-less node is an unbound cell: the lazy marker is the
-        // honest stand-in so it routes to the class name.
-        let value = self
-            .module
-            .node_value(AnyNodeId::Dynamic(node))
-            .unwrap_or_else(|| P::Value::from(LowValue::Parameterized));
-        if matches!(value.as_enum(), Some(LowValue::Parameterized)) {
-            return self.class_name(node);
-        }
-        self.path.push(node);
-        let out = self.value(node, value);
-        self.path.pop();
-        out
-    }
-
-    /// The stable name of an unbound cell's class: `?a`, `?b`, … — cells in
-    /// the same class share a name.
-    pub fn class_name(&mut self, node: NodeId) -> String {
-        let rep = representative(self.module, node);
-        if let Some(name) = self.names.get(&rep) {
-            return name.clone();
-        }
-        let name = letter_name(self.next);
-        self.next += 1;
-        self.names.insert(rep, name.clone());
-        name
-    }
-
-    /// The stable name of an unbound **static** cell: `?a`, `?b`, … — a frozen
-    /// module's type variable.  Keyed by the absolute ref so the same cell
-    /// keeps one name (and two refs to it — e.g. a kernel's signature cells —
-    /// share it), mirroring [`Self::class_name`].
-    pub fn static_class_name(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
-        if let Some(name) = self.static_names.get(&sref) {
-            return name.clone();
-        }
-        let name = letter_name(self.next);
-        self.next += 1;
-        self.static_names.insert(sref, name.clone());
-        name
-    }
-
-    /// Render a type value, descending into arrays.
-    fn value(&mut self, node: NodeId, value: P::Value) -> String {
-        if let Some(structural) = value.as_enum() {
-            return match structural {
-                LowValue::USize(n) => n.to_string(),
-                LowValue::Str(s) => format!("\"{s}\""),
-                LowValue::Array(array) => self.elements(node, array.items()),
-                LowValue::Table(_) => "Table".to_string(),
-                LowValue::Function(_) => "Function".to_string(),
-                LowValue::None | LowValue::Void => "none".to_string(),
-                LowValue::Parameterized => {
-                    unreachable!("handled by node()")
-                }
-            };
-        }
-        self.type_constant(&value)
-            .unwrap_or_else(|| "?".to_string())
-    }
-
-    /// The spelling of a type constant — or of an extension's own variant:
-    /// the lowlevel structural values return `None`, they are rendered by
-    /// [`Self::value`]'s structural branch.
-    pub(crate) fn type_constant(&self, value: &P::Value) -> Option<String> {
-        if value == &P::Value::int_marker() {
-            Some("Int".to_string())
-        } else if value == &P::Value::string_marker() {
-            Some("string".to_string())
-        } else if value == &P::Value::type_marker() {
-            Some("Type".to_string())
-        } else if value == &P::Value::function_type_marker() {
-            Some("TypeFunction".to_string())
-        } else if value == &P::Value::tuple_type_marker() {
-            Some("TypeTuple".to_string())
-        } else if value == &P::Value::array_type_marker() {
-            Some("TypeArray".to_string())
-        } else if value == &P::Value::type_struct_marker() {
-            Some("TypeStruct".to_string())
-        } else if let Some(n) = value.type_id() {
-            Some(format!("TypeId({n})"))
-        } else if let Some(render_ext) = self.render_ext {
-            render_ext(value)
-        } else {
-            None
-        }
-    }
-
-    fn elements(&mut self, node: NodeId, elements: &[ArrayItem]) -> String {
-        // A bare struct kind `[TypeStruct{id, names}, K]` (a struct type
-        // pair's type slot): render its tag `TypeStruct`.  Detected before the
-        // `[head, K]` atomic branch, since its marker is a 2-element array
-        // (not a plain type constant).
-        if is_struct_kind(self.module, node) {
-            return "TypeStruct".to_string();
-        }
-        // `[head, K]` — an atomic type: the kind slot is the self-looping
-        // universe, so render the head (`int`, `Type`, …).
-        if elements.len() == 2 && self.is_universe_any(elements[1].node) {
-            return self.any_node(elements[0].node);
-        }
-        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the two-field struct
-        // value `[id, names]`.  The id renders as `#n` so two structs with the
-        // same field shape stay distinguishable (their nominal types differ).
-        if elements.len() == 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && self.kind_is_struct_any(kind.items())
-        {
-            let fields = self.fields_any(elements[0].node);
-            let names = struct_field_names(self.module, kind.items(), fields.len());
-            let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, kind.items());
-            return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
-                _ => format!("struct<{}>", fields.join(", ")),
-            };
-        }
-        // `[shape, [marker, K]]` — a compound type: the kind's marker decides
-        // how the shape reads.
-        if elements.len() == 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
-            && kind.len() == 2
-            && self.is_universe_any(kind[1].node)
-        {
-            match self.module.node_value(kind[0].node) {
-                Some(m) if m == P::Value::function_type_marker() => {
-                    // shape = [in, out] — render `in -> out`.
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
-                        && s.len() == 2
-                    {
-                        return format!(
-                            "{} -> {}",
-                            self.any_node(s[0].node),
-                            self.any_node(s[1].node)
-                        );
-                    }
-                }
-                Some(m) if m == P::Value::tuple_type_marker() => {
-                    // shape = the field-type list — render `<T1, ..., Tn>`.
-                    let fields = self.fields_any(elements[0].node);
-                    return format!("<{}>", fields.join(", "));
-                }
-                Some(m) if m == P::Value::array_type_marker() => {
-                    // shape = [element type, length] — render `array<T, len>`.
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
-                        && s.len() == 2
-                    {
-                        return format!(
-                            "array<{}, {}>",
-                            self.any_node(s[0].node),
-                            self.any_node(s[1].node)
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        // A bare `[in, out]` shape with no kind wrapper: an arrow only when
-        // the checker registered the shape (the diagnostic path); otherwise
-        // it falls through to the raw pair.
-        if elements.len() == 2 && self.is_arrow(node) {
-            return format!(
-                "{} -> {}",
-                self.any_node(elements[0].node),
-                self.any_node(elements[1].node)
-            );
-        }
-        // Fallback: render the raw elements.
-        let parts: Vec<String> = elements
-            .iter()
-            .map(|item| self.any_node(item.node))
-            .collect();
-        format!("[{}]", parts.join(", "))
-    }
-
-    /// Is `node`'s class a checker-registered arrow shape?
-    fn is_arrow(&self, node: NodeId) -> bool {
-        self.arrows.is_some_and(|arrows| {
-            disjoint::members(&self.module.nodes, representative(self.module, node))
-                .any(|m| arrows.contains(&m))
-        })
-    }
-
-    /// Read-only variant of [`Self::fields`] for a static or dynamic shape.
-    fn fields_any(&mut self, shape: AnyNodeId) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            array
-                .items()
-                .iter()
-                .map(|item| self.any_node(item.node))
-                .collect()
-        } else {
-            vec![self.any_node(shape)]
-        }
-    }
-
-    /// Render any node — dynamic or static — as a type.
-    pub fn any_node(&mut self, id: AnyNodeId) -> String {
-        match id {
-            AnyNodeId::Dynamic(node) => self.node(node),
-            AnyNodeId::Static(sref) => self.static_node(sref),
-        }
-    }
-
-    fn static_node(&mut self, sref: lichen_lowlevel::StaticNodeId) -> String {
-        let mut visiting = HashSet::new();
-        self.static_inner(sref, &mut visiting)
-    }
-
-    fn static_inner(
-        &mut self,
-        sref: lichen_lowlevel::StaticNodeId,
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> String {
-        if !visiting.insert(sref) {
-            return "…".to_string();
-        }
-        let value = self.module.node_value(AnyNodeId::Static(sref));
-        if value.is_none_or(|v| matches!(v.as_enum(), Some(LowValue::Parameterized))) {
-            visiting.remove(&sref);
-            return self.static_class_name(sref);
-        }
-        let value = value.unwrap();
-        let out = match value.as_enum() {
-            Some(LowValue::USize(n)) => n.to_string(),
-            Some(LowValue::Str(s)) => format!("\"{s}\""),
-            Some(LowValue::Parameterized) => self.static_class_name(sref),
-            // A computed nothing is a concrete value, never a class letter.
-            Some(LowValue::None | LowValue::Void) => "none".to_string(),
-            Some(LowValue::Function(_)) => "Function".to_string(),
-            Some(LowValue::Table(_)) => "Table".to_string(),
-            Some(LowValue::Array(array)) => self.static_elements(sref, array.items(), visiting),
-            None => self
-                .type_constant(&value)
-                .unwrap_or_else(|| "?".to_string()),
-        };
-        visiting.remove(&sref);
-        out
-    }
-
-    fn static_elements(
-        &mut self,
-        _sref: lichen_lowlevel::StaticNodeId,
-        elements: &[ArrayItem],
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> String {
-        // A bare struct kind `[TypeStruct{id, names}, K]`: render its tag.
-        if kind_is_struct(self.module, elements) {
-            return "TypeStruct".to_string();
-        }
-        // `[head, K]` — an atomic type: the kind slot is the self-looping
-        // universe, so render the head (`int`, `Type`, …).
-        if elements.len() == 2 && self.is_static_universe(elements[1].node) {
-            return self.static_any(elements[0].node, visiting);
-        }
-        // A struct type: `[shape, [TypeStruct{id, names}, K]]` — the kind is a
-        // standard `[marker, K]` pair whose marker is the two-field struct
-        // value `[id, names]`; a name table rides at the marker's slot 1.
-        if elements.len() == 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && self.kind_is_struct_any(kind.items())
-        {
-            let fields = self.static_fields(elements[0].node, visiting);
-            let names = struct_field_names(self.module, kind.items(), fields.len());
-            let fields = struct_fields_with_names(&fields, &names);
-            let id = struct_kind_id(self.module, kind.items());
-            return match (self.show_struct_id, id) {
-                (true, Some(n)) => format!("struct<{}>#{n}", fields.join(", ")),
-                _ => format!("struct<{}>", fields.join(", ")),
-            };
-        }
-        // `[shape, [marker, K]]` — a compound type: the kind's marker decides
-        // how the shape reads.
-        if elements.len() == 2
-            && let Some(kind) = self.module.node_value(elements[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
-            && kind.len() == 2
-            && self.is_static_universe(kind[1].node)
-        {
-            match self.module.node_value(kind[0].node) {
-                Some(m) if m == P::Value::function_type_marker() => {
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
-                        && s.len() == 2
-                    {
-                        return format!(
-                            "{} -> {}",
-                            self.static_any(s[0].node, visiting),
-                            self.static_any(s[1].node, visiting)
-                        );
-                    }
-                }
-                Some(m) if m == P::Value::tuple_type_marker() => {
-                    let fields = self.static_fields(elements[0].node, visiting);
-                    return format!("<{}>", fields.join(", "));
-                }
-                Some(m) if m == P::Value::array_type_marker() => {
-                    if let Some(shape) = self.module.node_value(elements[0].node)
-                        && let Some(LowValue::Array(shape)) = shape.as_enum()
-                        && let s = shape.items()
-                        && s.len() == 2
-                    {
-                        return format!(
-                            "array<{}, {}>",
-                            self.static_any(s[0].node, visiting),
-                            self.static_any(s[1].node, visiting)
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-        // Fallback: render the raw static elements.
-        let parts: Vec<String> = elements
-            .iter()
-            .map(|item| self.static_any(item.node, visiting))
-            .collect();
-        format!("[{}]", parts.join(", "))
-    }
-
-    fn static_any(
-        &mut self,
-        id: AnyNodeId,
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> String {
-        match id {
-            AnyNodeId::Dynamic(node) => self.node(node),
-            AnyNodeId::Static(sref) => self.static_inner(sref, visiting),
-        }
-    }
-
-    fn static_fields(
-        &mut self,
-        shape: AnyNodeId,
-        visiting: &mut HashSet<lichen_lowlevel::StaticNodeId>,
-    ) -> Vec<String> {
-        if let Some(LowValue::Array(array)) =
-            self.module.node_value(shape).and_then(|v| v.as_enum())
-        {
-            array
-                .items()
-                .iter()
-                .map(|item| self.static_any(item.node, visiting))
-                .collect()
-        } else {
-            vec![self.static_any(shape, visiting)]
-        }
-    }
-
-    fn is_static_universe(&self, id: AnyNodeId) -> bool {
-        let AnyNodeId::Static(sref) = id else {
-            return false;
-        };
-        if let Some(value) = self.module.node_value(id)
-            && let Some(LowValue::Array(array)) = value.as_enum()
-        {
-            let items = array.items();
-            return items.len() == 2
-                && self.module.node_value(items[0].node) == Some(P::Value::type_marker())
-                && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index);
-        }
-        false
-    }
-
-    fn is_universe_any(&self, id: AnyNodeId) -> bool {
-        match id {
-            AnyNodeId::Dynamic(node) => is_universe(self.module, node),
-            AnyNodeId::Static(_) => self.is_static_universe(id),
-        }
-    }
-
-    fn kind_is_struct_any(&self, kind_items: &[ArrayItem]) -> bool {
-        kind_items.len() == 2
-            && self.is_universe_any(kind_items[1].node)
-            && marker_is_struct(self.module, kind_items[0].node)
-    }
 }
 
 /// The pretty value printer: renders a runtime value against its type chain,
@@ -596,348 +153,31 @@ where
     module: &'a Module<P>,
     printer: TypePrinter<'a, P>,
     /// Value nodes on the current recursion; a cycle renders as `…`.
-    path: Vec<NodeId>,
+    path: AncestorNodes<NodeId>,
     /// Type nodes on the current recursion; a cycle renders as `…`.
-    tpath: Vec<NodeId>,
-}
-
-impl<'a, P: HighProgram> ValuePrinter<'a, P>
-where
-    P::Value: ValueType,
-{
-    pub fn new(module: &'a Module<P>) -> Self {
-        Self::new_with_ext(module, None)
-    }
-
-    /// A printer that renders an extension vocabulary's own variants through
-    /// `render_ext` — see [`TypePrinter::new_with_ext`].
-    pub fn new_with_ext(
-        module: &'a Module<P>,
-        render_ext: Option<RenderExt<'a, P::Value>>,
-    ) -> Self {
-        ValuePrinter {
-            module,
-            printer: TypePrinter::new_with_ext(module, render_ext),
-            path: Vec::new(),
-            tpath: Vec::new(),
-        }
-    }
-
-    /// Render the runtime value `value`, whose type is `ty`.
-    pub fn print(&mut self, value: P::Value, ty: NodeId) -> String {
-        self.value(value, ty)
-    }
-
-    /// Render a value against its type: the type chain decides how the value
-    /// reads.  When the type chain is opaque, fall back to the raw layout.
-    fn value(&mut self, value: P::Value, ty: NodeId) -> String {
-        // The universe as the type: the value is an atomic type constant —
-        // `Int`, `Type`, or an extension's own type constant.
-        if self.printer.is_universe_any(AnyNodeId::Dynamic(ty)) {
-            return self.atomic(value);
-        }
-        let Some(LowValue::Array(ty_array)) = self
-            .module
-            .node_value(AnyNodeId::Dynamic(ty))
-            .and_then(|v| v.as_enum())
-        else {
-            return self.raw(value);
-        };
-        let tys = ty_array.items();
-        // A struct type itself: the value's type is the struct kind
-        // `[id, [TypeStruct, K], names]` (not a `[shape, [marker, K]]` pair),
-        // and the value is the field-type list — render
-        // `struct<T1, ..., Tn>` (or `struct<.a T1, ...>` when named).
-        if is_struct_kind(self.module, ty)
-            && let Some(LowValue::Array(shape)) = value.as_enum()
-        {
-            let fields: Vec<String> = shape
-                .items()
-                .iter()
-                .map(|item| self.printer.any_node(item.node))
-                .collect();
-            let names = struct_field_names(self.module, tys, fields.len());
-            let fields = struct_fields_with_names(&fields, &names);
-            return format!("struct<{}>", fields.join(", "));
-        }
-        // A kind `[marker, K]`: the value is a compound type — render its
-        // shape in type syntax.
-        if tys.len() == 2
-            && self.printer.is_universe_any(tys[1].node)
-            && let Some(out) = self.compound_type(value, tys[0].node)
-        {
-            return out;
-        }
-        // A struct instance: the value reads against the struct's
-        // field-type list (the shape); its kind is `[TypeStruct{id, names}, K]`
-        // (a standard `[marker, K]` pair), so it is detected beside the
-        // `[marker, K]` kinds.
-        if tys.len() == 2
-            && self.is_struct_kind_any(tys[1].node)
-            && let Some(marker) = self.struct_marker_value(tys[1].node)
-            && let Some(out) = self.instance(value, tys[0].node, marker)
-        {
-            return out;
-        }
-        // A term of a tuple/array/struct type `[shape, [marker, K]]`: the
-        // value's elements read against the shape.
-        if tys.len() == 2
-            && let Some(kind) = self.module.node_value(tys[1].node)
-            && let Some(LowValue::Array(kind)) = kind.as_enum()
-            && let kind = kind.items()
-            && kind.len() == 2
-            && self.printer.is_universe_any(kind[1].node)
-            && let Some(marker) = self.module.node_value(kind[0].node)
-            && let Some(out) = self.instance(value, tys[0].node, marker)
-        {
-            return out;
-        }
-        self.raw(value)
-    }
-
-    /// An atomic type constant: the value of a type expression whose type is
-    /// the universe.  A structural value typed by the universe (the universe
-    /// node itself) falls back to the raw layout.
-    fn atomic(&mut self, value: P::Value) -> String {
-        if let Some(spelling) = self.printer.type_constant(&value) {
-            spelling
-        } else {
-            self.raw(value)
-        }
-    }
-
-    /// A compound type value: the value is the shape `[in, out]` /
-    /// element list / `[element, length]` / `[TypeId, fields]`, and the
-    /// marker decides how the shape reads.  `None` when the value or the
-    /// marker does not fit a compound type.
-    fn compound_type(&mut self, value: P::Value, marker_node: AnyNodeId) -> Option<String> {
-        let marker = self.module.node_value(marker_node)?;
-        let Some(LowValue::Array(shape)) = value.as_enum() else {
-            return None;
-        };
-        let shape = shape.items();
-        if marker == P::Value::function_type_marker() {
-            if shape.len() == 2 {
-                return Some(format!(
-                    "{} -> {}",
-                    self.printer.any_node(shape[0].node),
-                    self.printer.any_node(shape[1].node)
-                ));
-            }
-        } else if marker == P::Value::tuple_type_marker() {
-            let fields: Vec<String> = shape
-                .iter()
-                .map(|item| self.printer.any_node(item.node))
-                .collect();
-            return Some(format!("<{}>", fields.join(", ")));
-        } else if marker == P::Value::array_type_marker() && shape.len() == 2 {
-            return Some(format!(
-                "array<{}, {}>",
-                self.printer.any_node(shape[0].node),
-                self.printer.any_node(shape[1].node)
-            ));
-        }
-        // A struct type never reaches `compound_type` — its kind is a standard
-        // `[marker, K]` pair whose marker is the two-field `TypeStruct`
-        // value, and the struct branch in `value` / `elements` handles it
-        // before this falls through.
-        None
-    }
-
-    /// A term of a tuple, array, or struct type: the value's elements read
-    /// against the shape — a tuple reads `(v1, ..., vn)` (a single element
-    /// `(v1,)`), an array `[v1, ..., vn]`, a struct instance its field tuple
-    /// `(v1, ..., vn)`.  `None` when the value or the shape does not fit.
-    fn instance(
-        &mut self,
-        value: P::Value,
-        shape_node: AnyNodeId,
-        marker: P::Value,
-    ) -> Option<String> {
-        let Some(LowValue::Array(values)) = value.as_enum() else {
-            return None;
-        };
-        let values = values.items();
-        let shape = self.module.node_value(shape_node).and_then(|v| v.as_enum());
-        let Some(LowValue::Array(shape)) = shape else {
-            return None;
-        };
-        let shape = shape.items();
-        if marker == P::Value::tuple_type_marker() {
-            if shape.len() != values.len() {
-                return None;
-            }
-            let mut out = Vec::with_capacity(values.len());
-            for (i, v) in values.iter().enumerate() {
-                out.push(self.element_any(v.node, shape[i].node));
-            }
-            return Some(self.parens(&out));
-        }
-        if marker == P::Value::array_type_marker() {
-            if shape.len() != 2 {
-                return None;
-            }
-            let mut out = Vec::with_capacity(values.len());
-            for v in values {
-                out.push(self.element_any(v.node, shape[0].node));
-            }
-            return Some(format!("[{}]", out.join(", ")));
-        }
-        // A struct marker is the two-field `TypeStruct{id, names}` value, a
-        // 2-element array.  No other kind's marker is an array, so an array
-        // marker names a struct.
-        if marker
-            .as_enum()
-            .is_some_and(|m| matches!(m, LowValue::Array(_)))
-        {
-            // The shape is the positional field-type list (the nominal id
-            // lives in the struct marker), so the element types are the fields.
-            let fields = shape;
-            if fields.len() != values.len() {
-                return None;
-            }
-            let mut out = Vec::with_capacity(values.len());
-            for (i, v) in values.iter().enumerate() {
-                out.push(self.element_any(v.node, fields[i].node));
-            }
-            return Some(self.parens(&out));
-        }
-        None
-    }
-
-    /// `(v1, ..., vn)` — a single element keeps its trailing comma, the
-    /// source spelling of a one-tuple.
-    fn parens(&self, elements: &[String]) -> String {
-        let body = elements.join(", ");
-        let body = if elements.len() == 1 {
-            format!("{body},")
-        } else {
-            body
-        };
-        format!("({body})")
-    }
-
-    /// [`Self::element`] for static or dynamic value/type refs.
-    fn element_any(&mut self, id: AnyNodeId, ty: AnyNodeId) -> String {
-        match (id, ty) {
-            (AnyNodeId::Dynamic(id), AnyNodeId::Dynamic(ty)) => {
-                if self.path.contains(&id) || self.tpath.contains(&ty) {
-                    return "…".to_string();
-                }
-                self.path.push(id);
-                self.tpath.push(ty);
-                let value = self
-                    .module
-                    .node_value(AnyNodeId::Dynamic(id))
-                    .unwrap_or_else(|| P::Value::from(LowValue::None));
-                let out = self.value(value, ty);
-                self.tpath.pop();
-                self.path.pop();
-                out
-            }
-            _ => {
-                let value = self
-                    .module
-                    .node_value(id)
-                    .unwrap_or_else(|| P::Value::from(LowValue::None));
-                self.raw_any(value)
-            }
-        }
-    }
-
-    /// Whether an `AnyNodeId` names a struct kind `[id, [TypeStruct, K]]`.
-    fn is_struct_kind_any(&self, id: AnyNodeId) -> bool {
-        self.module
-            .node_value(id)
-            .and_then(|v| v.as_enum())
-            .is_some_and(|v| match v {
-                LowValue::Array(kind) => kind_is_struct(self.module, kind.items()),
-                _ => false,
-            })
-    }
-
-    /// The struct marker value (`TypeStruct{id, names}` = `[id, names]`) from
-    /// a struct type's kind node (`[marker, K]`), or `None` when the kind is
-    /// not a struct kind.  Used to render a struct instance whose value reads
-    /// against the field-type shape.
-    fn struct_marker_value(&self, kind_node: AnyNodeId) -> Option<P::Value> {
-        let Some(LowValue::Array(kind)) =
-            self.module.node_value(kind_node).and_then(|v| v.as_enum())
-        else {
-            return None;
-        };
-        let marker = self.module.node_value(kind.items()[0].node)?;
-        if marker
-            .as_enum()
-            .is_some_and(|m| matches!(m, LowValue::Array(_)))
-        {
-            Some(marker)
-        } else {
-            None
-        }
-    }
-
-    /// The raw value layout — the fallback when the type chain cannot guide
-    /// the reading: a type pair `[head, [Type, ↺]]` renders as its head
-    /// (`[TypeInt, K]` → `Int`), arrays `[ ]`, functions `Function`, and the
-    /// type constants by their spellings `Int` / `Type`.
-    fn raw(&mut self, value: P::Value) -> String {
-        self.raw_any(value)
-    }
-
-    /// [`Self::raw`] for a value whose array items may be static refs.
-    fn raw_any(&mut self, value: P::Value) -> String {
-        if let Some(structural) = value.as_enum() {
-            return match structural {
-                LowValue::USize(n) => n.to_string(),
-                LowValue::Str(s) => format!("\"{s}\""),
-                LowValue::Function(_) => "Function".to_string(),
-                LowValue::Table(_) => "Table".to_string(),
-                LowValue::None => "none".to_string(),
-                LowValue::Void => "none".to_string(),
-                LowValue::Parameterized => "parameterized".to_string(),
-                LowValue::Array(array) => {
-                    let elements = array.items();
-                    // A type pair `[head, K]`: the kind slot is the
-                    // self-looping universe, so render just the head (and cut
-                    // the cycle).
-                    if elements.len() == 2 && self.printer.is_universe_any(elements[1].node) {
-                        let head = self
-                            .module
-                            .node_value(elements[0].node)
-                            .unwrap_or_else(|| P::Value::from(LowValue::None));
-                        return self.raw_any(head);
-                    }
-                    let mut out = Vec::new();
-                    for item in elements {
-                        let value = self
-                            .module
-                            .node_value(item.node)
-                            .unwrap_or_else(|| P::Value::from(LowValue::None));
-                        let text = self.raw_any(value);
-                        out.push(text);
-                    }
-                    format!("[{}]", out.join(", "))
-                }
-            };
-        }
-        self.printer
-            .type_constant(&value)
-            .unwrap_or_else(|| "?".to_string())
-    }
+    tpath: AncestorNodes<NodeId>,
 }
 
 /// The class representative of `node`, via a read-only `parent` walk (the
-/// printers never mutate the module).
-fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> NodeId
+/// printers never mutate the module).  `None` when the walk cannot answer: a
+/// node the module's table does not hold, or a `parent` chain longer than the
+/// table (a revisit — corrupt equality state).  Either way the caller renders
+/// its own "no answer" instead of panicking or looping.
+fn representative<P: HighProgram>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P::Value: ValueType,
 {
     let mut n = node;
-    while let Some(parent) = module.nodes[n].equality.parent {
-        n = parent;
+    // A parent chain visits each node at most once, so it cannot be longer
+    // than the node table.
+    for _ in 0..=module.nodes.len() {
+        module.nodes.get(n)?;
+        match module.node_equality(n).parent() {
+            Some(parent) => n = parent,
+            None => return Some(n),
+        }
     }
-    n
+    None
 }
 
 /// `0 → "?a"`, `1 → "?b"`, …, `26 → "?a1"`, `27 → "?b1"`, …
@@ -951,12 +191,6 @@ fn letter_name(i: usize) -> String {
     }
 }
 
-/// The canonical universe `K = [Type, ↺]` — a node whose value is an array
-/// that contains a member of its own unification class.  A plain
-/// self-referential member (`contains(&node)`) is the canonical node itself;
-/// a cell unified into the universe class carries the replicated value, whose
-/// self-referential member is the canonical node — the class check covers
-/// both.
 /// Whether `node` is itself a struct kind `[id, [TypeStruct, K]]` (as opposed
 /// to a struct type term `[shape, kind]`, whose kind slot is such a node).
 fn is_struct_kind<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
@@ -967,20 +201,31 @@ where
         .node_value(AnyNodeId::Dynamic(node))
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
-            LowValue::Array(kind) => kind_is_struct(module, kind.items()),
+            // SAFETY: `kind` is the payload of the value read from the live
+            // node `node`.
+            LowValue::Array(kind) => kind_is_struct(module, unsafe { kind.items() }),
             _ => false,
         })
 }
 
+/// Whether `node`'s class is the canonical universe `K = [Type, ↺]` — a node
+/// whose value is an array containing a member of its own unification class.
+/// The member test is a class comparison, so it covers both the canonical node
+/// itself and a cell that carries the replicated value.  A class the walk
+/// cannot place is not the universe.
 fn is_universe<P: HighProgram>(module: &Module<P>, node: NodeId) -> bool
 where
     P::Value: ValueType,
 {
-    let rep = representative(module, node);
+    let Some(rep) = representative(module, node) else {
+        return false;
+    };
     matches!(module.node_value(AnyNodeId::Dynamic(node)), Some(value)
     if matches!(value.as_enum(), Some(LowValue::Array(array))
-        if array.items().iter().any(|item| match item.node {
-            AnyNodeId::Dynamic(item) => representative(module, item) == rep,
+        // SAFETY: `array` is the payload of the value read from the live node
+        // `node`.
+        if unsafe { array.items() }.iter().any(|item| match item.node {
+            AnyNodeId::Dynamic(item) => representative(module, item) == Some(rep),
             AnyNodeId::Static(_) => is_universe_any(module, item.node),
         })))
 }
@@ -998,7 +243,9 @@ where
             .and_then(|v| v.as_enum())
             .is_some_and(|v| match v {
                 LowValue::Array(array) => {
-                    let items = array.items();
+                    // SAFETY: `array` is a static payload read through `sref`,
+                    // whose registered module pins the arena.
+                    let items = unsafe { array.items() };
                     items.len() == 2
                         && module.node_value(items[0].node) == Some(P::Value::type_marker())
                         && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
@@ -1019,7 +266,9 @@ where
         .node_value(marker)
         .and_then(|v| v.as_enum())
         .is_some_and(|v| match v {
-            LowValue::Array(m) => m.items().len() == 2,
+            // SAFETY: `m` is the payload of the value read from the live node
+            // `marker`.
+            LowValue::Array(m) => unsafe { m.items() }.len() == 2,
             _ => false,
         })
 }
@@ -1053,7 +302,9 @@ where
         .node_value(kind_items[0].node)
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(m) => Some(m.items()),
+            // SAFETY: `m` is the payload of a value read from a live node of
+            // the module being rendered.
+            LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         });
     let Some(marker_items) = marker_items else {
@@ -1066,7 +317,9 @@ where
     else {
         return out;
     };
-    for item in table.items() {
+    // SAFETY: `table` is the payload of the value read from the live node
+    // `names_item`.
+    for item in unsafe { table.items() } {
         let name = module
             .node_value(item.key)
             .and_then(|v| v.as_enum())
@@ -1081,10 +334,10 @@ where
                 LowValue::USize(n) => Some(n),
                 _ => None,
             });
-        if let (Some(name), Some(index)) = (name, index) {
-            if index < field_count {
-                out[index] = Some(name);
-            }
+        if let (Some(name), Some(index)) = (name, index)
+            && index < field_count
+        {
+            out[index] = Some(name);
         }
     }
     out
@@ -1111,7 +364,9 @@ where
     let LowValue::Array(ty_arr) = ty.as_enum()? else {
         return None;
     };
-    let tys = ty_arr.items();
+    // SAFETY: `ty_arr`/`shape`/`kind` are payloads of values read from live
+    // nodes of `module`; the note covers this function's `items()` calls.
+    let tys = unsafe { ty_arr.items() };
     if tys.len() != 2 {
         return None;
     }
@@ -1119,12 +374,12 @@ where
     let LowValue::Array(shape) = module.node_value(tys[0].node)?.as_enum()? else {
         return None;
     };
-    let field_count = shape.items().len();
+    let field_count = unsafe { shape.items() }.len();
     // The kind `[marker, K]`: only a struct kind carries a name table.
     let LowValue::Array(kind) = module.node_value(tys[1].node)?.as_enum()? else {
         return None;
     };
-    let kind_items = kind.items();
+    let kind_items = unsafe { kind.items() };
     if !kind_is_struct(module, kind_items) {
         return None;
     }
@@ -1141,10 +396,12 @@ where
         .node_value(kind_items[0].node)
         .and_then(|v| v.as_enum())
         .and_then(|v| match v {
-            LowValue::Array(m) => Some(m.items()),
+            // SAFETY: `m` is the payload of a value read from a live node of
+            // `module`.
+            LowValue::Array(m) => Some(unsafe { m.items() }),
             _ => None,
         })?;
-    let id_item = marker_items.get(0)?;
+    let id_item = marker_items.first()?;
     module.node_value(id_item.node).and_then(|v| v.type_id())
 }
 
@@ -1184,14 +441,16 @@ where
     let LowValue::Array(value_arr) = value else {
         return None;
     };
-    let field_values = value_arr.items();
+    // SAFETY: every slice below is the payload of a value read from a live
+    // node of `module`; the note covers this function's `items()` calls.
+    let field_values = unsafe { value_arr.items() };
 
     // The struct type: `[shape, kind]` where kind is `[marker, K]`.
     let ty = module.node_value(ty_node)?.as_enum()?;
     let LowValue::Array(ty_arr) = ty else {
         return None;
     };
-    let tys = ty_arr.items();
+    let tys = unsafe { ty_arr.items() };
     if tys.len() != 2 {
         return None;
     }
@@ -1199,7 +458,7 @@ where
     let LowValue::Array(kind_items) = kind else {
         return None;
     };
-    if !kind_is_struct(module, kind_items.items()) {
+    if !kind_is_struct(module, unsafe { kind_items.items() }) {
         return None;
     }
     // The shape is the positional field-type list.
@@ -1207,8 +466,8 @@ where
     let LowValue::Array(shape_items) = shape else {
         return None;
     };
-    let field_types = shape_items.items();
-    let names = struct_field_names(module, kind_items.items(), field_values.len());
+    let field_types = unsafe { shape_items.items() };
+    let names = struct_field_names(module, unsafe { kind_items.items() }, field_values.len());
 
     let mut vp = ValuePrinter::new(module);
     let mut fields = Vec::with_capacity(field_values.len());

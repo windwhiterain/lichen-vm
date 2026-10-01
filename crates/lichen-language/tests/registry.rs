@@ -186,6 +186,76 @@ fn a_package_whose_last_statement_is_a_raw_read_reports_an_import_export_error()
 }
 
 #[test]
+fn a_failed_assert_in_an_imported_package_still_reports_a_diagnostic() {
+    // The imported body's assert is cloned into the importer's module with the
+    // *imported* module's node as its template, so this build has no expression
+    // to attribute the failure to and renders nothing for it.  The report
+    // invariant — a failed build always carries a diagnostic — is what keeps
+    // that from surfacing as an error with an empty diagnostic list.
+    let dir = temp_dir("imported-assert");
+    write(&dir, "pkg.lichen", "x => ! (x == 1)\n");
+    let main = "@{f = import \"pkg.lichen\"@}f 2\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    assert_eq!(err.len(), 1, "a failure never renders as nothing: {err:?}");
+    let check = err[0].check.as_ref().expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::UnattributedFailure);
+    assert!(check.loc().is_none(), "there is no expression to blame");
+}
+
+#[test]
+fn an_unattributable_failure_in_a_dependency_names_the_package() {
+    // Here the failing assert belongs to `b`'s own build, so the failure
+    // reaches the importer through the package-load seam instead of through the
+    // importer's own build.  That seam takes the load's first diagnostic, which
+    // the report invariant guarantees exists.
+    let dir = temp_dir("dependency-unattributed");
+    write(&dir, "c.lichen", "x => ! (x == 1)\n");
+    write(&dir, "b.lichen", "@{f = import \"c.lichen\"@}f 2\n");
+    let main = "@{x = import \"b.lichen\"@}x\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    assert_eq!(
+        err.len(),
+        1,
+        "the load's own diagnostic is the one reported: {err:?}"
+    );
+    assert!(
+        err[0].message.contains("cannot load package 'b.lichen'")
+            && err[0].message.contains("could not be attributed"),
+        "the import diagnostic carries the failing build's own message: {}",
+        err[0].message
+    );
+}
+
+#[test]
+fn a_package_export_that_is_not_a_pair_reports_an_import_export_error() {
+    // A raw read of a raw read exports the inner array itself: `[[1]]<0>`
+    // evaluates to a one-element array, not the `[value, type]` pair the
+    // importer reads.  The guard covers the width as well as the kind, so this
+    // is the same honest diagnostic the non-array export gets rather than an
+    // index-out-of-bounds panic inside the checker.
+    let dir = temp_dir("short-export");
+    write(&dir, "short.lichen", "[[1]]<0>\n");
+    let main = "@{x = import \"short.lichen\"@}x\n";
+    let mut store = PackageStore::<LangProgram>::new();
+    let err = evaluate_raw(main, Some(&dir), &mut store).unwrap_err();
+    let diag = err
+        .iter()
+        .find(|d| {
+            d.check
+                .as_ref()
+                .is_some_and(|c| c.kind == DiagKind::ImportExport)
+        })
+        .unwrap_or_else(|| panic!("the one-element export must be guarded: {err:?}"));
+    assert_eq!(
+        diag.span,
+        Some((1, 3)),
+        "the caret is on the @import directive"
+    );
+}
+
+#[test]
 fn package_store_caches_loaded_packages() {
     let dir = temp_dir("cache");
     let pkg = write(&dir, "pkg.lichen", "42\n");

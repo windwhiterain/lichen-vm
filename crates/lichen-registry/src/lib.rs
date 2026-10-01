@@ -30,5 +30,8 @@ pub mod module_key;
 
 pub use lichen_utils::hash::{Hash, hex, sha256};
 
-pub use device::{DeviceRegistry, Entry, Verified, artifact_hash, file_id_hash, is_lichen_file_id};
+pub use device::{
+    DeviceRegistry, Entry, Verified, artifact_hash, file_id_hash, is_lichen_file_id,
+    is_virtual_file_id, virtual_file_id, virtual_name,
+};
 pub use module_key::ModuleKey;

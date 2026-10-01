@@ -13,7 +13,7 @@ fn recursive_function_applies_itself_lazily() {
     // copying the function per level.
     m.evaluate_node_deep(f_node, None);
     assert_eq!(
-        m.nodes[f_node].evaluated_deep,
+        m.node_evaluated_deep(f_node),
         Some(EvaluatedDeep {
             parameterized: false
         })
@@ -37,13 +37,13 @@ fn recursive_function_applies_itself_lazily() {
     let c1 = ids[1];
     assert!(m.node_value(AnyNodeId::Dynamic(c1)).is_none()); // unevaluated until forced
     assert!(matches!(
-        m.nodes[c1].operation,
+        m.node_operation(c1),
         Some(Operation {
             operator: TestOperator::LowOperator(LowOperator::Apply),
             ..
         })
     ));
-    let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(c1).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
@@ -55,7 +55,7 @@ fn recursive_function_applies_itself_lazily() {
     assert_eq!(m.equality_representative(ids1[0]), rep_five);
     let c2 = ids1[1];
     assert_ne!(c2, c1);
-    let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(c2).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
@@ -69,7 +69,7 @@ fn recursive_function_applies_itself_lazily() {
     // The recursion never cloned the function: the same template recursed
     // three times, referenced in place.
     assert_eq!(m.functions.len(), 1);
-    assert_eq!(m.functions[f_id].block, m.nodes[f_node].block);
+    assert_eq!(m.functions[f_id].block, m.node_block(f_node));
     assert!(matches!(
         m.node_value(AnyNodeId::Dynamic(f_node)),
         Some(TestValue::LowValue(LowValue::Function(_)))
@@ -84,7 +84,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     // recursion level carries its own fresh function clone homed on the
     // calling block.
     let (f_node, f_id) = recursive_function(&mut m);
-    assert_eq!(m.nodes[f_node].evaluated_deep, None);
+    assert_eq!(m.node_evaluated_deep(f_node), None);
 
     let five = u128_node(&mut m, root, 5);
     let call = call_node(&mut m, root, f_node, five);
@@ -95,7 +95,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     assert_eq!(m.equality_representative(ids[0]), rep_five);
     let c1 = ids[1];
 
-    let ops = m.nodes[c1].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(c1).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     let cloned = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_ne!(cloned, f_id);
@@ -108,7 +108,7 @@ fn undefined_recursive_function_clones_a_function_per_level() {
     assert_eq!(m.equality_representative(ids1[0]), rep_five);
     let c2 = ids1[1];
     assert_ne!(c2, c1);
-    let ops = m.nodes[c2].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(c2).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     let cloned2 = dyn_function(m.node_value(AnyNodeId::Dynamic(operand_ids[0])).unwrap());
     assert_ne!(cloned2, cloned);
@@ -131,7 +131,7 @@ fn mutually_recursive_functions_call_each_other() {
     assert_eq!(ids.len(), 2);
     assert_eq!(m.equality_representative(ids[0]), rep_five);
     let g_app = ids[1];
-    let ops = m.nodes[g_app].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(g_app).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], g_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
@@ -143,7 +143,7 @@ fn mutually_recursive_functions_call_each_other() {
     assert_eq!(m.equality_representative(ids[0]), rep_five);
     let f_app = ids[1];
     assert_ne!(f_app, g_app);
-    let ops = m.nodes[f_app].operation.unwrap().operand.unwrap();
+    let ops = m.node_operation(f_app).unwrap().operand.unwrap();
     let operand_ids = array_ids(m.node_value(AnyNodeId::Dynamic(ops)).unwrap());
     assert_eq!(operand_ids[0], f_node);
     assert_eq!(m.equality_representative(operand_ids[1]), rep_five);
@@ -159,7 +159,7 @@ fn fibonacci_recurses_through_index_branches() {
     // one FunctionId instead of cloning the function per level.
     m.evaluate_node_deep(fib_node, None);
     assert_eq!(
-        m.nodes[fib_node].evaluated_deep,
+        m.node_evaluated_deep(fib_node),
         Some(EvaluatedDeep {
             parameterized: false
         })
@@ -170,7 +170,7 @@ fn fibonacci_recurses_through_index_branches() {
     // definable even though it applies itself.
     m.evaluate_node_deep(m.functions[fib_id].r#return, None);
     assert_eq!(
-        m.nodes[m.functions[fib_id].r#return].evaluated_deep,
+        m.node_evaluated_deep(m.functions[fib_id].r#return),
         Some(EvaluatedDeep {
             parameterized: true
         })
@@ -232,7 +232,7 @@ fn countdown_definition_pass_terminates() {
     m.evaluate_node_deep(func_node, None); // self-ref stays in place
     m.evaluate_node_deep(ret, None); // definition pass: completes, flagged
     assert_eq!(
-        m.nodes[ret].evaluated_deep,
+        m.node_evaluated_deep(ret),
         Some(EvaluatedDeep {
             parameterized: true
         })
@@ -377,13 +377,13 @@ fn mutual_recursion_with_branches_definition_pass_terminates() {
     m.evaluate_node_deep(e_ret, None);
     m.evaluate_node_deep(o_ret, None);
     assert_eq!(
-        m.nodes[e_ret].evaluated_deep,
+        m.node_evaluated_deep(e_ret),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[o_ret].evaluated_deep,
+        m.node_evaluated_deep(o_ret),
         Some(EvaluatedDeep {
             parameterized: true
         })

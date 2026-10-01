@@ -236,7 +236,7 @@ pub enum Expr {
     /// slot at each of the first `n` levels of the element's type spine
     /// shallow.
     Shallow(Box<Expr>, usize, Span),
-    /// `T<e>` — an array type.
+    /// `array<T, n>` — an array type: the element type `T` and the length `n`.
     TypeArray {
         element_type: Box<Expr>,
         length: Box<Expr>,

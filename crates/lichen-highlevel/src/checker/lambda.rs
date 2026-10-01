@@ -5,9 +5,7 @@
 
 use std::collections::HashMap;
 
-use lichen_lowlevel::{AnyFunctionId, AnyNodeId, LowOperator, LowValue, NodeId};
-
-use lichen_utils::extend::AsEnum;
+use lichen_lowlevel::{AnyFunctionId, LowOperator, LowValue, NodeId};
 
 use crate::diagnostic::DiagKind;
 use crate::ir::ExprId;
@@ -70,7 +68,7 @@ where
         });
         let param = match attr_cell {
             Some((_, _, attr)) => {
-                self.attr[parameter] = Some(attr);
+                self.state[parameter].attr = Some(attr);
                 self.array_node(return_block, &[value_cell, type_cell, attr])
             }
             None => self.array_node(return_block, &[value_cell, type_cell]),
@@ -80,8 +78,8 @@ where
         // that allocated them (the apply clone walk requires `parameter` to be
         // a member, and `finish_function` asserts it).
         self.module.finish_function(function, param, param);
-        self.term[parameter] = Some(param);
-        self.ty[parameter] = Some(type_cell);
+        self.state[parameter].term = Some(param);
+        self.state[parameter].ty = Some(type_cell);
         // A self- or mutually-recursive binding (`fib = n => e`): the IR is a
         // cycle — the body references the function's own `ExprId`.  Register
         // the function's pair *before* the body compiles, so the reference
@@ -93,9 +91,9 @@ where
         let func_node = self.alloc_node(return_block, None, None);
         let ty_cell = self.fresh_cell();
         let pair = self.array_node(return_block, &[func_node, ty_cell]);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(func_node);
-        self.ty[e] = Some(ty_cell);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(func_node);
+        self.state[e].ty = Some(ty_cell);
         self.scopes.push(HashMap::from([(
             parameter,
             Binding {
@@ -114,8 +112,9 @@ where
         // when it happens, not in what it binds.
         if let Some(parameter_type) = parameter_type {
             self.check_expr(parameter_type);
-            let type_pair =
-                self.term[parameter_type].expect("the type expression must compile to a pair");
+            let type_pair = self.state[parameter_type]
+                .term
+                .expect("the type expression must compile to a pair");
             self.check_unify(
                 type_cell,
                 type_pair,
@@ -145,10 +144,19 @@ where
             // The declared value is the annotation expression's `[value, type]`
             // term pair — the uniform slot shape the apply's check compares
             // against the argument's slot.
-            let declared = self.term[parameter_attribute].expect("an attribute expr is compiled");
+            let declared = self.state[parameter_attribute]
+                .term
+                .expect("an attribute expr is compiled");
             // The parameter's schema tail[0] names the attribute; the apply's
             // check resolves its `AttrExt` from this marker.
             let marker = self.ir.schema(parameter).tail[0];
+            // A parameter annotation is the other site that reads an
+            // attribute: a build with no attribute extension reports it here,
+            // so the apply's check can simply decline to run (the guard has
+            // already failed the build).
+            if self.attribute_extension(&marker).is_none() {
+                self.no_attr_ext_guard(self.loc(e, 2));
+            }
             self.function_param_attr.insert(e, (marker, declared));
         }
         let ret = self.check_expr(r#return);
@@ -181,7 +189,7 @@ where
         // Built while the current function is still the shell, so these
         // nodes join its scope like the rest of the body.
         let (shape, _kind, arrow) =
-            self.arrow_parts(return_block, type_cell, self.ty[r#return].unwrap());
+            self.arrow_parts(return_block, type_cell, self.state[r#return].ty.unwrap());
         // The printer needs the arrow's *shape* — an anonymous `[dom, codom]`
         // pair is indistinguishable from a tuple type without it, so only a
         // registered shape renders as `dom -> codom`.
@@ -191,9 +199,9 @@ where
         self.module.unify(ty_cell, arrow);
         let pair = self.array_node(return_block, &[func_node, arrow]);
         self.function_stack.pop();
-        self.term[e] = Some(pair);
-        self.val[e] = Some(func_node);
-        self.ty[e] = Some(arrow);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(func_node);
+        self.state[e].ty = Some(arrow);
         pair
     }
 
@@ -215,7 +223,7 @@ where
         // declared value).
         let param_persp = self.function_param_attr.get(&function).copied();
         let argument_value = self.value_of(argument);
-        let argument_type = self.ty[argument].unwrap();
+        let argument_type = self.state[argument].ty.unwrap();
         let argument_pair = match &param_persp {
             Some((marker, _)) => {
                 let argument_persp = self.attr_or_missing(argument, marker);
@@ -233,16 +241,8 @@ where
         // cell here would chain the type cells of every use of a polymorphic
         // value.  A failed unify never merges classes, so this cannot chain
         // either.
-        let function_ty = self.ty[function].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(function_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let function_ty = self.state[function].ty.unwrap();
+        let concrete = self.type_is_concrete(function_ty);
         if concrete && !shape::is_function_type(&mut self.module, self.type_expr, function_ty) {
             let d = self.fresh_cell();
             let c = self.fresh_cell();
@@ -259,20 +259,29 @@ where
         // `f = x # 4 => x` (declared `4` vs missing).  Routed through the
         // attribute's `AttrExt::unify_slots`; a program with no attribute
         // extension reaches neither branch (no schema carries an attribute).
+        //
+        // A build with no attribute extension records the guard once, where
+        // the attribute is first read — an annotation or a parameter
+        // annotation — and it is the argument pair's own missing slot
+        // ([`Checker::missing_slot_of`]) that reports it when no other site
+        // has.  So this check is skipped, not re-reported.
         if let Some((param_marker, param_slot)) = param_persp {
-            let ext = (self.attr_ext)(&param_marker);
-            let arg_missing = self.attr_or_missing(argument, &param_marker);
-            let loc2 = self.loc(e, 2);
-            ext.unify_slots(self, arg_missing, param_slot, loc2);
-        } else if self.attr[argument].is_some() {
+            if let Some(ext) = self.attribute_extension(&param_marker) {
+                let arg_missing = self.attr_or_missing(argument, &param_marker);
+                let loc2 = self.loc(e, 2);
+                ext.unify_slots(self, arg_missing, param_slot, loc2);
+            }
+        } else if self.state[argument].attr.is_some() {
             let marker = self.schema_tail(argument)[0];
-            let ext = (self.attr_ext)(&marker);
-            let found_attr = self.attr[argument].unwrap();
-            // The declared side of an unannotated parameter is the attribute's
-            // missing slot — a `[0, int]` term pair, the uniform slot shape.
-            let missing = self.missing_slot_of(&marker);
-            let loc2 = self.loc(e, 2);
-            ext.unify_slots(self, found_attr, missing, loc2);
+            if let Some(ext) = self.attribute_extension(&marker) {
+                let found_attr = self.state[argument].attr.unwrap();
+                // The declared side of an unannotated parameter is the
+                // attribute's missing slot — a `[0, int]` term pair, the
+                // uniform slot shape.
+                let missing = self.missing_slot_of(&marker, self.loc(e, 2));
+                let loc2 = self.loc(e, 2);
+                ext.unify_slots(self, found_attr, missing, loc2);
+            }
         }
         // The result's type cell: unbound unless the apply's evaluation
         // syncs it.  The cell rides in the apply's operand; the runtime
@@ -301,9 +310,9 @@ where
                 apply_expr: e,
             },
         );
-        self.term[e] = Some(node);
-        self.val[e] = None;
-        self.ty[e] = Some(c);
+        self.state[e].term = Some(node);
+        self.state[e].val = None;
+        self.state[e].ty = Some(c);
         node
     }
 }

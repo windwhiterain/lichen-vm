@@ -161,18 +161,52 @@ fn out_of_bounds_index_in_a_function_body_records_without_panicking() {
     ));
 }
 #[test]
+fn applying_a_non_function_records_an_eval_error() {
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    // The target is a structural scalar — not a function, and not the
+    // program's own (possibly callable) value — so the apply is a user error
+    // rather than a lazy deferral.
+    let callee = usize_node(&mut m, root, 5);
+    let argument = usize_node(&mut m, root, 1);
+    let operands = array_node(&mut m, root, &[callee, argument], None);
+    let apply = op_node(
+        &mut m,
+        root,
+        TestOperator::LowOperator(LowOperator::Apply),
+        Some(operands),
+    );
+
+    let value = m.evaluate_node_deep(apply, None);
+
+    // No panic, no call: the failure is recorded as a fact, and the apply
+    // yields the computed-nothing value.
+    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+    assert_eq!(m.eval_errors.len(), 1);
+    let EvalError::ApplyTarget { function } = m.eval_errors[0] else {
+        panic!("applying a non-function records an ApplyTarget failure")
+    };
+    assert_eq!(function, AnyNodeId::Dynamic(callee));
+    assert!(m.unify_errors.is_empty());
+}
+#[test]
 #[should_panic(expected = "cycle")]
 fn cyclic_operations_panic_instead_of_looping() {
     let mut m = Module::new();
     let root = m.add_block(None);
-    let a = op_node(&mut m, root, TestOperator::Id, None);
+    // Two-phase: `a`'s operation names `b`, which cannot exist when `a` is
+    // allocated, so `a` starts operation-free and the cycle is closed once
+    // `b` exists.  The evaluating state marks `b` as in-progress on re-entry
+    // and panics.
+    let a = m.add_node(root, None, None);
     let b = op_node(&mut m, root, TestOperator::Id, Some(a));
-    // Close the loop a -> b -> a through the public operation fields; the
-    // evaluating state marks b as in-progress on re-entry and panics.
-    m.nodes[a].operation = Some(Operation {
-        operator: TestOperator::Id,
-        operand: Some(b),
-    });
+    m.close_operation_cycle(
+        a,
+        Operation {
+            operator: TestOperator::Id,
+            operand: Some(b),
+        },
+    );
     m.evaluate_node_deep(b, None);
 }
 
@@ -201,7 +235,7 @@ fn deep_eval_cuts_a_self_referential_value_cycle() {
     let value = m.evaluate_node_deep(k, None);
 
     assert!(matches!(value, TestValue::LowValue(LowValue::Array(_))));
-    assert!(m.nodes.values().all(|n| !n.visiting));
+    assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
 }
 #[test]
 fn visiting_markers_are_cleared_after_evaluation() {
@@ -214,7 +248,7 @@ fn visiting_markers_are_cleared_after_evaluation() {
 
     m.evaluate_node_deep(add, None);
 
-    assert!(m.nodes.values().all(|n| !n.visiting));
+    assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
 }
 #[test]
 fn evaluated_deep_marks_subtrees_with_parameters() {
@@ -235,34 +269,34 @@ fn evaluated_deep_marks_subtrees_with_parameters() {
     // The parameter node itself and everything reachable from it is flagged;
     // plain constants are not.
     assert_eq!(
-        m.nodes[p].evaluated_deep,
+        m.node_evaluated_deep(p),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[arr].evaluated_deep,
+        m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[id_arr].evaluated_deep,
+        m.node_evaluated_deep(id_arr),
         Some(EvaluatedDeep {
             parameterized: true
         })
     );
     assert_eq!(
-        m.nodes[x].evaluated_deep,
+        m.node_evaluated_deep(x),
         Some(EvaluatedDeep {
             parameterized: false
         })
     );
-    assert_eq!(m.nodes[id_p].evaluated_deep, None); // not yet evaluated
+    assert_eq!(m.node_evaluated_deep(id_p), None); // not yet evaluated
 
     m.evaluate_node_deep(id_p, None);
     assert_eq!(
-        m.nodes[id_p].evaluated_deep,
+        m.node_evaluated_deep(id_p),
         Some(EvaluatedDeep {
             parameterized: true
         })
@@ -289,15 +323,15 @@ fn deep_eval_skips_shallow_positions_until_an_index_read() {
         m.node_value(AnyNodeId::Dynamic(add)).is_none(),
         "shallow position stays lazy"
     );
-    assert_eq!(m.nodes[add].evaluated_deep, None, "never walked");
+    assert_eq!(m.node_evaluated_deep(add), None, "never walked");
     assert_eq!(
-        m.nodes[three].evaluated_deep,
+        m.node_evaluated_deep(three),
         Some(EvaluatedDeep {
             parameterized: false
         })
     );
     assert_eq!(
-        m.nodes[arr].evaluated_deep,
+        m.node_evaluated_deep(arr),
         Some(EvaluatedDeep {
             parameterized: true
         }),
@@ -337,5 +371,78 @@ fn sub_eq_lt_operators_compute_concrete_results() {
     assert!(matches!(
         m.evaluate_node_deep(lt, None),
         TestValue::LowValue(LowValue::USize(0))
+    ));
+}
+#[test]
+fn deep_budget_refusal_under_an_extension_operator_records_without_panicking() {
+    // The extension-operator arm reads its operand's `evaluated_deep` after
+    // the deep pass, but the pass returns before writing that flag when it
+    // refuses on depth.  Three Id frames put the innermost operand one frame
+    // past the limit, so the arm reads a node the pass never flagged.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let leaf = u128_node(&mut m, root, 7);
+    let first = op_node(&mut m, root, TestOperator::Id, Some(leaf));
+    let second = op_node(&mut m, root, TestOperator::Id, Some(first));
+    let top = op_node(&mut m, root, TestOperator::Id, Some(second));
+    m.evaluate_depth_limit = 2;
+
+    let value = m.evaluate_node_deep(top, None);
+
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
+        "the guard's verdict is the outcome, not a panic"
+    );
+    assert!(matches!(
+        value,
+        TestValue::LowValue(LowValue::Parameterized)
+    ));
+    assert_eq!(
+        m.node_evaluated_deep(first),
+        None,
+        "the refused frame wrote no flag"
+    );
+}
+#[test]
+fn a_block_root_the_budget_refuses_yields_a_computed_nothing() {
+    // The delegation into a child block runs a fresh deep pass whose first
+    // frame is the child's root.  At the limit the pass refuses before it
+    // evaluates the root, so the root caches no value at all and the block's
+    // compaction has nothing to move.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let leaf = u128_node(&mut m, child, 7);
+    let child_op = op_node(&mut m, child, TestOperator::Id, Some(leaf));
+    let read = op_node(&mut m, root, TestOperator::Id, Some(child_op));
+    m.evaluate_depth_limit = 2;
+
+    let value = m.evaluate_node_deep(read, None);
+
+    assert_eq!(
+        m.budget_exhausted,
+        Some(BudgetExhausted::EvaluateDepth { limit: 2 }),
+        "the guard's verdict is the outcome, not a panic"
+    );
+    assert!(matches!(value, TestValue::LowValue(LowValue::Void)));
+}
+#[test]
+fn a_block_root_that_stays_lazy_is_not_an_internal_error() {
+    // A `Parameterized` answer is deliberately never cached (the postlude
+    // writes only a decided value), so a block whose root is still lazy also
+    // leaves the block's compaction with nothing to move.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let child = m.add_block(Some(root));
+    let unbound = unbound_node(&mut m, child);
+    let add = op_node(&mut m, child, TestOperator::Add, Some(unbound));
+    let read = op_node(&mut m, root, TestOperator::Id, Some(add));
+
+    let value = m.evaluate_node_deep(read, None);
+
+    assert!(matches!(
+        value,
+        TestValue::LowValue(LowValue::Parameterized)
     ));
 }

@@ -104,12 +104,30 @@ where
 ///  1 | x => y
 ///    |      ^
 /// ```
+///
+/// A diagnostic with no span (an I/O or package-resolution failure — see
+/// [`Diag::unattributed`]) prints its message alone, with no position and no
+/// caret.
 pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> String {
+    let starts = crate::lex::line_starts(source);
+    render_with_line_starts(source, &starts, diag)
+}
+
+/// [`render`] against an already-computed line model, so a whole report costs
+/// one scan of the source instead of one per diagnostic.
+fn render_with_line_starts<P: lichen_lowlevel::Program>(
+    source: &str,
+    starts: &[usize],
+    diag: &Diag<P>,
+) -> String {
     let mut out = format!("error: {}\n", diag.message);
     if let Some((line, col)) = diag.span {
         out.push_str(&format!("  --> {line}:{col}\n"));
         out.push_str("   |\n");
-        if let Some(text) = source.lines().nth((line as usize).saturating_sub(1)) {
+        // The line the caret sits on comes from the shared line model
+        // (`line_starts`), not from a second scan of the source — so the text
+        // and the `(line, col)` name the same line.
+        if let Some(text) = crate::lex::line_text(source, starts, line) {
             let caret = format!("{}^", " ".repeat((col as usize).saturating_sub(1)));
             out.push_str(&format!(" {line} | {text}\n"));
             out.push_str(&format!("   | {caret}\n"));
@@ -121,7 +139,11 @@ pub fn render<P: lichen_lowlevel::Program>(source: &str, diag: &Diag<P>) -> Stri
 /// Render a whole diagnostic list back to back, exactly as the CLI prints
 /// them: one caret block per diagnostic, no separator.
 pub fn render_all<P: lichen_lowlevel::Program>(source: &str, diags: &[Diag<P>]) -> String {
-    diags.iter().map(|d| render(source, d)).collect()
+    let starts = crate::lex::line_starts(source);
+    diags
+        .iter()
+        .map(|d| render_with_line_starts(source, &starts, d))
+        .collect()
 }
 
 // --- the pretty checker message ----------------------------------------------
@@ -164,6 +186,9 @@ where
         }
         DiagKind::RuntimeIndexSubscript => {
             "this value is not an index — an element can only be read by position".to_string()
+        }
+        DiagKind::RuntimeApplyTarget => {
+            "this value is not a function — it cannot be applied".to_string()
         }
         DiagKind::ImportExport => {
             "this package's export is not a value — a package must end in a value".to_string()
@@ -230,6 +255,12 @@ where
             format!("index {index} out of bounds (array length {length})")
         }
         DiagKind::TableMiss => "table lookup missed — no entry for this key".to_string(),
+        // The report invariant's last resort (see `crate::build_report`): the
+        // build failed, but no failure could be pinned to an expression in this
+        // source, so there is no caret and the message names the whole build.
+        DiagKind::UnattributedFailure => {
+            "the build failed, but the failing check could not be attributed to an expression in this source".to_string()
+        }
         DiagKind::TableKeyUnbound => {
             "table key is not concrete (it is unbound or a failed read) — the entry is dropped"
                 .to_string()
@@ -241,6 +272,17 @@ where
             None => "unresolved native operator — this module composes no plugin registering it"
                 .to_string(),
         },
+        DiagKind::NativeOpContract => match d.field.as_deref() {
+            Some(name) => format!(
+                "native operator '{name}' returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+            ),
+            None => "a native operator returned a malformed term — a native operator must return the [value, type] pair it built in the current block"
+                .to_string(),
+        },
+        DiagKind::NoAttributeExtension => {
+            "this expression carries an attribute, but this build has no attribute extension to lower it"
+                .to_string()
+        }
         DiagKind::Assert => {
             // The assert's failed value, rendered generically through the
             // structural `LowValue` view.

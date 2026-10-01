@@ -38,6 +38,24 @@ fn a_spanless_diagnostic_has_no_caret() {
 }
 
 #[test]
+fn a_node_the_module_no_longer_holds_renders_without_panicking() {
+    // A released node is a documented state: `Module::node_value` reads a
+    // dynamic ref that names one as `None` ("safe for a node the executor may
+    // have dropped").  A malformed or unexpectedly shaped module can hand the
+    // printer such an id, so the class walk must answer "no answer" — not index
+    // a node table that no longer holds it.
+    let report = crate::compile("x => x");
+    let mut build = report.build.expect("the program checks");
+    let stale = build.root_ty;
+    build
+        .module
+        .nodes
+        .remove(stale)
+        .expect("the root type node is live");
+    assert_eq!(crate::render::print_type_lang(&build.module, stale), "?");
+}
+
+#[test]
 fn a_checker_message_uses_the_cli_type_syntax() {
     // 5 : Int -> Int — the found type is Int, the expected the arrow
     // type: the same spellings the CLI prints for a program's output,

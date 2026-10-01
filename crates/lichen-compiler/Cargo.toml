@@ -1,0 +1,24 @@
+[package]
+name = "lichen-compiler"
+version.workspace = true
+edition.workspace = true
+default-run = "lichen-compiler"
+
+# The command-line surface, split out of the compiler library so an embedder
+# (the language server included) does not link a command-line parser it never
+# calls (`P2-12`).  The library half is what a plugin-built compiler crate's
+# generated `main` calls; the binary half is the shipping `lichen-compiler`.
+[lib]
+name = "lichen_compiler"
+path = "src/lib.rs"
+
+[dependencies]
+clap.workspace = true
+lichen-compute.workspace = true
+lichen-highlevel.workspace = true
+lichen-language.workspace = true
+lichen-utils.workspace = true
+
+[[bin]]
+name = "lichen-compiler"
+path = "src/main.rs"

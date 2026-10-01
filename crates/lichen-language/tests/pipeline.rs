@@ -41,8 +41,9 @@ fn array_ids(value: LangValue) -> Vec<NodeId> {
     let LangValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| dyn_node(item.node))
         .collect()
@@ -805,6 +806,24 @@ fn a_self_referential_record_checks_without_overflow() {
     );
 }
 
+#[test]
+fn a_deep_operator_chain_compiles_without_an_overflow() {
+    // `1+1+…` is flat in the token stream but left-nested in the AST, so the
+    // frontend's expression walks recurse once per term on the caller's thread
+    // (`#[stacksafe]`: they grow the stack instead of overflowing it).  It is
+    // the shape that reaches them — nested brackets recurse in the parser
+    // first, and the parser's 16 MiB worker thread overflows at ~175 levels, so
+    // a bracket test cannot pin these walks; see `docs/notes/code-audit.md`
+    // (P1-22).  `TERMS` aborts this test process before the fix.
+    const TERMS: usize = 2000;
+    let report = compile(&("1+".repeat(TERMS) + "1"));
+    assert!(
+        report.ok(),
+        "expected the deep chain to check, got: {:?}",
+        report.diagnostics
+    );
+}
+
 // --- struct types ------------------------------------------------------------
 
 #[test]
@@ -1018,6 +1037,53 @@ fn a_raw_read_whose_subscript_is_not_an_index_reports_a_runtime_subscript_error(
     let check = d[0].check.as_ref().expect("a checker diagnostic");
     assert_eq!(check.kind, DiagKind::RuntimeIndexSubscript);
     assert_eq!(d[0].span, Some((2, 5)), "the caret is on the subscript `i`");
+}
+
+#[test]
+fn an_apply_of_a_deferred_non_function_reports_a_runtime_apply_target_error() {
+    // `f = g => g 1` applied to `5`: the callee is a parameter, so its type
+    // cell stays unbound and the checker's function-ness guard is skipped.
+    // The lowlevel records the runtime failure, and it reaches the
+    // diagnostics as `RuntimeApplyTarget` — the value itself is the fact,
+    // with no type to print.
+    let report = compile("f = g => g 1\nf 5");
+    assert!(
+        !report.ok(),
+        "an apply of a non-function must not be accepted"
+    );
+    assert_eq!(report.diagnostics.len(), 1);
+    let check = report.diagnostics[0]
+        .check
+        .as_ref()
+        .expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeApplyTarget);
+    assert_eq!(
+        report.diagnostics[0].message,
+        "this value is not a function — it cannot be applied"
+    );
+}
+
+#[test]
+fn an_apply_of_a_deferred_struct_value_reports_a_runtime_apply_target_error() {
+    // `f = g => g 1` applied to a struct instance: the callee is a parameter,
+    // so its type cell stays unbound and the checker's function-ness guard is
+    // skipped, and the instance's value is structurally a `LowValue::Array` —
+    // the same shape a compute kernel's `[native, sig]` pair takes, which the
+    // lowlevel cannot tell apart.  Only the program knows which of its values
+    // are callable (`Program::is_callable`), so its answer has to refuse this
+    // one for the fact to be recorded like the scalar sibling's.
+    let report = compile("S = struct<.a Int>\nf = g => g 1\nf S(.a 1)");
+    assert!(
+        !report.ok(),
+        "an apply of a struct value must not be accepted: {:?}",
+        report.diagnostics
+    );
+    assert_eq!(report.diagnostics.len(), 1);
+    let check = report.diagnostics[0]
+        .check
+        .as_ref()
+        .expect("a checker diagnostic");
+    assert_eq!(check.kind, DiagKind::RuntimeApplyTarget);
 }
 
 #[test]

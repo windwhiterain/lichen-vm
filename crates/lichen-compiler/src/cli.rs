@@ -17,12 +17,12 @@
 //!
 //! The compiler's **artifact cache is scoped per plugin set**.  A compiled
 //! package is serialized into the device store keyed by file ID (see
-//! [`crate::package::PackageStore`] / [`crate::persist`]), and the artifact
-//! encoding depends on the compiler's value/operator vocabulary.  A
-//! plugin-built compiler must therefore NOT share the shipping compiler's
-//! device cache — the same source file compiled by a different plugin set
-//! produces a different artifact, so the cache slot must be isolated per
-//! vocabulary.  [`main`] uses the shipping compiler's own
+//! [`lichen_language::package::PackageStore`] / [`lichen_language::persist`]),
+//! and the artifact encoding depends on the compiler's value/operator
+//! vocabulary.  A plugin-built compiler must therefore NOT share the shipping
+//! compiler's device cache — the same source file compiled by a different
+//! plugin set produces a different artifact, so the cache slot must be isolated
+//! per vocabulary.  [`main`] uses the shipping compiler's own
 //! `compilers/<toolchain-key>` slot (`persist::shipping_cache_root`);
 //! [`main_with_cache_dir`] lets a plugin-built compiler scope its artifacts to
 //! its own `compilers/<plugin-set-key>` slot.  Source staging (the git source
@@ -38,18 +38,18 @@ use lichen_highlevel::native::NativeOps;
 use lichen_highlevel::program::{TypeOperator, ValueType};
 use lichen_utils::extend::AsEnum;
 
-use crate::LangProgramShape;
-use crate::package::PackageStore;
-use crate::persist::{self, ArtifactCodec};
-use crate::preprocess::stage_depends;
-use crate::program::GcdOp;
+use lichen_language::LangProgramShape;
+use lichen_language::package::PackageStore;
+use lichen_language::persist::{self, ArtifactCodec};
+use lichen_language::preprocess::stage_depends;
+use lichen_language::program::GcdOp;
 
 /// One native plugin package to register on the store a compiler evaluates
 /// against: `(virtual_path, embedded_source, private_native_ops)`.  A
 /// plugin-built compiler's generated `main` supplies one entry per plugin, so
 /// the plugin's wrapper source is compiled against its own private native-op
 /// registry and served by name (`<alias>.lichen`) — see
-/// [`PackageStore::register_native`](crate::package::PackageStore::register_native).
+/// [`PackageStore::register_native`](lichen_language::package::PackageStore::register_native).
 ///
 /// `native_ops` is the plugin's per-module registry; the wrapper const and the
 /// ops macro are named from the plugin crate (see `crate::plugin`'s generated
@@ -110,7 +110,7 @@ where
 /// [`Self::main`] with an explicit **device/artifact cache root**.
 ///
 /// The compile artifacts drive the incremental device store
-/// ([`crate::package::PackageStore`]'s `with_cache_dir`).  Every compiler
+/// ([`lichen_language::package::PackageStore`]'s `with_cache_dir`).  Every compiler
 /// scopes its artifacts to a `compilers/<plugin-set-key>` slot so it never
 /// collides with (or reuses) another vocabulary's artifacts — the shipping
 /// compiler uses the empty plugin set's slot (see [`persist::shipping_cache_root`]),
@@ -212,7 +212,7 @@ fn staged_store<P>(
     source: &str,
     cache_root: &Path,
     native: &[NativePackage<P>],
-) -> (PackageStore<P>, Vec<crate::diag::Diag<P>>)
+) -> (PackageStore<P>, Vec<lichen_language::diag::Diag<P>>)
 where
     P: LangProgramShape,
     P::Value: ValueType
@@ -232,9 +232,8 @@ where
     let mut diags = stage_depends::<P>(&mut store, source);
     for &(virtual_path, wrapper, native_ops) in native {
         if let Err(e) = store.register_native(virtual_path, wrapper, native_ops) {
-            diags.push(crate::diag::Diag::new(
-                crate::diag::Stage::Preprocess,
-                (0, 0),
+            diags.push(lichen_language::diag::Diag::unattributed(
+                lichen_language::diag::Stage::Preprocess,
                 format!("cannot register native package {virtual_path}: {e}"),
             ));
         }
@@ -260,16 +259,16 @@ where
     };
     let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
     if !diags.is_empty() {
-        print!("{}", crate::render::render_all(&source, &diags));
+        print!("{}", lichen_language::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
     }
-    match crate::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
+    match lichen_language::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
         Ok(output) => {
             println!("{output}");
             ExitCode::SUCCESS
         }
         Err(diags) => {
-            print!("{}", crate::render::render_all(&source, &diags));
+            print!("{}", lichen_language::render::render_all(&source, &diags));
             ExitCode::FAILURE
         }
     }
@@ -310,17 +309,17 @@ where
         if !diags.is_empty() {
             failed += 1;
             eprintln!("{}: failed to stage dependencies", file.display());
-            print!("{}", crate::render::render_all(&source, &diags));
+            print!("{}", lichen_language::render::render_all(&source, &diags));
             continue;
         }
-        match crate::run::evaluate_raw::<P>(&source, Some(&file), &mut store) {
+        match lichen_language::run::evaluate_raw::<P>(&source, Some(&file), &mut store) {
             Ok(output) => {
                 println!("{}: {output}", file.file_name().unwrap().to_string_lossy())
             }
             Err(diags) => {
                 failed += 1;
                 eprintln!("{}: failed", file.display());
-                print!("{}", crate::render::render_all(&source, &diags));
+                print!("{}", lichen_language::render::render_all(&source, &diags));
             }
         }
     }
@@ -343,7 +342,7 @@ where
     let source = std::fs::read_to_string(path).unwrap_or_default();
     let (mut store, diags) = staged_store::<P>(&source, cache_root, native);
     if !diags.is_empty() {
-        print!("{}", crate::render::render_all(&source, &diags));
+        print!("{}", lichen_language::render::render_all(&source, &diags));
         return ExitCode::FAILURE;
     }
     match store.load_package(path) {
@@ -356,17 +355,17 @@ where
             // resolved against the file's directory.
             let name = path.file_name().unwrap().to_string_lossy();
             let source = format!("@{{\n  _pkg = import \"{name}\"\n@}}\n_pkg\n");
-            match crate::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
+            match lichen_language::run::evaluate_raw::<P>(&source, Some(path), &mut store) {
                 Ok(output) => println!("type: {}", output.split(": ").nth(1).unwrap_or(&output)),
                 Err(diags) => {
-                    print!("{}", crate::render::render_all(&source, &diags));
+                    print!("{}", lichen_language::render::render_all(&source, &diags));
                     return ExitCode::FAILURE;
                 }
             }
             ExitCode::SUCCESS
         }
         Err(diags) => {
-            print!("{}", crate::render::render_all(&source, &diags));
+            print!("{}", lichen_language::render::render_all(&source, &diags));
             ExitCode::FAILURE
         }
     }

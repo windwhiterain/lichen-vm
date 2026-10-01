@@ -2,9 +2,16 @@
 //! an editor-view index built on top of them.
 //!
 //! `Doc` reuses the *actual* frontend artifacts from `lichen-language` — the
-//! tokens (byte ranges), the AST (source spans) — and the *checker* via
-//! [`BufferSession`] for the full diagnostic set. It then adds the one thing the
-//! raw frontend does not give you: name resolution for editing.
+//! tokens (byte ranges), the AST (source spans) — and the *checker* through
+//! [`build_report`], the same shared tail the compiler calls, for the full
+//! diagnostic set. It then adds the one thing the raw frontend does not give
+//! you: name resolution for editing.
+//!
+//! The artifacts and the index are [`DocIndex`], a `Send` value; the [`Doc`]
+//! handle adds the checker diagnostics, whose structured facts carry raw arena
+//! pointers and make the handle `!Send`.  A long-lived host (the language
+//! server) caches a [`DocIndex`] per document and re-runs the frontend only for
+//! a source the cache does not hold.
 //!
 //! Why the resolution is re-derived here: `compile` resolves names at lowering
 //! but collapses a name *use* onto the binder's `ExprId`, so the IR never
@@ -15,7 +22,11 @@
 //! artifact for an editor, without forking the compiler.
 
 use std::collections::HashMap;
+use std::ops::Deref;
 use std::path::Path;
+use std::sync::Arc;
+
+use stacksafe::stacksafe;
 
 use lichen_compute::{ComputeOperator, ComputeValue};
 use lichen_highlevel::ir::ExprId;
@@ -103,10 +114,16 @@ pub struct Reference {
     pub definition: Option<usize>,
 }
 
-/// A parsed + checked source, ready for editor lookups.  Generic over the
-/// compiled program `P` (the associated-type collector), so the same editor
-/// view serves the shipping vocabulary and a plugin-composed one.
-pub struct Doc<P: LangProgramShape> {
+/// A parsed + checked source, ready for editor lookups: the frontend artifacts,
+/// the name-resolution index built on them, and the pipeline diagnostics in
+/// their LSP form.
+///
+/// This is the `Send` half of an analysis, so a long-lived host can hold it
+/// across requests.  A program-blind or embedding host that does not need the
+/// checker's structured diagnostics uses this type directly; the [`Doc`] handle
+/// wraps it with those diagnostics and re-exports it through [`Deref`], so the
+/// lookup methods read the same from either.
+pub struct DocIndex {
     /// The full source text.
     pub source: String,
     /// Byte offset at which each line begins (line 1 = 0).
@@ -119,15 +136,17 @@ pub struct Doc<P: LangProgramShape> {
     pub tokens: Vec<Token>,
     /// The parsed AST — the frontend's parser output.
     pub program: Program,
-    /// The full diagnostic set (lex + parse + resolve + check).
-    pub diagnostics: Vec<Diag<P>>,
     /// Every definition site, in declaration order.
     pub defs: Vec<Definition>,
-    /// Span of a name *use* → index into [`Doc::defs`].
+    /// The full diagnostic set (lex + parse + resolve + check), rendered for
+    /// the protocol.  Carries the same message and severity as the checker's
+    /// own diagnostics, minus their arena-bound structured facts.
+    lsp_diagnostics: Vec<Diagnostic>,
+    /// Span of a name *use* → index into [`DocIndex::defs`].
     resolve: HashMap<Span, usize>,
-    /// Span of a definition site → index into [`Doc::defs`].
+    /// Span of a definition site → index into [`DocIndex::defs`].
     def_index: HashMap<Span, usize>,
-    /// Span of a binding name → index into [`Doc::statements`] for the
+    /// Span of a binding name → index into [`DocIndex::statements`] for the
     /// statement that defines it.  A name — the binding's own name or any use
     /// of it — resolves to this statement's value/type for the hover.
     stmt_by_span: HashMap<Span, usize>,
@@ -135,13 +154,13 @@ pub struct Doc<P: LangProgramShape> {
     /// concrete, its value.  See [`StatementValue`] for the read-only contract.
     statements: Vec<StatementValue>,
     /// The byte offset of each statement's start, source order (the span index
-    /// backing [`Doc::statement_at`]).
+    /// backing [`DocIndex::statement_at`]).
     stmt_starts: Vec<u32>,
     /// The imported bindings this file resolves, source order — so a use of an
     /// imported module resolves to its `@import` directive and hovers as the
     /// imported module (with its type).
     imports: Vec<ImportBinding>,
-    /// Import-directive span → index into [`Doc::imports`].
+    /// Import-directive span → index into [`DocIndex::imports`].
     import_by_span: HashMap<Span, usize>,
     /// Per struct-block field (an exported struct's `succ`/`add`), keyed by
     /// field name: the field value's checked `value : type` snapshot.  Field
@@ -165,6 +184,30 @@ pub struct Doc<P: LangProgramShape> {
     /// the statement index so a resolved container can reach its struct's
     /// fields.
     struct_fields_by_stmt: HashMap<usize, Vec<String>>,
+}
+
+/// A parsed + checked source plus the checker's structured diagnostics.
+///
+/// Generic over the compiled program `P` (the associated-type collector), so
+/// the same editor view serves the shipping vocabulary and a plugin-composed
+/// one.  The handle is **not** `Send`: a checker diagnostic carries the
+/// program's arena-bound facts.  Everything an editor lookup reads lives in the
+/// `Send` [`DocIndex`] this dereferences to; a host that caches across threads
+/// keeps the index and lets the handle drop.
+pub struct Doc<P: LangProgramShape> {
+    index: Arc<DocIndex>,
+    /// The full diagnostic set (lex + parse + resolve + check), with the
+    /// checker's structured facts.  Rendered for the protocol as
+    /// [`DocIndex::lsp_diagnostics`].
+    pub diagnostics: Vec<Diag<P>>,
+}
+
+impl<P: LangProgramShape> Deref for Doc<P> {
+    type Target = DocIndex;
+
+    fn deref(&self) -> &DocIndex {
+        &self.index
+    }
 }
 
 impl<P: LangProgramShape> Doc<P>
@@ -210,245 +253,224 @@ where
         base: Option<&Path>,
         cache_root: Option<&Path>,
     ) -> Doc<P> {
-        let source = source.into();
-        let line_starts = lex::line_starts(&source);
-
-        // Cut the leading `@{…@}` block (metadata + imports) off the frontend
-        // input, resolving imports through a package store so the shared
-        // registry can serve any loaded imports.  `base` lets the store resolve
-        // relative `@import` paths against the file's directory.
         let mut store: PackageStore<P> = match cache_root {
             Some(root) if P::Codec::PERSISTENT => PackageStore::with_cache_dir(root.to_path_buf()),
             _ => PackageStore::new(),
         };
-        let (pre, mut diagnostics) = preprocess::preprocess(&source, base, &mut store);
+        Doc::new_with_store(source, base, &mut store)
+    }
 
-        // The frontend artifacts (for the editor index): tokens + AST in
-        // absolute file coordinates (the lexer maps through `code_base` and the
-        // full line starts).
-        let lexed = lex::lex_with(pre.code, &line_starts, pre.code_base);
-        let tokens = lexed.tokens;
-        let parsed = parse::parse(&tokens);
-        let program = parsed.program;
-
-        // The full pipeline diagnostics (lex + parse + resolve + check):
-        // preprocess first, then the frontend over the preprocessed code, then
-        // the checker over the IR.  All spans are absolute.  The frontend
-        // diagnostics are program-blind (they carry no checker build), so
-        // re-type them onto the caller's program marker before the report.
-        let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
-        diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
-        let report = build_report::<P>(
-            frontend.ir,
-            Some(frontend.span_index),
+    /// [`Doc::new_with_cache`] over a caller-owned package store: the store's
+    /// already-open device registry and resident modules are reused instead of
+    /// reopened per document (see `PackageStore::with_device`).  The caller
+    /// decides persistence from the codec, as [`Doc::new_with_cache`] does.
+    pub fn new_with_store(
+        source: impl Into<String>,
+        base: Option<&Path>,
+        store: &mut PackageStore<P>,
+    ) -> Doc<P> {
+        let (index, diagnostics) = analyze::<P>(source, base, store);
+        Doc {
+            index: Arc::new(index),
             diagnostics,
-            Some(store.registry()),
-            no_native_ops(),
-        );
-        let diagnostics = report.diagnostics;
-        // The frontend's `ExprId → span` index (highlevel is span-free).
-        let span_index = report.span_index;
+        }
+    }
 
-        // The imported module's checked type, per `@import` directive span: the
-        // compiler allocates a `Static` node at the directive's span, so we
-        // find it in the IR and read its type for the hover.  Borrowed here so
-        // `report.build` is still owned by the match below.
-        let mut import_ty: HashMap<Span, String> = HashMap::new();
-        // Per imported-module binding: its exported field names (for the
-        // `math.…` field completion).  Read from the import `Static` node's
-        // struct type, so a module's *own* fields are offered.
-        let mut module_fields: HashMap<String, Vec<String>> = HashMap::new();
-        if let Some(build) = &report.build {
-            for imp in &pre.imports {
-                let eid = span_index.as_ref().and_then(|s| {
-                    s.iter().enumerate().find_map(|(i, sp)| {
-                        (sp == &Some(imp.span)
-                            && matches!(
-                                build.ir.expr[i].kind,
-                                lichen_highlevel::ir::ExprKind::Static { .. }
-                            ))
-                        .then_some(ExprId(i as u32))
-                    })
-                });
-                if let Some(eid) = eid
-                    && let Some(t) = build.ty[eid]
-                {
-                    import_ty.insert(imp.span, print_type_lang(&build.module, t));
-                    if let Some(names) = struct_type_named_fields(&build.module, t) {
-                        let fields = names
-                            .into_iter()
-                            .flatten()
-                            .map(|n| n.to_string())
-                            .collect::<Vec<_>>();
-                        module_fields.insert(imp.name.clone(), fields);
-                    }
+    /// The `Send` editor index this analysis produced.  A host that caches
+    /// across requests keeps this and drops the handle, which is `!Send`.
+    pub fn index(&self) -> Arc<DocIndex> {
+        Arc::clone(&self.index)
+    }
+}
+
+/// One full frontend run: preprocess → lex → parse → resolve → check, then the
+/// editor index extracted from it (see [`DocIndex`]) and the checker's own
+/// diagnostics (see [`Doc`]).
+fn analyze<P>(
+    source: impl Into<String>,
+    base: Option<&Path>,
+    store: &mut PackageStore<P>,
+) -> (DocIndex, Vec<Diag<P>>)
+where
+    P: LangProgramShape,
+    P::Value: ValueType + AsEnum<ComputeValue> + From<ComputeValue> + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + From<ComputeOperator> + 'static,
+{
+    let source = source.into();
+    let line_starts = lex::line_starts(&source);
+
+    // Cut the leading `@{…@}` block (metadata + imports) off the frontend
+    // input, resolving imports through the package store so the shared
+    // registry can serve any loaded imports.  `base` lets the store resolve
+    // relative `@import` paths against the file's directory.
+    let mut diagnostics = preprocess::stage_depends::<P>(store, &source);
+    let (pre, preprocess_diagnostics) = preprocess::preprocess(&source, base, store);
+    diagnostics.extend(preprocess_diagnostics);
+
+    // The frontend artifacts (for the editor index): tokens + AST in
+    // absolute file coordinates (the lexer maps through `code_base` and the
+    // full line starts).
+    let lexed = lex::lex_with(pre.code, &line_starts, pre.code_base);
+    let tokens = lexed.tokens;
+    let parsed = parse::parse(&tokens);
+    let program = parsed.program;
+
+    // The full pipeline diagnostics (lex + parse + resolve + check):
+    // preprocess first, then the frontend over the preprocessed code, then
+    // the checker over the IR.  All spans are absolute.  The frontend
+    // diagnostics are program-blind (they carry no checker build), so
+    // re-type them onto the caller's program marker before the report.
+    let frontend = frontend_at(pre.code, pre.code_base, &line_starts, &pre.imports);
+    diagnostics.extend(frontend.diagnostics.into_iter().map(|d| d.retype()));
+    let report = build_report::<P>(
+        frontend.ir,
+        Some(frontend.span_index),
+        diagnostics,
+        Some(store.registry()),
+        no_native_ops(),
+    );
+    let diagnostics = report.diagnostics;
+    // The frontend's `ExprId → span` index (highlevel is span-free).
+    let span_index = report.span_index;
+
+    // The imported module's checked type, per `@import` directive span: the
+    // compiler allocates a `Static` node at the directive's span, so we
+    // find it in the IR and read its type for the hover.  Borrowed here so
+    // `report.build` is still owned by the match below.
+    let mut import_ty: HashMap<Span, String> = HashMap::new();
+    // Per imported-module binding: its exported field names (for the
+    // `math.…` field completion).  Read from the import `Static` node's
+    // struct type, so a module's *own* fields are offered.
+    let mut module_fields: HashMap<String, Vec<String>> = HashMap::new();
+    if let Some(build) = &report.build {
+        for imp in &pre.imports {
+            let eid = span_index.as_ref().and_then(|s| {
+                s.iter().enumerate().find_map(|(i, sp)| {
+                    (sp == &Some(imp.span)
+                        && matches!(
+                            build.ir.expr[i].kind,
+                            lichen_highlevel::ir::ExprKind::Static { .. }
+                        ))
+                    .then_some(ExprId(i as u32))
+                })
+            });
+            if let Some(eid) = eid
+                && let Some(t) = build.state[eid].ty
+            {
+                import_ty.insert(imp.span, print_type_lang(&build.module, t));
+                if let Some(names) = struct_type_named_fields(&build.module, t) {
+                    let fields = names
+                        .into_iter()
+                        .flatten()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>();
+                    module_fields.insert(imp.name.clone(), fields);
                 }
             }
         }
+    }
 
-        // Directive span → import binding name, so a field access's container
-        // (an imported module's `Static` node) can be traced back to its module.
-        let import_name_by_span: HashMap<Span, &str> = pre
-            .imports
-            .iter()
-            .map(|i| (i.span, i.name.as_str()))
-            .collect();
+    // Directive span → import binding name, so a field access's container
+    // (an imported module's `Static` node) can be traced back to its module.
+    let import_name_by_span: HashMap<Span, &str> = pre
+        .imports
+        .iter()
+        .map(|i| (i.span, i.name.as_str()))
+        .collect();
 
-        // A read-only per-statement type/value snapshot.  It is computed here,
-        // once, by reading the built module's cached values — never by
-        // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
-        let (statements, stmt_starts, field_types, module_field_types, struct_fields_by_stmt) =
-            match report.build {
-                Some(build) => {
-                    let mut statements = Vec::new();
-                    let mut starts = Vec::new();
-                    // Per top-level struct binding: its named-field list (for the
-                    // `point.…` field completion), indexed by statement.
-                    let mut struct_fields_by_stmt: HashMap<usize, Vec<String>> = HashMap::new();
-                    for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
-                        // The IR statement's own span points at its *value*
-                        // expression; for the span index use the AST statement's
-                        // start (the binding name / bare-expression start), which
-                        // is where the statement begins in the source.  Statements
-                        // align 1:1 with `program.statements` in source order.
-                        let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
-                            Some(Stmt::Binding(b)) => {
-                                (b.span, lsp::offset_of_span(&line_starts, b.span))
-                            }
-                            Some(Stmt::Expr(e)) => {
-                                let s = e.span();
-                                (s, lsp::offset_of_span(&line_starts, s))
-                            }
-                            None => {
-                                let s = span_index
-                                    .as_ref()
-                                    .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
-                                    .unwrap_or((0, 0));
-                                (s, lsp::offset_of_span(&line_starts, s))
-                            }
-                        };
-                        let ty_node = build.ty[id];
-                        let ty = match ty_node {
+    // A read-only per-statement type/value snapshot.  It is computed here,
+    // once, by reading the built module's cached values — never by
+    // re-evaluating a node or forcing a lazy cell (see [`StatementValue`]).
+    let (statements, stmt_starts, field_types, module_field_types, struct_fields_by_stmt) =
+        match report.build {
+            Some(build) => {
+                let mut statements = Vec::new();
+                let mut starts = Vec::new();
+                // Per top-level struct binding: its named-field list (for the
+                // `point.…` field completion), indexed by statement.
+                let mut struct_fields_by_stmt: HashMap<usize, Vec<String>> = HashMap::new();
+                for (i, &id) in build.ir.stmt_roots.iter().enumerate() {
+                    // The IR statement's own span points at its *value*
+                    // expression; for the span index use the AST statement's
+                    // start (the binding name / bare-expression start), which
+                    // is where the statement begins in the source.  Statements
+                    // align 1:1 with `program.statements` in source order.
+                    let (span, start) = match program.statements.get(i).map(|bs| &bs.stmt) {
+                        Some(Stmt::Binding(b)) => {
+                            (b.span, lsp::offset_of_span(&line_starts, b.span))
+                        }
+                        Some(Stmt::Expr(e)) => {
+                            let s = e.span();
+                            (s, lsp::offset_of_span(&line_starts, s))
+                        }
+                        None => {
+                            let s = span_index
+                                .as_ref()
+                                .and_then(|idx| idx.get(id.0 as usize).copied().flatten())
+                                .unwrap_or((0, 0));
+                            (s, lsp::offset_of_span(&line_starts, s))
+                        }
+                    };
+                    let ty_node = build.state[id].ty;
+                    let ty = match ty_node {
+                        Some(t) => print_type_lang(&build.module, t),
+                        None => String::new(),
+                    };
+                    // A concrete struct binding offers its fields after a `.`.
+                    if let Some(t) = ty_node
+                        && let Some(names) = struct_type_named_fields(&build.module, t)
+                    {
+                        struct_fields_by_stmt.insert(
+                            i,
+                            names.into_iter().flatten().map(|n| n.to_string()).collect(),
+                        );
+                    }
+                    let value = build.state[id].val.and_then(|vn| {
+                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                            // A `Parameterized` value is a deferred (lazy /
+                            // recursive) binding — report type only, never force.
+                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
+                            Some(v) => Some(print_value_lang(
+                                &build.module,
+                                v,
+                                build.state[id].ty.unwrap_or_default(),
+                            )),
+                            None => None,
+                        }
+                    });
+                    statements.push(StatementValue { span, ty, value });
+                    starts.push(start as u32);
+                }
+                // A struct-block field's value:type snapshot, keyed by field
+                // name.  A `RecordBlock` emits a `Record` node whose value is a
+                // tuple of the field values (parallel to its `struct_names`),
+                // so we read each field's value/type from the checker.  Field
+                // names are not IR nodes, hence this name-keyed table — it is
+                // what lets hovering a field *definition* (`succ` in
+                // `{succ = x => x + 1}`) render `Function : Int -> Int`.
+                let mut field_types: HashMap<String, StatementValue> = HashMap::new();
+                for id in 0..build.ir.expr.len() {
+                    let eid = ExprId(id as u32);
+                    let lichen_highlevel::ir::ExprKind::Record { value, names } =
+                        build.ir[eid].kind
+                    else {
+                        continue;
+                    };
+                    let lichen_highlevel::ir::ExprKind::Tuple(tuple_range) = build.ir[value].kind
+                    else {
+                        continue;
+                    };
+                    let vals =
+                        &build.ir.children[tuple_range.start as usize..tuple_range.end as usize];
+                    let field_names =
+                        &build.ir.struct_names[names.start as usize..names.end as usize];
+                    for (name, &val_id) in field_names.iter().zip(vals.iter()) {
+                        let Some(name) = name else { continue };
+                        let ty = match build.state[val_id].ty {
                             Some(t) => print_type_lang(&build.module, t),
                             None => String::new(),
                         };
-                        // A concrete struct binding offers its fields after a `.`.
-                        if let Some(t) = ty_node
-                            && let Some(names) = struct_type_named_fields(&build.module, t)
-                        {
-                            struct_fields_by_stmt.insert(
-                                i,
-                                names.into_iter().flatten().map(|n| n.to_string()).collect(),
-                            );
-                        }
-                        let value = build.val[id].and_then(|vn| {
-                            match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                // A `Parameterized` value is a deferred (lazy /
-                                // recursive) binding — report type only, never force.
-                                Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
-                                    None
-                                }
-                                Some(v) => Some(print_value_lang(
-                                    &build.module,
-                                    v,
-                                    build.ty[id].unwrap_or_default(),
-                                )),
-                                None => None,
-                            }
-                        });
-                        statements.push(StatementValue { span, ty, value });
-                        starts.push(start as u32);
-                    }
-                    // A struct-block field's value:type snapshot, keyed by field
-                    // name.  A `RecordBlock` emits a `Record` node whose value is a
-                    // tuple of the field values (parallel to its `struct_names`),
-                    // so we read each field's value/type from the checker.  Field
-                    // names are not IR nodes, hence this name-keyed table — it is
-                    // what lets hovering a field *definition* (`succ` in
-                    // `{succ = x => x + 1}`) render `Function : Int -> Int`.
-                    let mut field_types: HashMap<String, StatementValue> = HashMap::new();
-                    for id in 0..build.ir.expr.len() {
-                        let eid = ExprId(id as u32);
-                        let lichen_highlevel::ir::ExprKind::Record { value, names } =
-                            build.ir[eid].kind
-                        else {
-                            continue;
-                        };
-                        let lichen_highlevel::ir::ExprKind::Tuple(tuple_range) =
-                            build.ir[value].kind
-                        else {
-                            continue;
-                        };
-                        let vals = &build.ir.children
-                            [tuple_range.start as usize..tuple_range.end as usize];
-                        let field_names =
-                            &build.ir.struct_names[names.start as usize..names.end as usize];
-                        for (name, &val_id) in field_names.iter().zip(vals.iter()) {
-                            let Some(name) = name else { continue };
-                            let ty = match build.ty[val_id] {
-                                Some(t) => print_type_lang(&build.module, t),
-                                None => String::new(),
-                            };
-                            let value = build.val[val_id].and_then(|vn| {
-                                match build.module.node_value(AnyNodeId::Dynamic(vn)) {
-                                    Some(v)
-                                        if matches!(v.as_enum(), Some(LowValue::Parameterized)) =>
-                                    {
-                                        None
-                                    }
-                                    Some(v) => Some(print_value_lang(
-                                        &build.module,
-                                        v,
-                                        build.ty[val_id].unwrap_or_default(),
-                                    )),
-                                    None => None,
-                                }
-                            });
-                            field_types.insert(
-                                name.to_string(),
-                                StatementValue {
-                                    span: (0, 0),
-                                    ty,
-                                    value,
-                                },
-                            );
-                        }
-                    }
-                    // A field *access* on an imported module (`math.succ`): the
-                    // compiler lowers it to a `NamedField` IR node whose container
-                    // is the module's imported `Static`.  The field's value node
-                    // resolves (read below), but the field-access node's *type* slot
-                    // stays a lazy cell (`?a`), so the field's type is read from the
-                    // module's own rendered `struct<...>` type.  The table is keyed
-                    // by `(import binding name, field name)`.
-                    let mut module_field_types: HashMap<(String, String), StatementValue> =
-                        HashMap::new();
-                    for id in 0..build.ir.expr.len() {
-                        let eid = ExprId(id as u32);
-                        let lichen_highlevel::ir::ExprKind::NamedField { container, name } =
-                            build.ir[eid].kind
-                        else {
-                            continue;
-                        };
-                        let lichen_highlevel::ir::ExprKind::Static { .. } =
-                            build.ir[container].kind
-                        else {
-                            continue;
-                        };
-                        let Some(container_span) = span_index
-                            .as_ref()
-                            .and_then(|idx| idx.get(container.0 as usize).copied().flatten())
-                        else {
-                            continue;
-                        };
-                        let Some(&module_name) = import_name_by_span.get(&container_span) else {
-                            continue;
-                        };
-                        let ty = import_ty
-                            .get(&container_span)
-                            .and_then(|mty| field_type_in_struct(mty, name))
-                            .unwrap_or_default();
-                        let value = build.val[eid].and_then(|vn| {
+                        let value = build.state[val_id].val.and_then(|vn| {
                             match build.module.node_value(AnyNodeId::Dynamic(vn)) {
                                 Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => {
                                     None
@@ -456,13 +478,13 @@ where
                                 Some(v) => Some(print_value_lang(
                                     &build.module,
                                     v,
-                                    build.ty[eid].unwrap_or_default(),
+                                    build.state[val_id].ty.unwrap_or_default(),
                                 )),
                                 None => None,
                             }
                         });
-                        module_field_types.insert(
-                            (module_name.to_string(), name.to_string()),
+                        field_types.insert(
+                            name.to_string(),
                             StatementValue {
                                 span: (0, 0),
                                 ty,
@@ -470,65 +492,122 @@ where
                             },
                         );
                     }
-                    (
-                        statements,
-                        starts,
-                        field_types,
-                        module_field_types,
-                        struct_fields_by_stmt,
-                    )
                 }
-                None => (
-                    Vec::new(),
-                    Vec::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                    HashMap::new(),
-                ),
-            };
+                // A field *access* on an imported module (`math.succ`): the
+                // compiler lowers it to a `NamedField` IR node whose container
+                // is the module's imported `Static`.  The field's value node
+                // resolves (read below), but the field-access node's *type* slot
+                // stays a lazy cell (`?a`), so the field's type is read from the
+                // module's own rendered `struct<...>` type.  The table is keyed
+                // by `(import binding name, field name)`.
+                let mut module_field_types: HashMap<(String, String), StatementValue> =
+                    HashMap::new();
+                for id in 0..build.ir.expr.len() {
+                    let eid = ExprId(id as u32);
+                    let lichen_highlevel::ir::ExprKind::NamedField { container, name } =
+                        build.ir[eid].kind
+                    else {
+                        continue;
+                    };
+                    let lichen_highlevel::ir::ExprKind::Static { .. } = build.ir[container].kind
+                    else {
+                        continue;
+                    };
+                    let Some(container_span) = span_index
+                        .as_ref()
+                        .and_then(|idx| idx.get(container.0 as usize).copied().flatten())
+                    else {
+                        continue;
+                    };
+                    let Some(&module_name) = import_name_by_span.get(&container_span) else {
+                        continue;
+                    };
+                    let ty = import_ty
+                        .get(&container_span)
+                        .and_then(|mty| field_type_in_struct(mty, name))
+                        .unwrap_or_default();
+                    let value = build.state[eid].val.and_then(|vn| {
+                        match build.module.node_value(AnyNodeId::Dynamic(vn)) {
+                            Some(v) if matches!(v.as_enum(), Some(LowValue::Parameterized)) => None,
+                            Some(v) => Some(print_value_lang(
+                                &build.module,
+                                v,
+                                build.state[eid].ty.unwrap_or_default(),
+                            )),
+                            None => None,
+                        }
+                    });
+                    module_field_types.insert(
+                        (module_name.to_string(), name.to_string()),
+                        StatementValue {
+                            span: (0, 0),
+                            ty,
+                            value,
+                        },
+                    );
+                }
+                (
+                    statements,
+                    starts,
+                    field_types,
+                    module_field_types,
+                    struct_fields_by_stmt,
+                )
+            }
+            None => (
+                Vec::new(),
+                Vec::new(),
+                HashMap::new(),
+                HashMap::new(),
+                HashMap::new(),
+            ),
+        };
 
-        let (defs, resolve, def_index) = index(&program, &pre.imports);
-        // Map each statement's span (a binding's name span, or an
-        // expression's start span) to its statement index, so a name
-        // (resolved to a binding) can reach the binding's value/type.
-        let stmt_by_span: HashMap<Span, usize> = statements
-            .iter()
-            .enumerate()
-            .map(|(i, s)| (s.span, i))
-            .collect();
-        // The imported bindings and their type (for the hover).  `imp.path` is
-        // the canonical resolved path; display its file name (`math.lichen`).
-        let imports: Vec<ImportBinding> = pre
-            .imports
-            .iter()
-            .map(|imp| ImportBinding {
-                name: imp.name.clone(),
-                span: imp.span,
-                path: imp
-                    .path
-                    .file_name()
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .unwrap_or_else(|| imp.path.display().to_string()),
-                ty: import_ty.get(&imp.span).cloned(),
-            })
-            .collect();
-        let import_by_span: HashMap<Span, usize> = imports
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (b.span, i))
-            .collect();
-        // `pre.code` borrows `source`, so copy the offset out before moving
-        // `source` into the result.
-        let code_base = pre.code_base;
+    let (defs, resolve, def_index) = index(&program, &pre.imports);
+    // Map each statement's span (a binding's name span, or an
+    // expression's start span) to its statement index, so a name
+    // (resolved to a binding) can reach the binding's value/type.
+    let stmt_by_span: HashMap<Span, usize> = statements
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.span, i))
+        .collect();
+    // The imported bindings and their type (for the hover).  `imp.path` is
+    // the canonical resolved path; display its file name (`math.lichen`).
+    let imports: Vec<ImportBinding> = pre
+        .imports
+        .iter()
+        .map(|imp| ImportBinding {
+            name: imp.name.clone(),
+            span: imp.span,
+            path: imp
+                .path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| imp.path.display().to_string()),
+            ty: import_ty.get(&imp.span).cloned(),
+        })
+        .collect();
+    let import_by_span: HashMap<Span, usize> = imports
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.span, i))
+        .collect();
+    // `pre.code` borrows `source`, so copy the offset out before moving
+    // `source` into the result.
+    let code_base = pre.code_base;
 
-        Doc {
+    let lsp_diagnostics = render_diagnostics(&diagnostics, &source, &line_starts);
+
+    (
+        DocIndex {
             source,
             line_starts,
             code_base,
             tokens,
             program,
-            diagnostics,
             defs,
+            lsp_diagnostics,
             resolve,
             def_index,
             stmt_by_span,
@@ -540,40 +619,52 @@ where
             module_field_types,
             module_fields,
             struct_fields_by_stmt,
-        }
-    }
+        },
+        diagnostics,
+    )
+}
 
-    /// The diagnostics as LSP [`Diagnostic`]s.
+/// The pipeline diagnostics as LSP [`Diagnostic`]s.
+fn render_diagnostics<P: LangProgramShape>(
+    diagnostics: &[Diag<P>],
+    source: &str,
+    line_starts: &[usize],
+) -> Vec<Diagnostic> {
+    diagnostics
+        .iter()
+        .map(|d| {
+            let range = d
+                .span
+                .map(|s| lsp::range_from_span(source, line_starts, s))
+                .unwrap_or_else(|| Range {
+                    start: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                    end: Position {
+                        line: 0,
+                        character: 0,
+                    },
+                });
+            Diagnostic {
+                range,
+                severity: Some(severity_for(d.stage)),
+                code: None,
+                code_description: None,
+                source: Some("lichen".to_string()),
+                message: d.message.clone(),
+                tags: None,
+                related_information: None,
+                data: None,
+            }
+        })
+        .collect()
+}
+
+impl DocIndex {
+    /// The pipeline diagnostics as LSP [`Diagnostic`]s.
     pub fn lsp_diagnostics(&self) -> Vec<Diagnostic> {
-        self.diagnostics
-            .iter()
-            .map(|d| {
-                let range = d
-                    .span
-                    .map(|s| lsp::range_from_span(&self.source, &self.line_starts, s))
-                    .unwrap_or_else(|| Range {
-                        start: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                        end: Position {
-                            line: 0,
-                            character: 0,
-                        },
-                    });
-                Diagnostic {
-                    range,
-                    severity: Some(severity_for(d.stage)),
-                    code: None,
-                    code_description: None,
-                    source: Some("lichen".to_string()),
-                    message: d.message.clone(),
-                    tags: None,
-                    related_information: None,
-                    data: None,
-                }
-            })
-            .collect()
+        self.lsp_diagnostics.clone()
     }
 
     /// The token at byte offset `offset`, if any.
@@ -689,15 +780,15 @@ where
     pub fn definition_at(&self, position: Position) -> Option<Range> {
         let offset = self.offset_of(position)?;
         let token = self.token_at(offset)?;
-        if let TokenKind::Name(_) = &token.kind {
-            if let Some(idx) = self.resolve.get(&token.span) {
-                let def = &self.defs[*idx];
-                return Some(lsp::range_from_span(
-                    &self.source,
-                    &self.line_starts,
-                    def.span,
-                ));
-            }
+        if let TokenKind::Name(_) = &token.kind
+            && let Some(idx) = self.resolve.get(&token.span)
+        {
+            let def = &self.defs[*idx];
+            return Some(lsp::range_from_span(
+                &self.source,
+                &self.line_starts,
+                def.span,
+            ));
         }
         None
     }
@@ -740,8 +831,8 @@ where
     }
 
     /// Completion for a field access `container.…`: offer the container's struct
-    /// fields — an imported module's exported fields ([`Doc::module_fields`]),
-    /// or a local struct binding's fields ([`Doc::struct_fields_by_stmt`]).
+    /// fields — an imported module's exported fields ([`DocIndex::module_fields`]),
+    /// or a local struct binding's fields ([`DocIndex::struct_fields_by_stmt`]).
     /// Empty when the container is not a knowable struct (an unbound, non-
     /// binding, or non-struct container), so nothing is offered after a `.` on
     /// e.g. a call result.
@@ -809,9 +900,9 @@ where
     /// A completion item for one struct field of a `container.…` access: a
     /// FIELD kind, with the field's `value : type` (where the build produced
     /// one) as `detail`.  Field names are not bindings, so the detail comes from
-    /// the field tables, not [`Doc::def_detail`].  An imported module's field
-    /// resolves through [`Doc::module_field_types`]; a local struct field
-    /// through [`Doc::field_types`].
+    /// the field tables, not [`DocIndex::def_detail`].  An imported module's field
+    /// resolves through [`DocIndex::module_field_types`]; a local struct field
+    /// through [`DocIndex::field_types`].
     fn field_completion_item(
         &self,
         container_name: &str,
@@ -944,8 +1035,8 @@ where
     /// binding — so it is not "unresolved".  Detected by the name being preceded
     /// by a `.` and the container resolving to a knowable struct.  The hover
     /// renders the field's own `value : type` from the checker: an imported
-    /// module's field via [`Doc::module_field_types`], a local struct field via
-    /// [`Doc::field_types`].
+    /// module's field via [`DocIndex::module_field_types`], a local struct field via
+    /// [`DocIndex::field_types`].
     fn field_access_hover(&self, name: &str, field_span: Span) -> Option<String> {
         let idx = self.tokens.iter().position(|t| t.span == field_span)?;
         if idx < 2 || self.tokens[idx - 1].kind != TokenKind::Dot {
@@ -1072,9 +1163,12 @@ fn severity_for(stage: Stage) -> DiagnosticSeverity {
     // The frontend/checker report only errors; keep the mapping explicit so a
     // future warning stage slots in.
     match stage {
-        Stage::Preprocess | Stage::Lex | Stage::Parse | Stage::Resolve | Stage::Check => {
-            DiagnosticSeverity::ERROR
-        }
+        Stage::Preprocess
+        | Stage::Lex
+        | Stage::Parse
+        | Stage::Resolve
+        | Stage::Check
+        | Stage::Io => DiagnosticSeverity::ERROR,
     }
 }
 
@@ -1183,7 +1277,7 @@ fn split_top_level(s: &str, sep: char) -> Vec<&str> {
 // `classify_token_kind` maps the token-level kinds (literals / keywords /
 // operators) that need no AST context. `classify_names` records the *name* spans
 // the AST is required to disambiguate — a lambda parameter, or a name used in
-// function position — so `Doc::semantic_tokens` can color a `Name` as more than
+// function position — so `DocIndex::semantic_tokens` can color a `Name` as more than
 // the default `VARIABLE`, and so the same frontend drives highlighting with no
 // tree-sitter grammar in play.
 
@@ -1289,6 +1383,10 @@ impl<'a> NameClass<'a> {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Lambda {
@@ -1537,6 +1635,10 @@ impl Walk {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         match e {
             Expr::Int(..)
@@ -1802,10 +1904,10 @@ impl<'a> ScopeCapture<'a> {
                 break;
             }
         }
-        if self.result.is_none() {
-            if let Some(e) = expr {
-                self.expr(e);
-            }
+        if self.result.is_none()
+            && let Some(e) = expr
+        {
+            self.expr(e);
         }
         self.scopes.truncate(base);
     }
@@ -1829,6 +1931,10 @@ impl<'a> ScopeCapture<'a> {
         }
     }
 
+    /// `#[stacksafe]`: this walk recurses one frame per nested expression
+    /// (through the block/record helpers and back here) on the caller's
+    /// thread, so it grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn expr(&mut self, e: &Expr) {
         if self.result.is_some() {
             return;
@@ -2640,7 +2746,7 @@ mod tests {
                     line: line as u32,
                     character: 2,
                 })
-                .expect(&format!("hover on `{name}`"));
+                .unwrap_or_else(|| panic!("hover on `{name}`"));
             assert!(
                 !msg.contains("unresolved"),
                 "`{name}` should resolve; got {msg}"

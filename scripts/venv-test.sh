@@ -108,7 +108,7 @@ trap cleanup EXIT
 # ---------------------------------------------------------------------------
 if [ "$NO_BUILD" -eq 0 ]; then
   say "building lichen + lichen-compiler + lichen-language-server (release)"
-  cargo build --release -p lichen-package -p lichen-language -p lichen-language-server \
+  cargo build --release -p lichen-package -p lichen-compiler -p lichen-language-server \
     --manifest-path "$ROOT/Cargo.toml" || fail "cargo build --release"
 fi
 

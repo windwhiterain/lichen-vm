@@ -1,9 +1,9 @@
 [package]
 name = "lichen-render"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-lichen-highlevel = { path = "../lichen-highlevel" }
-lichen-lowlevel = { path = "../lichen-lowlevel" }
-lichen-utils = { path = "../lichen-utils" }
+lichen-highlevel.workspace = true
+lichen-lowlevel.workspace = true
+lichen-utils.workspace = true

@@ -106,7 +106,7 @@ when highlevel goes span-free):
 | Site | Reads |
 |---|---|
 | `crates/lichen-language/src/lib.rs:153` | `build.ir[loc.expr].span` — map a checker `Loc` back to a source span |
-| `crates/lichen-language/src/compile.rs:201` | copies the resolved value's span onto the placeholder `self.ir.expr[p].span` |
+| `crates/lichen-language/src/compile.rs` | copies the resolved value's span onto the placeholder `self.ir.expr[p].span` |
 | `crates/lichen-language/src/tests/compile_tests.rs:105,148` | asserts `expr.span` / `ir[root].span` |
 | `crates/lichen-language-server/src/analysis.rs:208,250,344` | `e.span`, `build.ir[id].span`, `build.ir[container].span` |
 | `crates/lichen-highlevel/tests/checker.rs` (many) | sets/reads `ir.expr[…].span` to assert diagnostic positions |
@@ -154,7 +154,9 @@ What moved, what stayed:
 | `diag.rs` wide `Diag`/`Stage` | **stays** in `lichen-language` | adds `Resolve`/`Check` + checker payload |
 | `src/preprocess/mod.rs` (orchestrator) | **stays** in `lichen-language` | resolves imports via `PackageStore` (`StaticNodeId`) |
 | `src/preprocess/{lex,parse}.rs` (directive block) | **stays** in `lichen-language` (see seam #5) | preprocessor/package-specific; byte-range, not `Span` |
-| `program.rs`, `session.rs`, `render.rs`, `run.rs`, `package.rs`, `persist.rs`, `readme.rs`, `main.rs` | **stay** in `lichen-language` | semantics / tooling |
+| `program.rs`, `session.rs`, `render.rs`, `run.rs`, `package.rs`, `persist.rs` | **stay** in `lichen-language` | semantics / tooling |
+| `cli.rs` + the `lichen-compiler` binary | **moved** to `lichen-compiler` (`P2-12`) | the library must not link `clap` for every embedder |
+| `readme.rs` + the `sync-readme` binary | **moved** to `lichen-tools` (`P2-6`) | repo tooling that panics outside a checkout must not ship in a library |
 | `lib.rs` (pipeline glue) | **stays** in `lichen-language` | merges lex/parse + resolve + check diagnostics |
 
 ### Back-compat re-export in `lichen-language`
@@ -325,7 +327,7 @@ Per [`AGENTS.md`](../../AGENTS.md), after each step:
 cargo check            # compilation passes
 cargo test             # behaviour correct (lex/parse/session/pipeline/readme/lsp/highlevel checker)
 cargo fix --allow-dirty && cargo fmt   # final tidy
-cargo run -p lichen-language -- examples   # example parity
+cargo run -p lichen-compiler -- examples   # example parity
 ```
 
 The lex/parser move is a pure relocation (types unchanged, `Span` a transparent alias).

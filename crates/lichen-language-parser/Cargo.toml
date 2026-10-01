@@ -1,8 +1,9 @@
 [package]
 name = "lichen-language-parser"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
 chumsky = "0.13.0"
-lichen-language-lex = { path = "../lichen-language-lex" }
+stacksafe.workspace = true
+lichen-language-lex.workspace = true

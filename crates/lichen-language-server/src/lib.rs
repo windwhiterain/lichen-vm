@@ -27,5 +27,5 @@ pub mod lsp;
 #[cfg(feature = "server")]
 pub mod server;
 
-pub use analysis::{Definition, Doc, StatementValue};
+pub use analysis::{Definition, Doc, DocIndex, StatementValue};
 pub use lsp_types;

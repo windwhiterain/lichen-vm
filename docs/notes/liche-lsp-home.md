@@ -104,11 +104,14 @@ already covers, plus the LSP supplying a root at all:
 - **Missing home → created lazily.** `LichenHome::ensure()` runs `create_dir_all`
   at server start (first lichen buffer), so the slot's `artifacts/` appears on
   demand — never at install time.
-- **Corrupt home → repaired lazily by the store.** `DeviceRegistry` already
-  reloads the last-known (or empty) state from an unparseable `registry` and
-  repairs it on the next `save`; a corrupt/missing artifact makes `try_reuse`
-  return `Ok(None)`, which recompiles. We add no extra reset/repair layer — the
-  store heals and the LSP just benefits from its fault-tolerant reload.
+- **Corrupt home → repaired lazily by the store.** `DeviceRegistry` preserves
+  an unparseable `registry`, and the artifacts only it could describe, as
+  `registry.corrupt[.n]` / `artifacts.corrupt[.n]`, then restarts the key space
+  over the now-empty artifact directory — so no recycled key can be paired with
+  an artifact the new registry does not describe. A corrupt/missing artifact
+  makes `try_reuse` return `Ok(None)`, which recompiles. We add no extra
+  reset/repair layer — the store heals and the LSP just benefits from its
+  fault-tolerant reload.
 - **Never in-memory unless intended.** An in-memory store is used only when the
   program's codec cannot serialize (`NoPersist`, `P::Codec::PERSISTENT == false`)
   or no root is supplied (`Doc::new_with_base` / tests). A healthy home is never

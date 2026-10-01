@@ -41,8 +41,8 @@ fn u128_payload_is_relocated_into_parent_and_block_releasable() {
     // Relocated into root's arena: the copy was made after the marker,
     // so it sits below it in the same chunk.
     let ptr = match ptr {
-        AnyHandle::Dynamic(h) => h.0 as *const u8,
-        AnyHandle::Static(h) => h.offset as *const u8,
+        AnyHandle::Dynamic(h) => h.as_ptr() as *const u8,
+        AnyHandle::Static(h) => h.as_ptr() as *const u8,
     };
     assert!(ptr as usize + 16 <= marker_start);
 
@@ -140,7 +140,7 @@ fn compact_preserves_the_shallow_mask() {
         "the mask survives compaction"
     );
     assert_eq!(array_ids(value).len(), 2);
-    assert_eq!(m.nodes[ret].block, root, "compacted into the parent");
+    assert_eq!(m.node_block(ret), root, "compacted into the parent");
     assert!(
         m.node_value(AnyNodeId::Dynamic(array_ids(value)[1]))
             .is_none(),
@@ -228,7 +228,7 @@ fn deep_block_chain_evaluates_stack_safely() {
 
     assert_eq!(u128_of(value), 7);
     assert_eq!(m.blocks.len(), 1); // only root remains, chain compacted into it
-    assert!(m.nodes.values().all(|n| !n.visiting));
+    assert!(m.nodes.keys().all(|id| !m.node_visiting(id)));
 }
 #[test]
 fn garbage_collect_hoists_uncompacted_descendants() {
@@ -248,9 +248,9 @@ fn garbage_collect_hoists_uncompacted_descendants() {
     let value = m.garbage_collect(ret).expect("evaluated return node");
 
     assert_u128_array(&m, value, &[10, 20]);
-    assert_eq!(m.nodes[ret].block, root);
-    assert_eq!(m.nodes[a].block, root); // hoisted past the child, not into it
-    assert_eq!(m.nodes[b].block, root);
+    assert_eq!(m.node_block(ret), root);
+    assert_eq!(m.node_block(a), root); // hoisted past the child, not into it
+    assert_eq!(m.node_block(b), root);
     // The release dropped the grandchild and its orphan, but the hoisted
     // elements survive.
     assert!(!m.blocks.contains_key(child));
@@ -272,9 +272,9 @@ fn garbage_collect_leaves_sibling_and_ancestor_content_in_place() {
     let value = m.garbage_collect(ret).expect("evaluated return node");
 
     assert_u128_array(&m, value, &[1, 2]);
-    assert_eq!(m.nodes[ret].block, parent);
-    assert_eq!(m.nodes[c_gp].block, grandparent); // untouched
-    assert_eq!(m.nodes[s_node].block, sibling); // untouched
+    assert_eq!(m.node_block(ret), parent);
+    assert_eq!(m.node_block(c_gp), grandparent); // untouched
+    assert_eq!(m.node_block(s_node), sibling); // untouched
     assert!(!m.blocks.contains_key(child)); // only the vacated block is released
     assert!(m.blocks.contains_key(sibling));
     assert!(m.blocks.contains_key(grandparent));
@@ -292,10 +292,13 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
         None,
         Some(TestValue::LowValue(LowValue::Parameterized)),
     );
-    m.nodes[ret_f].operation = Some(Operation {
-        operator: TestOperator::Id,
-        operand: Some(param_f),
-    });
+    m.close_operation_cycle(
+        ret_f,
+        Operation {
+            operator: TestOperator::Id,
+            operand: Some(param_f),
+        },
+    );
     let (func_node, f) = wrap_function(&mut m, grandchild, ret_f, param_f);
     let ret = array_node(&mut m, child, &[func_node], None);
 
@@ -304,12 +307,12 @@ fn garbage_collect_rehomes_function_from_uncompacted_descendant() {
     let value = m.garbage_collect(ret).expect("evaluated return node");
     assert_eq!(array_ids(value), &[func_node]);
 
-    assert_eq!(m.nodes[ret].block, root);
-    assert_eq!(m.nodes[func_node].block, root);
+    assert_eq!(m.node_block(ret), root);
+    assert_eq!(m.node_block(func_node), root);
     assert_eq!(m.functions[f].block, root); // re-homed out of the grandchild
     assert!(m.blocks[root].functions.contains(&f));
-    assert_eq!(m.nodes[ret_f].block, root); // scope mapped along with it
-    assert_eq!(m.nodes[param_f].block, root);
+    assert_eq!(m.node_block(ret_f), root); // scope mapped along with it
+    assert_eq!(m.node_block(param_f), root);
     assert_eq!(
         m.functions[f].nodes.iter().copied().collect::<HashSet<_>>(),
         HashSet::from([ret_f, param_f])
@@ -336,9 +339,9 @@ fn garbage_collect_hoists_unevaluated_scalar_operand() {
     // child hoists x through the operand edge instead of dropping it with
     // the vacated subtree; only the orphan, which no edge reaches, dies.
     assert!(m.garbage_collect(ret).is_none());
-    assert_eq!(m.nodes[ret].block, root);
+    assert_eq!(m.node_block(ret), root);
     assert!(m.node_value(AnyNodeId::Dynamic(ret)).is_none());
-    assert_eq!(m.nodes[x].block, root); // operand hoisted, not dropped
+    assert_eq!(m.node_block(x), root); // operand hoisted, not dropped
     assert!(!m.blocks.contains_key(child));
     assert!(!m.blocks.contains_key(grandchild));
     assert!(!m.nodes.contains_key(orphan));
@@ -360,8 +363,8 @@ fn garbage_collect_enters_unevaluated_subtree_via_operand() {
     // element with it, so nothing the future evaluation of `ret` needs is
     // dropped with the inner block.
     assert!(m.garbage_collect(ret).is_none());
-    assert_eq!(m.nodes[operands].block, root); // hoisted via the operand edge
-    assert_eq!(m.nodes[x].block, root); // and its array element with it
+    assert_eq!(m.node_block(operands), root); // hoisted via the operand edge
+    assert_eq!(m.node_block(x), root); // and its array element with it
     assert!(!m.blocks.contains_key(child));
     assert!(!m.blocks.contains_key(grandchild));
     let value = m.evaluate_node_deep(ret, None);
@@ -384,8 +387,8 @@ fn garbage_collect_skips_operands_of_evaluated_nodes() {
     let evaluated = m.evaluate_node_deep(ret, None);
     assert_u128_array(&m, evaluated, &[7]);
     let value = m.garbage_collect(ret).expect("evaluated return node");
-    assert_eq!(m.nodes[ret].block, root);
-    assert_eq!(m.nodes[x].block, root); // kept by the value edge
+    assert_eq!(m.node_block(ret), root);
+    assert_eq!(m.node_block(x), root); // kept by the value edge
     assert!(!m.nodes.contains_key(operands)); // dead operand edge not followed
     assert!(!m.blocks.contains_key(child));
     assert!(!m.blocks.contains_key(grandchild));
@@ -398,12 +401,15 @@ fn call_clones_are_compacted_with_the_calling_block() {
     let child = m.add_block(Some(root));
     // g(x) = Add(x, 1) lives at the root level.
     let (g_node, g_ret, _g_param) = function(&mut m, |m, ret, param| {
-        let one = u128_node(m, m.nodes[ret].block, 1);
-        let operands = array_node(m, m.nodes[ret].block, &[param, one], None);
-        m.nodes[ret].operation = Some(Operation {
-            operator: TestOperator::Add,
-            operand: Some(operands),
-        });
+        let one = u128_node(m, m.node_block(ret), 1);
+        let operands = array_node(m, m.node_block(ret), &[param, one], None);
+        m.close_operation_cycle(
+            ret,
+            Operation {
+                operator: TestOperator::Add,
+                operand: Some(operands),
+            },
+        );
     });
     m.evaluate_node_deep(g_ret, None); // definition pass
 
@@ -411,13 +417,13 @@ fn call_clones_are_compacted_with_the_calling_block() {
     let five = u128_node(&mut m, child, 5);
     let call = call_node(&mut m, child, g_node, five);
     assert_eq!(u128_of(m.evaluate_node_deep(call, None)), 6);
-    assert_eq!(m.nodes[call].block, child);
+    assert_eq!(m.node_block(call), child);
 
     // Compacting the child moves the call node (with its cached result)
     // into the root; the clone nodes it used are released with the block.
     let root_node = op_node(&mut m, root, TestOperator::Id, Some(call));
     assert_eq!(u128_of(m.evaluate_node_deep(root_node, None)), 6);
-    assert_eq!(m.nodes[call].block, root);
+    assert_eq!(m.node_block(call), root);
     assert!(!m.blocks.contains_key(child));
 
     // The root-level function is untouched and still callable.

@@ -1,5 +1,7 @@
 //! AST → IR compilation with name resolution.
 //!
+//! The node allocators live in the sibling module `alloc`.
+//!
 //! A use of a name *is* the binder's own `ExprId`: compiling `x => e`
 //! allocates the `Parameter` expression first (span = the name's), pushes `x`
 //! on a scope stack, compiles `e`, then wraps `Function { parameter, return }`.
@@ -40,6 +42,8 @@
 
 use std::collections::HashMap;
 
+use stacksafe::stacksafe;
+
 use lichen_highlevel::attr::AttrSet;
 use lichen_highlevel::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Schema};
 use lichen_highlevel::program::{
@@ -52,6 +56,8 @@ use crate::diag::Diag;
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, LangProgram, Perspective};
 use lichen_doc::Doc;
+
+mod alloc;
 
 /// `ExprId` → the source span the expr lowers from.  Built here, exactly where
 /// each highlevel node is created via the IR alloc API; parallel to `IR.expr`.
@@ -376,6 +382,13 @@ impl Compiler {
         leaked
     }
 
+    /// The lowering's recursion: one frame per nested expression (through the
+    /// per-kind arms, [`Self::compile_scope_statements`] and
+    /// [`Self::compile_record_fields`] for a block, and back here), so a deep
+    /// program overflows the caller's stack — the parser runs on a worker
+    /// thread with a large stack, but nothing after it does.  `#[stacksafe]`:
+    /// the recursion grows the stack instead of overflowing the process.
+    #[stacksafe]
     fn compile_expr(&mut self, e: &Expr) -> ExprId {
         match e {
             Expr::Int(n, span) => self.alloc(
@@ -748,7 +761,40 @@ impl Compiler {
                             ids.push(self.compile_expr(inner));
                             depths.push(*depth);
                         }
-                        _ => {
+                        // Every other kind is a plain element — compile it
+                        // with depth 0.  Named exhaustively, so a new kind has
+                        // to be classified here instead of silently taking the
+                        // `~`-free path.
+                        Expr::Int(..)
+                        | Expr::Str(..)
+                        | Expr::TypeConst(..)
+                        | Expr::TypeOf(..)
+                        | Expr::Name(..)
+                        | Expr::Placeholder(..)
+                        | Expr::Lambda { .. }
+                        | Expr::Apply { .. }
+                        | Expr::BinOp { .. }
+                        | Expr::If { .. }
+                        | Expr::Assert { .. }
+                        | Expr::NativeCall { .. }
+                        | Expr::Index { .. }
+                        | Expr::RawIndex { .. }
+                        | Expr::FieldRead { .. }
+                        | Expr::NamedFieldRead { .. }
+                        | Expr::RawNamedField { .. }
+                        | Expr::TableFind { .. }
+                        | Expr::Annotation { .. }
+                        | Expr::Arrow { .. }
+                        | Expr::Tuple(..)
+                        | Expr::TypeTuple(..)
+                        | Expr::StructType(..)
+                        | Expr::StructInst { .. }
+                        | Expr::Array(..)
+                        | Expr::Table(..)
+                        | Expr::TypeArray { .. }
+                        | Expr::Block { .. }
+                        | Expr::RecordBlock { .. }
+                        | Expr::Err { .. } => {
                             ids.push(self.compile_expr(element));
                             depths.push(0);
                         }
@@ -868,82 +914,6 @@ impl Compiler {
 
     fn compile_all(&mut self, elements: &[Expr]) -> Vec<ExprId> {
         elements.iter().map(|e| self.compile_expr(e)).collect()
-    }
-
-    fn alloc(&mut self, kind: ExprKind<HighProgramLiteral>, span: &Span) -> ExprId {
-        let id = self.ir.alloc(kind);
-        self.spans.push(Some(*span));
-        id
-    }
-
-    // The variadic/struct allocs don't go through `Self::alloc` (they are
-    // distinct `IR` methods), so wrap each here to record the span in our index
-    // at exactly the point the node is created.
-    fn alloc_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_tuple(elements);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_type_tuple(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_type_tuple(elements);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_type_struct(
-        &mut self,
-        fields: &[(ExprId, Option<&'static str>)],
-        span: &Span,
-    ) -> ExprId {
-        let id = self.ir.alloc_type_struct(fields);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_instantiate(
-        &mut self,
-        type_expr: ExprId,
-        value: ExprId,
-        names: &[Option<&'static str>],
-        span: &Span,
-    ) -> ExprId {
-        let id = self.ir.alloc_instantiate(type_expr, value, names);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_record(
-        &mut self,
-        value: ExprId,
-        names: &[Option<&'static str>],
-        span: &Span,
-    ) -> ExprId {
-        let id = self.ir.alloc_record(value, names);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_array(&mut self, elements: &[ExprId], span: &Span) -> ExprId {
-        let id = self.ir.alloc_array(elements);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_table(&mut self, entries: &[(ExprId, ExprId)], span: &Span) -> ExprId {
-        let id = self.ir.alloc_table(entries);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_shallow_array(&mut self, elements: &[(ExprId, usize)], span: &Span) -> ExprId {
-        let id = self.ir.alloc_shallow_array(elements);
-        self.spans.push(Some(*span));
-        id
-    }
-    fn alloc_annotation(
-        &mut self,
-        value: ExprId,
-        r#type: Option<ExprId>,
-        attrs: &[ExprId],
-        span: &Span,
-    ) -> ExprId {
-        let id = self.ir.alloc_annotation(value, r#type, attrs);
-        self.spans.push(Some(*span));
-        id
     }
 }
 

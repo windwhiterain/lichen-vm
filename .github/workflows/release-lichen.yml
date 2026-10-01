@@ -11,8 +11,8 @@ name: release-lichen-toolchain
 # Trigger manually (workflow_dispatch) after tagging the commit you want to ship:
 # the release tag is the **commit's short SHA** (first 12 hex chars) — GitHub
 # rejects tags that are a bare 40/64-hex commit SHA — which the `lichen` package
-# manager derives from the same `LICHEN_BUILD_COMMIT` it embeds at build time
-# (keeping the toolchain at the same revision as the package manager).
+# manager derives from the same `LICHEN_BUILD_COMMIT` it embeds at build time, so
+# the package manager and this workflow name the same release tag.
 #
 # By default the release is published as a **full/latest** release. Set the
 # `prerelease` input (or `scripts/release.sh --prerelease`) to publish it as a
@@ -57,7 +57,7 @@ jobs:
         run: |
           cargo build --release --locked \
             -p lichen-package \
-            -p lichen-language \
+            -p lichen-compiler \
             -p lichen-language-server
       - name: Stage release assets
         shell: bash

@@ -130,7 +130,7 @@ fn applied_equality_assert(arg: usize) -> Module<TestProgram> {
     let mut m = Module::new();
     let root = m.add_block(None);
     let (func_node, _, _) = function(&mut m, |m, ret, param| {
-        let block = m.nodes[ret].block;
+        let block = m.node_block(ret);
         let one = u128_node(m, block, 1);
         let operands = array_node(m, block, &[param, one], None);
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
@@ -177,7 +177,7 @@ fn never_called_function_assert_stays_pending() {
     // stays unbound, so it is not triggered — and not failed.
     let mut m = Module::new();
     let (func_node, _, _) = function(&mut m, |m, ret, param| {
-        let block = m.nodes[ret].block;
+        let block = m.node_block(ret);
         let one = u128_node(m, block, 1);
         let operands = array_node(m, block, &[param, one], None);
         let eq = op_node(m, block, TestOperator::Eq, Some(operands));
@@ -387,7 +387,8 @@ fn gc_moves_an_assert_condition_with_its_function() {
 
     assert!(!m.blocks.contains_key(body));
     assert_eq!(
-        m.nodes[condition].block, root,
+        m.node_block(condition),
+        root,
         "the condition moved with its function"
     );
     assert!(

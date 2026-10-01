@@ -5,6 +5,7 @@
 //! dropped with a [`EvalError::TableKeyUnbound`] at build).
 
 use super::*;
+use lichen_lowlevel::{Freeze, ModuleKey, StaticNodeId};
 
 /// A node holding a table value built from raw `(key, value)` node pairs.
 fn table_value(
@@ -129,7 +130,12 @@ fn an_unbound_key_is_dropped_with_a_recorded_error() {
     else {
         panic!("the table value")
     };
-    assert_eq!(payload.items().len(), 0, "the unbound entry is dropped");
+    // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+    assert_eq!(
+        unsafe { payload.items() }.len(),
+        0,
+        "the unbound entry is dropped"
+    );
     let EvalError::TableKeyUnbound { key: dropped } = m.eval_errors[0] else {
         panic!("the build records a TableKeyUnbound failure")
     };
@@ -187,7 +193,8 @@ fn a_computed_nothing_key_is_never_a_phantom_hit() {
         panic!("the table value")
     };
     assert!(
-        payload.items().is_empty(),
+        // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+        unsafe { payload.items() }.is_empty(),
         "the `Void`-keyed entry is dropped"
     );
     assert!(
@@ -341,7 +348,7 @@ fn table_values_stay_lazy_until_read() {
     let TestValue::U128(AnyHandle::Dynamic(handle)) = read else {
         panic!("the read forces the stored value, got {read:?}")
     };
-    assert_eq!(unsafe { *handle.0 }, 5, "the forced value's content");
+    assert_eq!(unsafe { *handle.as_ptr() }, 5, "the forced value's content");
 }
 
 #[test]
@@ -365,7 +372,8 @@ fn the_payload_is_stored_sorted_by_hash() {
     else {
         panic!("the table value")
     };
-    let items = payload.items();
+    // SAFETY: `t` is a live node of `m`, whose block has not been dropped.
+    let items = unsafe { payload.items() };
     assert_eq!(items.len(), 2);
     assert!(
         items.windows(2).all(|w| w[0].hash <= w[1].hash),
@@ -433,4 +441,277 @@ fn tables_unify_by_identity_not_content() {
     let before = m.unify_errors.len();
     m.unify(t1, t1);
     assert_eq!(m.unify_errors.len(), before, "a table unifies with itself");
+}
+
+// --- the key hash across a freeze and across a cycle's depth ----------
+//
+// The stored hash is a *pre-filter*: a read binary-searches the payload for
+// the equal-hash run and verifies every candidate with `key_eq`, which is the
+// authority.  So the hash owes one direction only — equal keys must hash
+// equal — and a hash that cannot be recomputed after a reload is a permanent
+// `TableMiss` for a key that *is* there.
+
+/// Freeze `source` into a fresh importer and hand back the importer, its root
+/// block and the freeze map.  The byte round-trip of the artifact container
+/// lives in `lichen-language`; this is the lowlevel half of the same path —
+/// the static refs and the payloads a reload reads.
+fn reload_after_freeze(source: &Module<TestProgram>) -> (Module<TestProgram>, BlockId, Freeze) {
+    let mut importer = Module::new();
+    let root = importer.add_block(None);
+    let freeze = importer.freeze_mapped(source, ModuleKey::from_raw(1), [0; 32]);
+    (importer, root, freeze)
+}
+
+/// The static ref of a source node under `freeze`.
+fn sref_of(freeze: &Freeze, node: NodeId) -> StaticNodeId {
+    StaticNodeId {
+        module: freeze.key,
+        index: freeze.node_map[&node],
+    }
+}
+
+/// `[1, ↺]` — a self-referential two-element array, the `[Type, ↺]` universe
+/// shape.
+fn cyclic_pair(m: &mut Module<TestProgram>, block: BlockId) -> NodeId {
+    let node = m.add_node(block, None, None);
+    let one = usize_node(m, block, 1);
+    let items = m.alloc_array(
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(one)),
+            ArrayItem::new(AnyNodeId::Dynamic(node)),
+        ],
+        block,
+    );
+    m.write_node_value(node, Some(TestValue::LowValue(LowValue::Array(items))));
+    node
+}
+
+#[test]
+fn a_table_key_survives_a_freeze_and_a_reload() {
+    // A table used as a key: a dynamic handle's identity is its payload's
+    // address, which no longer exists after a reload, so the stored hash has
+    // to be a function of the table's content.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let inner_key = usize_node(&mut m, root, 1);
+    let inner_value = usize_node(&mut m, root, 2);
+    let inner = table_value(
+        &mut m,
+        root,
+        &[(
+            AnyNodeId::Dynamic(inner_key),
+            AnyNodeId::Dynamic(inner_value),
+        )],
+    );
+    let value = usize_node(&mut m, root, 42);
+    let outer = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(inner), AnyNodeId::Dynamic(value))],
+    );
+
+    let get = table_get(&mut m, root, outer, inner);
+    assert_eq!(
+        m.evaluate_node_deep(get, None),
+        TestValue::LowValue(LowValue::USize(42)),
+        "the table key is found before the freeze"
+    );
+
+    let (mut importer, iroot, freeze) = reload_after_freeze(&m);
+    let outer_leaf = importer.materialize_leaf(sref_of(&freeze, outer), iroot);
+    let inner_leaf = importer.materialize_leaf(sref_of(&freeze, inner), iroot);
+    let get = table_get(&mut importer, iroot, outer_leaf, inner_leaf);
+    let read = importer.evaluate_node_deep(get, None);
+    assert!(
+        importer.eval_errors.is_empty(),
+        "{:?}",
+        importer.eval_errors
+    );
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::USize(42)),
+        "the table key is still found after a freeze and a reload"
+    );
+}
+
+#[test]
+fn a_function_key_survives_a_freeze_and_a_reload() {
+    // A function used as a key: `FunctionId` is a slotmap key, so the id the
+    // hash was taken from is process-local; the template it names is the only
+    // thing a reload preserves.  The definition pass runs the body between the
+    // build and the freeze, so a hash that read the body's memoized result
+    // would drift too.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let (function, body, _) = function(&mut m, |m, r#return, parameter| {
+        let block = m.node_block(r#return);
+        let one = u128_node(m, block, 1);
+        let two = u128_node(m, block, 2);
+        let operands = array_node(m, block, &[one, two], None);
+        let sum = op_node(m, block, TestOperator::Add, Some(operands));
+        let items = m.alloc_array(
+            &[
+                ArrayItem::new(AnyNodeId::Dynamic(parameter)),
+                ArrayItem::new(AnyNodeId::Dynamic(sum)),
+            ],
+            block,
+        );
+        m.write_node_value(r#return, Some(TestValue::LowValue(LowValue::Array(items))));
+    });
+    let value = usize_node(&mut m, root, 7);
+    let table = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(function), AnyNodeId::Dynamic(value))],
+    );
+
+    let get = table_get(&mut m, root, table, function);
+    assert_eq!(
+        m.evaluate_node_deep(get, None),
+        TestValue::LowValue(LowValue::USize(7)),
+        "the function key is found before the freeze"
+    );
+
+    // The definition pass runs the template's body — `x => [x, 1 + 2]` with
+    // the `Add`'s operand chain already bound.
+    m.evaluate_node_deep(body, None);
+
+    let (mut importer, iroot, freeze) = reload_after_freeze(&m);
+    let table_leaf = importer.materialize_leaf(sref_of(&freeze, table), iroot);
+    let function_leaf = importer.materialize_leaf(sref_of(&freeze, function), iroot);
+    let get = table_get(&mut importer, iroot, table_leaf, function_leaf);
+    let read = importer.evaluate_node_deep(get, None);
+    assert!(
+        importer.eval_errors.is_empty(),
+        "{:?}",
+        importer.eval_errors
+    );
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::USize(7)),
+        "the function key is still found after a freeze and a reload"
+    );
+}
+
+#[test]
+fn a_key_of_the_program_s_own_value_vocabulary_is_hashed_not_refused() {
+    // The program's own value variants are key content like any other: a
+    // vocabulary with handle-carrying values reaches this path from ordinary
+    // source (a type constant as a table key), and it used to be an
+    // `unreachable!`.  The lowlevel cannot unfold a variant it does not know,
+    // so equal values match through `key_eq` in the equal-hash run and a
+    // different one misses.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let five = u128_node(&mut m, root, 5);
+    let value = usize_node(&mut m, root, 3);
+    let table = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(five), AnyNodeId::Dynamic(value))],
+    );
+
+    let same = u128_node(&mut m, root, 5);
+    let get = table_get(&mut m, root, table, same);
+    assert_eq!(
+        m.evaluate_node_deep(get, None),
+        TestValue::LowValue(LowValue::USize(3)),
+        "an equal value of the program's own vocabulary is the same key"
+    );
+
+    let other = u128_node(&mut m, root, 6);
+    let get = table_get(&mut m, root, table, other);
+    assert_eq!(
+        m.evaluate_node_deep(get, None),
+        TestValue::LowValue(LowValue::Void),
+        "a different value misses"
+    );
+    assert!(
+        m.eval_errors
+            .iter()
+            .any(|error| matches!(error, EvalError::TableMiss { .. })),
+        "the miss is recorded: {:?}",
+        m.eval_errors
+    );
+}
+
+#[test]
+fn coinductively_equal_cyclic_keys_hash_equal_across_depth() {
+    // `[1, ↺]` and `[1, [1, ↺]]` are the same infinite structure, so `key_eq`
+    // calls them equal; a cycle token that carries the revisit depth does not,
+    // and under a pre-filter that disagreement is a miss.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let a = cyclic_pair(&mut m, root);
+    // `b = [1, [1, b]]`.
+    let b = m.add_node(root, None, None);
+    let one = usize_node(&mut m, root, 1);
+    let inner = array_node(&mut m, root, &[one, b], None);
+    let items = m.alloc_array(
+        &[
+            ArrayItem::new(AnyNodeId::Dynamic(one)),
+            ArrayItem::new(AnyNodeId::Dynamic(inner)),
+        ],
+        root,
+    );
+    m.write_node_value(b, Some(TestValue::LowValue(LowValue::Array(items))));
+
+    let value = usize_node(&mut m, root, 9);
+    let table = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(a), AnyNodeId::Dynamic(value))],
+    );
+    let get = table_get(&mut m, root, table, b);
+    let read = m.evaluate_node_deep(get, None);
+    assert!(m.eval_errors.is_empty(), "{:?}", m.eval_errors);
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::USize(9)),
+        "a coinductively equal key must be found"
+    );
+}
+
+#[test]
+fn a_cyclic_key_is_found_across_the_static_boundary() {
+    // The stored key is a cycle inside a frozen module; the lookup key closes
+    // the same cycle one level deeper and through a static ref.  The two are
+    // equal under `key_eq` and — with a depth-bounded unfolding — under the
+    // hash as well.
+    let mut m = Module::new();
+    let root = m.add_block(None);
+    let key = cyclic_pair(&mut m, root);
+    let value = usize_node(&mut m, root, 5);
+    let table = table_value(
+        &mut m,
+        root,
+        &[(AnyNodeId::Dynamic(key), AnyNodeId::Dynamic(value))],
+    );
+    let get = table_get(&mut m, root, table, key);
+    assert_eq!(
+        m.evaluate_node_deep(get, None),
+        TestValue::LowValue(LowValue::USize(5)),
+        "the cyclic key is found before the freeze"
+    );
+
+    let (mut importer, iroot, freeze) = reload_after_freeze(&m);
+    let table_leaf = importer.materialize_leaf(sref_of(&freeze, table), iroot);
+    let frozen_key = importer.materialize_leaf(sref_of(&freeze, key), iroot);
+    // `[1, [1, frozen_key]]` — coinductively equal to the stored `[1, ↺]`.
+    let one = usize_node(&mut importer, iroot, 1);
+    let inner = array_node(&mut importer, iroot, &[one, frozen_key], None);
+    let query = array_node(&mut importer, iroot, &[one, inner], None);
+
+    let get = table_get(&mut importer, iroot, table_leaf, query);
+    let read = importer.evaluate_node_deep(get, None);
+    assert!(
+        importer.eval_errors.is_empty(),
+        "{:?}",
+        importer.eval_errors
+    );
+    assert_eq!(
+        read,
+        TestValue::LowValue(LowValue::USize(5)),
+        "the cyclic key is still found through the static module"
+    );
 }

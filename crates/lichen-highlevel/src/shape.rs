@@ -196,7 +196,16 @@ pub const STRUCT_KIND_NAMES_PATH: [usize; 2] = [KIND_MARKER_SLOT, STRUCT_MARKER_
 /// The array items behind either a dynamic node or a static ref — the raw
 /// read every accessor and predicate in this module is built on.  `None`
 /// when `id` is unbound or not an array.
-pub fn array_items<P: Program>(module: &Module<P>, id: AnyNodeId) -> Option<&'static [ArrayItem]>
+///
+/// # Safety
+///
+/// The caller must keep `id` reachable — its home block alive — for as long
+/// as the returned slice is read: the contract
+/// `AnyHandle::<[ArrayItem]>::items` states.
+pub unsafe fn array_items<P: Program>(
+    module: &Module<P>,
+    id: AnyNodeId,
+) -> Option<&'static [ArrayItem]>
 where
     P::Value: AsEnum<LowValue>,
 {
@@ -204,7 +213,10 @@ where
     let LowValue::Array(array) = value.as_enum()? else {
         return None;
     };
-    Some(array.items())
+    // SAFETY: `array` is the payload of `id`, a node of `module`, and nothing
+    // in this crate calls `Module::drop_block`, so the home block outlives
+    // this read.
+    Some(unsafe { array.items() })
 }
 
 /// The shape slot of a kinded type expression `[shape, kind]`, for a dynamic
@@ -215,7 +227,9 @@ pub fn shape_of<P: Program>(module: &Module<P>, ty: AnyNodeId) -> Option<AnyNode
 where
     P::Value: AsEnum<LowValue>,
 {
-    let items = array_items(module, ty)?;
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, ty) }?;
     if items.len() == 2 {
         Some(items[TYPE_SHAPE_SLOT].node)
     } else {
@@ -230,7 +244,9 @@ pub fn kind_of<P: Program>(module: &Module<P>, ty: AnyNodeId) -> Option<AnyNodeI
 where
     P::Value: AsEnum<LowValue>,
 {
-    let items = array_items(module, ty)?;
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, ty) }?;
     if items.len() == 2 {
         Some(items[TYPE_KIND_SLOT].node)
     } else {
@@ -244,7 +260,9 @@ pub fn marker_of<P: Program>(module: &Module<P>, kind: AnyNodeId) -> Option<AnyN
 where
     P::Value: AsEnum<LowValue>,
 {
-    let items = array_items(module, kind)?;
+    // SAFETY: `kind` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, kind) }?;
     if items.len() == 2 {
         Some(items[KIND_MARKER_SLOT].node)
     } else {
@@ -261,7 +279,9 @@ pub fn is_static_universe<P: Program>(module: &Module<P>, sref: StaticNodeId) ->
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, AnyNodeId::Static(sref)) else {
+    // SAFETY: `sref`'s payload lives in a static module's arena, pinned by the
+    // registry for as long as the module stays registered.
+    let Some(items) = (unsafe { array_items(module, AnyNodeId::Static(sref)) }) else {
         return false;
     };
     items.len() == 2
@@ -307,7 +327,9 @@ where
     let Some(kind) = kind_of(module, AnyNodeId::Dynamic(rep)) else {
         return false;
     };
-    let Some(kind_items) = array_items(module, kind) else {
+    // SAFETY: `kind` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(kind_items) = (unsafe { array_items(module, kind) }) else {
         return false;
     };
     // The kind's second slot is the universe — the self-referential cycle
@@ -358,7 +380,9 @@ pub fn kind_marker_is_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, kind) else {
+    // SAFETY: `kind` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, kind) }) else {
         return false;
     };
     items.len() == 2
@@ -390,7 +414,9 @@ pub fn is_function_type_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, ty) else {
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
     items.len() == 2
@@ -461,13 +487,17 @@ pub fn is_struct_type_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, ty) else {
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
     if items.len() != 2 {
         return false;
     }
-    let Some(kind_items) = array_items(module, items[TYPE_KIND_SLOT].node) else {
+    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
+    // in this crate calls `Module::drop_block`.
+    let Some(kind_items) = (unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }) else {
         return false;
     };
     kind_items.len() == 2
@@ -488,7 +518,9 @@ pub fn is_struct_marker_any<P: Program>(module: &Module<P>, marker: AnyNodeId) -
 where
     P::Value: AsEnum<LowValue>,
 {
-    array_items(module, marker).is_some_and(|items| items.len() == STRUCT_MARKER_LEN)
+    // SAFETY: `marker` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    unsafe { array_items(module, marker) }.is_some_and(|items| items.len() == STRUCT_MARKER_LEN)
 }
 
 /// Whether `ty` is a TypeStruct **kind** — `[TypeStruct{id, names}, K]` —
@@ -505,7 +537,9 @@ pub fn is_type_struct_kind_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, ty) else {
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
     items.len() == 2
@@ -528,7 +562,9 @@ pub fn is_positional_type_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let Some(items) = array_items(module, ty) else {
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, ty) }) else {
         return false;
     };
     if items.len() != 2 {
@@ -562,21 +598,25 @@ pub fn struct_names_any<P: Program>(
 where
     P::Value: ValueType,
 {
-    let items = array_items(module, ty)?;
+    // SAFETY: `ty` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let items = unsafe { array_items(module, ty) }?;
     if items.len() != 2 {
         return None;
     }
-    let kind_items = array_items(module, items[TYPE_KIND_SLOT].node)?;
+    // SAFETY: `items[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
+    // in this crate calls `Module::drop_block`.
+    let kind_items = unsafe { array_items(module, items[TYPE_KIND_SLOT].node) }?;
     if kind_items.len() != 2
         || !is_universe_any(module, universe, kind_items[KIND_UNIVERSE_SLOT].node)
     {
         return None;
     }
     // The struct marker `[id, names]`; its second field is the name table.
-    let marker_items = array_items(module, kind_items[KIND_MARKER_SLOT].node)?;
-    let Some(names_item) = marker_items.get(STRUCT_MARKER_NAMES_SLOT) else {
-        return None;
-    };
+    // SAFETY: `kind_items[KIND_MARKER_SLOT].node` is a live node of `module`;
+    // nothing in this crate calls `Module::drop_block`.
+    let marker_items = unsafe { array_items(module, kind_items[KIND_MARKER_SLOT].node) }?;
+    let names_item = marker_items.get(STRUCT_MARKER_NAMES_SLOT)?;
     match module.node_value(names_item.node).and_then(|v| v.as_enum()) {
         Some(LowValue::Table(table)) => Some(table),
         _ => None,
@@ -624,7 +664,9 @@ where
 {
     // A type expression is `[shape, kind]`; anything else is not a type this
     // decoder can read.
-    let Some(kinded) = array_items(module, type_value) else {
+    // SAFETY: `type_value` is a live node of `module`; nothing in this crate
+    // calls `Module::drop_block`.
+    let Some(kinded) = (unsafe { array_items(module, type_value) }) else {
         return LowShape::Unknown;
     };
     if kinded.len() != 2 {
@@ -644,7 +686,9 @@ where
     }
     // A compound type: the marker is the kind's, and the shape is a list or a
     // pair whose two positions mean different things per kind.
-    let Some(kind) = array_items(module, kinded[TYPE_KIND_SLOT].node) else {
+    // SAFETY: `kinded[TYPE_KIND_SLOT].node` is a live node of `module`; nothing
+    // in this crate calls `Module::drop_block`.
+    let Some(kind) = (unsafe { array_items(module, kinded[TYPE_KIND_SLOT].node) }) else {
         return LowShape::Unknown;
     };
     if kind.len() != 2 {
@@ -655,7 +699,9 @@ where
     };
     if marker == P::Value::tuple_type_marker() {
         // A tuple type's shape *is* its element-type list.
-        let Some(elements) = array_items(module, shape) else {
+        // SAFETY: `shape` is a live node of `module`; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(elements) = (unsafe { array_items(module, shape) }) else {
             return LowShape::Unknown;
         };
         return LowShape::Tuple(
@@ -676,7 +722,9 @@ where
     }
     if marker == P::Value::table_type_marker() {
         // A table type's shape is `[key type, value type]`.
-        let Some(halves) = array_items(module, shape) else {
+        // SAFETY: `shape` is a live node of `module`; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(halves) = (unsafe { array_items(module, shape) }) else {
             return LowShape::Unknown;
         };
         return LowShape::Table(
@@ -687,7 +735,9 @@ where
     if marker == P::Value::function_type_marker() {
         // A function type's shape is the `[domain, codomain]` pair — the same
         // node `function_type_parts` returns.
-        let Some(halves) = array_items(module, shape) else {
+        // SAFETY: `shape` is a live node of `module`; nothing in this crate
+        // calls `Module::drop_block`.
+        let Some(halves) = (unsafe { array_items(module, shape) }) else {
             return LowShape::Unknown;
         };
         return LowShape::Function(
@@ -735,7 +785,9 @@ where
     }
     // The pair indirection: the term's own value slot, tried once.  A value
     // slot that does not decode either is not a type this decoder can read.
-    let Some(items) = array_items(module, slot) else {
+    // SAFETY: `slot` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { array_items(module, slot) }) else {
         return LowShape::Unknown;
     };
     let Some(value) = items.first() else {
@@ -751,7 +803,9 @@ fn low_type_of_array<P: Program>(module: &Module<P>, shape: AnyNodeId) -> Option
 where
     P::Value: ValueType,
 {
-    let parts = array_items(module, shape)?;
+    // SAFETY: `shape` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let parts = unsafe { array_items(module, shape) }?;
     if parts.len() != 2 {
         return None;
     }
@@ -818,14 +872,17 @@ pub(crate) fn tag_descent<P: Program>(
 /// array (a tuple value), tagging that `Value` descent as `Shape`.  Kept
 /// as-is in Phase 1: it is a diagnostic rendering hint, never a check.
 fn slot0_is_shape<P: Program>(module: &Module<P>, node: NodeId) -> bool {
-    let Some(items) = module.array_items(node) else {
+    // SAFETY: `node` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let Some(items) = (unsafe { module.array_items(node) }) else {
         return false;
     };
     if items.is_empty() {
         return false;
     }
     match items[0].node {
-        AnyNodeId::Dynamic(child) => module.array_items(child).is_some(),
+        // SAFETY: as above — `child` is a live node of `module`.
+        AnyNodeId::Dynamic(child) => unsafe { module.array_items(child) }.is_some(),
         // A static element is a leaf (a package export); it is never a
         // tuple/array/struct shape we descend into.
         AnyNodeId::Static(_) => false,

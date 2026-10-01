@@ -8,7 +8,7 @@ use lichen_lowlevel::{AnyNodeId, LowOperator, NodeId};
 
 use crate::attr::AttrSet;
 use crate::diagnostic::DiagKind;
-use crate::ir::{ExprId, ExprKind};
+use crate::ir::{ExprId, ExprKind, Loc};
 use crate::program::{HighProgram, TypeOperator, ValueType};
 use crate::shape;
 
@@ -19,6 +19,49 @@ where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
+    /// The [`AttrExt`](crate::attr::AttrExt) for `marker`, or `None` when this
+    /// build has no attribute extension at all ([`Checker::build`] and
+    /// [`Checker::build_in`] install none).  A marker this build cannot lower
+    /// is a check-time refusal, not a broken invariant: the sites that read it
+    /// report [`DiagKind::NoAttributeExtension`] through
+    /// [`Self::no_attr_ext_guard`] and carry on over the hole it returns.
+    ///
+    /// [`Checker::build`]: super::Checker::build
+    /// [`Checker::build_in`]: super::Checker::build_in
+    pub(super) fn attribute_extension(
+        &self,
+        marker: &P::Attr,
+    ) -> Option<&'static dyn crate::attr::AttrExt<P>> {
+        self.attr_ext.as_ref().map(|registry| registry(marker))
+    }
+
+    /// Records the [`DiagKind::NoAttributeExtension`] guard at `loc` — the
+    /// site that read the attribute — and returns the well-formed hole the
+    /// slot falls back to: a fresh unbound `[value, type]` pair, the shape
+    /// every attribute slot has (see [`crate::attr`]).  Nothing unifies
+    /// against it — the guard has already failed the build, and
+    /// `check_failed` skips the definition pass — so it binds nothing, while
+    /// the runtime pair keeps the arity its schema declared.
+    ///
+    /// Recorded **once per build**, at the first reader: a program may read an
+    /// attribute at every expression it annotates, and the fact being reported
+    /// is about the build, not about any one of them.
+    pub(super) fn no_attr_ext_guard(&mut self, loc: Loc) -> NodeId {
+        if !self.no_attr_ext_reported {
+            self.no_attr_ext_reported = true;
+            self.record_guard(
+                self.type_expr,
+                self.type_expr,
+                loc,
+                DiagKind::NoAttributeExtension,
+                None,
+            );
+        }
+        let value = self.fresh_cell();
+        let ty = self.fresh_cell();
+        self.pair_of(value, ty)
+    }
+
     /// The direct sub-expressions of a compound whose perspectives participate
     /// in a `# p` annotation's meet (gcd) — the reference.  A leaf has none.
     /// Per the plan's combine table: the named sub-expressions of a `BinOp`/
@@ -57,7 +100,7 @@ where
             }
             // An annotated value contributes no sub-expression to a parent's
             // combine: its attribute is its OWN slot (read via
-            // `self.attr[value]` in `check_ann`), never the value beneath it
+            // `self.state[value].attr` in `check_ann`), never the value beneath it
             // (`a # q` re-annotated keeps `q`; a `? doc` on a value writes the
             // new doc).  A doc-only annotation (no perspective) therefore
             // reads as a leaf.
@@ -108,8 +151,10 @@ where
     fn value_attr_node(&self, value: ExprId, marker: &P::Attr) -> Option<NodeId> {
         let value_tail = self.schema_tail(value).to_vec();
         let pos = value_tail.iter().position(|m| m == marker)?;
-        let pair = self.term[value]?;
-        let items = shape::array_items(&self.module, AnyNodeId::Dynamic(pair))?;
+        let pair = self.state[value].term?;
+        // SAFETY: `pair` is a live node of this module; nothing in this crate
+        // calls `Module::drop_block`.
+        let items = unsafe { shape::array_items(&self.module, AnyNodeId::Dynamic(pair)) }?;
         items
             .get(shape::attr_slot(pos))
             .and_then(|item| match item.node {
@@ -125,10 +170,10 @@ where
     /// which attribute the caller is asking about; the missing slot is the
     /// attribute's own (`[0, int]` for a perspective).
     pub(super) fn attr_or_missing(&mut self, e: ExprId, marker: &P::Attr) -> NodeId {
-        if let Some(slot) = self.attr[e] {
+        if let Some(slot) = self.state[e].attr {
             return slot;
         }
-        self.missing_slot_of(marker)
+        self.missing_slot_of(marker, self.loc(e, 2))
     }
 
     /// The attribute's *missing* slot node — one shared node for the whole
@@ -145,14 +190,31 @@ where
     /// laziness is that a slot first needed *inside* a lambda is tagged into
     /// that function's template and so is cloned per apply, which is exactly
     /// what the per-occurrence form did; it is never worse, only sometimes no
-    /// better.
-    pub(super) fn missing_slot_of(&mut self, marker: &P::Attr) -> NodeId {
-        let index = marker.order_index();
+    /// better.  `loc` is the attribute slot of the expression the slot is
+    /// needed for — where the missing attribute is read.
+    pub(super) fn missing_slot_of(&mut self, marker: &P::Attr, loc: Loc) -> NodeId {
+        // The slot cache is keyed by the marker's **position in the set's own
+        // order list**, not by `AttrSet::order_index`: the list is what sizes
+        // [`Checker::missing_slots`], so the position is in range by
+        // construction, while an index the plugin returns is only checked in
+        // debug builds by `order_is_canonical` — a hand-written set that
+        // disagrees with its own list would index out of bounds, or alias
+        // another attribute's cached slot, in a release build.  For a set whose
+        // order *is* canonical the two are the same number, so nothing moves.
+        let Some(index) = P::Attr::ORDER.iter().position(|attr| attr == marker) else {
+            // Not an attribute of the set the cache is sized for: the same
+            // recorded guard and well-formed hole as an attribute this build
+            // cannot lower.
+            return self.no_attr_ext_guard(loc);
+        };
         if let Some(shared) = self.missing_slots[index] {
             return shared;
         }
-        let slot = (self.attr_ext)(marker).missing_slot(self);
-        if (self.attr_ext)(marker).share_missing_slot() {
+        let Some(ext) = self.attribute_extension(marker) else {
+            return self.no_attr_ext_guard(loc);
+        };
+        let slot = ext.missing_slot(self);
+        if ext.share_missing_slot() {
             self.missing_slots[index] = Some(slot);
         }
         slot
@@ -169,16 +231,16 @@ where
         let type_pair = match r#type {
             Some(type_expr) => {
                 self.check_expr(type_expr);
-                let type_pair = self.term[type_expr].unwrap();
+                let type_pair = self.state[type_expr].term.unwrap();
                 self.check_unify(
-                    self.ty[value].unwrap(),
+                    self.state[value].ty.unwrap(),
                     type_pair,
                     self.loc(value, 1),
                     DiagKind::Annotation,
                 );
                 type_pair
             }
-            None => self.ty[value].unwrap(),
+            None => self.state[value].ty.unwrap(),
         };
         let value_node = self.value_of(value);
         // The annotation *replaces* the attribute slots it spells and
@@ -213,7 +275,16 @@ where
         let mut constraint_slot: Option<NodeId> = None;
         let mut attr_idx = 0;
         for marker in &tail {
-            let ext = (self.attr_ext)(marker);
+            let Some(ext) = self.attribute_extension(marker) else {
+                // The schema carries an attribute this build cannot lower:
+                // report it at the annotation and keep the pair's arity with
+                // the hole.  No constraint slot is recorded — without an
+                // extension there is nothing to constrain with — so nothing
+                // downstream consults the extension for this expression a
+                // second time.
+                slots.push(self.no_attr_ext_guard(self.loc(e, 2)));
+                continue;
+            };
             // Does this annotation spell this slot?  (its own schema lists
             // exactly the slots it replaces; everything else is preserved.)
             let spelled = own_tail
@@ -234,7 +305,9 @@ where
                 // label's slot representation — the distinction below is the
                 // *semantic* one (does the attribute constrain at apply time?)
                 // that lives in [`AttrExt::is_label`].
-                let slot = self.term[pe].expect("an annotation value expr is compiled");
+                let slot = self.state[pe]
+                    .term
+                    .expect("an annotation value expr is compiled");
                 if ext.is_label() {
                     // A label (metadata, e.g. `Doc`) carries no constraint: it
                     // contributes no apply-time slot.  The attribute's own
@@ -255,7 +328,7 @@ where
                     // no attribute of its own (a plain leaf, or a doc-only
                     // annotation) has no provider, so there is nothing to
                     // validate against and the annotation is the slot.
-                    let provider = if self.attr[value].is_some() {
+                    let provider = if self.state[value].attr.is_some() {
                         Some(self.attr_or_missing(value, marker))
                     } else {
                         let children = self.persp_combine_children(value);
@@ -284,7 +357,7 @@ where
                 // at element 0, a label's metadata is the whole pair).
                 let node = self
                     .value_attr_node(value, marker)
-                    .unwrap_or_else(|| self.missing_slot_of(marker));
+                    .unwrap_or_else(|| self.missing_slot_of(marker, self.loc(e, 2)));
                 if !ext.is_label() {
                     constraint_slot = Some(node);
                 }
@@ -293,15 +366,15 @@ where
         }
         // The constraint slot (e.g. the perspective) is what the apply-time
         // attribute check reads; a label slot is metadata only.
-        self.attr[e] = constraint_slot;
+        self.state[e].attr = constraint_slot;
         let mut pair = Vec::with_capacity(slots.len() + 2);
         pair.push(value_node);
         pair.push(type_pair);
         pair.extend(slots);
         let pair = self.array_node(self.current_block, &pair);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(type_pair);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(type_pair);
         pair
     }
 }

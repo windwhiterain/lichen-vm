@@ -80,7 +80,7 @@ where
     /// never reached unification (a non-struct instantiation callee, a missing
     /// named field, an invalid index target).  No `UnifyError` is fabricated:
     /// the diagnostic is the diary entry itself, whose [`DiaryEntry::errors`]
-    /// is empty, and which the diagnostics layer emits at its recording
+    /// is `None`, and which the diagnostics layer emits at its recording
     /// position like any other failure.
     ///
     /// `a`/`b` name the offending type node and the location it was rejected
@@ -97,7 +97,7 @@ where
         field: Option<&'static str>,
     ) {
         self.diary.push(DiaryEntry {
-            errors: Range::default(),
+            errors: None,
             seq: self.check_seq,
             a,
             b,
@@ -111,7 +111,8 @@ where
     /// Record a failed checker-issued unify: the diary entry owns `errors`,
     /// the exact range [`Module::try_unify`](lichen_lowlevel::Module::try_unify)
     /// reported, so the diagnostics layer attributes each of them to `loc`
-    /// and `kind` without guessing at ownership.
+    /// and `kind` without guessing at ownership.  Only a failed unify is
+    /// recorded — a successful one produced no range to own.
     fn record_unify(
         &mut self,
         a: NodeId,
@@ -124,7 +125,7 @@ where
         let first = self.module.unify_errors[errors.start].clone();
         let path = shape::tag_descent(&self.module, loc.path.clone(), b, &first.steps);
         self.diary.push(DiaryEntry {
-            errors,
+            errors: Some(errors),
             seq: self.check_seq,
             a,
             b,

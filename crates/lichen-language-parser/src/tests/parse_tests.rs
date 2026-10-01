@@ -830,6 +830,31 @@ fn block_errors_carry_spans() {
 }
 
 #[test]
+fn the_recovered_error_walk_does_not_overflow_a_shallow_caller_stack() {
+    // `1+1+…` is flat in the token stream but left-nested in the AST, so the
+    // recovered-error walk recurses once per term.  Unlike the in-parser call
+    // inside the 16 MiB worker, `lichen_language`'s session splice calls it on
+    // the caller's thread, which is what this shallow thread stands in for.
+    // See `docs/notes/code-audit.md` (P1-28).  Like `P1-22`'s pin, the unfixed
+    // tree aborts this process here rather than failing an assertion.
+    const TERMS: usize = 2000;
+    const STACK_BYTES: usize = 128 * 1024;
+    let tokens = lex(&("1+".repeat(TERMS) + "1")).tokens;
+    let Parsed { program, .. } = parse(&tokens);
+    let (program, blocks) = std::thread::Builder::new()
+        .stack_size(STACK_BYTES)
+        .spawn(move || {
+            let blocks = collect_error_blocks(&program);
+            (program, blocks)
+        })
+        .expect("spawn the shallow-stack thread")
+        .join()
+        .expect("the walk returns rather than aborting");
+    assert!(blocks.is_empty(), "the chain carries no recovered errors");
+    drop(program);
+}
+
+#[test]
 fn broken_statements_are_recovered() {
     // A broken binding value skips to the next separator and the rest of
     // the program is reached.

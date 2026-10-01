@@ -4,8 +4,8 @@ use stacksafe::stacksafe;
 
 use crate::{
     AnyNodeId, AnyNodeId::Dynamic as Dyn, ArrayItem, Deferral, LowOperator, LowShape, LowValue,
-    Module, Node, NodeId, Operation, PendingSide, PendingSides, Program, StaticNodeId,
-    ValueExt as _, is_unbound,
+    Module, Node, NodeId, Operation, PendingSide, PendingSides, Program, StaticModuleCache,
+    StaticNodeId, ValueExt as _, ancestors::AncestorPairs, is_unbound,
 };
 use lichen_utils::disjoint::{self, Node as _};
 use lichen_utils::extend::AsEnum;
@@ -51,7 +51,7 @@ impl<P: Program> disjoint::Node for Node<P> {
     fn meta(&self) -> &disjoint::Meta<NodeId> {
         &self.equality
     }
-    fn meta_mut(&mut self) -> &mut disjoint::Meta<NodeId> {
+    fn meta_mut(&mut self, _permit: disjoint::MetaPermit) -> &mut disjoint::Meta<NodeId> {
         &mut self.equality
     }
 }
@@ -80,7 +80,7 @@ impl<P: Program> Module<P> {
     /// union-find tree.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         let mut root = node;
-        while let Some(parent) = self.nodes[root].equality.parent {
+        while let Some(parent) = self.nodes[root].equality.parent() {
             root = parent;
         }
         self.nodes[root].value
@@ -129,7 +129,7 @@ impl<P: Program> Module<P> {
     /// stay read-only.
     fn class_root(&self, node: NodeId) -> NodeId {
         let mut root = node;
-        while let Some(parent) = self.nodes[root].equality.parent {
+        while let Some(parent) = self.nodes[root].equality.parent() {
             root = parent;
         }
         root
@@ -141,7 +141,10 @@ impl<P: Program> Module<P> {
         let LowValue::Array(array) = self.class_value(node)?.as_enum()? else {
             return None;
         };
-        Some(array.items())
+        // SAFETY: the slice points into the array payload's home arena, and the
+        // node is read out of `self.nodes` here, so its home block is alive for
+        // as long as this borrow of the module can reach it.
+        Some(unsafe { array.items() })
     }
 
     /// Refine `node`'s class low type with `shape` (the lattice join) and
@@ -270,10 +273,19 @@ impl<P: Program> Module<P> {
     pub fn write_node_value(&mut self, node: NodeId, value: Option<P::Value>) {
         self.nodes[node].value = value;
         if let Some(value) = value.filter(|v| !is_unbound(Some(*v))) {
+            // A class whose sole member is `node` — `parent` and `next` both
+            // `None`, `disjoint::Meta`'s contract for a representative with no
+            // second member — holds nobody to replicate to, so the write above
+            // is the whole effect.  See `P4-2` in `docs/notes/code-audit.md`.
+            if self.nodes[node].equality.parent().is_none()
+                && self.nodes[node].equality.next().is_none()
+            {
+                return;
+            }
             let rep = self.equality_representative(node);
             let mut member = rep;
             loop {
-                let next = self.nodes[member].meta().next;
+                let next = self.nodes[member].meta().next();
                 if self.nodes[member].operation.is_none() && is_unbound(self.nodes[member].value) {
                     self.nodes[member].value = Some(value);
                 }
@@ -320,7 +332,7 @@ impl<P: Program> Module<P> {
     /// Returns the representative of the merged class on success, or of
     /// `a`'s class when unification fails.
     pub fn unify(&mut self, a: NodeId, b: NodeId) -> NodeId {
-        let mut path = Vec::new();
+        let mut path = AncestorPairs::new();
         let mut materialized = HashMap::new();
         // The descent path, seeded empty; the root operands are carried
         // separately and recorded in each `UnifyError`'s `root_a`/`root_b`.
@@ -395,10 +407,13 @@ impl<P: Program> Module<P> {
                 else {
                     return false;
                 };
-                if array.items().len() != 2 {
+                // SAFETY: `array` is the payload of `node`, a live node of
+                // this module, so its home block has not been dropped.
+                if unsafe { array.items() }.len() != 2 {
                     return false;
                 }
-                for item in array.items() {
+                // SAFETY: as above — `node` is a live node of this module.
+                for item in unsafe { array.items() } {
                     match item.node {
                         Dyn(item) => {
                             if self.equality_representative(item) == rep {
@@ -422,7 +437,9 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = self.static_read(sref).as_enum() else {
             return false;
         };
-        let items = array.items();
+        // SAFETY: `array` is a static payload read through `sref`, whose home
+        // module is registered — the registration pins its arena.
+        let items = unsafe { array.items() };
         items.len() == 2
             && matches!(items[1].node, AnyNodeId::Static(tail) if tail.module == sref.module && tail.index == sref.index)
     }
@@ -435,7 +452,7 @@ impl<P: Program> Module<P> {
         &mut self,
         a: AnyNodeId,
         b: AnyNodeId,
-        path: &mut Vec<(NodeId, NodeId)>,
+        path: &mut AncestorPairs<NodeId>,
         materialized: &mut HashMap<StaticNodeId, NodeId>,
         steps: &mut Vec<UnifyStep>,
         root: (NodeId, NodeId),
@@ -447,7 +464,7 @@ impl<P: Program> Module<P> {
         if ra == rb {
             return true;
         }
-        if path.contains(&(ra, rb)) || path.contains(&(rb, ra)) {
+        if path.contains(ra, rb) {
             self.record_error(ra, rb, steps, root);
             return false;
         }
@@ -532,11 +549,11 @@ impl<P: Program> Module<P> {
                         pure_cell: self.class_is_pure_cell(rb),
                     },
                 };
-                if let Some(verdict) = P::defer_pending(self, &sides) {
-                    if verdict == Deferral::Merge {
-                        self.add_equality(ra, rb);
-                        return true;
-                    }
+                if let Some(verdict) = P::defer_pending(self, &sides)
+                    && verdict == Deferral::Merge
+                {
+                    self.add_equality(ra, rb);
+                    return true;
                 }
                 // A pending *field/positional read* unified against another
                 // pending field read — both over (ultimately) unbound
@@ -566,7 +583,11 @@ impl<P: Program> Module<P> {
         );
         match pair {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                let (left, right) = (pa.items(), pb.items());
+                // SAFETY: `pa`/`pb` are the payloads of the reachable class
+                // representatives `ra`/`rb`, both live nodes of this module, so
+                // their home blocks stay alive across the recursion below —
+                // nothing in the descent releases a block.
+                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                 if left.len() != right.len() {
                     self.record_error(ra, rb, steps, root);
                     return false;
@@ -578,7 +599,7 @@ impl<P: Program> Module<P> {
                     self.add_equality(ra, rb);
                     return true;
                 }
-                path.push((ra, rb));
+                path.insert(ra, rb);
                 let mut ok = true;
                 for (i, (na, nb)) in left.iter().zip(right.iter()).enumerate() {
                     // Record the descent step before recursing, so the deep
@@ -596,7 +617,7 @@ impl<P: Program> Module<P> {
                         break;
                     }
                 }
-                path.pop();
+                path.remove(ra, rb);
                 if ok {
                     self.add_equality(ra, rb);
                 }
@@ -651,7 +672,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 return true;
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return false;
             };
             member = next;
@@ -672,7 +693,7 @@ impl<P: Program> Module<P> {
             {
                 return false;
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return true;
             };
             member = next;
@@ -686,6 +707,9 @@ impl<P: Program> Module<P> {
     /// concrete value or operation is not a skeleton, and binding a
     /// computation onto it would corrupt it.
     fn class_is_skeleton(&self, rep: NodeId) -> bool {
+        // One resolution cache for the whole class walk: an array member's
+        // static elements usually name one module.
+        let mut cache = StaticModuleCache::new();
         let mut member = rep;
         loop {
             if self.nodes[member].operation.is_some() {
@@ -695,18 +719,20 @@ impl<P: Program> Module<P> {
                 None => {}
                 Some(LowValue::Parameterized) => {}
                 Some(LowValue::Array(array)) => {
-                    let items = array.items();
+                    // SAFETY: `array` is the payload of `member`, a live node
+                    // of this module, so its home block has not been dropped.
+                    let items = unsafe { array.items() };
                     let mut seen = HashSet::new();
                     if items
                         .iter()
-                        .any(|item| !self.value_is_skeleton(item.node, &mut seen))
+                        .any(|item| !self.value_is_skeleton(&mut cache, item.node, &mut seen))
                     {
                         return false;
                     }
                 }
                 _ => return false,
             }
-            let Some(next) = self.nodes[member].meta().next else {
+            let Some(next) = self.nodes[member].meta().next() else {
                 return true;
             };
             member = next;
@@ -717,24 +743,30 @@ impl<P: Program> Module<P> {
     /// skeletons; `seen` cuts the cycle of a self-referential structure
     /// (which is a skeleton only if its own elements are).  A static ref is
     /// a decided leaf: its solved flag says whether it reads `Parameterized`
-    /// (a skeleton position) or concrete (not).
-    fn value_is_skeleton(&self, node: AnyNodeId, seen: &mut HashSet<AnyNodeId>) -> bool {
+    /// (a skeleton position) or concrete (not).  `cache` is the enclosing
+    /// walk's static-module resolution cache.
+    fn value_is_skeleton(
+        &self,
+        cache: &mut StaticModuleCache<P>,
+        node: AnyNodeId,
+        seen: &mut HashSet<AnyNodeId>,
+    ) -> bool {
         if !seen.insert(node) {
             return true;
         }
         let ok = match node {
-            AnyNodeId::Static(sref) => {
-                self.static_module(sref.module).nodes[sref.index.index].parameterized
-            }
+            AnyNodeId::Static(sref) => cache.node_parameterized(self, sref),
             Dyn(node) => {
                 self.nodes[node].operation.is_none()
                     && match self.nodes[node].value.and_then(|value| value.as_enum()) {
                         None => true,
                         Some(LowValue::Parameterized) => true,
-                        Some(LowValue::Array(array)) => array
-                            .items()
+                        // SAFETY: `array` is the payload of `node`, a live node
+                        // of this module, so its home block has not been
+                        // dropped.
+                        Some(LowValue::Array(array)) => unsafe { array.items() }
                             .iter()
-                            .all(|item| self.value_is_skeleton(item.node, seen)),
+                            .all(|item| self.value_is_skeleton(cache, item.node, seen)),
                         _ => false,
                     }
             }
@@ -756,7 +788,7 @@ impl<P: Program> Module<P> {
             return false;
         };
         let mut n = target;
-        while let Some(parent) = self.nodes[n].equality.parent {
+        while let Some(parent) = self.nodes[n].equality.parent() {
             n = parent;
         }
         n == rep
@@ -776,7 +808,9 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(array)) = operands.as_enum() else {
             return None;
         };
-        let operands = array.items();
+        // SAFETY: `array` is the payload of `operand`, a live node of this
+        // module, so its home block has not been dropped.
+        let operands = unsafe { array.items() };
         if operands.len() != 2 {
             return None;
         }
@@ -788,7 +822,12 @@ impl<P: Program> Module<P> {
         let Some(LowValue::Array(container_ptr)) = container_value.as_enum() else {
             return None;
         };
-        container_ptr.items().get(index).map(|item| item.node)
+        // SAFETY: `container_ptr` is the array payload of a live node of this
+        // module (read through `Self::node_value` just above), so its home
+        // block has not been dropped.
+        unsafe { container_ptr.items() }
+            .get(index)
+            .map(|item| item.node)
     }
 
     /// Whether `rep`'s class holds a *pending field/positional read*: an
@@ -817,7 +856,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 return Some(member);
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
     }
 
@@ -906,12 +945,12 @@ impl<P: Program> Module<P> {
     fn class_committed_value(&self, rep: NodeId) -> Option<P::Value> {
         let mut member = rep;
         loop {
-            if let Some(value) = self.nodes[member].value {
-                if !is_unbound(Some(value)) {
-                    return Some(value);
-                }
+            if let Some(value) = self.nodes[member].value
+                && !is_unbound(Some(value))
+            {
+                return Some(value);
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
     }
 
@@ -927,7 +966,7 @@ impl<P: Program> Module<P> {
             if self.nodes[member].operation.is_some() && is_unbound(self.nodes[member].value) {
                 break;
             }
-            member = self.nodes[member].meta().next?;
+            member = self.nodes[member].meta().next()?;
         }
         let block = self.nodes[member].block;
         // Capture the value the class already committed *before* forcing — the
@@ -946,7 +985,7 @@ impl<P: Program> Module<P> {
         // (it binds to the computed result); a concrete conflict is the
         // deferred error surfacing now, at the moment the computation ran.
         if let Some(prior) = prior {
-            let mut path = Vec::new();
+            let mut path = AncestorPairs::new();
             if !self.reconcile_value(prior, value, &mut path) {
                 self.unify_errors.push(UnifyError {
                     root_a: rep,
@@ -978,7 +1017,7 @@ impl<P: Program> Module<P> {
         &self,
         a: P::Value,
         b: P::Value,
-        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+        path: &mut AncestorPairs<AnyNodeId>,
     ) -> bool {
         // A free (unbound) cell matches anything — it resolves by binding.
         if is_unbound(Some(a)) || is_unbound(Some(b)) {
@@ -986,7 +1025,10 @@ impl<P: Program> Module<P> {
         }
         match (a.as_enum(), b.as_enum()) {
             (Some(LowValue::Array(pa)), Some(LowValue::Array(pb))) => {
-                let (left, right) = (pa.items(), pb.items());
+                // SAFETY: `pa`/`pb` are values the caller read out of live
+                // nodes of this module (`Self::node_value`), so their home
+                // blocks have not been dropped.
+                let (left, right) = (unsafe { pa.items() }, unsafe { pb.items() });
                 left.len() == right.len()
                     && left
                         .iter()
@@ -1002,22 +1044,22 @@ impl<P: Program> Module<P> {
         &self,
         a: AnyNodeId,
         b: AnyNodeId,
-        path: &mut Vec<(AnyNodeId, AnyNodeId)>,
+        path: &mut AncestorPairs<AnyNodeId>,
     ) -> bool {
         if a == b {
             return true;
         }
-        if path.contains(&(a, b)) || path.contains(&(b, a)) {
+        if path.contains(a, b) {
             return true;
         }
-        path.push((a, b));
+        path.insert(a, b);
         let ok = match (self.node_value(a), self.node_value(b)) {
             (Some(va), Some(vb)) => self.reconcile_value(va, vb, path),
             // A node without a value is unknown (free or released) — a
             // wildcard, never a conflict.
             _ => true,
         };
-        path.pop();
+        path.remove(a, b);
         ok
     }
 
@@ -1067,7 +1109,10 @@ fn observed_low_shape(value: impl AsEnum<LowValue>) -> Option<LowShape> {
         LowValue::USize(_) => Some(LowShape::USize),
         LowValue::Array(array) => Some(LowShape::Array(
             Box::new(LowShape::Unknown),
-            array.items().len(),
+            // SAFETY: only the length is read, and the caller passes a value
+            // it is holding on this borrow of the module, so the payload's home
+            // arena is alive for the read.
+            unsafe { array.items().len() },
         )),
         LowValue::Table(_) => Some(LowShape::Table(
             Box::new(LowShape::Unknown),

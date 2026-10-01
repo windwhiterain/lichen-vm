@@ -1,9 +1,9 @@
 [package]
 name = "lichen-utils"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [dependencies]
-sha2 = "0.10"
-slotmap = "1.1.1"
-stacksafe = "1"
+sha2.workspace = true
+slotmap.workspace = true
+stacksafe.workspace = true

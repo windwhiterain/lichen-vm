@@ -1,8 +1,9 @@
 # README example sync
 
 > Status: current
-> Points at: `crates/lichen-language/src/readme.rs` (the renderer), `src/bin/sync-readme.rs`
-> (the on-demand command), `tests/readme.rs` (the self-healing check), and the
+> Points at: `crates/lichen-tools/src/readme.rs` (the renderer),
+> `crates/lichen-tools/src/bin/sync-readme.rs` (the on-demand command),
+> `crates/lichen-language/tests/readme.rs` (the self-healing check), and the
 > `examples/` tree itself. The `@{…@}` block *syntax* is the spec's business:
 > [language-spec.md §2.2](../language-spec.md).
 
@@ -12,6 +13,11 @@ drift from what the language actually prints. Each example is shown as its whole
 file, `@{…@}` block and all; the block's `output = "…"` metadata is the program's *real*
 output, so the README carries verifiable truth rather than a promise, and each program's
 own file documents exactly what it evaluates to.
+
+The tooling lives in **`lichen-tools`**, a crate of its own: it is repository maintenance,
+not a compiler surface, so an embedder of `lichen-language` links neither the generator nor
+its `CARGO_MANIFEST_DIR`-relative tree walk (`P2-6`). A run outside the repository — the
+relative `examples/` absent — reports the unreadable path and exits non-zero.
 
 ## Why it exists
 
@@ -39,7 +45,7 @@ in the block, not hard-coded in the renderer.
 
 ## Keeping it in sync
 
-- `cargo run -p lichen-language --bin sync-readme` regenerates and writes the section on
+- `cargo run -p lichen-tools --bin sync-readme` regenerates and writes the section on
   demand — run it right after changing an example to commit the result.
 - `cargo test` self-heals: `tests/readme.rs` resyncs the README and the `output =`
   metadata in place on drift, so a stale README or stale metadata fixes itself on the
@@ -48,5 +54,5 @@ in the block, not hard-coded in the renderer.
 ## Where the detail lives
 
 The rendering rules and the marker logic are documented in the `readme` module's rustdoc
-(`src/readme.rs`); this note is the "what/why" and the commands. The `order` / `output` /
-prose metadata that feed this are covered in [packages.md](packages.md).
+(`crates/lichen-tools/src/readme.rs`); this note is the "what/why" and the commands. The
+`order` / `output` / prose metadata that feed this are covered in [packages.md](packages.md).

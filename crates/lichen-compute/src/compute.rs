@@ -58,6 +58,7 @@ use lichen_lowlevel::{
     AnyFunctionId, AnyNodeId, ArrayItem, BlockId, LowOperator, LowShape, LowValue, Module,
     ModuleKey, NodeId, OperatorExt, Program, StaticModule,
 };
+use lichen_utils::disjoint;
 use lichen_utils::extend::AsEnum;
 
 /// The program-generic bounds the kernel-safe JIT requires.
@@ -321,6 +322,24 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue> + ValueType,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
+    /// The compute leaf's applicability policy: a **kernel** apply is the one
+    /// lowlevel `Apply` this vocabulary can lower, as a cross-kernel call, so
+    /// it stays lazy instead of being refused.  Both halves of the answer are
+    /// the JIT's own predicate: [`kernel_id_of`] for a kernel whose value is
+    /// decided — the same call `emit_cross_kernel_call` needs to emit — and
+    /// [`pending_kernel`] for the struct pair whose value slot the lowlevel
+    /// consults before the deep pass has evaluated it.  A static node is never
+    /// a kernel: a kernel artifact is process-local, so a frozen module
+    /// carries none.
+    fn is_callable(module: &Module<P>, callee: AnyNodeId) -> bool {
+        match callee {
+            AnyNodeId::Dynamic(node) => {
+                kernel_id_of(module, node).is_some() || pending_kernel(module, node)
+            }
+            AnyNodeId::Static(_) => false,
+        }
+    }
+
     fn run(&self, operand: P::Value, block: BlockId, module: &mut Module<P>) -> P::Value {
         match self {
             ComputeOperator::Jit => {
@@ -365,7 +384,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Launch expects an operand array of [kernel, arg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Kernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -406,7 +428,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Call expects an operand array of [kernel, arg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Kernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -466,7 +491,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("ParLaunch expects an operand array of [kernel, cfg]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; the note covers this arm's `items()`
+                // calls, all of live nodes of `module`.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::ParKernel(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -478,7 +506,8 @@ where
                 let Ok(cfg_node) = dyn_node(operands[1].node) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
-                let Some(cfg_items) = module.array_items(cfg_node) else {
+                // SAFETY: as above — `cfg_node` names a live node of `module`.
+                let Some(cfg_items) = (unsafe { module.array_items(cfg_node) }) else {
                     return <P::Value as From<LowValue>>::from(LowValue::Parameterized);
                 };
                 // count = cfg(0), an `Int`/`USize`.
@@ -494,7 +523,8 @@ where
                 let mut inputs: Vec<Vec<i64>> = Vec::new();
                 if let Some(buf_tuple) = cfg_items.get(1)
                     && let Ok(buf_tuple_node) = dyn_node(buf_tuple.node)
-                    && let Some(buf_items) = module.array_items(buf_tuple_node)
+                    // SAFETY: `buf_tuple_node` names a live node of `module`.
+                    && let Some(buf_items) = (unsafe { module.array_items(buf_tuple_node) })
                 {
                     for item in buf_items {
                         match module
@@ -535,7 +565,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("Read expects an operand array of [buffer, index]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Buffer(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -573,7 +606,10 @@ where
                 let Some(LowValue::Array(operands)) = AsEnum::<LowValue>::as_enum(&operand) else {
                     unreachable!("BufferCollect expects an operand array of [buffer]")
                 };
-                let operands = operands.items();
+                // SAFETY: `operands` is the operand array the VM just evaluated
+                // for this operation; its home block is alive for the duration
+                // of the run.
+                let operands = unsafe { operands.items() };
                 let Some(ComputeValue::Buffer(id)) = module
                     .node_value(operands[0].node)
                     .and_then(|v| AsEnum::<ComputeValue>::as_enum(&v))
@@ -669,10 +705,10 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     for slot in params {
-        if let Some(path) = param_path(module, slot.pair, node) {
-            if let Ok(offset) = flatten_offset(&slot.shape, &path) {
-                return Some((slot.base + offset) as u32);
-            }
+        if let Some(path) = param_path(module, slot.pair, node)
+            && let Ok(offset) = flatten_offset(&slot.shape, &path)
+        {
+            return Some((slot.base + offset) as u32);
         }
     }
     None
@@ -721,14 +757,18 @@ where
     // value node (the checker leaves a direct kernel-apply's codomain unbound,
     // so it stores the body's value node directly instead of a pair) is used
     // as the value itself.
-    let ret_value = match module.array_items(ret) {
+    // SAFETY: `ret` is a live node of `module`; nothing in this crate calls
+    // `Module::drop_block`.
+    let ret_value = match unsafe { module.array_items(ret) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => ret,
     };
     // The parameter's two cells, read once and released before the pass needs
     // the module mutably.  `None` for the type cell is not a failure here — it
     // is an undecided domain, and the refusal below says so.
-    let (param_value, param_type) = match module.array_items(param_pair) {
+    // SAFETY: `param_pair` is a live node of `module`; nothing in this crate
+    // calls `Module::drop_block`.
+    let (param_value, param_type) = match unsafe { module.array_items(param_pair) } {
         Some(items) if !items.is_empty() => (
             dyn_node(items[PAIR_VALUE_SLOT].node)?,
             items.get(PAIR_TYPE_SLOT).map(|item| item.node),
@@ -789,7 +829,8 @@ where
     let body = module.functions[fid].r#return;
     // The kernel's result is the index function's body value (a `Write`, v1
     // single output), through a `[value, type]` pair or a bare value node.
-    let ret_value = match module.array_items(body) {
+    // SAFETY: `body` is a live node of `module`.
+    let ret_value = match unsafe { module.array_items(body) } {
         Some(items) if !items.is_empty() => dyn_node(items[0].node)?,
         _ => body,
     };
@@ -1050,7 +1091,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let mut root = node;
-    while let Some(parent) = module.nodes[root].equality.parent {
+    while let Some(parent) = module.node_equality(root).parent() {
         root = parent;
     }
     root
@@ -1064,6 +1105,11 @@ where
 /// (a kernel call's result, a `launch` argument); the emitter reaches the
 /// computation through the class.  Returns `None` when the class has no such
 /// member — the value is genuinely opaque (an uncomputable leaf).
+///
+/// The walk is the class's own member list, not a scan of the module's whole
+/// node table.  The table holds every kernel's nodes while the emitter is
+/// compiling one kernel, and this call is made per kernel that reaches a bare
+/// cell, so scanning it made codegen quadratic in the number of kernels.
 fn class_computation_node<P>(module: &Module<P>, node: NodeId) -> Option<NodeId>
 where
     P: Program,
@@ -1071,17 +1117,14 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let root = equality_rep(module, node);
-    for (n, nd) in &module.nodes {
-        if equality_rep(module, n) != root {
-            continue;
-        }
-        if let Some(op) = nd.operation.as_ref() {
-            if !matches!(
+    for member in disjoint::members(&module.nodes, root) {
+        if let Some(op) = module.node_operation(member).as_ref()
+            && !matches!(
                 AsEnum::<LowOperator>::as_enum(&op.operator),
                 Some(LowOperator::Index)
-            ) {
-                return Some(n);
-            }
+            )
+        {
+            return Some(member);
         }
     }
     None
@@ -1103,16 +1146,13 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        match AsEnum::<LowValue>::as_enum(&value) {
-            Some(LowValue::USize(n)) => {
-                body.push(KernelInstr::Const(n as i64));
-                return Ok(());
-            }
-            _ => {}
-        }
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
+        && let Some(LowValue::USize(n)) = AsEnum::<LowValue>::as_enum(&value)
+    {
+        body.push(KernelInstr::Const(n as i64));
+        return Ok(());
     }
-    let Some(operation) = module.nodes[node].operation else {
+    let Some(operation) = module.node_operation(node) else {
         // A bare value cell (no value specialization, no operator).  If it is
         // in one of the enclosing parameters' equality classes, it is a
         // whole-parameter read: the deep pass's apply-clone *unifies* a
@@ -1157,10 +1197,10 @@ where
                 // `0` index and `pair` a `[value, type]` pair.  Emit the
                 // pair's value slot instead of treating the extraction as a
                 // real index.
-                if usize_value(module, index) == Some(0) {
-                    if let Some(value_node) = value_of_node(module, node) {
-                        return emit_node(module, params, value_node, body);
-                    }
+                if usize_value(module, index) == Some(0)
+                    && let Some(value_node) = value_of_node(module, node)
+                {
+                    return emit_node(module, params, value_node, body);
                 }
                 // A constant index into a concrete array value selects that
                 // element — the wrapper's slot-read destructuring
@@ -1168,33 +1208,35 @@ where
                 // `x(0)/x(1)/x(2)`) leaves `Index(arg_array, k)` ops whose
                 // target is a materialized array value.  `value_of` above only
                 // peels index 0, so handle every constant `k` here.
-                if let Some(k) = usize_value(module, index) {
-                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        if let Some(items) = module.array_items(array_value) {
-                            if let Some(item) = items.get(k) {
-                                return emit_node(module, params, dyn_node(item.node)?, body);
-                            }
-                        }
+                if let Some(k) = usize_value(module, index)
+                    && let Some(array_value) = value_of_node(module, target).or(Some(target))
+                {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    if let Some(items) = unsafe { module.array_items(array_value) }
+                        && let Some(item) = items.get(k)
+                    {
+                        return emit_node(module, params, dyn_node(item.node)?, body);
                     }
                 }
                 // A conditional `if c then a else b` lowers to `[b, a][c]` — a
                 // 2-element array value indexed by a *computed* (non-constant)
                 // selector, a wasm `select`.  The array may be reached through
                 // a value_of extraction; look through it.
-                if usize_value(module, index).is_none() {
-                    if let Some(array_value) = value_of_node(module, target).or(Some(target)) {
-                        if let Some(items) = module.array_items(array_value) {
-                            if items.len() == 2 {
-                                let then_node = dyn_node(items[1].node)?;
-                                let else_node = dyn_node(items[0].node)?;
-                                emit_node(module, params, then_node, body)?;
-                                emit_node(module, params, else_node, body)?;
-                                emit_node(module, params, index, body)?;
-                                body.push(KernelInstr::I32WrapI64);
-                                body.push(KernelInstr::Select);
-                                return Ok(());
-                            }
-                        }
+                if usize_value(module, index).is_none()
+                    && let Some(array_value) = value_of_node(module, target).or(Some(target))
+                {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    if let Some(items) = unsafe { module.array_items(array_value) }
+                        && items.len() == 2
+                    {
+                        let then_node = dyn_node(items[1].node)?;
+                        let else_node = dyn_node(items[0].node)?;
+                        emit_node(module, params, then_node, body)?;
+                        emit_node(module, params, else_node, body)?;
+                        emit_node(module, params, index, body)?;
+                        body.push(KernelInstr::I32WrapI64);
+                        body.push(KernelInstr::Select);
+                        return Ok(());
                     }
                 }
                 return Err(
@@ -1280,7 +1322,7 @@ where
                 // `Index` emitter peels a constant array element.
                 let mut buf = buf;
                 for _ in 0..8 {
-                    let target_oi = match module.nodes[buf].operation.as_ref() {
+                    let target_oi = match module.node_operation(buf).as_ref() {
                         Some(op)
                             if matches!(
                                 AsEnum::<LowOperator>::as_enum(&op.operator),
@@ -1300,7 +1342,8 @@ where
                     let Some(array_value) = value_of_node(module, target).or(Some(target)) else {
                         break;
                     };
-                    let Some(items) = module.array_items(array_value) else {
+                    // SAFETY: `array_value` is a live node of `module`.
+                    let Some(items) = (unsafe { module.array_items(array_value) }) else {
                         break;
                     };
                     let Some(item) = items.get(k) else { break };
@@ -1355,7 +1398,7 @@ where
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
     let cfg_value = params.first()?.value;
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
@@ -1364,7 +1407,7 @@ where
     }
     let (target, index) = operand_pair(module, operation.operand).ok()?;
     let k = usize_value(module, index)?;
-    let target_op = module.nodes[target].operation?;
+    let target_op = module.node_operation(target)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&target_op.operator),
         Some(LowOperator::Index)
@@ -1430,7 +1473,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let Some(operation) = module.nodes[node].operation else {
+    let Some(operation) = module.node_operation(node) else {
         return false;
     };
     if !matches!(
@@ -1479,7 +1522,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
@@ -1491,14 +1534,15 @@ where
         return None;
     }
     // A concrete `[value, type]` pair value → its value slot (element 0).
-    if let Some(items) = module.array_items(target) {
+    // SAFETY: `target` is a live node of `module`.
+    if let Some(items) = unsafe { module.array_items(target) } {
         return dyn_node(items.first()?.node).ok();
     }
     // An *operator* node as the target — e.g. `Index(apply_op, 0)` where the
     // checker peels a call result (`value_of` over an `Apply` expression).  The
     // operator's result is the pair's value, so emit the operator directly; its
     // codegen produces the scalar (a cross-kernel call, an arithmetic op, ...).
-    if module.nodes[target].operation.is_some() {
+    if module.node_operation(target).is_some() {
         return Some(target);
     }
     None
@@ -1515,19 +1559,21 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node)) {
-        if let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value) {
-            return Some(kid);
-        }
+    if let Some(value) = module.node_value(AnyNodeId::Dynamic(node))
+        && let Some(ComputeValue::Kernel(kid)) = AsEnum::<ComputeValue>::as_enum(&value)
+    {
+        return Some(kid);
     }
-    if let Some(inner) = value_of_node(module, node) {
-        if let Some(kid) = kernel_id_of(module, inner) {
-            return Some(kid);
-        }
+    if let Some(inner) = value_of_node(module, node)
+        && let Some(kid) = kernel_id_of(module, inner)
+    {
+        return Some(kid);
     }
     // A kernel *struct value* `[native, sig]` reached by value (not through an
     // `Index` op): its element 0 is the bare `.native` kernel artifact.
-    if let Some(items) = module.array_items(node)
+    // SAFETY: `node` is a live node of `module`; the note covers this
+    // function's `items()` calls.
+    if let Some(items) = (unsafe { module.array_items(node) })
         && let Some(first) = items.first()
         && let Ok(first) = dyn_node(first.node)
         && let Some(kid) = kernel_id_of(module, first)
@@ -1536,17 +1582,58 @@ where
     }
     // A kernel struct `.native` field read: `Index(struct, 0)`, where the
     // struct value's element 0 is the bare kernel artifact.
-    if let Some(operation) = module.nodes[node].operation {
-        if let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
+    if let Some(operation) = module.node_operation(node)
+        && let Some(LowOperator::Index) = AsEnum::<LowOperator>::as_enum(&operation.operator)
             && let Ok((target, index)) = operand_pair(module, operation.operand)
             && usize_value(module, index) == Some(0)
-            && let Some(items) = module.array_items(target)
+            // SAFETY: `target` is a live node of `module`.
+            && let Some(items) = (unsafe { module.array_items(target) })
             && let Ok(first) = dyn_node(items.first()?.node)
-        {
-            return kernel_id_of(module, first);
-        }
+    {
+        return kernel_id_of(module, first);
     }
     None
+}
+
+/// Whether `node` is a kernel **in the making** — the undecided half of
+/// [`kernel_id_of`], for [`ComputeOperator::is_callable`], which the lowlevel
+/// consults in the middle of the deep pass, before the struct pair's value slot
+/// has been evaluated.  A `Jit` that has not run yet counts as the kernel it
+/// will produce, and the walk follows the same two value edges `kernel_id_of`
+/// follows ([`value_of_node`]'s `Index(pair, 0)` extraction and a struct
+/// pair's element 0).  The answer is therefore a superset of the JIT's: it can
+/// keep a callee lazy that later turns out not to be a kernel (the conservative
+/// direction), and never refuses one the JIT would lower.
+fn pending_kernel<P>(module: &Module<P>, node: NodeId) -> bool
+where
+    P: Program,
+    P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
+    P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
+{
+    // The one operator that produces a `Kernel`; a value that is still lazy
+    // here is a function the definition pass has not run yet.
+    if module.node_operation(node).is_some_and(|operation| {
+        matches!(
+            AsEnum::<ComputeOperator>::as_enum(&operation.operator),
+            Some(ComputeOperator::Jit)
+        )
+    }) {
+        return true;
+    }
+    if let Some(inner) = value_of_node(module, node)
+        && pending_kernel(module, inner)
+    {
+        return true;
+    }
+    // SAFETY: `node` is a live node of `module`.
+    if let Some(items) = unsafe { module.array_items(node) }
+        && let Some(first) = items.first()
+        && let Ok(first) = dyn_node(first.node)
+        && pending_kernel(module, first)
+    {
+        return true;
+    }
+    false
 }
 
 /// The *value* node behind a `[value, type]` pair stored as a **concrete array
@@ -1560,7 +1647,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let items = module.array_items(node)?;
+    // SAFETY: `node` is a live node of `module`.
+    let items = unsafe { module.array_items(node) }?;
     dyn_node(items.first()?.node).ok()
 }
 
@@ -1578,7 +1666,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let operation = module.nodes[node].operation?;
+    let operation = module.node_operation(node)?;
     if !matches!(
         AsEnum::<LowOperator>::as_enum(&operation.operator),
         Some(LowOperator::Index)
@@ -1650,7 +1738,9 @@ where
             true
         }
         Some(LowValue::Array(arr)) => {
-            for item in arr.items() {
+            // SAFETY: `arr` is the payload of a value read from a live node of
+            // `module`.
+            for item in unsafe { arr.items() } {
                 if !collect_args(module, item.node, out) {
                     return false;
                 }
@@ -1684,9 +1774,8 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    module
-        .array_items(node)
-        .ok_or_else(|| "operand is not an array value".into())
+    // SAFETY: `node` is a live node of `module`.
+    unsafe { module.array_items(node) }.ok_or_else(|| "operand is not an array value".into())
 }
 
 /// The `[function, argument]` of an `Apply` operand array.  The checker's
@@ -1716,6 +1805,132 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
     }
 }
 
+/// The compiled **module cache** — the launch paths' derived-data cache: an
+/// assembled, validated wasm module per launch, so a repeated launch of the
+/// same kernel does not re-assemble and re-validate it.
+///
+/// The key is everything the module depends on: the launch mode (which owns
+/// the *fragment set* — [`run_kernel`] assembles the root's relative launch
+/// set, [`run_parallel_kernel`] one parallel fragment) and the root
+/// [`KernelId`].  The id alone is sufficient because a registered fragment is
+/// immutable and an id is never reused, so a key's assembly is fixed for the
+/// process's life; it is also process-unique, so two different programs can
+/// never share an entry — only a repeated launch of one kernel hits.  Both
+/// facts are the kernel registry's contract (see its doc): the day an entry
+/// can be removed or replaced there, this cache must be keyed on the fragments
+/// themselves or cleared with it.
+///
+/// An entry here is *derived*: it can always be rebuilt from the fragment, so
+/// eviction cannot lose anything a value refers to — unlike the kernel and
+/// buffer registries, whose entries **are** the referents of `Kernel`/
+/// `ParKernel`/`Buffer` values.  That is why a bound with eviction is sound
+/// here and not there.
+///
+/// The [`wasmi::Engine`] is cached **with** its module and deliberately not
+/// shared process-wide: wasmi's default `CompilationMode::LazyTranslation`
+/// validates eagerly and translates each function on first use into the
+/// **engine's** code map, which is append-only and freed only with the engine.
+/// Dropping an evicted entry's engine is therefore what frees its translated
+/// code, and one shared engine would turn this cache into a second unbounded
+/// accumulator — the defect it exists to avoid.
+static MODULES: OnceLock<Mutex<ModuleCache>> = OnceLock::new();
+fn modules() -> &'static Mutex<ModuleCache> {
+    MODULES.get_or_init(Default::default)
+}
+
+/// How many compiled modules stay resident.  The entries are rebuildable, so
+/// this only trades recompiles against memory; it is a bound, not a policy.
+const MAX_CACHED_MODULES: usize = 64;
+
+/// Which launch assembled a cached module.  The fragment set is the mode's, so
+/// the mode is part of the cache key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum LaunchMode {
+    /// [`run_kernel`]: the root's relative launch set.
+    Kernel,
+    /// [`run_parallel_kernel`]: the single parallel fragment.
+    Parallel,
+}
+
+/// One cached module and the engine that compiled it.
+struct CachedModule {
+    /// The engine the module was compiled by — see [`MODULES`] for why it is
+    /// cached here rather than shared.
+    engine: wasmi::Engine,
+    module: wasmi::Module,
+    /// Insertion stamp: the eviction order, oldest (smallest) first.
+    stamp: u64,
+}
+
+/// The bounded map behind [`MODULES`].
+#[derive(Default)]
+struct ModuleCache {
+    entries: HashMap<(LaunchMode, KernelId), CachedModule>,
+    next_stamp: u64,
+}
+
+impl ModuleCache {
+    /// A resident module, cloned out (both are `Arc` handles) so the caller
+    /// does not hold the lock while instantiating.
+    fn get(&self, key: (LaunchMode, KernelId)) -> Option<(wasmi::Engine, wasmi::Module)> {
+        self.entries
+            .get(&key)
+            .map(|cached| (cached.engine.clone(), cached.module.clone()))
+    }
+
+    /// Insert a freshly compiled module, evicting the oldest entry once the
+    /// bound is reached.  Replacing a resident key evicts nothing: the assembly
+    /// for a key is deterministic, so the entry is the same module.
+    fn insert(
+        &mut self,
+        key: (LaunchMode, KernelId),
+        engine: wasmi::Engine,
+        module: wasmi::Module,
+    ) {
+        if self.entries.len() >= MAX_CACHED_MODULES
+            && !self.entries.contains_key(&key)
+            && let Some(oldest) = self
+                .entries
+                .iter()
+                .min_by_key(|(_, cached)| cached.stamp)
+                .map(|(key, _)| *key)
+        {
+            self.entries.remove(&oldest);
+        }
+        let stamp = self.next_stamp;
+        self.next_stamp += 1;
+        self.entries.insert(
+            key,
+            CachedModule {
+                engine,
+                module,
+                stamp,
+            },
+        );
+    }
+}
+
+/// The compiled module for `(mode, root)`, assembling and compiling it on a
+/// miss.  `assemble` is the one half the launch paths do differently.
+fn cached_module(
+    mode: LaunchMode,
+    root: KernelId,
+    assemble: impl FnOnce() -> Result<Vec<u8>, String>,
+) -> Result<(wasmi::Engine, wasmi::Module), String> {
+    let key = (mode, root);
+    if let Some(cached) = modules().lock().unwrap().get(key) {
+        return Ok(cached);
+    }
+    let bytes = assemble()?;
+    let engine = wasmi::Engine::default();
+    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+    modules()
+        .lock()
+        .unwrap()
+        .insert(key, engine.clone(), module.clone());
+    Ok((engine, module))
+}
+
 /// Execute a compiled kernel on an argument vector with wasmi, returning the
 /// `usize` result.  The dynamic [`wasmi::Func::call`] API accepts any number of
 /// `i64` inputs, so a tuple-domain kernel (arity N) launches with N arguments
@@ -1724,10 +1939,38 @@ fn dyn_node(id: AnyNodeId) -> Result<NodeId, String> {
 /// The kernel's **relative launch set** — the kernel itself plus every kernel
 /// it (transitively) cross-calls, discovered by scanning each fragment's
 /// cross-kernel instructions — is assembled into one wasm module (launch-time
-/// assembly, the deferred linker), the root exported as `main`.
+/// assembly, the deferred linker), the root exported as `main`.  The module is
+/// fetched through [`cached_module`], so a repeat launch of the same kernel
+/// reuses it (`P1-18`).
 fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
-    // Discover the relative kernel set in BFS order: `ordered[i]` becomes wasm
-    // function index `i`; `index` maps a callee kernel-id to that index.
+    let (engine, module) = cached_module(LaunchMode::Kernel, id, || assemble_launch_set(id))?;
+    let mut store = wasmi::Store::new(&engine, ());
+    let linker = wasmi::Linker::new(&engine);
+    let instance = linker
+        .instantiate_and_start(&mut store, &module)
+        .map_err(|e| e.to_string())?;
+    let main = instance
+        .get_func(&store, "main")
+        .ok_or_else(|| "kernel has no export `main`".to_string())?;
+    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a)).collect();
+    let mut outputs = [wasmi::Val::I64(0)];
+    main.call(&mut store, &inputs, &mut outputs)
+        .map_err(|e| e.to_string())?;
+    let result = outputs[0]
+        .i64()
+        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
+    Ok(result as usize)
+}
+
+/// Assemble the wasm bytes of the root kernel's **relative launch set** — the
+/// root plus every kernel it (transitively) cross-calls.
+///
+/// The set is discovered in BFS order: `ordered[i]` becomes wasm function
+/// index `i`; `index` maps a callee kernel-id to that index.  The result is a
+/// function of the root id alone (the registry's fragments are immutable and
+/// ids are never reused), which is what makes the id a sufficient cache key
+/// for [`cached_module`].
+fn assemble_launch_set(id: KernelId) -> Result<Vec<u8>, String> {
     let mut ordered: Vec<KernelFragment> = Vec::new();
     let mut index: HashMap<KernelId, u32> = HashMap::new();
     let mut seen: HashSet<KernelId> = HashSet::new();
@@ -1758,25 +2001,7 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<usize, String> {
     }
     drop(fragments);
 
-    let bytes = assemble_module(&ordered, &index)?;
-    let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
-    let mut store = wasmi::Store::new(&engine, ());
-    let linker = wasmi::Linker::new(&engine);
-    let instance = linker
-        .instantiate_and_start(&mut store, &module)
-        .map_err(|e| e.to_string())?;
-    let main = instance
-        .get_func(&store, "main")
-        .ok_or_else(|| "kernel has no export `main`".to_string())?;
-    let inputs: Vec<wasmi::Val> = args.iter().map(|&a| wasmi::Val::I64(a as i64)).collect();
-    let mut outputs = [wasmi::Val::I64(0)];
-    main.call(&mut store, &inputs, &mut outputs)
-        .map_err(|e| e.to_string())?;
-    let result = outputs[0]
-        .i64()
-        .ok_or_else(|| "kernel `main` returned a non-i64".to_string())?;
-    Ok(result as usize)
+    assemble_module(&ordered, &index)
 }
 
 /// The execution state a parallel kernel's host imports read/write against:
@@ -1790,6 +2015,34 @@ struct ParallelState {
     output: Vec<i64>,
 }
 
+/// Assemble the wasm bytes of one **parallel** fragment — the degenerate
+/// single-fragment link (`assemble_module`, which `run_kernel` uses for a whole
+/// relative launch set).  Like [`assemble_launch_set`] this is a function of
+/// the kernel id alone, and it is the other half of [`cached_module`]'s key:
+/// the two modes assemble different fragment sets for one id.
+fn assemble_parallel_fragment(id: KernelId) -> Result<Vec<u8>, String> {
+    let fragment = kernels()
+        .lock()
+        .unwrap()
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
+    let index: HashMap<KernelId, u32> = [(id, 0)].into();
+    assemble_module(&[fragment], &index)
+}
+
+/// The most elements one `plrun` may collect — the bound on the count the
+/// program controls (the `cfg(0)` the index function is run over).
+///
+/// The count sizes the output buffer (`count` × 8 bytes = 8 MiB at the limit)
+/// and, because the kernel is called once per element, the interpreted work a
+/// single launch can do.  Both are otherwise unbounded: `2^40` is a legal
+/// `Int`, and it asks for 8 TiB and 10^12 wasm calls.  A count past the limit
+/// is **refused**, never truncated: a short buffer would be a wrong answer,
+/// and there is no diagnostic channel for a runtime refusal in this plugin's
+/// vocabulary (see `run_parallel_kernel`).
+const MAX_PARALLEL_ELEMENTS: usize = 1 << 20;
+
 /// Run a **parallel** kernel over the index range `[0, count)`, computing the
 /// index function once per index with `cfg(0) = count` and the cfg input
 /// buffers fixed, and collecting the writes into the output buffer.
@@ -1801,23 +2054,33 @@ struct ParallelState {
 /// the writes accumulate into the output buffer (last write to a slot wins, a
 /// scatter).  v1 runs sequentially (the data-parallelism is logical); a worker
 /// pool is future work.
+///
+/// `count > `[`MAX_PARALLEL_ELEMENTS`] is refused with an `Err` before the
+/// buffer is allocated.  The caller turns a refusal into the lazy
+/// (`Parameterized`) marker — this plugin's channel for every runtime refusal,
+/// since `Module::eval_errors` is a closed enum of structural value facts and
+/// `BudgetExhausted` names the apply/depth budgets; a dedicated message would
+/// be a new cross-crate variant, not a local choice.  **Queueing is not the
+/// alternative:** `plrun` is a synchronous, caller-blocking call, so there is
+/// nothing to queue onto — the choice is refuse or run.
+///
+/// The module comes from [`cached_module`].  The [`wasmi::Linker`] is
+/// deliberately rebuilt per launch rather than cached: it is the object that
+/// carries host-function bindings, so keeping it out of the cache makes "no
+/// host binding is shared between two launches" true by construction, and its
+/// cost is the two fixed registrations below.
 fn run_parallel_kernel(
     id: KernelId,
     count: usize,
     inputs: Vec<Vec<i64>>,
 ) -> Result<Vec<i64>, String> {
-    let fragment = kernels()
-        .lock()
-        .unwrap()
-        .get(&id)
-        .cloned()
-        .ok_or_else(|| format!("parallel kernel {id} is not registered"))?;
-    let ordered = vec![fragment];
-    let index: HashMap<KernelId, u32> = [(id, 0)].into();
-
-    let bytes = assemble_module(&ordered, &index)?;
-    let engine = wasmi::Engine::default();
-    let module = wasmi::Module::new(&engine, &bytes).map_err(|e| e.to_string())?;
+    if count > MAX_PARALLEL_ELEMENTS {
+        return Err(format!(
+            "parallel launch count {count} exceeds the limit of {MAX_PARALLEL_ELEMENTS} elements"
+        ));
+    }
+    let (engine, module) =
+        cached_module(LaunchMode::Parallel, id, || assemble_parallel_fragment(id))?;
     let output = vec![0i64; count];
     let mut store = wasmi::Store::new(&engine, ParallelState { inputs, output });
     let mut linker = wasmi::Linker::new(&engine);
@@ -1914,13 +2177,25 @@ impl lichen_highlevel::plugin::NativePlugin for ComputePlugin {}
 /// own embedded source.  The host names only the plugin crate and its program
 /// marker — never the plugin's op structs — so this is the composition point a
 /// package manager would generate.
+///
+/// The table is **leaked deliberately, and the leak is bounded**: the slice is
+/// nine entries of `(&'static str, &'static dyn NativeOp<$program>)`, 144 bytes
+/// on a 64-bit target, and exactly one is allocated per call.  The slice cannot
+/// be hoisted into a `static` initializer instead: a `static` may not name a
+/// type parameter, and two invocations of this macro are distinct items even
+/// when they name the same program, so no shape of `static` or `OnceLock` can be
+/// shared across them.  Caching it on the host would be no better: a table held
+/// per store serves a compilation that already happens per store, so the same
+/// single allocation is made either way.  The one call site
+/// (`PackageStore::register_compute`, reached from `PackageStore::new`) runs
+/// once per store — the store compiles its embedded wrapper source once and
+/// keeps the frozen module — so this is a fixed handful of bytes per store, not
+/// a per-compile or per-keystroke cost.
 #[macro_export]
 macro_rules! compute_native_ops {
     ($program:ty) => {{
-        // The registry is a `&'static [(&str, &dyn NativeOp<P>)]`.  A `static`
-        // of that type cannot reference a *generic* `$program` (statics are
-        // never generic), so build it per call and leak it — once per host
-        // `register_compute`, a handful of small allocations.
+        // The self-supporting `static`s below are the operator structs, which
+        // are program-independent; the leaked slice is the table above.
         static JIT: $crate::JitOp = $crate::JitOp;
         static LAUNCH: $crate::LaunchOp = $crate::LaunchOp;
         static CALL: $crate::CallOp = $crate::CallOp;

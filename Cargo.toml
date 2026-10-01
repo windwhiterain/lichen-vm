@@ -14,6 +14,8 @@ members = [
     "crates/lichen-doc",
     "crates/lichen-perspective",
     "crates/lichen-language",
+    "crates/lichen-tools",
+    "crates/lichen-compiler",
     "crates/lichen-language-server",
     "lichen-language-zed",
     "crates/lichen-package",
@@ -27,6 +29,46 @@ members = [
 # `grammar-consistency` feature is enabled, or tested directly via its manifest:
 #   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
 exclude = ["tree-sitter-lichen"]
+
+# The fields every member states identically.  A member writes
+# `version.workspace = true` / `edition.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+# Every dependency that more than one member names, stated once here and
+# inherited as `<name>.workspace = true`.  A dependency only one member uses is
+# left in that member's manifest: there is nothing to state once.
+#
+# The internal crates are all here, so the path to each is written in one place.
+# `tree-sitter-lichen` is deliberately absent — it is an excluded standalone
+# crate, not a member, so no member may inherit a path entry that would pull it
+# into this workspace (see `exclude` above).
+[workspace.dependencies]
+lichen-span = { path = "crates/lichen-span" }
+lichen-utils = { path = "crates/lichen-utils" }
+lichen-registry = { path = "crates/lichen-registry" }
+lichen-language-lex = { path = "crates/lichen-language-lex" }
+lichen-language-parser = { path = "crates/lichen-language-parser" }
+lichen-preprocess = { path = "crates/lichen-preprocess" }
+lichen-lowlevel = { path = "crates/lichen-lowlevel" }
+lichen-highlevel = { path = "crates/lichen-highlevel" }
+lichen-compute = { path = "crates/lichen-compute" }
+lichen-render = { path = "crates/lichen-render" }
+lichen-doc = { path = "crates/lichen-doc" }
+lichen-perspective = { path = "crates/lichen-perspective" }
+lichen-language = { path = "crates/lichen-language" }
+lichen-tools = { path = "crates/lichen-tools" }
+lichen-package = { path = "crates/lichen-package" }
+lichen-std-native = { path = "lichen-std-native" }
+
+clap = { version = "4", features = ["derive"] }
+logos = "0.16"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+slotmap = "1.1.1"
+stacksafe = "1"
 
 # `lichen-std-native` declares its core deps as **git** deps (to this same
 # repo) so an external compose crate (a generated plugin-built compiler) can

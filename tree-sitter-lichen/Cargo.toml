@@ -24,3 +24,10 @@ tree-sitter = "0.25"
 #   cargo test --manifest-path tree-sitter-lichen/Cargo.toml
 # (the only opt-in gate is `grammar-consistency` in `lichen-language-zed`, which does pull
 # this crate in as a dep and needs the tree-sitter CLI).
+#
+# The empty table below is deliberate: it stops cargo's upward search for a workspace root
+# at this manifest. Without it, resolving this manifest from a nested worktree reaches the
+# main checkout's manifest — which does not `exclude` this path — and cargo rejects the
+# crate as believing it is in a workspace when it is not.
+
+[workspace]

@@ -97,12 +97,12 @@ impl<P: Program> Module<P> {
         cell: Option<NodeId>,
     ) -> P::Value {
         self.with_apply_frame(|module| {
-            let (r#return, parameter, asserts) = {
+            let (r#return, parameter, assert_count) = {
                 let function = &module.functions[function];
                 (
                     function.r#return,
                     function.parameter,
-                    function.asserts.clone(),
+                    function.asserts.len(),
                 )
             };
             debug_assert!(
@@ -148,7 +148,14 @@ impl<P: Program> Module<P> {
             // entry keeps the body condition as its template, which is all the
             // host needs to attribute a per-call failure (a user-facing flag, a
             // source position) through its own table.
-            for &condition in &asserts {
+            // Walked by index rather than over a clone of the list: the loop
+            // body needs `&mut module` to instantiate each condition, and the
+            // registry lives on `module` itself, so no borrow of it can be
+            // held across the call.  The list is only read here — the entries
+            // this loop adds go to `module.asserts`, the per-call registry,
+            // not to the function's own.
+            for index in 0..assert_count {
+                let condition = module.functions[function].asserts[index];
                 let instantiated = module.node_apply(condition, &mut ctx);
                 if instantiated != condition {
                     module.asserts.push(PendingAssert {
@@ -170,17 +177,13 @@ impl<P: Program> Module<P> {
                 // the pattern's internal constraints.  A single clone (just the
                 // parameter) has no topology to re-establish.
                 if ctx.remap.len() > 1 {
-                    for clones in crate::apply::regroup_clones(
+                    let groups = crate::apply::regroup_clones(
                         ctx.remap.iter().map(|(&template, &clone)| (template, clone)),
                         |template| disjoint::find(&mut module.nodes, template),
-                    )
-                    .values()
-                    {
-                        let first = clones[0];
-                        for &clone in &clones[1..] {
-                            module.unify(first, clone);
-                        }
-                    }
+                    );
+                    crate::apply::unify_clone_groups(groups, |first, clone| {
+                        module.unify(first, clone);
+                    });
                 }
                 // A failed parameter check leaves the apply's result unknown:
                 // the body must not run under a mismatched argument.
@@ -249,7 +252,14 @@ impl<P: Program> Module<P> {
         ) else {
             return;
         };
-        for (pattern_item, argument_item) in pattern.items().iter().zip(argument.items().iter()) {
+        // SAFETY: `pattern` is a live node of this module (a static ref
+        // resolves through the registered module) and `argument` is the value
+        // just evaluated from a live node; neither home block is released by
+        // the descent below.
+        for (pattern_item, argument_item) in unsafe { pattern.items() }
+            .iter()
+            .zip(unsafe { argument.items() }.iter())
+        {
             // A shallow position on either side is opaque — its subtree
             // stays lazy, so the apply's argument evaluation does not force
             // what the marker deliberately left unevaluated.
@@ -379,8 +389,11 @@ impl<P: Program> Module<P> {
                 // with the remapped node, so each call's clone honors its
                 // own markers.  A baked static reference is absolute and
                 // per-call invariant — referenced in place.
-                let items: Vec<ArrayItem> = array
-                    .items()
+                // SAFETY: `array` is the payload of `value`, the value this
+                // pass is applying; the caller holds it reachable and
+                // `node_apply` never releases a block, so its arena stays
+                // alive across the map.
+                let items: Vec<ArrayItem> = unsafe { array.items() }
                     .iter()
                     .map(|&item| ArrayItem {
                         node: match item.node {
@@ -396,8 +409,11 @@ impl<P: Program> Module<P> {
                 // The entry nodes clone like array items; the stored hash
                 // travels verbatim — a cloned key holds the same forced
                 // value, so its hash stays valid for the fresh instance.
-                let items: Vec<TableItem> = table
-                    .items()
+                // SAFETY: `table` is the payload of `value`, the value this
+                // pass is applying; the caller holds it reachable and
+                // `node_apply` never releases a block, so its arena stays
+                // alive across the map.
+                let items: Vec<TableItem> = unsafe { table.items() }
                     .iter()
                     .map(|&item| TableItem {
                         key: match item.key {
@@ -556,9 +572,14 @@ impl<P: Program> Module<P> {
             return false;
         };
         let mut stack: Vec<AnyNodeId> = match value.as_enum() {
-            Some(LowValue::Array(array)) => array.items().iter().map(|item| item.node).collect(),
-            Some(LowValue::Table(table)) => table
-                .items()
+            // SAFETY: `array`/`table` are payloads of `value`, which the
+            // caller holds reachable; this method only reads, so neither home
+            // block is released.  The note covers both arms.
+            Some(LowValue::Array(array)) => unsafe { array.items() }
+                .iter()
+                .map(|item| item.node)
+                .collect(),
+            Some(LowValue::Table(table)) => unsafe { table.items() }
                 .iter()
                 .flat_map(|item| [item.key, item.value])
                 .collect(),
@@ -578,10 +599,14 @@ impl<P: Program> Module<P> {
                         return true;
                     }
                     Some(LowValue::Array(array)) => {
-                        stack.extend(array.items().iter().map(|item| item.node))
+                        // SAFETY: `array` is the payload of `node`, a live node
+                        // of this module; this method only reads.
+                        stack.extend(unsafe { array.items() }.iter().map(|item| item.node))
                     }
                     Some(LowValue::Table(table)) => {
-                        for item in table.items() {
+                        // SAFETY: `table` is the payload of `node`, a live node
+                        // of this module; this method only reads.
+                        for item in unsafe { table.items() } {
                             stack.push(item.key);
                             stack.push(item.value);
                         }

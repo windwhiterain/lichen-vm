@@ -335,6 +335,12 @@ macro_rules! lang_compose_vocabulary {
         // leaf states what its own computation produces, so a composed
         // program inherits its plugin's transfer without the lowlevel knowing
         // the vocabulary.
+        //
+        // `is_callable` is the composed applicability policy: the OR of the
+        // extension leaves' policies, so a compute kernel — which only the
+        // compute leaf can recognise inside its struct array — keeps its
+        // cross-kernel apply lazy.  The two structural leaves name no
+        // applicable value, so only the extension list is consulted.
         impl ::lichen_lowlevel::OperatorExt<LangProgram> for LangOperator {
             fn run(
                 &self,
@@ -368,15 +374,22 @@ macro_rules! lang_compose_vocabulary {
                     } )*
                 }
             }
+
+            fn is_callable(
+                module: &::lichen_lowlevel::Module<LangProgram>,
+                callee: ::lichen_lowlevel::AnyNodeId,
+            ) -> bool {
+                false $( || <$extra_op as ::lichen_lowlevel::OperatorExt<LangProgram>>::is_callable(module, callee) )*
+            }
         }
 
         // ── The per-leaf artifact codec for the composed vocabulary.
         //
         // `ProgramCodec` implements [`$crate::persist::ArtifactCodec`] by
         // dispatching each carry variant to its leaf's [`ValueCodec`]/
-        // [`OperatorCodec`]: a leaf discriminator byte (the leaf's position in
-        // the composition — `0`/`1` are the structural leaves, `2 3 …` each
-        // plugin in order), then the leaf's own payload.  Self-consistent per
+        // [`OperatorCodec`]: a length-prefixed leaf-name tag (the carry
+        // variant's name, written by `Writer::leaf`), then the leaf's own
+        // payload.  Self-consistent per
         // compiler; a plugin-built compiler's `cli` uses it for a real
         // `~/.lichen` device cache.
         #[derive(Default)]
@@ -399,28 +412,28 @@ macro_rules! lang_compose_vocabulary {
                     ::lichen_lowlevel::ModuleKey,
                     std::sync::Arc<::lichen_lowlevel::StaticModule<LangProgram>>,
                 >,
-            ) {
+            ) -> Result<(), String> {
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$low>>::as_enum(&value)
                 {
-                    w.leaf(stringify!($low_name));
+                    w.leaf(stringify!($low_name))?;
                     <$low as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
-                    return;
+                    return Ok(());
                 }
                 if let Some(v) = <LangValue as ::lichen_utils::extend::AsEnum<$tyv>>::as_enum(&value)
                 {
-                    w.leaf(stringify!($tyv_name));
+                    w.leaf(stringify!($tyv_name))?;
                     <$tyv as ::lichen_lowlevel::codec::ValueCodec>::write_value(w, v, modules);
-                    return;
+                    return Ok(());
                 }
                 $(
                     if let Some(v) =
                         <LangValue as ::lichen_utils::extend::AsEnum<$extra_v>>::as_enum(&value)
                     {
-                        w.leaf(stringify!($extra_v_name));
+                        w.leaf(stringify!($extra_v_name))?;
                         <$extra_v as ::lichen_lowlevel::codec::ValueCodec>::write_value(
                             w, v, modules,
                         );
-                        return;
+                        return Ok(());
                     }
                 )*
                 unreachable!("a composed value always carries a leaf")
@@ -478,28 +491,31 @@ macro_rules! lang_compose_vocabulary {
                 ))
             }
 
-            fn write_operator(w: &mut $crate::persist::Writer, operator: LangOperator) {
+            fn write_operator(
+                w: &mut $crate::persist::Writer,
+                operator: LangOperator,
+            ) -> Result<(), String> {
                 if let Some(op) =
                     <LangOperator as ::lichen_utils::extend::AsEnum<$lowop>>::as_enum(&operator)
                 {
-                    w.leaf(stringify!($lowop_name));
+                    w.leaf(stringify!($lowop_name))?;
                     <$lowop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                    return;
+                    return Ok(());
                 }
                 if let Some(op) =
                     <LangOperator as ::lichen_utils::extend::AsEnum<$tyop>>::as_enum(&operator)
                 {
-                    w.leaf(stringify!($tyop_name));
+                    w.leaf(stringify!($tyop_name))?;
                     <$tyop as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                    return;
+                    return Ok(());
                 }
                 $(
                     if let Some(op) =
                         <LangOperator as ::lichen_utils::extend::AsEnum<$extra_op>>::as_enum(&operator)
                     {
-                        w.leaf(stringify!($extra_op_name));
+                        w.leaf(stringify!($extra_op_name))?;
                         <$extra_op as ::lichen_lowlevel::codec::OperatorCodec>::write_operator(w, op);
-                        return;
+                        return Ok(());
                     }
                 )*
                 unreachable!("a composed operator always carries a leaf")
@@ -696,8 +712,9 @@ mod sort_op_tests {
         let Some(LowValue::Array(array)) = out.as_enum() else {
             panic!("Sort must yield a USize array");
         };
-        let sorted: Vec<usize> = array
-            .items()
+        // SAFETY: `array` is the payload of the value the sort extension just
+        // returned, allocated in a live block of this module.
+        let sorted: Vec<usize> = unsafe { array.items() }
             .iter()
             .map(|item| {
                 module

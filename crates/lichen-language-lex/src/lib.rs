@@ -16,9 +16,10 @@
 //! quantity never matters.
 //!
 //! The only whitespace-significance the grammar needs is adjacency: an
-//! expression followed immediately (no trivia) by '(' '{' '<' or '[' is a
-//! postfix form (a slot read, a table lookup, an array type, or an index).
-//! So the lexer emits a Glue token immediately before one of those four
+//! expression followed immediately (no trivia) by '(' '{' '<' '[' or '::' is
+//! a postfix form (a slot read or struct instantiation, a table lookup, a raw
+//! type-component read, an index, or a raw named read).
+//! So the lexer emits a Glue token immediately before one of those five
 //! delimiters when it is directly glued to the previous token.  The parser
 //! reads Glue to decide postfix vs application -- no hidden space_before flag.
 //!
@@ -27,11 +28,13 @@
 //! slice of a larger source, mapping every token's span and range back to the
 //! original file via a base offset and the source's line starts.
 //!
-//! Int, Type, struct, table, let, if, then, else, and type_of lex as
-//! keywords.  '->'
-//! is the function-type arrow, '=>' a lambda, '::' a table key/value
-//! separator, '!' a prefix assert.  '~' with adjacent digits folds into
-//! Tilde(n).  Any other character is a lex error -- errors accumulate (the
+//! Int, string, Type, struct, table, let, if, then, else, return, pub,
+//! type_of, and array lex as keywords.  '->'
+//! is the function-type arrow, '=>' a lambda, '::' the raw named-read
+//! separator, '==>' the table key/value separator, '!' a prefix assert.  A
+//! bare '~' folds into Tilde(usize::MAX) and '~' with adjacent digits into
+//! Tilde(n); a run that overflows is a lex error with no token.  Any other
+//! character is a lex error -- errors accumulate (the
 //! character is skipped).
 
 use logos::Logos;
@@ -40,7 +43,7 @@ use logos::Logos;
 // crate) so a crate that only needs to name a source position doesn't have to
 // depend on the lexer.  Re-exported here for the existing
 // `lichen_language_lex::{Span, line_starts, line_col}` paths.
-pub use lichen_span::{Span, line_col, line_starts};
+pub use lichen_span::{Span, line_col, line_starts, line_text, offset_of_span};
 
 /// A lex diagnostic: a message plus the source position it is grounded in.
 /// Check-free (no checker payload), so it is `Send` and stays entirely in this
@@ -144,8 +147,8 @@ pub enum TokenKind {
     Tilde(usize),
     /// A newline, comma, or semicolon -- a uniform boundary token.
     Separator,
-    /// A zero-width marker: the next '(' '{' '<' or '[' is directly glued to
-    /// the previous token, so it is a postfix form.
+    /// A zero-width marker: the next '(' '{' '<' '[' or '::' is directly
+    /// glued to the previous token, so it is a postfix form.
     Glue,
     Eof,
 }
@@ -384,7 +387,7 @@ pub fn lex_with(code: &str, line_starts: &[usize], base: u32) -> Lexed {
                         prev_end = Some(end);
                     }
                     None => {
-                        // integer overflow: the run was consumed, no token.
+                        // literal overflow: the run was consumed, no token.
                         prev_end = Some(end);
                     }
                 }
@@ -487,7 +490,7 @@ pub fn lex_resume(
                         span: lc,
                         range: (start_abs, end_abs),
                     };
-                    if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                    if let Some(jj) = resync(prev, &mut j, &t, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
                     }
@@ -502,7 +505,7 @@ pub fn lex_resume(
                         span: lc,
                         range: (start_abs, start_abs),
                     };
-                    if let Some(jj) = resync(&prev, &mut j, &g, delta, b) {
+                    if let Some(jj) = resync(prev, &mut j, &g, delta, b) {
                         resynced_at = Some(jj);
                         break 'lex;
                     }
@@ -515,7 +518,7 @@ pub fn lex_resume(
                             span: lc,
                             range: (start_abs, end_abs),
                         };
-                        if let Some(jj) = resync(&prev, &mut j, &t, delta, b) {
+                        if let Some(jj) = resync(prev, &mut j, &t, delta, b) {
                             resynced_at = Some(jj);
                             break 'lex;
                         }
@@ -606,8 +609,9 @@ fn resync(prev: &[Token], j: &mut usize, t: &Token, delta: isize, b: usize) -> O
     }
 }
 
-/// Map a raw token plus its matched slice to a TokenKind.  Integer literals
-/// are parsed here: overflow records an error and returns None (no token).
+/// Map a raw token plus its matched slice to a TokenKind.  Numeric literals
+/// are parsed here — `Int`, and the `~n` shallow marker's depth; an overflow
+/// records an error and returns None (no token).
 fn raw_to_kind(
     raw: &RawToken,
     slice: &str,
@@ -664,15 +668,27 @@ fn raw_to_kind(
         }),
         RawToken::TildeLit => {
             let digits = &slice[1..];
-            let n = if digits.is_empty() {
-                usize::MAX
-            } else {
-                let mut n: usize = 0;
-                for byte in digits.bytes() {
-                    n = n.saturating_mul(10).saturating_add((byte - b'0') as usize);
+            // A bare `~` is the unbounded depth, encoded as `usize::MAX` in
+            // the token's payload (`TokenKind::Tilde`).
+            if digits.is_empty() {
+                return Some(TokenKind::Tilde(usize::MAX));
+            }
+            let mut n: usize = 0;
+            for byte in digits.bytes() {
+                let digit = (byte - b'0') as usize;
+                // Saturating would turn an out-of-range depth into the bare
+                // `~` — a different marker; report it as the `IntLit` arm does.
+                match n.checked_mul(10).and_then(|v| v.checked_add(digit)) {
+                    Some(v) => n = v,
+                    None => {
+                        errors.push(LexDiag {
+                            span: Some(lc),
+                            message: "shallow marker depth out of range".to_string(),
+                        });
+                        return None;
+                    }
                 }
-                n
-            };
+            }
             Some(TokenKind::Tilde(n))
         }
         RawToken::KwInt => Some(TokenKind::KwInt),

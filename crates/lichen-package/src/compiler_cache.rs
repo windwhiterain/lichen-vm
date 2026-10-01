@@ -4,10 +4,13 @@
 //! that uses one needs a compiler built over that plugin set.  Rather than
 //! building into the project, the package manager builds that compiler into a
 //! **cache under the lichen home** (`<lichendir>/compilers/<key>/`), keyed by
-//! the lichen-library version and every plugin's *resolved* version (the
-//! commit `HEAD` in the fetched source cache).  The same plugin set + library
-//! version reuses the cached binary; a change to any plugin (or to the
-//! library) keys a new slot.
+//! the toolchain version, the core repository the composed compiler's core
+//! crates come from, and every plugin's *resolved* version (the commit `HEAD`
+//! in the fetched source cache).  The same plugin set + toolchain + repository
+//! reuses the cached binary; a change to any of them keys a new slot.  The key
+//! is derived once, in `lichen_utils::cache::compiler_slot_key`, because the
+//! compiler that reads the slot derives it too and the two crates cannot see
+//! each other.
 //!
 //! `ensure` builds on a miss and returns the cached binary on a hit, so each
 //! `lichen run`/`build` can gather the project's native plugins and drive the
@@ -18,7 +21,6 @@
 use std::path::PathBuf;
 
 use lichen_preprocess::{Depend, lichendir};
-use lichen_utils::hash::{hex, sha256};
 
 use crate::git;
 use crate::plugin::{self, Leaves};
@@ -40,28 +42,22 @@ pub const COMPILER_NAME: &str = "project";
 /// into the `lichen-language-server-<name>` binary).
 pub const LSP_NAME: &str = "project";
 
-/// The cache key for a plugin set: a stable hash of the lichen-library version
-/// and every plugin's (name, resolved version), sorted so the same set in any
-/// order keys identically.  Each plugin must already be fetched so its source
-/// cache `HEAD` is resolvable.
-pub fn key(plugins: &[Depend]) -> Result<String, String> {
+/// The cache key for a plugin set: a stable hash of the toolchain version, the
+/// core repository the composed compiler's core crates come from, and every
+/// plugin's (name, resolved version), sorted so the same set in any order keys
+/// identically.  Each plugin must already be fetched so its source cache `HEAD`
+/// is resolvable.
+pub fn key(core_repo: &str, plugins: &[Depend]) -> Result<String, String> {
     let mut parts: Vec<String> = Vec::new();
     for dep in plugins {
         let version = git::resolved_version(dep)?;
         parts.push(format!("{}@{version}", dep.name));
     }
-    parts.sort();
-    // The key is the toolchain version + the plugin set.  The plugin set is
-    // versioned by each plugin's resolved source-cache `HEAD`; the toolchain
-    // is versioned by this crate's own version (the package manager and the
-    // core crates are released together, so `CARGO_PKG_VERSION` is the
-    // toolchain version — the key a change to any core crate should bump).
-    let mut spec = format!("lichen-language={}", env!("CARGO_PKG_VERSION"));
-    for part in &parts {
-        spec.push('&');
-        spec.push_str(part);
-    }
-    Ok(hex(&sha256(spec.as_bytes())))
+    // The derivation lives in `lichen_utils::cache`, which the language layer
+    // also calls for the shipping slot it reads: the two sides cannot see each
+    // other, so a second derivation here is the defect (see `P1-13` of
+    // `docs/notes/code-audit.md`).
+    Ok(lichen_utils::cache::compiler_slot_key(core_repo, &parts))
 }
 
 /// The cache slot directory for `key`.
@@ -95,7 +91,7 @@ fn resolve_lsp(key: &str) -> Option<PathBuf> {
 /// the cache key).  `core_repo` is the repository (or local checkout path) the
 /// core crates and toolchain come from.
 pub fn ensure(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<PathBuf, String> {
-    let key = key(plugins).map_err(|e| format!("cannot key the compiler cache: {e}"))?;
+    let key = key(core_repo, plugins).map_err(|e| format!("cannot key the compiler cache: {e}"))?;
     if let Some(bin) = resolve(&key) {
         return Ok(bin);
     }
@@ -115,7 +111,7 @@ pub fn ensure(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<Pa
 /// the cache key).  `core_repo` is the repository (or local checkout path) the
 /// core crates and toolchain come from.
 pub fn ensure_lsp(core_repo: &str, plugins: &[Depend], leaves: &Leaves) -> Result<PathBuf, String> {
-    let key = key(plugins).map_err(|e| format!("cannot key the LSP cache: {e}"))?;
+    let key = key(core_repo, plugins).map_err(|e| format!("cannot key the LSP cache: {e}"))?;
     if let Some(bin) = resolve_lsp(&key) {
         return Ok(bin);
     }

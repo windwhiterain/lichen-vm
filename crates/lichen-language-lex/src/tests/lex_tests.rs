@@ -317,6 +317,20 @@ fn a_tilde_is_a_shallow_marker_token() {
 }
 
 #[test]
+fn an_overflowing_shallow_depth_is_a_lex_error() {
+    // A depth that does not fit `usize` must not become the bare `~`, whose
+    // payload is `usize::MAX`; it is reported and dropped, like an `Int`.
+    let source = "~99999999999999999999999999999999999999 x";
+    let lexed = lex(source);
+    assert_eq!(lexed.errors.len(), 1);
+    assert_eq!(lexed.errors[0].message, "shallow marker depth out of range");
+    assert_eq!(
+        kinds(source),
+        vec![TokenKind::Name("x".to_string()), TokenKind::Eof]
+    );
+}
+
+#[test]
 fn a_bang_is_a_prefix_assert_token() {
     assert_eq!(
         kinds("! (1 == 1)"),

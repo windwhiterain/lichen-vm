@@ -158,7 +158,10 @@ impl<P: Program> Module<P> {
         let Some(operand) = operation.operand else {
             return Vec::new();
         };
-        let Some(items) = self.array_items(operand) else {
+        // SAFETY: the operand node is read out of `self.nodes` on this borrow,
+        // so its home block — and the arena the array payload lives in — stays
+        // alive for as long as `items` is walked below.
+        let Some(items) = (unsafe { self.array_items(operand) }) else {
             return Vec::new();
         };
         items

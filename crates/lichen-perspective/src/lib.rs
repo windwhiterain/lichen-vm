@@ -19,8 +19,9 @@
 //!   annotation),
 //! - the `Schema { tail: [.., Perspective, ..] }` IR form the checker reads,
 //!   and
-//! - the operator **persist discriminator** (`u8(9)` for `GcdOp`) in the
-//!   on-disk format.
+//! - the operator **persist form** in the on-disk format: the composed codec
+//!   tags the operator leaf with its carry-variant name (`GcdOp`), then
+//!   `GcdOp` writes its own payload byte.
 //!
 //! Those live in the host language layer (e.g. `lichen-language`), because
 //! they are tied to one language's surface and on-disk contract and so cannot

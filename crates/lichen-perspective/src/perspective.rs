@@ -9,7 +9,7 @@
 //! the registry to its checker; the codesign (grammar, IR schema tail, persist
 //! discriminator) stays in the host language layer.
 
-use lichen_highlevel::attr::{AttrExt, AttrSpec};
+use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
@@ -79,7 +79,11 @@ pub fn gcd(a: usize, b: usize) -> usize {
 /// - `sub > 0`: `sub | sup ⟺ sup % sub == 0`.  `sup = 0` (a uniform-over-all
 ///   value) satisfies any requirement, since `0 % sub == 0`.
 pub fn divides(sub: usize, sup: usize) -> bool {
-    if sub == 0 { sup == 0 } else { sup % sub == 0 }
+    if sub == 0 {
+        sup == 0
+    } else {
+        sup.is_multiple_of(sub)
+    }
 }
 
 /// The attribute-extension registry for a host program `P`: maps the
@@ -90,7 +94,7 @@ pub fn divides(sub: usize, sup: usize) -> bool {
 /// The closure returns the single [`Perspective`] marker coerced to a
 /// `&'static` extension — the checker sees a uniform attribute and never names
 /// a concrete lattice.
-pub fn persp_attr_ext<P>() -> Box<dyn Fn(&Perspective) -> &'static dyn AttrExt<P>>
+pub fn persp_attr_ext<P>() -> AttrExtRegistry<P, Perspective>
 where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
@@ -122,7 +126,10 @@ where
                     unreachable!("Gcd expects an operand array");
                 };
                 let mut acc = 0;
-                for item in operands.items() {
+                // SAFETY: `operands` is the payload of the operand value the
+                // VM just evaluated for this operation; its home block is
+                // alive for the duration of the run.
+                for item in unsafe { operands.items() } {
                     // A child slot is a `[value, type]` term pair; the lattice
                     // value is its element 0.  A bare value (an un-annotated
                     // edge that never became a pair) is accepted too.
@@ -132,7 +139,9 @@ where
                         .and_then(|value| match value {
                             LowValue::USize(n) => Some(n),
                             LowValue::Array(items) => {
-                                let elem0 = items.items().first()?;
+                                // SAFETY: `items` is the payload of a value
+                                // read from a live node of `module` just above.
+                                let elem0 = unsafe { items.items() }.first()?;
                                 match module
                                     .node_value(elem0.node)
                                     .and_then(|v| AsEnum::<LowValue>::as_enum(&v))
@@ -228,7 +237,9 @@ where
             let value = ctx.class_value(node)?;
             match AsEnum::<LowValue>::as_enum(&value) {
                 Some(LowValue::USize(n)) => Some(n),
-                Some(LowValue::Array(items)) => match items.items().first()?.node {
+                // SAFETY: `items` is the payload of `ctx.class_value(node)` —
+                // a value of a live node of the checked module.
+                Some(LowValue::Array(items)) => match unsafe { items.items() }.first()?.node {
                     AnyNodeId::Dynamic(n) => {
                         let elem0 = ctx.class_value(n)?;
                         match AsEnum::<LowValue>::as_enum(&elem0) {
@@ -255,7 +266,9 @@ where
         let n = match slot_value {
             LowValue::USize(n) => n,
             LowValue::Array(items) => match module
-                .node_value(items.items().first()?.node)
+                // SAFETY: `items` is the payload of a value read from the
+                // live node `slot` of `module` just above.
+                .node_value(unsafe { items.items() }.first()?.node)
                 .and_then(|v| v.as_enum())
             {
                 Some(LowValue::USize(n)) => n,
@@ -279,10 +292,14 @@ where
         return slot;
     };
     match AsEnum::<LowValue>::as_enum(&value) {
-        Some(LowValue::Array(items)) => match items.items().first().map(|item| item.node) {
-            Some(AnyNodeId::Dynamic(n)) => n,
-            _ => slot,
-        },
+        // SAFETY: `items` is the payload of `ctx.class_value(slot)` — a value
+        // of a live node of the checked module.
+        Some(LowValue::Array(items)) => {
+            match unsafe { items.items() }.first().map(|item| item.node) {
+                Some(AnyNodeId::Dynamic(n)) => n,
+                _ => slot,
+            }
+        }
         _ => slot,
     }
 }

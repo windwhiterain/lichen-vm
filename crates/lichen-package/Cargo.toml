@@ -1,7 +1,7 @@
 [package]
 name = "lichen-package"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 default-run = "lichen"
 description = "The lichen package manager: resolve git dependencies, fetch the toolchain binaries, and own the preprocessor import path."
 
@@ -14,9 +14,14 @@ name = "lichen"
 path = "src/main.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive"] }
-lichen-preprocess = { path = "../lichen-preprocess" }
-lichen-registry = { path = "../lichen-registry" }
-lichen-utils = { path = "../lichen-utils" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+clap.workspace = true
+lichen-preprocess.workspace = true
+lichen-registry.workspace = true
+lichen-utils.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+# The generated-manifest test parses the document it emits, so the escaping is
+# checked by a real TOML parser rather than by string comparison.
+[dev-dependencies]
+toml = "0.8"

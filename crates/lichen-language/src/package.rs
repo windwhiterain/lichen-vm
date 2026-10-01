@@ -1,6 +1,8 @@
 //! The package store: a shared registry plus a path cache, optionally
 //! backed by the persistent device store ([`crate::persist`]).
 //!
+//! Vendored path resolution lives in the sibling module `vendored`.
+//!
 //! A package is an ordinary lichen source file whose final expression is the
 //! exported value.  Loading one resolves its `@import` directives through
 //! this same store (transitive dependencies load first and freeze into the
@@ -33,6 +35,9 @@ use crate::diag::{Diag, Stage};
 use crate::persist::{self, DeviceRegistry, Hash, ProgramCodecOf};
 use crate::preprocess::preprocess;
 use crate::program::GcdOp;
+
+mod vendored;
+use vendored::{vendored_alias, vendored_entry_file};
 
 /// The virtual path of the `lichen-compute` native package.  Imported as
 /// `compute.lichen`, it is served from a registered native module (see
@@ -143,6 +148,27 @@ impl<P: ProgramCodecOf> PackageStore<P> {
         store
     }
 
+    /// A store backed by an already-open device registry at `cache_dir`.  For a
+    /// host that keeps one registry handle across requests (the language
+    /// server) instead of reopening — and reparsing — the registry file each
+    /// time: the handle carries the same cache directory
+    /// [`Self::with_cache_dir`] would have opened.  Every mutation re-reads the
+    /// registry under the cross-process lock and every verification reads it
+    /// back, so a long-lived handle observes another process's writes exactly
+    /// as a freshly opened one would.
+    pub fn with_device(cache_dir: PathBuf, device: DeviceRegistry) -> Self {
+        let mut store = PackageStore::new();
+        store.cache_dir = Some(cache_dir);
+        store.device = Some(device);
+        store
+    }
+
+    /// Take the open device registry back out, so a host can hold it across
+    /// requests (see [`Self::with_device`]).  `None` for an in-memory store.
+    pub fn into_device(self) -> Option<DeviceRegistry> {
+        self.device
+    }
+
     /// Explicitly garbage-collect the device cache: reclaim every artifact
     /// not reachable from a path alias whose source file still exists.
     /// Returns the number of reclaimed artifacts.
@@ -197,6 +223,23 @@ impl<P: ProgramCodecOf> PackageStore<P> {
             }
         }
     }
+
+    /// The device file ID of an import path this store resolved: an on-disk
+    /// package's canonical path is its file ID, while a registered embedded
+    /// source is filed under `virtual:<name>` (see [`Self::register_native`]
+    /// and [`Self::register_compute`]) — the import path is that source's
+    /// display path, not its identity, so the device cannot verify the
+    /// dependency by it.
+    fn dependency_file_id(&self, path: &Path) -> String {
+        let registered = path
+            .file_name()
+            .map(Path::new)
+            .and_then(|name| self.native.get(name));
+        match registered {
+            Some(handle) => persist::virtual_file_id(&handle.path.to_string_lossy()),
+            None => path.to_string_lossy().into_owned(),
+        }
+    }
 }
 
 // The compute-bounds impl: load/compile/freeze/serialize, which compile the
@@ -220,17 +263,17 @@ where
         // that registered one (the package-manager plug: a plugin's embedded
         // source compiled against its private native registry) is served here
         // by its file name.
-        if let Some(file_name) = path.file_name() {
-            if let Some(handle) = self.native.get(Path::new(file_name)) {
-                return Ok(handle.clone());
-            }
+        if let Some(file_name) = path.file_name()
+            && let Some(handle) = self.native.get(Path::new(file_name))
+        {
+            return Ok(handle.clone());
         }
         // The `lichen-compute` native package: served from a registered
         // module, not a disk file.  It self-registers on first import.
         if path.file_name().is_some_and(|n| n == "compute.lichen") {
             let handle = self
                 .register_compute()
-                .map_err(|e| vec![Diag::new(Stage::Preprocess, (0, 0), e)])?;
+                .map_err(|e| vec![Diag::unattributed(Stage::Preprocess, e)])?;
             return Ok(handle);
         }
         // Only `.lichen` files are packages.  Reject any other extension up
@@ -238,9 +281,8 @@ where
         // file ID is always a `.lichen` path (or a `virtual:` path for an
         // embedded source), which is exactly what the `gc` "clean" rule keeps.
         if path.extension().is_none_or(|ext| ext != "lichen") {
-            return Err(vec![Diag::new(
+            return Err(vec![Diag::unattributed(
                 Stage::Preprocess,
-                (0, 0),
                 format!(
                     "cannot load package {}: only .lichen files are packages",
                     path.display()
@@ -250,17 +292,15 @@ where
         let canonical = match std::fs::canonicalize(path) {
             Ok(canonical) => canonical,
             Err(e) => {
-                return Err(vec![Diag::new(
-                    Stage::Preprocess,
-                    (0, 0),
-                    format!("cannot read package {}: {e}", path.display()),
-                )]);
+                return Err(vec![Diag::io(format!(
+                    "cannot read package {}: {e}",
+                    path.display()
+                ))]);
             }
         };
         if self.loading.contains(&canonical) {
-            return Err(vec![Diag::new(
+            return Err(vec![Diag::unattributed(
                 Stage::Preprocess,
-                (0, 0),
                 format!(
                     "circular import: {} is already being loaded",
                     canonical.display()
@@ -297,9 +337,9 @@ where
                 .collect::<Vec<_>>()
                 .join("\n"));
         }
-        let line_starts = crate::lex::line_starts(&preprocessed.code);
+        let line_starts = crate::lex::line_starts(preprocessed.code);
         let report = crate::compile_with_imports_at::<P>(
-            &preprocessed.code,
+            preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
@@ -321,8 +361,10 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        let hash = persist::artifact_hash(source.as_bytes(), &[]);
-        let (key, _is_new) = self.alloc_key("virtual:compute.lichen");
+        // The embedded compute package has no imports, so its identity is its
+        // own source hash alone.
+        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(COMPUTE_PATH));
         let freeze = self
             .registry
             .write()
@@ -359,27 +401,25 @@ where
     fn load_package_inner(&mut self, canonical: &Path) -> Result<PackageHandle, Vec<Diag<P>>> {
         let file_id = canonical.to_string_lossy().into_owned();
         let source = std::fs::read_to_string(canonical).map_err(|e| {
-            vec![Diag::new(
-                Stage::Preprocess,
-                (0, 0),
-                format!("cannot read package {}: {e}", canonical.display()),
-            )]
+            vec![Diag::io(format!(
+                "cannot read package {}: {e}",
+                canonical.display()
+            ))]
         })?;
-        if let Some(device) = &self.device {
-            if let Some(verified) = device.verify(&file_id, source.as_bytes()) {
-                if let Some(handle) = self.try_reuse(
-                    canonical,
-                    &file_id,
-                    verified.key,
-                    verified.hash,
-                    &verified.deps,
-                )? {
-                    return Ok(handle);
-                }
-                // The artifact file is missing or corrupt — fall through to
-                // a fresh compile (the pending allocation is reused).
-            }
+        if let Some(device) = &self.device
+            && let Some(verified) = device.verify(&file_id, source.as_bytes())
+            && let Some(handle) = self.try_reuse(
+                canonical,
+                &file_id,
+                verified.key,
+                verified.hash,
+                &verified.deps,
+            )?
+        {
+            return Ok(handle);
         }
+        // The artifact file is missing or corrupt — fall through to
+        // a fresh compile (the pending allocation is reused).
         self.build_package(canonical, source)
     }
 
@@ -397,7 +437,11 @@ where
         deps: &[(String, ModuleKey)],
     ) -> Result<Option<PackageHandle>, Vec<Diag<P>>> {
         for (dep_file_id, _) in deps {
-            self.load_package(Path::new(dep_file_id))?;
+            // A recorded embedded dependency is filed as a `virtual:<name>`
+            // file ID; the store serves it by the name it registered (see
+            // [`Self::dependency_file_id`]).
+            let name = persist::virtual_name(dep_file_id).unwrap_or(dep_file_id.as_str());
+            self.load_package(Path::new(name))?;
         }
         let mut modules: HashMap<ModuleKey, Arc<StaticModule<P>>> = HashMap::new();
         {
@@ -483,15 +527,21 @@ where
             return Err(std::mem::take(&mut diags));
         }
 
-        // The artifact identity: the raw source plus the dependency keys in
-        // source order — transitive, so a dependency change re-keys this
-        // artifact.
-        let dep_keys: Vec<ModuleKey> = preprocessed
+        // The artifact identity: the raw source hash, then each dependency's
+        // own identity.  Transitive by construction — a dependency's identity
+        // is the identity it was built as, so a change anywhere in the import
+        // closure changes this one, and the frozen artifact this key writes
+        // into its header stops matching the one a later verification computes.
+        //
+        // The recorded dependency identity is the file ID, not the import's
+        // display path (they differ for an embedded source).
+        let deps: Vec<(String, ModuleKey)> = preprocessed
             .imports
             .iter()
-            .map(|import| import.export.module)
+            .map(|import| (self.dependency_file_id(&import.path), import.export.module))
             .collect();
-        let hash = persist::artifact_hash(source.as_bytes(), &dep_keys);
+        let source_hash = persist::sha256(source.as_bytes());
+        let hash = self.artifact_identity(source_hash, &deps);
         // A file ID is compiled once and overwritten: the key is stable per
         // file, so recompiling a changed file reuses the same slot.
         let (key, _is_new) = self.alloc_key(&file_id);
@@ -501,7 +551,7 @@ where
         // into its freeze below.
         let line_starts = crate::lex::line_starts(&source);
         let report = crate::compile_with_imports_at::<P>(
-            &preprocessed.code,
+            preprocessed.code,
             &preprocessed.imports,
             Some(self.registry()),
             preprocessed.code_base,
@@ -557,18 +607,9 @@ where
                 hash,
                 export.index,
                 P::Codec::default(),
-            );
+            )
+            .map_err(|error| vec![Diag::io(error)])?;
             device.store_artifact(&file_id, &bytes);
-            let deps: Vec<(String, ModuleKey)> = preprocessed
-                .imports
-                .iter()
-                .map(|import| {
-                    (
-                        import.path.to_string_lossy().into_owned(),
-                        import.export.module,
-                    )
-                })
-                .collect();
             device.publish(&file_id, key, persist::sha256(source.as_bytes()), deps);
         }
         self.compiled += 1;
@@ -578,6 +619,44 @@ where
             export,
             direct: Vec::new(),
         })
+    }
+
+    /// The artifact identity this unit's source and recorded dependencies will
+    /// produce — the fold every side must agree on, or the cache misses on
+    /// every run instead of once (see [`persist::artifact_hash`]).
+    ///
+    /// A cache-backed store asks the device, because the device's record is
+    /// what a later verification recomputes from; an in-memory store has no
+    /// artifact to key and nothing to be consistent with across loads, so its
+    /// own registry answers.
+    fn artifact_identity(&self, source_hash: Hash, deps: &[(String, ModuleKey)]) -> Hash {
+        match &self.device {
+            Some(device) => device.artifact_identity(source_hash, deps),
+            None => {
+                let identities = self.dependency_identities(deps);
+                persist::artifact_hash(source_hash, &identities)
+            }
+        }
+    }
+
+    /// The recorded identity of each dependency in an **in-memory** store: what
+    /// its module was frozen as.  A dependency this store has no record of
+    /// contributes the all-zero sentinel, which no real identity equals.
+    fn dependency_identities(&self, deps: &[(String, ModuleKey)]) -> Vec<(ModuleKey, Hash)> {
+        let registry = self
+            .registry
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        deps.iter()
+            .map(|(_, dep_key)| {
+                (
+                    *dep_key,
+                    registry
+                        .get(*dep_key)
+                        .map_or([0; 32], |package| package.hash),
+                )
+            })
+            .collect()
     }
 
     /// Resolve an import path relative to the current source file's directory.
@@ -592,22 +671,14 @@ where
         // dependency's entry package; `alias/rest` resolves `rest` relative to
         // the vendored directory.  Only tried when the alias is registered and
         // is not a file-like path (a leading segment ending in `.lichen`).
-        if let Some((alias, rest)) = vendored_alias(import_path) {
-            if let Some(dir) = self.vendored.get(alias) {
-                let resolved = match rest {
-                    Some(rest) => dir.join(rest),
-                    None => vendored_entry_file::<P>(dir, alias)?,
-                };
-                return self.load_package(&resolved).map_err(|mut diags| {
-                    diags.drain(..).next().unwrap_or_else(|| {
-                        Diag::new(
-                            Stage::Preprocess,
-                            (0, 0),
-                            format!("cannot resolve vendored import '{}'", import_path),
-                        )
-                    })
-                });
-            }
+        if let Some((alias, rest)) = vendored_alias(import_path)
+            && let Some(dir) = self.vendored.get(alias)
+        {
+            let resolved = match rest {
+                Some(rest) => dir.join(rest),
+                None => vendored_entry_file::<P>(dir, alias)?,
+            };
+            return self.load_package(&resolved).map_err(first_diagnostic);
         }
         let path = Path::new(import_path);
         let resolved = if path.is_absolute() {
@@ -626,16 +697,18 @@ where
                 .unwrap_or_else(|| PathBuf::from("."));
             base_dir.join(path)
         };
-        self.load_package(&resolved).map_err(|mut diags| {
-            diags.drain(..).next().unwrap_or_else(|| {
-                Diag::new(
-                    Stage::Preprocess,
-                    (0, 0),
-                    format!("cannot resolve import '{}'", import_path),
-                )
-            })
-        })
+        self.load_package(&resolved).map_err(first_diagnostic)
     }
+}
+
+/// The diagnostic a failed package load reports: the load's own first.  A
+/// failed build always carries at least one (see [`crate::build_report`]), so
+/// this seam needs no fallback message of its own.
+fn first_diagnostic<P: lichen_lowlevel::Program>(mut diags: Vec<Diag<P>>) -> Diag<P> {
+    diags
+        .drain(..)
+        .next()
+        .expect("a failed package load reports a diagnostic")
 }
 
 // The native-package registration impl: compile a plugin's embedded lichen
@@ -696,8 +769,11 @@ where
         module.evaluate_node_deep(build.root_val, None);
         module.evaluate_node_deep(build.root_ty, None);
 
-        let hash = persist::artifact_hash(source.as_bytes(), &[]);
-        let (key, _is_new) = self.alloc_key(&format!("virtual:{virtual_path}"));
+        // A registered native package is compiled from the source embedded in
+        // this binary and has no imports, so its identity is its own source
+        // hash alone.
+        let hash = persist::artifact_hash(persist::sha256(source.as_bytes()), &[]);
+        let (key, _is_new) = self.alloc_key(&persist::virtual_file_id(virtual_path));
         let freeze = self
             .registry
             .write()
@@ -766,151 +842,8 @@ where
     }
 }
 
-/// Split a potential vendored alias from an import path: `"foo"` →
-/// `("foo", None)`, `"foo/rest"` → `("foo", Some("rest"))`.  A leading
-/// segment that ends in `.lichen` is a file name, not an alias (so a relative
-/// import like `"math.lichen"` never hits the vendored map).
-fn vendored_alias(import_path: &str) -> Option<(&str, Option<&str>)> {
-    let (first, rest) = match import_path.find('/') {
-        Some(i) => (&import_path[..i], Some(&import_path[i + 1..])),
-        None => (import_path, None),
-    };
-    if first.is_empty() || first.ends_with(".lichen") {
-        return None;
-    }
-    Some((first, rest))
-}
-
-/// The entry package file of a vendored dependency directory: a `_.lichen`,
-/// then `<alias>.lichen`, then the directory's sole `.lichen` file.  An
-/// ambiguous (many) or absent package is a diagnostic, not a guess.
-fn vendored_entry_file<P: lichen_lowlevel::Program>(
-    dir: &Path,
-    alias: &str,
-) -> Result<PathBuf, Diag<P>> {
-    let lib = dir.join("_.lichen");
-    if lib.is_file() {
-        return Ok(lib);
-    }
-    let aliased = dir.join(format!("{alias}.lichen"));
-    if aliased.is_file() {
-        return Ok(aliased);
-    }
-    let mut files = match std::fs::read_dir(dir) {
-        Ok(entries) => entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "lichen"))
-            .collect::<Vec<_>>(),
-        Err(_) => Vec::new(),
-    };
-    files.sort();
-    match files.len() {
-        1 => Ok(files.into_iter().next().expect("one file")),
-        0 => Err(Diag::new(
-            Stage::Preprocess,
-            (0, 0),
-            format!(
-                "vendored dependency '{alias}' has no .lichen entry package (no _.lichen, \
-                 {alias}.lichen, or a single .lichen file)"
-            ),
-        )),
-        _ => {
-            let names = files
-                .into_iter()
-                .map(|f| {
-                    f.file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            Err(Diag::new(
-                Stage::Preprocess,
-                (0, 0),
-                format!(
-                    "vendored dependency '{alias}' is ambiguous: pick one of {names} (or add a _.lichen)"
-                ),
-            ))
-        }
-    }
-}
-
 impl<P: ProgramCodecOf> Default for PackageStore<P> {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod vendored_tests {
-    use super::*;
-    use crate::program::LangProgram;
-
-    fn tempdir(tag: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("lichen-vendored-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn vendored_alias_resolves_to_entry_package() {
-        let dir = tempdir("entry");
-        let foo = dir.join("deps").join("foo");
-        std::fs::create_dir_all(&foo).unwrap();
-        std::fs::write(foo.join("_.lichen"), "42").unwrap();
-        let mut store = PackageStore::<LangProgram>::new();
-        store.register_vendored("foo", foo.clone());
-        let handle = store.resolve_import(None, "foo").unwrap();
-        assert_eq!(
-            handle.path,
-            std::fs::canonicalize(foo.join("_.lichen")).unwrap()
-        );
-    }
-
-    #[test]
-    fn vendored_alias_resolves_subpath() {
-        let dir = tempdir("sub");
-        let foo = dir.join("deps").join("foo");
-        std::fs::create_dir_all(&foo).unwrap();
-        std::fs::write(foo.join("_.lichen"), "1").unwrap();
-        std::fs::write(foo.join("other.lichen"), "2").unwrap();
-        let mut store = PackageStore::<LangProgram>::new();
-        store.register_vendored("foo", foo.clone());
-        let handle = store.resolve_import(None, "foo/other.lichen").unwrap();
-        assert_eq!(
-            handle.path,
-            std::fs::canonicalize(foo.join("other.lichen")).unwrap()
-        );
-    }
-
-    #[test]
-    fn non_vendored_relative_import_does_not_hit_alias() {
-        let dir = tempdir("plain");
-        std::fs::write(dir.join("math.lichen"), "3").unwrap();
-        let mut store = PackageStore::<LangProgram>::new();
-        store.register_vendored("foo", dir.join("deps").join("foo"));
-        let base = dir.join("main.lichen");
-        let handle = store.resolve_import(Some(&base), "math.lichen").unwrap();
-        assert_eq!(
-            handle.path,
-            std::fs::canonicalize(dir.join("math.lichen")).unwrap()
-        );
-    }
-
-    #[test]
-    fn ambiguous_vendored_dir_is_diagnosed() {
-        let dir = tempdir("ambig");
-        let foo = dir.join("deps").join("foo");
-        std::fs::create_dir_all(&foo).unwrap();
-        std::fs::write(foo.join("a.lichen"), "1").unwrap();
-        std::fs::write(foo.join("b.lichen"), "2").unwrap();
-        let mut store = PackageStore::<LangProgram>::new();
-        store.register_vendored("foo", foo);
-        let err = store.resolve_import(None, "foo").unwrap_err();
-        assert!(err.message.contains("ambiguous"), "{}", err.message);
     }
 }

@@ -45,7 +45,7 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let array_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
-            self.ty[array].unwrap(),
+            self.state[array].ty.unwrap(),
             array_ty,
             self.loc(array, 1),
             DiagKind::Guard,
@@ -73,9 +73,9 @@ where
         );
         self.register_assert(in_range, self.loc(e, 0), false);
         let pair = self.pair_of(value_node, elem_cell);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(elem_cell);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(elem_cell);
         pair
     }
 
@@ -106,11 +106,28 @@ where
         let container_value = self.value_of(container);
         let index_value = self.value_of(index);
         self.node_edges.insert(index_value, self.loc(index, 0));
-        let ops = self.array_node(self.current_block, &[container_value, index_value]);
+        let (value_node, ty_node) = self.element_read(container_value, index_value);
+        self.state[e].term = Some(value_node);
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty_node);
+        value_node
+    }
+
+    /// The structural element read shared by the raw positional form `X<e>`
+    /// and the raw named form `X::a`: `value = Index(container_value,
+    /// subscript)`, `type = Index(value, 1)` — the element's own pair, both
+    /// read lazily, with no type validation.  `subscript` is already the
+    /// resolved slot: the caller's index value, or a name table's read.
+    pub(super) fn element_read(
+        &mut self,
+        container_value: NodeId,
+        subscript: NodeId,
+    ) -> (NodeId, NodeId) {
+        let value_ops = self.array_node(self.current_block, &[container_value, subscript]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
-            Some(ops),
+            Some(value_ops),
         );
         let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
         let ty_node = self.op_node(
@@ -118,10 +135,7 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        self.term[e] = Some(value_node);
-        self.val[e] = None;
-        self.ty[e] = Some(ty_node);
-        value_node
+        (value_node, ty_node)
     }
 
     /// A table lookup `t{k}`: the lowlevel `TableGet` reads the entry whose
@@ -147,7 +161,7 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let table_ty = self.array_node(self.current_block, &[shape, kind]);
         self.check_unify(
-            self.ty[container].unwrap(),
+            self.state[container].ty.unwrap(),
             table_ty,
             self.loc(container, 1),
             DiagKind::Guard,
@@ -162,9 +176,9 @@ where
             Some(ops),
         );
         let pair = self.pair_of(value_node, value_cell);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(value_cell);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(value_cell);
         pair
     }
 
@@ -185,7 +199,7 @@ where
             // first element binds the cell, a later one that differs
             // conflicts against it.
             self.check_unify(
-                self.ty[el].unwrap(),
+                self.state[el].ty.unwrap(),
                 element_ty,
                 self.loc(el, 1),
                 DiagKind::ArrayElement,
@@ -201,9 +215,9 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -233,13 +247,13 @@ where
                 AnyNodeId::Dynamic(self.value_of(value)),
             ));
             self.check_unify(
-                self.ty[key].unwrap(),
+                self.state[key].ty.unwrap(),
                 key_ty,
                 self.loc(key, 1),
                 DiagKind::TableKey,
             );
             self.check_unify(
-                self.ty[value].unwrap(),
+                self.state[value].ty.unwrap(),
                 value_ty,
                 self.loc(value, 1),
                 DiagKind::TableValue,
@@ -255,9 +269,9 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.table_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -279,11 +293,11 @@ where
             match depths[i] {
                 0 => {
                     vals.push(self.value_of(el));
-                    tys.push(self.ty[el].unwrap());
+                    tys.push(self.state[el].ty.unwrap());
                 }
                 usize::MAX => {
                     vals.push(self.value_of(el));
-                    tys.push(self.ty[el].unwrap());
+                    tys.push(self.state[el].ty.unwrap());
                 }
                 n => {
                     // The wrapped term is a lazy region: its value is the
@@ -306,9 +320,9 @@ where
         let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
         let ty_node = self.array_node(self.current_block, &[shape, kind]);
         let pair = self.pair_of(value, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -328,12 +342,14 @@ where
         // the extracted value and type.  Each deeper level is the previous
         // level's type slot's own `[shape, kind]` pair.
         let mut levels: Vec<(NodeId, NodeId)> = Vec::new();
-        let mut current = self.term[e].unwrap();
-        if self.module.nodes[current].operation.is_some() {
-            levels.push((self.value_of(e), self.ty[e].unwrap()));
+        let mut current = self.state[e].term.unwrap();
+        if self.module.node_operation(current).is_some() {
+            levels.push((self.value_of(e), self.state[e].ty.unwrap()));
         } else {
             while levels.len() < depth {
-                let Some(items) = self.module.array_items(current) else {
+                // SAFETY: `current` is a live node of this module (a checked
+                // expression's term).
+                let Some(items) = (unsafe { self.module.array_items(current) }) else {
                     break;
                 };
                 if items.len() != 2 {
@@ -341,10 +357,10 @@ where
                 }
                 let slot0 = self.module.as_dynamic(items[0].node, self.current_block);
                 let slot1 = self.module.as_dynamic(items[1].node, self.current_block);
-                let descend = self
-                    .module
-                    .array_items(slot1)
-                    .is_some_and(|next| next.len() == 2);
+                // SAFETY: `slot1` was just materialized into the current
+                // block, whose arena is alive.
+                let descend =
+                    unsafe { self.module.array_items(slot1) }.is_some_and(|next| next.len() == 2);
                 levels.push((slot0, slot1));
                 if !descend {
                     break;
@@ -360,7 +376,7 @@ where
             wrapped =
                 Some(self.array_node_masked(self.current_block, &[slot0, next], &[true, false]));
         }
-        wrapped.unwrap_or(self.term[e].unwrap())
+        wrapped.unwrap_or(self.state[e].term.unwrap())
     }
 
     /// The real array type `{ element_type, length }` — the instance is the
@@ -382,13 +398,13 @@ where
         let length_value = self.value_of(length);
         let shape = self.array_node(
             self.current_block,
-            &[self.term[element_type].unwrap(), length_value],
+            &[self.state[element_type].term.unwrap(), length_value],
         );
         let kind = self.kind_expr(self.current_block, self.markers.array_type_marker);
         let pair = self.array_node(self.current_block, &[shape, kind]);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(shape);
-        self.ty[e] = Some(kind);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
         pair
     }
 }

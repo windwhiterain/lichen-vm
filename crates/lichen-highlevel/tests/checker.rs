@@ -170,8 +170,9 @@ fn array_ids(
     b: &lichen_highlevel::checker::Build<ProgramImpl>,
     node: lichen_lowlevel::NodeId,
 ) -> Vec<lichen_lowlevel::NodeId> {
-    b.module
-        .array_items(node)
+    // SAFETY: `node` is a live node of the build under test, whose block has
+    // not been dropped.
+    unsafe { b.module.array_items(node) }
         .expect("expected an array value")
         .iter()
         .map(|item| dyn_node(item.node))
@@ -183,8 +184,9 @@ fn array_ids_from(value: HighProgramValue) -> Vec<lichen_lowlevel::NodeId> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| dyn_node(item.node))
         .collect()
@@ -195,7 +197,12 @@ fn array_mask_from(value: HighProgramValue) -> Vec<bool> {
     let HighProgramValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected an array value, got {value:?}");
     };
-    array.items().iter().map(|item| item.shallow).collect()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
+        .iter()
+        .map(|item| item.shallow)
+        .collect()
 }
 
 /// Whether the given ids form the int type — a `[int, Type]` pair.  The two
@@ -236,8 +243,8 @@ fn int_literal_checks() {
     assert!(b.ok, "5 should check");
     // The type of 5 is the recursive pair [int, [Type, ↺]] — rebuilt fresh per
     // occurrence (content-equal to the shared int_type, not node-identical).
-    assert!(is_int_type(&b, b.ty[five].unwrap()));
-    let ids = array_ids(&b, b.ty[five].unwrap());
+    assert!(is_int_type(&b, b.state[five].ty.unwrap()));
+    let ids = array_ids(&b, b.state[five].ty.unwrap());
     assert_eq!(ids.len(), 2);
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(ids[0])),
@@ -258,7 +265,7 @@ fn annotated_literal_checks() {
     let a = ann(&mut ir, five, t);
     let b = build(a, ir);
     assert!(b.ok, "5 : int should check");
-    assert!(is_int_type(&b, b.ty[a].unwrap()));
+    assert!(is_int_type(&b, b.state[a].ty.unwrap()));
 }
 
 #[test]
@@ -269,8 +276,8 @@ fn the_type_universe_is_self_referential() {
     let t = ty(&mut ir);
     let b = build(t, ir);
     assert!(b.ok);
-    assert_eq!(b.term[t], Some(b.type_expr));
-    assert_eq!(b.ty[t], Some(b.type_expr), "Type : Type");
+    assert_eq!(b.state[t].term, Some(b.type_expr));
+    assert_eq!(b.state[t].ty, Some(b.type_expr), "Type : Type");
     let ids = array_ids(&b, b.type_expr);
     assert_eq!(ids.len(), 2);
     assert!(matches!(
@@ -296,12 +303,18 @@ fn an_error_block_is_skipped_and_never_cascades() {
     assert!(b.ok, "a masked error region is not a check failure");
     // The skip path still records the pair's three slots, so every downstream
     // read (`value_of`, `ty`) works and the expression is "done" (recompiles).
-    assert!(b.term[e].is_some(), "the skip path records the pair");
-    assert!(b.val[e].is_some(), "the skip path records the value slot");
-    assert!(b.ty[e].is_some(), "the skip path records the type slot");
+    assert!(b.state[e].term.is_some(), "the skip path records the pair");
+    assert!(
+        b.state[e].val.is_some(),
+        "the skip path records the value slot"
+    );
+    assert!(
+        b.state[e].ty.is_some(),
+        "the skip path records the type slot"
+    );
     // The two slots are fresh (unbound) cells — never unified by the
     // surrounding context, so they have no value and no type conflict.
-    let ty_cell = b.ty[e].unwrap();
+    let ty_cell = b.state[e].ty.unwrap();
     assert!(
         lichen_lowlevel::is_unbound(b.module.node_value(AnyNodeId::Dynamic(ty_cell))),
         "the type cell is a fresh, unbound cell"
@@ -328,7 +341,7 @@ fn an_error_block_as_a_child_does_not_cascade() {
     let b = build(tuple(&mut ir, &[e, five]), ir);
     assert!(b.ok, "a tuple with an error block checks");
     assert!(
-        b.term[e].is_some(),
+        b.state[e].term.is_some(),
         "the embedded error block still records its pair"
     );
 }
@@ -354,7 +367,7 @@ fn lambda_has_arrow_type() {
     let b = build(l, ir);
     assert!(b.ok, "\\x. x should check");
     // The lambda's type is the kinded arrow [[?a, ?a], [FunctionType, Type]].
-    let arrow = b.ty[l].unwrap();
+    let arrow = b.state[l].ty.unwrap();
     let ids = array_ids(&b, arrow);
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let kind_ids = array_ids(&b, ids[1]);
@@ -409,7 +422,7 @@ fn typed_tuple_is_a_kinded_tuple() {
     let tup = tuple(&mut ir, &[e1, e2]);
     let b = build(tup, ir);
     assert!(b.ok, "[1, 2] should check");
-    let ty = b.ty[tup].unwrap();
+    let ty = b.state[tup].ty.unwrap();
     let ids = array_ids(&b, ty);
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
@@ -436,7 +449,7 @@ fn real_array_type_is_type_and_length() {
     let b = build(arr, ir);
     assert!(b.ok, "Array(int, 3) should check");
     // The type of the array type is its kind [ArrayType, Type].
-    let ty = b.ty[arr].unwrap();
+    let ty = b.state[arr].ty.unwrap();
     let kind_ids = array_ids(&b, ty);
     assert_eq!(kind_ids.len(), 2);
     assert!(matches!(
@@ -445,7 +458,7 @@ fn real_array_type_is_type_and_length() {
     ));
     assert_eq!(kind_ids[1], b.type_expr);
     // The value is the instance [type, length].
-    let shape = b.val[arr].unwrap();
+    let shape = b.state[arr].val.unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
     assert!(
@@ -460,7 +473,7 @@ fn real_array_type_is_type_and_length() {
         "instance[1] is the length"
     );
     // The pair is [shape, kind].
-    let ids = array_ids(&b, b.term[arr].unwrap());
+    let ids = array_ids(&b, b.state[arr].term.unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(ids[0], shape);
     assert_eq!(ids[1], ty);
@@ -535,7 +548,7 @@ fn array_literal_is_homogeneous() {
     let arr = array(&mut ir, &[e1, e2]);
     let b = build(arr, ir);
     assert!(b.ok, "[1, 2] as an array literal should check");
-    let ty = b.ty[arr].unwrap();
+    let ty = b.state[arr].ty.unwrap();
     let ids = array_ids(&b, ty);
     assert_eq!(ids.len(), 2, "a type expression is a pair [shape, kind]");
     let shape_ids = array_ids(&b, ids[0]);
@@ -559,7 +572,7 @@ fn array_literal_is_homogeneous() {
     ));
     assert_eq!(kind_ids[1], b.type_expr);
     // The value holds the element values.
-    let value_ids = array_ids(&b, b.val[arr].unwrap());
+    let value_ids = array_ids(&b, b.state[arr].val.unwrap());
     assert_eq!(value_ids.len(), 2);
 }
 
@@ -751,7 +764,7 @@ fn type_of_a_literal_yields_its_type() {
         "type_of 5 is the int type marker, got {value:?}"
     );
     // The read's own type is element 1 of the int type — the universe.
-    let read = b.ty[whole].unwrap();
+    let read = b.state[whole].ty.unwrap();
     let kind = b.module.evaluate_node_deep(read, None);
     let ids = array_ids_from(kind);
     assert_eq!(ids[1], b.type_expr, "the type of the type is Type");
@@ -774,7 +787,7 @@ fn a_value_annotates_against_its_own_type_of() {
     let mut b = build(a, ir);
     assert!(b.ok, "5 : type_of 5 should check like 5 : int");
     // The annotation's type is the int type expression itself.
-    let ty = b.module.evaluate_node_deep(b.ty[a].unwrap(), None);
+    let ty = b.module.evaluate_node_deep(b.state[a].ty.unwrap(), None);
     assert!(is_int_type_value(&b, ty));
 }
 
@@ -926,7 +939,7 @@ fn indexing_a_function_reports_expected_tuple_or_array() {
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].kind, DiagKind::Guard);
     assert_eq!(diags[0].loc().map(|loc| loc.expr), Some(l));
-    assert_eq!(diags[0].a, b.ty[l].unwrap());
+    assert_eq!(diags[0].a, b.state[l].ty.unwrap());
 }
 
 #[test]
@@ -1202,7 +1215,7 @@ fn a_nested_function_value_captures_the_applied_outer_parameter() {
 /// The [`FunctionId`](lichen_lowlevel::FunctionId) this lambda expression
 /// compiled to — read off the expression's compiled value node.
 fn function_of(b: &lichen_highlevel::checker::Build<ProgramImpl>, e: ExprId) -> FunctionId {
-    let node = b.val[e].expect("the lambda compiled to a value node");
+    let node = b.state[e].val.expect("the lambda compiled to a value node");
     let value = b
         .module
         .node_value(AnyNodeId::Dynamic(node))
@@ -1274,12 +1287,12 @@ fn tuple_index_selects_value_and_type() {
     assert!(b.ok, "(1, 2)[0] should check");
     assert!(
         matches!(
-            b.module.evaluate_node_deep(b.val[idx].unwrap(), None),
+            b.module.evaluate_node_deep(b.state[idx].val.unwrap(), None),
             HighProgramValue::LowValue(LowValue::USize(1))
         ),
         "the value is the selected element"
     );
-    let ty_val = b.module.evaluate_node_deep(b.ty[idx].unwrap(), None);
+    let ty_val = b.module.evaluate_node_deep(b.state[idx].ty.unwrap(), None);
     assert!(
         is_int_type_value(&b, ty_val),
         "the type is the element type"
@@ -1303,12 +1316,12 @@ fn array_index_selects_value_and_type() {
     assert!(b.ok, "[1, 2, 3][1] should check");
     assert!(
         matches!(
-            b.module.evaluate_node_deep(b.val[idx].unwrap(), None),
+            b.module.evaluate_node_deep(b.state[idx].val.unwrap(), None),
             HighProgramValue::LowValue(LowValue::USize(2))
         ),
         "the value is the selected element"
     );
-    let ty_val = b.module.evaluate_node_deep(b.ty[idx].unwrap(), None);
+    let ty_val = b.module.evaluate_node_deep(b.state[idx].ty.unwrap(), None);
     assert!(
         is_int_type_value(&b, ty_val),
         "the type is the element type"
@@ -1414,13 +1427,13 @@ fn struct_type_has_a_kind_and_carries_a_fresh_type_id() {
     assert!(b.module.unify_errors.is_empty());
     // the shape is just the positional field-type list [int, Type] — the
     // nominal id no longer rides in the shape
-    let shape = b.val[s].unwrap();
+    let shape = b.state[s].val.unwrap();
     let shape_ids = array_ids(&b, shape);
     assert_eq!(shape_ids.len(), 2);
     assert!(is_int_type(&b, shape_ids[0]));
     // the kind slot is a standard [marker, K] pair; its marker is the
     // two-field TypeStruct value [id, names].
-    let kind = b.ty[s].unwrap();
+    let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     assert_eq!(kind_ids[1], b.type_expr);
@@ -1455,7 +1468,7 @@ fn a_named_struct_carries_a_name_to_index_table() {
     let s = named_type_struct(&mut ir, &[(t1, "a"), (t2, "b")]);
     let b = build(s, ir);
     assert!(b.ok);
-    let kind = b.ty[s].unwrap();
+    let kind = b.state[s].ty.unwrap();
     let kind_ids = array_ids(&b, kind);
     assert_eq!(kind_ids.len(), 2);
     let marker = kind_ids[0];
@@ -1468,7 +1481,9 @@ fn a_named_struct_carries_a_name_to_index_table() {
     else {
         panic!("the names field must be a table");
     };
-    let items = table.items();
+    // SAFETY: `names_node` is a live node of the build under test, whose block
+    // has not been dropped.
+    let items = unsafe { table.items() };
     assert_eq!(items.len(), 2);
     let mut found: Vec<(&str, usize)> = items
         .iter()
@@ -1502,8 +1517,8 @@ fn each_struct_type_occurrence_allocates_a_distinct_id() {
         2
     );
     // the nominal id is the marker's slot 0: kind = [marker, K], marker = [id, names].
-    let id1 = array_ids(&b, array_ids(&b, b.ty[s1].unwrap())[0])[0];
-    let id2 = array_ids(&b, array_ids(&b, b.ty[s2].unwrap())[0])[0];
+    let id1 = array_ids(&b, array_ids(&b, b.state[s1].ty.unwrap())[0])[0];
+    let id2 = array_ids(&b, array_ids(&b, b.state[s2].ty.unwrap())[0])[0];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(id1)),
         Some(HighProgramValue::TypeValue(TypeValue::TypeId(0)))
@@ -1525,7 +1540,7 @@ fn two_struct_type_occurrences_do_not_unify() {
     let b = build(pair, ir);
     assert!(b.ok);
     let mut module = b.module;
-    module.unify(b.term[s1].unwrap(), b.term[s2].unwrap());
+    module.unify(b.state[s1].term.unwrap(), b.state[s2].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
     let err = module.unify_errors[0].clone();
     assert!(matches!(
@@ -1548,7 +1563,7 @@ fn a_struct_type_does_not_unify_with_a_same_shape_tuple_type() {
     let b = build(pair, ir);
     assert!(b.ok);
     let mut module = b.module;
-    module.unify(b.term[s].unwrap(), b.term[t].unwrap());
+    module.unify(b.state[s].term.unwrap(), b.state[t].term.unwrap());
     assert_eq!(module.unify_errors.len(), 1);
     // The struct and tuple shapes are both the field-type list (same arity),
     // so the nominal distinction now lives at the kind's marker: a struct
@@ -1580,7 +1595,7 @@ fn a_struct_type_unifies_with_itself() {
     let b = build(s, ir);
     assert!(b.ok);
     let mut module = b.module;
-    module.unify(b.term[s].unwrap(), b.term[s].unwrap());
+    module.unify(b.state[s].term.unwrap(), b.state[s].term.unwrap());
     assert!(
         module.unify_errors.is_empty(),
         "the same struct type unifies with itself"
@@ -1718,7 +1733,7 @@ fn a_tuple_instantiated_with_a_struct_type_is_an_instance() {
     assert!(b.module.unify_errors.is_empty());
     // the instance's type is the struct type, not the tuple type
     assert_eq!(
-        b.ty[inst], b.term[s],
+        b.state[inst].ty, b.state[s].term,
         "the instance's type is the struct type"
     );
 }
@@ -1826,7 +1841,7 @@ fn an_instantiation_through_a_call_result_callee_checks() {
         b.diagnostics()
     );
     assert_eq!(
-        b.ty[inst], b.term[call],
+        b.state[inst].ty, b.state[call].term,
         "the instance's type is the callee's struct type"
     );
 }
@@ -1974,7 +1989,7 @@ fn an_underscore_annotation_infers_the_type() {
     let a = ann(&mut ir, five, h);
     let mut b = build(a, ir);
     assert!(b.ok, "5 : _ should check");
-    let ids = array_ids(&b, b.ty[a].unwrap());
+    let ids = array_ids(&b, b.state[a].ty.unwrap());
     assert_eq!(ids.len(), 2);
     assert_eq!(
         b.module.equality_representative(ids[0]),
@@ -2001,8 +2016,8 @@ fn an_underscore_annotation_binds_a_function_type() {
     let mut b = build(a, ir);
     assert!(b.ok, "(\\x. x) : _ should check");
     // The placeholder's value slot binds to the arrow shape.
-    let ann_ids = array_ids(&b, b.ty[a].unwrap());
-    let shape = array_ids(&b, b.ty[l].unwrap())[0];
+    let ann_ids = array_ids(&b, b.state[a].ty.unwrap());
+    let shape = array_ids(&b, b.state[l].ty.unwrap())[0];
     assert_eq!(
         b.module.equality_representative(ann_ids[0]),
         b.module.equality_representative(shape),
@@ -2029,7 +2044,7 @@ fn partial_inference_in_an_arrow_type() {
     let a = ann(&mut ir, l, t);
     let b = build(a, ir);
     assert!(b.ok, "the identity fits Int -> _");
-    let arrow = array_ids(&b, b.ty[l].unwrap());
+    let arrow = array_ids(&b, b.state[l].ty.unwrap());
     let shape_ids = array_ids(&b, arrow[0]);
     assert!(
         is_int_type(&b, shape_ids[0]),
@@ -2053,9 +2068,9 @@ fn an_underscore_in_the_array_length_position() {
     let mut b = build(a, ir);
     assert!(b.ok, "[1, 2, 3] : array<Int, _> should check");
     // The annotated type's length slot unifies with the literal's length 3.
-    let ann_shape = array_ids(&b, b.ty[a].unwrap())[0];
+    let ann_shape = array_ids(&b, b.state[a].ty.unwrap())[0];
     let length_slot = array_ids(&b, ann_shape)[1];
-    let arr_shape = array_ids(&b, b.ty[arr].unwrap())[0];
+    let arr_shape = array_ids(&b, b.state[arr].ty.unwrap())[0];
     let len3 = array_ids(&b, arr_shape)[1];
     assert!(matches!(
         b.module.node_value(AnyNodeId::Dynamic(len3)),
@@ -2096,25 +2111,31 @@ fn shallow_array_is_masked_and_typed_like_a_tuple() {
     let arr = ir.alloc_shallow_array(&[(one, 0), (two, usize::MAX)]);
     let mut b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
-    let value = b.module.evaluate_node_deep(b.val[arr].unwrap(), None);
+    let value = b.module.evaluate_node_deep(b.state[arr].val.unwrap(), None);
     assert_eq!(
         array_mask_from(value),
         [false, true],
         "position 1 is marked"
     );
-    let ty_val = b.module.evaluate_node_deep(b.ty[arr].unwrap(), None);
+    let ty_val = b.module.evaluate_node_deep(b.state[arr].ty.unwrap(), None);
     let HighProgramValue::LowValue(LowValue::Array(ty_pair)) = ty_val else {
         panic!("expected a type pair");
     };
-    let kind_val = b
-        .module
-        .evaluate_node_deep(dyn_node(ty_pair.items()[1].node), None);
+    let kind_val = b.module.evaluate_node_deep(
+        // SAFETY: `ty_pair` is the value just evaluated by the build under
+        // test, whose block has not been dropped.
+        dyn_node(unsafe { ty_pair.items() }[1].node),
+        None,
+    );
     let HighProgramValue::LowValue(LowValue::Array(kind)) = kind_val else {
         panic!("expected a kind expression");
     };
     assert_eq!(
-        b.module
-            .node_value(AnyNodeId::Dynamic(dyn_node(kind.items()[0].node))),
+        b.module.node_value(AnyNodeId::Dynamic(
+            // SAFETY: `kind` is the value just evaluated by the build under
+            // test, whose block has not been dropped.
+            dyn_node(unsafe { kind.items() }[0].node)
+        )),
         Some(HighProgramValue::TypeValue(TypeValue::TypeTuple)),
         "typed like a tuple"
     );
@@ -2140,7 +2161,7 @@ fn shallow_marked_position_stays_lazy_until_a_read() {
     let arr = ir.alloc_shallow_array(&[(one, 0), (call, usize::MAX)]);
     let b = build(arr, ir);
     assert!(b.ok, "the shallow array should check");
-    let ids = array_ids(&b, b.val[arr].unwrap());
+    let ids = array_ids(&b, b.state[arr].val.unwrap());
     assert_eq!(ids.len(), 2);
     assert!(
         b.module.node_value(AnyNodeId::Dynamic(ids[1])).is_none(),
@@ -2170,7 +2191,8 @@ fn a_read_of_a_shallow_position_forces_the_element() {
     let mut b = build(read, ir);
     assert!(b.ok, "the read should check");
     assert_eq!(
-        b.module.evaluate_node_deep(b.val[read].unwrap(), None),
+        b.module
+            .evaluate_node_deep(b.state[read].val.unwrap(), None),
         HighProgramValue::LowValue(LowValue::USize(6)),
         "the read forces the apply at the masked position"
     );
@@ -2480,4 +2502,146 @@ fn an_annotated_array_parameter_in_bounds_body_index_checks_and_drains() {
         b.module.asserts.is_empty(),
         "the all-concrete constraint was decided and consumed"
     );
+}
+
+// --- the compile work budget ---------------------------------------------
+
+/// `count n = [count (n - 1), 0][n == 0]` — the lazy-branch spelling of
+/// `if n == 0 then 0 else count (n - 1)`: a recursion that terminates after
+/// `argument + 1` applications, so how much work it asks of the definition
+/// pass is known exactly.
+fn countdown(argument: u64) -> (ExprId, IR) {
+    let mut ir = IR::new();
+    // A block-wide binding reserves its own id before its value compiles, so
+    // the recursive call in the body resolves to it (the frontend's
+    // block-root discipline).
+    let count = ir.alloc(ExprKind::Placeholder);
+    ir.block_roots.insert(count);
+    let n = param(&mut ir);
+    let zero = int(&mut ir, 0);
+    let condition = eq_binop(&mut ir, n, zero);
+    let one = int(&mut ir, 1);
+    let decrement = ir.alloc(ExprKind::BinOp {
+        operator: lichen_highlevel::ir::BinOp::Sub,
+        left: n,
+        right: one,
+    });
+    let recursive = app(&mut ir, count, decrement);
+    let base = int(&mut ir, 0);
+    let branches = tuple(&mut ir, &[recursive, base]);
+    let body = field(&mut ir, branches, condition);
+    ir.set_kind(
+        count,
+        ExprKind::Function {
+            parameter: n,
+            parameter_type: None,
+            parameter_attribute: None,
+            r#return: body,
+            parent: None,
+        },
+    );
+    let argument = int(&mut ir, argument);
+    let root = app(&mut ir, count, argument);
+    (root, ir)
+}
+
+#[test]
+fn a_caller_supplied_budget_bounds_the_definition_pass() {
+    // `count 3` applies four times.  A caller-supplied total of two refuses
+    // the definition pass, and the refusal is reported as the same
+    // non-termination diagnostic an unbounded recursion gets — so the limit
+    // in force is the caller's, not the tuned default.
+    let (root, mut ir) = countdown(3);
+    ir.set_root(root);
+    let b = Checker::<ProgramImpl>::build_with_budget(
+        ir,
+        lichen_highlevel::checker::WorkBudget {
+            apply_total_limit: 2,
+            ..Default::default()
+        },
+    );
+    assert!(!b.ok, "the caller's budget must refuse the walk");
+    assert_eq!(
+        b.module.budget_exhausted,
+        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2 }),
+        "the caller's limit is the one the guard refused on"
+    );
+    assert_eq!(b.nonterminating.len(), 1, "the refusal is a diagnostic");
+    assert!(
+        b.diagnostics()
+            .iter()
+            .any(|d| d.kind == DiagKind::NonTerminating)
+    );
+}
+
+#[test]
+fn the_default_entry_point_still_uses_the_tuned_budget() {
+    // The same program through the default entry point: `count 3` applies
+    // four times, far below the tuned total, so it checks and runs.
+    let (root, ir) = countdown(3);
+    let b = build(root, ir);
+    assert!(b.ok, "count 3 must check under the default budget");
+    assert!(b.module.budget_exhausted.is_none());
+}
+
+#[test]
+fn a_raised_budget_lets_a_terminating_program_check() {
+    // The same program as above, under a total the caller raised: `count
+    // 2500` terminates after 2_501 applications and now checks.  This is the
+    // capability the tuned-only budget denied — before it, the build above is
+    // the only available answer for a terminating program.
+    let (root, mut ir) = countdown(2_500);
+    ir.set_root(root);
+    let b = Checker::<ProgramImpl>::build_with_budget(
+        ir,
+        lichen_highlevel::checker::WorkBudget {
+            apply_total_limit: 10_000,
+            ..Default::default()
+        },
+    );
+    assert!(
+        b.ok,
+        "a terminating recursion below the raised total must check"
+    );
+    assert!(b.module.budget_exhausted.is_none());
+}
+
+#[test]
+fn the_tuned_total_still_bounds_a_long_but_terminating_recursion() {
+    // The default numbers are unchanged: a terminating recursion past the
+    // tuned total (2_000 applications) is still refused and reported, which
+    // is exactly why the limit has to be the caller's to raise.
+    let (root, ir) = countdown(2_500);
+    let b = build(root, ir);
+    assert!(!b.ok, "the tuned total must still refuse this walk");
+    assert_eq!(
+        b.module.budget_exhausted,
+        Some(lichen_lowlevel::BudgetExhausted::ApplyTotal { limit: 2_000 })
+    );
+    assert_eq!(b.nonterminating.len(), 1);
+}
+
+// --- the checker's own recursion -----------------------------------------
+
+/// Nesting levels of [`a_deeply_nested_program_is_checked_without_an_overflow`],
+/// chosen past what the test thread's native stack holds: the checker's
+/// `check_term` recurses about twice per level (through `check_expr` and the
+/// `check_ann` rule), so this is millions of frames.
+const DEEP_NESTING: usize = 200_000;
+
+#[test]
+fn a_deeply_nested_program_is_checked_without_an_overflow() {
+    // A generated program may nest far deeper than the native stack: the
+    // checker's `check_term` recurses once per nesting level, so without a
+    // stack guard this build overflows and aborts the process instead of
+    // reporting anything.  The deep pass that follows is already
+    // `#[stacksafe]`; this pins the same property for the checker.
+    let mut ir = IR::new();
+    let int_ty = int_t(&mut ir);
+    let mut nested = int(&mut ir, 5);
+    for _ in 0..DEEP_NESTING {
+        nested = ann(&mut ir, nested, int_ty);
+    }
+    let b = build(nested, ir);
+    assert!(b.ok, "the nested annotations must check");
 }

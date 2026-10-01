@@ -6,6 +6,11 @@
 //! list, [`union`] splices the two member lists with O(1) pointer surgery,
 //! and neither allocates: the metadata lives inside the caller's nodes and
 //! every operation is plain field reads and writes.
+//!
+//! The links are the union-find's state, not the caller's: [`Meta`]'s fields
+//! are private and the mutable accessor [`Node::meta_mut`] requires a permit
+//! only this module can mint, so a node changes sets only through the
+//! operations below.  See `P2-13` in `docs/notes/code-audit.md`.
 
 use slotmap::{Key, SlotMap};
 use stacksafe::stacksafe;
@@ -19,24 +24,74 @@ use stacksafe::stacksafe;
 ///   they are never read elsewhere.
 /// - The member list is acyclic: [`union`] splices a root (a None-terminated
 ///   list head) onto the tail of another root's list, so `next` never loops.
+///
+/// The links are the union-find's state, so the fields are private: read
+/// them through the accessors, and build one with [`Self::new`] only to
+/// carry solved links between key spaces.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Meta<K: Copy> {
     /// The representative of the set; `None` means this node is its own root.
-    pub parent: Option<K>,
+    parent: Option<K>,
     /// The next member in the set's member list, headed by the representative.
-    pub next: Option<K>,
+    next: Option<K>,
     /// Valid only at a representative: the last member of its list.
-    pub tail: Option<K>,
+    tail: Option<K>,
     /// Valid only at a representative: the number of members in the set.
-    pub size: u32,
+    size: u32,
 }
+
+impl<K: Copy> Meta<K> {
+    /// Assemble metadata from its four links.
+    ///
+    /// The one way to build a [`Meta`] whose links did not come from this
+    /// module's own operations: freezing a solved module remaps a live
+    /// node's links onto local indices, and the artifact decoder reads them
+    /// back.
+    pub fn new(parent: Option<K>, next: Option<K>, tail: Option<K>, size: u32) -> Self {
+        Self {
+            parent,
+            next,
+            tail,
+            size,
+        }
+    }
+
+    /// The representative of the set; `None` means this node is its own root.
+    pub fn parent(&self) -> Option<K> {
+        self.parent
+    }
+
+    /// The next member in the set's member list, headed by the representative.
+    pub fn next(&self) -> Option<K> {
+        self.next
+    }
+
+    /// Valid only at a representative: the last member of its list.
+    pub fn tail(&self) -> Option<K> {
+        self.tail
+    }
+
+    /// Valid only at a representative: the number of members in the set.
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+}
+
+/// The permit [`Node::meta_mut`] requires.
+///
+/// Its field is private, so only this module can mint one: a [`Meta`] the
+/// caller built with [`Meta::new`] (or [`Default`]) can be handed *back*, but
+/// a live node's links are writable only by the operations here.
+pub struct MetaPermit(());
 
 /// A node type that carries a [`Meta`] for a disjoint-set.
 pub trait Node: Sized {
     /// The node's key in the [`SlotMap`] that stores it.
     type Key: Copy;
     fn meta(&self) -> &Meta<Self::Key>;
-    fn meta_mut(&mut self) -> &mut Meta<Self::Key>;
+    /// The node's metadata, writable under a minted `permit` — see
+    /// [`MetaPermit`].
+    fn meta_mut(&mut self, permit: MetaPermit) -> &mut Meta<Self::Key>;
 }
 
 /// Initialize `key` as the singleton representative of its own set.
@@ -48,7 +103,7 @@ where
     K: Key,
     V: Node<Key = K>,
 {
-    let set = nodes[key].meta_mut();
+    let set = nodes[key].meta_mut(MetaPermit(()));
     set.parent = None;
     set.next = None;
     set.tail = Some(key);
@@ -68,12 +123,12 @@ where
     K: Key,
     V: Node<Key = K>,
 {
-    let Some(parent) = nodes[key].meta().parent else {
+    let Some(parent) = nodes[key].meta().parent() else {
         return key;
     };
     let root = find(nodes, parent);
     if root != parent {
-        nodes[key].meta_mut().parent = Some(root);
+        nodes[key].meta_mut(MetaPermit(())).parent = Some(root);
     }
     root
 }
@@ -95,24 +150,59 @@ where
     if ra == rb {
         return ra;
     }
-    let (ra, rb) = if nodes[ra].meta().size < nodes[rb].meta().size {
+    let (ra, rb) = if nodes[ra].meta().size() < nodes[rb].meta().size() {
         (rb, ra)
     } else {
         (ra, rb)
     };
     // Read every target before writing, so the writes below are independent.
-    let Some(ta) = nodes[ra].meta().tail else {
+    let Some(ta) = nodes[ra].meta().tail() else {
         unreachable!("representative {ra:?} lacks a member-list tail")
     };
-    let Some(tb) = nodes[rb].meta().tail else {
+    let Some(tb) = nodes[rb].meta().tail() else {
         unreachable!("representative {rb:?} lacks a member-list tail")
     };
-    let size = nodes[ra].meta().size + nodes[rb].meta().size;
-    nodes[ta].meta_mut().next = Some(rb);
-    nodes[rb].meta_mut().parent = Some(ra);
-    nodes[ra].meta_mut().tail = Some(tb);
-    nodes[ra].meta_mut().size = size;
+    let size = nodes[ra].meta().size() + nodes[rb].meta().size();
+    nodes[ta].meta_mut(MetaPermit(())).next = Some(rb);
+    nodes[rb].meta_mut(MetaPermit(())).parent = Some(ra);
+    nodes[ra].meta_mut(MetaPermit(())).tail = Some(tb);
+    nodes[ra].meta_mut(MetaPermit(())).size = size;
     ra
+}
+
+/// Rewrite a set's member list to exactly `members`, in the order given.
+///
+/// `members[0]` becomes the representative, every other member's parent is
+/// re-pointed straight at it (flattening the tree), the member list is
+/// re-linked in that order and the representative's `tail` and `size` are
+/// recorded.  Members left out keep their own metadata — the caller is
+/// dropping them.  An empty `members` is a no-op, so a set that loses every
+/// member is left alone.
+///
+/// This is the splice a caller needs when some of a set's members die: see
+/// `Module::flatten_class`.
+pub fn rebuild<K, V>(nodes: &mut SlotMap<K, V>, members: &[K])
+where
+    K: Key,
+    V: Node<Key = K>,
+{
+    let Some((&representative, _)) = members.split_first() else {
+        return;
+    };
+    let mut previous: Option<K> = None;
+    for &member in members {
+        if let Some(previous) = previous {
+            nodes[previous].meta_mut(MetaPermit(())).next = Some(member);
+        }
+        nodes[member].meta_mut(MetaPermit(())).parent =
+            (member != representative).then_some(representative);
+        previous = Some(member);
+    }
+    let last = previous.expect("the member list is non-empty");
+    nodes[last].meta_mut(MetaPermit(())).next = None;
+    let meta = nodes[representative].meta_mut(MetaPermit(()));
+    meta.tail = Some(last);
+    meta.size = members.len() as u32;
 }
 
 /// Iterate over every member of the set represented by `root`, starting with
@@ -124,5 +214,5 @@ where
     K: Key,
     V: Node<Key = K>,
 {
-    std::iter::successors(Some(root), |&key| nodes[key].meta().next)
+    std::iter::successors(Some(root), |&key| nodes[key].meta().next())
 }

@@ -9,14 +9,32 @@
 
 use std::path::{Path, PathBuf};
 
+/// The largest leaf name [`Writer::leaf`] can encode.
+///
+/// A leaf name is a Rust identifier from lichen-language's vocabulary
+/// composition macro (`stringify!` of a plugin-declared variant name), never
+/// source text, so this is a closed vocabulary: a name longer than the
+/// one-byte length field is a compiler bug, and the writer refuses it rather
+/// than truncating the length — a truncated length leaves the rest of the
+/// name in the stream and every field after it is then read from the wrong
+/// offset.
+pub const MAX_LEAF_NAME_BYTES: usize = u8::MAX as usize;
+
 /// A little-endian byte writer for the artifact format.
 pub struct Writer {
     buf: Vec<u8>,
+    /// The first leaf name that could not be encoded.  Once set the writer is
+    /// poisoned: its buffer is a prefix that must never be handed out, and
+    /// [`Writer::finish`] reports this instead.
+    error: Option<String>,
 }
 
 impl Writer {
     pub fn new() -> Writer {
-        Writer { buf: Vec::new() }
+        Writer {
+            buf: Vec::new(),
+            error: None,
+        }
     }
     pub fn u8(&mut self, value: u8) {
         self.buf.push(value);
@@ -39,12 +57,43 @@ impl Writer {
     /// the name bytes.  The composed `ProgramCodec` tags every value/operator
     /// leaf with its carry-variant name so the reader knows which leaf codec
     /// to dispatch to.
-    pub fn leaf(&mut self, name: &str) {
+    ///
+    /// Refuses a name longer than [`MAX_LEAF_NAME_BYTES`]: the length field
+    /// cannot hold it, and writing the name anyway desynchronises the stream
+    /// (see [`Reader::leaf_name`]).
+    pub fn leaf(&mut self, name: &str) -> Result<(), String> {
+        if name.len() > MAX_LEAF_NAME_BYTES {
+            let error = format!(
+                "leaf name of {} bytes exceeds the {MAX_LEAF_NAME_BYTES}-byte limit",
+                name.len()
+            );
+            self.error.get_or_insert_with(|| error.clone());
+            return Err(error);
+        }
         self.u8(name.len() as u8);
         self.bytes(name.as_bytes());
+        Ok(())
     }
+    /// The finished buffer, or the first leaf name [`Writer::leaf`] refused.
+    ///
+    /// Prefer this over [`Writer::into_bytes`] wherever a leaf name can have
+    /// been written: it is the only way a refused name reaches the caller as
+    /// an error instead of a buffer that misparses.
+    pub fn finish(self) -> Result<Vec<u8>, String> {
+        match self.error {
+            Some(error) => Err(error),
+            None => Ok(self.buf),
+        }
+    }
+    /// The finished buffer, infallibly.
+    ///
+    /// The format's fixed fields are all write-only here — nothing in the
+    /// registry or in the artifact *header* goes through [`Writer::leaf`] — so
+    /// neither can a name be refused.  A writer that did refuse one must be
+    /// finished with [`Writer::finish`] instead.
     pub fn into_bytes(self) -> Vec<u8> {
-        self.buf
+        self.finish()
+            .expect("no leaf name is written on this path, so none can be refused")
     }
 }
 
@@ -78,11 +127,14 @@ impl<'a> Reader<'a> {
         Ok(u64::from_le_bytes(bytes.try_into().expect("8 bytes")))
     }
     pub fn take(&mut self, len: usize) -> Result<&'a [u8], String> {
-        if self.pos + len > self.buf.len() {
+        // `self.pos + len` is an unchecked add: a crafted length wraps in
+        // release and makes the bounds check below vacuous.
+        let end = self.pos.checked_add(len).ok_or("truncated artifact")?;
+        if end > self.buf.len() {
             return Err("truncated artifact".into());
         }
-        let bytes = &self.buf[self.pos..self.pos + len];
-        self.pos += len;
+        let bytes = &self.buf[self.pos..end];
+        self.pos = end;
         Ok(bytes)
     }
     pub fn path(&mut self) -> Result<PathBuf, String> {
@@ -96,6 +148,26 @@ impl<'a> Reader<'a> {
     pub fn leaf_name(&mut self) -> Result<&'a [u8], String> {
         let len = self.u8()? as usize;
         self.take(len)
+    }
+    /// How many bytes are still unread in the buffer.
+    ///
+    /// This is the bound every length read out of the stream is checked
+    /// against: a list of `n` elements costs at least `n` bytes, so a declared
+    /// count larger than the remaining byte count cannot have been produced by
+    /// any writer.  A reader that preallocates from the count alone lets a
+    /// tiny file request an enormous allocation.
+    pub fn remaining(&self) -> usize {
+        self.buf.len().saturating_sub(self.pos)
+    }
+    /// How many bytes have been read so far — the read offset into the buffer.
+    ///
+    /// The artifact container uses this to find where its header ends: the body
+    /// digest covers exactly the bytes after the header, and a caller slices
+    /// them out of the original buffer from this offset onward, because
+    /// [`Reader::take`] hands back a borrow of the buffer rather than of the
+    /// reader.
+    pub fn position(&self) -> usize {
+        self.pos
     }
     pub fn done(&self) -> bool {
         self.pos == self.buf.len()

@@ -16,11 +16,12 @@
 
 use std::path::PathBuf;
 
-use lichen_language::readme;
+use lichen_tools::readme;
 
 #[test]
 fn every_example_runs_and_prints_what_it_declares() {
     let files: Vec<PathBuf> = readme::example_files()
+        .unwrap_or_else(|e| panic!("{e}"))
         .into_iter()
         .map(|(_, file)| file)
         .collect();

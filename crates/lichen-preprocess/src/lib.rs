@@ -31,7 +31,7 @@
 //! the package manager fetches each `depend` into and the compiler reads the
 //! vendored aliases from (see [`Depend::vendored_dir`]).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use lichen_span::{Span, line_col, line_starts};
 
@@ -40,10 +40,14 @@ mod parse;
 
 pub use parse::Directive;
 
-/// A preprocessor diagnostic: a message plus the source position it is
-/// grounded in.  Check-free — the preprocessor never touches a checker or a
-/// program marker — so it is not typed over a vocabulary.  A caller (the
-/// language layer) widens it into its own diagnostic at `Stage::Preprocess`.
+/// A preprocessor diagnostic: a message plus, when the failure is a property of
+/// the source, the position it is grounded in.  A failure that is about no
+/// source text at all — a dependency directory that has not been fetched, a
+/// `sub` path that is not a relative path inside its clone — carries `None` and
+/// is rendered as its message alone.  Check-free — the preprocessor never
+/// touches a checker or a program marker — so it is not typed over a
+/// vocabulary.  A caller (the language layer) widens it into its own diagnostic
+/// at `Stage::Preprocess`.
 #[derive(Clone, Debug)]
 pub struct PreprocessDiag {
     pub span: Option<Span>,
@@ -58,9 +62,11 @@ impl PreprocessDiag {
         }
     }
 
-    pub fn at_zero(message: impl Into<String>) -> Self {
+    /// A diagnostic with no source position: the failure is not a property of
+    /// any source text, so it renders as its message alone, with no caret.
+    pub fn unattributed(message: impl Into<String>) -> Self {
         PreprocessDiag {
-            span: Some((0, 0)),
+            span: None,
             message: message.into(),
         }
     }
@@ -158,11 +164,32 @@ impl Depend {
     }
 
     /// The vendored directory the alias resolves to: the clone root, or its
-    /// `sub` subdirectory (a monorepo dependency).
-    pub fn vendored_dir(&self) -> PathBuf {
+    /// `sub` subdirectory (a monorepo dependency).  `sub` is free-form text
+    /// from the source file, so it is validated here — the one place every
+    /// consumer reads the path from — and rejected unless it is a plain
+    /// relative path inside the clone.
+    pub fn vendored_dir(&self) -> Result<PathBuf, String> {
+        let root = self.sources_dir();
         match &self.sub {
-            Some(sub) => self.sources_dir().join(sub),
-            None => self.sources_dir(),
+            Some(sub) => {
+                let sub_path = Path::new(sub);
+                if sub_path.is_absolute()
+                    || sub_path.components().any(|component| {
+                        matches!(
+                            component,
+                            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+                        )
+                    })
+                {
+                    return Err(format!(
+                        "dependency '{}' has a `sub` path '{sub}' that is not a relative path \
+                         inside the clone",
+                        self.alias()
+                    ));
+                }
+                Ok(root.join(sub_path))
+            }
+            None => Ok(root),
         }
     }
 }
@@ -269,43 +296,15 @@ where
                             }
                         }
                         Directive::Metadata { name, value } => metadata.push((name, value)),
-                        Directive::Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin,
-                        } => depends.push(Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin,
-                        }),
-                        Directive::Plug {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                        } => depends.push(Depend {
-                            url,
-                            name,
-                            rev,
-                            branch,
-                            tag,
-                            package,
-                            sub,
-                            plugin: true,
-                        }),
+                        // Both `name = depend "url"` and `name = plug "url"`
+                        // normalize through `depend_of` — the one place a
+                        // `Depend` is built — so a new field cannot be dropped
+                        // on this path.
+                        other => {
+                            if let Some(dep) = depend_of(other) {
+                                depends.push(dep);
+                            }
+                        }
                     }
                 }
             }
@@ -426,9 +425,10 @@ pub fn depend_of(dir: Directive) -> Option<Depend> {
 /// `resolver` as vendored aliases, resolving each against the lichen-home
 /// source cache (see [`Depend::vendored_dir`]).  A dependency that has not
 /// been fetched by the package manager (`lichen fetch`) is reported as a
-/// preprocess diagnostic naming the missing dir — the compiler never fetches
-/// git sources itself, it only reads what the package manager put in the
-/// cache.
+/// preprocess diagnostic naming the missing dir, and one whose `sub` is not a
+/// relative path inside the clone is reported the same way — the compiler
+/// never fetches git sources itself, it only reads what the package manager
+/// put in the cache.
 pub fn stage_depends<E, R>(resolver: &mut R, source: &str) -> Vec<PreprocessDiag>
 where
     R: ImportResolver<E>,
@@ -440,11 +440,17 @@ where
     };
     for dep in block_depends(interior) {
         let alias = dep.alias();
-        let dir = dep.vendored_dir();
+        let dir = match dep.vendored_dir() {
+            Ok(dir) => dir,
+            Err(message) => {
+                diags.push(PreprocessDiag::unattributed(message));
+                continue;
+            }
+        };
         if dir.is_dir() {
             resolver.register_vendored(alias, dir);
         } else {
-            diags.push(PreprocessDiag::at_zero(format!(
+            diags.push(PreprocessDiag::unattributed(format!(
                 "dependency '{alias}' is not fetched (expected {}) — run `lichen fetch` first",
                 dir.display()
             )));

@@ -5,14 +5,19 @@
 //! compiled file keeps exactly one cache slot (keyed by its file ID), so
 //! recompiling a modified file overwrites it rather than accumulating.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lichen_language::diag::Stage;
 use lichen_language::package::PackageStore;
-use lichen_language::persist::DeviceRegistry;
-use lichen_language::program::LangProgram;
+use lichen_language::persist::{
+    DeviceRegistry, artifact_hash, deserialize_artifact, file_id_hash, hex, sha256,
+};
+use lichen_language::program::{LangProgram, LangValue};
 use lichen_language::run::evaluate_raw;
+use lichen_lowlevel::LowValue;
 
 fn temp_dir(name: &str) -> PathBuf {
     let nonce = SystemTime::now()
@@ -44,6 +49,25 @@ fn handle_of(
         .find(|handle| handle.path.file_name().is_some_and(|n| n == name))
         .unwrap_or_else(|| panic!("{name} was not loaded"))
         .clone()
+}
+
+#[test]
+fn the_shipping_slot_is_the_one_the_package_manager_installs_into() {
+    // The compiler locates its cache root here; `lichen` (lichen-package)
+    // installs the shipping toolchain into `<lichendir>/compilers/<its own
+    // key>`.  Both call `lichen_utils::cache::compiler_slot_key`, and this is
+    // the one test that spans the two crates: a second derivation — or the
+    // same derivation over a different repository — on either side fails here.
+    let installed = lichen_package::compiler_cache::key(lichen_package::DEFAULT_REPO, &[])
+        .expect("the empty plugin set needs no fetched source");
+    let expected = lichen_language::persist::lichendir()
+        .join("compilers")
+        .join(installed);
+    assert_eq!(
+        lichen_language::persist::shipping_cache_root(),
+        expected,
+        "the slot the compiler reads must be the slot the package manager writes"
+    );
 }
 
 #[test]
@@ -190,6 +214,73 @@ fn identical_content_gets_separate_file_id_slots() {
 }
 
 #[test]
+fn a_corrupted_body_is_rejected_by_the_header_digest() {
+    // The header's body digest is verified before any body field is read, so a
+    // body corrupted in place is a clean miss (the store recompiles) rather
+    // than a module that loads and is silently wrong.  The flipped byte is a
+    // letter of a string literal: valid UTF-8, inside no length or index, so
+    // no field parser can reject it — only the digest can.
+    const MARKER: &str = "artifact-body-digest-marker";
+    let dir = temp_dir("bodydigest");
+    let path = write(&dir, "pkg.lichen", &format!("\"{MARKER}\"\n"));
+    let cache = dir.join("cache");
+    let mut store = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    let handle = store.load_package(&path).unwrap();
+
+    let source = fs::read_to_string(&path).unwrap();
+    let file_id = fs::canonicalize(&path)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let bytes = fs::read(
+        cache
+            .join("artifacts")
+            .join(format!("{}.module", hex(&file_id_hash(&file_id)))),
+    )
+    .unwrap();
+    let hash = artifact_hash(sha256(source.as_bytes()), &[]);
+    let modules = HashMap::new();
+
+    // A valid artifact the writer produced still loads: a digest read or
+    // computed over the wrong bytes would break every cache load.
+    let (module, export) = deserialize_artifact(&bytes, handle.key, hash, &modules)
+        .expect("the artifact the writer produced must load");
+    assert!(export.index < module.nodes.len());
+    assert!(
+        module
+            .nodes
+            .iter()
+            .any(|node| node.value == Some(LangValue::LowValue(LowValue::Str(MARKER)))),
+        "the loaded module carries the program's string literal"
+    );
+
+    // The writer emits the string literal's bytes into the body exactly once,
+    // so the flip below lands in the body and changes no length or index.
+    let at = bytes
+        .windows(MARKER.len())
+        .position(|window| window == MARKER.as_bytes())
+        .expect("the string literal's bytes are in the artifact body");
+    assert_eq!(
+        bytes
+            .windows(MARKER.len())
+            .filter(|window| *window == MARKER.as_bytes())
+            .count(),
+        1,
+        "the marker occurs once, so the flip lands in the string literal"
+    );
+    let mut corrupt = bytes.clone();
+    corrupt[at] ^= 0x20;
+
+    let Err(error) = deserialize_artifact(&corrupt, handle.key, hash, &modules) else {
+        panic!("a corrupted body must not load");
+    };
+    assert!(
+        error.contains("digest"),
+        "the body digest rejects it, not a field parser: {error}"
+    );
+}
+
+#[test]
 fn gc_cleans_only_non_lichen_and_non_virtual_slots() {
     // `gc` is a "clean": it keeps artifacts whose file ID is a lichen file
     // path or a virtual lichen-file path, and removes anything else.  Since
@@ -242,6 +333,37 @@ fn non_lichen_package_is_rejected_at_load() {
             .map(|d| d.message.as_str())
             .collect::<Vec<_>>()
             .join("; ")
+    );
+}
+
+#[test]
+fn a_missing_package_is_an_io_diagnostic_not_a_line_one_syntax_error() {
+    // A path that does not exist is a filesystem failure, so it carries no
+    // source position: it must not be reported as a source problem at line 1,
+    // column 1 (a caret at the first character of a file that is not there).
+    let dir = temp_dir("missing");
+    let missing = dir.join("absent.lichen");
+    let mut store = PackageStore::<LangProgram>::with_cache_dir(dir.join("cache"));
+    let err = store.load_package(&missing).unwrap_err();
+    let diagnostic = err.first().expect("a diagnostic");
+    assert_eq!(
+        diagnostic.stage,
+        Stage::Io,
+        "a filesystem failure is its own stage: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic.span.is_none(),
+        "an I/O failure is not grounded in the source: {diagnostic:?}"
+    );
+    assert!(
+        diagnostic.message.contains("absent.lichen"),
+        "the path must survive: {}",
+        diagnostic.message
+    );
+    let rendered = lichen_language::render::render("", diagnostic);
+    assert!(
+        !rendered.contains('^') && !rendered.contains("-->"),
+        "an I/O failure renders without a caret:\n{rendered}"
     );
 }
 
@@ -309,6 +431,34 @@ fn two_stores_share_the_device_registry() {
     let hb_again = store1.load_package(&dir.join("b.lichen")).unwrap();
     assert_eq!(hb.key, hb_again.key, "store1 serves store2's artifact");
     assert_eq!(store1.compiled, 1, "store1 never recompiles b");
+}
+
+#[test]
+fn a_package_that_imports_an_embedded_source_verifies_across_stores() {
+    // The package imports an embedded (native virtual) source instead of a file
+    // on disk.  Its bytes are compiled into the compiler binary, so the
+    // dependency can never change under this cache root and must not force the
+    // package to recompile on every run.
+    let dir = temp_dir("embedded-dep");
+    let pkg_path = write(&dir, "pkg.lichen", "@{p = import \"plug.lichen\"@}p + 1\n");
+    let cache = dir.join("cache");
+
+    let mut first = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    first
+        .register_native("plug.lichen", "42", lichen_highlevel::no_native_ops())
+        .unwrap();
+    first.load_package(&pkg_path).unwrap();
+    assert_eq!(first.loaded_from_cache, 0, "the first load compiles");
+
+    let mut second = PackageStore::<LangProgram>::with_cache_dir(cache.clone());
+    second
+        .register_native("plug.lichen", "42", lichen_highlevel::no_native_ops())
+        .unwrap();
+    second.load_package(&pkg_path).unwrap();
+    assert_eq!(
+        second.loaded_from_cache, 1,
+        "an embedded dependency cannot change, so it must not force a recompile every run"
+    );
 }
 
 #[test]

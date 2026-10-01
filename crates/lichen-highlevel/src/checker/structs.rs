@@ -41,16 +41,8 @@ where
     pub(super) fn check_field(&mut self, e: ExprId, container: ExprId, key: ExprId) -> NodeId {
         self.check_expr(container);
         self.check_expr(key);
-        let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let container_ty = self.state[container].ty.unwrap();
+        let concrete = self.type_is_concrete(container_ty);
         if concrete && !shape::is_positional_type(&mut self.module, self.type_expr, container_ty) {
             self.record_guard(
                 container_ty,
@@ -63,7 +55,27 @@ where
         let container_value = self.value_of(container);
         let key_value = self.value_of(key);
         self.node_edges.insert(key_value, self.loc(key, 0));
-        let value_ops = self.array_node(self.current_block, &[container_value, key_value]);
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key_value);
+        let pair = self.pair_of(value_node, ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(ty_node);
+        pair
+    }
+
+    /// The structural slot read shared by the positional form `a(k)` and the
+    /// named form `a.name`: `value = Index(container_value, key)`,
+    /// `type = Index(Index(container_ty, 0), key)` — the type comes from the
+    /// container's **type** tree (its shape), so an unbound container resolves
+    /// when the call binds it.  `key` is already the resolved slot: the
+    /// argument's own value, or a struct name table's read.
+    fn slot_read(
+        &mut self,
+        container_ty: NodeId,
+        container_value: NodeId,
+        key: NodeId,
+    ) -> (NodeId, NodeId) {
+        let value_ops = self.array_node(self.current_block, &[container_value, key]);
         let value_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -75,17 +87,13 @@ where
             P::Operator::from(LowOperator::Index),
             Some(shape_ops),
         );
-        let ty_ops = self.array_node(self.current_block, &[shape, key_value]);
+        let ty_ops = self.array_node(self.current_block, &[shape, key]);
         let ty_node = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(ty_ops),
         );
-        let pair = self.pair_of(value_node, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(ty_node);
-        pair
+        (value_node, ty_node)
     }
 
     /// A **raw** named component read `X::a` (the glued `::` postfix).  It is
@@ -110,16 +118,8 @@ where
         name: &'static str,
     ) -> NodeId {
         self.check_expr(container);
-        let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let container_ty = self.state[container].ty.unwrap();
+        let concrete = self.type_is_concrete(container_ty);
         if concrete
             && !shape::is_type_struct_kind_any(
                 &mut self.module,
@@ -151,21 +151,10 @@ where
         self.node_edges.insert(key, self.loc(e, 0));
         // value = Index(container_value, key); type = Index(value, 1).
         let container_value = self.value_of(container);
-        let value_ops = self.array_node(self.current_block, &[container_value, key]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[value_node, self.one()]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
-        self.term[e] = Some(value_node);
-        self.val[e] = None;
-        self.ty[e] = Some(ty_node);
+        let (value_node, ty_node) = self.element_read(container_value, key);
+        self.state[e].term = Some(value_node);
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty_node);
         value_node
     }
 
@@ -188,16 +177,8 @@ where
         name: &'static str,
     ) -> NodeId {
         self.check_expr(container);
-        let container_ty = self.ty[container].unwrap();
-        let concrete = self
-            .module
-            .node_value(AnyNodeId::Dynamic(container_ty))
-            .is_some_and(|value| {
-                matches!(
-                    value.as_enum(),
-                    None | Some(LowValue::USize(_)) | Some(LowValue::Array(_))
-                )
-            });
+        let container_ty = self.state[container].ty.unwrap();
+        let concrete = self.type_is_concrete(container_ty);
         if concrete {
             if !shape::is_struct_type_any(
                 &mut self.module,
@@ -241,28 +222,11 @@ where
         );
         self.node_edges.insert(key, self.loc(e, 0));
         let container_value = self.value_of(container);
-        let value_ops = self.array_node(self.current_block, &[container_value, key]);
-        let value_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(value_ops),
-        );
-        let shape_ops = self.array_node(self.current_block, &[container_ty, self.zero()]);
-        let shape = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(shape_ops),
-        );
-        let ty_ops = self.array_node(self.current_block, &[shape, key]);
-        let ty_node = self.op_node(
-            self.current_block,
-            P::Operator::from(LowOperator::Index),
-            Some(ty_ops),
-        );
+        let (value_node, ty_node) = self.slot_read(container_ty, container_value, key);
         let pair = self.pair_of(value_node, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(ty_node);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(ty_node);
         pair
     }
 
@@ -271,18 +235,18 @@ where
     /// struct, is an anonymous struct, or has no such named field.
     fn named_field_index_any(&mut self, ty: AnyNodeId, name: &'static str) -> Option<usize> {
         let table = shape::struct_names_any(&mut self.module, self.type_expr, ty)?;
-        for item in table.items() {
+        // SAFETY: `table` is read from a live node of this module; nothing in
+        // this crate calls `Module::drop_block`.
+        for item in unsafe { table.items() } {
             if self
                 .module
                 .node_value(item.key)
                 .and_then(|v| v.as_enum())
                 .is_some_and(|v| v == LowValue::Str(name))
-            {
-                if let Some(LowValue::USize(n)) =
+                && let Some(LowValue::USize(n)) =
                     self.module.node_value(item.value).and_then(|v| v.as_enum())
-                {
-                    return Some(n);
-                }
+            {
+                return Some(n);
             }
         }
         None
@@ -292,7 +256,7 @@ where
     /// type/kind expression (an array) or marker — as opposed to an unbound
     /// cell (a parameter, a deferred read), whose checks defer to the apply.
     /// The same predicate gates the field-read and function-ness guards.
-    fn type_is_concrete(&self, ty: NodeId) -> bool {
+    pub(super) fn type_is_concrete(&self, ty: NodeId) -> bool {
         self.module
             .node_value(AnyNodeId::Dynamic(ty))
             .is_some_and(|value| {
@@ -328,7 +292,7 @@ where
         let mut tys = Vec::with_capacity(elements.len());
         for &el in &elements {
             vals.push(self.value_of(el));
-            tys.push(self.ty[el].unwrap());
+            tys.push(self.state[el].ty.unwrap());
         }
         let id = self.op_node(
             self.current_block,
@@ -338,9 +302,9 @@ where
         let (_shape, _kind, struct_ty) = self.struct_type_type(id, &tys, field_names);
         let value_node = self.array_node(self.current_block, &vals);
         let pair = self.pair_of(value_node, struct_ty);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(struct_ty);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(struct_ty);
         pair
     }
 
@@ -363,7 +327,7 @@ where
     ) -> NodeId {
         self.check_expr(type_expr);
         self.check_expr(value);
-        let type_pair = self.term[type_expr].unwrap();
+        let type_pair = self.state[type_expr].term.unwrap();
         // An unevaluated callee (a call result, `(mk (Int))(1, 2)`) has no
         // statically readable pair — it is an apply node, not an array.  Force
         // its evaluation so the nominality check and the field-list read see
@@ -373,11 +337,13 @@ where
         // build's statement pass evaluates the statement again and reports
         // the `NonTerminating` diagnostic.  A refused callee leaves a partly
         // walked graph, so never force twice.
-        if self.module.array_items(type_pair).is_none() && !self.force_failed {
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        if unsafe { self.module.array_items(type_pair) }.is_none() && !self.force_failed {
             self.module.evaluate_node_deep(type_pair, None);
             self.force_failed = self.module.budget_exhausted.is_some();
         }
-        let callee_ty = self.ty[type_expr].unwrap();
+        let callee_ty = self.state[type_expr].ty.unwrap();
         let concrete = self.type_is_concrete(callee_ty);
         let any_named = arg_names.iter().any(|n| n.is_some());
         if concrete
@@ -402,9 +368,9 @@ where
             // under the callee's pair), so the descent stays total.
             let value_node = self.value_of(value);
             let pair = self.pair_of(value_node, type_pair);
-            self.term[e] = Some(pair);
-            self.val[e] = Some(value_node);
-            self.ty[e] = Some(type_pair);
+            self.state[e].term = Some(pair);
+            self.state[e].val = Some(value_node);
+            self.state[e].ty = Some(type_pair);
             return pair;
         }
         if !concrete {
@@ -435,43 +401,44 @@ where
         // cell; a callee whose pair stayed unreadable after the force (it
         // depends on an unbound parameter) reads the shape through a lazy
         // `Index` that resolves when the call binds it.
-        let field_list = match self
-            .module
-            .array_items(type_pair)
-            .and_then(|items| items.first())
-        {
-            Some(item) => {
-                let shape = self.module.as_dynamic(item.node, self.current_block);
-                match self.module.array_items(shape) {
-                    Some(_) => shape,
-                    // The struct's shape cell is not resolved yet
-                    // (mid-recursion): bind it to a [field-list] probe and
-                    // check the value against the probe slot.  When the
-                    // descent completes the cell unifies with the real shape,
-                    // closing the deferred check.
-                    _ => {
-                        let fields_cell = self.fresh_cell();
-                        self.module.unify(shape, fields_cell);
-                        fields_cell
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        let field_list =
+            match unsafe { self.module.array_items(type_pair) }.and_then(|items| items.first()) {
+                Some(item) => {
+                    let shape = self.module.as_dynamic(item.node, self.current_block);
+                    // SAFETY: `shape` was just materialized into the current
+                    // block, whose arena is alive.
+                    match unsafe { self.module.array_items(shape) } {
+                        Some(_) => shape,
+                        // The struct's shape cell is not resolved yet
+                        // (mid-recursion): bind it to a [field-list] probe and
+                        // check the value against the probe slot.  When the
+                        // descent completes the cell unifies with the real shape,
+                        // closing the deferred check.
+                        _ => {
+                            let fields_cell = self.fresh_cell();
+                            self.module.unify(shape, fields_cell);
+                            fields_cell
+                        }
                     }
                 }
-            }
-            // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
-            // deferred unify below resolves through the lowlevel's
-            // pending-`Index` deferral, which accepts only a 2-element
-            // concrete other side (`class_holds_type`) — a param-dependent
-            // call-result callee whose struct has ≠2 fields reports the
-            // field-list mismatch at check time instead of at the apply.
-            // Phase 2's unification-hook extraction (D1) subsumes that rule.
-            _ => {
-                let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
-                self.op_node(
-                    self.current_block,
-                    P::Operator::from(LowOperator::Index),
-                    Some(ops),
-                )
-            }
-        };
+                // Lazy shape read: `Index(type_pair, 0)`.  Known limitation: the
+                // deferred unify below resolves through the lowlevel's
+                // pending-`Index` deferral, which accepts only a 2-element
+                // concrete other side (`class_holds_type`) — a param-dependent
+                // call-result callee whose struct has ≠2 fields reports the
+                // field-list mismatch at check time instead of at the apply.
+                // Phase 2's unification-hook extraction (D1) subsumes that rule.
+                _ => {
+                    let ops = self.array_node(self.current_block, &[type_pair, self.zero()]);
+                    self.op_node(
+                        self.current_block,
+                        P::Operator::from(LowOperator::Index),
+                        Some(ops),
+                    )
+                }
+            };
         let (value_node, value_shape, valid) = if any_named {
             self.named_instantiate(e, type_pair, value, arg_names, concrete)
         } else {
@@ -479,8 +446,10 @@ where
             // The value's shape: the element-type list of a tuple type, or
             // the type itself for anything else (which then fails the list
             // check).
-            let value_ty = self.ty[value].unwrap();
-            let value_shape = match self.module.array_items(value_ty) {
+            let value_ty = self.state[value].ty.unwrap();
+            // SAFETY: `value_ty` is a live node of this module; nothing in
+            // this crate calls `Module::drop_block`.
+            let value_shape = match unsafe { self.module.array_items(value_ty) } {
                 Some(items) if items.len() == 2 => {
                     // Materialize static refs so the shape can participate in
                     // dynamic array construction below.
@@ -510,9 +479,9 @@ where
             );
         }
         let pair = self.pair_of(value_node, type_pair);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value_node);
-        self.ty[e] = Some(type_pair);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(value_node);
+        self.state[e].ty = Some(type_pair);
         pair
     }
 
@@ -542,7 +511,10 @@ where
         // order); their values and types are reordered into definition order.
         let elem_ids = self.range_children(value);
         let vals: Vec<NodeId> = elem_ids.iter().map(|&a| self.value_of(a)).collect();
-        let tys: Vec<NodeId> = elem_ids.iter().map(|&a| self.ty[a].unwrap()).collect();
+        let tys: Vec<NodeId> = elem_ids
+            .iter()
+            .map(|&a| self.state[a].ty.unwrap())
+            .collect();
         // The name table is unavailable: record each `.name` argument and
         // fall back to the call-order value (the caller skips the field-list
         // unify).
@@ -565,16 +537,18 @@ where
                     self.record_guard(type_pair, type_pair, self.loc(elem_ids[i], 0), kind, *name);
                 }
             }
-            return (self.value_of(value), self.ty[value].unwrap(), false);
+            return (self.value_of(value), self.state[value].ty.unwrap(), false);
         }
         // The definition's field count (the shape's length) — `None` when the
         // shape is still an unbound cell mid-recursion, in which case the
         // missing/excess checks are deferred to the probe unify.
-        let def_len = self
-            .module
-            .array_items(type_pair)
-            .and_then(|items| items.get(0))
-            .and_then(|item| shape::array_items(&self.module, item.node))
+        // SAFETY: `type_pair` is a live node of this module; nothing in this
+        // crate calls `Module::drop_block`.
+        let def_len = unsafe { self.module.array_items(type_pair) }
+            .and_then(|items| items.first())
+            // SAFETY: the field item's node is a live node of this module;
+            // nothing in this crate calls `Module::drop_block`.
+            .and_then(|item| unsafe { shape::array_items(&self.module, item.node) })
             .map(|items| items.len());
         // `assign[pos]` = the argument index supplying definition position
         // `pos`.  `valid` flips when a structural mismatch is recorded.
@@ -646,8 +620,8 @@ where
             if assign.len() < def_len {
                 assign.resize(def_len, None);
             }
-            for pos in 0..def_len {
-                if assign[pos].is_none() {
+            for (pos, slot) in assign.iter().enumerate().take(def_len) {
+                if slot.is_none() {
                     let name = self.struct_field_name(type_pair, pos);
                     self.record_guard(
                         type_pair,
@@ -664,7 +638,7 @@ where
             // The structural mismatch is the recorded diagnostic; return the
             // call-order value so the checker still produces a term, but the
             // caller skips the field-list unify.
-            return (self.value_of(value), self.ty[value].unwrap(), false);
+            return (self.value_of(value), self.state[value].ty.unwrap(), false);
         }
         // Reorder the argument values and their element types into definition
         // order, so the instance's value reads positionally against the
@@ -684,18 +658,18 @@ where
             self.type_expr,
             AnyNodeId::Dynamic(type_pair),
         )?;
-        for item in table.items() {
+        // SAFETY: `table` is read from a live node of this module; nothing in
+        // this crate calls `Module::drop_block`.
+        for item in unsafe { table.items() } {
             if self
                 .module
                 .node_value(item.value)
                 .and_then(|v| v.as_enum())
                 .is_some_and(|v| v == LowValue::USize(pos))
-            {
-                if let Some(LowValue::Str(name)) =
+                && let Some(LowValue::Str(name)) =
                     self.module.node_value(item.key).and_then(|v| v.as_enum())
-                {
-                    return Some(name);
-                }
+            {
+                return Some(name);
             }
         }
         None
@@ -741,9 +715,9 @@ where
             None,
         );
         let (shape, kind, pair) = self.struct_type_type(id, &tys, &names);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(shape);
-        self.ty[e] = Some(kind);
+        self.state[e].term = Some(pair);
+        self.state[e].val = Some(shape);
+        self.state[e].ty = Some(kind);
         pair
     }
 

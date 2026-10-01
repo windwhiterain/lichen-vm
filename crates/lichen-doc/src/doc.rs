@@ -30,7 +30,7 @@
 //! hardcoded shape.  That spelling renders through the program-generic
 //! [`lichen_render::render_struct_fields_named`].
 
-use lichen_highlevel::attr::{AttrExt, AttrSpec};
+use lichen_highlevel::attr::{AttrExt, AttrExtRegistry, AttrSpec};
 use lichen_highlevel::diagnostic::DiagKind;
 use lichen_highlevel::ir::Loc;
 use lichen_highlevel::program::{Ctx, HighProgram, ValueType};
@@ -48,7 +48,7 @@ impl AttrSpec for Doc {}
 /// The attribute-extension registry mapping the [`Doc`] marker to its label
 /// behaviour.  A host composes [`Doc`] into its attribute vocabulary and
 /// passes this to the checker's attribute machinery.
-pub fn doc_attr_ext<P>() -> Box<dyn Fn(&Doc) -> &'static dyn AttrExt<P>>
+pub fn doc_attr_ext<P>() -> AttrExtRegistry<P, Doc>
 where
     P: HighProgram,
     P::Value: ValueType + AsEnum<LowValue>,
@@ -106,7 +106,9 @@ where
         let LowValue::Array(items) = pair else {
             return None;
         };
-        let items = items.items();
+        // SAFETY: `items` is the payload of the value read from the live node
+        // `slot` of `module`.
+        let items = unsafe { items.items() };
         let value = items.first()?.node;
         let ty = items.get(1)?.node;
         let fields = render_struct_fields_named(module, value, ty)?;

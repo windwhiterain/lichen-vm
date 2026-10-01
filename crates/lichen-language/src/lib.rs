@@ -27,14 +27,12 @@ pub use lichen_language_parser as parse;
 pub use lichen_language_parser::ast;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
-pub mod cli;
 pub mod compile;
 pub mod diag;
 pub mod package;
 pub mod persist;
 pub mod preprocess;
 pub mod program;
-pub mod readme;
 pub mod render;
 pub mod resolve;
 pub mod run;
@@ -110,10 +108,10 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The result of compiling and checking a source program.
 ///
-/// `build` is `Some` whenever the frontend resolved the program (lex, parse,
-/// resolve) — including a *partially recovered* parse — and the checker ran
-/// on it; it is `None` only when the resolve stage failed (an unresolved
-/// name), so no IR exists to check.  `diagnostics` holds the frontend's
+/// `build` is `Some` on every path this crate produces: the frontend's
+/// lowering is total, so even an unresolved name yields an IR and its error
+/// rides in `diagnostics`.  `None` is reserved for a caller of [`build_report`]
+/// that has no IR to check.  `diagnostics` holds the frontend's
 /// errors (which may be many — lex errors accumulate and parse errors are
 /// recovered) and the checker's rendered failures.
 pub struct Report<P: HighProgram>
@@ -263,6 +261,23 @@ where
                 })
                 .collect::<Vec<_>>(),
         );
+        // The invariant every consumer of a `Report` relies on: a failed build
+        // carries at least one diagnostic.  `Build::diagnostics` skips a
+        // recorded failure it cannot attribute to an expression — an assert
+        // cloned out of an imported module has no entry in this build's node
+        // tables — so without this the state `!ok && diagnostics.is_empty()`
+        // reaches `Err(report.diagnostics)` as an error rendering *nothing at
+        // all*.  Synthesise exactly one, here, so `run`, the package store and
+        // the editor all inherit it instead of each inventing their own.
+        if diagnostics.is_empty() {
+            let unattributed = lichen_highlevel::diagnostic::Diag::unattributed_failure();
+            diagnostics.push(Diag {
+                span: None,
+                message: crate::render::checker_message(&mut printer, &unattributed),
+                stage: Stage::Check,
+                check: Some(Box::new(unattributed)),
+            });
+        }
     }
     Report {
         build: Some(build),

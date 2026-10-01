@@ -9,18 +9,26 @@ use lichen_utils::extend::AsEnum;
 impl<P: Program> Module<P> {
     /// The items of `node`'s array value, if it has one.
     ///
-    /// # Safety
-    /// The returned slice points into the arena of the node's home block.
     /// A node's home block is alive exactly while the node is: dropping a
-    /// block removes its nodes, and indexing a removed `NodeId` panics — so
-    /// a reachable node always has its arena alive, and the slice is valid
-    /// for the lifetime of `&self`.
-    pub fn array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
+    /// block removes its nodes, and indexing a removed `NodeId` panics, so a
+    /// reachable node always has its arena alive.
+    ///
+    /// # Safety
+    ///
+    /// As [`AnyHandle<[ArrayItem]>::items`], which states the contract: the
+    /// returned slice points into the array payload's home arena, so the
+    /// caller must keep `node` reachable — its home block alive — for as long
+    /// as the slice is read.  [`Module::drop_block`] releasing the block's
+    /// `Bump` is what invalidates it.
+    pub unsafe fn array_items(&self, node: NodeId) -> Option<&'static [ArrayItem]> {
         let value = self.nodes[node].value?;
         let LowValue::Array(array) = value.as_enum()? else {
             return None;
         };
-        Some(array.items())
+        // SAFETY: the caller upholds this method's `# Safety`; `array` is the
+        // live payload of a node whose home block has not been released, so
+        // the same obligation covers handing its slice out here.
+        Some(unsafe { array.items() })
     }
 
     /// Copy `items` into `block.arena` and return the array handle pointing
@@ -52,8 +60,17 @@ impl<P: Program> Module<P> {
             return value;
         }
         let old = value.handle();
-        let layout = Layout::from_size_align(old.len(), P::Value::alignment()).unwrap();
+        // `ValueExt::alignment` is required to be a power of two and the byte
+        // length has to fit the layout; either violation is a broken value
+        // vocabulary, not a runtime condition this signature can report.
+        let layout = Layout::from_size_align(old.len(), P::Value::alignment()).expect(
+            "ValueExt::alignment() must be a power of two and the payload byte length must fit the layout",
+        );
         let dst = arena.alloc_layout(layout);
+        // SAFETY: `old` is the live payload of `value` — its pointer and byte
+        // length agree by the `ValueExt::handle` contract — and `dst` is a
+        // fresh bump allocation of exactly that many bytes, so the source and
+        // destination ranges cannot overlap.
         unsafe { ptr::copy_nonoverlapping(old.as_ptr(), dst.as_ptr(), old.len()) };
         value.set_handle(AnyHandle::Dynamic(Handle(ptr::slice_from_raw_parts(
             dst.as_ptr(),

@@ -27,9 +27,12 @@
 //!
 //! The checking rules are grouped into the sibling modules: `lambda` (a
 //! function and an application), `structs` (struct types, field reads,
-//! instantiation), `indexing` (arrays, tables, the reads over them),
-//! `annotations` (the attribute slots), and `diagnostics` (the attributed
-//! unify and the reported-error helpers).  This root holds the checker itself:
+//! instantiation), `indexing` (arrays, tables, the reads over them), `tuples`
+//! (tuple terms, tuple types, the type-position helper), `operators` (the
+//! binary operators), `asserts` (the explicit constraint and its
+//! registration), `native_call` (a `$name(…)` plugin call), `annotations`
+//! (the attribute slots), and `diagnostics` (the attributed unify and the
+//! reported-error helpers).  This root holds the checker itself:
 //! its state, the node construction every check shares, the per-kind dispatch,
 //! and the passes that drive them.
 
@@ -40,8 +43,10 @@ use lichen_lowlevel::{
     AnyNodeId, ArrayItem, BlockId, BudgetExhausted, FunctionId, LowOperator, LowValue, Module,
     NodeId, Operation, Registry,
 };
+use lichen_utils::extend::AsEnum;
+use stacksafe::stacksafe;
 
-use crate::attr::{AttrExt, AttrSet};
+use crate::attr::{AttrExtRegistry, AttrSet};
 use crate::diagnostic::{DiagKind, DiaryEntry};
 use crate::ir::{BinOp, ChildRange, ExprId, ExprKind, IR, Loc};
 use crate::native::{NativeArg, NativeOps, no_native_ops};
@@ -49,10 +54,14 @@ use crate::program::{Ctx, HighProgram, LiteralExt, TypeOperator, ValueType};
 use crate::shape::for_each_kind_marker;
 
 mod annotations;
+mod asserts;
 mod diagnostics;
 mod indexing;
 mod lambda;
+mod native_call;
+mod operators;
 mod structs;
+mod tuples;
 
 // The registry-derived consumer macros below expand the one kind-marker
 // list ([`crate::shape::for_each_kind_marker`]) into the checker's marker
@@ -148,10 +157,18 @@ where
     module: Module<P>,
     pub current_block: BlockId,
     /// The attribute extension registry: maps an attribute marker
-    /// (`P::Attr`) to its lowering behaviour.  The checker never names a
-    /// concrete attribute — it asks this registry for the `AttrExt` and
-    /// calls through it.
-    attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+    /// (`P::Attr`) to its lowering behaviour, or `None` for a build with no
+    /// attribute extension at all.  The checker never names a concrete
+    /// attribute — it asks this registry for the `AttrExt` and calls through
+    /// it, and a marker it cannot resolve is
+    /// [`DiagKind::NoAttributeExtension`] rather than a panic (see
+    /// [`Checker::no_attr_ext_guard`]).
+    attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
+    /// Whether [`Checker::no_attr_ext_guard`] has already reported this
+    /// build's missing attribute extension.  "This build has no attribute
+    /// extension" is one fact about the build, however many expressions read
+    /// an attribute, so the guard is recorded once — at the first reader.
+    no_attr_ext_reported: bool,
     /// The native-operator registry: a private, name→operator mapping for the
     /// compiling module's plugin (see [`crate::native`]).  Nothing upstream of
     /// the checker can see it — the frontend compiles a `$name` call blindly,
@@ -189,21 +206,9 @@ where
     /// [`ExprKind::Function::parent`] link, filled in by
     /// [`Checker::check_lam`] as each function's shell is begun.
     function_of: HashMap<ExprId, FunctionId>,
-    /// The compiled pair node `[value, type]` per expression.
-    term: Vec<Option<NodeId>>,
-    /// Element 0 of the pair (the value).  `None` for call results, whose
-    /// value is only known at runtime — built lazily as
-    /// `Index(pair, 0)` via [`Checker::value_of`] when the value is needed.
-    val: Vec<Option<NodeId>>,
-    /// Element 1 of the pair (the type).
-    ty: Vec<Option<NodeId>>,
-    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
-    /// apply-time attribute check reads.  Indexed like [`Checker::ty`]: `None`
-    /// for an expression whose schema carries only a label attribute (`? d`)
-    /// or no attribute; the constraint slot for one carrying a constraint
-    /// (a `# p` annotation's perspective).  A label slot (e.g. `Doc`) is
-    /// metadata and lives only in the pair, never here.
-    attr: Vec<Option<NodeId>>,
+    /// The per-expression checker state — one entry per IR expression, see
+    /// [`ExprState`].  Indexed by [`ExprId`].
+    state: Vec<ExprState>,
     /// The parameter-attribute slot of each function whose parameter is
     /// annotated `x # n` — keyed by the `Function` expression id, carrying the
     /// attribute marker (the parameter's schema tail) and the fresh attribute
@@ -300,11 +305,12 @@ where
     /// The shared `USize(1)` node — element 1 of an expression's pair.
     one_value: NodeId,
     /// One shared absent-occurrence slot per attribute that opted in, indexed
-    /// by [`AttrSet::order_index`] and installed by `install_constants`; `None`
-    /// where the attribute builds a fresh one per site.
+    /// by the attribute's position in [`AttrSet::ORDER`] and installed by
+    /// `install_constants`; `None` where the attribute builds a fresh one per
+    /// site.
     ///
     /// The attribute decides whether its own missing value may be shared — see
-    /// [`AttrExt::share_missing_slot`], which states the contract (the value
+    /// [`crate::attr::AttrExt::share_missing_slot`], which states the contract (the value
     /// must be concrete, because reconciliation writes an unbound side and a
     /// shared node would be written by whichever occurrence reconciled first).
     /// The checker holds the node, not the rule: a `None` entry here is the
@@ -347,6 +353,46 @@ pub struct NonTerminating {
     pub budget: Option<BudgetExhausted>,
 }
 
+/// One IR expression's checker state, held in a single entry so the four
+/// records cannot disagree about which expression they describe.
+///
+/// [`Build::state`] holds one entry per IR expression, indexed by [`ExprId`]:
+/// the compiled pair `[value, type]` (`term`), its two halves (`val` and
+/// `ty`), and the constraint attribute slot (`attr`).  The ordinal is the
+/// vector's, so no code can record one field at a different expression than
+/// the rest.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExprState {
+    /// The compiled pair node `[value, type]`.
+    pub term: Option<NodeId>,
+    /// Element 0 of the pair (the value).  `None` for call results, whose
+    /// value is only known at runtime — built lazily as `Index(pair, 0)` when
+    /// the value is needed (the checker's `value_of`).
+    pub val: Option<NodeId>,
+    /// Element 1 of the pair (the type).
+    pub ty: Option<NodeId>,
+    /// The *constraint* attribute slot (element 2+ of the pair) — the slot the
+    /// apply-time attribute check reads.  `None` for an expression whose
+    /// schema carries only a label attribute (`? d`) or no attribute; the
+    /// constraint slot for one carrying a constraint (a `# p` annotation's
+    /// perspective).  A label slot (e.g. `Doc`) is metadata and lives only in
+    /// the pair, never here.
+    pub attr: Option<NodeId>,
+}
+
+impl std::ops::Index<ExprId> for Vec<ExprState> {
+    type Output = ExprState;
+    fn index(&self, id: ExprId) -> &ExprState {
+        &self[id.0 as usize]
+    }
+}
+
+impl std::ops::IndexMut<ExprId> for Vec<ExprState> {
+    fn index_mut(&mut self, id: ExprId) -> &mut ExprState {
+        &mut self[id.0 as usize]
+    }
+}
+
 /// The result of one [`Checker::build`]: the module the lowlevel built, the
 /// per-expression nodes the checker attributed, and everything the layers
 /// above need to render, trace, or freeze it — plus the pass records that let
@@ -362,10 +408,9 @@ where
     /// from it lives on this struct.
     pub ir: Arc<IR<P::Attr, P::Literal>>,
     pub module: Module<P>,
-    pub term: Vec<Option<NodeId>>,
-    pub val: Vec<Option<NodeId>>,
-    pub ty: Vec<Option<NodeId>>,
-    pub attr: Vec<Option<NodeId>>,
+    /// The per-expression checker state — one entry per IR expression, see
+    /// [`ExprState`].  Indexed by [`ExprId`].
+    pub state: Vec<ExprState>,
     pub root_term: NodeId,
     pub root_val: NodeId,
     pub root_ty: NodeId,
@@ -411,15 +456,66 @@ where
     pub ok: bool,
 }
 
+/// The compile work budget one [`Checker`] build runs under: the lowlevel
+/// application guards the checker installs before its definition pass.
+///
+/// It is the caller's to set because the two failures are otherwise
+/// indistinguishable to a user: a *terminating* program whose definition pass
+/// exceeds the budget is reported as [`DiagKind::NonTerminating`], exactly
+/// like an infinite loop, so a host compiling a large generated program must
+/// be able to raise it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkBudget {
+    /// Nested applications permitted before the guard refuses — the
+    /// lowlevel's [`Module::apply_depth_limit`].
+    pub apply_depth_limit: usize,
+    /// Cumulative applications permitted before the guard refuses — the
+    /// lowlevel's [`Module::apply_total_limit`].
+    pub apply_total_limit: usize,
+}
+
+impl Default for WorkBudget {
+    /// The checker's tuned pair.  The nesting limit sits below what a thread
+    /// stack survives once the checker's per-call machinery (clone, unify,
+    /// deep pass) is on the stack, so a non-terminating recursion is refused
+    /// cleanly instead of overflowing the stack first; legitimate recursion
+    /// (fib, countdown) nests far below it.  The lazy graph flattens most
+    /// recursion (an apply returns its result pair; the deep pass descends
+    /// into it), so nested depth alone does not bound a run — an infinite
+    /// loop behind a lazy branch stays at depth 1, and a wide recursion (fib)
+    /// is never deep.  The total-application budget is the work bound that
+    /// catches those; each application also grows the module's classes (every
+    /// recursion level's parameter unifies into one shared class), so a tight
+    /// budget stops a runaway recursion in seconds, while legitimate programs
+    /// (the examples, fib up to ~15, countdown) apply far fewer times.
+    fn default() -> Self {
+        WorkBudget {
+            apply_depth_limit: 500,
+            apply_total_limit: 2_000,
+        }
+    }
+}
+
 impl<P: HighProgram> Checker<P>
 where
     P::Value: ValueType,
     P::Operator: From<LowOperator> + From<TypeOperator>,
 {
     /// Compile an IR with a fresh private registry and no attribute
-    /// extension (a program whose schemas carry no attribute is unaffected).
+    /// extension, under the default [`WorkBudget`] — [`Self::build_with_budget`]
+    /// with [`WorkBudget::default`].  A program whose schemas carry no
+    /// attribute is unaffected; one that does carry an attribute is refused
+    /// with [`DiagKind::NoAttributeExtension`] (use [`Self::build_in_attr`]).
     pub fn build(ir: IR<P::Attr, P::Literal>) -> Build<P> {
-        Self::build_with(ir, Module::new(), Self::no_attr_ext(), no_native_ops())
+        Self::build_with_budget(ir, WorkBudget::default())
+    }
+
+    /// [`Self::build`] under a caller-supplied [`WorkBudget`] — the entry
+    /// point for a host compiling a program that is large but still
+    /// terminating, whose definition pass needs more work than the tuned
+    /// default allows.
+    pub fn build_with_budget(ir: IR<P::Attr, P::Literal>, work_budget: WorkBudget) -> Build<P> {
+        Self::build_with(ir, Module::new(), None, no_native_ops(), work_budget)
     }
 
     /// Compile an IR whose module is bound to a caller-provided shared
@@ -427,7 +523,7 @@ where
     /// leaves through a `PackageStore`.
     pub fn build_in(ir: IR<P::Attr, P::Literal>, registry: Arc<RwLock<Registry<P>>>) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, Self::no_attr_ext(), no_native_ops())
+        Self::build_with(ir, module, None, no_native_ops(), WorkBudget::default())
     }
 
     /// Compile an IR with a caller-supplied attribute extension registry — the
@@ -437,10 +533,16 @@ where
     pub fn build_in_attr(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: AttrExtRegistry<P, P::Attr>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, no_native_ops())
+        Self::build_with(
+            ir,
+            module,
+            Some(attr_ext),
+            no_native_ops(),
+            WorkBudget::default(),
+        )
     }
 
     /// [`Self::build_in_attr`] with a native-operator registry — the entry
@@ -451,28 +553,30 @@ where
     pub fn build_in_attr_native(
         ir: IR<P::Attr, P::Literal>,
         registry: Arc<RwLock<Registry<P>>>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: AttrExtRegistry<P, P::Attr>,
         native_ops: NativeOps<P>,
     ) -> Build<P> {
         let module = Registry::new_module(&registry);
-        Self::build_with(ir, module, attr_ext, native_ops)
+        Self::build_with(
+            ir,
+            module,
+            Some(attr_ext),
+            native_ops,
+            WorkBudget::default(),
+        )
     }
 
-    /// The no-op registry of a program with no attribute extension: no schema
-    /// carries an attribute, so it is never consulted.  (Sharing is decided on
-    /// first use at the site that needs a slot, not in the install pass, so a
-    /// program that never has an absent attribute never asks even that.)
-    fn no_attr_ext() -> Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>> {
-        Box::new(|_attr: &P::Attr| -> &'static dyn AttrExt<P> {
-            unreachable!("this program has no attribute extension")
-        })
-    }
-
+    /// The shared body of every entry point above: compile `ir` against
+    /// `module`, resolving an attribute marker through `attr_ext` and a
+    /// `$name` call through `native_ops`, under a caller-supplied
+    /// [`WorkBudget`].  Every public constructor delegates here, with either
+    /// the caller's budget or [`WorkBudget::default`].
     fn build_with(
         ir: IR<P::Attr, P::Literal>,
         mut module: Module<P>,
-        attr_ext: Box<dyn Fn(&P::Attr) -> &'static dyn AttrExt<P>>,
+        attr_ext: Option<AttrExtRegistry<P, P::Attr>>,
         native_ops: NativeOps<P>,
+        work_budget: WorkBudget,
     ) -> Build<P> {
         // The attribute set's canonical order is the pair layout; a generated
         // set proves it at build time, and a hand-written one is checked here
@@ -481,25 +585,11 @@ where
             crate::attr::order_is_canonical::<P::Attr>(),
             "an attribute's canonical index must be its position in the set's order"
         );
-        // The lowlevel's default application guard (10k nested calls) sits
-        // below what a thread stack survives once the checker's per-call
-        // machinery (clone, unify, deep pass) is on the stack — a
-        // non-terminating recursion would overflow the stack before the
-        // guard fires.  Lower it so the guard panics cleanly; legitimate
-        // recursion (fib, countdown) nests far below this.
-        module.apply_depth_limit = 500;
-        // The lazy graph flattens most recursion (an apply returns its
-        // result pair; the deep pass descends into it), so nested depth
-        // alone does not bound a run — an infinite loop behind a lazy
-        // branch stays at depth 1, and a wide recursion (fib) is never deep.
-        // The total-application budget is the work bound that catches those;
-        // the definition pass runs the whole program, so it must be set
-        // here, before it starts.  Each application also grows the module's
-        // classes (every recursion level's parameter unifies into one
-        // shared class), so a tight budget stops a runaway recursion in
-        // seconds; legitimate programs (the examples, fib up to ~15,
-        // countdown) apply far fewer times than this.
-        module.apply_total_limit = 2_000;
+        // The definition pass runs the whole program, so the budget must be
+        // set here, before it starts; the rationale for the default values is
+        // on [`WorkBudget::default`].
+        module.apply_depth_limit = work_budget.apply_depth_limit;
+        module.apply_total_limit = work_budget.apply_total_limit;
         let root_block = module.add_block(None);
         let n = ir.expr.len();
         let mut checker = Checker {
@@ -507,14 +597,12 @@ where
             module,
             current_block: root_block,
             attr_ext,
+            no_attr_ext_reported: false,
             native_ops,
             scopes: Vec::new(),
             function_stack: Vec::new(),
             function_of: HashMap::new(),
-            term: vec![None; n],
-            val: vec![None; n],
-            ty: vec![None; n],
-            attr: vec![None; n],
+            state: vec![ExprState::default(); n],
             function_param_attr: HashMap::new(),
             merged_tails: HashMap::new(),
             diary: Vec::new(),
@@ -555,7 +643,9 @@ where
             checker.check_expr(s);
         }
         let root_term = checker.check_expr(root);
-        let root_ty = checker.ty[root].expect("the root expression must have a type");
+        let root_ty = checker.state[root]
+            .ty
+            .expect("the root expression must have a type");
         // Prove every lambda's function value concrete before the definition
         // pass: a recursive reference (the apply in the body) then stays in
         // place, so every recursion level re-applies the
@@ -575,12 +665,29 @@ where
         // it is still unbound).  The order against the root pass is
         // irrelevant: reads alias their target cells (see the lowlevel Index
         // arm), so bindings propagate class-wise however they happen.
-        // Skipped when the checker-side unifies (annotations,
-        // guards) already failed — the graph may then hit a non-function
-        // apply, which the runtime panics on.
+        // Skipped when the checker-side unifies (annotations, guards) already
+        // failed: the build is rejected either way.
         if !checker.check_failed() {
-            let functions: Vec<lichen_lowlevel::FunctionId> =
-                checker.module.functions.keys().collect();
+            // The *order* of this pass is user-visible: an orphan unify error
+            // and a runtime `eval_error` are emitted in the order their
+            // function is walked, with no re-sort afterwards.  Each function is
+            // keyed by the IR expression it was compiled from — every function
+            // here was begun by [`Checker::check_lam`], which is what fills
+            // [`Checker::function_of`] — so sorting by that key states the
+            // order instead of inheriting `SlotMap::keys`'s
+            // documented-as-arbitrary key order.  The fallback orders a
+            // function with no expression after all the rest.
+            let expression_of: HashMap<FunctionId, ExprId> = checker
+                .function_of
+                .iter()
+                .map(|(&expression, &function)| (function, expression))
+                .collect();
+            let mut functions: Vec<FunctionId> = checker.module.functions.keys().collect();
+            functions.sort_by_key(|function| {
+                expression_of
+                    .get(function)
+                    .map_or(u32::MAX, |expression| expression.0)
+            });
             for function in functions {
                 let (ret, asserts) = {
                     let function = &checker.module.functions[function];
@@ -611,7 +718,7 @@ where
         if !checker.check_failed() {
             let mut fatal = false;
             for &s in &stmt_roots {
-                let Some(term) = checker.term[s] else {
+                let Some(term) = checker.state[s].term else {
                     continue;
                 };
                 checker.module.evaluate_node_deep(term, None);
@@ -675,10 +782,7 @@ where
         Build {
             ir: checker.ir,
             module: checker.module,
-            term: checker.term,
-            val: checker.val,
-            ty: checker.ty,
-            attr: checker.attr,
+            state: checker.state,
             root_term,
             root_val,
             root_ty,
@@ -704,10 +808,13 @@ where
     /// unification **or** a recorded guard failure.  A guard failure is a
     /// check-time refusal that never reached the lowlevel, so it leaves the
     /// error vec empty and the vec alone would now miss it; this is why the
-    /// definition pass skips when it holds (the graph may then hit a
-    /// non-function apply, which the runtime panics on).
+    /// definition pass skips when it holds (the build is rejected either way).
+    /// A guard entry is
+    /// exactly one whose [`DiaryEntry::errors`] is `None` — the kind of check
+    /// it was is a recorded fact, never an inference from an empty range.
     fn check_failed(&self) -> bool {
-        !self.module.unify_errors.is_empty() || self.diary.iter().any(|e| e.errors.is_empty())
+        !self.module.unify_errors.is_empty()
+            || self.diary.iter().any(|entry| entry.errors.is_none())
     }
 
     /// The attribute tail a checked expression carries: an annotation's
@@ -810,8 +917,7 @@ where
     ) -> NodeId {
         let node = self.module.add_node(block, operation, value);
         if let Some(function) = self.current_function() {
-            self.module.nodes[node].function = Some(function);
-            self.module.functions[function].nodes.push(node);
+            self.module.register_in_function(function, node);
         }
         node
     }
@@ -981,6 +1087,11 @@ where
 
     /// The children of a variadic expression (`Tuple`, `TypeTuple`,
     /// `Array`, `TypeStruct`, `ShallowArray`).
+    ///
+    /// The non-variadic kinds are named rather than caught by a wildcard: this
+    /// is the *open* end of the encoding — a new kind that stores its children
+    /// as a [`ChildRange`] must be added to the range arm, and a wildcard would
+    /// let it compile and then panic at run time.
     fn range_children(&self, e: ExprId) -> Vec<ExprId> {
         let range = match self.ir[e].kind {
             ExprKind::Tuple(range)
@@ -990,7 +1101,29 @@ where
             | ExprKind::Table(range) => range,
             ExprKind::TypeStruct { fields, .. } => fields,
             ExprKind::NativeCall { args, .. } => args,
-            _ => unreachable!("expected a variadic expression kind"),
+            ExprKind::Literal(_)
+            | ExprKind::Parameter
+            | ExprKind::Function { .. }
+            | ExprKind::Apply { .. }
+            | ExprKind::BinOp { .. }
+            | ExprKind::Instantiate { .. }
+            | ExprKind::Record { .. }
+            | ExprKind::Assert { .. }
+            | ExprKind::TypeOf { .. }
+            | ExprKind::Index { .. }
+            | ExprKind::RawIndex { .. }
+            | ExprKind::Field { .. }
+            | ExprKind::NamedField { .. }
+            | ExprKind::RawNamedField { .. }
+            | ExprKind::Find { .. }
+            | ExprKind::Annotation { .. }
+            | ExprKind::TypeFunction { .. }
+            | ExprKind::TypeArray { .. }
+            | ExprKind::Placeholder
+            | ExprKind::ErrorBlock
+            | ExprKind::Static { .. } => {
+                unreachable!("expected a variadic expression kind")
+            }
         };
         self.ir.children[range.start as usize..range.end as usize].to_vec()
     }
@@ -1010,17 +1143,17 @@ where
     /// stored; for call results it is extracted at runtime with
     /// `Index(pair, 0)` and memoized.
     fn value_of(&mut self, e: ExprId) -> NodeId {
-        if let Some(value) = self.val[e] {
+        if let Some(value) = self.state[e].val {
             return value;
         }
-        let pair = self.term[e].expect("expression must be compiled");
+        let pair = self.state[e].term.expect("expression must be compiled");
         let operands = self.array_node(self.current_block, &[pair, self.zero()]);
         let index = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
             Some(operands),
         );
-        self.val[e] = Some(index);
+        self.state[e].val = Some(index);
         index
     }
 
@@ -1036,8 +1169,10 @@ where
     /// clone rewrites the parameter pair to the argument's).
     fn check_type_of(&mut self, e: ExprId, value: ExprId) -> NodeId {
         self.check_expr(value);
-        let operands =
-            self.array_node(self.current_block, &[self.term[value].unwrap(), self.one()]);
+        let operands = self.array_node(
+            self.current_block,
+            &[self.state[value].term.unwrap(), self.one()],
+        );
         let pair = self.op_node(
             self.current_block,
             P::Operator::from(LowOperator::Index),
@@ -1049,16 +1184,16 @@ where
             P::Operator::from(LowOperator::Index),
             Some(ty_operands),
         );
-        self.term[e] = Some(pair);
-        self.val[e] = None;
-        self.ty[e] = Some(ty);
+        self.state[e].term = Some(pair);
+        self.state[e].val = None;
+        self.state[e].ty = Some(ty);
         pair
     }
 
     /// The value currently held by `node`'s equality class — the
     /// representative's value — or `None` when the class is unbound.
     /// Read-only (a parent-pointer walk, no path compression).  An attribute's
-    /// [`AttrExt::is_subtype`] uses this to compare two slot values after a
+    /// [`crate::attr::AttrExt::is_subtype`] uses this to compare two slot values after a
     /// failed equality unify.
     pub fn class_value(&self, node: NodeId) -> Option<P::Value> {
         self.module.class_value(node)
@@ -1081,6 +1216,14 @@ where
     // encoding — and are called from here with `self.type_expr` as the
     // canonical universe node.
 
+    /// The checker's recursion: one frame per nested expression (through the
+    /// per-kind rules and back through [`Self::check_expr`]), so a generated
+    /// or hostile program may nest past the native stack.  Nothing bounds the
+    /// expression grammar here — the budget guards bound the *runtime*, not
+    /// the check — so the recursion grows the stack instead, exactly as the
+    /// lowlevel's own recursive entry points do (`#[stacksafe]`: without it a
+    /// deeply nested program overflows the process instead of being checked).
+    #[stacksafe]
     fn check_term(&mut self, e: ExprId) -> NodeId {
         // The IR is a graph: statement bindings pre-resolve every use of a
         // name to the value's own `ExprId`, so one expression may be
@@ -1089,7 +1232,7 @@ where
         // duplicate fresh state (a struct type's nominal id comes from a
         // per-compilation `Fresh` call), silently breaking the sharing the
         // frontend relies on.
-        if let Some(pair) = self.term[e] {
+        if let Some(pair) = self.state[e].term {
             return pair;
         }
         // A cycle can only form through a block-wide binding placeholder —
@@ -1110,9 +1253,9 @@ where
             let vc = self.fresh_cell();
             let tc = self.fresh_cell();
             let skel = self.array_node(self.current_block, &[vc, tc]);
-            self.term[e] = Some(skel);
-            self.val[e] = Some(vc);
-            self.ty[e] = Some(tc);
+            self.state[e].term = Some(skel);
+            self.state[e].val = Some(vc);
+            self.state[e].ty = Some(tc);
             Some((vc, tc))
         } else {
             None
@@ -1129,9 +1272,9 @@ where
                 // is built as the self-referential universe node, so it is
                 // not `[value, type]`.
                 let built = lit.build(self);
-                self.term[e] = Some(built.pair);
-                self.val[e] = Some(built.value);
-                self.ty[e] = Some(built.ty);
+                self.state[e].term = Some(built.pair);
+                self.state[e].val = Some(built.value);
+                self.state[e].ty = Some(built.ty);
                 built.pair
             }
             ExprKind::Parameter => {
@@ -1142,8 +1285,8 @@ where
                 // resolves to it.  The value slot is left alone — `value_of`
                 // builds and memoizes the shared `Index(pair, 0)` lazily.
                 let binding = self.lookup(e);
-                self.term[e] = Some(binding.term);
-                self.ty[e] = Some(binding.ty);
+                self.state[e].term = Some(binding.term);
+                self.state[e].ty = Some(binding.ty);
                 binding.term
             }
             ExprKind::Function {
@@ -1203,9 +1346,9 @@ where
                 // `arrows`; a *pattern* arrow (the apply's function-ness
                 // guard) deliberately does not — see [`Self::arrow`].
                 self.arrows.insert(shape);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(shape);
-                self.ty[e] = Some(kind);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(shape);
+                self.state[e].ty = Some(kind);
                 pair
             }
             ExprKind::Tuple(_) => self.check_tuple_term(e),
@@ -1227,9 +1370,9 @@ where
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(val);
-                self.ty[e] = Some(ty_cell);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(val);
+                self.state[e].ty = Some(ty_cell);
                 pair
             }
             ExprKind::Placeholder => {
@@ -1243,9 +1386,9 @@ where
                 let val = self.fresh_cell();
                 let ty_cell = self.fresh_cell();
                 let pair = self.pair_of(val, ty_cell);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(val);
-                self.ty[e] = Some(ty_cell);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(val);
+                self.state[e].ty = Some(ty_cell);
                 pair
             }
             ExprKind::TypeArray {
@@ -1261,24 +1404,31 @@ where
                 let pair = self.module.materialize_leaf(export, self.current_block);
                 // A `RawIndex` root compiles to the raw read operation, not to
                 // a pair: `[1, 2]<0>` exports an unevaluated op node, whose
-                // items are unavailable until something evaluates it.  The
-                // contract the importer needs is therefore a *checked* one, so
-                // a violated contract is an honest guard about the import
-                // rather than a panic inside the checker.
-                let Some(items) = self.module.array_items(pair) else {
+                // items are unavailable until something evaluates it.  A raw
+                // read *of* a raw read exports the inner array itself
+                // (`[[1]]<0>` evaluates to an array of one element).  The
+                // contract the importer needs is therefore a *checked* one —
+                // exactly the pair's two items — so a violated contract is an
+                // honest guard about the import rather than a panic inside the
+                // checker.
+                // SAFETY: `pair` was just materialized into the current
+                // block, whose arena is alive.
+                let Some(items) =
+                    (unsafe { self.module.array_items(pair) }).filter(|items| items.len() == 2)
+                else {
                     let cell = self.fresh_cell();
                     let pair = self.pair_of(cell, cell);
-                    self.term[e] = Some(pair);
-                    self.val[e] = Some(cell);
-                    self.ty[e] = Some(cell);
+                    self.state[e].term = Some(pair);
+                    self.state[e].val = Some(cell);
+                    self.state[e].ty = Some(cell);
                     self.record_guard(pair, pair, self.loc(e, 0), DiagKind::ImportExport, None);
                     return pair;
                 };
                 let value_node = self.module.as_dynamic(items[0].node, self.current_block);
                 let ty_node = self.module.as_dynamic(items[1].node, self.current_block);
-                self.term[e] = Some(pair);
-                self.val[e] = Some(value_node);
-                self.ty[e] = Some(ty_node);
+                self.state[e].term = Some(pair);
+                self.state[e].val = Some(value_node);
+                self.state[e].ty = Some(ty_node);
                 pair
             }
             ExprKind::NativeCall { op, args } => self.check_native_call(e, op, args),
@@ -1288,208 +1438,11 @@ where
         // equals the finished expression.
         if let Some((vc, tc)) = skeleton {
             let value = self.value_of(e);
-            let ty = self.ty[e].expect("a compound kind sets a type");
+            let ty = self.state[e].ty.expect("a compound kind sets a type");
             self.module.unify(vc, value);
             self.module.unify(tc, ty);
         }
         pair
-    }
-
-    /// A `$name(args…)` call: compile each argument, look `name` up in this
-    /// module's private [`NativeOps`] registry, and adopt the `[value, type]`
-    /// pair the plugin's [`NativeOp`] builder returns.  The checker has no
-    /// knowledge of what the operator does — the plugin's registration owns the
-    /// lowering and the type construction (the private contract with its own
-    /// source).
-    /// a diagnostic rather than a panic (the frontend compiles `$name`
-    /// blind, so the checker is the first layer that can see the registry).
-    fn check_native_call(&mut self, e: ExprId, op: &'static str, args: ChildRange) -> NodeId {
-        let arg_ids: Vec<ExprId> =
-            self.ir.children[args.start as usize..args.end as usize].to_vec();
-        for &arg in &arg_ids {
-            self.check_expr(arg);
-        }
-        let native_args: Vec<NativeArg> = arg_ids
-            .iter()
-            .map(|&arg| NativeArg {
-                expr: arg,
-                value: self.value_of(arg),
-                ty: self.ty[arg].expect("a compiled argument has a type"),
-            })
-            .collect();
-        let loc = self.loc(e, 0);
-        let ops = self.native_ops;
-        let built = match ops
-            .iter()
-            .find(|(name, _)| *name == op)
-            .map(|(_, operator)| operator)
-        {
-            Some(operator) => operator.build(self, e, &native_args, loc),
-            None => {
-                // An unregistered name is an ordinary check-time refusal, not
-                // a broken invariant: only the checker can see the registry,
-                // so this is the one place it can be reported.  The guard
-                // leaves the expression uncompiled, which `check_failed` picks
-                // up — the definition pass is skipped, so nothing ever
-                // evaluates the hole.
-                self.record_guard(
-                    self.type_expr,
-                    self.type_expr,
-                    loc,
-                    DiagKind::NativeOpUnresolved,
-                    Some(op),
-                );
-                let pair = self.pair_of(self.type_expr, self.type_expr);
-                self.term[e] = Some(pair);
-                self.val[e] = None;
-                self.ty[e] = Some(self.type_expr);
-                return pair;
-            }
-        };
-        self.term[e] = Some(built.node);
-        self.val[e] = built.val;
-        self.ty[e] = Some(built.ty);
-        built.node
-    }
-
-    /// A binary integer operation `a op b`: both operands must be `Int`, and
-    /// the result is `Int` (a comparison yields `0/1` to drive an `if`'s
-    /// lazy `Index` branch).  Each operand's type is unified against the int
-    /// type expression — a concretely non-`Int` operand is a check error,
-    /// and an unbound operand (a parameter) is *pinned* to `Int`, so a
-    /// later apply at a non-`Int` argument is a runtime failure in the
-    /// argument unify, not a panic inside the operator.
-    fn check_binop(&mut self, e: ExprId, operator: BinOp, left: ExprId, right: ExprId) -> NodeId {
-        self.check_expr(left);
-        self.check_expr(right);
-        match operator {
-            // `==` compares two *same-typed* values and yields 0/1: the Int
-            // equalities (`s.a == 1`, `x == y`) and the type-value equalities
-            // (`S::a == Int`) — the operands' types must be equal, so a type
-            // value (`: Type`) can be compared with a type constant.
-            BinOp::Eq => self.check_unify(
-                self.ty[left].unwrap(),
-                self.ty[right].unwrap(),
-                self.loc(left, 1),
-                DiagKind::BinOp,
-            ),
-            BinOp::Add | BinOp::Sub | BinOp::Leq => {
-                self.check_unify(
-                    self.ty[left].unwrap(),
-                    self.int_type,
-                    self.loc(left, 1),
-                    DiagKind::BinOp,
-                );
-                self.check_unify(
-                    self.ty[right].unwrap(),
-                    self.int_type,
-                    self.loc(right, 1),
-                    DiagKind::BinOp,
-                );
-            }
-        }
-        let operator = P::Operator::from(TypeOperator::from(operator));
-        let left = self.value_of(left);
-        let right = self.value_of(right);
-        let operands = self.array_node(self.current_block, &[left, right]);
-        let value = self.op_node(self.current_block, operator, Some(operands));
-        let pair = self.pair_of(value, self.int_type);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(self.int_type);
-        pair
-    }
-
-    /// `assert(condition)` — an explicit constraint, not a unify: the
-    /// condition's *value* node is registered as an assert.  The
-    /// lowlevel's [`Module::check_asserts`] then force-evaluates every
-    /// assert (ignoring laziness) after the definition pass and requires
-    /// `USize(1)` — an unbound condition is not bound to `1`, it stays
-    /// untriggered, and the apply clone re-checks the instantiated
-    /// condition per call.  The expression compiles to the condition
-    /// itself: an assert checks its subject, it does not replace it.
-    fn check_assert(&mut self, e: ExprId, condition: ExprId) -> NodeId {
-        self.check_expr(condition);
-        // The checked thing is a `USize`, so the assert names the value
-        // node — element 0 of the pair — not the pair itself.
-        let value = self.value_of(condition);
-        self.register_assert(value, self.loc(e, 0), true);
-        let pair = self.term[condition].unwrap();
-        self.term[e] = Some(pair);
-        self.val[e] = self.val[condition];
-        self.ty[e] = self.ty[condition];
-        pair
-    }
-
-    /// Registers an assert condition: the module worklist entry plus, when
-    /// a function body is being compiled, the current function's own list —
-    /// the function owns it, so an apply clones it and re-checks the
-    /// instantiated condition against each call's argument.  `loc` is
-    /// recorded as the runtime attribution edge for the condition node;
-    /// `user_facing` marks an explicit `assert` (rendered as a diagnostic) as
-    /// opposed to a generated guard (the array-bounds check, which duplicates
-    /// the index eval error and is not rendered).  The location is source-blind
-    /// (an [`ExprId`]-based [`Loc`]), so no span reaches the lowlevel module.
-    fn register_assert(&mut self, condition: NodeId, loc: Loc, user_facing: bool) {
-        self.node_edges.insert(condition, loc);
-        if user_facing {
-            self.user_asserts.insert(condition);
-        }
-        self.module.add_assert(condition);
-        if let Some(function) = self.current_function() {
-            self.module.functions[function].asserts.push(condition);
-        }
-    }
-
-    fn check_tuple_term(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut vals = Vec::new();
-        let mut tys = Vec::new();
-        for &el in &elements {
-            self.check_expr(el);
-            vals.push(self.value_of(el));
-            tys.push(self.ty[el].unwrap());
-        }
-        // A tuple: `[values, [[element types], [TupleType, Type]]]`.
-        let value = self.array_node(self.current_block, &vals);
-        let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let ty_node = self.array_node(self.current_block, &[shape, kind]);
-        let pair = self.pair_of(value, ty_node);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(value);
-        self.ty[e] = Some(ty_node);
-        pair
-    }
-
-    /// A tuple type expression: `[[element types], [TupleType, Type]]`.
-    fn check_tuple_type(&mut self, e: ExprId) -> NodeId {
-        let elements = self.range_children(e);
-        let mut tys = Vec::new();
-        for &el in &elements {
-            tys.push(self.check_type_element(el));
-        }
-        let shape = self.array_node(self.current_block, &tys);
-        let kind = self.kind_expr(self.current_block, self.markers.tuple_type_marker);
-        let pair = self.array_node(self.current_block, &[shape, kind]);
-        self.term[e] = Some(pair);
-        self.val[e] = Some(shape);
-        self.ty[e] = Some(kind);
-        pair
-    }
-
-    /// The type an expression contributes in a type position — a struct
-    /// field, a tuple-type element, a function-type side.  There is no
-    /// term/type distinction: the expression is used as-is, its pair being
-    /// the type it denotes.  A genuine type (a value whose own type is a
-    /// kind, or an unbound cell) contributes its pair directly; a *term*
-    /// put in a type position contributes its own value pair too, and the
-    /// subsequent unification fails (a term's value pair does not unify
-    /// with its own type) — `struct<Int, b>` with `b : B` fails, while
-    /// `struct<Int, B>` works.
-    fn check_type_element(&mut self, el: ExprId) -> NodeId {
-        self.check_expr(el);
-        self.term[el].unwrap()
     }
 
     fn lookup(&self, target: ExprId) -> Binding {

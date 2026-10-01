@@ -66,7 +66,9 @@ lichen_utils::enum_ext! {
 /// A dynamic (block-arena) handle — the kind every hand-built test value
 /// uses; static payloads appear only inside `StaticModule`s.
 fn dyn_handle<T: ?Sized>(ptr: *const T) -> AnyHandle<T> {
-    AnyHandle::Dynamic(Handle(ptr))
+    // SAFETY: every caller passes the address of a payload just allocated in
+    // the block arena the value is stored in.
+    AnyHandle::Dynamic(unsafe { Handle::from_raw(ptr) })
 }
 
 impl ValueExt for TestValue {
@@ -81,30 +83,36 @@ impl ValueExt for TestValue {
     fn handle(&self) -> AnyHandle<[u8]> {
         match self {
             TestValue::U128(p) => match p {
-                AnyHandle::Dynamic(h) => {
-                    AnyHandle::Dynamic(Handle(std::ptr::slice_from_raw_parts(h.0 as *const u8, 16)))
-                }
-                AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
-                    module: h.module,
-                    offset: std::ptr::slice_from_raw_parts(h.offset as *const u8, 16),
+                AnyHandle::Dynamic(h) => AnyHandle::Dynamic(unsafe {
+                    Handle::from_raw(std::ptr::slice_from_raw_parts(h.as_ptr() as *const u8, 16))
+                }),
+                AnyHandle::Static(h) => AnyHandle::Static(unsafe {
+                    StaticHandle::from_raw(
+                        h.module,
+                        std::ptr::slice_from_raw_parts(h.as_ptr() as *const u8, 16),
+                    )
                 }),
             },
             TestValue::String(p) => match p {
                 AnyHandle::Dynamic(h) => {
-                    let chars = unsafe { &*h.0 };
-                    AnyHandle::Dynamic(Handle(std::ptr::slice_from_raw_parts(
-                        chars.as_ptr() as *const u8,
-                        chars.len() * 4,
-                    )))
-                }
-                AnyHandle::Static(h) => {
-                    let chars = unsafe { &*h.offset };
-                    AnyHandle::Static(StaticHandle {
-                        module: h.module,
-                        offset: std::ptr::slice_from_raw_parts(
+                    let chars = unsafe { &*h.as_ptr() };
+                    AnyHandle::Dynamic(unsafe {
+                        Handle::from_raw(std::ptr::slice_from_raw_parts(
                             chars.as_ptr() as *const u8,
                             chars.len() * 4,
-                        ),
+                        ))
+                    })
+                }
+                AnyHandle::Static(h) => {
+                    let chars = unsafe { &*h.as_ptr() };
+                    AnyHandle::Static(unsafe {
+                        StaticHandle::from_raw(
+                            h.module,
+                            std::ptr::slice_from_raw_parts(
+                                chars.as_ptr() as *const u8,
+                                chars.len() * 4,
+                            ),
+                        )
                     })
                 }
             },
@@ -115,24 +123,27 @@ impl ValueExt for TestValue {
         match self {
             TestValue::U128(p) => {
                 *p = match payload {
-                    AnyHandle::Dynamic(h) => AnyHandle::Dynamic(Handle(h.0 as *const u128)),
-                    AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
-                        module: h.module,
-                        offset: h.offset as *const u128,
+                    AnyHandle::Dynamic(h) => {
+                        AnyHandle::Dynamic(unsafe { Handle::from_raw(h.as_ptr() as *const u128) })
+                    }
+                    AnyHandle::Static(h) => AnyHandle::Static(unsafe {
+                        StaticHandle::from_raw(h.module, h.as_ptr() as *const u128)
                     }),
                 }
             }
             TestValue::String(p) => {
                 *p = match payload {
-                    AnyHandle::Dynamic(h) => AnyHandle::Dynamic(Handle(
-                        std::ptr::slice_from_raw_parts(h.0 as *const char, h.len() / 4),
-                    )),
-                    AnyHandle::Static(h) => AnyHandle::Static(StaticHandle {
-                        module: h.module,
-                        offset: std::ptr::slice_from_raw_parts(
-                            h.offset as *const char,
+                    AnyHandle::Dynamic(h) => AnyHandle::Dynamic(unsafe {
+                        Handle::from_raw(std::ptr::slice_from_raw_parts(
+                            h.as_ptr() as *const char,
                             h.len() / 4,
-                        ),
+                        ))
+                    }),
+                    AnyHandle::Static(h) => AnyHandle::Static(unsafe {
+                        StaticHandle::from_raw(
+                            h.module,
+                            std::ptr::slice_from_raw_parts(h.as_ptr() as *const char, h.len() / 4),
+                        )
                     }),
                 }
             }
@@ -190,7 +201,9 @@ impl OperatorExt<TestProgram> for TestOperator {
                 let Some(LowValue::Array(operands)) = operand.as_enum() else {
                     unreachable!("binary ops expect an array of two node ids")
                 };
-                let operands = operands.items();
+                // SAFETY: the operand is the value of a live node of `module`,
+                // whose block has not been dropped.
+                let operands = unsafe { operands.items() };
                 // Operands may be baked static refs (a constant operand of a
                 // materialized static function) — resolve through the module
                 // API, which reads a dynamic node's value or a static node's
@@ -235,8 +248,8 @@ fn u128_of(value: TestValue) -> u128 {
         panic!("expected U128")
     };
     let ptr = match payload {
-        AnyHandle::Dynamic(h) => h.0 as *const u8,
-        AnyHandle::Static(h) => h.offset as *const u8,
+        AnyHandle::Dynamic(h) => h.as_ptr() as *const u8,
+        AnyHandle::Static(h) => h.as_ptr() as *const u8,
     };
     u128::from_ne_bytes(
         unsafe { std::slice::from_raw_parts(ptr, 16) }
@@ -250,8 +263,8 @@ fn string_of(value: TestValue) -> Vec<char> {
         panic!("expected String")
     };
     match payload {
-        AnyHandle::Dynamic(h) => unsafe { &*h.0 }.to_vec(),
-        AnyHandle::Static(h) => unsafe { &*h.offset }.to_vec(),
+        AnyHandle::Dynamic(h) => unsafe { &*h.as_ptr() }.to_vec(),
+        AnyHandle::Static(h) => unsafe { &*h.as_ptr() }.to_vec(),
     }
 }
 
@@ -348,8 +361,9 @@ fn array_ids(value: TestValue) -> Vec<NodeId> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected array")
     };
-    array
-        .items()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
         .iter()
         .map(|item| match item.node {
             AnyNodeId::Dynamic(node) => node,
@@ -363,7 +377,12 @@ fn array_mask(value: TestValue) -> Vec<bool> {
     let TestValue::LowValue(LowValue::Array(array)) = value else {
         panic!("expected array")
     };
-    array.items().iter().map(|item| item.shallow).collect()
+    // SAFETY: the value was just produced by the module under test, whose
+    // block has not been dropped.
+    unsafe { array.items() }
+        .iter()
+        .map(|item| item.shallow)
+        .collect()
 }
 
 /// Assert `value` is an array whose elements hold the given `u128`s.
@@ -407,16 +426,16 @@ fn wrap_function_asserts(
     (func_node, func)
 }
 
-/// The manual-insert mirror of [`Module::add_function`]'s tagging: stamp
-/// `nodes` as owned by `function` and record them as its scope.  A function
-/// built by hand (the placeholder-value helpers below) must tag its body,
-/// or the apply clone walk's chain membership test reads the body as
-/// outside the template and references it in place.
+/// The manual-insert mirror of [`Module::add_function`]'s registration:
+/// register `nodes` in `function`'s body scope (owner tag plus
+/// `Function::nodes`).  A function built by hand (the placeholder-value
+/// helpers below) must register its body, or the apply clone walk's chain
+/// membership test reads the body as outside the template and references it
+/// in place.
 fn tag_scope(m: &mut Module<TestProgram>, function: FunctionId, nodes: Vec<NodeId>) {
-    for &node in &nodes {
-        m.nodes[node].function = Some(function);
+    for node in nodes {
+        m.register_in_function(function, node);
     }
-    m.functions[function].nodes = nodes;
 }
 
 /// Create a function value in a fresh body block: the return node at
@@ -473,7 +492,7 @@ fn finish_function(
     param: NodeId,
     func_node: NodeId,
 ) -> FunctionId {
-    let nodes: Vec<NodeId> = m.blocks[block].nodes.iter().copied().collect();
+    let nodes: Vec<NodeId> = m.blocks[block].nodes.to_vec();
     let function = m.functions.insert(Function {
         nodes: Vec::new(),
         r#return: ret,
