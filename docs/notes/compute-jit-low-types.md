@@ -101,4 +101,18 @@ the remaining coupling lives (see
   domain and scalar body operations are covered.
 - **Static/imported kernel functions** (compute v1 rejects them; the
   freeze/persist plumbing is already in place for when they are supported).
-- **SPIRV / GPU backend** — `wasm-encoder` + `wasmi` only today.
+- **SPIRV / GPU backend** — no second backend exists. What the split
+  [bought](lichen-compute.md#4-codegen-bytecode-fragments-not-a-module) is that
+  one could now: the lowered body lives in the dependency-free
+  `lichen-kernel-ir` crate, so a backend would depend on that and not on
+  `wasm-encoder`/`wasmi`, and the IR is already target-neutral rather than
+  wasm-shaped. Two measured facts shape the cost, though. A compute shader can
+  index freely — an index-based body dispatches directly, one lane per index —
+  so the "no indices" property is a precondition only for *vectorising* across a
+  lane group, not for GPU execution. And a buffer index needs no capability at
+  all: SPIR-V's addressing arithmetic is 32-bit by default (4 GB range) with
+  64-bit indexing an opt-in extension for larger buffers, and one `plrun` is
+  bounded at 8 MiB by `MAX_PARALLEL_ELEMENTS`. Only the *data* width needs a
+  device capability (`shaderInt64` on Vulkan, MSL 2.3+ on Metal), and WGSL core
+  has no 64-bit integer at all — so the reachable targets are the native ones,
+  not WebGPU.

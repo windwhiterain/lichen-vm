@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/lichen-kernel-ir",
     "crates/lichen-span",
     "crates/lichen-utils",
     "crates/lichen-registry",
@@ -45,6 +46,7 @@ edition = "2024"
 # crate, not a member, so no member may inherit a path entry that would pull it
 # into this workspace (see `exclude` above).
 [workspace.dependencies]
+lichen-kernel-ir = { path = "crates/lichen-kernel-ir" }
 lichen-span = { path = "crates/lichen-span" }
 lichen-utils = { path = "crates/lichen-utils" }
 lichen-registry = { path = "crates/lichen-registry" }

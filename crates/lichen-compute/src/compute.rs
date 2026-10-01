@@ -59,6 +59,9 @@ use lichen_highlevel::ir::{ExprId, Loc};
 use lichen_highlevel::native::{NativeApply, NativeArg, NativeOp};
 use lichen_highlevel::program::{Ctx, HighProgram, TypeOperator, ValueType};
 use lichen_highlevel::shape::{PAIR_TYPE_SLOT, PAIR_VALUE_SLOT, low_type_of_slot};
+use lichen_kernel_ir::{
+    IntWidth, KernelBin, KernelFragment, KernelInstr, KernelShape, fragment_digest,
+};
 use lichen_lowlevel::codec::{OperatorCodec, Reader, ValueCodec, Writer};
 use lichen_lowlevel::{
     AnyFunctionId, AnyHandle, AnyNodeId, ArrayItem, BlockId, Handle, LowOperator, LowShape,
@@ -91,7 +94,11 @@ use lichen_utils::extend::AsEnum;
 /// kernel registry (the compiled wasm bytes).  A kernel value is host-owned
 /// (a small `Copy` scalar), so it is never an arena payload and never needs GC
 /// re-homing or static freeze.
-pub type KernelId = usize;
+///
+/// The id itself belongs to the lowered-kernel IR, because a cross-kernel call
+/// in that IR has to name a callee and the IR must not depend on this crate to
+/// say so.  Re-exported here because this is where a host finds it.
+pub use lichen_kernel_ir::KernelId;
 
 /// A runtime parallel-buffer artifact's payload: the `n` collected element
 /// results, held **in the block arena** as an `i64` slice rather than in a
@@ -166,41 +173,17 @@ fn intern_kernel(fragment: KernelFragment) -> KernelId {
     id
 }
 
-/// A fragment's content digest: the domain shape plus the lowered body plus the
-/// output count plus the result count.
-///
-/// **Every field of the fragment is hashed, and that is the invariant.**  The
-/// digest is what makes a [`KernelId`] an identity, so a field left out of it
-/// is a way for two fragments that differ in it to intern to *one* id — and
-/// then the module cache, keyed on `(LaunchMode, KernelId)`, serves one kernel's
-/// module for another's, silently.  `results` in particular is what types the
-/// assembled function's result vector, so a fragment that returned two values
-/// and one that returned three must not share an entry.
-///
-/// The `Debug` rendering is the canonical form here because it is a total,
-/// deterministic function of the fields it hashes — the same reason the
-/// round-trip tests can print a value — and this runs once per `jit`, against a
-/// wasm compile it exists to avoid repeating.
-fn fragment_digest(fragment: &KernelFragment) -> u64 {
-    use std::hash::{Hash as _, Hasher as _};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    format!("{:?}", fragment.param_shape).hash(&mut hasher);
-    format!("{:?}", fragment.body).hash(&mut hasher);
-    fragment.outputs.hash(&mut hasher);
-    fragment.results.hash(&mut hasher);
-    hasher.finish()
-}
-
 #[cfg(test)]
 mod kernel_intern_tests {
     use super::*;
 
     fn fragment(body: Vec<KernelInstr>) -> KernelFragment {
         KernelFragment {
-            param_shape: LowShape::USize,
+            param_shape: KernelShape::Scalar,
             body,
             outputs: 0,
             results: 1,
+            int_width: IntWidth::I64,
         }
     }
 
@@ -251,51 +234,12 @@ fn buffer_items(payload: &BufferPayload) -> Option<&[i64]> {
     }
 }
 
-/// A binary arithmetic/comparison operator of the kernel-safe subset.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KernelBin {
-    Add,
-    Sub,
-    Leq,
-    Eq,
-}
-
-/// One abstract instruction in a lowered kernel body.
-///
-/// A [`KernelFragment`] stores a `Vec<KernelInstr>` — **not** raw wasm — so the
-/// launcher can lower cross-kernel calls with indices resolved *after* the
-/// kernel's relative launch set is laid out (the deferred-linker condition
-/// style-2 `k x` calls need).  Style-1 inline lichen-function calls and the
-/// scalar-arithmetic subset lower directly; a later variant carries a
-/// cross-kernel call by callee [`KernelId`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KernelInstr {
-    /// Push an `i64` constant.
-    Const(i64),
-    /// A binary `add/sub/leq/eq` over the top two stack values.
-    Bin(KernelBin),
-    /// Read a parameter local (a flattened scalar offset in the domain).
-    LocalGet(u32),
-    /// Convert the top stack value `i64 -> i32` (a `select` condition).
-    I32WrapI64,
-    /// A `if c then a else b` — emitted as then/else values, the selector,
-    /// `I32WrapI64`, then this `select`.
-    Select,
-    /// A cross-kernel call (style 2): the top `arity` stack values are the
-    /// argument; the caller's launch-time assembler resolves this to an
-    /// in-module `call` to the callee kernel's assembled function index.
-    CallKernel(KernelId),
-    /// Call the host `read(cfg_pos, idx)` import — the stack holds
-    /// `[cfg_pos, idx]`.
-    BufferReadCall,
-    /// Call the host `write(out_pos, idx, val)` import — the stack holds
-    /// `[out_pos, idx, val]`.  `out_pos` is a **compile-time constant** the
-    /// emitter writes just before the call: the write's *emission ordinal*
-    /// (see [`emit_node`]), which is the same fact as the index function's
-    /// codomain position.  Every emitted write is a straight-line statement,
-    /// so each ordinal `0 .. outputs` is written on **every** index.
-    BufferWriteCall,
-}
+// The lowered-kernel IR — `KernelBin`, `KernelInstr`, `KernelFragment`,
+// `KernelShape`, `IntWidth` and the content digest — lives in the dependency-free
+// `lichen-kernel-ir` crate, not here, so that a backend other than this crate's
+// wasm one can consume a fragment without pulling in `wasmi`.  What follows is
+// the *wasm* half: this crate compiles a checked graph down to that IR and then
+// lowers the IR to a wasm module.  See `docs/notes/compute-jit-low-types.md`.
 
 /// The diagnostic categories this plugin records through the lowlevel's
 /// general extension channel ([`Module::record_extension_diagnostic`]).  They
@@ -311,47 +255,6 @@ const PARALLEL_DIAGNOSTIC: &str = "compute.parallel";
 /// selecting on this category catches a `compute.call` refusal too instead of
 /// needing to know which arm produced it.
 const KERNEL_LAUNCH_DIAGNOSTIC: &str = "compute.kernel_launch";
-
-/// A compiled kernel-callable unit — the JIT's **bytecode** output, not a
-/// module.
-///
-/// `jit` lowers one lichen function to a [`KernelFragment`]: the function's
-/// body as abstract instructions, plus the domain shape signature a linker
-/// needs.  The fragment is stored (not the whole module); `launch` assembles
-/// the reachable fragment set into one module ([`assemble_module`]) and runs
-/// it.  Splitting "emit bytecode" from "assemble a module" is what lets a
-/// later step link many fragments together (helper sharing, recursion) and
-/// emit cross-module imports for callees compiled elsewhere.
-#[derive(Debug, Clone, PartialEq)]
-struct KernelFragment {
-    /// The parameter domain shape — the wasm parameter types and the layout
-    /// the body emitter used for parameter reads.
-    param_shape: LowShape,
-    /// The lowered function body as abstract instructions.  The launcher
-    /// lowers these to wasm with any cross-kernel call indices resolved.
-    body: Vec<KernelInstr>,
-    /// How many output buffers this fragment writes — `0` for a scalar `jit`
-    /// fragment (which has no output buffer at all), and for a **parallel**
-    /// fragment the index function's codomain arity.  The count is a property
-    /// of the *compiled* fragment, so a `plrun` allocates exactly this many
-    /// buffers and never has to discover at run time which ones were written.
-    outputs: usize,
-    /// How many `i64` values this fragment's body leaves on the stack — the wasm
-    /// function's **result arity**, and the length of the `Vec<ValType>` the
-    /// assembler emits for it.
-    ///
-    /// `1` for a scalar body and for a parallel fragment (whose body ends in
-    /// the dummy `Const(0)`), and one per leaf of a **tuple** codomain: the
-    /// body's tuple value is flattened so each leaf is its own stack slot, which
-    /// is what makes a kernel return several values at once.
-    ///
-    /// This is a *compiled* property, read from the registry by [`run_kernel`]
-    /// to size its output buffer and by the assembler to type the function, so
-    /// it must never be discovered at run time from the values that came back.
-    /// It is part of [`fragment_digest`] for the same reason `outputs` is: two
-    /// fragments differing only in result arity must not intern to one id.
-    results: usize,
-}
 
 /// The compute value vocabulary — injected as a sibling leaf into a host's
 /// value union (see a host `program` module).  A plain enum of exactly this
@@ -1200,10 +1103,11 @@ where
     }
 
     Ok(KernelFragment {
-        param_shape,
+        param_shape: kernel_shape(&param_shape),
         body,
         outputs: 0,
         results: leaves.len(),
+        int_width: IntWidth::I64,
     })
 }
 
@@ -1376,10 +1280,11 @@ where
     // of the buffers the `write` import filled.
     body_instr.push(KernelInstr::Const(0));
     Ok(KernelFragment {
-        param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
+        param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
         body: body_instr,
         outputs: outputs.len(),
         results: 1,
+        int_width: IntWidth::I64,
     })
 }
 
@@ -1487,7 +1392,7 @@ fn assemble_module(
     let mut type_index_by_signature: HashMap<(usize, usize), u32> = HashMap::new();
     let mut func_types: Vec<u32> = Vec::with_capacity(ordered.len());
     for frag in ordered {
-        let (params, results) = (flat_arity(&frag.param_shape), frag.results);
+        let (params, results) = (frag.param_shape.flat_arity(), frag.results);
         let ti = type_index_by_signature
             .entry((params, results))
             .or_insert_with(|| {
@@ -1611,6 +1516,28 @@ fn kernel_domain(domain: LowShape) -> Result<LowShape, String> {
     match &domain {
         LowShape::USize | LowShape::Tuple(_) => Ok(domain),
         _ => Err("kernel domain must be a scalar or a tuple of scalars".into()),
+    }
+}
+
+/// The IR's own expression of a kernel domain — the same structure, in the two
+/// variants the lowered-kernel IR has, so that a backend reading a fragment
+/// needs no dependency on the host shape lattice.
+///
+/// **Total, on purpose, and it preserves the arity convention.** A domain
+/// `kernel_domain` accepted is a scalar or a tuple, but a tuple's *element* is
+/// not itself re-checked, so a shape with no IR counterpart can still arrive
+/// here; those fold to [`KernelShape::Scalar`], which flattens to one leaf
+/// exactly as the `flat_arity` filler arms do for the same shapes.  A separate
+/// refusal arm would be a second failure mode for a case the parameter-count
+/// path already tolerates, and would change behaviour rather than preserve it.
+fn kernel_shape(domain: &LowShape) -> KernelShape {
+    match domain {
+        LowShape::USize => KernelShape::Scalar,
+        LowShape::Tuple(items) => KernelShape::Tuple(items.iter().map(kernel_shape).collect()),
+        LowShape::Unknown
+        | LowShape::Array(_, _)
+        | LowShape::Function(..)
+        | LowShape::Table(..) => KernelShape::Scalar,
     }
 }
 
@@ -2099,7 +2026,7 @@ where
             CROSS_KERNEL_RESULT_ARITY
         ));
     }
-    if flat_arity(&shape) == 1 {
+    if shape.flat_arity() == 1 {
         // A scalar-domain callee takes one i64, and the argument is peeled
         // once and emitted once — the pre-existing path, kept exactly as it was.
         // (A *tuple* domain has to resolve its own encoding; see
@@ -2138,7 +2065,7 @@ fn emit_callee_args<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     arg: NodeId,
-    shape: &LowShape,
+    shape: &KernelShape,
     body: &mut Vec<KernelInstr>,
     out: &mut usize,
 ) -> Result<(), String>
@@ -2147,7 +2074,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let LowShape::Tuple(items) = shape else {
+    let KernelShape::Tuple(items) = shape else {
         return emit_node(module, params, arg, body, out);
     };
     // A candidate that reads as a tuple but disagrees with the domain is a
@@ -2224,7 +2151,7 @@ fn emit_tuple_leaves<P>(
     module: &Module<P>,
     params: &[ParamSlot],
     node: NodeId,
-    items: &[LowShape],
+    items: &[KernelShape],
     out: &mut Vec<KernelInstr>,
     writes: &mut usize,
 ) -> Result<(), String>
@@ -2233,7 +2160,7 @@ where
     P::Value: From<ComputeValue> + AsEnum<ComputeValue>,
     P::Operator: AsEnum<TypeOperator> + AsEnum<ComputeOperator>,
 {
-    let arity: usize = items.iter().map(flat_arity).sum();
+    let arity: usize = items.iter().map(KernelShape::flat_arity).sum();
     if let Some((base, read)) = param_pass_through(module, params, node) {
         if flat_arity(&read) == arity {
             for offset in 0..arity {
@@ -2260,10 +2187,10 @@ scalar(s)",
     }
     for (element, element_shape) in elements.iter().zip(items) {
         match element_shape {
-            LowShape::Tuple(nested) => {
+            KernelShape::Tuple(nested) => {
                 emit_tuple_leaves(module, params, *element, nested, out, writes)?
             }
-            _ => emit_node(module, params, *element, out, writes)?,
+            KernelShape::Scalar => emit_node(module, params, *element, out, writes)?,
         }
     }
     Ok(())
@@ -2971,7 +2898,7 @@ fn run_kernel(id: KernelId, args: &[i64]) -> Result<Vec<usize>, String> {
         let fragment = fragments
             .get(&id)
             .ok_or_else(|| format!("kernel {id} is not registered"))?;
-        (flat_arity(&fragment.param_shape), fragment.results)
+        (fragment.param_shape.flat_arity(), fragment.results)
     };
     if args.len() != expected {
         return Err(format!(
@@ -3505,7 +3432,7 @@ mod parallel_launch_tests {
     /// signature needs one value left on the stack.
     fn two_outputs() -> KernelFragment {
         KernelFragment {
-            param_shape: LowShape::Tuple(vec![LowShape::USize, LowShape::USize]),
+            param_shape: KernelShape::Tuple(vec![KernelShape::Scalar, KernelShape::Scalar]),
             body: vec![
                 KernelInstr::Const(0),
                 KernelInstr::LocalGet(1),
@@ -3523,6 +3450,7 @@ mod parallel_launch_tests {
             ],
             outputs: 2,
             results: 1,
+            int_width: IntWidth::I64,
         }
     }
 

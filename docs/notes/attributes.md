@@ -113,6 +113,26 @@ The combine operator is `GcdOp::Gcd`, an n-ary gcd meet, defined as a **language
 operator — `LangOperator` is a union over `HighProgramOperator` + `GcdOp` — so the
 lowlevel/highlevel core never names it. An absent perspective reads `USize(0)`.
 
+### Nothing consumes it yet
+
+`Perspective` is **live and fully checked** — `#p` reaches the IR from the grammar
+(`compile.rs` spells `LangAttr::Perspective`), it is in the persist codec, and the
+table below is the acceptance suite — but **no part of the runtime reads it**. It is
+an unused asset, not a half-built one, and it is the static half of a GPU execution
+model: the certificate for which expressions are uniform across an aligned lane group.
+
+It is worth recording a conclusion that was reached the wrong way first, because the
+wrong version is the tempting one. The obvious claim is that a GPU backend *needs*
+this, because "the body must be index-free" — that is false. A compute shader indexes
+freely, and a dispatch that gives each lane one index maps straight onto
+`lichen-compute`'s existing index-based parallel kernel, one lane per index, with no
+rewrite of the body. Being index-free is a precondition only for **vectorising across a
+lane group**, which is a different (and larger) win than parallelism. What
+`Perspective` would buy is the part a dispatch *cannot* give: hoisting a
+uniform (`#0`) subexpression out of a lane-varying body, and kernel fusion. So it is a
+real future feature and **not** a prerequisite for the GPU backend described in
+[compute-jit-low-types](compute-jit-low-types.md).
+
 ## Subtyping: checking is a generalised unify
 
 `check_unify_relaxed(a, b, loc, kind, is_subtype)` attempts an equality unify; on

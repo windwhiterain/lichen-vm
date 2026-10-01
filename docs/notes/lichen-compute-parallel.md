@@ -92,10 +92,19 @@ lambda.  It resolves the outer config parameter and the inner index parameter an
 traces the inner body with **two parameter slots**
 
 ```
-param_shape  = Tuple([cfg_shape, USize])
+slot 0 shape = cfg_shape            (a LowShape; the compiler-stage slot shape)
+slot 1 shape = USize
+fragment param_shape = Tuple([Scalar, Scalar])   (the IR shape)
 slot 0: cfg  (base 0)
 slot 1: i    (base flat_arity(cfg_shape))
 ```
+
+The two shapes are deliberately different types: a `ParamSlot` keeps the full
+`LowShape` because `flatten_offset`/`sub_shape` walk the lattice, while the
+fragment carries the `KernelShape` the lowered-kernel IR defines
+([codegen](lichen-compute.md#4-codegen-bytecode-fragments-not-a-module)). For a
+parallel fragment the two coincide — `cfg_shape` is itself a decided scalar or
+tuple of them, so it flattens to the same leaf count.
 
 The emitter was generalized from a single `(param_pair, param_value)` pair to a
 `&[ParamSlot]` list: a parameter read resolves to `slot.base + flatten_offset(shape,

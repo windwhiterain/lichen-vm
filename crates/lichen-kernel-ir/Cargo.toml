@@ -1,0 +1,15 @@
+[package]
+name = "lichen-kernel-ir"
+version.workspace = true
+edition.workspace = true
+
+# No dependencies, and that is an invariant rather than an accident of the
+# current tree: this crate is the contract between a *compiler* stage that
+# lowers a checked lichen graph and one or more *backends* that emit machine
+# code from the result.  Anything it named would be named by both sides, so a
+# dependency here is a dependency every backend cannot avoid — which is exactly
+# how a backend ends up unable to exist without pulling in another backend's
+# runtime.  The one thing it deliberately does not depend on is the host IR
+# (`lichen-lowlevel`), even though the compiler stage reads that IR to produce
+# this one; see `KernelShape`.
+[dependencies]

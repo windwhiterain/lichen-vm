@@ -648,6 +648,7 @@ name = "lichen-compute"
 version = "0.1.0"
 dependencies = [
  "lichen-highlevel",
+ "lichen-kernel-ir",
  "lichen-lowlevel",
  "lichen-utils",
  "wasm-encoder 0.228.0",
@@ -673,6 +674,10 @@ dependencies = [
  "slotmap",
  "stacksafe",
 ]
+
+[[package]]
+name = "lichen-kernel-ir"
+version = "0.1.0"
 
 [[package]]
 name = "lichen-language"

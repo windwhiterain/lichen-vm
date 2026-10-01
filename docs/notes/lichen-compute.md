@@ -175,10 +175,42 @@ cross-module-shared artifacts.
 ## 4. Codegen: bytecode fragments, not a module
 
 `jit` emits the function's **body** as a `KernelFragment { param_shape, body,
-outputs, results }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
+outputs, results, int_width }` — a `Vec<KernelInstr>` of *abstract* instructions, not raw wasm.
 Splitting "emit bytecode" from "assemble a module" is what lets the launcher
 resolve cross-kernel call indices after the kernel's relative launch set is laid
 out.
+
+That IR lives in **`lichen-kernel-ir`**, a dependency-free crate, not in this one.
+The split is by stage: **lowering** a checked graph to a fragment needs the lowlevel
+(it reads it), while **emitting** a fragment needs the fragment and nothing else —
+and the emitting stage is the one with more than one plausible implementation. A
+dependency in the IR crate would be a dependency every backend cannot avoid, which
+is how a backend ends up unable to exist without pulling in another backend's
+runtime. A second backend (a GPU one being the obvious candidate) would depend on
+`lichen-kernel-ir` and not on `wasmi`.
+
+Two things follow from the IR being its own crate rather than a set of private
+types here:
+
+- **`param_shape` is `KernelShape`** (`Scalar` / `Tuple`), not `LowShape`. The IR
+  carries only the two shapes a kernel domain can be — the ones `kernel_domain`
+  admits — because a backend needs the domain's *structure* to flatten it and
+  nothing else. `kernel_shape` in `compute.rs` is the single conversion point, and
+  it is deliberately total: a tuple's element is not re-checked, so a shape with
+  no IR counterpart can still arrive, and it folds to `Scalar` with the same
+  one-leaf arity the local `flat_arity` filler gives those shapes. The
+  compiler-stage `ParamSlot.shape` stays a `LowShape`, because `flatten_offset`
+  and `sub_shape` walk the full lattice.
+- **`int_width` is a declared fact, not an assumption.** The language says
+  "integer" and stops: an `Int` reaches the lowered graph as a machine-sized
+  integer, so the width in a kernel is a property of the host the compiler ran on.
+  A fragment that assumed 64 bits would bake that host's choice into every backend
+  and leave a backend whose target has a different (or absent) native width with
+  no way to know it must convert at its boundary. A backend that cannot represent
+  the declared width refuses the fragment **by name** rather than narrowing,
+  because narrowing is a semantic change to a program nobody wrote. `I64` is the
+  only variant because it is the only width this compiler produces; a second one is
+  a decision it has not made, so it is not spelled as a variant nothing produces.
 
 `outputs` and `results` are two different counts and must not be conflated:
 `outputs` is how many **output buffers** a fragment writes (a parallel kernel's
@@ -188,16 +220,24 @@ parallel fragment has `results: 1` (its dummy `Const(0)`); a scalar kernel has
 `results: 1`; a tuple-codomain kernel has one per leaf. Both are compiled
 properties read off the fragment rather than discovered at run time, and both are
 in `fragment_digest`, so two fragments differing only in either cannot intern to
-one id and be served each other's module.
+one id and be served each other's module. `int_width` is hashed there for the same
+reason: `fragment_digest`'s invariant is that *every* field is hashed.
+
+The fragment ids the digest produces are **process-local** — `write_operator`
+refuses to serialize any compute operator ("a compute operation is a runtime form
+with no on-disk representation"), and a frozen module carries no kernel — so a
+change to the digest is a cold start and has no on-disk consequence.
 
 ```
 enum KernelInstr {
-  Const(i64),          // i64.const
-  Bin(KernelBin),      // add/sub/leq/eq over the top two i64
-  LocalGet(u32),       // a flattened parameter read
-  I32WrapI64,          // the `select` condition
-  Select,              // if c then a else b
-  CallKernel(KernelId) // cross-kernel call, resolved at assembly
+  Const(i64),           // i64.const
+  Bin(KernelBin),       // add/sub/leq/eq over the top two i64
+  LocalGet(u32),        // a flattened parameter read
+  I32WrapI64,           // the `select` condition
+  Select,               // if c then a else b
+  CallKernel(KernelId), // cross-kernel call, resolved at assembly
+  BufferReadCall,       // the host `read(cfg_pos, idx)` import
+  BufferWriteCall       // the host `write(out_pos, idx, val)` import
 }
 ```
 
