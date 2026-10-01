@@ -52,10 +52,13 @@ use lichen_highlevel::program::{
 use lichen_language_lex::Span;
 
 use crate::ast::{BinderId, Binding, Expr, Program, RecordField, Stmt, TypeConst};
+use crate::cells::CellStore;
 use crate::diag::Diag;
+use crate::path::Path;
 use crate::preprocess::ResolvedImport;
 use crate::program::{LangAttr, LangProgram, Perspective};
 use lichen_doc::Doc;
+use lichen_lowlevel::StaticNodeId;
 
 mod alloc;
 
@@ -81,12 +84,30 @@ pub fn compile_with_imports(
     program: &mut Program,
     imports: &[ResolvedImport],
 ) -> (IR<LangAttr>, SpanIndex, Vec<Diag<LangProgram>>) {
+    let (ir, spans, diagnostics, _) = compile_with_imports_with_cells(program, imports, None);
+    (ir, spans, diagnostics)
+}
+
+/// [`compile_with_imports`] with a **cell store**, also returning the marked
+/// bindings it compiled (with their paths) so the caller can freeze them once the
+/// build is solved.
+pub fn compile_with_imports_with_cells(
+    program: &mut Program,
+    imports: &[ResolvedImport],
+    cells: Option<&CellStore>,
+) -> (
+    IR<LangAttr>,
+    SpanIndex,
+    Vec<Diag<LangProgram>>,
+    Vec<(Path, ExprId)>,
+) {
     // Resolution is its own stage: it assigns each binder a `BinderId` (writing
     // it into the AST's resolve fields) and yields the resolve diagnostics.  The
     // lowering below reads those fields instead of re-resolving.
     let resolved = crate::resolve::resolve(program, imports);
-    let (ir, spans) = compile_resolved(program, &resolved.import_binders);
-    (ir, spans, resolved.diagnostics)
+    let (ir, spans, compiled_cells) =
+        compile_resolved_with_cells(program, &resolved.import_binders, cells);
+    (ir, spans, resolved.diagnostics, compiled_cells)
 }
 
 /// Lower a *resolved* program.  `program` must already carry its `BinderId`
@@ -98,8 +119,32 @@ pub(crate) fn compile_resolved(
     program: &Program,
     import_binders: &[crate::resolve::ImportBinder],
 ) -> (IR<LangAttr>, SpanIndex) {
+    let (ir, spans, _) = compile_resolved_with_cells(program, import_binders, None);
+    (ir, spans)
+}
+
+/// [`compile_resolved`] with a **cell store**: a marked binding whose cell is
+/// clean is lowered to a static read of its frozen pair — its body is never
+/// lowered, checked or evaluated — and the marked bindings that *were* compiled
+/// come back with their paths so the caller can freeze them once the build is
+/// solved (`docs/notes/incremental-update.md`).
+pub(crate) fn compile_resolved_with_cells(
+    program: &Program,
+    import_binders: &[crate::resolve::ImportBinder],
+    cells: Option<&CellStore>,
+) -> (IR<LangAttr>, SpanIndex, Vec<(Path, ExprId)>) {
     let mut compiler = Compiler::new();
     compiler.seed_imports(import_binders);
+    // One `for_each` pass over the resolved AST is what gives every marked binding
+    // its occurrence path; the lowering walk below never carries one.
+    compiler.cached_paths = cached_bindings(program);
+    if let Some(cells) = cells {
+        for (binder, path) in &compiler.cached_paths {
+            if let Some(reference) = cells.reference(path) {
+                compiler.reusable.insert(*binder, reference);
+            }
+        }
+    }
     // The whole program is one scope (established by the resolver): block-wide
     // bindings are entered before any value compiles, restrictive `let` bindings
     // are entered as they're seen; the scope is never popped, so later
@@ -166,11 +211,55 @@ pub(crate) fn compile_resolved(
     // cascade.  (Nested blocks still use the tuple wrap.)
     compiler.ir.set_stmt_roots(statements);
     compiler.ir.set_root(final_id);
-    (compiler.ir, compiler.spans)
+    (compiler.ir, compiler.spans, compiler.compiled_cells)
+}
+
+/// The marked bindings of a resolved program, by binder, with their occurrence
+/// paths.
+///
+/// A binding whose value spells an **annotation** is not eligible: a static read
+/// materializes the pair the artifact froze, and the artifact's pair is two wide,
+/// while an annotation's schema tail makes the source's pair wider — so an
+/// annotated cell would be read back at the wrong arity.  It is left to be
+/// compiled and re-frozen as an ordinary (unretained) binding, which is honest
+/// rather than silently wrong.
+fn cached_bindings(program: &Program) -> HashMap<BinderId, Path> {
+    let mut out = HashMap::new();
+    crate::path::for_each(program, &mut |path, node| {
+        let (cached, binder, annotated) = match node {
+            crate::path::Node::Binding(binding) => (
+                binding.cached,
+                binding.binder,
+                matches!(&binding.value, Expr::Annotation { .. }),
+            ),
+            crate::path::Node::Field(field) => (
+                field.cached,
+                field.binder,
+                matches!(&field.value, Expr::Annotation { .. }),
+            ),
+            crate::path::Node::Expr(_) => return,
+        };
+        if cached
+            && !annotated
+            && let Some(binder) = binder
+        {
+            out.insert(binder, path.clone());
+        }
+    });
+    out
 }
 
 struct Compiler {
     ir: IR<LangAttr>,
+    /// The marked bindings' occurrence paths, by binder (see
+    /// [`cached_bindings`]).
+    cached_paths: HashMap<BinderId, Path>,
+    /// The marked bindings whose cell is clean: the frozen reference their node
+    /// is lowered to, instead of compiling their body.
+    reusable: HashMap<BinderId, StaticNodeId>,
+    /// The marked bindings this build compiled, with their paths — what the
+    /// caller freezes and records once the build is solved.
+    compiled_cells: Vec<(Path, ExprId)>,
     /// `BinderId` → the IR `ExprId` of that binding's node.  Every binder (a
     /// block-wide or `let` binding, a lambda parameter, a record field, an
     /// import) gets exactly one node, and a use of the name *is* that node —
@@ -213,6 +302,9 @@ impl Compiler {
     fn new() -> Self {
         Compiler {
             ir: IR::new(),
+            cached_paths: HashMap::new(),
+            reusable: HashMap::new(),
+            compiled_cells: Vec::new(),
             binder_to_expr: Vec::new(),
             fn_parents: Vec::new(),
             op_names: HashMap::new(),
@@ -266,7 +358,37 @@ impl Compiler {
         // Compile pass: each statement becomes one id in order.
         let mut out = Vec::new();
         for stmt in statements {
-            out.push(match stmt {
+            let id = match stmt {
+                // A **clean cell**: the frozen pair, read in place.  The body is
+                // not lowered at all — that is what makes a retained cell a
+                // saving rather than a cache — so the node is the static read
+                // wherever the binding would have been the value's own node.
+                Stmt::Binding(binding)
+                    if binding
+                        .binder
+                        .is_some_and(|binder| self.reusable.contains_key(&binder)) =>
+                {
+                    let binder = binding.binder.expect("a resolved cached binding");
+                    let export = self.reusable[&binder];
+                    if binding.restrictive {
+                        // A `let`: the name enters scope after the value, exactly
+                        // as the compiled path does, and there is no placeholder to
+                        // reuse — so this is the one node.
+                        let id = self.alloc(ExprKind::Static { export }, &binding.span);
+                        self.set_binder(binder, id);
+                        id
+                    } else {
+                        // A block-wide binding's placeholder was reserved in the
+                        // pre-pass and forward references captured it, so the
+                        // placeholder *is* the static read — made one here rather
+                        // than transplanted from a second node, which would leave
+                        // that node behind in the IR.
+                        let p = self.binder(binder);
+                        self.ir.set_kind(p, ExprKind::Static { export });
+                        self.set_binder(binder, p);
+                        p
+                    }
+                }
                 Stmt::Binding(binding) if binding.restrictive => {
                     // `let a = e` — the value compiles before the name is
                     // recorded, so it is visible only to later statements and
@@ -320,7 +442,18 @@ impl Compiler {
                     }
                 }
                 Stmt::Expr(e) => self.compile_expr(e),
-            });
+            };
+            // A marked binding that was *compiled* is what the caller freezes
+            // once the build is solved; a clean cell read in place is not.
+            if let Stmt::Binding(binding) = stmt
+                && binding.cached
+                && let Some(binder) = binding.binder
+                && !self.reusable.contains_key(&binder)
+                && let Some(path) = self.cached_paths.get(&binder)
+            {
+                self.compiled_cells.push((path.clone(), id));
+            }
+            out.push(id);
         }
         out
     }

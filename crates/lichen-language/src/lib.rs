@@ -28,6 +28,7 @@ pub use lichen_language_parser::ast;
 pub use lichen_language_parser::path;
 pub use lichen_language_parser::{ParseDiag, Parsed};
 
+pub mod cells;
 pub mod compile;
 pub mod diag;
 pub mod package;
@@ -40,16 +41,18 @@ pub mod run;
 pub mod session;
 pub mod suggest;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use lichen_highlevel::checker::{Build, Checker};
-use lichen_highlevel::ir::IR;
+use lichen_highlevel::ir::{ExprId, IR};
 use lichen_highlevel::program::{
     HighGlobalExt, HighProgram, HighProgramLiteral, TypeOperator, ValueType,
 };
 use lichen_highlevel::{NativeOps, no_native_ops};
-use lichen_lowlevel::Registry;
+use lichen_lowlevel::{Registry, StaticNodeId, is_unbound};
 
+use crate::cells::CellStore;
+use crate::path::Path;
 use crate::persist::ProgramCodecOf;
 pub use diag::{Diag, Stage};
 use preprocess::ResolvedImport;
@@ -138,6 +141,66 @@ where
     }
 }
 
+/// Compile and check a source program with a **cell store** (shipping
+/// vocabulary): a `cache`d binding whose cell is clean is lowered to a read of its
+/// frozen artifact — its body is not lowered, checked or evaluated — and a marked
+/// binding that *is* compiled is frozen into `registry` and recorded under its
+/// occurrence path.
+///
+/// The registry is the caller's because a cell's artifact must outlive the build
+/// that made it, exactly as a package's artifact does for an import.
+pub fn compile_with_cells(
+    source: &str,
+    cells: &mut CellStore,
+    registry: Arc<RwLock<Registry<LangProgram>>>,
+) -> Report<LangProgram> {
+    let line_starts = lex::line_starts(source);
+    compile_with_imports_at_with_cells::<LangProgram>(
+        source,
+        &[],
+        Some(registry),
+        0,
+        &line_starts,
+        no_native_ops(),
+        Some(cells),
+        Vec::new(),
+    )
+}
+
+/// Freeze the marked bindings a build compiled, and record each under its
+/// occurrence path.
+///
+/// Only a **solved** pair is retained: a `Parameterized` one has no answer to
+/// keep, so filing it would record an artifact that says nothing — the cell is
+/// left out and the next build compiles the binding again, which is the honest
+/// answer rather than a silent freeze of nothing.
+fn freeze_cells<P>(
+    build: &Build<P>,
+    cells: &mut CellStore,
+    registry: &Arc<RwLock<Registry<P>>>,
+    compiled_cells: Vec<(Path, ExprId)>,
+) where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+{
+    let mut registry = registry.write().unwrap_or_else(PoisonError::into_inner);
+    for (path, expr) in compiled_cells {
+        let Some(pair) = build.state[expr.0 as usize].term else {
+            continue;
+        };
+        if is_unbound(build.module.class_value(pair)) {
+            continue;
+        }
+        let key = cells.allocate_key();
+        // The hash is a placeholder on this path: a cell's reuse is decided by its
+        // **path**, never by content (`docs/notes/incremental-update.md` §4.3).
+        let freeze = registry.freeze_closure_mapped(&build.module, key, &[pair], [0; 32]);
+        let index = freeze.node_map[&pair];
+        cells.record(path, StaticNodeId { module: key, index });
+    }
+}
+
 /// Compile and check a source program: the full pipeline (shipping vocabulary).
 pub fn compile(source: &str) -> Report<LangProgram> {
     compile_with_imports(source, &[])
@@ -188,15 +251,62 @@ where
     P::Value: ValueType + 'static,
     P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
 {
+    compile_with_imports_at_with_cells(
+        code,
+        imports,
+        registry,
+        base,
+        line_starts,
+        native_ops,
+        None,
+        Vec::new(),
+    )
+}
+
+/// [`compile_with_imports_at`] with a **cell store**: `cache`d bindings whose cell
+/// is clean are lowered to a read of their frozen artifact instead of being
+/// compiled, and the marked bindings that *were* compiled are frozen into
+/// `registry` and recorded under their occurrence paths.
+pub fn compile_with_imports_at_with_cells<P>(
+    code: &str,
+    imports: &[ResolvedImport],
+    registry: Option<Arc<RwLock<Registry<P>>>>,
+    base: u32,
+    line_starts: &[usize],
+    native_ops: NativeOps<P>,
+    cells: Option<&mut CellStore>,
+    compiled_cells: Vec<(Path, ExprId)>,
+) -> Report<P>
+where
+    P: LangProgramShape,
+    P::Value: ValueType + 'static,
+    P::Operator: From<GcdOp> + From<TypeOperator> + 'static,
+{
+    let (frontend, compiled_cells) = frontend_at_with_cells(
+        code,
+        base,
+        line_starts,
+        imports,
+        cells.as_ref().map(|cells| &**cells),
+        compiled_cells,
+    );
     let Frontend {
         ir,
         span_index,
         diagnostics,
-    } = frontend_at(code, base, line_starts, imports);
+    } = frontend;
     // The frontend diagnostics carry no checker build (they are program-blind),
     // so re-type them onto the caller's program marker before the report.
     let diagnostics: Vec<Diag<P>> = diagnostics.into_iter().map(|d| d.retype()).collect();
-    build_report(ir, Some(span_index), diagnostics, registry, native_ops)
+    build_report(
+        ir,
+        Some(span_index),
+        diagnostics,
+        registry,
+        native_ops,
+        cells,
+        compiled_cells,
+    )
 }
 
 /// The shared tail of the pipeline: run the checker on an [`IR`] (if the
@@ -210,6 +320,8 @@ pub fn build_report<P>(
     mut diagnostics: Vec<Diag<P>>,
     registry: Option<Arc<RwLock<Registry<P>>>>,
     native_ops: NativeOps<P>,
+    cells: Option<&mut CellStore>,
+    compiled_cells: Vec<(Path, ExprId)>,
 ) -> Report<P>
 where
     P: LangProgramShape,
@@ -224,7 +336,13 @@ where
         };
     };
     let registry = registry.unwrap_or_else(|| Arc::new(RwLock::new(Registry::new())));
-    let build = Checker::<P>::build_in_attr_native(ir, registry, lang_attr_ext::<P>(), native_ops);
+    let build =
+        Checker::<P>::build_in_attr_native(ir, registry.clone(), lang_attr_ext::<P>(), native_ops);
+    // The cells this build compiled: frozen now, because the build is solved (the
+    // definition pass ran) and a frozen artifact must be complete.
+    if let Some(cells) = cells {
+        freeze_cells(&build, cells, &registry, compiled_cells);
+    }
     // The pretty rendering is shared across the whole report: one type
     // printer, so a class keeps one `?a` name across diagnostics.  The
     // message carries no `?a` journey — the user inspects an expression's
@@ -337,6 +455,21 @@ pub fn frontend_at(
     line_starts: &[usize],
     imports: &[ResolvedImport],
 ) -> Frontend {
+    frontend_at_with_cells(code, base, line_starts, imports, None, Vec::new()).0
+}
+
+/// [`frontend_at`] with a cell store: a marked binding whose cell is clean lowers
+/// to a static read of its frozen pair, and the marked bindings that *were*
+/// compiled come back with their paths — together with whatever the caller had
+/// already collected, so a pipeline can thread one list through several stages.
+pub fn frontend_at_with_cells(
+    code: &str,
+    base: u32,
+    line_starts: &[usize],
+    imports: &[ResolvedImport],
+    cells: Option<&CellStore>,
+    mut compiled_cells: Vec<(Path, ExprId)>,
+) -> (Frontend, Vec<(Path, ExprId)>) {
     let lex::Lexed {
         tokens,
         errors: lex_errors,
@@ -351,11 +484,16 @@ pub fn frontend_at(
     // The lowering is total: an unresolved name lowers to the same inert
     // `ErrorBlock` the parse layer uses, so the frontend always produces an IR
     // and the resolve errors ride in `diagnostics`.
-    let (ir, span_index, resolve_errors) = compile::compile_with_imports(&mut program, imports);
+    let (ir, span_index, resolve_errors, compiled) =
+        compile::compile_with_imports_with_cells(&mut program, imports, cells);
+    compiled_cells.extend(compiled);
     diagnostics.extend(resolve_errors);
-    Frontend {
-        ir: Some(ir),
-        span_index,
-        diagnostics,
-    }
+    (
+        Frontend {
+            ir: Some(ir),
+            span_index,
+            diagnostics,
+        },
+        compiled_cells,
+    )
 }

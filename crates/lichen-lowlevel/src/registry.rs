@@ -66,6 +66,43 @@ impl<P: Program> Registry<P> {
         Freeze { key, node_map }
     }
 
+    /// [`Self::freeze_mapped`] for the **closure** of `roots` — the per-cell
+    /// freeze: only the nodes those roots can reach are filed, so an artifact is
+    /// as small as the value it keeps (see [`StaticModule::freeze_closure`]).
+    ///
+    /// The preconditions are `freeze_mapped`'s, and are checked the same way.  The
+    /// dependency check is over the **whole module** rather than the closure,
+    /// which is stricter than the closure needs and free: a live module's
+    /// referenced keys are registered, or a read of one would already panic.
+    pub fn freeze_closure_mapped(
+        &mut self,
+        module: &Module<P>,
+        key: ModuleKey,
+        roots: &[NodeId],
+        hash: [u8; 32],
+    ) -> Freeze {
+        for dep in crate::static_module::referenced_keys(module) {
+            assert!(
+                self.entries.contains_key(&dep),
+                "freezing a module that references dependency key {dep:?}, which is not registered here — freeze dependencies first"
+            );
+        }
+        assert!(
+            !self.entries.contains_key(&key),
+            "freezing a module under device key {key:?}, which is already registered — the same content must not be compiled twice"
+        );
+        let (static_module, node_map) = StaticModule::freeze_closure(module, key, roots);
+        self.entries.insert(
+            key,
+            Package {
+                module: Arc::new(static_module),
+                meta: Default::default(),
+                hash,
+            },
+        );
+        Freeze { key, node_map }
+    }
+
     /// File an already-built artifact (a module loaded from the device's
     /// persistent store) under its device `key` — the load-time mirror of
     /// [`Self::freeze_mapped`]: the artifact's refs are already baked with
