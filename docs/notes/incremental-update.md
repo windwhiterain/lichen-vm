@@ -1,7 +1,7 @@
 # Incremental update: identity by path, retention by `cache`
 
 > Status: **the mechanism is complete, measured, and now has a production caller
-> (§7.1–§7.6).** Path identity, the `cache` syntax, the per-cell closure freeze, the
+> (§7.1–§7.7).** Path identity, the `cache` syntax, the per-cell closure freeze, the
 > general release obligations, the cell store, **dirty propagation**, **eviction** and
 > the **language server** all exist: the server drives one `BufferSession` per open
 > document on a dedicated thread, so an edit reuses every marked binding it did not
@@ -9,11 +9,11 @@
 > On the §7.5 program (600 bindings, 60 marks) a first build is 2.1× a plain compile and
 > every edit is 0.29–0.42× — three times faster than compiling the file from scratch —
 > with one cell re-frozen; through the server (§7.6) an edit is 0.15–0.2× the path it
-> replaced. What is left is the **artifact's size** (a scalar cell's closure is ~611
-> nodes, which is what a first analysis pays per mark) and the fine cuts: the reverse
-> import closure, the eviction timing, backdating. **§12 is the handoff**: what exists,
-> in what order to continue, the landmines, and how to verify. Read that first if you
-> are picking this up cold.
+> replaced, and a first analysis is no longer billed for the artifact's size (a scalar
+> cell's closure went from ~611 nodes to 6–27, §7.7). What is left is the fine cuts: the
+> per-freeze dependency scan (§12.3 item 1), the reverse import closure, the eviction
+> timing, backdating. **§12 is the handoff**: what exists, in what order to continue, the
+> landmines, and how to verify. Read that first if you are picking this up cold.
 >
 > This is the *cross-build* half of the incrementality question. It supersedes the
 > withdrawn cross-build halves of [incremental-evaluation](incremental-evaluation.md),
@@ -393,8 +393,11 @@ closure. The closure must be **closed under four edge kinds**, or the existing
 - `operation.operand` — a residual node must be able to re-run later, so unlike the
   GC's walk, which deliberately does not follow a cached value's operand, this one
   must;
-- the **whole equality class** (`parent`/`next`/`tail` all go through `node_map`, and
-  half a class is a broken class);
+- the equality class of a node **whose own value is still unbound** — the class is
+  what holds that node's answer, so it is taken whole. A node that already carries
+  its own solved value takes nothing from its class (§7.7), and the class the
+  artifact does not hold whole is spliced to the members it holds, exactly as the GC
+  splices a class that lost members;
 - the **whole function template** (`StaticFunction.nodes` is the template's member
   list, and a missing member is a broken template);
 
@@ -658,11 +661,10 @@ the walk against **0.14–0.6 ms** in `freeze_set` — because `closure` called
 `class_members` for *every* node it visited, and **one node's equality class had 602
 members** (every binding's value is an `Int`, and the checker merged all 600 type slots
 into one class). The walk visited **363,627** nodes for 611. A class is now expanded
-**once**, however many of its members the walk reaches; the node set is unchanged, so
-this was pure bookkeeping. The "whole equality class" *edge* is still deliberate (§7.1:
-`freeze_set` maps `parent`/`next`/`tail` through `node_map`, so half a class is a broken
-class) — what remains is the artifact's *size*, ~611 nodes for a scalar cell, which is
-what the 2.1× first build is.
+**once**, however many of its members the walk reaches. The *edge* itself was still
+deliberate then (`freeze_set` mapped `parent`/`next`/`tail` through `node_map`, so half a
+class was a broken class) — the artifact was still ~611 nodes for a scalar cell, which is
+what the 2.1× first build was. Both halves are gone now: §7.7.
 
 **2. An edit at a statement boundary re-parsed the whole tail** (fixed). Appending to the
 end of a line is an insertion at a statement boundary, so *no* statement's byte range
@@ -791,6 +793,83 @@ analysis ~1.2× the old path (it wins back the second lex+parse, and loses the f
 and every later analysis is **0.15–0.2×**. The index build is ~0.6 ms and is not a cost.
 The 600-cell row is the pathological end and it is linear in marks: that is item 1's
 bill, and it is the reason item 1 stays first on the list.
+
+**Item 1 was then paid (§7.7)**, and this table is the before: the same probe shape
+re-measured after it gives **~17–19 ms** for the 75-cell first analysis (below the old
+path's 24–28 ms) and **~29 ms** for the 600-cell one (2× the old path, down from 6×),
+with the edit unchanged. The per-mark cost is now ~15 µs, and what it is made of is
+§12.3 item 1's remainder.
+
+### 7.7 The artifact's size: a decided leaf is not its class
+
+What §7.5 left standing was the artifact's *size*: a scalar cell's closure was **~611
+nodes**, because a `cache`d binding's root is its `[value, type]` pair, the pair names the
+binding's type node, and every binding's type node is in **one** equality class (each
+binding's type slot unifies with the same `Int` type node) — so freezing one cell copied
+601 type slots with it, and a mark on every binding copied that class 600 times. Two
+things were wrong, and both are about who reads a frozen class.
+
+- **The class edge was taken from every node.** It is now taken only from a node whose
+  **own value is still unbound**: that node's answer *is* its class — the shared
+  inference cell, the template's pattern — so the class is a structure a later read
+  depends on and is taken whole. A node that already carries its own solved value needs
+  nothing of its class. A solved class reads alike at every member (that is what
+  `write_node_value`'s replication and `bind` establish), and a member the walk never
+  reaches has no clone to be grouped with: the frozen links have exactly one reader,
+  `static_find` in the apply's `regroup_clones`, and it only ever asks about nodes the
+  artifact holds. A *per-class* census ("is every member of this class bound?") is not the
+  same thing and was measured first: it walks the class at every freeze that touches it
+  (~50 µs for the 601-member class, against ~7 µs for the same freeze in a small program),
+  because the member list is a pointer chase with a cache miss per member.
+- **`freeze_set` refused a partial class.** It mapped `parent`/`next`/`tail` through
+  `node_map` and panicked on a member outside the set — which is *why* the walk had to
+  take a class whole. It now **splices** a class the artifact does not hold whole down to
+  the members it does hold: the first frozen member (in slotmap order) becomes the
+  representative, every other member's parent points straight at it, and the member list
+  is re-linked in that order — `disjoint::rebuild`'s splice, which the GC already performs
+  on a class that lost members (`Module::flatten_class`). Two frozen members of one class
+  therefore stay in one class, which is all the one reader asks of them.
+
+**And the walk's tail was scanning the module.** With the closure down to 6–27 nodes,
+`closure`'s last step — collect the frozen ids *in slotmap order* by iterating the whole
+module and testing membership — became the dominant cost: one hash lookup per node of the
+*module* per freeze (~40 µs to order a 7-node closure in a 3,600-node module, against
+~4 µs for the whole walk in a 20-binding program). It now sorts the frozen set instead:
+`NodeId`'s `Ord` is its key data's, whose first field is the slot index, so the sort
+yields exactly `SlotMap::iter`'s order — the order the whole-module freeze files its nodes
+in, so a closure's local indices are a subsequence of that one's — without touching the
+module.
+
+**Measurements · a temporary probe (`--example cell_class_probe`), since removed.** 600
+bindings in 75 chains of 8, `--release`, a `BufferSession` over the whole file
+(`set_source`); "closure" is the marked binding's `[value, type]` pair, the edit is a
+literal in the last statement.
+
+| | closure of a scalar cell | first compile (75 cells) | first compile (600 cells) | edit |
+|---|---|---|---|---|
+| before | 607–635 nodes | 30–32 ms | 154–159 ms | 3.5–5.4 ms |
+| after | 6–27 nodes | 16–18 ms | ~29 ms | 3.1–4.6 ms |
+
+The 600-cell row is the pathological density (a mark on every binding): its first analysis
+is now **2×** the one-shot path instead of 6×, and at a realistic density the session's
+first analysis is *cheaper* than the old path (17–19 ms against 24–28 ms) — the artifact's
+size is no longer what a first analysis pays for. What it pays for now is ~15 µs per
+freeze, of which ~6 µs is the artifact's own build and ~9 µs is `freeze_closure_mapped`'s
+**module-wide** dependency scan (`referenced_keys(module)`: one lookup per node of the
+module, per freeze). That is §12.3 item 1's remainder, and its fix is a choice between
+hoisting the scan to the caller (one per build, since the module's refs are the same for
+every cell of one build) and checking the artifact's own refs after the build instead
+(which is *more* precise — the whole-module check is stricter than the closure needs — but
+moves the panic after the freeze's ownership transfer, §12.4).
+
+**Verified** by a temporary probe check over every closure freeze of two programs (1,130
+of them): the frozen class links induce **the same partition as the source's, restricted
+to the nodes the artifact holds** — so `static_find`'s grouping of clones is unchanged —
+the links are self-consistent (one representative per class, a member list covering the
+class exactly once, tail and size agreeing with it, every member's parent chain reaching
+the representative), and the frozen concreteness flags agree with the source's. Plus the
+influenced suites: `lichen-lowlevel` (143), `lichen-language`, `lichen-language-server`,
+`lichen-package`, `lichen-compiler` — all green.
 
 ## 8. Costs and failure modes
 
@@ -959,6 +1038,7 @@ bill, and it is the reason item 1 stays first on the list.
 | `9039f90` | the note records the three costs and their fixes |
 | `64db7c4` | the caller's view (code region, base, imports), the report's frontend artifacts, the registry-owned cell key space, a reuse that moves its spans |
 | `4400d6a` | the language server as the first real caller: the compile worker, one registry, the replacing freeze, the import record (§7.6) |
+| `9844332` | the artifact's size: the class edge only from an unbound node, a spliced class, the walk's ordering without a module scan (§7.7) |
 
 ### 12.2 The entry points
 
@@ -989,7 +1069,8 @@ bill, and it is the reason item 1 stays first on the list.
   frozen values, so it is the closure's set); `StaticModule::referenced_keys` is the
   reader.
 - `lichen_lowlevel::StaticModule` — `freeze_closure(module, key, roots)`, `releases`,
-  `Drop`.
+  `Drop`. The closure's edges and the class splice are §7.7; `freeze_set` is the shared
+  phase.
 - `lichen_lowlevel::ValueExt` — `traced`, `release_obligations`;
   `lichen_lowlevel::Release`.
 - `lichen_language_lex::lex_resume(prev, old, new, line_starts, base, a, b)` — the
@@ -1005,16 +1086,17 @@ bill, and it is the reason item 1 stays first on the list.
 
 ### 12.3 What to do next, in order
 
-1. **The artifact's *size*** (§7.5, §7.6 — the one cost left, and now the LSP's first
-   analysis is billed for it: ~0.3 ms per `cache` mark). The closure walk is fixed, so
-   freezing is no longer the bottleneck — but a *scalar* cell's artifact still carries
-   ~611 nodes, because a decided node's equality class is a unification structure and a
-   shared type puts every binding in one class. The options are to **narrow** the edge
-   for a decided node (freeze `Meta::new(None, None, None, size)`, or drop its
-   operation) or to **share** the class once per registry instead of copying it per
-   artifact. Either changes what an artifact contains, so it must keep `freeze_set`'s
-   totality (`node_map[&parent]` and friends panic otherwise) and re-check `apply.rs`'s
-   `static_function_captures` and `equality.rs`'s decided-leaf test.
+1. **The per-freeze dependency scan** (§7.7 — the remainder of what was "the artifact's
+   size", and now the only per-`cache`-mark cost the first analysis has). The artifact is
+   down to 6–27 nodes for a scalar cell and the closure walk no longer scans the module,
+   so a freeze costs ~15 µs, of which ~6 µs is the artifact's own build and ~9 µs is
+   `freeze_closure_mapped`'s **module-wide** `referenced_keys(module)` check (one lookup
+   per node of the module, per freeze). Two shapes: **hoist** the scan to the caller —
+   the module's referenced keys are the same for every cell of one build, so the session
+   could compute them once — or **check the artifact's own refs** after the build, which
+   is more precise (the whole-module check is stricter than the closure needs, as
+   `registry.rs` says) but moves the panic after the freeze's ownership transfer (see the
+   `Release` landmine below).
 2. **The eviction *timing*** (§11). The mechanism and its refusal are landed (§7.4) and
    the server now has the caller's two moments: a document **close** (the session, and
    the artifacts it retained, are dropped — nothing outside the worker ever holds a
@@ -1135,14 +1217,20 @@ bill, and it is the reason item 1 stays first on the list.
 - **`traced` is only as good as its implementors.** A production value that holds
   nodes must implement it, and the composition macro must forward it (it now does —
   this was the landmine the graph work would have hit).
-- **A cell's closure follows the whole equality class, and a shared type makes that
-  class the program** (§7.5). A scalar cell's closure measured **611 nodes**, because
-  one node's class had **602** members — every binding's `Int` unified into one class —
-  and the walk re-expanded that class per visited node (363,627 visits). The walk is
-  fixed; the *size* is not, and it is what the 2.1× first build is. Anything that
-  changes this edge must keep `freeze_set`'s totality (`node_map[&parent]` and friends
-  panic otherwise) and re-check `apply.rs`'s `static_function_captures` and
-  `equality.rs`'s decided-leaf test.
+- **A frozen class is only ever read by `static_find`, and only about nodes the artifact
+  holds** (§7.7). That is what lets the closure take a class whole *only* from a node
+  whose own value is unbound, and lets `freeze_set` **splice** a class the artifact does
+  not hold whole down to the members it holds (`disjoint::rebuild`'s splice, as the GC's
+  `flatten_class` does). Two consequences to keep in view if this edge changes again:
+  the splice must keep the **partition** the source's classes induce on the artifact's
+  nodes (a member the artifact drops has no clone to be grouped with, but two it holds
+  that shared a class must still share one), and a member the artifact holds whose own
+  slot is unbound must not lose the value its class carries — which is why the class is
+  taken whole from such a node. A shared type makes one class the program: a scalar
+  cell's class measured **601** members, and taking it per cell was 600 copies of it
+  (~0.3 ms per mark of first analysis; §7.5, §7.7). Anything that changes the edge must
+  re-check `apply.rs`'s `regroup_clones`/`static_function_captures` and the equality
+  suite's class tests.
 - **A cloned suffix statement's spans must be shifted** (§7.5). A clone's bytes are
   unchanged but its *position* is not, and a `Span` is a `(line, col)` pair: an edit
   that adds or removes a line moves every statement after it. Without
@@ -1168,16 +1256,19 @@ cargo test -p lichen-lowlevel -p lichen-highlevel -p lichen-language -p lichen-l
 ```
 
 The influenced set is those five crates (plus the lexer, which `lex_resume`'s base
-touches). The temporary probes are gone; to re-take a reading, write one as an
+touches, and `lichen-package`/`lichen-compiler`, which freeze whole modules through the
+same `freeze_set`). The temporary probes are gone; to re-take a reading, write one as an
 `examples/` binary and delete it after. The numbers to expect:
 §7.1 (0/2/2 static nodes and `USize(5)`; 13 positions, 0 mismatches; every path unique;
 3-of-4 nodes; 1 obligation released once), §7.2 (the `CellEvents` per edit, the two
 propagation cases, `USize(37)`/`USize(19)`/`USize(16)`, and 0 cells from a failed check),
 §7.4 (2/1/0/2 freed, and the shared-array case's 1 then 0 with `pending` stuck at 1 until
 `b` is recompiled), §7.5 (a first build at 2.1× a plain compile; every edit at
-0.29–0.42× with one cell re-frozen) and §7.6 (a first analysis at 1.2× the old one-shot
+0.29–0.42× with one cell re-frozen), §7.6 (a first analysis at 1.2× the old one-shot
 path for 75 cells, 0.15–0.2× per edit, and `(2, 1, 1)` cells for an edit in the third of
-three marked statements, end to end through the real server binary).
+three marked statements, end to end through the real server binary) and §7.7 (a scalar
+cell's closure at 6–27 nodes, a 600-mark first analysis at ~29 ms against 154–159 ms,
+and the frozen classes' partition equal to the source's restricted to the artifact).
 
 Two of those probes are worth re-creating first, because they are the oracles:
 the **differential** one (§7.3 — every prefix of an edit sequence against a fresh
