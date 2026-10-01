@@ -354,6 +354,49 @@ macro_rules! lang_compose_vocabulary {
                 // must raise it for all.
                 1 $( .max(<$extra_v as ::lichen_lowlevel::ValueExt>::alignment()) )*
             }
+
+            // The two **accumulating** value methods: every leaf is asked, and
+            // each appends to the caller's buffer.  A leaf that answers nothing
+            // (the default) contributes nothing, so a composed vocabulary pays
+            // only for the leaves that have something to say.
+            //
+            // `traced` matters even though nothing in this tree overrides it yet:
+            // it is the *only* way the GC can see a node a value holds outside the
+            // operand and item edges, so a leaf that implements it while the
+            // composition does not forward it would have its report silently
+            // swallowed — sound alone, unsound together.
+            fn traced(
+                &self,
+                context: &dyn ::lichen_lowlevel::TraceContext,
+                out: &mut Vec<::lichen_lowlevel::NodeId>,
+            ) {
+                let _ = (&context, &out);
+                match self {
+                    $(
+                        Self::$extra_v_name(value) => {
+                            <$extra_v as ::lichen_lowlevel::ValueExt>::traced(value, context, out)
+                        }
+                    )*
+                    _ => {}
+                }
+            }
+
+            fn release_obligations(
+                &self,
+                out: &mut Vec<Box<dyn ::lichen_lowlevel::Release>>,
+            ) {
+                let _ = &out;
+                match self {
+                    $(
+                        Self::$extra_v_name(value) => {
+                            <$extra_v as ::lichen_lowlevel::ValueExt>::release_obligations(
+                                value, out,
+                            )
+                        }
+                    )*
+                    _ => {}
+                }
+            }
         }
 
         // The type-constant markers all live in the core `TypeValue` leaf, so
