@@ -202,7 +202,27 @@ pub struct GpuContext {
     /// invalidates the previous run's set, and that run's fence has already
     /// signalled.
     descriptor_pool: vk::DescriptorPool,
+    /// Device buffers that have been given back, keyed by their element count.
+    ///
+    /// Reuse is safe **without clearing**, and that is worth spelling out because
+    /// it is what makes this a saving rather than a trade: every consumer of a
+    /// buffer writes all of it. An output is written by the shader across
+    /// `[0, padded)` — see `spirv`'s straight-line invariant — and an input is
+    /// uploaded across `[0, count)` with the tail filled on the device, so no
+    /// stale byte is ever read back.
+    ///
+    /// Keyed by exact count, so a chain at a fixed size is served from here
+    /// forever and a different size simply allocates. The cap is what keeps this
+    /// from turning a release into a permanent VRAM reservation.
+    recycled: Mutex<HashMap<usize, Vec<DeviceBuffer>>>,
 }
+
+/// How many freed buffers of one size are kept for reuse.
+///
+/// Four is enough for a chain to ping-pong two buffers plus a host input and a
+/// host output without allocating, and small enough that idling here is not worth
+/// measuring against a device's whole memory.
+const RECYCLED_PER_SIZE: usize = 4;
 
 /// The reusable objects one submission needs.
 struct Submit {
@@ -336,6 +356,7 @@ impl GpuContext {
             submit: Mutex::new(submit),
             layouts: Mutex::new(HashMap::new()),
             descriptor_pool,
+            recycled: Mutex::new(HashMap::new()),
         })
     }
 
@@ -403,9 +424,8 @@ impl GpuContext {
         staging.reserve(self, host_inputs.len() as u64 * data_bytes)?;
 
         let mut scratch = ScratchGuard {
-            device: &self.device,
+            context: self,
             buffers: Vec::new(),
-            armed: true,
         };
         let mut descriptors: Vec<vk::DescriptorBufferInfo> = Vec::with_capacity(binding.total());
         let mut uploads: Vec<Transfer> = Vec::with_capacity(host_inputs.len());
@@ -464,9 +484,8 @@ impl GpuContext {
         outcome?;
 
         // Success: the output buffers stop being scratch and become the ids the
-        // caller is handed.  Nothing can fail from here, so the guard is safe to
-        // disarm.
-        scratch.armed = false;
+        // caller is handed.  Nothing can fail from here, and the guard owns
+        // whatever is left in `buffers` — the host upload targets — either way.
         let mut resident = self.resident.lock().unwrap();
         let mut ids = Vec::with_capacity(binding.outputs);
         for buffer in scratch
@@ -497,12 +516,23 @@ impl GpuContext {
             .ok_or(RunError::UnknownResident { id: id.0 })
     }
 
-    /// A fresh device-local buffer for `padded` elements.
+    /// A fresh device-local buffer for `padded` elements, from the recycled pool
+    /// when one of that size is free.
     ///
-    /// Its contents are undefined until something writes them: a run fills its
-    /// outputs before the dispatch, and an upload's staging is copied over the
-    /// whole allocation, padding included.
+    /// Its contents are undefined until something writes them, and every consumer
+    /// writes all of it — see [`GpuContext::recycled`]. A run fills its outputs
+    /// before the dispatch, and an upload's staging is copied over the whole real
+    /// range with the tail cleared on the device.
     fn allocate(&self, padded: usize) -> Result<DeviceBuffer, RunError> {
+        if let Some(buffer) = self
+            .recycled
+            .lock()
+            .unwrap()
+            .get_mut(&padded)
+            .and_then(Vec::pop)
+        {
+            return Ok(buffer);
+        }
         let device = &self.device;
         let bytes = DeviceBuffer::bytes(padded);
         let handle = check("buffer creation", unsafe {
@@ -555,6 +585,22 @@ impl GpuContext {
             memory,
             padded,
         })
+    }
+
+    /// Hand a device buffer back for reuse, or free it if the pool for its size
+    /// is already full.
+    fn recycle(&self, buffer: DeviceBuffer) {
+        let mut recycled = self.recycled.lock().unwrap();
+        let pool = recycled.entry(buffer.padded).or_default();
+        if pool.len() < RECYCLED_PER_SIZE {
+            pool.push(buffer);
+        } else {
+            // Past the cap the memory is genuinely the caller's again, so it goes
+            // back to the driver rather than sitting here for a run that may
+            // never come.
+            drop(recycled);
+            buffer.destroy(&self.device);
+        }
     }
 
     /// The first `count` elements of a resident buffer, as host data.
@@ -619,7 +665,7 @@ impl GpuContext {
         let Some(buffer) = self.resident.lock().unwrap().remove(&id) else {
             return;
         };
-        buffer.destroy(&self.device);
+        self.recycle(buffer);
     }
 
     /// Record one command buffer, submit it, and wait for it to finish.
@@ -932,6 +978,11 @@ impl Drop for GpuContext {
         for (_, buffer) in self.resident.lock().unwrap().drain() {
             buffer.destroy(&self.device);
         }
+        for (_, pool) in self.recycled.lock().unwrap().drain() {
+            for buffer in pool {
+                buffer.destroy(&self.device);
+            }
+        }
         self.staging.lock().unwrap().destroy(self);
         unsafe {
             self.device.destroy_device(None);
@@ -1048,25 +1099,22 @@ impl DeviceBuffer {
     }
 }
 
-/// Frees device buffers unless the run handed them off.
+/// Returns device buffers to the context's pool unless the run handed them off.
 ///
 /// A run that fails after allocating buffers for its outputs would otherwise leak
-/// them with nothing left holding their addresses. `armed` goes false at exactly
-/// the point the buffers become the caller's ids, which is the only point at
-/// which this stops owning them.
+/// them with nothing left holding their addresses, and a run that succeeds has
+/// already moved its outputs out of here into the ids it hands back.  So this
+/// owns exactly the scratch buffers: host upload targets on every path, plus the
+/// outputs on the path that never completed.
 struct ScratchGuard<'a> {
-    device: &'a ash::Device,
+    context: &'a GpuContext,
     buffers: Vec<DeviceBuffer>,
-    armed: bool,
 }
 
 impl Drop for ScratchGuard<'_> {
     fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        for buffer in &self.buffers {
-            buffer.destroy(self.device);
+        for buffer in std::mem::take(&mut self.buffers) {
+            self.context.recycle(buffer);
         }
     }
 }

@@ -259,6 +259,47 @@ fn a_second_run_consumes_the_first_runs_id_without_a_round_trip() {
     context.release(second[0]);
 }
 
+/// A released buffer goes back into the context's pool and is handed out again,
+/// uncleared — so what a run reads must never depend on what the previous run of
+/// the same size left in it.
+///
+/// The two fragments are alternated in **one** context so the second run of each
+/// is served from the pool the first one released. Every other test builds a
+/// fresh context, so nothing else would notice a stale byte reaching a result.
+#[test]
+fn a_recycled_buffer_never_shows_the_previous_run_its_contents() {
+    let context = GpuContext::new().expect("a Vulkan device with shaderInt64 is available");
+    let count = 100;
+    let input: Vec<i64> = (0..count as i64).collect();
+    let adds_expected: Vec<i64> = input.iter().map(|v| v + v + 1).collect();
+    let select_expected: Vec<i64> = input.iter().map(|v| if *v <= 3 { 7 } else { *v }).collect();
+
+    for round in 0..8 {
+        let adds_run = context
+            .run(&adds(), &[BufferSlot::Host(&input)], count)
+            .expect("the adds run completes");
+        assert_eq!(
+            context.fetch(adds_run[0], count).expect("adds comes back"),
+            adds_expected,
+            "round {round}: the adds run is right"
+        );
+        context.release(adds_run[0]);
+
+        let select_run = context
+            .run(&conditional(), &[BufferSlot::Host(&input)], count)
+            .expect("the conditional run completes");
+        assert_eq!(
+            context
+                .fetch(select_run[0], count)
+                .expect("the conditional run comes back"),
+            select_expected,
+            "round {round}: the conditional run is right, on a buffer the adds run just \
+             released — a leaked byte would show here as a value the kernel never wrote"
+        );
+        context.release(select_run[0]);
+    }
+}
+
 /// A count that is an exact multiple of the workgroup, so the padding path is
 /// *not* exercised — the complement of the tests above, which pin both ends.
 #[test]

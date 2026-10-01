@@ -264,56 +264,62 @@ device-local memory. Two things moved it:
 2. **Staging is reused.** One mapping per context rather than per run, which is
    why the fixed floor fell from ~0.54 ms to ~0.30 ms.
 
-**The honest framing is that the GPU does not win here, even chained, and the
-reason is measured rather than inferred.** An **empty** dispatch — one workgroup,
-so nothing but the dispatch itself — costs **0.20 ms at best and 0.29 ms at the
-median** over 200 runs. That is the per-dispatch fixed cost, and it is already
-about a fifth of what the CPU spends on a *complete* million-element loop. A
-chained run adds roughly a millisecond per link on the GPU and about a millisecond
-per link on the CPU, so the two are within noise of each other and the GPU pays
-two transfers on top:
+**The GPU wins on a chain, and the fixed cost is what decided it.** An **empty**
+dispatch — one workgroup, so nothing but the dispatch itself — costs **0.046 ms
+at best and 0.053 ms at the median** over 200 runs. That is the per-dispatch
+fixed cost a chain pays once per link, and the chain table shows what it buys:
 
 | count | chain | GPU | sequential | ratio |
 |---|---|---|---|---|
-| 65 536 | 16 | 9.88 ms | 0.22 ms | 0.02× |
-| 262 144 | 16 | 11.81 ms | 2.47 ms | 0.21× |
-| 1 048 576 | 4 | 8.74 ms | 4.17 ms | 0.48× |
-| 1 048 576 | 8 | 12.97 ms | 6.92 ms | 0.53× |
-| 1 048 576 | 16 | 21.49 ms | 16.25 ms | **0.76×** |
+| 65 536 | 16 | 1.74 ms | 0.48 ms | 0.28× |
+| 262 144 | 16 | 2.81 ms | 3.64 ms | **1.30×** |
+| 1 048 576 | 1 | 5.52 ms | 3.09 ms | 0.56× |
+| 1 048 576 | 2 | 6.86 ms | 5.14 ms | 0.75× |
+| 1 048 576 | 4 | 6.56 ms | 7.34 ms | **1.12×** |
+| 1 048 576 | 8 | 7.21 ms | 11.43 ms | **1.59×** |
+| 1 048 576 | 16 | 7.79 ms | 21.19 ms | **2.72×** |
 
-The ratio is climbing toward 1 and would cross somewhere past 16 links, so the
-shape is right — but the fixed cost is the reason it does not cross yet.
+A single cold dispatch still loses, and that is not a bug: the first upload is
+8 MB across PCIe, which costs about what the scalar loop costs outright. The
+cross-over is at **about four links** at a million elements, and it climbs from
+there. Note the shape of the GPU column: 16 links cost 7.79 ms against 5.52 ms
+for one, so a link is roughly **0.15 ms** now — the chain is nearly free to
+extend, which is the property that makes a long pipeline worth writing.
 
-**Two things about that fixed cost, one of them a correction.** First, the
-estimate is a **distribution, not a number**: the same binary measures an empty
-dispatch anywhere from 0.33 ms to 0.93 ms on a single sample depending on what
-else the machine is doing, which is a 3× spread. The example therefore runs 200
-of them and reports the best and the median, because a single sample of this is
-worth very little and an earlier version of this note quoted one. Second — and
-this is the part worth knowing — **removing the per-run object churn barely
-moved it.** The command pool, command buffer, fence, descriptor pool and both
-layouts are now created once per context, and `spirv::compile` runs only on a
-pipeline-cache miss. That is a strict reduction in work per dispatch and it
-measured **0.222 ms → 0.200 ms best, 0.305 ms → 0.29 ms median**: about 10%,
-against an expectation of most of the cost. The fixed cost is therefore
-overwhelmingly the submit-and-wait round trip, not the bookkeeping around it.
+**Where the fixed cost went, and the surprise in it.** Getting from 0.46 ms to
+0.046 ms took three changes, and they were not equally important:
 
-That points at where the real win is, and it is not a per-run optimisation. A
-chain of N dispatches does N submits and N fence waits, even though the links are
-device-sequential and the host has no reason to look at the intermediate results
-— residency is exactly the property that says the host is not needed between
-links. Collapsing a chain into one submit is a **launch-graph** optimisation, not
-a `plrun` one: a single `plrun` cannot know that another link is coming. See
-[Not yet](#not-yet).
+1. **Recycling released device buffers** — 0.20 ms → 0.046 ms, about **4×**, and
+   by far the largest single win. `vkAllocateMemory` is a kernel-mode allocation
+   and it was happening once per run, for an 8 MB buffer at a million elements.
+2. **Reusing the per-dispatch objects** — command pool, command buffer, fence,
+   descriptor pool and both layouts now belong to the context, and
+   `spirv::compile` runs only on a pipeline-cache miss. That measured
+   0.222 ms → 0.200 ms, about **10%**.
+3. **Not initialising output buffers**, and staging through `HOST_CACHED` memory
+   rather than the uncached host-visible type.
 
-**The CPU side of the chain measurement swaps two buffers per link** rather than
-allocating a fresh one, because an allocation per link is the allocator being
-measured instead of the loop. Getting that wrong reported a crossover at four
-links that does not exist.
+The surprise is that (2) — seven object create/destroy pairs removed from every
+dispatch — was worth 10% while (1), reusing one allocation, was worth 4×. Pool
+reuse looks like the optimisation and is not; the allocation is the cost. A
+recycled buffer needs no clearing either, because every consumer writes all of
+it: an output is written across `[0, padded)` by the shader's straight-line body,
+and an input is uploaded across `[0, count)` with the tail cleared on the device.
 
-There is deliberately **no** minimum-count gate. A threshold would be a number
-invented to look careful: the measurement says the answer depends on the fixed
-cost per dispatch, not on `count`.
+**Two things about the measurement itself, because they changed the numbers.**
+A single sample of an empty dispatch lands anywhere from 0.33 ms to 0.93 ms
+depending on what else the machine is doing — a 3× spread, wide enough to hide
+the effect of anything. The example therefore runs 200 and reports best and
+median; the best is reproducible to within 0.006 ms across runs where a single
+sample is not. And the CPU side of the chain measurement **swaps two buffers per
+link** rather than allocating a fresh one, because an allocation per link is the
+allocator being measured instead of the loop. Getting that wrong reported a
+crossover at four links back when there was none.
+
+There is deliberately **no** minimum-count gate. The measurement says the answer
+is not a count: 65 536 elements loses at every chain length while 1 048 576 wins
+from four links on. A count threshold would be a number invented to look careful
+about a quantity that is not the one that decides it.
 
 ## Not yet
 
@@ -344,14 +350,16 @@ Named rather than implied, because each is a decision not a gap:
   backend.** The backstops are `GpuContext::drop`, which reclaims everything, and
   a refused allocation once the device is full, which names itself. A program
   that runs many large kernels in one process will hit that backstop.
-- **The per-dispatch submit-and-wait round trip.** 0.20 ms best / 0.29 ms median
-  on an empty dispatch, and the whole remaining gap to a crossover. Note what
-  this is **not**: removing the per-run object churn measured about 10%, so the
-  cost is the round trip and not the bookkeeping. Collapsing a chain into one
-  submit is a launch-graph optimisation and lives there, not here.
+- **The per-dispatch submit and wait.** 0.046 ms best, paid once per link, so a
+  chain of N still does N submits and N fence waits where one would do. This is
+  worth roughly a factor of N on a long chain, and unlike everything above it is
+  **not** a per-run optimisation.
 - **A launch graph.** A `compute.graph` that JITs an ordinary lichen function
   into a graph IR — a DAG of kernels and the dataflow between them, which is the
-  IR's natural shape rather than a special case — and optimises on that. A
-  single `plrun` cannot see the link after it, so a chain cannot be collapsed
-  into one submit without it. The `ResidentId` split is the prerequisite and is
-  done.
+  IR's natural shape rather than a special case to be detected — and optimises on
+  that. What it buys is the one thing left: recording a whole chain into one
+  command buffer and submitting it once. A single `plrun` cannot see the link
+  after it, so this is not reachable from the per-run path at all. The
+  `ResidentId` split is the prerequisite and is done; the buffer recycling above
+  is the same discipline one level down, so a graph's arena is not a new idea so
+  much as the same pool scoped to a graph instead of a run.
