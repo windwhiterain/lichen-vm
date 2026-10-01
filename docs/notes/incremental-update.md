@@ -51,6 +51,20 @@ jobs:
 The two are orthogonal: every node has a path, so dirty propagation is universal;
 only marked paths hold memory, so retention is bounded by what the user asked for.
 
+### 1.1 What this is *not*: the JIT's graph IR
+
+`crates/lichen-graph-ir` is the **compute** layer's graph: the shape of a lichen
+program that has been *evaluated once and whose evaluation was recorded* — kernel
+and native nodes, and the submission policy that decides when the host observes
+completion. It is **JIT-specific**, and it is not this design's subject.
+
+A `cache` cell is a **language-level retention point**: a marked position in the
+source, identified by its occurrence path, whose value survives a build. The two
+structures share no identity and no node set — a graph node is something that
+*ran*, a cell is something the user *marked*. Where they do meet is residency, and
+only residency: a cached cell's value may hold a device buffer the compute layer
+produced, which is §8's problem (release on eviction), not an identity one.
+
 ## 2. Identity: the occurrence path
 
 ### 2.1 The definition
@@ -233,9 +247,11 @@ can arrive later on the host side without renumbering anything.
 
 Decided by the superior:
 
-- **Graph edits use a descriptor.** A graph is edited *as data* — add / remove /
-  rewire / re-parameterize a node — so the edit names the node paths it touched and
-  the invalidation is exact. No diffing is involved.
+- **Graph edits use a descriptor.** Here "graph" is the *program's own* graph data —
+  the structure an agent builds and edits (a PCG graph), **not** the JIT's
+  `lichen-graph-ir` (§1.1). It is edited *as data* — add / remove / rewire /
+  re-parameterize a node — so the edit names the node paths it touched and the
+  invalidation is exact. No diffing is involved.
 - **Source edits use file granularity.** A source edit dirties the file; the file's
   marked cells are re-derived, and §4.3's backdating is what keeps the rest of the
   program, and the graph, from re-running. Sub-file identity is *not* needed for
@@ -251,10 +267,47 @@ Decided by the superior:
 | 2 | `language-spec.md` §2 + `tree-sitter-lichen` (`grammar.js`, `highlights.scm`) | **landed**: the statement form, the keyword list, the highlighting |
 | 3 | `lichen-registry` (the store) | cells keyed by path; freeze/read in place; the four events reported |
 | 3 | `session.rs:243` (`content_key` gate), `artifact_hash` | **demoted**: they may still move bytes between processes and feed diagnostics, but they no longer decide reuse |
-| 4 | the graph side (`feature/graph-jit`'s IR crate and node set) | node paths, the edit descriptor, and per-node residency — this note constrains that crate's shape |
+| 4 | the program's own graph data (the PCG graph a program builds) | node paths and the edit descriptor. **Not** `lichen-graph-ir`: that crate is the JIT's recorded evaluation graph, a different structure with a different identity (§1.1) |
 
-Step 4 is the reason this design is written before that crate: its node set and
-residency rules are exactly what path identity and the `cache` mark constrain.
+Step 4 is a *consumer*, not a mechanism: the agent edits the graph as data, and the
+cells it marks are what make an edit cheap. Nothing in `lichen-graph-ir` changes for
+it — the two graphs are different structures (§1.1).
+
+### 7.1 The retention landing's shape (step 3)
+
+The mechanism is the **existing** import path, which is what makes this step small:
+
+1. A cell's value is a `[value, type]` pair, and `Registry::freeze_mapped`
+   (`lichen-lowlevel/src/registry.rs:46`) already turns a solved module into a
+   static artifact *and* hands back the `NodeId → LocalNodeId` map — so a cell's
+   frozen reference is
+   `StaticNodeId { module: key, index: node_map[&pair] }` (`lib.rs:901`).
+2. A later build **reuses** a clean cell by lowering it to
+   `ExprKind::Static { export }` instead of compiling its body — the node the front
+   end already emits for an import (`compile.rs:227`), materialized by the checker's
+   own arm (`checker.rs:1399`). The body is not lowered, not checked and not
+   evaluated: the reuse skips the work rather than caching its result.
+3. So the store is a map `Path → StaticNodeId` and nothing else is new: no partial
+   freeze, no second read path, no new node kind.
+
+**The cost, stated up front:** `freeze_mapped` is **whole-module**, so a build that
+uses `cache` at all freezes everything, not only the marked cells. Two things bound
+it, and one is a decision:
+
+- the freeze is **gated on the program having at least one `cache` cell**, so a
+  program that does not use the mark pays nothing;
+- narrowing it to a **partial freeze** — the sub-graph rooted at a marked node — is
+  the recorded optimization rather than part of this landing, because it is a new
+  entry point into a walk that is otherwise already understood.
+
+The dirty input for this landing is the caller's, and it is the granularity the
+superior chose for source edits: the edit declares which file changed, and every file
+that **imports** it, transitively, is dirty with it (the reverse import closure, the
+files whose values can depend on the changed one). A cell is reused iff its own file
+is not in that closure. That is sound **without recording a single read**, which is
+exactly why it comes before §4's path-valued dependencies: §4 makes the cut finer
+(an unchanged cell downstream of a changed file is reused), it does not make this
+landing sound.
 
 **Step 1 measured · a temporary probe (`cargo run -p lichen-language --example
 path_probe`), since removed.** Over seven shapes — top-level bindings, a binding
