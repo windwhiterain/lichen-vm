@@ -102,14 +102,12 @@ impl Graph {
     /// are cheaper to find now: an **edge that names a value this graph has not
     /// produced yet**, which is how a cycle would be written, and an **output
     /// count that disagrees with the node** — a kernel produces
-    /// `fragment.outputs` and a native node its own declared count, so a caller
-    /// that passes a different number is asking for value numbers that mean
-    /// something else.
+    /// `fragment.outputs`, so a caller that passes a different number is asking
+    /// for value numbers that mean something else.
     pub fn push(&mut self, node: Node, outputs: usize) -> Result<ValueId, crate::GraphRefusal> {
         use crate::GraphRefusal;
         let declared = match &node {
             Node::Kernel(kernel) => kernel.fragment.outputs,
-            Node::Native(native) => native.outputs,
         };
         if declared != outputs {
             return Err(GraphRefusal::OutputCount {
@@ -156,12 +154,19 @@ impl Graph {
 }
 
 /// What one node of a graph is.
+///
+/// **One kind, and the enum is left as the place a second would go.** The graph
+/// IR used to have two, a dispatch and a host call, and the host call was a bare
+/// `fn` pointer. That is what made a user closure inexpressible, and it opened
+/// a contradiction that outlived three attempts to settle it. The answer was not
+/// a better pointer: it was that **a closure is a compiled artifact like any
+/// other**, so it lowers to a fragment and is dispatched like one. One kind of
+/// node means one set of rules about what a node's environment is, and nothing
+/// a trait object could make unsound behind it.
 #[derive(Debug, Clone)]
 pub enum Node {
     /// A dispatch: one fragment over one index range.
     Kernel(KernelNode),
-    /// A host call.
-    Native(NativeNode),
 }
 
 impl Node {
@@ -169,7 +174,6 @@ impl Node {
     pub fn inputs(&self) -> &[ValueId] {
         match self {
             Node::Kernel(kernel) => &kernel.inputs,
-            Node::Native(native) => &native.inputs,
         }
     }
 
@@ -177,7 +181,6 @@ impl Node {
     pub fn outputs(&self) -> usize {
         match self {
             Node::Kernel(kernel) => kernel.fragment.outputs,
-            Node::Native(native) => native.outputs,
         }
     }
 }
@@ -215,64 +218,3 @@ pub enum Count {
     /// never needs the wait that a buffer edge does not need but might.
     Value(ValueId),
 }
-
-/// A host call over the values its inputs resolve to.
-///
-/// # The inputs are not always empty, and why that is not a hole in the
-/// # invariant
-///
-/// The soundness rule is about a native node's **capture**: the environment its
-/// function was closed over is fixed before the graph runs and lies entirely
-/// outside the graph, which is what makes the graph's edges statically known and
-/// any topological order correct. It is not a rule about the *arguments* the call
-/// is applied to — those are graph values, and refusing them would leave native
-/// nodes unable to transform anything, which is most of what a host call is for.
-///
-/// A non-empty `inputs` is therefore ordinary, and it has a consequence the
-/// runner has to honour rather than assume away: **a native node that reads a
-/// device value has to wait for it**, because the only way a host call can read a
-/// buffer is to bring it home. That wait is the price of putting host logic in
-/// the middle of a data path, and it is exactly the thing that overlapping
-/// avoids. See [`crate::run`].
-#[derive(Debug, Clone)]
-pub struct NativeNode {
-    pub call: NativeCall,
-    /// The values this reads. Empty in the shape that pays: a host call over
-    /// data that existed before the graph ran can start while the device is busy.
-    pub inputs: Vec<ValueId>,
-    /// How many values this produces. Fixed per [`NativeCall`], so a caller that
-    /// disagrees is refused at run time by the value table, not silently given a
-    /// short read.
-    pub outputs: usize,
-}
-
-/// A host computation, as a **plain function pointer** over host data.
-///
-/// # The pointer is the invariant
-///
-/// The scheduling argument for a graph containing host logic rests on a native
-/// node being unable to reach anything the graph is producing. A `fn` item
-/// **cannot capture** — that is a property of the type, not a rule anyone has to
-/// remember — so a native node's environment is necessarily fixed when the `fn`
-/// is named.
-///
-/// A caller that has a pre-run value to work from builds a `fn` that reads it
-/// from wherever it lives and hands that `fn` over. That is safe for the reason
-/// it is allowed to be: the environment was fixed before the graph ran, which is
-/// exactly the condition the rule requires. The alternative, a boxed trait
-/// object, would let the same rule be broken invisibly — and the break is a
-/// **silently wrong answer** rather than a slow one.
-///
-/// # Why the arguments are `&[i64]` and not values
-///
-/// Because a host call cannot read device memory, full stop. Handing it a graph
-/// value would mean handing it one of two things it cannot use: a buffer whose
-/// contents may not be written yet, or a transfer the call site has to know how
-/// to ask for. So the runner settles and fetches its arguments first — which is
-/// where a native node's cost of being in the middle of a data path lands — and
-/// what the call receives is host data and nothing else.
-///
-/// It is also why the arguments are borrowed: a node over a million elements
-/// must not copy them to call, and the data belongs to the value that already
-/// holds it.
-pub type NativeCall = fn(&[&[i64]]) -> Vec<Vec<i64>>;

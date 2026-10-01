@@ -26,10 +26,10 @@ pub enum GraphRefusal {
     },
     /// A node was pushed with an output count its own body does not agree with.
     ///
-    /// A kernel produces `fragment.outputs` and a native node the count it
-    /// declared. A caller passing a different number is asking for value numbers
-    /// that will mean something else for the rest of the graph, so it is refused
-    /// here rather than producing a value table that is quietly misaligned.
+    /// A kernel produces `fragment.outputs`. A caller passing a different number
+    /// is asking for value numbers that will mean something else for the rest of
+    /// the graph, so it is refused here rather than producing a value table that
+    /// is quietly misaligned.
     OutputCount {
         node: usize,
         declared: usize,
@@ -69,36 +69,25 @@ pub enum GraphRefusal {
         first: usize,
         other: usize,
     },
-    /// A native call was given, or produced, the wrong number of values.
-    ///
-    /// The count is part of the node rather than inferred, because a `fn`
-    /// pointer carries no type for it — so nothing but this check stands between
-    /// a wrong `outputs` and a value table that is off by however many the call
-    /// disagreed by.
-    NativeArity {
-        node: usize,
-        wanted: usize,
-        got: usize,
-    },
     /// Something wanted host data from a value that is not host data.
     ///
     /// Named with what the value *is*, because the two cases have different
     /// fixes: a value still pending needs a wait, and one already waited for
     /// needs a fetch, and telling a caller only that it is "not host data" hands
     /// them the first when they needed the second.
+    ///
+    /// **This is the caller's refusal, not a node's.** A dispatch never reads a
+    /// value on the host, so nothing inside a run can ask for it; the only
+    /// reader is whoever takes a result home, and telling that reader "not host
+    /// data" is a genuine answer rather than a sign of a hole.
     NotHostData { found: &'static str },
-    /// A dispatch was given something that is not a buffer.
+    /// A dispatch was given a number where it wanted a buffer.
     ///
     /// The mirror of [`Self::CountNotANumber`], and separate for the same
     /// reason: the two are different mistakes in different positions, and a
     /// caller told only "wrong shape" has to work out which one they hit. There
-    /// is a repair that looks reasonable here — read a number as a one-element
+    /// is a repair that looks reasonable here — read the number as a one-element
     /// host vector — and taking it would run a kernel nobody wrote.
-    ///
-    /// `found` names the **kind** and not merely the category, because the
-    /// repairs differ: a caller who passed a number has a literal in the wrong
-    /// position, and a caller who passed a host-owned value has a closure where
-    /// a buffer belongs, and neither of them learns anything from "not a buffer".
     NotBufferData { found: &'static str },
     /// A dispatch's count resolved to something that is not a number.
     ///
@@ -176,11 +165,6 @@ impl fmt::Display for GraphRefusal {
                  dispatch over [0, count) reads every input to `count`, so a lane would read \
                  past the shorter one."
             ),
-            GraphRefusal::NativeArity { node, wanted, got } => write!(
-                f,
-                "node {node}'s native call was declared to produce {wanted} value(s) and \
-                 produced {got}."
-            ),
             GraphRefusal::NotHostData { found } => write!(
                 f,
                 "host data was asked of a value that is {found}: one that has not been waited \
@@ -188,9 +172,8 @@ impl fmt::Display for GraphRefusal {
             ),
             GraphRefusal::NotBufferData { found } => write!(
                 f,
-                "a buffer was asked of a value that is {found}. A value the host computed is \
-                 not a one-element buffer, and reading one as another would run the dispatch \
-                 against data nobody wrote."
+                "a buffer was asked of a value that is {found}. A number is not a one-element \
+                 buffer, and reading it as one would run the dispatch against data nobody wrote."
             ),
             GraphRefusal::CountNotANumber { found } => write!(
                 f,

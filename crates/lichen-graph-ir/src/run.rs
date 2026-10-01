@@ -179,35 +179,6 @@ impl<'backend> Runner<'backend> {
                     };
                     values.extend(produced);
                 }
-                Node::Native(native) => {
-                    // A host call reads host data, so every argument is settled
-                    // **and fetched** first. Settling is a wait; fetching is a
-                    // transfer. Both are the price of host logic in the middle of
-                    // a data path, and the reason a native node whose inputs are
-                    // already host-side is the shape worth having.
-                    for value in &native.inputs {
-                        let slot = values.get_mut(*value).ok_or(GraphRefusal::UnknownValue {
-                            node: index,
-                            value: *value,
-                        })?;
-                        slot.to_host(self.backend)?;
-                    }
-                    let arguments: Vec<&[i64]> = native
-                        .inputs
-                        .iter()
-                        .map(|value| Ok(values[*value].as_host()?))
-                        .collect::<Result<_, GraphRefusal>>()?;
-
-                    let produced = (native.call)(&arguments);
-                    if produced.len() != native.outputs {
-                        return Err(GraphRefusal::NativeArity {
-                            node: index,
-                            wanted: native.outputs,
-                            got: produced.len(),
-                        });
-                    }
-                    values.extend(produced.into_iter().map(Value::host));
-                }
             }
         }
 
